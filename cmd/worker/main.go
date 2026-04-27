@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/queue"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -56,7 +57,16 @@ func runTask(ctx context.Context, t task.Task) error {
 	if err := run(ctx, workdir, "git", "add", "."); err != nil { return err }
 	if err := run(ctx, workdir, "git", "commit", "-m", "chore(ai): "+t.Title); err != nil { return err }
 	if err := run(ctx, workdir, "git", "push", "origin", t.WorkBranch); err != nil { return err }
-	log.Printf("task %s pushed branch %s; create PR manually or enable Gitea PR adapter next", t.ID, t.WorkBranch)
+	if err := createPR(ctx, t); err != nil { return err }
+	return nil
+}
+
+func createPR(ctx context.Context, t task.Task) error {
+	client := gitea.Client{BaseURL: os.Getenv("GITEA_BASE_URL"), Token: os.Getenv("GITEA_TOKEN")}
+	body := fmt.Sprintf("## AI Task\n\nTask ID: `%s`\n\n## Source\n\n%s / %s\n\n## Changes\n\nDay 1 mock runner created `.aiops/%s.md`.\n\n## Verification\n\nMock mode: no project tests executed yet.\n\n## Risk\n\nDraft-style AI-generated change. Human review required.\n", t.ID, t.SourceType, t.SourceEventID, t.ID)
+	pr, err := client.CreatePullRequest(ctx, gitea.CreatePullRequestInput{Owner: t.RepoOwner, Repo: t.RepoName, Title: "chore(ai): "+t.Title, Body: body, Head: t.WorkBranch, Base: t.BaseBranch})
+	if err != nil { return err }
+	log.Printf("task %s created PR #%d %s", t.ID, pr.Number, pr.HTMLURL)
 	return nil
 }
 
