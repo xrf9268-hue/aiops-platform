@@ -1,0 +1,81 @@
+package workflow
+
+type Config struct {
+	Repo      RepoConfig      `yaml:"repo"`
+	Tracker   TrackerConfig   `yaml:"tracker"`
+	Workspace WorkspaceConfig `yaml:"workspace"`
+	Agent     AgentConfig     `yaml:"agent"`
+	Codex     CommandConfig   `yaml:"codex"`
+	Claude    CommandConfig   `yaml:"claude"`
+	Policy    PolicyConfig    `yaml:"policy"`
+	Verify    VerifyConfig    `yaml:"verify"`
+	PR        PRConfig        `yaml:"pr"`
+}
+
+type RepoConfig struct {
+	Owner         string `yaml:"owner"`
+	Name          string `yaml:"name"`
+	CloneURL      string `yaml:"clone_url"`
+	DefaultBranch string `yaml:"default_branch"`
+}
+
+type TrackerConfig struct {
+	Kind           string   `yaml:"kind"`
+	APIKey         string   `yaml:"api_key"`
+	TeamKey        string   `yaml:"team_key"`
+	ProjectSlug    string   `yaml:"project_slug"`
+	ActiveStates   []string `yaml:"active_states"`
+	TerminalStates []string `yaml:"terminal_states"`
+	PollIntervalMs int      `yaml:"poll_interval_ms"`
+}
+
+type WorkspaceConfig struct {
+	Root string `yaml:"root"`
+}
+
+type AgentConfig struct {
+	Default             string `yaml:"default"`
+	Fallback            string `yaml:"fallback"`
+	MaxConcurrentAgents int    `yaml:"max_concurrent_agents"`
+	MaxTurns            int    `yaml:"max_turns"`
+}
+
+type CommandConfig struct {
+	Command string `yaml:"command"`
+}
+
+type PolicyConfig struct {
+	Mode            string   `yaml:"mode"`
+	AllowPaths      []string `yaml:"allow_paths"`
+	DenyPaths       []string `yaml:"deny_paths"`
+	MaxChangedFiles int      `yaml:"max_changed_files"`
+	MaxChangedLOC   int      `yaml:"max_changed_loc"`
+}
+
+type VerifyConfig struct {
+	Commands []string `yaml:"commands"`
+}
+
+type PRConfig struct {
+	Draft     bool     `yaml:"draft"`
+	Labels    []string `yaml:"labels"`
+	Reviewers []string `yaml:"reviewers"`
+}
+
+func DefaultConfig() Config {
+	return Config{
+		Tracker: TrackerConfig{
+			Kind:           "gitea",
+			ActiveStates:   []string{"AI Ready", "In Progress", "Rework"},
+			TerminalStates: []string{"Done", "Canceled"},
+			PollIntervalMs: 30000,
+		},
+		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
+		Agent:     AgentConfig{Default: "mock", Fallback: "claude", MaxConcurrentAgents: 1, MaxTurns: 8},
+		Codex:     CommandConfig{Command: "codex exec"},
+		Claude:    CommandConfig{Command: "claude"},
+		Policy:    PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
+		Verify:    VerifyConfig{Commands: []string{}},
+		PR:        PRConfig{Draft: true, Labels: []string{"ai-generated", "needs-review"}},
+	}
+}
