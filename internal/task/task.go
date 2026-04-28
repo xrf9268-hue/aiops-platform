@@ -1,6 +1,12 @@
 package task
 
-import "time"
+import (
+	"encoding/json"
+	"errors"
+	"time"
+)
+
+var ErrNotFound = errors.New("task not found")
 
 type Status string
 
@@ -12,23 +18,32 @@ const (
 )
 
 type Task struct {
-	ID            string
-	Status        Status
-	SourceType    string
-	SourceEventID string
-	RepoOwner     string
-	RepoName      string
-	CloneURL      string
-	BaseBranch    string
-	WorkBranch    string
-	Title         string
-	Description   string
-	Actor         string
-	Model         string
-	Priority      int
-	Attempts      int
-	MaxAttempts   int
-	AvailableAt   time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID            string    `json:"id"`
+	Status        Status    `json:"status"`
+	SourceType    string    `json:"source_type"`
+	SourceEventID string    `json:"source_event_id"`
+	RepoOwner     string    `json:"repo_owner"`
+	RepoName      string    `json:"repo_name"`
+	CloneURL      string    `json:"clone_url"`
+	BaseBranch    string    `json:"base_branch"`
+	WorkBranch    string    `json:"work_branch"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	Actor         string    `json:"actor"`
+	Model         string    `json:"model"`
+	Priority      int       `json:"priority"`
+	Attempts      int       `json:"attempts"`
+	MaxAttempts   int       `json:"max_attempts"`
+	AvailableAt   time.Time `json:"available_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type Event struct {
+	ID        int64           `json:"id"`
+	TaskID    string          `json:"task_id"`
+	EventType string          `json:"event_type"`
+	Message   string          `json:"message,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }

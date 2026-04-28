@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,8 +18,15 @@ import (
 )
 
 type server struct {
-	store  *queue.Store
+	store  taskStore
 	secret string
+}
+
+type taskStore interface {
+	Enqueue(context.Context, task.Task) (task.Task, bool, error)
+	GetTask(context.Context, string) (task.Task, error)
+	ListTasks(context.Context, task.Status) ([]task.Task, error)
+	TaskEvents(context.Context, string) ([]task.Event, error)
 }
 
 func main() {
@@ -32,14 +40,20 @@ func main() {
 
 	s := &server{store: queue.New(pool), secret: os.Getenv("GITEA_WEBHOOK_SECRET")}
 
+	addr := env("ADDR", ":8080")
+	log.Printf("trigger-api listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, routes(s)))
+}
+
+func routes(s *server) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]any{"ok": true}) })
 	mux.HandleFunc("POST /v1/events/gitea", s.handleGitea)
 	mux.HandleFunc("POST /v1/tasks", s.handleManualTask)
-
-	addr := env("ADDR", ":8080")
-	log.Printf("trigger-api listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, mux))
+	mux.HandleFunc("GET /v1/tasks", s.handleListTasks)
+	mux.HandleFunc("GET /v1/tasks/{id}", s.handleGetTask)
+	mux.HandleFunc("GET /v1/tasks/{id}/events", s.handleTaskEvents)
+	return mux
 }
 
 func (s *server) handleGitea(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +131,37 @@ func (s *server) handleManualTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 202, map[string]any{"task_id": out.ID, "deduped": deduped})
+}
+
+func (s *server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	out, err := s.store.GetTask(r.Context(), r.PathValue("id"))
+	if errors.Is(err, task.ErrNotFound) {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
+	out, err := s.store.TaskEvents(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
+	out, err := s.store.ListTasks(r.Context(), task.Status(r.URL.Query().Get("status")))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func env(k, d string) string {

@@ -1,0 +1,29 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Local AI Ops workspaces and caches
+aiops-workspaces/
+.aiops-workspaces/
+workspaces/
+.workspaces/
+.cache/
+
+# Build outputs and runtime artifacts
+dist/
+logs/
+tmp/
+*.log
+*.out
+*.pid
+*.tmp
+
+# Go test artifacts
+coverage.out
+*.test
+
+# macOS
+.DS_Store
