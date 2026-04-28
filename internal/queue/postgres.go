@@ -69,6 +69,65 @@ RETURNING t.id,t.status,t.source_type,t.source_event_id,t.repo_owner,t.repo_name
 	return &out, nil
 }
 
+func (s *Store) GetTask(ctx context.Context, id string) (task.Task, error) {
+	row := s.db.QueryRow(ctx, `
+	SELECT id,status,source_type,source_event_id,repo_owner,repo_name,clone_url,base_branch,work_branch,title,description,actor,model,priority,attempts,max_attempts,available_at,created_at,updated_at
+	FROM tasks WHERE id=$1`, id)
+	out, err := scanTask(row)
+	if err == pgx.ErrNoRows {
+		return task.Task{}, task.ErrNotFound
+	}
+	return out, err
+}
+
+func (s *Store) ListTasks(ctx context.Context, status task.Status) ([]task.Task, error) {
+	var rows pgx.Rows
+	var err error
+	if status == "" {
+		rows, err = s.db.Query(ctx, `
+	SELECT id,status,source_type,source_event_id,repo_owner,repo_name,clone_url,base_branch,work_branch,title,description,actor,model,priority,attempts,max_attempts,available_at,created_at,updated_at
+	FROM tasks ORDER BY created_at DESC LIMIT 100`)
+	} else {
+		rows, err = s.db.Query(ctx, `
+	SELECT id,status,source_type,source_event_id,repo_owner,repo_name,clone_url,base_branch,work_branch,title,description,actor,model,priority,attempts,max_attempts,available_at,created_at,updated_at
+	FROM tasks WHERE status=$1 ORDER BY created_at DESC LIMIT 100`, status)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []task.Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) TaskEvents(ctx context.Context, taskID string) ([]task.Event, error) {
+	rows, err := s.db.Query(ctx, `
+	SELECT id,task_id,event_type,coalesce(message,''),coalesce(payload,'{}'::jsonb),created_at
+	FROM task_events WHERE task_id=$1 ORDER BY id ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []task.Event
+	for rows.Next() {
+		var event task.Event
+		if err := rows.Scan(&event.ID, &event.TaskID, &event.EventType, &event.Message, &event.Payload, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Complete(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, "UPDATE tasks SET status='succeeded', updated_at=now() WHERE id=$1", id)
 	if err == nil {
@@ -88,4 +147,14 @@ func (s *Store) Fail(ctx context.Context, id string, msg string) error {
 func (s *Store) AddEvent(ctx context.Context, taskID, typ, msg string) error {
 	_, err := s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message) VALUES($1,$2,$3)", taskID, typ, msg)
 	return err
+}
+
+type taskScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTask(row taskScanner) (task.Task, error) {
+	var out task.Task
+	err := row.Scan(&out.ID, &out.Status, &out.SourceType, &out.SourceEventID, &out.RepoOwner, &out.RepoName, &out.CloneURL, &out.BaseBranch, &out.WorkBranch, &out.Title, &out.Description, &out.Actor, &out.Model, &out.Priority, &out.Attempts, &out.MaxAttempts, &out.AvailableAt, &out.CreatedAt, &out.UpdatedAt)
+	return out, err
 }

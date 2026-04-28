@@ -41,6 +41,7 @@ This repository implements the second track.
 - [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
+- [Task debugging API](docs/runbooks/task-api.md)
 
 ## Quick start: Gitea webhook path
 
