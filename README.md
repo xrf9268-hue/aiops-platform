@@ -35,6 +35,12 @@ This repository implements the second track.
 - `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
 - `internal/gitea`: webhook parser, signature verification, and PR client.
 
+## Architecture notes
+
+- [Symphony integration guide](docs/symphony-integration.md)
+- [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
+- [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
+
 ## Quick start: Gitea webhook path
 
 ```bash
