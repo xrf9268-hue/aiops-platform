@@ -24,6 +24,20 @@ services:
     ports:
       - "8080:8080"
 
+  linear-poller:
+    build:
+      context: ..
+    command: ["linear-poller", "/app/examples/WORKFLOW.md"]
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
+    volumes:
+      - ../examples:/app/examples:ro
+    profiles:
+      - linear
+
   worker:
     build:
       context: ..
