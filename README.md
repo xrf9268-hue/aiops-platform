@@ -1,31 +1,41 @@
 # aiops-platform
 
-Enterprise-internal AI coding automation platform skeleton.
+A personal-productivity AI coding orchestrator inspired by OpenAI Symphony.
 
-Day 1 goal:
+The goal is not to build a heavy enterprise platform first. The goal is to run a practical loop:
 
 ```text
-Gitea issue comment `/ai-run`
-  -> trigger-api webhook
-  -> Postgres queued task
-  -> worker claim
-  -> git clone + branch
-  -> mock runner writes `.aiops/<task>.md`
-  -> git push
-  -> Gitea pull request
+Linear or Gitea task
+  -> aiops-platform
+  -> deterministic workspace
+  -> WORKFLOW.md policy + prompt
+  -> mock / Codex / Claude runner
+  -> verification
+  -> draft PR handoff
 ```
+
+## Two-track workflow
+
+Use both tracks:
+
+1. **OpenAI Symphony directly** for quick Linear + Codex experiments.
+2. **aiops-platform** for your own Go-based, Gitea-friendly, locally customizable workflow.
+
+This repository implements the second track.
 
 ## Components
 
 - `cmd/trigger-api`: receives Gitea webhooks and manual task submissions.
-- `cmd/worker`: claims queued tasks and executes the Day 1 mock pipeline.
+- `cmd/linear-poller`: polls Linear issues in configured active states and enqueues tasks.
+- `cmd/worker`: claims queued tasks and runs the Symphony-style workflow.
+- `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
+- `internal/tracker`: tracker abstraction with a Linear client.
+- `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
+- `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
 - `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
 - `internal/gitea`: webhook parser, signature verification, and PR client.
-- `internal/runner`: execution engines. Day 1 includes `mock` only.
-- `migrations`: database schema.
-- `deploy`: local docker compose deployment.
 
-## Quick start
+## Quick start: Gitea webhook path
 
 ```bash
 cp .env.example .env
@@ -33,17 +43,49 @@ cp .env.example .env
 docker compose --env-file .env -f deploy/docker-compose.yml up --build
 ```
 
-Health check:
+Configure a Gitea issue-comment webhook pointing at:
 
-```bash
-curl http://localhost:8080/healthz
+```text
+http://<trigger-host>:8080/v1/events/gitea
 ```
 
-Full Day 1 runbook: [`docs/day1-runbook.md`](docs/day1-runbook.md)
+Comment on a Gitea issue:
 
-## Security notes
+```text
+/ai-run
+```
 
-- Do not commit real Gitea tokens.
-- Use a dedicated `ai-bot` account with repo write permission only on demo repositories.
-- Keep branch protection enabled. The worker opens PRs; it does not merge them.
-- Start with `model=mock`; wire Codex/Claude only after the pipeline is proven.
+## Quick start: Linear polling path
+
+Edit `examples/WORKFLOW.md` with your repo and Linear settings, then run:
+
+```bash
+export LINEAR_API_KEY=your-linear-personal-key
+docker compose --env-file .env -f deploy/docker-compose.yml --profile linear up --build
+```
+
+The poller watches active Linear states such as `AI Ready`, `In Progress`, and `Rework`, then enqueues tasks for the worker.
+
+## First safe mode
+
+Start with:
+
+```yaml
+agent:
+  default: mock
+```
+
+After the mock loop produces a branch and PR, change the workflow to:
+
+```yaml
+agent:
+  default: codex
+```
+
+## Safety notes
+
+- Keep branch protection enabled.
+- The worker opens PRs; it does not merge them.
+- Use a low-privilege bot account for Gitea.
+- Keep company repositories in draft-PR or analysis-only mode until the workflow is trusted.
+- Do not commit real credentials to `.env`, `.env.example`, or `WORKFLOW.md`.
