@@ -1,0 +1,91 @@
+name: CI
+
+run-name: CI / ${{ github.ref_name }} / ${{ github.event_name }}
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check gofmt
+        run: |
+          files="$(git ls-files '*.go' | xargs -r gofmt -l)"
+          if [ -n "$files" ]; then
+            echo "The following files need gofmt:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: Verify go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Run tests
+        run: go test -race -covermode=atomic ./...
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/trigger-api ./cmd/trigger-api
+          go build -trimpath -ldflags="-s -w" -o dist/worker ./cmd/worker
+          go build -trimpath -ldflags="-s -w" -o dist/linear-poller ./cmd/linear-poller
+
+      - name: Upload CI binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: aiops-platform-linux-amd64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  docker:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs:
+      - go
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Build Docker image
+        run: docker build --pull --tag aiops-platform:ci .

@@ -1,0 +1,93 @@
+name: Release
+
+run-name: Release / ${{ github.ref_name || inputs.tag }}
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to publish, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag exists
+        run: git rev-parse --verify "refs/tags/${{ steps.release.outputs.tag }}"
+
+      - name: Test before release
+        run: go test ./...
+
+      - name: Build release binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          targets=(
+            "linux amd64"
+            "linux arm64"
+            "darwin amd64"
+            "darwin arm64"
+          )
+          for target in "${targets[@]}"; do
+            read -r goos goarch <<< "$target"
+            out="dist/aiops-platform_${{ steps.release.outputs.tag }}_${goos}_${goarch}"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/trigger-api" ./cmd/trigger-api
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/worker" ./cmd/worker
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/linear-poller" ./cmd/linear-poller
+            tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
+            rm -rf "$out"
+          done
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "${{ steps.release.outputs.tag }}" \
+            --notes "Automated aiops-platform release for ${{ steps.release.outputs.tag }}" \
+            --verify-tag

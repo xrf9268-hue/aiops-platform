@@ -31,7 +31,9 @@ type PullRequest struct {
 }
 
 func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput) (*PullRequest, error) {
-	if c.BaseURL == "" || c.Token == "" { return nil, fmt.Errorf("GITEA_BASE_URL and GITEA_TOKEN are required") }
+	if c.BaseURL == "" || c.Token == "" {
+		return nil, fmt.Errorf("GITEA_BASE_URL and GITEA_TOKEN are required")
+	}
 	payload := map[string]string{
 		"title": in.Title,
 		"body":  in.Body,
@@ -41,16 +43,26 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 	b, _ := json.Marshal(payload)
 	url := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "token "+c.Token)
 	client := c.HTTP
-	if client == nil { client = http.DefaultClient }
+	if client == nil {
+		client = http.DefaultClient
+	}
 	resp, err := client.Do(req)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 { return nil, fmt.Errorf("create pull request failed: %s", resp.Status) }
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("create pull request failed: %s", resp.Status)
+	}
 	var pr PullRequest
-	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil { return nil, err }
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
+		return nil, err
+	}
 	return &pr, nil
 }

@@ -32,7 +32,9 @@ type IssueCommentPayload struct {
 }
 
 func VerifySignature(secret, sig string, body []byte) bool {
-	if secret == "" { return true }
+	if secret == "" {
+		return true
+	}
 	sig = strings.TrimPrefix(sig, "sha256=")
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
@@ -42,19 +44,25 @@ func VerifySignature(secret, sig string, body []byte) bool {
 
 func ParseIssueComment(body []byte) (*IssueCommentPayload, error) {
 	var p IssueCommentPayload
-	if err := json.Unmarshal(body, &p); err != nil { return nil, err }
+	if err := json.Unmarshal(body, &p); err != nil {
+		return nil, err
+	}
 	return &p, nil
 }
 
 func HasAIRunCommand(s string) bool {
 	for _, line := range strings.Split(s, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "/ai-run") { return true }
+		if strings.HasPrefix(strings.TrimSpace(line), "/ai-run") {
+			return true
+		}
 	}
 	return false
 }
 
 func SplitOwnerRepo(full string) (string, string) {
 	parts := strings.SplitN(full, "/", 2)
-	if len(parts) == 2 { return parts[0], parts[1] }
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
 	return "", full
 }
