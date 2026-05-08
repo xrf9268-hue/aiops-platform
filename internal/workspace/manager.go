@@ -193,6 +193,24 @@ func WriteSummary(workdir, summary string) error {
 // per-run summary so the worker can include it in the PR body.
 const SummaryPath = ".aiops/RUN_SUMMARY.md"
 
+// ResetRunSummary deletes any pre-existing .aiops/RUN_SUMMARY.md from the
+// workdir before the runner starts so the post-runner CheckSummary gate can
+// only pass when the runner produced a summary for *this* run. Without this
+// reset, a stale summary committed to the repo (or left over from a previous
+// attempt in the same workspace) would silently satisfy the gate and let the
+// worker open a PR with content that does not describe the current change.
+//
+// The function is idempotent: a missing file is not an error. Any other I/O
+// error (permission, etc.) is returned so the caller can surface it before
+// running the runner.
+func ResetRunSummary(workdir string) error {
+	path := filepath.Join(workdir, SummaryPath)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("reset %s: %w", SummaryPath, err)
+	}
+	return nil
+}
+
 // summaryPlaceholderHints are substrings whose presence (in a short file)
 // indicates the runner did not actually fill in a real summary. We keep the
 // list intentionally narrow so legitimate summaries are not rejected.

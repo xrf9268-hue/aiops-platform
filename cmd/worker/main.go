@@ -123,6 +123,16 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return cfg, err
 	}
 
+	// Make sure the post-runner CheckSummary gate cannot pass on a stale
+	// summary. PrepareGitWorkspace already nukes the workdir on a fresh
+	// clone, but we still defend against the case where the base branch
+	// *itself* has a committed .aiops/RUN_SUMMARY.md (left over from a prior
+	// PR or seeded by hand). Deleting it here means CheckSummary can only
+	// succeed when the runner produced a summary during this invocation.
+	if err := workspace.ResetRunSummary(workdir); err != nil {
+		return cfg, fmt.Errorf("reset run summary: %w", err)
+	}
+
 	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout); runErr != nil {
 		writeFailureArtifacts(ctx, workdir, nil, "runner failed: "+errSummary(runErr))
 		return cfg, runErr

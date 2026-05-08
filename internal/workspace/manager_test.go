@@ -337,6 +337,66 @@ func TestCheckSummaryStatuses(t *testing.T) {
 	}
 }
 
+// TestResetRunSummary verifies the helper that the worker calls before
+// starting the runner so the post-runner gate cannot pass on a stale summary
+// committed to the base branch or left over from a previous attempt.
+func TestResetRunSummary(t *testing.T) {
+	t.Run("removes existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		// Seed a summary that looks substantive enough to satisfy the gate so
+		// the test fails loudly if ResetRunSummary becomes a no-op.
+		stale := "# Stale summary\n\nThis came from a previous run and should not gate the next PR.\n"
+		if err := WriteSummary(dir, stale); err != nil {
+			t.Fatalf("seed stale summary: %v", err)
+		}
+		if _, status, _ := CheckSummary(dir); status != SummaryOK {
+			t.Fatalf("precondition: stale summary should look OK, got %s", status)
+		}
+		if err := ResetRunSummary(dir); err != nil {
+			t.Fatalf("ResetRunSummary: %v", err)
+		}
+		_, status, err := CheckSummary(dir)
+		if err != nil {
+			t.Fatalf("CheckSummary post-reset: %v", err)
+		}
+		if status != SummaryMissing {
+			t.Fatalf("status after reset = %s, want %s", status, SummaryMissing)
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, SummaryPath)); !os.IsNotExist(statErr) {
+			t.Fatalf("file should be gone, got stat err = %v", statErr)
+		}
+	})
+
+	t.Run("missing file is not an error", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := ResetRunSummary(dir); err != nil {
+			t.Fatalf("ResetRunSummary on empty dir: %v", err)
+		}
+		if err := ResetRunSummary(dir); err != nil {
+			t.Fatalf("ResetRunSummary should be idempotent, got %v", err)
+		}
+	})
+
+	t.Run("does not touch sibling artifacts", func(t *testing.T) {
+		// CHANGED_FILES.txt and VERIFICATION.txt are produced by the worker
+		// itself (which overwrites them each run); the runner-contract file
+		// is RUN_SUMMARY.md alone. Confirm the reset is narrowly scoped.
+		dir := t.TempDir()
+		if err := WriteSummary(dir, "stale summary contents long enough to look real"); err != nil {
+			t.Fatalf("seed summary: %v", err)
+		}
+		if err := WriteChangedFiles(dir, []string{"a.go", "b.go"}); err != nil {
+			t.Fatalf("seed changed files: %v", err)
+		}
+		if err := ResetRunSummary(dir); err != nil {
+			t.Fatalf("ResetRunSummary: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".aiops", "CHANGED_FILES.txt")); err != nil {
+			t.Fatalf("CHANGED_FILES.txt should still exist after reset, got %v", err)
+		}
+	})
+}
+
 // TestWriteAndReadSummaryRoundTrip ensures WriteSummary persists the body
 // and ReadSummary returns the trimmed contents (used by the worker's gate
 // helper path).
