@@ -3,10 +3,12 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
@@ -270,5 +272,172 @@ func TestEnforcePolicyCleanWorkdir(t *testing.T) {
 	}}
 	if err := EnforcePolicy(context.Background(), dir, cfg); err != nil {
 		t.Fatalf("expected no policy error on clean workdir, got %v", err)
+	}
+}
+
+func TestRunVerifyCapturesOutputAndStopsOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"echo hello-world",
+		"   ", // empty command should be skipped without recording a result
+		"sh -c 'echo to-stderr 1>&2; exit 7'",
+		"echo unreachable",
+	}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err == nil {
+		t.Fatalf("RunVerify should report failure when a command exits non-zero")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 verify results (skip empty + stop after failure), got %d", len(results))
+	}
+	if !strings.Contains(results[0].Output, "hello-world") {
+		t.Fatalf("first result missing stdout: %q", results[0].Output)
+	}
+	if results[0].ExitCode != 0 || results[0].Err != nil {
+		t.Fatalf("first result should be success, got %+v", results[0])
+	}
+	if results[1].ExitCode != 7 {
+		t.Fatalf("second result exit code = %d, want 7", results[1].ExitCode)
+	}
+	if !strings.Contains(results[1].Output, "to-stderr") {
+		t.Fatalf("second result should capture stderr: %q", results[1].Output)
+	}
+	if results[1].Err == nil {
+		t.Fatalf("failed verify result should retain underlying error")
+	}
+}
+
+func TestWriteArtifacts(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := WriteSummary(dir, "summary body"); err != nil {
+		t.Fatalf("WriteSummary error: %v", err)
+	}
+	if err := WriteChangedFiles(dir, []string{"a.go", "b.go"}); err != nil {
+		t.Fatalf("WriteChangedFiles error: %v", err)
+	}
+	if err := WriteVerification(dir, []VerifyResult{{
+		Command:  "go test ./...",
+		ExitCode: 0,
+		Output:   "ok\n",
+	}}); err != nil {
+		t.Fatalf("WriteVerification error: %v", err)
+	}
+
+	for name, want := range map[string]string{
+		"RUN_SUMMARY.md":    "summary body",
+		"CHANGED_FILES.txt": "a.go\nb.go\n",
+		"VERIFICATION.txt":  "go test ./...",
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, ".aiops", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("%s = %q, want substring %q", name, got, want)
+		}
+	}
+}
+
+func TestRunVerifyCapsLargeOutputAndMarksTruncated(t *testing.T) {
+	dir := t.TempDir()
+	// Emit ~2 MiB so we exceed VerifyOutputCap (1 MiB) and trigger truncation.
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"yes 0123456789abcdef0123456789abcdef | head -c 2097152",
+	}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err != nil {
+		t.Fatalf("RunVerify error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 verify result, got %d", len(results))
+	}
+	r := results[0]
+	if !r.Truncated {
+		t.Fatalf("expected Truncated=true for 2 MiB output, got false")
+	}
+	if got := len(r.Output); got > VerifyOutputCap {
+		t.Fatalf("captured output should be <= cap, got %d > %d", got, VerifyOutputCap)
+	}
+	if got := len(r.Output); got < VerifyOutputCap-1024 {
+		t.Fatalf("captured output unexpectedly small: %d bytes", got)
+	}
+
+	// Persist + ensure the artifact mentions the truncation.
+	if err := WriteVerification(dir, results); err != nil {
+		t.Fatalf("WriteVerification: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".aiops", "VERIFICATION.txt"))
+	if err != nil {
+		t.Fatalf("read VERIFICATION.txt: %v", err)
+	}
+	wantMarker := fmt.Sprintf("...output truncated at %d bytes", VerifyOutputCap)
+	if !strings.Contains(string(body), wantMarker) {
+		t.Fatalf("VERIFICATION.txt missing truncation marker %q", wantMarker)
+	}
+}
+
+func TestCappedBufferDropsBeyondCap(t *testing.T) {
+	buf := &cappedBuffer{Cap: 10}
+	n, err := buf.Write([]byte("hello "))
+	if err != nil || n != 6 {
+		t.Fatalf("first write n=%d err=%v", n, err)
+	}
+	n, err = buf.Write([]byte("world!!"))
+	if err != nil || n != 7 {
+		t.Fatalf("second write should report full length, n=%d err=%v", n, err)
+	}
+	if got := buf.String(); got != "hello worl" {
+		t.Fatalf("buffered content = %q, want %q", got, "hello worl")
+	}
+	if !buf.Truncated() {
+		t.Fatalf("buffer should report Truncated=true after exceeding cap")
+	}
+	if buf.Dropped() != 3 {
+		t.Fatalf("dropped bytes = %d, want 3", buf.Dropped())
+	}
+}
+
+func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
+	// Regression: success-path metadata under-reported pushed contents because
+	// AllChangedFiles ran before .aiops artifacts were written. Ordering the
+	// snapshot after WriteChangedFiles/WriteSummary should make those files
+	// appear in the result.
+	dir := t.TempDir()
+	mustGit(t, dir, "init", "-q")
+	mustGit(t, dir, "config", "user.email", "test@example.com")
+	mustGit(t, dir, "config", "user.name", "test")
+	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
+
+	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write src.go: %v", err)
+	}
+	if err := WriteChangedFiles(dir, nil); err != nil {
+		t.Fatalf("seed CHANGED_FILES.txt: %v", err)
+	}
+	if err := WriteSummary(dir, ""); err != nil {
+		t.Fatalf("seed RUN_SUMMARY.md: %v", err)
+	}
+
+	files, err := AllChangedFiles(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("AllChangedFiles: %v", err)
+	}
+	got := strings.Join(files, ",")
+	for _, want := range []string{"src.go", ".aiops/CHANGED_FILES.txt", ".aiops/RUN_SUMMARY.md"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AllChangedFiles missing %q in %q", want, got)
+		}
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }

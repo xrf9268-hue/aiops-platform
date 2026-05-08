@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -42,7 +43,7 @@ RETURNING id,status,source_type,source_event_id,repo_owner,repo_name,clone_url,b
 	if err != nil {
 		return task.Task{}, false, err
 	}
-	_ = s.AddEvent(ctx, out.ID, "enqueued", "task accepted")
+	_ = s.AddEvent(ctx, out.ID, task.EventEnqueued, "task accepted")
 	return out, deduped, nil
 }
 
@@ -65,7 +66,7 @@ RETURNING t.id,t.status,t.source_type,t.source_event_id,t.repo_owner,t.repo_name
 	if err != nil {
 		return nil, err
 	}
-	_ = s.AddEvent(ctx, out.ID, "claimed", "worker claimed task")
+	_ = s.AddEvent(ctx, out.ID, task.EventClaimed, "worker claimed task")
 	return &out, nil
 }
 
@@ -131,7 +132,7 @@ func (s *Store) TaskEvents(ctx context.Context, taskID string) ([]task.Event, er
 func (s *Store) Complete(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, "UPDATE tasks SET status='succeeded', updated_at=now() WHERE id=$1", id)
 	if err == nil {
-		_ = s.AddEvent(ctx, id, "succeeded", "task completed")
+		_ = s.AddEvent(ctx, id, task.EventSucceeded, "task completed")
 	}
 	return err
 }
@@ -139,7 +140,7 @@ func (s *Store) Complete(ctx context.Context, id string) error {
 func (s *Store) Fail(ctx context.Context, id string, msg string) error {
 	_, err := s.db.Exec(ctx, `UPDATE tasks SET status=CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END, available_at=now()+interval '60 seconds', updated_at=now() WHERE id=$1`, id)
 	if err == nil {
-		_ = s.AddEvent(ctx, id, "failed_attempt", msg)
+		_ = s.AddEvent(ctx, id, task.EventFailedAttempt, msg)
 	}
 	return err
 }
@@ -149,14 +150,27 @@ func (s *Store) AddEvent(ctx context.Context, taskID, typ, msg string) error {
 	return err
 }
 
-// AddEventWithPayload writes a task event with a JSON payload. It is used
-// for structured events such as policy_violation where callers want to
-// attach the full violation list for later inspection.
-func (s *Store) AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload []byte) error {
-	if len(payload) == 0 {
+// AddEventWithPayload writes a task event with a structured JSON payload. It
+// is used for events such as policy_violation, runner_start, verify_end, etc.
+// where callers want to attach extra context for later inspection. Pass nil
+// (or an empty []byte) to keep the payload column NULL. The payload column is
+// jsonb; raw []byte is sent as-is, anything else is json.Marshal'd first.
+func (s *Store) AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error {
+	if payload == nil {
 		return s.AddEvent(ctx, taskID, typ, msg)
 	}
-	_, err := s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message,payload) VALUES($1,$2,$3,$4)", taskID, typ, msg, payload)
+	if raw, ok := payload.([]byte); ok {
+		if len(raw) == 0 {
+			return s.AddEvent(ctx, taskID, typ, msg)
+		}
+		_, err := s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message,payload) VALUES($1,$2,$3,$4)", taskID, typ, msg, raw)
+		return err
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal task event payload: %w", err)
+	}
+	_, err = s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message,payload) VALUES($1,$2,$3,$4::jsonb)", taskID, typ, msg, string(b))
 	return err
 }
 
