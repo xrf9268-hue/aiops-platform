@@ -19,7 +19,7 @@ Per-state rules:
 - `AI Ready`: refined and small enough that an agent can attempt it. The poller picks these up.
 - `In Progress`: the worker has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
 - `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself.
-- `Rework`: review found issues and you want the agent to retry. Move it back here to re-enqueue.
+- `Rework`: review found issues and you want another attempt. The state is in `active_states`, but moving the Linear issue to `Rework` does not by itself re-enqueue: the poller uses `issue.ID` as `source_event_id` and `Enqueue` dedupes via `ON CONFLICT (source_type, source_event_id)` (see `cmd/linear-poller/main.go` and `internal/queue/postgres.go`). Use `/ai-run` on Gitea or `POST /v1/tasks` to actually trigger a fresh run; see "Re-running a failed task" below.
 - `Done` / `Canceled`: terminal. Listed under `tracker.terminal_states`.
 
 Default `active_states` in code:
@@ -109,12 +109,11 @@ Use when:
 
 - the task touches several files or needs more reasoning across a package.
 - you want richer tool use during the run.
-- Codex produced a thin or wrong patch and you want a second opinion. Set `agent.fallback: claude` in `WORKFLOW.md` to make this the retry runner.
+- Codex produced a thin or wrong patch and you want a second opinion. To switch runner you set `agent.default` in `WORKFLOW.md`, or pass `model` per task via `POST /v1/tasks`. Note: `agent.fallback` exists as a config field (`internal/workflow/config.go`) but no runtime path reads it today — `cmd/worker/main.go` selects the runner from `t.Model`/`agent.default`, and `internal/runner/runner.go` has no fallback handling. Setting `agent.fallback` will not change retry behavior.
 
 ```yaml
 agent:
   default: claude
-  fallback: claude
 claude:
   command: claude
 ```
@@ -159,15 +158,14 @@ curl 'http://localhost:8080/v1/tasks/<task-id>/events'
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` or `claude.command` resolves on the worker host. The shell runner uses `sh -lc`, so PATH must be set in the worker's login shell.
-- Empty diff: agent decided nothing to do. Tighten the issue body and move it to `Rework`.
+- Empty diff: agent decided nothing to do. Tighten the issue body, move it to `Rework`, then re-trigger via `/ai-run` on Gitea or `POST /v1/tasks` (the Linear state change alone will not re-enqueue — see below).
 
 ### Re-running a failed task
 
-Three options, in order of preference:
+Two options, in order of preference (moving the Linear issue alone is not enough — the poller dedupes on `source_event_id = issue.ID` via `ON CONFLICT (source_type, source_event_id) DO UPDATE SET updated_at`, so re-polling just touches the existing task instead of creating a fresh queued one):
 
-1. Move the Linear issue to `Rework`. The poller will re-enqueue under the same `source_event_id` (idempotent via dedupe).
-2. Re-trigger from Gitea by commenting `/ai-run` on the issue.
-3. Manual enqueue against the trigger API:
+1. Re-trigger from Gitea by commenting `/ai-run` on the issue. The trigger API uses the Gitea delivery ID (or `comment-<id>`) as `source_event_id`, so each comment produces a new queued task.
+2. Manual enqueue against the trigger API (each call defaults `source_event_id` to `manual-<unix-nanos>`, so it is always fresh):
 
    ```bash
    curl -X POST http://localhost:8080/v1/tasks \
