@@ -43,6 +43,7 @@ This repository implements the second track.
 - [Local development runbook](docs/runbooks/local-dev.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Task debugging API](docs/runbooks/task-api.md)
+- [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 
 ## Continuous integration
 
