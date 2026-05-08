@@ -58,6 +58,7 @@ func main() {
 
 func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 	mgr := workspace.New(env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"))
+	mgr.MirrorRoot = os.Getenv("AIOPS_MIRROR_ROOT")
 	workdir, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
 		return err

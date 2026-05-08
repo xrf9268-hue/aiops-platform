@@ -231,3 +231,15 @@ Stop the conflicting local service or change the published port in `deploy/docke
 ### `go: module lookup disabled` or `go.sum` mismatch
 
 Run `go mod tidy`, then re-run the failing command. CI will reject changes that leave `go.mod` or `go.sum` dirty; see [CI/CD runbook](ci.md) for the local pre-push check list.
+
+## Workspace cache and cleanup
+
+After M2, the worker keeps a per-repo bare mirror under
+`AIOPS_MIRROR_ROOT` (default `os.UserCacheDir()/aiops-platform/mirrors`)
+and creates a per-task worktree under `WORKSPACE_ROOT` for every claimed
+task. This avoids re-cloning on every retry and lets two tasks run
+concurrently without sharing a working tree. See the dedicated
+[workspace cache runbook](workspace-cache.md) for the on-disk layout,
+configuration knobs, and recommended cleanup cadence (the
+`(*workspace.Manager).Cleanup` API or `rm -rf $WORKSPACE_ROOT/*` once
+old tasks no longer matter).

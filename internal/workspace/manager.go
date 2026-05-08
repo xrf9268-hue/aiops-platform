@@ -72,8 +72,17 @@ func (c *cappedBuffer) Dropped() int64  { return c.dropped }
 // Compile-time check that cappedBuffer satisfies io.Writer.
 var _ io.Writer = (*cappedBuffer)(nil)
 
+// Manager owns per-task workspace creation, layered on top of a process-wide
+// bare mirror cache. Each task gets its own detached worktree under Root so
+// concurrent workers cannot stomp on each other, while the heavy network IO
+// (object download) happens once per repo in the mirror cache and is
+// reused on every subsequent task.
 type Manager struct {
+	// Root is the per-task worktree root, typically WORKSPACE_ROOT.
 	Root string
+	// MirrorRoot overrides the bare mirror cache location. When empty,
+	// MirrorRoot() resolves it from os.UserCacheDir or os.TempDir.
+	MirrorRoot string
 }
 
 func New(root string) *Manager { return &Manager{Root: root} }
@@ -83,21 +92,51 @@ func (m *Manager) PathFor(t task.Task) string {
 	return filepath.Join(m.Root, repo, t.ID)
 }
 
+// PrepareGitWorkspace materialises a per-task workspace by adding a fresh
+// worktree off the cached bare mirror for t.CloneURL. The worktree is
+// created at PathFor(t) on the work branch, with origin set back to the
+// upstream URL so `git push origin <branch>` works without further setup.
+//
+// On every call we refresh the mirror first so the worktree starts from
+// up-to-date refs; this replaces the previous behaviour of running a fresh
+// `git clone` per task, which was both slow and wasteful for large repos.
 func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, error) {
 	workdir := m.PathFor(t)
-	_ = os.RemoveAll(workdir)
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
 		return "", err
 	}
-	if err := run(ctx, filepath.Dir(workdir), "git", "clone", t.CloneURL, workdir); err != nil {
+	mirror, err := m.EnsureMirror(ctx, t.CloneURL)
+	if err != nil {
 		return "", err
 	}
-	if err := run(ctx, workdir, "git", "checkout", t.BaseBranch); err != nil {
-		return "", err
+	// Drop any leftover worktree from a previous run *before* asking git to
+	// add a new one at the same path. We deliberately ignore failures and
+	// silence stderr because the common case ("no such worktree") prints a
+	// scary fatal line that obscures real worker logs.
+	_ = runQuiet(ctx, mirror, "git", "worktree", "remove", "--force", workdir)
+	_ = os.RemoveAll(workdir)
+	if err := runQuiet(ctx, mirror, "git", "worktree", "prune"); err != nil {
+		return "", fmt.Errorf("worktree prune: %w", err)
 	}
-	if err := run(ctx, workdir, "git", "checkout", "-b", t.WorkBranch); err != nil {
-		return "", err
+	// Create the worktree on the work branch, branched from the requested
+	// base ref. We resolve the base via `origin/<base>` because the bare
+	// cache stores upstream branches as remote-tracking refs (see
+	// EnsureMirror); falling back to the bare name covers `file://` test
+	// fixtures where the upstream is the same on-disk repo. Using -B makes
+	// the operation idempotent if a previous attempt left an in-mirror
+	// branch behind.
+	startRef := "origin/" + t.BaseBranch
+	if err := runQuiet(ctx, mirror, "git", "rev-parse", "--verify", startRef); err != nil {
+		startRef = t.BaseBranch
 	}
+	if err := run(ctx, mirror, "git", "worktree", "add", "-B", t.WorkBranch, workdir, startRef); err != nil {
+		return "", fmt.Errorf("worktree add: %w", err)
+	}
+	// The mirror's "origin" remote points at the upstream URL, but inside
+	// the worktree git resolves remotes via the linked repo, so push works
+	// out of the box. We still set the URL explicitly for clarity in case
+	// downstream tooling inspects `git remote -v` from within the worktree.
+	_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
 	return workdir, nil
 }
 
@@ -359,6 +398,15 @@ func run(ctx context.Context, dir string, name string, args ...string) error {
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// runQuiet runs a command without forwarding stdout/stderr. We use it for
+// probe operations like `git rev-parse --verify` whose stderr is expected
+// noise on the unhappy path.
+func runQuiet(ctx context.Context, dir string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	return cmd.Run()
 }
 
