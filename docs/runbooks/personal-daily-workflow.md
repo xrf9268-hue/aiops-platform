@@ -19,7 +19,7 @@ Per-state rules:
 - `AI Ready`: refined and small enough that an agent can attempt it. The poller picks these up.
 - `In Progress`: the worker has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
 - `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself.
-- `Rework`: review found issues and you want another attempt. The state is in `active_states`, but moving the Linear issue to `Rework` does not by itself re-enqueue: the poller uses `issue.ID` as `source_event_id` and `Enqueue` dedupes via `ON CONFLICT (source_type, source_event_id)` (see `cmd/linear-poller/main.go` and `internal/queue/postgres.go`). Use `/ai-run` on Gitea or `POST /v1/tasks` to actually trigger a fresh run; see "Re-running a failed task" below.
+- `Rework`: review found issues and you want another attempt. Moving the Linear issue into `Rework` re-enqueues a fresh task automatically. The poller composes `source_event_id` as `<issue.ID>|rework|<issue.updatedAt>` whenever the state is `Rework`, so each transition into Rework is a brand-new dedupe key and Postgres INSERTs a new task row. While the issue stays parked in Rework, repeated polls reuse the same `updatedAt` and dedupe (no enqueue loop). Non-Rework states still use plain `issue.ID`, so `AI Ready` -> `In Progress` iteration on a single task is unchanged. See `cmd/linear-poller/main.go` (`sourceEventID`) and `internal/queue/postgres.go` (`Enqueue`).
 - `Done` / `Canceled`: terminal. Listed under `tracker.terminal_states`.
 
 Default `active_states` in code:
@@ -158,14 +158,15 @@ curl 'http://localhost:8080/v1/tasks/<task-id>/events'
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` or `claude.command` resolves on the worker host. The shell runner uses `sh -lc`, so PATH must be set in the worker's login shell.
-- Empty diff: agent decided nothing to do. Tighten the issue body, move it to `Rework`, then re-trigger via `/ai-run` on Gitea or `POST /v1/tasks` (the Linear state change alone will not re-enqueue — see below).
+- Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework`. The state change alone re-enqueues a fresh task (the poller keys Rework by `issue.ID|rework|updatedAt`). `/ai-run` on Gitea and `POST /v1/tasks` are still available as fallbacks if the poller is paused.
 
 ### Re-running a failed task
 
-Two options, in order of preference (moving the Linear issue alone is not enough — the poller dedupes on `source_event_id = issue.ID` via `ON CONFLICT (source_type, source_event_id) DO UPDATE SET updated_at`, so re-polling just touches the existing task instead of creating a fresh queued one):
+Three options, in order of preference:
 
-1. Re-trigger from Gitea by commenting `/ai-run` on the issue. The trigger API uses the Gitea delivery ID (or `comment-<id>`) as `source_event_id`, so each comment produces a new queued task.
-2. Manual enqueue against the trigger API (each call defaults `source_event_id` to `manual-<unix-nanos>`, so it is always fresh):
+1. Move the Linear issue to `Rework`. The poller composes `source_event_id` as `<issue.ID>|rework|<updatedAt>` for the Rework state, so the transition INSERTs a new task row instead of deduping against the original. Subsequent polls while the issue stays in Rework reuse the same `updatedAt` and stay deduped, so you do not get an enqueue loop.
+2. Re-trigger from Gitea by commenting `/ai-run` on the issue. The trigger API uses the Gitea delivery ID (or `comment-<id>`) as `source_event_id`, so each comment produces a new queued task. Useful when you want to retry without changing Linear state.
+3. Manual enqueue against the trigger API (each call defaults `source_event_id` to `manual-<unix-nanos>`, so it is always fresh):
 
    ```bash
    curl -X POST http://localhost:8080/v1/tasks \
