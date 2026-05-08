@@ -70,7 +70,7 @@ func main() {
 // purely concerned with retry routing.
 func handleTaskFailure(ctx context.Context, store *queue.Store, t task.Task, cfg workflow.Config, err error) {
 	if runner.IsTimeout(err) {
-		budget := cfg.Agent.MaxTimeoutRetries
+		budget := cfg.Agent.MaxTimeoutRetriesValue()
 		if _, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget); ferr != nil {
 			log.Printf("task %s FailTimeout error: %v", t.ID, ferr)
 		}

@@ -49,7 +49,26 @@ type AgentConfig struct {
 	// after a runner timeout. This is intentionally separate from the
 	// generic max_attempts (which covers verify/policy/other failures)
 	// so a flaky runner cannot exhaust the global retry budget.
-	MaxTimeoutRetries int `yaml:"max_timeout_retries"`
+	//
+	// Pointer-typed so we can distinguish "absent" (nil → schema default
+	// of 1) from "explicitly set to 0" (no retry). Read via
+	// MaxTimeoutRetriesValue() rather than dereferencing directly.
+	MaxTimeoutRetries *int `yaml:"max_timeout_retries"`
+}
+
+// MaxTimeoutRetriesValue returns the effective runner-timeout retry
+// budget. A nil pointer (field omitted from YAML) yields the schema
+// default of 1 bonus retry; an explicit value—including 0—is honored
+// as configured. Negative values are clamped to 0 since a negative
+// retry budget is meaningless.
+func (a AgentConfig) MaxTimeoutRetriesValue() int {
+	if a.MaxTimeoutRetries == nil {
+		return 1
+	}
+	if *a.MaxTimeoutRetries < 0 {
+		return 0
+	}
+	return *a.MaxTimeoutRetries
 }
 
 type CommandConfig struct {
@@ -96,13 +115,16 @@ func DefaultConfig() Config {
 			PollIntervalMs: 30000,
 		},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
+		// Agent.MaxTimeoutRetries is intentionally left nil here so the
+		// "absent" signal survives a YAML unmarshal that overlays this
+		// default. The effective default of 1 retry is supplied by
+		// MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
 			Fallback:            "claude",
 			MaxConcurrentAgents: 1,
 			MaxTurns:            8,
 			Timeout:             30 * time.Minute,
-			MaxTimeoutRetries:   1,
 		},
 		Codex:  CommandConfig{Command: "codex exec"},
 		Claude: CommandConfig{Command: "claude"},

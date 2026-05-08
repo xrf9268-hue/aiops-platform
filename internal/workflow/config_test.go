@@ -102,8 +102,8 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	if cfg.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("default Agent.Timeout: got %v want 30m", cfg.Agent.Timeout)
 	}
-	if cfg.Agent.MaxTimeoutRetries != 1 {
-		t.Fatalf("default Agent.MaxTimeoutRetries: got %d want 1", cfg.Agent.MaxTimeoutRetries)
+	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != 1 {
+		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want 1", got)
 	}
 }
 
@@ -124,8 +124,8 @@ func TestLoadOptionalAppliesAgentTimeoutDefaults(t *testing.T) {
 	if wf.Config.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("expanded Agent.Timeout: got %v want 30m", wf.Config.Agent.Timeout)
 	}
-	if wf.Config.Agent.MaxTimeoutRetries != 1 {
-		t.Fatalf("expanded Agent.MaxTimeoutRetries: got %d want 1", wf.Config.Agent.MaxTimeoutRetries)
+	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 1 {
+		t.Fatalf("expanded Agent.MaxTimeoutRetriesValue: got %d want 1", got)
 	}
 }
 
@@ -145,7 +145,27 @@ func TestLoadOptionalHonorsExplicitAgentTimeout(t *testing.T) {
 	if wf.Config.Agent.Timeout != 5*time.Minute {
 		t.Fatalf("explicit Agent.Timeout: got %v want 5m", wf.Config.Agent.Timeout)
 	}
-	if wf.Config.Agent.MaxTimeoutRetries != 3 {
-		t.Fatalf("explicit Agent.MaxTimeoutRetries: got %d want 3", wf.Config.Agent.MaxTimeoutRetries)
+	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 3 {
+		t.Fatalf("explicit Agent.MaxTimeoutRetriesValue: got %d want 3", got)
+	}
+}
+
+// TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries verifies that an
+// operator who deliberately sets max_timeout_retries: 0 in YAML can
+// disable the runner-timeout retry budget entirely. Previously the
+// loader coerced 0 back to 1, silently undoing this override.
+func TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := "---\nagent:\n  max_timeout_retries: 0\n---\nhello\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wf, err := LoadOptional(path)
+	if err != nil {
+		t.Fatalf("LoadOptional: %v", err)
+	}
+	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 0 {
+		t.Fatalf("explicit zero Agent.MaxTimeoutRetriesValue: got %d want 0", got)
 	}
 }
