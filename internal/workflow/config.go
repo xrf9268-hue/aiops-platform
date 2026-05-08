@@ -1,5 +1,7 @@
 package workflow
 
+import "time"
+
 type Config struct {
 	Repo      RepoConfig      `yaml:"repo"`
 	Tracker   TrackerConfig   `yaml:"tracker"`
@@ -38,6 +40,16 @@ type AgentConfig struct {
 	Fallback            string `yaml:"fallback"`
 	MaxConcurrentAgents int    `yaml:"max_concurrent_agents"`
 	MaxTurns            int    `yaml:"max_turns"`
+	// Timeout caps a single runner invocation. When exceeded, the runner
+	// subprocess is killed and the task records a `runner_timeout` event.
+	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
+	// schema default of 30m.
+	Timeout time.Duration `yaml:"timeout"`
+	// MaxTimeoutRetries bounds how many times a task may be re-queued
+	// after a runner timeout. This is intentionally separate from the
+	// generic max_attempts (which covers verify/policy/other failures)
+	// so a flaky runner cannot exhaust the global retry budget.
+	MaxTimeoutRetries int `yaml:"max_timeout_retries"`
 }
 
 type CommandConfig struct {
@@ -84,11 +96,18 @@ func DefaultConfig() Config {
 			PollIntervalMs: 30000,
 		},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
-		Agent:     AgentConfig{Default: "mock", Fallback: "claude", MaxConcurrentAgents: 1, MaxTurns: 8},
-		Codex:     CommandConfig{Command: "codex exec"},
-		Claude:    CommandConfig{Command: "claude"},
-		Policy:    PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
-		Verify:    VerifyConfig{Commands: []string{}},
+		Agent: AgentConfig{
+			Default:             "mock",
+			Fallback:            "claude",
+			MaxConcurrentAgents: 1,
+			MaxTurns:            8,
+			Timeout:             30 * time.Minute,
+			MaxTimeoutRetries:   1,
+		},
+		Codex:  CommandConfig{Command: "codex exec"},
+		Claude: CommandConfig{Command: "claude"},
+		Policy: PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
+		Verify: VerifyConfig{Commands: []string{}},
 		// PR.Draft defaults to false so workflows that omit `pr.draft` keep
 		// the historical worker behavior of opening ready-for-review PRs.
 		// Profiles that want draft PRs (e.g. company-cautious) opt in by

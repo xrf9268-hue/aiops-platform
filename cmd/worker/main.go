@@ -20,7 +20,9 @@ import (
 
 // eventEmitter is the subset of the queue store the worker needs to record
 // per-stage events. Defined here so unit tests can verify the worker emits
-// the right kinds without standing up a database.
+// the right kinds without standing up a database. The payload parameter is
+// `any` so callers can pass either structured maps (Marshal'd by the store)
+// or pre-serialized JSON []byte.
 type eventEmitter interface {
 	AddEvent(ctx context.Context, taskID, typ, msg string) error
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
@@ -47,29 +49,56 @@ func main() {
 			time.Sleep(3 * time.Second)
 			continue
 		}
-		if err := runTask(ctx, store, *t); err != nil {
+		cfg, err := runTask(ctx, store, *t)
+		if err != nil {
 			log.Printf("task %s failed: %v", t.ID, err)
-			_ = store.Fail(ctx, t.ID, err.Error())
+			handleTaskFailure(ctx, store, *t, cfg, err)
 			continue
 		}
 		_ = store.Complete(ctx, t.ID)
 	}
 }
 
-func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
+// handleTaskFailure routes a task error to the right retry bucket.
+//
+// Runner timeouts use a dedicated budget (agent.max_timeout_retries) so a
+// hung agent cannot consume the generic max_attempts reserved for
+// verify/policy/transient infra failures. Non-timeout failures fall through
+// to the legacy Fail path which is still gated by max_attempts. Failure
+// artifacts (CHANGED_FILES.txt / RUN_SUMMARY.md / VERIFICATION.json) are
+// written by the runTask code path on the way out, so this function is
+// purely concerned with retry routing.
+func handleTaskFailure(ctx context.Context, store *queue.Store, t task.Task, cfg workflow.Config, err error) {
+	if runner.IsTimeout(err) {
+		budget := cfg.Agent.MaxTimeoutRetries
+		if _, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget); ferr != nil {
+			log.Printf("task %s FailTimeout error: %v", t.ID, ferr)
+		}
+		return
+	}
+	_ = store.Fail(ctx, t.ID, err.Error())
+}
+
+// runTask executes a single task end-to-end and returns the resolved
+// workflow config alongside any error so callers can route retries by
+// failure class. The returned config carries the per-agent timeout and
+// retry budgets so handleTaskFailure does not need to re-prepare the
+// workspace just to read agent settings.
+func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config, error) {
 	mgr := workspace.New(env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"))
 	mgr.MirrorRoot = os.Getenv("AIOPS_MIRROR_ROOT")
 	workdir, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
-		return err
+		return workflow.Config{}, err
 	}
 
 	wf, err := workflow.LoadOptional(workdir + "/WORKFLOW.md")
 	if err != nil {
-		return err
+		return workflow.Config{}, err
 	}
+	cfg := wf.Config
 	if t.Model == "" || t.Model == "mock" {
-		t.Model = wf.Config.Agent.Default
+		t.Model = cfg.Agent.Default
 		if t.Model == "" {
 			t.Model = "mock"
 		}
@@ -85,39 +114,29 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 		"repo.branch":      t.BaseBranch,
 	})
 	if err := writeTaskFiles(workdir, t, prompt); err != nil {
-		return err
+		return cfg, err
 	}
 
 	r, err := runner.New(t.Model)
 	if err != nil {
-		return err
+		return cfg, err
 	}
 
-	emit(ctx, ev, t.ID, task.EventRunnerStart, "runner started", map[string]any{"model": t.Model})
-	runnerStart := time.Now()
-	res, runErr := r.Run(ctx, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt})
-	runnerDur := time.Since(runnerStart)
-	runnerPayload := map[string]any{"model": t.Model, "duration_ms": runnerDur.Milliseconds()}
+	res, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout)
 	if runErr != nil {
-		runnerPayload["error"] = errSummary(runErr)
-		emit(ctx, ev, t.ID, task.EventRunnerEnd, "runner failed", runnerPayload)
 		writeFailureArtifacts(ctx, workdir, nil, "runner failed: "+errSummary(runErr))
-		return runErr
+		return cfg, runErr
 	}
-	if res.Summary != "" {
-		runnerPayload["summary"] = res.Summary
-	}
-	emit(ctx, ev, t.ID, task.EventRunnerEnd, "runner completed", runnerPayload)
 
-	if err := workspace.EnforcePolicy(ctx, workdir, wf.Config); err != nil {
+	if err := workspace.EnforcePolicy(ctx, workdir, cfg); err != nil {
 		recordPolicyViolation(ctx, ev, t.ID, err)
 		writeFailureArtifacts(ctx, workdir, nil, "policy check failed: "+errSummary(err))
-		return err
+		return cfg, err
 	}
 
-	emit(ctx, ev, t.ID, task.EventVerifyStart, "verify started", map[string]any{"commands": wf.Config.Verify.Commands})
+	emit(ctx, ev, t.ID, task.EventVerifyStart, "verify started", map[string]any{"commands": cfg.Verify.Commands})
 	verifyStart := time.Now()
-	verifyResults, verifyErr := workspace.RunVerify(ctx, workdir, wf.Config)
+	verifyResults, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
 	verifyDur := time.Since(verifyStart)
 	if writeErr := workspace.WriteVerification(workdir, verifyResults); writeErr != nil {
 		log.Printf("task %s: write verification artifact: %v", t.ID, writeErr)
@@ -130,7 +149,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 		verifyPayload["error"] = errSummary(verifyErr)
 		emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify failed", verifyPayload)
 		writeFailureArtifacts(ctx, workdir, verifyResults, "verify failed: "+errSummary(verifyErr))
-		return verifyErr
+		return cfg, verifyErr
 	}
 	emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify completed", verifyPayload)
 
@@ -161,7 +180,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 			"duration_ms": time.Since(pushStart).Milliseconds(),
 			"error":       errSummary(err),
 		})
-		return err
+		return cfg, err
 	}
 	emit(ctx, ev, t.ID, task.EventPush, "push completed", map[string]any{
 		"branch":         t.WorkBranch,
@@ -170,7 +189,61 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 		"sample_changes": sampleSlice(changed, 10),
 	})
 
-	return createPR(ctx, ev, t, wf.Config)
+	return cfg, createPR(ctx, ev, t, cfg)
+}
+
+// runRunnerWithTimeout invokes the runner under a per-task timeout derived
+// from agent.timeout. It emits structured task events
+// (runner_start, runner_end, runner_timeout) so retry policy and observers
+// can distinguish a clean exit from a kill due to deadline. The returned
+// runner.Result is what runTask passes to runSummary on the success path;
+// on failure it is zero-valued.
+func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration) (runner.Result, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+
+	emit(ctx, ev, in.Task.ID, task.EventRunnerStart, "runner started", map[string]any{
+		"model":      in.Task.Model,
+		"timeout_ms": timeout.Milliseconds(),
+	})
+
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	start := time.Now()
+	res, runErr := r.Run(runCtx, in)
+	elapsed := time.Since(start)
+
+	if runErr != nil {
+		var te *runner.TimeoutError
+		if errors.As(runErr, &te) {
+			emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, te.Error(), map[string]any{
+				"model":      in.Task.Model,
+				"timeout_ms": te.Timeout.Milliseconds(),
+				"elapsed_ms": te.Elapsed.Milliseconds(),
+			})
+			return runner.Result{}, runErr
+		}
+		emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner failed", map[string]any{
+			"model":       in.Task.Model,
+			"duration_ms": elapsed.Milliseconds(),
+			"error":       errSummary(runErr),
+			"ok":          false,
+		})
+		return runner.Result{}, runErr
+	}
+
+	endPayload := map[string]any{
+		"model":       in.Task.Model,
+		"duration_ms": elapsed.Milliseconds(),
+		"ok":          true,
+	}
+	if res.Summary != "" {
+		endPayload["summary"] = res.Summary
+	}
+	emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner completed", endPayload)
+	return res, nil
 }
 
 // recordPolicyViolation writes a structured `policy_violation` task event

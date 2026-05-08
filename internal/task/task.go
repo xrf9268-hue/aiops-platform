@@ -24,6 +24,7 @@ const (
 	EventClaimed       = "claimed"
 	EventRunnerStart   = "runner_start"
 	EventRunnerEnd     = "runner_end"
+	EventRunnerTimeout = "runner_timeout"
 	EventVerifyStart   = "verify_start"
 	EventVerifyEnd     = "verify_end"
 	EventPush          = "push"
