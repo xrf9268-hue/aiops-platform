@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -122,17 +124,169 @@ func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
 	}
 }
 
-func TestRunSummaryContainsKeyFields(t *testing.T) {
-	t1 := task.Task{ID: "tsk_99", Title: "fix bug", Actor: "octo", Model: "claude", BaseBranch: "main", WorkBranch: "ai/tsk_99"}
-	res := runner.Result{Summary: "claude completed"}
-	changed := []string{"a.go", "b.go"}
-	verify := []workspace.VerifyResult{{Command: "go test", ExitCode: 0, Duration: time.Millisecond}}
-	out := runSummary(t1, res, changed, verify)
-	for _, want := range []string{"tsk_99", "fix bug", "claude completed", "main -> ai/tsk_99", "Changed files: 2", "a.go", "go test"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("run summary missing %q:\n%s", want, out)
+// TestBuildPRBodyEmbedsRunSummary verifies the PR body includes the runner-
+// produced RUN_SUMMARY.md content, the source/task fields, and a link back
+// to the artifact path so reviewers can find the full file even when the
+// excerpt is truncated.
+func TestBuildPRBodyEmbedsRunSummary(t *testing.T) {
+	t1 := task.Task{
+		ID:            "tsk_42",
+		Title:         "fix bug",
+		SourceType:    "github_issue",
+		SourceEventID: "issue#7",
+		WorkBranch:    "ai/tsk_42",
+	}
+	summary := "# Run summary\n\nFixed the off-by-one in foo().\nVerified with `go test ./...`.\n"
+	body := buildPRBody(t1, summary)
+	for _, want := range []string{
+		"tsk_42",
+		"github_issue / issue#7",
+		"Run summary",
+		"Fixed the off-by-one in foo().",
+		"`.aiops/RUN_SUMMARY.md`",
+		"`ai/tsk_42`",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("PR body missing %q:\n%s", want, body)
 		}
 	}
+	if strings.Contains(body, "_Summary truncated") {
+		t.Fatalf("PR body should not advertise truncation for short summaries")
+	}
+}
+
+// TestBuildPRBodyTruncatesLongSummary confirms the PR body excerpt is capped
+// at prBodySummaryCap and surfaces a truncation marker so reviewers know to
+// open the artifact for the rest.
+func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
+	t1 := task.Task{ID: "tsk_big", WorkBranch: "ai/tsk_big"}
+	// Use a sentinel char that does not appear elsewhere in the PR chrome
+	// so we can count exactly how much of the user-provided summary made
+	// it into the rendered body.
+	const sentinel = "Z"
+	long := strings.Repeat(sentinel, prBodySummaryCap+1024)
+	body := buildPRBody(t1, long)
+	if !strings.Contains(body, "_Summary truncated at") {
+		t.Fatalf("expected truncation marker in PR body for oversized summary")
+	}
+	if got := strings.Count(body, sentinel); got > prBodySummaryCap {
+		t.Fatalf("excerpt exceeded prBodySummaryCap: %d > %d", got, prBodySummaryCap)
+	}
+}
+
+// TestAppendRunSummaryDirectiveAppendsOnce verifies the runner contract is
+// only appended when the rendered prompt does not already mention it. This
+// keeps workflow templates free to embed their own (more detailed) version
+// without duplication.
+func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
+	plain := "do the work"
+	out := appendRunSummaryDirective(plain)
+	if !strings.Contains(out, "RUN_SUMMARY.md") {
+		t.Fatalf("directive not appended: %q", out)
+	}
+	if !strings.Contains(out, "**Required output:**") {
+		t.Fatalf("expected Required output marker in appended directive")
+	}
+
+	// Idempotent: prompt that already mentions RUN_SUMMARY.md is left alone.
+	already := "please write .aiops/RUN_SUMMARY.md when done"
+	if got := appendRunSummaryDirective(already); got != already {
+		t.Fatalf("expected no-op when prompt already references RUN_SUMMARY.md, got %q", got)
+	}
+}
+
+// TestMockRunnerWritesRunSummary confirms the mock runner produces a
+// RUN_SUMMARY.md that satisfies workspace.CheckSummary, so the worker gate
+// passes end-to-end without touching codex/claude.
+func TestMockRunnerWritesRunSummary(t *testing.T) {
+	dir := t.TempDir()
+	r := runner.MockRunner{}
+	tk := task.Task{ID: "tsk_mock", Title: "mock task", Actor: "tester", Model: "mock"}
+	if _, err := r.Run(context.Background(), runner.RunInput{Task: tk, Workflow: workflow.Workflow{}, Workdir: dir, Prompt: "p"}); err != nil {
+		t.Fatalf("mock runner: %v", err)
+	}
+	body, status, err := workspace.CheckSummary(dir)
+	if err != nil {
+		t.Fatalf("CheckSummary: %v", err)
+	}
+	if status != workspace.SummaryOK {
+		t.Fatalf("status = %s, want ok; body=%q", status, body)
+	}
+	if !strings.Contains(body, "tsk_mock") {
+		t.Fatalf("mock summary should contain task id, got: %s", body)
+	}
+}
+
+// TestCheckSummaryRejectsMissingEmptyAndPlaceholder asserts the gate
+// distinguishes the three failure modes the worker exposes via the
+// `summary_missing` / `failed_attempt` events.
+func TestCheckSummaryRejectsMissingEmptyAndPlaceholder(t *testing.T) {
+	cases := []struct {
+		name    string
+		write   func(dir string) error
+		want    workspace.SummaryStatus
+		wantErr bool
+	}{
+		{
+			name:  "missing",
+			write: func(dir string) error { return nil },
+			want:  workspace.SummaryMissing,
+		},
+		{
+			name: "empty",
+			write: func(dir string) error {
+				return writeAiopsFileForTest(dir, "")
+			},
+			want: workspace.SummaryEmpty,
+		},
+		{
+			name: "whitespace only",
+			write: func(dir string) error {
+				return writeAiopsFileForTest(dir, "   \n\n\t\n")
+			},
+			want: workspace.SummaryEmpty,
+		},
+		{
+			name: "TODO placeholder",
+			write: func(dir string) error {
+				return writeAiopsFileForTest(dir, "TODO\n")
+			},
+			want: workspace.SummaryPlaceholder,
+		},
+		{
+			name: "real summary",
+			write: func(dir string) error {
+				return writeAiopsFileForTest(dir, "# Summary\n\nFixed bug, verified with go test ./...\n")
+			},
+			want: workspace.SummaryOK,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := tc.write(dir); err != nil {
+				t.Fatalf("setup: %v", err)
+			}
+			_, status, err := workspace.CheckSummary(dir)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
+			}
+			if status != tc.want {
+				t.Fatalf("status=%s want=%s", status, tc.want)
+			}
+		})
+	}
+}
+
+// writeAiopsFileForTest is a small helper to seed .aiops/RUN_SUMMARY.md on
+// disk for gate tests. It avoids exporting a workspace test helper.
+func writeAiopsFileForTest(dir, body string) error {
+	aiops := filepath.Join(dir, ".aiops")
+	if err := os.MkdirAll(aiops, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(aiops, "RUN_SUMMARY.md"), []byte(body), 0o644)
 }
 
 func TestEventKindConstantsAreSnakeCase(t *testing.T) {

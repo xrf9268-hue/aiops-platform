@@ -113,6 +113,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		"repo.name":        t.RepoName,
 		"repo.branch":      t.BaseBranch,
 	})
+	prompt = appendRunSummaryDirective(prompt)
 	if err := writeTaskFiles(workdir, t, prompt); err != nil {
 		return cfg, err
 	}
@@ -122,8 +123,17 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return cfg, err
 	}
 
-	res, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout)
-	if runErr != nil {
+	// Make sure the post-runner CheckSummary gate cannot pass on a stale
+	// summary. PrepareGitWorkspace already nukes the workdir on a fresh
+	// clone, but we still defend against the case where the base branch
+	// *itself* has a committed .aiops/RUN_SUMMARY.md (left over from a prior
+	// PR or seeded by hand). Deleting it here means CheckSummary can only
+	// succeed when the runner produced a summary during this invocation.
+	if err := workspace.ResetRunSummary(workdir); err != nil {
+		return cfg, fmt.Errorf("reset run summary: %w", err)
+	}
+
+	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout); runErr != nil {
 		writeFailureArtifacts(ctx, workdir, nil, "runner failed: "+errSummary(runErr))
 		return cfg, runErr
 	}
@@ -153,33 +163,65 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 	}
 	emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify completed", verifyPayload)
 
-	// Run the optional pre-push secret scanner between verify and push so a
-	// branch carrying credential leaks never reaches the remote. Failures
-	// flow through writeFailureArtifacts + the existing failed_attempt path
-	// so operators can inspect what the scanner saw.
-	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
-		writeFailureArtifacts(ctx, workdir, verifyResults, "secret scan blocked push: "+errSummary(err))
-		return err
+	// Gate: the runner is required to write .aiops/RUN_SUMMARY.md describing
+	// the change. If it is missing/empty/a placeholder we refuse to open a PR
+	// and emit `summary_missing` + `failed_attempt` events so the human can
+	// see exactly why the task did not progress. We do NOT fall back to a
+	// worker-generated summary here on purpose: the artifact must come from
+	// the runner so it reflects intent, not a synthesized recap. The failure
+	// path below (writeFailureArtifacts) still seeds a worker summary for
+	// post-mortem inspection — that is observed but never gates a PR.
+	//
+	// This gate runs BEFORE the secret scanner: a run with no real summary
+	// is not allowed to push regardless of scanner outcome, and skipping the
+	// scanner on this path keeps the failure attribution unambiguous.
+	summary, status, checkErr := workspace.CheckSummary(workdir)
+	if checkErr != nil {
+		emit(ctx, ev, t.ID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
+			"path":  workspace.SummaryPath,
+			"error": errSummary(checkErr),
+		})
+		emit(ctx, ev, t.ID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+			"reason": "summary_unreadable",
+			"path":   workspace.SummaryPath,
+		})
+		writeFailureArtifacts(ctx, workdir, verifyResults, "RUN_SUMMARY.md unreadable: "+errSummary(checkErr))
+		return cfg, fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)
+	}
+	if status != workspace.SummaryOK {
+		emit(ctx, ev, t.ID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
+			"path":   workspace.SummaryPath,
+			"status": string(status),
+		})
+		emit(ctx, ev, t.ID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+			"reason": "summary_" + string(status),
+			"path":   workspace.SummaryPath,
+		})
+		writeFailureArtifacts(ctx, workdir, verifyResults, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
+		return cfg, fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)
 	}
 
-	// Snapshot the changed files AFTER all run artifacts have been written so
-	// that CHANGED_FILES.txt, RUN_SUMMARY.md, and the success-path event
-	// payload reflect what is actually about to be committed (artifacts
-	// included). We seed the artifacts with empty stubs so they are present in
-	// the working tree when `git status --porcelain` runs, then rewrite them
-	// with the final snapshot contents.
+	// Run the optional pre-push secret scanner between the summary gate and
+	// push so a branch carrying credential leaks never reaches the remote.
+	// Failures flow through writeFailureArtifacts + the existing
+	// failed_attempt path so operators can inspect what the scanner saw.
+	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
+		writeFailureArtifacts(ctx, workdir, verifyResults, "secret scan blocked push: "+errSummary(err))
+		return cfg, err
+	}
+
+	// Snapshot the changed files AFTER the gate has accepted the runner's
+	// summary and the secret scanner has cleared the tree. We seed
+	// CHANGED_FILES.txt as an empty stub so it shows up in
+	// `git status --porcelain` alongside the runner-produced summary, then
+	// rewrite it with the final list. RUN_SUMMARY.md is intentionally NOT
+	// rewritten by the worker on the success path — see gate above.
 	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
 		log.Printf("task %s: seed changed files artifact: %v", t.ID, err)
-	}
-	if err := workspace.WriteSummary(workdir, ""); err != nil {
-		log.Printf("task %s: seed run summary artifact: %v", t.ID, err)
 	}
 	changed, _ := workspace.AllChangedFiles(ctx, workdir)
 	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
 		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
-	}
-	if err := workspace.WriteSummary(workdir, runSummary(t, res, changed, verifyResults)); err != nil {
-		log.Printf("task %s: write run summary artifact: %v", t.ID, err)
 	}
 
 	pushStart := time.Now()
@@ -198,7 +240,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		"sample_changes": sampleSlice(changed, 10),
 	})
 
-	return cfg, createPR(ctx, ev, t, cfg)
+	return cfg, createPR(ctx, ev, t, cfg, summary)
 }
 
 // runRunnerWithTimeout invokes the runner under a per-task timeout derived
@@ -340,10 +382,10 @@ func recordPolicyViolation(ctx context.Context, ev eventEmitter, taskID string, 
 	_ = ev.AddEvent(ctx, taskID, "policy_violation", err.Error())
 }
 
-func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config) error {
+func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string) error {
 	_ = cfg
 	client := gitea.Client{BaseURL: os.Getenv("GITEA_BASE_URL"), Token: os.Getenv("GITEA_TOKEN")}
-	body := fmt.Sprintf("## AI Task\n\nTask ID: `%s`\n\n## Source\n\n%s / %s\n\n## Changes\n\nGenerated by aiops-platform Symphony-style worker.\n\n## Verification\n\nSee workflow verify commands and worker logs.\n\n## Risk\n\nHuman review required.\n", t.ID, t.SourceType, t.SourceEventID)
+	body := buildPRBody(t, summary)
 	pr, err := client.CreatePullRequest(ctx, gitea.CreatePullRequestInput{Owner: t.RepoOwner, Repo: t.RepoName, Title: "chore(ai): " + t.Title, Body: body, Head: t.WorkBranch, Base: t.BaseBranch, Draft: cfg.PR.Draft})
 	if err != nil {
 		emit(ctx, ev, t.ID, task.EventPRCreated, "pr creation failed", map[string]any{"error": errSummary(err)})
@@ -413,34 +455,73 @@ func summarizeVerifyResults(results []workspace.VerifyResult) []map[string]any {
 	return out
 }
 
-func runSummary(t task.Task, res runner.Result, changed []string, verifyResults []workspace.VerifyResult) string {
+// prBodySummaryCap bounds how much of the runner-produced RUN_SUMMARY.md
+// we inline into the PR body. 8 KiB is well under Gitea's body limit and
+// keeps the rendered review page navigable; the full file is always
+// available via the .aiops/RUN_SUMMARY.md path linked beneath the excerpt.
+const prBodySummaryCap = 8 << 10 // 8 KiB
+
+// buildPRBody renders the pull request body with the runner-produced
+// RUN_SUMMARY.md content inlined (truncated to prBodySummaryCap) and a link
+// to the full artifact path on the work branch. Callers must pass a summary
+// that has already been validated by workspace.CheckSummary.
+func buildPRBody(t task.Task, summary string) string {
+	excerpt, truncated := truncateForPR(summary, prBodySummaryCap)
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Run summary for %s\n\n", t.ID)
-	fmt.Fprintf(&b, "- Title: %s\n", t.Title)
-	fmt.Fprintf(&b, "- Actor: %s\n", t.Actor)
-	fmt.Fprintf(&b, "- Model: %s\n", t.Model)
-	if res.Summary != "" {
-		fmt.Fprintf(&b, "- Runner: %s\n", res.Summary)
-	}
-	fmt.Fprintf(&b, "- Branch: %s -> %s\n", t.BaseBranch, t.WorkBranch)
-	fmt.Fprintf(&b, "- Changed files: %d\n", len(changed))
-	if len(changed) > 0 {
-		b.WriteString("\n## Changed files\n\n")
-		for _, f := range changed {
-			fmt.Fprintf(&b, "- %s\n", f)
+	fmt.Fprintf(&b, "## AI Task\n\nTask ID: `%s`\n\n", t.ID)
+	fmt.Fprintf(&b, "## Source\n\n%s / %s\n\n", t.SourceType, t.SourceEventID)
+	b.WriteString("## Run summary\n\n")
+	if excerpt == "" {
+		// Should not happen because CheckSummary gates this, but stay safe.
+		b.WriteString("_No summary provided._\n\n")
+	} else {
+		b.WriteString(excerpt)
+		if !strings.HasSuffix(excerpt, "\n") {
+			b.WriteString("\n")
 		}
-	}
-	if len(verifyResults) > 0 {
-		b.WriteString("\n## Verification\n\n")
-		for _, r := range verifyResults {
-			status := "ok"
-			if r.Err != nil {
-				status = "failed"
-			}
-			fmt.Fprintf(&b, "- `%s` (%s, %dms)\n", r.Command, status, r.Duration.Milliseconds())
+		if truncated {
+			fmt.Fprintf(&b, "\n_Summary truncated at %d bytes; see full artifact below._\n", prBodySummaryCap)
 		}
+		b.WriteString("\n")
 	}
+	fmt.Fprintf(&b, "Full artifact: `%s` on `%s`.\n\n", workspace.SummaryPath, t.WorkBranch)
+	b.WriteString("## Verification\n\nSee `.aiops/VERIFICATION.txt` and worker logs.\n\n")
+	b.WriteString("## Risk\n\nHuman review required.\n")
 	return b.String()
+}
+
+// truncateForPR returns the head of s up to cap bytes (UTF-8 safe at the
+// boundary) along with a flag indicating whether truncation occurred.
+func truncateForPR(s string, cap int) (string, bool) {
+	if cap <= 0 || len(s) <= cap {
+		return s, false
+	}
+	cut := cap
+	// Walk back to a rune boundary so we never split a multi-byte sequence.
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
+	}
+	return s[:cut], true
+}
+
+// runSummaryDirective is the line we append to every rendered prompt so
+// runners (codex/claude) know the worker will reject the task without a
+// runner-produced .aiops/RUN_SUMMARY.md. The mock runner writes one
+// directly; this directive is the contract for shell-based runners.
+const runSummaryDirective = "\n\n---\n\n" +
+	"**Required output:** before exiting, you MUST write " +
+	"`.aiops/RUN_SUMMARY.md` describing what you changed, why, and how it " +
+	"was verified. The task will fail if this file is missing, empty, or " +
+	"contains only a placeholder."
+
+// appendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
+// prompt unless it is already present (so workflow templates that already
+// include the directive do not get a duplicate).
+func appendRunSummaryDirective(prompt string) string {
+	if strings.Contains(prompt, "RUN_SUMMARY.md") {
+		return prompt
+	}
+	return prompt + runSummaryDirective
 }
 
 func sampleSlice(items []string, max int) []string {
