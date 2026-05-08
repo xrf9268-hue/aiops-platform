@@ -89,6 +89,10 @@ func DefaultConfig() Config {
 		Claude:    CommandConfig{Command: "claude"},
 		Policy:    PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
 		Verify:    VerifyConfig{Commands: []string{}},
-		PR:        PRConfig{Draft: true, Labels: []string{"ai-generated", "needs-review"}},
+		// PR.Draft defaults to false so workflows that omit `pr.draft` keep
+		// the historical worker behavior of opening ready-for-review PRs.
+		// Profiles that want draft PRs (e.g. company-cautious) opt in by
+		// setting `pr.draft: true` in their WORKFLOW.md front matter.
+		PR: PRConfig{Draft: false, Labels: []string{"ai-generated", "needs-review"}},
 	}
 }

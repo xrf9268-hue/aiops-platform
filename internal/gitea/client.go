@@ -22,6 +22,11 @@ type CreatePullRequestInput struct {
 	Body  string
 	Head  string
 	Base  string
+	// Draft, when true, asks Gitea to open the pull request as a draft.
+	// Gitea ≥ 1.18 supports the `draft` field on POST /repos/{owner}/{repo}/pulls.
+	// When false (the default) the field is omitted so older Gitea versions
+	// keep their existing behavior.
+	Draft bool
 }
 
 type PullRequest struct {
@@ -34,11 +39,14 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and GITEA_TOKEN are required")
 	}
-	payload := map[string]string{
+	payload := map[string]any{
 		"title": in.Title,
 		"body":  in.Body,
 		"head":  in.Head,
 		"base":  in.Base,
+	}
+	if in.Draft {
+		payload["draft"] = true
 	}
 	b, _ := json.Marshal(payload)
 	url := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
