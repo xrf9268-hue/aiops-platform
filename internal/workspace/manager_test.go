@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -336,5 +337,107 @@ func TestWriteArtifacts(t *testing.T) {
 		if !strings.Contains(string(got), want) {
 			t.Fatalf("%s = %q, want substring %q", name, got, want)
 		}
+	}
+}
+
+func TestRunVerifyCapsLargeOutputAndMarksTruncated(t *testing.T) {
+	dir := t.TempDir()
+	// Emit ~2 MiB so we exceed VerifyOutputCap (1 MiB) and trigger truncation.
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"yes 0123456789abcdef0123456789abcdef | head -c 2097152",
+	}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err != nil {
+		t.Fatalf("RunVerify error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 verify result, got %d", len(results))
+	}
+	r := results[0]
+	if !r.Truncated {
+		t.Fatalf("expected Truncated=true for 2 MiB output, got false")
+	}
+	if got := len(r.Output); got > VerifyOutputCap {
+		t.Fatalf("captured output should be <= cap, got %d > %d", got, VerifyOutputCap)
+	}
+	if got := len(r.Output); got < VerifyOutputCap-1024 {
+		t.Fatalf("captured output unexpectedly small: %d bytes", got)
+	}
+
+	// Persist + ensure the artifact mentions the truncation.
+	if err := WriteVerification(dir, results); err != nil {
+		t.Fatalf("WriteVerification: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, ".aiops", "VERIFICATION.txt"))
+	if err != nil {
+		t.Fatalf("read VERIFICATION.txt: %v", err)
+	}
+	wantMarker := fmt.Sprintf("...output truncated at %d bytes", VerifyOutputCap)
+	if !strings.Contains(string(body), wantMarker) {
+		t.Fatalf("VERIFICATION.txt missing truncation marker %q", wantMarker)
+	}
+}
+
+func TestCappedBufferDropsBeyondCap(t *testing.T) {
+	buf := &cappedBuffer{Cap: 10}
+	n, err := buf.Write([]byte("hello "))
+	if err != nil || n != 6 {
+		t.Fatalf("first write n=%d err=%v", n, err)
+	}
+	n, err = buf.Write([]byte("world!!"))
+	if err != nil || n != 7 {
+		t.Fatalf("second write should report full length, n=%d err=%v", n, err)
+	}
+	if got := buf.String(); got != "hello worl" {
+		t.Fatalf("buffered content = %q, want %q", got, "hello worl")
+	}
+	if !buf.Truncated() {
+		t.Fatalf("buffer should report Truncated=true after exceeding cap")
+	}
+	if buf.Dropped() != 3 {
+		t.Fatalf("dropped bytes = %d, want 3", buf.Dropped())
+	}
+}
+
+func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
+	// Regression: success-path metadata under-reported pushed contents because
+	// AllChangedFiles ran before .aiops artifacts were written. Ordering the
+	// snapshot after WriteChangedFiles/WriteSummary should make those files
+	// appear in the result.
+	dir := t.TempDir()
+	mustGit(t, dir, "init", "-q")
+	mustGit(t, dir, "config", "user.email", "test@example.com")
+	mustGit(t, dir, "config", "user.name", "test")
+	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
+
+	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write src.go: %v", err)
+	}
+	if err := WriteChangedFiles(dir, nil); err != nil {
+		t.Fatalf("seed CHANGED_FILES.txt: %v", err)
+	}
+	if err := WriteSummary(dir, ""); err != nil {
+		t.Fatalf("seed RUN_SUMMARY.md: %v", err)
+	}
+
+	files, err := AllChangedFiles(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("AllChangedFiles: %v", err)
+	}
+	got := strings.Join(files, ",")
+	for _, want := range []string{"src.go", ".aiops/CHANGED_FILES.txt", ".aiops/RUN_SUMMARY.md"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("AllChangedFiles missing %q in %q", want, got)
+		}
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }

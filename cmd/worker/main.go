@@ -133,6 +133,18 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 	}
 	emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify completed", verifyPayload)
 
+	// Snapshot the changed files AFTER all run artifacts have been written so
+	// that CHANGED_FILES.txt, RUN_SUMMARY.md, and the success-path event
+	// payload reflect what is actually about to be committed (artifacts
+	// included). We seed the artifacts with empty stubs so they are present in
+	// the working tree when `git status --porcelain` runs, then rewrite them
+	// with the final snapshot contents.
+	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
+		log.Printf("task %s: seed changed files artifact: %v", t.ID, err)
+	}
+	if err := workspace.WriteSummary(workdir, ""); err != nil {
+		log.Printf("task %s: seed run summary artifact: %v", t.ID, err)
+	}
 	changed, _ := workspace.AllChangedFiles(ctx, workdir)
 	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
 		log.Printf("task %s: write changed files artifact: %v", t.ID, err)

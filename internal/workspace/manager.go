@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,16 +17,60 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+// VerifyOutputCap bounds how many bytes of combined stdout+stderr we keep in
+// memory per verify command. Verbose verify steps (e.g. `go test -v ./...`)
+// can emit tens of MiB; capping prevents unbounded RAM use and the duplicate
+// allocation that happens when the output is later written as an artifact.
+const VerifyOutputCap = 1 << 20 // 1 MiB
+
 // VerifyResult captures the outcome of running a workflow verify command.
 // Output contains the combined stdout+stderr so it can be persisted as a
-// run artifact even when the command fails.
+// run artifact even when the command fails. When the captured output exceeds
+// VerifyOutputCap, Output is truncated to the cap and Truncated is set so
+// callers can surface the fact in artifacts and event payloads.
 type VerifyResult struct {
-	Command  string
-	ExitCode int
-	Output   string
-	Duration time.Duration
-	Err      error
+	Command   string
+	ExitCode  int
+	Output    string
+	Truncated bool
+	Duration  time.Duration
+	Err       error
 }
+
+// cappedBuffer is an io.Writer that buffers up to Cap bytes and silently
+// drops the rest while remembering how many bytes were dropped. It avoids
+// holding the entire output of a verbose verify command in memory.
+type cappedBuffer struct {
+	Cap     int
+	buf     bytes.Buffer
+	dropped int64
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	remaining := c.Cap - c.buf.Len()
+	if remaining > 0 {
+		take := len(p)
+		if take > remaining {
+			take = remaining
+		}
+		c.buf.Write(p[:take])
+		if take < len(p) {
+			c.dropped += int64(len(p) - take)
+		}
+	} else {
+		c.dropped += int64(len(p))
+	}
+	// Always report the full length so the producer treats the write as
+	// successful and does not block trying to drain io.ErrShortWrite.
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string  { return c.buf.String() }
+func (c *cappedBuffer) Truncated() bool { return c.dropped > 0 }
+func (c *cappedBuffer) Dropped() int64  { return c.dropped }
+
+// Compile-time check that cappedBuffer satisfies io.Writer.
+var _ io.Writer = (*cappedBuffer)(nil)
 
 type Manager struct {
 	Root string
@@ -76,17 +121,18 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 			continue
 		}
 		start := time.Now()
-		var buf bytes.Buffer
+		buf := &cappedBuffer{Cap: VerifyOutputCap}
 		cmd := exec.CommandContext(ctx, "sh", "-lc", command)
 		cmd.Dir = workdir
-		cmd.Stdout = &buf
-		cmd.Stderr = &buf
+		cmd.Stdout = buf
+		cmd.Stderr = buf
 		runErr := cmd.Run()
 		res := VerifyResult{
-			Command:  command,
-			Output:   buf.String(),
-			Duration: time.Since(start),
-			ExitCode: cmd.ProcessState.ExitCode(),
+			Command:   command,
+			Output:    buf.String(),
+			Truncated: buf.Truncated(),
+			Duration:  time.Since(start),
+			ExitCode:  cmd.ProcessState.ExitCode(),
 		}
 		if runErr != nil {
 			res.Err = runErr
@@ -131,6 +177,9 @@ func WriteVerification(workdir string, results []VerifyResult) error {
 			if !strings.HasSuffix(r.Output, "\n") {
 				buf.WriteString("\n")
 			}
+		}
+		if r.Truncated {
+			fmt.Fprintf(&buf, "...output truncated at %d bytes\n", VerifyOutputCap)
 		}
 	}
 	return writeAiopsFile(workdir, "VERIFICATION.txt", buf.String())
@@ -227,9 +276,11 @@ func parseNumstatZ(out []byte) (policy.Diffstat, error) {
 // modifications plus untracked files reported by `git status --porcelain`.
 // This is what we want to persist as a run artifact since the runner often
 // creates new files (for example .aiops/RUN_SUMMARY.md) that `git diff`
-// alone does not surface.
+// alone does not surface. We pass `-uall` so newly created directories like
+// `.aiops/` are expanded to their individual files instead of collapsed to a
+// single `.aiops/` entry.
 func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "-uall")
 	cmd.Dir = workdir
 	out, err := cmd.Output()
 	if err != nil {
