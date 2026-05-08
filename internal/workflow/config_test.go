@@ -33,6 +33,18 @@ prompt body
 	}
 }
 
+// TestDefaultConfig_PRDraftDefaultsFalse pins the contract that the
+// built-in default for `PR.Draft` is false. Prior to PR #42, the worker
+// did not forward draft to Gitea at all, so workflows that omit
+// `pr.draft` got ready-for-review PRs. Keeping the default at false
+// preserves that behavior; profiles like `company-cautious-WORKFLOW.md`
+// must opt in explicitly with `pr.draft: true`.
+func TestDefaultConfig_PRDraftDefaultsFalse(t *testing.T) {
+	if got := DefaultConfig().PR.Draft; got != false {
+		t.Fatalf("DefaultConfig().PR.Draft: got %v want false (would regress non-draft default)", got)
+	}
+}
+
 func TestLoad_PRDraftDefaultsAndExplicitFalse(t *testing.T) {
 	cases := map[string]struct {
 		front string
@@ -58,7 +70,8 @@ repo:
 ---
 body
 `,
-			// DefaultConfig() sets PR.Draft=true, so unset preserves the default.
+			// DefaultConfig() sets PR.Draft=false, so workflows that omit
+			// `pr.draft` keep the historical ready-for-review behavior.
 			want: DefaultConfig().PR.Draft,
 		},
 	}
