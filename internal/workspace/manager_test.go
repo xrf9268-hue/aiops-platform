@@ -275,6 +275,85 @@ func TestEnforcePolicyCleanWorkdir(t *testing.T) {
 	}
 }
 
+// TestCheckSummaryStatuses pins the four states the worker gate inspects:
+//
+//  1. Missing — file does not exist on disk.
+//  2. Empty   — file exists but is whitespace-only.
+//  3. Placeholder — short file with TODO/TBD-style markers (rejected so
+//     runners cannot trivially satisfy the gate with a stub).
+//  4. OK — substantive content.
+func TestCheckSummaryStatuses(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		write      bool
+		wantStatus SummaryStatus
+		wantBody   string
+	}{
+		{name: "missing", write: false, wantStatus: SummaryMissing},
+		{name: "empty", write: true, body: "", wantStatus: SummaryEmpty},
+		{name: "whitespace", write: true, body: "   \n\t\n", wantStatus: SummaryEmpty},
+		{name: "todo placeholder", write: true, body: "TODO\n", wantStatus: SummaryPlaceholder, wantBody: "TODO"},
+		{name: "tbd placeholder", write: true, body: "<TBD>\n", wantStatus: SummaryPlaceholder, wantBody: "<TBD>"},
+		{
+			name:       "real",
+			write:      true,
+			body:       "# Summary\n\nFixed off-by-one in foo(); verified with go test ./...\n",
+			wantStatus: SummaryOK,
+		},
+		{
+			// Long summary that contains the substring TODO is accepted because
+			// length > placeholder threshold; we trust real summaries to
+			// reference TODOs without being one.
+			name:       "long body mentioning todo is ok",
+			write:      true,
+			body:       "# Summary\n\nFixed bug. Remaining TODO: investigate flake in worker_test.\n",
+			wantStatus: SummaryOK,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.write {
+				if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, SummaryPath), []byte(tc.body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			body, status, err := CheckSummary(dir)
+			if err != nil {
+				t.Fatalf("CheckSummary: %v", err)
+			}
+			if status != tc.wantStatus {
+				t.Fatalf("status = %s, want %s (body=%q)", status, tc.wantStatus, body)
+			}
+			if tc.wantBody != "" && body != tc.wantBody {
+				t.Fatalf("body = %q, want %q", body, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestWriteAndReadSummaryRoundTrip ensures WriteSummary persists the body
+// and ReadSummary returns the trimmed contents (used by the worker's gate
+// helper path).
+func TestWriteAndReadSummaryRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteSummary(dir, "# Summary\n\nDid the thing.\n"); err != nil {
+		t.Fatalf("WriteSummary: %v", err)
+	}
+	got, err := ReadSummary(dir)
+	if err != nil {
+		t.Fatalf("ReadSummary: %v", err)
+	}
+	if got != "# Summary\n\nDid the thing." {
+		t.Fatalf("ReadSummary = %q", got)
+	}
+}
+
 func TestRunVerifyCapturesOutputAndStopsOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
