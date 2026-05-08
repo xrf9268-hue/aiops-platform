@@ -92,10 +92,24 @@ Option A: from source.
 ```bash
 export DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
 export WORKSPACE_ROOT=/tmp/aiops-workspaces
-# Only needed if you want the worker to actually open a PR:
+# Required: cmd/worker always calls the Gitea client at the end of every task.
+# Both values must be non-empty or every task fails after the agent run with
+# "GITEA_BASE_URL and GITEA_TOKEN are required". For local-only smoke testing
+# without a real Gitea, any non-empty placeholder is enough to get past the
+# precondition (the HTTP call will then fail, but that happens after the
+# verification step you usually care about in a smoke test).
 export GITEA_BASE_URL=http://gitea.local
 export GITEA_TOKEN=replace-with-gitea-bot-token
 go run ./cmd/worker
+```
+
+A minimal `.env` snippet that satisfies the worker's required vars:
+
+```bash
+DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+WORKSPACE_ROOT=/tmp/aiops-workspaces
+GITEA_BASE_URL=http://gitea.local
+GITEA_TOKEN=placeholder-not-used-for-mock-only-smoke-test
 ```
 
 Option B: in Docker.
@@ -130,18 +144,27 @@ The poller exits immediately with `tracker.kind must be linear` if `examples/WOR
 
 The fastest way to verify the full local loop without a real Gitea or Linear is to enqueue a manual task with the helper script and inspect the resulting rows.
 
-Enqueue a task:
+Enqueue a task. The `CLONE_URL` must be one the running worker can actually
+clone, because `internal/workspace.PrepareGitWorkspace` runs `git clone $CLONE_URL`
+before any agent runs. For a fully local smoke test we point at this checkout
+through a `file://` URL so no network or remote Gitea is needed:
 
 ```bash
 export AIOPS_API_URL=http://localhost:8080
-export REPO_OWNER=octo
-export REPO_NAME=demo
-export CLONE_URL=git@example.com:octo/demo.git
+export REPO_OWNER=local
+export REPO_NAME=aiops-platform
+export CLONE_URL="file://$(git rev-parse --show-toplevel)/.git"
 export BASE_BRANCH=main
 export TITLE="Local smoke task"
 export MODEL=mock
 scripts/enqueue-manual-task.sh
 ```
+
+If you only want to verify that the trigger API enqueues the row and do not
+plan to start the worker, any value in `CLONE_URL` works (the worker is what
+actually performs the clone). To fully exercise the worker offline without
+starting the API, run `scripts/test-enqueue-manual-task.sh` instead, which
+stubs `curl`.
 
 The script prints the assigned `task_id` and a follow-up `psql` command. Inspect the task and its events through the trigger API:
 
