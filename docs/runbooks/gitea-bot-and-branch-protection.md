@@ -78,7 +78,7 @@ The worker is designed to never land code on `main` by itself. The contract is:
 
 - The worker pushes to a feature branch named after the task (for example `ai/<task-id>-<slug>`).
 - The worker opens a pull request from that branch into `main`.
-- The pull request is opened as a regular (non-draft) PR. The current `CreatePullRequest` payload in `internal/gitea/client.go` does not set a `draft` field, so PRs are ready-for-review immediately. Reviewers must treat every worker-authored PR as unverified until a human review is complete; do not rely on a draft state as an extra human gate. If draft-by-default behavior is desired, it must be added to `CreatePullRequestInput` and wired through `cmd/worker/main.go` first.
+- Whether the PR is opened as a draft is controlled by the `pr.draft` field in `WORKFLOW.md`. The cautious-company template (`docs/workflows/company-cautious-WORKFLOW.md`) sets `pr.draft: true`, so the worker opens drafts under the cautious profile. Workflows that omit the field or set it to `false` get regular ready-for-review PRs. The flag is forwarded to Gitea's `POST /repos/{owner}/{repo}/pulls` `draft` field (Gitea ≥ 1.18) by `internal/gitea/client.go`. Draft state is a workflow-level signal only — do not rely on it as a human gate; reviewers must still treat every worker-authored PR as unverified until a human review is complete.
 - The worker does **not** call any merge endpoint. There is no merge code path in `cmd/worker/main.go` or `internal/gitea/client.go`. If you add one in the future, gate it behind explicit configuration and do not enable it by default.
 - The worker does not delete branches.
 - The worker does not change repository settings, webhooks, or branch protection.
@@ -98,7 +98,7 @@ Every worker-authored pull request must be reviewed by a human before merge. Rev
 4. **Run the verify commands locally** if the change touches anything you are not certain about. The verify commands are listed in `WORKFLOW.md` and `docs/runbooks/ci.md`.
 5. **Check secrets and credentials**: confirm no tokens, keys, or environment values were added to the repository.
 6. **Resolve all review threads** before approval.
-7. **Approve and merge as a human**. The bot account must not approve and must not merge. Worker-authored PRs are opened as ready-for-review (not draft) today, so reviewers are the first and only human gate before merge — do not assume any prior draft step has filtered the change.
+7. **Approve and merge as a human**. The bot account must not approve and must not merge. The cautious profile opens worker PRs as drafts via `pr.draft: true`, but draft state only signals intent — reviewers are the first and only human gate before merge, regardless of whether the PR was opened as draft or ready-for-review. Mark the PR ready for review only after the verification steps above pass.
 
 If the reviewer is uncertain, the expected action is to request changes or close the PR. Do not merge to "see what happens".
 
