@@ -78,14 +78,14 @@ The worker is designed to never land code on `main` by itself. The contract is:
 
 - The worker pushes to a feature branch named after the task (for example `ai/<task-id>-<slug>`).
 - The worker opens a pull request from that branch into `main`.
-- The pull request is opened as a **draft** when `WORKFLOW.md` policy or task metadata requests human review (the default for company mode).
+- The pull request is opened as a regular (non-draft) PR. The current `CreatePullRequest` payload in `internal/gitea/client.go` does not set a `draft` field, so PRs are ready-for-review immediately. Reviewers must treat every worker-authored PR as unverified until a human review is complete; do not rely on a draft state as an extra human gate. If draft-by-default behavior is desired, it must be added to `CreatePullRequestInput` and wired through `cmd/worker/main.go` first.
 - The worker does **not** call any merge endpoint. There is no merge code path in `cmd/worker/main.go` or `internal/gitea/client.go`. If you add one in the future, gate it behind explicit configuration and do not enable it by default.
 - The worker does not delete branches.
 - The worker does not change repository settings, webhooks, or branch protection.
 
 If a future change introduces auto-merge, it must be opt-in per repository, must require all status checks green, and must still require at least one human review according to branch protection.
 
-## Draft pull request review expectations
+## Pull request review expectations
 
 Every worker-authored pull request must be reviewed by a human before merge. Reviewers are expected to:
 
@@ -98,8 +98,7 @@ Every worker-authored pull request must be reviewed by a human before merge. Rev
 4. **Run the verify commands locally** if the change touches anything you are not certain about. The verify commands are listed in `WORKFLOW.md` and `docs/runbooks/ci.md`.
 5. **Check secrets and credentials**: confirm no tokens, keys, or environment values were added to the repository.
 6. **Resolve all review threads** before approval.
-7. **Mark "Ready for review"** only after the reviewer is satisfied. The worker leaves the PR in draft when company-cautious mode is on; promoting out of draft is a human action.
-8. **Approve and merge as a human**. The bot account must not approve and must not merge.
+7. **Approve and merge as a human**. The bot account must not approve and must not merge. Worker-authored PRs are opened as ready-for-review (not draft) today, so reviewers are the first and only human gate before merge — do not assume any prior draft step has filtered the change.
 
 If the reviewer is uncertain, the expected action is to request changes or close the PR. Do not merge to "see what happens".
 
