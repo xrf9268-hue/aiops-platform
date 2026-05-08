@@ -44,6 +44,7 @@ This repository implements the second track.
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Task debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
+- [Pre-push secret scanning](docs/runbooks/secret-scanning.md)
 
 ## Continuous integration
 
