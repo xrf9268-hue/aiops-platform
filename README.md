@@ -43,6 +43,23 @@ This repository implements the second track.
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Task debugging API](docs/runbooks/task-api.md)
 
+## Continuous integration
+
+Every push to `main` and every pull request targeting `main` runs
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml). The CI job is the
+safety net for all changes; PRs should not merge while it is red.
+
+CI expectations on each run:
+
+- `gofmt` check on all tracked Go files (no diff).
+- `go mod tidy` check (`go.mod` and `go.sum` clean).
+- `go test -race -covermode=atomic ./...`.
+- `go build` of `cmd/trigger-api`, `cmd/worker`, and `cmd/linear-poller`.
+- Docker image build of the repository `Dockerfile`.
+
+See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
+release flow, and local pre-push checks.
+
 ## Quick start: Gitea webhook path
 
 ```bash
