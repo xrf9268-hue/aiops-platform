@@ -66,7 +66,43 @@ func (p PolicyConfig) LineLimit() int {
 }
 
 type VerifyConfig struct {
-	Commands []string `yaml:"commands"`
+	Commands   []string         `yaml:"commands"`
+	SecretScan SecretScanConfig `yaml:"secret_scan"`
+}
+
+// SecretScanConfig describes an optional pre-push secret scanner that runs
+// after verify commands and policy enforcement but before `git push`. The
+// scanner is invoked in the workspace directory; a non-zero exit code is
+// treated as a finding by default and blocks the push.
+//
+// Recommended tools (installed by the operator, not bundled here):
+//
+//   - gitleaks:   ["gitleaks", "detect", "--source", ".", "--no-banner"]
+//   - trufflehog: ["trufflehog", "filesystem", "--no-update", "."]
+//
+// Leave Enabled=false (or omit the section) to keep the previous behavior.
+type SecretScanConfig struct {
+	// Enabled toggles the hook. When false, the worker skips the scan and
+	// proceeds to push, preserving backward compatibility.
+	Enabled bool `yaml:"enabled"`
+	// Command is argv to exec inside the workspace. The first element is
+	// the binary; remaining elements are passed verbatim. No shell is used,
+	// so quoting/expansion is not performed.
+	Command []string `yaml:"command"`
+	// FailOnFinding controls whether a non-zero exit code blocks the push.
+	// Defaults to true. Set to false to surface findings as a warning event
+	// without aborting (useful while tuning false positives).
+	FailOnFinding *bool `yaml:"fail_on_finding,omitempty"`
+}
+
+// ShouldFailOnFinding reports whether a non-zero exit from the scanner
+// should block the push. The default is true; callers should pass through
+// this method rather than reading FailOnFinding directly.
+func (s SecretScanConfig) ShouldFailOnFinding() bool {
+	if s.FailOnFinding == nil {
+		return true
+	}
+	return *s.FailOnFinding
 }
 
 type PRConfig struct {

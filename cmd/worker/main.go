@@ -134,6 +134,15 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 	}
 	emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify completed", verifyPayload)
 
+	// Run the optional pre-push secret scanner between verify and push so a
+	// branch carrying credential leaks never reaches the remote. Failures
+	// flow through writeFailureArtifacts + the existing failed_attempt path
+	// so operators can inspect what the scanner saw.
+	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
+		writeFailureArtifacts(ctx, workdir, verifyResults, "secret scan blocked push: "+errSummary(err))
+		return err
+	}
+
 	// Snapshot the changed files AFTER all run artifacts have been written so
 	// that CHANGED_FILES.txt, RUN_SUMMARY.md, and the success-path event
 	// payload reflect what is actually about to be committed (artifacts
@@ -171,6 +180,75 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) error {
 	})
 
 	return createPR(ctx, ev, t, wf.Config)
+}
+
+// secretScanFn is the indirection used to swap the real workspace scanner
+// for a stub in tests. It mirrors workspace.RunSecretScan's signature.
+type secretScanFn func(ctx context.Context, workdir string, cfg workflow.SecretScanConfig) workspace.SecretScanResult
+
+// runSecretScan executes the configured pre-push secret scanner and
+// records structured task events for the start, clean exit, finding, or
+// execution error cases. It returns a non-nil error only when the push
+// should be aborted, so the caller can simply propagate the error and let
+// the existing failed_attempt path take over.
+//
+// Event kinds emitted (mirroring the existing event vocabulary):
+//
+//   - secret_scan_start:     scanner is about to run
+//   - secret_scan_clean:     scanner exited zero, no findings
+//   - secret_scan_violation: scanner exited non-zero (potential secrets)
+//   - secret_scan_error:     scanner failed to run (binary missing, etc.)
+//
+// When the scan is disabled or unconfigured, no events are emitted; this
+// preserves the worker's previous behavior for repos that have not opted
+// in.
+func runSecretScan(ctx context.Context, ev eventEmitter, taskID string, workdir string, cfg workflow.Config) error {
+	return runSecretScanWith(ctx, ev, taskID, workdir, cfg, workspace.RunSecretScan)
+}
+
+func runSecretScanWith(ctx context.Context, ev eventEmitter, taskID string, workdir string, cfg workflow.Config, scan secretScanFn) error {
+	scfg := cfg.Verify.SecretScan
+	if !scfg.Enabled || len(scfg.Command) == 0 {
+		return nil
+	}
+
+	_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_start", "running pre-push secret scan", map[string]any{
+		"command": scfg.Command,
+	})
+
+	res := scan(ctx, workdir, scfg)
+	payload := map[string]any{
+		"command":     res.Command,
+		"exit_code":   res.ExitCode,
+		"duration_ms": res.DurationMs,
+		"stdout":      res.Stdout,
+		"stderr":      res.Stderr,
+	}
+
+	switch res.Status {
+	case workspace.SecretScanClean:
+		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_clean", "secret scan reported no findings", payload)
+		return nil
+	case workspace.SecretScanViolation:
+		msg := fmt.Sprintf("secret scan reported findings (exit %d)", res.ExitCode)
+		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_violation", msg, payload)
+		if res.ShouldBlockPush(scfg) {
+			return errors.New(msg)
+		}
+		return nil
+	case workspace.SecretScanError:
+		msg := fmt.Sprintf("secret scan failed to execute: %v", res.Err)
+		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
+		// Execution errors always block: an operator-misconfigured scanner
+		// must not silently allow pushes.
+		return errors.New(msg)
+	default:
+		// Defensive: an unexpected status should not leak through. Treat
+		// like a violation so pushes are blocked rather than waved through.
+		msg := fmt.Sprintf("secret scan returned unexpected status %q", res.Status)
+		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
+		return errors.New(msg)
+	}
 }
 
 // recordPolicyViolation writes a structured `policy_violation` task event
