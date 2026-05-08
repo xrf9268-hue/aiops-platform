@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,11 +9,23 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+// VerifyResult captures the outcome of running a workflow verify command.
+// Output contains the combined stdout+stderr so it can be persisted as a
+// run artifact even when the command fails.
+type VerifyResult struct {
+	Command  string
+	ExitCode int
+	Output   string
+	Duration time.Duration
+	Err      error
+}
 
 type Manager struct {
 	Root string
@@ -51,16 +64,84 @@ func WritePrompt(workdir string, prompt string) error {
 	return os.WriteFile(filepath.Join(dir, "PROMPT.md"), []byte(prompt), 0o644)
 }
 
-func RunVerify(ctx context.Context, workdir string, wf workflow.Config) error {
+// RunVerify executes the workflow verify commands in order. It returns one
+// VerifyResult per non-empty command (even when one fails) so callers can
+// persist the combined output as a run artifact for post-mortem inspection.
+// On the first failing command the slice is returned together with the
+// underlying error and remaining commands are skipped.
+func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) {
+	var results []VerifyResult
 	for _, command := range wf.Verify.Commands {
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
-		if err := run(ctx, workdir, "sh", "-lc", command); err != nil {
-			return fmt.Errorf("verify command failed %q: %w", command, err)
+		start := time.Now()
+		var buf bytes.Buffer
+		cmd := exec.CommandContext(ctx, "sh", "-lc", command)
+		cmd.Dir = workdir
+		cmd.Stdout = &buf
+		cmd.Stderr = &buf
+		runErr := cmd.Run()
+		res := VerifyResult{
+			Command:  command,
+			Output:   buf.String(),
+			Duration: time.Since(start),
+			ExitCode: cmd.ProcessState.ExitCode(),
+		}
+		if runErr != nil {
+			res.Err = runErr
+			results = append(results, res)
+			return results, fmt.Errorf("verify command failed %q: %w", command, runErr)
+		}
+		results = append(results, res)
+	}
+	return results, nil
+}
+
+// WriteSummary writes the per-run summary to .aiops/RUN_SUMMARY.md so it can
+// be committed alongside the change and inspected on failure paths.
+func WriteSummary(workdir, summary string) error {
+	return writeAiopsFile(workdir, "RUN_SUMMARY.md", summary)
+}
+
+// WriteChangedFiles writes one path per line to .aiops/CHANGED_FILES.txt.
+func WriteChangedFiles(workdir string, files []string) error {
+	body := strings.Join(files, "\n")
+	if body != "" {
+		body += "\n"
+	}
+	return writeAiopsFile(workdir, "CHANGED_FILES.txt", body)
+}
+
+// WriteVerification serializes verify command results to
+// .aiops/VERIFICATION.txt so failed runs preserve the diagnostic output.
+func WriteVerification(workdir string, results []VerifyResult) error {
+	var buf bytes.Buffer
+	for i, r := range results {
+		if i > 0 {
+			buf.WriteString("\n")
+		}
+		fmt.Fprintf(&buf, "$ %s\n", r.Command)
+		fmt.Fprintf(&buf, "exit_code=%d duration_ms=%d\n", r.ExitCode, r.Duration.Milliseconds())
+		if r.Err != nil {
+			fmt.Fprintf(&buf, "error: %s\n", r.Err.Error())
+		}
+		if r.Output != "" {
+			buf.WriteString(r.Output)
+			if !strings.HasSuffix(r.Output, "\n") {
+				buf.WriteString("\n")
+			}
 		}
 	}
-	return nil
+	return writeAiopsFile(workdir, "VERIFICATION.txt", buf.String())
+}
+
+func writeAiopsFile(workdir, name, body string) error {
+	dir := filepath.Join(workdir, ".aiops")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644)
 }
 
 func ChangedFiles(ctx context.Context, workdir string) ([]string, error) {
@@ -140,6 +221,42 @@ func parseNumstatZ(out []byte) (policy.Diffstat, error) {
 		i++
 	}
 	return d, nil
+}
+
+// AllChangedFiles returns every path the worker is about to commit: tracked
+// modifications plus untracked files reported by `git status --porcelain`.
+// This is what we want to persist as a run artifact since the runner often
+// creates new files (for example .aiops/RUN_SUMMARY.md) that `git diff`
+// alone does not surface.
+func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	files := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		path := strings.TrimSpace(line[3:])
+		if path == "" {
+			continue
+		}
+		// Rename entries look like "old -> new"; keep the new path.
+		if idx := strings.Index(path, " -> "); idx >= 0 {
+			path = strings.TrimSpace(path[idx+4:])
+		}
+		path = strings.Trim(path, "\"")
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		files = append(files, path)
+	}
+	return files, nil
 }
 
 // PolicyError is returned by EnforcePolicy when one or more policy checks

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
@@ -270,5 +271,70 @@ func TestEnforcePolicyCleanWorkdir(t *testing.T) {
 	}}
 	if err := EnforcePolicy(context.Background(), dir, cfg); err != nil {
 		t.Fatalf("expected no policy error on clean workdir, got %v", err)
+	}
+}
+
+func TestRunVerifyCapturesOutputAndStopsOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"echo hello-world",
+		"   ", // empty command should be skipped without recording a result
+		"sh -c 'echo to-stderr 1>&2; exit 7'",
+		"echo unreachable",
+	}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err == nil {
+		t.Fatalf("RunVerify should report failure when a command exits non-zero")
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 verify results (skip empty + stop after failure), got %d", len(results))
+	}
+	if !strings.Contains(results[0].Output, "hello-world") {
+		t.Fatalf("first result missing stdout: %q", results[0].Output)
+	}
+	if results[0].ExitCode != 0 || results[0].Err != nil {
+		t.Fatalf("first result should be success, got %+v", results[0])
+	}
+	if results[1].ExitCode != 7 {
+		t.Fatalf("second result exit code = %d, want 7", results[1].ExitCode)
+	}
+	if !strings.Contains(results[1].Output, "to-stderr") {
+		t.Fatalf("second result should capture stderr: %q", results[1].Output)
+	}
+	if results[1].Err == nil {
+		t.Fatalf("failed verify result should retain underlying error")
+	}
+}
+
+func TestWriteArtifacts(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := WriteSummary(dir, "summary body"); err != nil {
+		t.Fatalf("WriteSummary error: %v", err)
+	}
+	if err := WriteChangedFiles(dir, []string{"a.go", "b.go"}); err != nil {
+		t.Fatalf("WriteChangedFiles error: %v", err)
+	}
+	if err := WriteVerification(dir, []VerifyResult{{
+		Command:  "go test ./...",
+		ExitCode: 0,
+		Output:   "ok\n",
+	}}); err != nil {
+		t.Fatalf("WriteVerification error: %v", err)
+	}
+
+	for name, want := range map[string]string{
+		"RUN_SUMMARY.md":    "summary body",
+		"CHANGED_FILES.txt": "a.go\nb.go\n",
+		"VERIFICATION.txt":  "go test ./...",
+	} {
+		got, err := os.ReadFile(filepath.Join(dir, ".aiops", name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("%s = %q, want substring %q", name, got, want)
+		}
 	}
 }
