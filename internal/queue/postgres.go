@@ -149,6 +149,17 @@ func (s *Store) AddEvent(ctx context.Context, taskID, typ, msg string) error {
 	return err
 }
 
+// AddEventWithPayload writes a task event with a JSON payload. It is used
+// for structured events such as policy_violation where callers want to
+// attach the full violation list for later inspection.
+func (s *Store) AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload []byte) error {
+	if len(payload) == 0 {
+		return s.AddEvent(ctx, taskID, typ, msg)
+	}
+	_, err := s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message,payload) VALUES($1,$2,$3,$4)", taskID, typ, msg, payload)
+	return err
+}
+
 type taskScanner interface {
 	Scan(dest ...any) error
 }

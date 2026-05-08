@@ -49,7 +49,20 @@ type PolicyConfig struct {
 	AllowPaths      []string `yaml:"allow_paths"`
 	DenyPaths       []string `yaml:"deny_paths"`
 	MaxChangedFiles int      `yaml:"max_changed_files"`
-	MaxChangedLOC   int      `yaml:"max_changed_loc"`
+	// MaxChangedLines bounds the total added+deleted lines reported by
+	// `git diff --numstat`. The legacy YAML key `max_changed_loc` is still
+	// honored via MaxChangedLOC below for back-compat.
+	MaxChangedLines int `yaml:"max_changed_lines"`
+	MaxChangedLOC   int `yaml:"max_changed_loc"`
+}
+
+// LineLimit returns the effective maximum changed lines, preferring the
+// new MaxChangedLines field but falling back to the legacy MaxChangedLOC.
+func (p PolicyConfig) LineLimit() int {
+	if p.MaxChangedLines > 0 {
+		return p.MaxChangedLines
+	}
+	return p.MaxChangedLOC
 }
 
 type VerifyConfig struct {

@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -62,36 +64,78 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) error {
 }
 
 func ChangedFiles(ctx context.Context, workdir string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
+	d, err := Diffstat(ctx, workdir)
 	if err != nil {
 		return nil, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	files := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			files = append(files, strings.TrimSpace(l))
-		}
-	}
-	return files, nil
+	return d.Files, nil
 }
 
+// Diffstat returns the set of changed files and the total added+deleted
+// lines for the working tree at workdir. It uses `git add --intent-to-add
+// --all` so newly created (untracked) files show up, then runs
+// `git diff --numstat HEAD` to capture both modified and added paths.
+// Binary files (which numstat reports as "-\t-") contribute 0 lines but
+// are still counted as changed files.
+func Diffstat(ctx context.Context, workdir string) (policy.Diffstat, error) {
+	// Mark untracked files so they appear in `git diff` without actually
+	// staging their content. This is reversible and idempotent; the
+	// subsequent `git add .` in CommitAndPush will fully stage them.
+	if err := run(ctx, workdir, "git", "add", "--intent-to-add", "--all"); err != nil {
+		return policy.Diffstat{}, fmt.Errorf("git add --intent-to-add: %w", err)
+	}
+	cmd := exec.CommandContext(ctx, "git", "diff", "--numstat", "HEAD")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return policy.Diffstat{}, err
+	}
+	var d policy.Diffstat
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// numstat format: "<added>\t<deleted>\t<path>" (path may include rename "old => new")
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		added, _ := strconv.Atoi(parts[0])
+		deleted, _ := strconv.Atoi(parts[1])
+		d.Lines += added + deleted
+		d.Files = append(d.Files, parts[2])
+	}
+	return d, nil
+}
+
+// PolicyError is returned by EnforcePolicy when one or more policy checks
+// fail. It carries the structured violations so callers (the worker) can
+// emit a precise task event.
+type PolicyError struct {
+	Violations []policy.Violation
+}
+
+func (e *PolicyError) Error() string {
+	return "policy violation: " + policy.Summarize(e.Violations)
+}
+
+// EnforcePolicy gathers a diffstat for workdir and evaluates it against the
+// workflow PolicyConfig. On any violation it returns *PolicyError so that
+// the worker can both block the push and write a structured task event.
 func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) error {
-	files, err := ChangedFiles(ctx, workdir)
+	d, err := Diffstat(ctx, workdir)
 	if err != nil {
 		return err
 	}
-	if cfg.Policy.MaxChangedFiles > 0 && len(files) > cfg.Policy.MaxChangedFiles {
-		return fmt.Errorf("changed files %d exceeds max %d", len(files), cfg.Policy.MaxChangedFiles)
+	pcfg := policy.Config{
+		AllowPaths:      cfg.Policy.AllowPaths,
+		DenyPaths:       cfg.Policy.DenyPaths,
+		MaxChangedFiles: cfg.Policy.MaxChangedFiles,
+		MaxChangedLines: cfg.Policy.LineLimit(),
 	}
-	for _, f := range files {
-		for _, p := range cfg.Policy.DenyPaths {
-			if matchesPath(p, f) {
-				return fmt.Errorf("changed denied path %s matches %s", f, p)
-			}
-		}
+	if vs := policy.Evaluate(d, pcfg); len(vs) > 0 {
+		return &PolicyError{Violations: vs}
 	}
 	return nil
 }
@@ -121,19 +165,4 @@ func sanitize(s string) string {
 	s = strings.ReplaceAll(s, "/", "_")
 	s = strings.ReplaceAll(s, " ", "_")
 	return s
-}
-
-func matchesPath(pattern, file string) bool {
-	pattern = strings.TrimSpace(pattern)
-	if pattern == "" {
-		return false
-	}
-	if strings.HasSuffix(pattern, "/**") {
-		return strings.HasPrefix(file, strings.TrimSuffix(pattern, "**"))
-	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(file, strings.TrimSuffix(pattern, "*"))
-	}
-	ok, _ := filepath.Match(pattern, file)
-	return ok || pattern == file
 }
