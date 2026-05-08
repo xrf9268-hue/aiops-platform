@@ -21,10 +21,14 @@ workspace:
   root: ~/aiops-workspaces/company
 
 agent:
-  # Start in analysis-only. The Claude analysis runner produces a plan
-  # artifact and never commits code. Switch to `codex` only after
-  # auditing several analysis runs and confirming the policy guardrails.
-  default: claude-analysis
+  # Start with the mock runner. It executes the worker pipeline end to
+  # end (clone, branch, draft PR, labels, comments) without authoring
+  # any code, so you can validate policy guardrails before letting a
+  # real model touch the repository. Only the runners registered in
+  # `internal/runner/runner.go` (`mock`, `codex`, `claude`) can execute;
+  # any other name fails the task with `unknown runner`. Switch to
+  # `codex` (or `claude`) only after auditing several mock runs.
+  default: mock
   fallback: mock
   max_concurrent_agents: 1
   max_turns: 6
@@ -40,13 +44,22 @@ policy:
   # graduate from analysis-only. Do not set this to a non-draft mode
   # for company repositories.
   mode: draft_pr
+  # The current `internal/workspace.matchesPath` only enforces patterns
+  # ending in `/**` (prefix match) or `/*` (also prefix). Globs that
+  # start with `**/` (e.g. `**/secrets/**`) become a literal prefix that
+  # no real file path matches, so they silently fail open. List each
+  # top-level directory you actually want to block. Add more entries if
+  # your repository keeps these concerns under a different prefix
+  # (e.g. `services/billing/**`, `apps/web/migrations/**`).
   deny_paths:
     - infra/**
     - deploy/**
-    - "**/secrets/**"
-    - "**/auth/**"
+    - secrets/**
+    - auth/**
     - billing/**
-    - "**/migrations/**"
+    - migrations/**
+    - db/migrations/**
+    - .github/**
   max_changed_files: 8
   max_changed_loc: 200
 
@@ -79,11 +92,12 @@ Description:
 
 Process:
 1. Read the relevant files before proposing any change.
-2. In analysis-only mode, produce a written plan in `.aiops/PLAN.md`
-   covering scope, risks, files to touch, and verification.
-3. If code changes are eventually allowed, make the smallest safe edit
-   that fits inside the policy's `allow_paths` and respects all
-   `deny_paths`.
+2. While the workflow is on the `mock` runner, no code is authored;
+   use those runs to confirm the worker can clone, branch, open a draft
+   PR, attach labels, and route review comments correctly.
+3. After graduating to `codex` or `claude`, make the smallest safe edit
+   that respects every entry in `policy.deny_paths` and stays inside
+   `max_changed_files` / `max_changed_loc`.
 4. Run the verification commands and capture results.
 5. Write a concise summary in `.aiops/RUN_SUMMARY.md`.
 6. Stop and explain the blocker if the task is ambiguous, exceeds
@@ -97,38 +111,39 @@ Rules:
 - Do not exfiltrate secrets, tokens, or customer data into logs,
   prompts, or PR descriptions.
 
-# When to switch to Codex
+# When to switch runners
 
-This template ships in analysis-only (`agent.default: claude-analysis`)
-on purpose. Promote a company repository through the following stages,
-and only move forward after the previous stage has produced a clean
-audit trail:
+This template ships with `agent.default: mock` on purpose. Only the
+runners registered in `internal/runner/runner.go` are accepted today
+(`mock`, `codex`, `claude`); any other name causes the worker to fail
+the task with `unknown runner`. Promote a company repository through
+the following stages, and only move forward after the previous stage
+has produced a clean audit trail:
 
-1. **Analysis-only with Claude** (`claude-analysis`).
+1. **Mock runner end-to-end** (`mock`).
    Use this to validate that the repository, tracker, and policy
-   guardrails behave correctly. The runner writes a plan artifact and
-   never commits code. Stay here until you have reviewed at least a
-   handful of plans and confirmed `deny_paths` blocks the right
-   directories.
+   guardrails behave correctly. The mock runner writes a deterministic
+   summary, opens the draft PR, attaches labels, and never authors
+   code. Stay here until you have reviewed several runs and confirmed
+   `deny_paths` blocks the directories you expect.
 
-2. **Mock runner end-to-end** (`mock`).
-   Switch `agent.default` to `mock` to confirm the worker can open a
-   draft PR, attach the expected labels, and receive review comments
-   without any model-authored code.
+2. **Claude with draft PRs** (`claude`).
+   When you are ready to let a model author code, switch
+   `agent.default` to `claude` while keeping `policy.mode: draft_pr`,
+   `pr.draft: true`, and the full `deny_paths` list. Keep
+   `max_changed_files` and `max_changed_loc` conservative.
 
 3. **Codex with draft PRs** (`codex`).
-   Once analysis and the mock loop look healthy, set
-   `agent.default: codex` while keeping `policy.mode: draft_pr`,
-   `pr.draft: true`, and the full `deny_paths` list. Keep
-   `max_changed_files` and `max_changed_loc` conservative; raise them
-   only after several Codex PRs have been reviewed and merged cleanly.
+   Once the Claude loop looks healthy, swap `agent.default` to `codex`
+   under the same guardrails. Raise the size caps only after several
+   PRs have been reviewed and merged cleanly.
 
-Do not switch to Codex if any of the following is still true:
+Do not switch off `mock` if any of the following is still true:
 
 - Branch protection is not enforced on the default branch.
 - A low-privilege bot account is not in use for Gitea or GitHub.
 - Reviewers are not consistently triaging `ai-generated` PRs.
-- Recent analysis runs have surfaced policy violations or scope creep.
+- Recent mock runs have surfaced policy violations or scope creep.
 
-When in doubt, stay in analysis-only. Cautious mode is the default for
+When in doubt, stay on `mock`. Cautious mode is the default for
 company repositories until the workflow has earned trust.
