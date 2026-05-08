@@ -145,6 +145,48 @@ func (s *Store) Fail(ctx context.Context, id string, msg string) error {
 	return err
 }
 
+// FailTimeout records a runner timeout failure for task id and re-queues
+// the task only if it has not yet reached its dedicated timeout retry
+// budget. The budget is intentionally separate from the generic
+// max_attempts (covering verify/policy/other failures) so a flaky
+// runner cannot exhaust the global retry pool. Returns true when the
+// task was re-queued, false when it was permanently failed.
+func (s *Store) FailTimeout(ctx context.Context, id string, msg string, maxTimeoutRetries int) (bool, error) {
+	prior, err := s.CountEvents(ctx, id, "runner_timeout")
+	if err != nil {
+		return false, err
+	}
+	// `prior` already includes the timeout event for the current attempt
+	// (callers should have emitted runner_timeout before invoking us).
+	// Re-queue while we still have unused budget.
+	if prior <= maxTimeoutRetries {
+		_, err := s.db.Exec(ctx, `UPDATE tasks SET status='queued', available_at=now()+interval '60 seconds', updated_at=now() WHERE id=$1`, id)
+		if err != nil {
+			return false, err
+		}
+		_ = s.AddEvent(ctx, id, "failed_attempt", msg)
+		return true, nil
+	}
+	_, err = s.db.Exec(ctx, "UPDATE tasks SET status='failed', updated_at=now() WHERE id=$1", id)
+	if err != nil {
+		return false, err
+	}
+	_ = s.AddEvent(ctx, id, "failed_attempt", msg)
+	return false, nil
+}
+
+// CountEvents returns the number of task_events of the given event_type
+// associated with taskID. It is used by retry policy to differentiate
+// timeout failures from verify/policy failures.
+func (s *Store) CountEvents(ctx context.Context, taskID, eventType string) (int, error) {
+	var n int
+	row := s.db.QueryRow(ctx, "SELECT count(*) FROM task_events WHERE task_id=$1 AND event_type=$2", taskID, eventType)
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (s *Store) AddEvent(ctx context.Context, taskID, typ, msg string) error {
 	_, err := s.db.Exec(ctx, "INSERT INTO task_events(task_id,event_type,message) VALUES($1,$2,$3)", taskID, typ, msg)
 	return err

@@ -1,5 +1,7 @@
 package workflow
 
+import "time"
+
 type Config struct {
 	Repo      RepoConfig      `yaml:"repo"`
 	Tracker   TrackerConfig   `yaml:"tracker"`
@@ -38,6 +40,35 @@ type AgentConfig struct {
 	Fallback            string `yaml:"fallback"`
 	MaxConcurrentAgents int    `yaml:"max_concurrent_agents"`
 	MaxTurns            int    `yaml:"max_turns"`
+	// Timeout caps a single runner invocation. When exceeded, the runner
+	// subprocess is killed and the task records a `runner_timeout` event.
+	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
+	// schema default of 30m.
+	Timeout time.Duration `yaml:"timeout"`
+	// MaxTimeoutRetries bounds how many times a task may be re-queued
+	// after a runner timeout. This is intentionally separate from the
+	// generic max_attempts (which covers verify/policy/other failures)
+	// so a flaky runner cannot exhaust the global retry budget.
+	//
+	// Pointer-typed so we can distinguish "absent" (nil → schema default
+	// of 1) from "explicitly set to 0" (no retry). Read via
+	// MaxTimeoutRetriesValue() rather than dereferencing directly.
+	MaxTimeoutRetries *int `yaml:"max_timeout_retries"`
+}
+
+// MaxTimeoutRetriesValue returns the effective runner-timeout retry
+// budget. A nil pointer (field omitted from YAML) yields the schema
+// default of 1 bonus retry; an explicit value—including 0—is honored
+// as configured. Negative values are clamped to 0 since a negative
+// retry budget is meaningless.
+func (a AgentConfig) MaxTimeoutRetriesValue() int {
+	if a.MaxTimeoutRetries == nil {
+		return 1
+	}
+	if *a.MaxTimeoutRetries < 0 {
+		return 0
+	}
+	return *a.MaxTimeoutRetries
 }
 
 type CommandConfig struct {
@@ -120,11 +151,21 @@ func DefaultConfig() Config {
 			PollIntervalMs: 30000,
 		},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
-		Agent:     AgentConfig{Default: "mock", Fallback: "claude", MaxConcurrentAgents: 1, MaxTurns: 8},
-		Codex:     CommandConfig{Command: "codex exec"},
-		Claude:    CommandConfig{Command: "claude"},
-		Policy:    PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
-		Verify:    VerifyConfig{Commands: []string{}},
+		// Agent.MaxTimeoutRetries is intentionally left nil here so the
+		// "absent" signal survives a YAML unmarshal that overlays this
+		// default. The effective default of 1 retry is supplied by
+		// MaxTimeoutRetriesValue().
+		Agent: AgentConfig{
+			Default:             "mock",
+			Fallback:            "claude",
+			MaxConcurrentAgents: 1,
+			MaxTurns:            8,
+			Timeout:             30 * time.Minute,
+		},
+		Codex:  CommandConfig{Command: "codex exec"},
+		Claude: CommandConfig{Command: "claude"},
+		Policy: PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
+		Verify: VerifyConfig{Commands: []string{}},
 		// PR.Draft defaults to false so workflows that omit `pr.draft` keep
 		// the historical worker behavior of opening ready-for-review PRs.
 		// Profiles that want draft PRs (e.g. company-cautious) opt in by

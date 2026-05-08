@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -75,6 +76,14 @@ func expandConfig(cfg *Config) {
 	if cfg.Agent.MaxConcurrentAgents <= 0 {
 		cfg.Agent.MaxConcurrentAgents = 1
 	}
+	if cfg.Agent.Timeout <= 0 {
+		cfg.Agent.Timeout = 30 * time.Minute
+	}
+	// MaxTimeoutRetries is *int so callers can distinguish "absent"
+	// (nil → MaxTimeoutRetriesValue() returns the schema default of 1)
+	// from "explicitly 0" (zero retries). We deliberately do not coerce
+	// here: forcing 0 → 1 stripped users of the ability to disable the
+	// runner-timeout retry budget entirely.
 	if cfg.Tracker.PollIntervalMs <= 0 {
 		cfg.Tracker.PollIntervalMs = 30000
 	}

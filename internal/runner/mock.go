@@ -2,15 +2,41 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
 
-type MockRunner struct{}
+// MockRunner is the Symphony-style Day-1 runner used in tests and the
+// `mock` agent path. Sleep, when > 0, makes the runner block until either
+// it elapses or the context is cancelled — this is how tests drive the
+// timeout path without spawning a real subprocess.
+type MockRunner struct {
+	Sleep time.Duration
+}
 
-func (MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
+func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
+	if m.Sleep > 0 {
+		start := time.Now()
+		t := time.NewTimer(m.Sleep)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			elapsed := time.Since(start)
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return Result{}, &TimeoutError{
+					Timeout: deadlineBudget(ctx, start),
+					Elapsed: elapsed,
+					Cause:   ctx.Err(),
+				}
+			}
+			return Result{}, ctx.Err()
+		case <-t.C:
+		}
+	}
+
 	dir := filepath.Join(in.Workdir, ".aiops")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Result{}, err
