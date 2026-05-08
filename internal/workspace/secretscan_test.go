@@ -6,7 +6,9 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -189,6 +191,124 @@ func TestSecretScanConfig_ShouldFailOnFindingDefaultsTrue(t *testing.T) {
 	cfg.FailOnFinding = &on
 	if !cfg.ShouldFailOnFinding() {
 		t.Fatal("explicit true must be honored")
+	}
+}
+
+// killedExitError starts a long-running subprocess, kills it with SIGKILL,
+// and returns the resulting *exec.ExitError. This is the cleanest way to
+// produce a real signal-terminated ProcessState across Unix platforms.
+func killedExitError(t *testing.T) *exec.ExitError {
+	t.Helper()
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("sleep(1) not available")
+	}
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start sleep: %v", err)
+	}
+	if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
+		t.Fatalf("kill sleep: %v", err)
+	}
+	err := cmd.Wait()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected *exec.ExitError after SIGKILL, got %T: %v", err, err)
+	}
+	if ws, ok := ee.ProcessState.Sys().(syscall.WaitStatus); ok && !ws.Signaled() {
+		t.Fatalf("expected WaitStatus.Signaled()==true; ws=%#v", ws)
+	}
+	return ee
+}
+
+func TestRunSecretScan_SignalKilledIsExecError(t *testing.T) {
+	cfg := workflow.SecretScanConfig{Enabled: true, Command: []string{"gitleaks"}}
+	ee := killedExitError(t)
+	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
+		return nil, nil, ee.ProcessState.ExitCode(), ee
+	}
+	res := runSecretScanWith(context.Background(), t.TempDir(), cfg, stub)
+	if res.Status != SecretScanError {
+		t.Fatalf("SIGKILL should map to SecretScanError, got %q (err=%v)", res.Status, res.Err)
+	}
+	if res.Err == nil {
+		t.Fatal("expected Err populated when scanner is signal-killed")
+	}
+	// Always block, including warn-only mode: we never know if there's a secret.
+	off := false
+	cfg.FailOnFinding = &off
+	if !res.ShouldBlockPush(cfg) {
+		t.Fatal("signal-killed scanner must block push even with fail_on_finding=false")
+	}
+}
+
+func TestRunSecretScan_ContextCanceledIsExecError(t *testing.T) {
+	cfg := workflow.SecretScanConfig{Enabled: true, Command: []string{"gitleaks"}}
+	// Stub returns an ExitError to mimic exec.CommandContext killing the
+	// process when the parent ctx is canceled. The classifier should look
+	// at ctx.Err() first and route this to SecretScanError, not Violation.
+	ee := killedExitError(t)
+	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
+		return nil, nil, ee.ProcessState.ExitCode(), ee
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled
+	res := runSecretScanWith(ctx, t.TempDir(), cfg, stub)
+	if res.Status != SecretScanError {
+		t.Fatalf("canceled ctx should yield SecretScanError, got %q", res.Status)
+	}
+	if !errors.Is(res.Err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got %v", res.Err)
+	}
+	off := false
+	cfg.FailOnFinding = &off
+	if !res.ShouldBlockPush(cfg) {
+		t.Fatal("ctx-canceled scan must block push even in warn-only mode")
+	}
+}
+
+func TestRunSecretScan_ContextDeadlineExceededIsExecError(t *testing.T) {
+	cfg := workflow.SecretScanConfig{Enabled: true, Command: []string{"gitleaks"}}
+	ee := killedExitError(t)
+	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
+		// Simulate the deadline elapsing during the run.
+		<-ctx.Done()
+		return nil, nil, ee.ProcessState.ExitCode(), ee
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+	defer cancel()
+	res := runSecretScanWith(ctx, t.TempDir(), cfg, stub)
+	if res.Status != SecretScanError {
+		t.Fatalf("deadline exceeded should yield SecretScanError, got %q", res.Status)
+	}
+	if !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Fatalf("expected wrapped context.DeadlineExceeded, got %v", res.Err)
+	}
+	off := false
+	cfg.FailOnFinding = &off
+	if !res.ShouldBlockPush(cfg) {
+		t.Fatal("deadline-exceeded scan must block push even in warn-only mode")
+	}
+}
+
+func TestIsSignaled(t *testing.T) {
+	// Normal non-zero exit: not signaled.
+	cmd := exec.Command("false")
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("expected *exec.ExitError from false, got %T", err)
+	}
+	if isSignaled(ee) {
+		t.Fatal("`false` exits normally; isSignaled must return false")
+	}
+	// SIGKILL: signaled.
+	killed := killedExitError(t)
+	if !isSignaled(killed) {
+		t.Fatal("SIGKILL'd process must be reported as signaled")
+	}
+	// Nil-safety.
+	if isSignaled(nil) {
+		t.Fatal("nil ExitError must not panic and must return false")
 	}
 }
 

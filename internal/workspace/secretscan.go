@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -102,11 +103,31 @@ func runSecretScanWith(ctx context.Context, workdir string, cfg workflow.SecretS
 		Stderr:     truncate(stderr, secretScanOutputCap),
 	}
 	if err != nil {
+		// If the parent context was canceled or its deadline elapsed, the
+		// scan never had a chance to complete. We must not treat that as a
+		// finding: report it as an execution error so the push is blocked
+		// regardless of fail_on_finding (we simply do not know whether the
+		// repo contains secrets).
+		if ctxErr := ctx.Err(); errors.Is(ctxErr, context.Canceled) || errors.Is(ctxErr, context.DeadlineExceeded) {
+			res.Status = SecretScanError
+			res.Err = fmt.Errorf("secret scan aborted: %w", ctxErr)
+			return res
+		}
 		// Distinguish "ran and exited non-zero" (ExitError) from "could
-		// not start at all" (e.g. binary missing). The former is a finding
-		// to surface; the latter is an operator error.
+		// not start at all" (e.g. binary missing) and from "process was
+		// killed by a signal" (OOM kill, external SIGTERM, etc.).
+		//
+		// A normal non-zero exit is a finding to surface (SecretScanViolation).
+		// A failure to start or a signal-killed process is an operator/exec
+		// error: the scan never produced a trustworthy result, so we map
+		// it to SecretScanError, which always blocks the push.
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
+			if isSignaled(ee) {
+				res.Status = SecretScanError
+				res.Err = fmt.Errorf("secret scan terminated by signal: %w", err)
+				return res
+			}
 			res.Status = SecretScanViolation
 			return res
 		}
@@ -116,6 +137,34 @@ func runSecretScanWith(ctx context.Context, workdir string, cfg workflow.SecretS
 	}
 	res.Status = SecretScanClean
 	return res
+}
+
+// isSignaled reports whether the process exited because it received a
+// signal (SIGKILL/SIGTERM/etc.) rather than calling exit(2) on its own.
+// Such terminations are not trustworthy scanner results: an OOM kill or
+// timeout-driven SIGKILL leaves the scan incomplete and must not be
+// classified as "found a secret".
+//
+// On Unix, the underlying ProcessState's WaitStatus exposes Signaled().
+// As a portable fallback, a -1 exit code (or any negative code) also
+// indicates the OS reported no normal exit code, which Go uses for
+// signal-terminated processes.
+func isSignaled(ee *exec.ExitError) bool {
+	if ee == nil || ee.ProcessState == nil {
+		return false
+	}
+	if ws, ok := ee.ProcessState.Sys().(syscall.WaitStatus); ok {
+		if ws.Signaled() {
+			return true
+		}
+	}
+	// Defensive fallback: ExitCode() returns -1 when the process did not
+	// exit normally (e.g. killed by signal, or platforms without
+	// WaitStatus). Treat any negative code as "not a real exit".
+	if ee.ProcessState.ExitCode() < 0 {
+		return true
+	}
+	return false
 }
 
 // runSecretScanCommand is the default command runner. It captures stdout
