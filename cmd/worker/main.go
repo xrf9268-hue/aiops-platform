@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -37,7 +39,7 @@ func main() {
 			time.Sleep(3 * time.Second)
 			continue
 		}
-		if err := runTask(ctx, *t); err != nil {
+		if err := runTask(ctx, store, *t); err != nil {
 			log.Printf("task %s failed: %v", t.ID, err)
 			_ = store.Fail(ctx, t.ID, err.Error())
 			continue
@@ -46,7 +48,7 @@ func main() {
 	}
 }
 
-func runTask(ctx context.Context, t task.Task) error {
+func runTask(ctx context.Context, store *queue.Store, t task.Task) error {
 	mgr := workspace.New(env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"))
 	workdir, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
@@ -85,6 +87,7 @@ func runTask(ctx context.Context, t task.Task) error {
 		return err
 	}
 	if err := workspace.EnforcePolicy(ctx, workdir, wf.Config); err != nil {
+		recordPolicyViolation(ctx, store, t.ID, err)
 		return err
 	}
 	if err := workspace.RunVerify(ctx, workdir, wf.Config); err != nil {
@@ -94,6 +97,21 @@ func runTask(ctx context.Context, t task.Task) error {
 		return err
 	}
 	return createPR(ctx, t, wf.Config)
+}
+
+// recordPolicyViolation writes a structured `policy_violation` task event
+// before the worker fails the task. The push/PR step is skipped because the
+// caller returns the error immediately after this call.
+func recordPolicyViolation(ctx context.Context, store *queue.Store, taskID string, err error) {
+	var perr *workspace.PolicyError
+	if errors.As(err, &perr) {
+		payload, mErr := json.Marshal(map[string]any{"violations": perr.Violations})
+		if mErr == nil {
+			_ = store.AddEventWithPayload(ctx, taskID, "policy_violation", perr.Error(), payload)
+			return
+		}
+	}
+	_ = store.AddEvent(ctx, taskID, "policy_violation", err.Error())
 }
 
 func createPR(ctx context.Context, t task.Task, cfg workflow.Config) error {
