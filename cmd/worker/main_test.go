@@ -603,3 +603,75 @@ func TestCreatePRWith_ListErrorFallsThroughToCreate(t *testing.T) {
 		t.Fatalf("expected fallback CreatePullRequest call, got %d", len(client.createCalls))
 	}
 }
+
+// TestResolveWorkflow_EmitsResolvedEvent verifies the worker emits a
+// workflow_resolved event whose payload carries Source, Path, and the
+// effective config quick-look fields (agent_default, policy_mode,
+// tracker_kind). These four fields are what the spec promises for the
+// post-hoc inspection contract.
+func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ev := &fakeEmitter{}
+	wf, src, err := resolveWorkflow(context.Background(), ev, "tsk_1", dir)
+	if err != nil {
+		t.Fatalf("resolveWorkflow: %v", err)
+	}
+	if src != "file" {
+		t.Fatalf("workflow_source = %q, want %q", src, "file")
+	}
+	if wf.Config.Agent.Default != "codex" {
+		t.Fatalf("agent.default not loaded: %q", wf.Config.Agent.Default)
+	}
+	got := ev.byKind(task.EventWorkflowResolved)
+	if len(got) != 1 {
+		t.Fatalf("workflow_resolved events = %d, want 1", len(got))
+	}
+	payload, _ := got[0].Payload.(map[string]any)
+	for _, key := range []string{"source", "path", "agent_default", "policy_mode", "tracker_kind"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("payload missing key %q: %#v", key, payload)
+		}
+	}
+	if payload["source"] != "file" {
+		t.Fatalf("payload.source = %v, want \"file\"", payload["source"])
+	}
+	if payload["path"] != "WORKFLOW.md" {
+		t.Fatalf("payload.path = %v, want \"WORKFLOW.md\"", payload["path"])
+	}
+	if payload["agent_default"] != "codex" {
+		t.Fatalf("payload.agent_default = %v, want \"codex\"", payload["agent_default"])
+	}
+	if _, present := payload["shadowed_by"]; present {
+		t.Fatalf("payload should omit shadowed_by when empty: %#v", payload)
+	}
+}
+
+// TestResolveWorkflow_DefaultSourceOmitsPath checks that when no
+// WORKFLOW.md exists, the resolved event records source=default and
+// does not emit an empty path key.
+func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
+	dir := t.TempDir()
+	ev := &fakeEmitter{}
+	_, src, err := resolveWorkflow(context.Background(), ev, "tsk_2", dir)
+	if err != nil {
+		t.Fatalf("resolveWorkflow: %v", err)
+	}
+	if src != "default" {
+		t.Fatalf("workflow_source = %q, want %q", src, "default")
+	}
+	got := ev.byKind(task.EventWorkflowResolved)
+	if len(got) != 1 {
+		t.Fatalf("workflow_resolved events = %d, want 1", len(got))
+	}
+	payload, _ := got[0].Payload.(map[string]any)
+	if _, present := payload["path"]; present {
+		t.Fatalf("payload should omit path when source=default: %#v", payload)
+	}
+	if _, present := payload["shadowed_by"]; present {
+		t.Fatalf("payload should omit shadowed_by when empty: %#v", payload)
+	}
+}

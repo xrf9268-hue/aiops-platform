@@ -28,6 +28,32 @@ type eventEmitter interface {
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
 }
 
+// resolveWorkflow performs WORKFLOW.md discovery for a prepared workdir
+// and emits the workflow_resolved event before any runner work begins.
+// Returning the workflow_source string lets callers stamp it onto the
+// runner_start payload as a quick-look field; the full provenance lives
+// on the workflow_resolved event itself.
+func resolveWorkflow(ctx context.Context, ev eventEmitter, taskID, workdir string) (*workflow.Workflow, string, error) {
+	wf, res, err := workflow.Resolve(workdir)
+	if err != nil {
+		return nil, "", err
+	}
+	payload := map[string]any{
+		"source":        string(res.Source),
+		"agent_default": wf.Config.Agent.Default,
+		"policy_mode":   wf.Config.Policy.Mode,
+		"tracker_kind":  wf.Config.Tracker.Kind,
+	}
+	if res.Path != "" {
+		payload["path"] = res.Path
+	}
+	if len(res.ShadowedBy) > 0 {
+		payload["shadowed_by"] = res.ShadowedBy
+	}
+	emit(ctx, ev, taskID, task.EventWorkflowResolved, "workflow resolved", payload)
+	return wf, string(res.Source), nil
+}
+
 func main() {
 	ctx := context.Background()
 	dsn := env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable")
@@ -92,7 +118,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return workflow.Config{}, err
 	}
 
-	wf, err := workflow.LoadOptional(workdir + "/WORKFLOW.md")
+	wf, _, err := resolveWorkflow(ctx, ev, t.ID, workdir)
 	if err != nil {
 		return workflow.Config{}, err
 	}
