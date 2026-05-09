@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -29,6 +30,28 @@ type promptSummary struct {
 	FirstLine string `json:"first_line"`
 }
 
+const promptFirstLineMaxBytes = 200
+
+// summarizePrompt produces the bounded prompt summary published by
+// --print-config. Length is the byte length of the trimmed body so a
+// reader can sanity-check completeness; FirstLine is truncated to keep
+// debug output cheap to paste even when an author writes a long single
+// line. The full body is never echoed (see spec safety contract).
+func summarizePrompt(body string) promptSummary {
+	trimmed := strings.TrimSpace(body)
+	first := trimmed
+	if i := strings.IndexByte(first, '\n'); i >= 0 {
+		first = first[:i]
+	}
+	if len(first) > promptFirstLineMaxBytes {
+		first = first[:promptFirstLineMaxBytes]
+	}
+	return promptSummary{
+		Length:    len(trimmed),
+		FirstLine: first,
+	}
+}
+
 // printConfig writes the effective workflow for workdir as JSON to
 // stdout. Returns the process exit code (0 on success, 1 on schema
 // validation error). Used both by main()'s --print-config dispatch and
@@ -47,7 +70,7 @@ func printConfig(workdir string, stdout, stderr io.Writer) int {
 			ShadowedBy: res.ShadowedBy,
 		},
 		Config:         wf.Config,
-		PromptTemplate: promptSummary{}, // populated in Task 12
+		PromptTemplate: summarizePrompt(wf.PromptTemplate),
 	}
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
