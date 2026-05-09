@@ -9,6 +9,31 @@ import (
 	"testing"
 )
 
+// TestPrintConfig_MasksTrackerAPIKey verifies the secret-masking
+// contract from the spec. Even when --print-config is used legitimately
+// for debugging, the API key must never reach stdout. We test with the
+// env-var indirection style that examples/WORKFLOW.md uses, since that
+// is the realistic source of a non-empty key.
+func TestPrintConfig_MasksTrackerAPIKey(t *testing.T) {
+	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin_super_secret_value")
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	got := stdout.String()
+	if strings.Contains(got, "lin_super_secret_value") {
+		t.Fatalf("api_key value leaked into stdout:\n%s", got)
+	}
+	if !strings.Contains(got, `"api_key": "***"`) {
+		t.Fatalf("api_key not masked; stdout:\n%s", got)
+	}
+}
+
 // TestPrintConfig_DefaultSource verifies the simplest case: an empty
 // workdir resolves to source=default, and the JSON output reports it
 // without a path or shadowed_by field.

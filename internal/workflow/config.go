@@ -23,7 +23,7 @@ type RepoConfig struct {
 
 type TrackerConfig struct {
 	Kind           string   `yaml:"kind"`
-	APIKey         string   `yaml:"api_key"`
+	APIKey         string   `yaml:"api_key" json:"api_key"`
 	TeamKey        string   `yaml:"team_key"`
 	ProjectSlug    string   `yaml:"project_slug"`
 	ActiveStates   []string `yaml:"active_states"`

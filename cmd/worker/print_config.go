@@ -52,6 +52,20 @@ func summarizePrompt(body string) promptSummary {
 	}
 }
 
+const maskedSecret = "***"
+
+// maskSecrets rewrites secret-bearing fields on a Config to a fixed
+// placeholder before serialization. The function takes its argument by
+// value; the workflow.Config used by the running worker is never
+// touched. Currently only Tracker.APIKey is masked — extend this list
+// when new secret-bearing fields are added to the schema.
+func maskSecrets(cfg workflow.Config) workflow.Config {
+	if cfg.Tracker.APIKey != "" {
+		cfg.Tracker.APIKey = maskedSecret
+	}
+	return cfg
+}
+
 // printConfig writes the effective workflow for workdir as JSON to
 // stdout. Returns the process exit code (0 on success, 1 on schema
 // validation error). Used both by main()'s --print-config dispatch and
@@ -69,7 +83,7 @@ func printConfig(workdir string, stdout, stderr io.Writer) int {
 			Path:       res.Path,
 			ShadowedBy: res.ShadowedBy,
 		},
-		Config:         wf.Config,
+		Config:         maskSecrets(wf.Config),
 		PromptTemplate: summarizePrompt(wf.PromptTemplate),
 	}
 	enc := json.NewEncoder(stdout)
