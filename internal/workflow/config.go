@@ -37,7 +37,6 @@ type WorkspaceConfig struct {
 
 type AgentConfig struct {
 	Default             string `yaml:"default"`
-	Fallback            string `yaml:"fallback"`
 	MaxConcurrentAgents int    `yaml:"max_concurrent_agents"`
 	MaxTurns            int    `yaml:"max_turns"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
@@ -157,7 +156,6 @@ func DefaultConfig() Config {
 		// MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
-			Fallback:            "claude",
 			MaxConcurrentAgents: 1,
 			MaxTurns:            8,
 			Timeout:             30 * time.Minute,

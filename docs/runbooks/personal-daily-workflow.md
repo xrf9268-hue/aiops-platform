@@ -109,7 +109,7 @@ Use when:
 
 - the task touches several files or needs more reasoning across a package.
 - you want richer tool use during the run.
-- Codex produced a thin or wrong patch and you want a second opinion. To switch runner you set `agent.default` in `WORKFLOW.md`, or pass `model` per task via `POST /v1/tasks`. Note: `agent.fallback` exists as a config field (`internal/workflow/config.go`) but no runtime path reads it today — `cmd/worker/main.go` selects the runner from `t.Model`/`agent.default`, and `internal/runner/runner.go` has no fallback handling. Setting `agent.fallback` will not change retry behavior.
+- Codex produced a thin or wrong patch and you want a second opinion. To switch runner you set `agent.default` in `WORKFLOW.md`, or pass `model` per task via `POST /v1/tasks`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
 
 ```yaml
 agent:
