@@ -35,6 +35,42 @@ This repository implements the second track.
 - `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
 - `internal/gitea`: webhook parser, signature verification, and PR client.
 
+## WORKFLOW.md discovery
+
+The worker looks for `WORKFLOW.md` in three locations and uses the first one it finds:
+
+1. `<repo>/WORKFLOW.md`
+2. `<repo>/.aiops/WORKFLOW.md`
+3. `<repo>/.github/WORKFLOW.md`
+
+When multiple files exist, lower-priority files are recorded as `shadowed_by` on the `workflow_resolved` event but are otherwise ignored. The worker does not warn or fail.
+
+If none of the three exist, the worker proceeds with built-in defaults:
+
+| Setting | Default |
+|---------|---------|
+| `agent.default` | `mock` |
+| `agent.timeout` | `30m` |
+| `agent.max_concurrent_agents` | `1` |
+| `pr.draft` | `false` |
+| `pr.labels` | `[ai-generated, needs-review]` |
+| `policy.mode` | `draft_pr` |
+| `policy.max_changed_files` | `12` |
+| `policy.max_changed_loc` | `300` |
+| `verify.commands` | none |
+
+A `WORKFLOW.md` with no YAML front matter (just a prompt body) is supported: the body becomes the prompt template, all other settings fall through to the defaults above. The `workflow_resolved` event records this as `source: prompt_only` so an operator can tell apart "ran with full Symphony config" from "ran with body-only template".
+
+To inspect the effective configuration for a workdir without consuming a task:
+
+```bash
+worker --print-config /path/to/repo/clone
+```
+
+The output is JSON. `tracker.api_key` is masked as `***`; the prompt template is summarized (length + first line) rather than printed verbatim — `cat <resolution.path>` to see the full body.
+
+For post-hoc inspection, the `workflow_resolved` task event records the source, path, and shadowed list of every run.
+
 ## Architecture notes
 
 - [Symphony integration guide](docs/symphony-integration.md)
