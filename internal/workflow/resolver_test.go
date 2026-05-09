@@ -101,3 +101,28 @@ func TestResolve_LowerPriorityStatErrorIgnored(t *testing.T) {
 		t.Fatalf("got Source=%q Path=%q; want file/WORKFLOW.md", res.Source, res.Path)
 	}
 }
+
+// TestResolve_PromptOnlyFile pins the spec contract that a WORKFLOW.md
+// without a YAML front matter block resolves as Source=prompt_only:
+// the body becomes the prompt template, but config falls through to
+// schema defaults. This is consistent with TestLoad_AcceptsPromptOnlyFile.
+func TestResolve_PromptOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	body := "just a prompt template, no front matter\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	wf, res, err := Resolve(dir)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Source != SourcePromptOnly {
+		t.Fatalf("Source = %q, want %q", res.Source, SourcePromptOnly)
+	}
+	if res.Path != "WORKFLOW.md" {
+		t.Fatalf("Path = %q, want %q", res.Path, "WORKFLOW.md")
+	}
+	if wf.PromptTemplate != "just a prompt template, no front matter" {
+		t.Fatalf("PromptTemplate = %q", wf.PromptTemplate)
+	}
+}

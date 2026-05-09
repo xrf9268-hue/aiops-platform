@@ -70,7 +70,11 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return wf, &Resolution{Source: SourceFile, Path: found}, nil
+	src := SourceFile
+	if !hasFrontMatterAt(abs) {
+		src = SourcePromptOnly
+	}
+	return wf, &Resolution{Source: src, Path: found}, nil
 }
 
 // hasFrontMatterAt returns true when path begins with a YAML front
