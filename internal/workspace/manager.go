@@ -178,9 +178,10 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
-		// Stop launching new commands once the phase deadline has
-		// elapsed; the in-flight command (if any) was already killed
-		// by runCtx.Done().
+		// Stop launching new commands once the phase deadline (or the
+		// parent context) has elapsed. The previous command's cmd.Run
+		// already returned with a context-related error; we don't need
+		// to wait for anything.
 		if runCtx.Err() != nil {
 			break
 		}
@@ -191,12 +192,22 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		cmd.Stdout = buf
 		cmd.Stderr = buf
 		runErr := cmd.Run()
+		// Nil-guard ProcessState: when the context expires between the
+		// pre-loop check and exec.Cmd.Start(), Go returns an error without
+		// starting the process, leaving ProcessState nil. Calling ExitCode()
+		// on a nil pointer would panic; -1 is Go's documented "no exit code"
+		// sentinel and matches the behaviour callers already expect for
+		// context-cancelled commands.
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
 		res := VerifyResult{
 			Command:   command,
 			Output:    buf.String(),
 			Truncated: buf.Truncated(),
 			Duration:  time.Since(start),
-			ExitCode:  cmd.ProcessState.ExitCode(),
+			ExitCode:  exitCode,
 		}
 		if runErr != nil {
 			res.Err = runErr
@@ -205,6 +216,9 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		results = append(results, res)
 	}
 
+	if ctx.Err() != nil {
+		return results, ctx.Err()
+	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return results, fmt.Errorf("verify phase exceeded timeout %s after %d command(s)", wf.Verify.Timeout, len(results))
 	}

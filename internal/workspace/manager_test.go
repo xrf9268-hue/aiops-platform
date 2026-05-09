@@ -623,6 +623,34 @@ func TestRunVerify_PhaseTimeout(t *testing.T) {
 	}
 }
 
+// TestRunVerify_ParentContextCancelPropagates pins the contract that
+// when the parent context is canceled (not the inner verify.timeout),
+// RunVerify returns the cancellation error rather than misattributing
+// the killed commands as plain verify failures.
+func TestRunVerify_ParentContextCancelPropagates(t *testing.T) {
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"sleep 5",
+	}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := RunVerify(ctx, dir, cfg)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("RunVerify did not honor parent cancel; took %v", elapsed)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want errors.Is(err, context.Canceled)", err)
+	}
+}
+
 func mustGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", args...)
