@@ -43,12 +43,15 @@ var resolveCandidates = []string{
 // Source=default.
 func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	var found string
+	var shadows []string
 	for _, rel := range resolveCandidates {
 		abs := filepath.Join(workdir, rel)
 		info, err := os.Stat(abs)
 		if err == nil && !info.IsDir() {
 			if found == "" {
 				found = rel
+			} else {
+				shadows = append(shadows, rel)
 			}
 		} else if err != nil && !os.IsNotExist(err) {
 			// Hard stat errors (permission denied, I/O) on a lower-priority
@@ -78,7 +81,7 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if !hasFront {
 		src = SourcePromptOnly
 	}
-	return wf, &Resolution{Source: src, Path: found}, nil
+	return wf, &Resolution{Source: src, Path: found, ShadowedBy: shadows}, nil
 }
 
 // hasFrontMatterAt returns true when path begins with a YAML front

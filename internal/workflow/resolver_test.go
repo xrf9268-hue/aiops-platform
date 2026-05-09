@@ -127,6 +127,40 @@ func TestResolve_PromptOnlyFile(t *testing.T) {
 	}
 }
 
+// TestResolve_ShadowedBy covers the precedence contract: when multiple
+// WORKFLOW.md files exist, the first in declaration order wins and the
+// remaining ones are recorded in ShadowedBy in declaration order. The
+// shadow list is data only — Resolve does not warn or error.
+func TestResolve_ShadowedBy(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\n---\nprompt\n"
+	for _, rel := range []string{"WORKFLOW.md", ".aiops/WORKFLOW.md", ".github/WORKFLOW.md"} {
+		abs := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	_, res, err := Resolve(dir)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Path != "WORKFLOW.md" {
+		t.Fatalf("Path = %q, want root", res.Path)
+	}
+	want := []string{".aiops/WORKFLOW.md", ".github/WORKFLOW.md"}
+	if len(res.ShadowedBy) != len(want) {
+		t.Fatalf("ShadowedBy = %v, want %v", res.ShadowedBy, want)
+	}
+	for i := range want {
+		if res.ShadowedBy[i] != want[i] {
+			t.Fatalf("ShadowedBy[%d] = %q, want %q", i, res.ShadowedBy[i], want[i])
+		}
+	}
+}
+
 // TestResolve_AlternateLocations covers the .aiops/ and .github/
 // fallback locations declared in the discovery contract. Each case
 // puts WORKFLOW.md in exactly one place; precedence (when multiple
