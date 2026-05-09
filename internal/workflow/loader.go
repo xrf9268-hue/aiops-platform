@@ -106,6 +106,14 @@ func rejectRemovedFields(front []byte) error {
 	return nil
 }
 
+// LoadOptional loads a workflow from an explicit path, returning schema
+// defaults when the file does not exist. New worker code should use
+// Resolve(workdir), which handles repo-relative discovery and returns
+// resolution metadata.
+//
+// Deprecated: use Resolve(workdir) for repo-relative discovery. Retained
+// for callers that pass an explicit path (e.g. cmd/linear-poller has a
+// related but separate loader contract).
 func LoadOptional(path string) (*Workflow, error) {
 	wf, err := Load(path)
 	if err == nil {
