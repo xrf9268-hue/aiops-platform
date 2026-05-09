@@ -55,7 +55,11 @@ func resolveWorkflow(ctx context.Context, ev eventEmitter, taskID, workdir strin
 }
 
 func main() {
-	if len(os.Args) >= 3 && os.Args[1] == "--print-config" {
+	if len(os.Args) >= 2 && os.Args[1] == "--print-config" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: worker --print-config <workdir>")
+			os.Exit(2)
+		}
 		os.Exit(printConfig(os.Args[2], os.Stdout, os.Stderr))
 	}
 	ctx := context.Background()
