@@ -27,3 +27,6 @@ coverage.out
 
 # macOS
 .DS_Store
+
+# Local Claude Code state (worktrees, plugin cache, transcripts)
+.claude/
