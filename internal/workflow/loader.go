@@ -23,7 +23,8 @@ func Load(path string) (*Workflow, error) {
 	}
 	front, body := splitFrontMatter(string(b))
 	cfg := DefaultConfig()
-	if strings.TrimSpace(front) != "" {
+	hasFrontMatter := strings.TrimSpace(front) != ""
+	if hasFrontMatter {
 		if err := rejectRemovedFields([]byte(front)); err != nil {
 			return nil, err
 		}
@@ -32,7 +33,57 @@ func Load(path string) (*Workflow, error) {
 		}
 	}
 	expandConfig(&cfg)
+	// Only validate when the file actually carries a front-matter block.
+	// Prompt-only WORKFLOW.md files are a supported pattern for repos that
+	// rely on the worker's built-in defaults (same semantic as
+	// LoadOptional's no-file fallback). Forcing schema validation on those
+	// would regress every repo that has not yet adopted the explicit
+	// Symphony front matter.
+	if hasFrontMatter {
+		if err := validateConfig(path, cfg); err != nil {
+			return nil, err
+		}
+	}
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body)}, nil
+}
+
+// supportedTrackerKinds enumerates the tracker integrations the platform
+// actually wires up today (see cmd/linear-poller and the Gitea webhook
+// path in cmd/api). Anything outside this set would parse as a typed
+// string but go nowhere at runtime, so reject it at Load.
+var supportedTrackerKinds = map[string]struct{}{
+	"gitea":  {},
+	"linear": {},
+}
+
+// supportedAgentDefaults mirrors the runner registry in
+// internal/runner.New. Keeping the two lists in sync at the schema layer
+// turns "unknown runner: X" — which today only surfaces after a task is
+// claimed and the workspace prepared — into a load-time configuration
+// error with the workflow file path attached.
+var supportedAgentDefaults = map[string]struct{}{
+	"mock":   {},
+	"codex":  {},
+	"claude": {},
+}
+
+// validateConfig enforces the required-field and enum constraints that
+// the typed YAML decoder cannot express on its own. It runs after
+// expandConfig so env-var indirections (e.g. `clone_url: $REPO_URL`)
+// are evaluated before non-empty checks. Errors include the workflow
+// file path and the offending field/value so operators can fix the
+// source rather than chasing runtime symptoms (issue #9).
+func validateConfig(path string, cfg Config) error {
+	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
+		return fmt.Errorf("%s: repo.clone_url is required", path)
+	}
+	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
+		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, linear)", path, cfg.Tracker.Kind)
+	}
+	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
+		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, claude)", path, cfg.Agent.Default)
+	}
+	return nil
 }
 
 // rejectRemovedFields surfaces a clear error for keys that were once part
