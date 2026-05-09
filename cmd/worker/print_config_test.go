@@ -116,3 +116,26 @@ func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 		t.Fatalf("length = %d, want > 0", out.PromptTemplate.Length)
 	}
 }
+
+// TestPrintConfig_SchemaErrorReturnsExitOne pins the contract that
+// schema validation failures produce a non-zero exit and route the
+// human-readable error to stderr. Stdout must remain empty so a script
+// piping the JSON elsewhere does not feed it a malformed document.
+func TestPrintConfig_SchemaErrorReturnsExitOne(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n---\nprompt\n" // no clone_url
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := printConfig(dir, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout not empty on error: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "repo.clone_url") {
+		t.Fatalf("stderr missing field name: %s", stderr.String())
+	}
+}
