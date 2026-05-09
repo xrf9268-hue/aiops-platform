@@ -126,3 +126,40 @@ func TestResolve_PromptOnlyFile(t *testing.T) {
 		t.Fatalf("PromptTemplate = %q", wf.PromptTemplate)
 	}
 }
+
+// TestResolve_AlternateLocations covers the .aiops/ and .github/
+// fallback locations declared in the discovery contract. Each case
+// puts WORKFLOW.md in exactly one place; precedence (when multiple
+// exist) is covered by TestResolve_ShadowedBy.
+func TestResolve_AlternateLocations(t *testing.T) {
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\n---\nprompt\n"
+	cases := []struct {
+		name string
+		rel  string
+	}{
+		{"aiops_dir", ".aiops/WORKFLOW.md"},
+		{"github_dir", ".github/WORKFLOW.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			abs := filepath.Join(dir, tc.rel)
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(abs, []byte(body), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, res, err := Resolve(dir)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if res.Source != SourceFile {
+				t.Fatalf("Source = %q, want %q", res.Source, SourceFile)
+			}
+			if res.Path != tc.rel {
+				t.Fatalf("Path = %q, want %q", res.Path, tc.rel)
+			}
+		})
+	}
+}
