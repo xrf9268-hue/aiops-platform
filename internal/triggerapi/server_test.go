@@ -1,4 +1,4 @@
-package main
+package triggerapi
 
 import (
 	"context"
@@ -61,7 +61,7 @@ func TestTaskReadHandlers(t *testing.T) {
 			},
 		},
 	}
-	handler := routes(&server{store: store})
+	handler := Routes(&Server{store: store})
 
 	t.Run("get task by id", func(t *testing.T) {
 		res := requestJSON(t, handler, "GET", "/v1/tasks/tsk_queued")
