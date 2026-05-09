@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestPrintConfig_MasksTrackerAPIKey verifies the secret-masking
@@ -114,6 +115,57 @@ func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 	}
 	if out.PromptTemplate.Length <= 0 {
 		t.Fatalf("length = %d, want > 0", out.PromptTemplate.Length)
+	}
+}
+
+// TestPrintConfig_RendersAgentTimeoutAsDurationString pins the contract
+// from issue #53: agent.timeout in --print-config output must be a
+// human-readable duration string (e.g. "30m0s") rather than a raw
+// nanosecond integer. The default schema timeout is 30 minutes.
+func TestPrintConfig_RendersAgentTimeoutAsDurationString(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Agent struct {
+				Timeout string `json:"timeout"`
+			} `json:"agent"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if got, want := out.Config.Agent.Timeout, "30m0s"; got != want {
+		t.Fatalf("agent.timeout = %q, want %q\nstdout:\n%s", got, want, stdout.String())
+	}
+	d, err := time.ParseDuration(out.Config.Agent.Timeout)
+	if err != nil {
+		t.Fatalf("ParseDuration(%q): %v", out.Config.Agent.Timeout, err)
+	}
+	if d != 30*time.Minute {
+		t.Fatalf("round-trip duration = %v, want 30m", d)
+	}
+}
+
+// TestPrintConfig_AgentTimeoutFromYAMLOverride covers the round-trip
+// requirement: a YAML config supplying `timeout: 10m` must surface as
+// "10m0s" in the print-config output, and that string must parse back
+// to the same duration.
+func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  timeout: 10m\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"timeout": "10m0s"`) {
+		t.Fatalf("expected timeout=\"10m0s\" in output, got:\n%s", stdout.String())
 	}
 }
 
