@@ -805,3 +805,51 @@ func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 		t.Fatalf("verify_end status: got=%q want=%q", status, "failed")
 	}
 }
+
+// TestVerifyAllowFailure_DoesNotMaskParentCancel pins that allow_failure
+// only downgrades real verification failures, not context cancellation.
+// Codex review on PR #55 caught that the original runVerifyPhase swallowed
+// every non-nil verifyErr under allow_failure, including context.Canceled
+// from a parent ctx, turning worker shutdown into a "failed_allowed" PR.
+// The cancellation must still abort the task.
+func TestVerifyAllowFailure_DoesNotMaskParentCancel(t *testing.T) {
+	ev := &fakeEmitter{}
+	dir := t.TempDir()
+
+	cfg := workflow.Config{
+		Verify: workflow.VerifyConfig{
+			Commands:     []string{"sleep 5"},
+			AllowFailure: true, // would otherwise downgrade
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	degraded, err := runVerifyPhase(ctx, ev, "tsk_cancel", dir, cfg)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("runVerifyPhase did not honor parent cancel; took %v", elapsed)
+	}
+	if degraded {
+		t.Fatalf("degraded must be false on parent cancel even when allow_failure=true")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want errors.Is(err, context.Canceled)", err)
+	}
+
+	// Event should report status=canceled, not failed_allowed.
+	ends := ev.byKind(task.EventVerifyEnd)
+	if len(ends) != 1 {
+		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
+	}
+	status, _ := payloadField(t, ends[0].Payload, "status").(string)
+	if status != "canceled" {
+		t.Fatalf("verify_end status: got=%q want=%q", status, "canceled")
+	}
+}

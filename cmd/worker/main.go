@@ -354,6 +354,16 @@ func runVerifyPhase(ctx context.Context, ev eventEmitter, taskID, workdir string
 		return false, nil
 	}
 	payload["error"] = errSummary(verifyErr)
+	// Parent context cancellation (worker shutdown, task abort) must always
+	// propagate, even when allow_failure is on. allow_failure only downgrades
+	// real verification failures — a canceled task is not an "investigation"
+	// case and must not result in a degraded PR being opened. RunVerify
+	// returns ctx.Err() directly on parent-cancel, so errors.Is matches.
+	if errors.Is(verifyErr, context.Canceled) || errors.Is(verifyErr, context.DeadlineExceeded) {
+		payload["status"] = "canceled"
+		emit(ctx, ev, taskID, task.EventVerifyEnd, "verify canceled", payload)
+		return false, verifyErr
+	}
 	if cfg.Verify.AllowFailure {
 		payload["status"] = "failed_allowed"
 		emit(ctx, ev, taskID, task.EventVerifyEnd, "verify failed (investigation mode)", payload)
