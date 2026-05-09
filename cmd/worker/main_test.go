@@ -365,7 +365,7 @@ func TestRunRunnerWithTimeoutEmitsTimeoutEvent(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second}, in, 30*time.Millisecond)
+	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second}, in, 30*time.Millisecond, "file")
 	if !runner.IsTimeout(err) {
 		t.Fatalf("expected TimeoutError from runRunnerWithTimeout, got %v", err)
 	}
@@ -399,7 +399,7 @@ func TestRunRunnerWithTimeoutHappyPath(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second); err != nil {
+	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "file"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := len(ev.byKind(task.EventRunnerStart)); got != 1 {
@@ -430,7 +430,7 @@ func TestRunRunnerWithTimeoutNonTimeoutError(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{err: wantErr}, in, time.Second)
+	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{err: wantErr}, in, time.Second, "file")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err propagation broken: got %v want %v", err, wantErr)
 	}
@@ -456,7 +456,7 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 10 * time.Millisecond}, in, 0); err != nil {
+	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 10 * time.Millisecond}, in, 0, "default"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	pe := ev.byKind(task.EventRunnerStart)[0]
@@ -673,5 +673,26 @@ func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
 	}
 	if _, present := payload["shadowed_by"]; present {
 		t.Fatalf("payload should omit shadowed_by when empty: %#v", payload)
+	}
+}
+
+// TestRunRunnerWithTimeout_StampsWorkflowSource verifies the
+// runner_start payload carries workflow_source as a quick-look field.
+// The full provenance is on workflow_resolved; this stamp lets a
+// timeline viewer color the runner stage by source without joining
+// against the earlier event.
+func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
+	ev := &fakeEmitter{}
+	in := runner.RunInput{Task: task.Task{ID: "tsk_1", Model: "mock"}}
+	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "prompt_only"); err != nil {
+		t.Fatalf("runRunnerWithTimeout: %v", err)
+	}
+	got := ev.byKind(task.EventRunnerStart)
+	if len(got) != 1 {
+		t.Fatalf("runner_start events = %d, want 1", len(got))
+	}
+	payload, _ := got[0].Payload.(map[string]any)
+	if payload["workflow_source"] != "prompt_only" {
+		t.Fatalf("workflow_source = %v, want %q", payload["workflow_source"], "prompt_only")
 	}
 }

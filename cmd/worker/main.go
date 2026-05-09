@@ -118,7 +118,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return workflow.Config{}, err
 	}
 
-	wf, _, err := resolveWorkflow(ctx, ev, t.ID, workdir)
+	wf, workflowSource, err := resolveWorkflow(ctx, ev, t.ID, workdir)
 	if err != nil {
 		return workflow.Config{}, err
 	}
@@ -159,7 +159,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return cfg, fmt.Errorf("reset run summary: %w", err)
 	}
 
-	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout); runErr != nil {
+	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout, workflowSource); runErr != nil {
 		writeFailureArtifacts(ctx, workdir, nil, "runner failed: "+errSummary(runErr))
 		return cfg, runErr
 	}
@@ -275,14 +275,15 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 // can distinguish a clean exit from a kill due to deadline. The returned
 // runner.Result is what runTask passes to runSummary on the success path;
 // on failure it is zero-valued.
-func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration) (runner.Result, error) {
+func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
 
 	emit(ctx, ev, in.Task.ID, task.EventRunnerStart, "runner started", map[string]any{
-		"model":      in.Task.Model,
-		"timeout_ms": timeout.Milliseconds(),
+		"model":           in.Task.Model,
+		"timeout_ms":      timeout.Milliseconds(),
+		"workflow_source": workflowSource,
 	})
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
