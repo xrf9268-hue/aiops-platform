@@ -35,8 +35,13 @@ failed run can be reconstructed from the event timeline alone:
 - `enqueued`, `claimed` — queue lifecycle
 - `runner_start`, `runner_end` — agent runner timing and summary
 - `verify_start`, `verify_end` — workflow verify command results
-- `push` — git push outcome and changed file count
+- `push` — git push outcome and changed file count. Retries push the work
+  branch with `--force-with-lease` so an earlier attempt's tip is overwritten
+  cleanly instead of failing as non-fast-forward.
 - `pr_created` — pull request creation (number, html_url) or failure
+- `pr_reused` — emitted instead of `pr_created` when the work branch already
+  has an open PR from a previous attempt; the worker reuses it (number,
+  html_url, title) and skips the create call so retries do not duplicate PRs
 - `succeeded`, `failed_attempt` — terminal outcomes
 
 The worker also writes the following artifacts under `.aiops/` in the

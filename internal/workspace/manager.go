@@ -478,6 +478,15 @@ func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) err
 	return nil
 }
 
+// CommitAndPush stages the workdir, commits with a Title-derived message,
+// and pushes to origin/<branch>. Retries for the same task ID reuse the same
+// work branch (see queue.Postgres.Enqueue), so on the second attempt origin
+// already holds the rejected commit from the previous run. We push with
+// --force-with-lease so retries cleanly overwrite that stale tip without
+// silently clobbering anything else: the lease is computed from the
+// remote-tracking ref we refresh just before the push. The pre-fetch is
+// best-effort because the very first push has no upstream branch to fetch;
+// in that case --force-with-lease degrades to a normal create-and-push.
 func CommitAndPush(ctx context.Context, workdir string, title string, branch string) error {
 	if err := run(ctx, workdir, "git", "add", "."); err != nil {
 		return err
@@ -488,7 +497,8 @@ func CommitAndPush(ctx context.Context, workdir string, title string, branch str
 	if err := run(ctx, workdir, "git", "commit", "-m", "chore(ai): "+title); err != nil {
 		return err
 	}
-	return run(ctx, workdir, "git", "push", "origin", branch)
+	_ = runQuiet(ctx, workdir, "git", "fetch", "origin", branch)
+	return run(ctx, workdir, "git", "push", "--force-with-lease", "origin", branch)
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) error {

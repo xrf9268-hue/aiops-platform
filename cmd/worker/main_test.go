@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -298,6 +299,7 @@ func TestEventKindConstantsAreSnakeCase(t *testing.T) {
 		task.EventVerifyEnd,
 		task.EventPush,
 		task.EventPRCreated,
+		task.EventPRReused,
 	}
 	for _, kind := range required {
 		if kind == "" {
@@ -462,5 +464,142 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 	want := float64((30 * time.Minute).Milliseconds())
 	if got != want {
 		t.Fatalf("expected default timeout %v ms, got %v", want, got)
+	}
+}
+
+// fakePRClient lets PR-handoff tests script the responses from the gitea
+// client without going through HTTP. It also records every call so tests can
+// assert on whether CreatePullRequest was even attempted on the reuse path.
+type fakePRClient struct {
+	findResult *gitea.PullRequest
+	findErr    error
+	createPR   *gitea.PullRequest
+	createErr  error
+
+	mu          sync.Mutex
+	findCalls   []gitea.FindOpenPullRequestInput
+	createCalls []gitea.CreatePullRequestInput
+}
+
+func (f *fakePRClient) FindOpenPullRequest(_ context.Context, in gitea.FindOpenPullRequestInput) (*gitea.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.findCalls = append(f.findCalls, in)
+	return f.findResult, f.findErr
+}
+
+func (f *fakePRClient) CreatePullRequest(_ context.Context, in gitea.CreatePullRequestInput) (*gitea.PullRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.createCalls = append(f.createCalls, in)
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	if f.createPR != nil {
+		return f.createPR, nil
+	}
+	return &gitea.PullRequest{Number: 1, HTMLURL: "http://gitea.local/o/r/pulls/1", Title: in.Title}, nil
+}
+
+func samplePRTask() task.Task {
+	return task.Task{
+		ID:            "tsk_42",
+		Title:         "fix bug",
+		SourceType:    "gitea_issue",
+		SourceEventID: "evt-1",
+		RepoOwner:     "o",
+		RepoName:      "r",
+		BaseBranch:    "main",
+		WorkBranch:    "ai/tsk_42",
+	}
+}
+
+// TestCreatePRWith_ReusesExistingPR is the core of issue #7: when a previous
+// attempt already opened a PR for the work branch, the retry must reuse it
+// rather than asking Gitea to create a duplicate (which would fail with 422
+// and surface as a task failure). The test asserts both that CreatePullRequest
+// is NOT called and that a pr_reused event is emitted with the existing PR's
+// metadata so observers can attribute the handoff.
+func TestCreatePRWith_ReusesExistingPR(t *testing.T) {
+	ev := &fakeEmitter{}
+	tk := samplePRTask()
+	cfg := workflow.Config{}
+	client := &fakePRClient{
+		findResult: &gitea.PullRequest{Number: 17, HTMLURL: "http://gitea.local/o/r/pulls/17", Title: "chore(ai): fix bug"},
+	}
+
+	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", client); err != nil {
+		t.Fatalf("createPRWith: %v", err)
+	}
+
+	if len(client.createCalls) != 0 {
+		t.Fatalf("expected zero CreatePullRequest calls when reusing, got %d", len(client.createCalls))
+	}
+	if len(client.findCalls) != 1 || client.findCalls[0].Head != tk.WorkBranch {
+		t.Fatalf("expected single FindOpenPullRequest with head=%q, got %#v", tk.WorkBranch, client.findCalls)
+	}
+	reused := ev.byKind(task.EventPRReused)
+	if len(reused) != 1 {
+		t.Fatalf("expected one pr_reused event, got %d (events=%#v)", len(reused), ev.events)
+	}
+	number, _ := payloadField(t, reused[0].Payload, "number").(float64)
+	if int(number) != 17 {
+		t.Fatalf("pr_reused number: got %v want 17", number)
+	}
+	if got := len(ev.byKind(task.EventPRCreated)); got != 0 {
+		t.Fatalf("pr_created must not fire on reuse, got %d", got)
+	}
+}
+
+// TestCreatePRWith_CreatesWhenNoneExists confirms the unchanged happy path:
+// when the lookup returns no match, the worker still calls CreatePullRequest
+// exactly once and emits pr_created with the new PR metadata.
+func TestCreatePRWith_CreatesWhenNoneExists(t *testing.T) {
+	ev := &fakeEmitter{}
+	tk := samplePRTask()
+	client := &fakePRClient{
+		findResult: nil,
+		createPR:   &gitea.PullRequest{Number: 99, HTMLURL: "http://gitea.local/o/r/pulls/99", Title: "chore(ai): fix bug"},
+	}
+
+	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", client); err != nil {
+		t.Fatalf("createPRWith: %v", err)
+	}
+
+	if len(client.createCalls) != 1 {
+		t.Fatalf("expected exactly one CreatePullRequest call, got %d", len(client.createCalls))
+	}
+	if got := len(ev.byKind(task.EventPRReused)); got != 0 {
+		t.Fatalf("pr_reused must not fire on create path, got %d", got)
+	}
+	created := ev.byKind(task.EventPRCreated)
+	if len(created) != 1 {
+		t.Fatalf("expected one pr_created event, got %d", len(created))
+	}
+	number, _ := payloadField(t, created[0].Payload, "number").(float64)
+	if int(number) != 99 {
+		t.Fatalf("pr_created number: got %v want 99", number)
+	}
+}
+
+// TestCreatePRWith_ListErrorFallsThroughToCreate ensures that a transient
+// failure in the list step does not block the worker: we still attempt to
+// create. This is the safer fallback because if a PR really does already
+// exist, Gitea will surface a 422 from CreatePullRequest, which then flows
+// through the existing failure-attribution path; meanwhile a real
+// "no PR exists yet" lookup that just happened to fail (network hiccup,
+// 5xx) still completes the handoff.
+func TestCreatePRWith_ListErrorFallsThroughToCreate(t *testing.T) {
+	ev := &fakeEmitter{}
+	tk := samplePRTask()
+	client := &fakePRClient{
+		findErr: errors.New("list pull requests failed: 500"),
+	}
+
+	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", client); err != nil {
+		t.Fatalf("createPRWith: %v", err)
+	}
+	if len(client.createCalls) != 1 {
+		t.Fatalf("expected fallback CreatePullRequest call, got %d", len(client.createCalls))
 	}
 }
