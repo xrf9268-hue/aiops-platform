@@ -175,6 +175,29 @@ func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
 	}
 }
 
+// TestBuildPRBody_VerifyDegradedBanner pins the contract that a
+// degraded run (verify.allow_failure took effect) prepends a clear
+// warning banner to the PR body so a human reviewer cannot miss it.
+func TestBuildPRBody_VerifyDegradedBanner(t *testing.T) {
+	tk := task.Task{ID: "tsk_demo", SourceType: "linear", SourceEventID: "ABC-1", WorkBranch: "ai/tsk_demo"}
+	body := buildPRBody(tk, "Did the thing.", true)
+
+	if !strings.Contains(body, "Verification failed (investigation mode)") {
+		t.Fatalf("expected investigation-mode banner; body:\n%s", body)
+	}
+	bannerIdx := strings.Index(body, "Verification failed (investigation mode)")
+	taskHeaderIdx := strings.Index(body, "## AI Task")
+	if bannerIdx < 0 || taskHeaderIdx < 0 || bannerIdx > taskHeaderIdx {
+		t.Fatalf("banner must precede the AI Task heading; banner=%d task=%d body:\n%s", bannerIdx, taskHeaderIdx, body)
+	}
+
+	// And: a non-degraded body must not carry the banner.
+	clean := buildPRBody(tk, "Did the thing.", false)
+	if strings.Contains(clean, "Verification failed") {
+		t.Fatalf("clean body should not mention verification failure; body:\n%s", clean)
+	}
+}
+
 // TestAppendRunSummaryDirectiveAppendsOnce verifies the runner contract is
 // only appended when the rendered prompt does not already mention it. This
 // keeps workflow templates free to embed their own (more detailed) version

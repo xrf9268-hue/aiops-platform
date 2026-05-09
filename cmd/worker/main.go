@@ -577,9 +577,14 @@ const prBodySummaryCap = 8 << 10 // 8 KiB
 // indicates the verify phase failed with allow_failure=true; Task 4 will use
 // this flag to render the investigation-mode banner.
 func buildPRBody(t task.Task, summary string, verifyDegraded bool) string {
-	_ = verifyDegraded // banner rendering deferred to Task 4
 	excerpt, truncated := truncateForPR(summary, prBodySummaryCap)
 	var b strings.Builder
+	if verifyDegraded {
+		b.WriteString("> ⚠️ **Verification failed (investigation mode).** ")
+		b.WriteString("This PR was opened despite a failing verify phase because ")
+		b.WriteString("`verify.allow_failure` is enabled. Inspect ")
+		b.WriteString("`.aiops/VERIFICATION.txt` before merging.\n\n")
+	}
 	fmt.Fprintf(&b, "## AI Task\n\nTask ID: `%s`\n\n", t.ID)
 	fmt.Fprintf(&b, "## Source\n\n%s / %s\n\n", t.SourceType, t.SourceEventID)
 	b.WriteString("## Run summary\n\n")
