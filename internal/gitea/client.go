@@ -23,9 +23,14 @@ type CreatePullRequestInput struct {
 	Head  string
 	Base  string
 	// Draft, when true, asks Gitea to open the pull request as a draft.
-	// Gitea ≥ 1.18 supports the `draft` field on POST /repos/{owner}/{repo}/pulls.
-	// When false (the default) the field is omitted so older Gitea versions
-	// keep their existing behavior.
+	//
+	// Gitea's CreatePullRequestOption has NO `draft` field — verified against
+	// Gitea release/v1.26 source (modules/structs/pull.go). Draft state is
+	// derived exclusively from a Work-In-Progress title prefix
+	// (`WIP:` / `[WIP]` by default; configurable via Gitea's
+	// `setting.Repository.PullRequest.WorkInProgressPrefixes`). When Draft is
+	// true and the input Title does not already begin with a recognized WIP
+	// prefix, this client prepends `WIP: ` before sending the request.
 	Draft bool
 }
 
@@ -33,6 +38,32 @@ type PullRequest struct {
 	Number  int    `json:"number"`
 	HTMLURL string `json:"html_url"`
 	Title   string `json:"title"`
+	// Draft is populated from the Gitea response. Older Gitea versions
+	// (≤ 1.21.x) omit the field, so callers should treat false as
+	// "either not draft or unknown" on those versions.
+	Draft bool `json:"draft"`
+}
+
+// wipPrefixes mirrors Gitea's default
+// `setting.Repository.PullRequest.WorkInProgressPrefixes`. We do not read
+// the actual Gitea config; if an operator has customized the prefix list
+// the worker still uses these defaults, which is acceptable because the
+// match in Gitea is a superset (Gitea will recognize "WIP: " regardless
+// of whether it has been removed from the config — and in practice it
+// has not been).
+var wipPrefixes = []string{"WIP:", "[WIP]"}
+
+// hasWIPPrefix reports whether title already starts with one of Gitea's
+// recognized Work-In-Progress prefixes (case-insensitive, matching
+// Gitea's util.AsciiEqualFold behavior).
+func hasWIPPrefix(title string) bool {
+	upper := strings.ToUpper(title)
+	for _, p := range wipPrefixes {
+		if strings.HasPrefix(upper, strings.ToUpper(p)) {
+			return true
+		}
+	}
+	return false
 }
 
 type FindOpenPullRequestInput struct {
@@ -112,14 +143,15 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and GITEA_TOKEN are required")
 	}
+	title := in.Title
+	if in.Draft && !hasWIPPrefix(title) {
+		title = "WIP: " + title
+	}
 	payload := map[string]any{
-		"title": in.Title,
+		"title": title,
 		"body":  in.Body,
 		"head":  in.Head,
 		"base":  in.Base,
-	}
-	if in.Draft {
-		payload["draft"] = true
 	}
 	b, _ := json.Marshal(payload)
 	url := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)

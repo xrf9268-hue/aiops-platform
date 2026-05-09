@@ -25,13 +25,18 @@ func captureBody(t *testing.T, r *http.Request) map[string]any {
 	return out
 }
 
-func TestCreatePullRequest_DraftTrueSendsDraftField(t *testing.T) {
+// TestCreatePullRequest_DraftPrependsWIPTitle pins that Draft=true causes the
+// outgoing title to start with "WIP: " — Gitea's only mechanism for opening a
+// pull request as a draft. The CreatePullRequestOption struct in Gitea's
+// upstream API has no `draft` field; the WIP title prefix is the canonical
+// signal. See doc on CreatePullRequestInput.Draft for the version reference.
+func TestCreatePullRequest_DraftPrependsWIPTitle(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = captureBody(t, r)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"number": 7, "html_url": "http://gitea.local/o/r/pulls/7", "title": "t"}`))
+		_, _ = w.Write([]byte(`{"number": 7, "html_url": "http://gitea.local/o/r/pulls/7", "title": "WIP: t", "draft": true}`))
 	}))
 	defer srv.Close()
 
@@ -45,39 +50,69 @@ func TestCreatePullRequest_DraftTrueSendsDraftField(t *testing.T) {
 	if pr.Number != 7 {
 		t.Fatalf("pr number: got %d want 7", pr.Number)
 	}
-	v, ok := got["draft"]
-	if !ok {
-		t.Fatalf("payload missing draft field: %#v", got)
+	if !pr.Draft {
+		t.Fatalf("response Draft should be true; got %#v", pr)
 	}
-	if b, _ := v.(bool); !b {
-		t.Fatalf("draft field should be true, got %#v", v)
+	if _, present := got["draft"]; present {
+		t.Fatalf("payload must NOT carry a draft field — Gitea ignores it: %#v", got)
+	}
+	if title, _ := got["title"].(string); title != "WIP: t" {
+		t.Fatalf("title should be prefixed with WIP: ; got %q", title)
 	}
 }
 
-func TestCreatePullRequest_DraftFalseOmitsDraftField(t *testing.T) {
+// TestCreatePullRequest_DraftDoesNotDoublePrefixExistingWIP pins idempotency:
+// a caller that already supplies "WIP: ..." should not have the prefix added
+// twice when Draft=true.
+func TestCreatePullRequest_DraftDoesNotDoublePrefixExistingWIP(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = captureBody(t, r)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"number": 8, "html_url": "http://gitea.local/o/r/pulls/8", "title": "t"}`))
+		_, _ = w.Write([]byte(`{"number": 8, "html_url": "http://gitea.local/o/r/pulls/8", "title": "WIP: keep"}`))
 	}))
 	defer srv.Close()
 
 	c := Client{BaseURL: srv.URL, Token: "fake"}
 	if _, err := c.CreatePullRequest(context.Background(), CreatePullRequestInput{
-		Owner: "o", Repo: "r", Title: "t", Body: "b", Head: "feat", Base: "main", Draft: false,
+		Owner: "o", Repo: "r", Title: "WIP: keep", Body: "b", Head: "feat", Base: "main", Draft: true,
 	}); err != nil {
 		t.Fatalf("CreatePullRequest: %v", err)
 	}
-	if _, present := got["draft"]; present {
-		t.Fatalf("draft key should be omitted when false; got %#v", got)
+	if title, _ := got["title"].(string); title != "WIP: keep" {
+		t.Fatalf("existing WIP title should be left intact; got %q", title)
 	}
-	// Sanity check that the existing fields are still sent.
+}
+
+// TestCreatePullRequest_DraftFalseLeavesTitleAlone pins that the WIP prefix is
+// only added when Draft is true.
+func TestCreatePullRequest_DraftFalseLeavesTitleAlone(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = captureBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"number": 9, "html_url": "http://gitea.local/o/r/pulls/9", "title": "ship it"}`))
+	}))
+	defer srv.Close()
+
+	c := Client{BaseURL: srv.URL, Token: "fake"}
+	if _, err := c.CreatePullRequest(context.Background(), CreatePullRequestInput{
+		Owner: "o", Repo: "r", Title: "ship it", Body: "b", Head: "feat", Base: "main", Draft: false,
+	}); err != nil {
+		t.Fatalf("CreatePullRequest: %v", err)
+	}
+	if title, _ := got["title"].(string); title != "ship it" {
+		t.Fatalf("non-draft title should be unchanged; got %q", title)
+	}
 	for _, k := range []string{"title", "body", "head", "base"} {
 		if _, present := got[k]; !present {
 			t.Fatalf("payload missing %q: %#v", k, got)
 		}
+	}
+	if _, present := got["draft"]; present {
+		t.Fatalf("payload must NOT carry a draft field; got %#v", got)
 	}
 }
 

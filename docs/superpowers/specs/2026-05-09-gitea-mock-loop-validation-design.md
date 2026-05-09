@@ -110,7 +110,7 @@ test/e2e/
 ```
 testcontainers-go
 ├── postgres:16                      ← migrations/001_init.sql injected via /docker-entrypoint-initdb.d
-└── gitea/gitea:1.21.11-rootless     ← admin user + token created via REST after readiness
+└── gitea/gitea:1.26.1-rootless     ← admin user + token created via REST after readiness
                                        host.docker.internal:host-gateway extra host
                                        so webhooks can reach the test process
 trigger-api                          ← httptest.NewServer(triggerapi.Routes(...))
@@ -277,7 +277,7 @@ func (g *giteaEnv) getBranch(ctx context.Context, owner, repo, branch string) (b
 
 ### Gitea container configuration
 
-- Image: `gitea/gitea:1.21.11-rootless`.
+- Image: `gitea/gitea:1.26.1-rootless`.
 - Env (admin bootstrap on first start, supported since 1.19):
   - `GITEA_ADMIN_USER=aiops-bot`
   - `GITEA_ADMIN_PASSWORD=<random per test process>`
@@ -472,7 +472,7 @@ e2e:
     - name: Pre-pull container images
       run: |
         docker pull postgres:16
-        docker pull gitea/gitea:1.21.11-rootless
+        docker pull gitea/gitea:1.26.1-rootless
     - name: Run e2e tests
       run: go test -tags e2e -race -timeout 15m ./test/e2e/...
 ```
@@ -549,7 +549,7 @@ if !strings.Contains(triggerSrv.URL, "127.0.0.1") {
 }
 
 giteaContainer := testcontainers.GenericContainer(ctx, ContainerRequest{
-    Image:      "gitea/gitea:1.21.11-rootless",
+    Image:      "gitea/gitea:1.26.1-rootless",
     ExtraHosts: []string{"host.docker.internal:host-gateway"},
     // ...
 })
@@ -591,7 +591,7 @@ and a flaky e2e cannot block a clean refactor merge.
 - **Shared testbed in TestMain**: amortizes ~30s startup; per-test isolation
   via distinct repo names plus truncate-on-cleanup. Per-test testbed instances
   would multiply CI time without proportional value.
-- **Pin Gitea to 1.21.11-rootless**: matches what production runs; image bumps
+- **Pin Gitea to 1.26.1-rootless**: matches what production runs; image bumps
   are deliberate, not silent.
 - **Don't add `e2e` to required checks in this PR**: repo-settings change is
   out of scope for the code PR; tracked as a follow-up.
