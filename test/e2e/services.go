@@ -127,6 +127,11 @@ func (b *testbed) close(ctx context.Context) {
 // earlier tests (which their own cleanup should have handled) untouched.
 // Uses DELETE rather than TRUNCATE to avoid ACCESS EXCLUSIVE deadlocks
 // with the worker's claim transactions.
+//
+// Test isolation here assumes sequential execution. Do NOT add t.Parallel()
+// to any test in this package without rethinking the row-window strategy:
+// concurrent tests would observe each other's testStart cutoffs and the
+// shared worker would race claims across rows the cleanups want to delete.
 func (b *testbed) resetState(t *testing.T, testStart time.Time) {
 	ctx := context.Background()
 	if _, err := b.pg.pool.Exec(ctx,
