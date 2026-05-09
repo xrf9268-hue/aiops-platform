@@ -98,11 +98,14 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 		t.Fatalf("want 1 open PR, got %d: %+v", len(prs), prs)
 	}
 	pr := prs[0]
-	// NOTE: Gitea 1.21.x does not include "draft" in its PR API response
-	// (the field is absent, not false). The production client sends draft:true
-	// but Gitea ignores it. We skip the draft assertion for this Gitea version;
-	// it should be re-enabled once the testbed is upgraded to a Gitea version
-	// that supports draft PRs in the API (≥ 1.22 or forge-specific fork).
+	// Gitea (verified on 1.21.x and 1.26.x) does not honor the `draft: true`
+	// field in the POST /repos/{owner}/{repo}/pulls API request body — the
+	// PR is always created non-draft. The field is also missing from older
+	// API responses entirely (1.21.x) and present-but-always-false on newer
+	// versions (1.26.x). This is a production-side gap (internal/gitea
+	// sends draft:true, Gitea ignores it). Tracked separately; do not
+	// assert pr.Draft until the production client is fixed (e.g., via
+	// title-prefix WIP: or post-create draft toggle).
 	_ = pr.Draft
 	if !strings.Contains(pr.Body, ".aiops/") {
 		t.Errorf("PR body should reference .aiops/ artifacts; got: %s", pr.Body)

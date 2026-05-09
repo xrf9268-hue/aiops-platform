@@ -28,7 +28,7 @@ type giteaEnv struct {
 	container  testcontainers.Container
 }
 
-const giteaImage = "gitea/gitea:1.21.11-rootless"
+const giteaImage = "gitea/gitea:1.26.1-rootless"
 
 // startGitea boots Gitea with admin credentials injected via env, then
 // exchanges basic auth for an access token. Returns a fully usable client

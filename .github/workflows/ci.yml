@@ -96,7 +96,7 @@ jobs:
       - name: Pre-pull container images
         run: |
           docker pull postgres:16
-          docker pull gitea/gitea:1.21.11-rootless
+          docker pull gitea/gitea:1.26.1-rootless
       - name: Run e2e tests
         run: go test -tags e2e -race -timeout 15m ./test/e2e/...
 
