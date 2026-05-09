@@ -42,6 +42,16 @@ func VerifySignature(secret, sig string, body []byte) bool {
 	return hmac.Equal([]byte(sig), []byte(expected))
 }
 
+// Sign returns the value of an X-Gitea-Signature header for body, given
+// the shared HMAC secret. It is the inverse of VerifySignature: a value
+// produced by Sign(secret, body) is always accepted by
+// VerifySignature(secret, ..., body).
+func Sign(secret string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
 func ParseIssueComment(body []byte) (*IssueCommentPayload, error) {
 	var p IssueCommentPayload
 	if err := json.Unmarshal(body, &p); err != nil {

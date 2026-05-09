@@ -1,4 +1,4 @@
-package main
+package worker_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
+	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
@@ -59,7 +60,7 @@ func (f *fakeEmitter) byKind(kind string) []recordedEvent {
 
 func TestEmitRecordsEventOnFakeEmitter(t *testing.T) {
 	ev := &fakeEmitter{}
-	emit(context.Background(), ev, "tsk_1", task.EventRunnerStart, "runner started", map[string]any{"model": "mock"})
+	worker.Emit(context.Background(), ev, "tsk_1", task.EventRunnerStart, "runner started", map[string]any{"model": "mock"})
 	if len(ev.events) != 1 {
 		t.Fatalf("events = %d, want 1", len(ev.events))
 	}
@@ -79,23 +80,23 @@ func TestEmitRecordsEventOnFakeEmitter(t *testing.T) {
 
 func TestEmitNilEmitterIsNoop(t *testing.T) {
 	// Should not panic when worker is started without an emitter (e.g. tests).
-	emit(context.Background(), nil, "tsk_1", task.EventRunnerStart, "ignored", nil)
+	worker.Emit(context.Background(), nil, "tsk_1", task.EventRunnerStart, "ignored", nil)
 }
 
 func TestEmitLogsEmitterError(t *testing.T) {
 	ev := &fakeEmitter{err: errors.New("db down")}
-	emit(context.Background(), ev, "tsk_1", task.EventPush, "push", nil)
+	worker.Emit(context.Background(), ev, "tsk_1", task.EventPush, "push", nil)
 	if len(ev.events) != 1 {
 		t.Fatalf("event should still be recorded by fake even when error returned")
 	}
 }
 
 func TestErrSummaryTruncatesLongMessages(t *testing.T) {
-	if errSummary(nil) != "" {
+	if worker.ErrSummary(nil) != "" {
 		t.Fatalf("nil error should map to empty string")
 	}
 	long := strings.Repeat("x", 600)
-	got := errSummary(errors.New(long))
+	got := worker.ErrSummary(errors.New(long))
 	if len(got) > 600 {
 		t.Fatalf("errSummary did not truncate: len=%d", len(got))
 	}
@@ -109,7 +110,7 @@ func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
 		{Command: "go test", ExitCode: 0, Duration: 10 * time.Millisecond},
 		{Command: "make lint", ExitCode: 2, Err: errors.New("lint failed"), Duration: 5 * time.Millisecond},
 	}
-	got := summarizeVerifyResults(results)
+	got := worker.SummarizeVerifyResults(results)
 	if len(got) != 2 {
 		t.Fatalf("got %d entries, want 2", len(got))
 	}
@@ -138,7 +139,7 @@ func TestBuildPRBodyEmbedsRunSummary(t *testing.T) {
 		WorkBranch:    "ai/tsk_42",
 	}
 	summary := "# Run summary\n\nFixed the off-by-one in foo().\nVerified with `go test ./...`.\n"
-	body := buildPRBody(t1, summary, false)
+	body := worker.BuildPRBody(t1, summary, false)
 	for _, want := range []string{
 		"tsk_42",
 		"github_issue / issue#7",
@@ -157,7 +158,7 @@ func TestBuildPRBodyEmbedsRunSummary(t *testing.T) {
 }
 
 // TestBuildPRBodyTruncatesLongSummary confirms the PR body excerpt is capped
-// at prBodySummaryCap and surfaces a truncation marker so reviewers know to
+// at PRBodySummaryCap and surfaces a truncation marker so reviewers know to
 // open the artifact for the rest.
 func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
 	t1 := task.Task{ID: "tsk_big", WorkBranch: "ai/tsk_big"}
@@ -165,13 +166,13 @@ func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
 	// so we can count exactly how much of the user-provided summary made
 	// it into the rendered body.
 	const sentinel = "Z"
-	long := strings.Repeat(sentinel, prBodySummaryCap+1024)
-	body := buildPRBody(t1, long, false)
+	long := strings.Repeat(sentinel, worker.PRBodySummaryCap+1024)
+	body := worker.BuildPRBody(t1, long, false)
 	if !strings.Contains(body, "_Summary truncated at") {
 		t.Fatalf("expected truncation marker in PR body for oversized summary")
 	}
-	if got := strings.Count(body, sentinel); got > prBodySummaryCap {
-		t.Fatalf("excerpt exceeded prBodySummaryCap: %d > %d", got, prBodySummaryCap)
+	if got := strings.Count(body, sentinel); got > worker.PRBodySummaryCap {
+		t.Fatalf("excerpt exceeded PRBodySummaryCap: %d > %d", got, worker.PRBodySummaryCap)
 	}
 }
 
@@ -180,7 +181,7 @@ func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
 // warning banner to the PR body so a human reviewer cannot miss it.
 func TestBuildPRBody_VerifyDegradedBanner(t *testing.T) {
 	tk := task.Task{ID: "tsk_demo", SourceType: "linear", SourceEventID: "ABC-1", WorkBranch: "ai/tsk_demo"}
-	body := buildPRBody(tk, "Did the thing.", true)
+	body := worker.BuildPRBody(tk, "Did the thing.", true)
 
 	if !strings.Contains(body, "Verification failed (investigation mode)") {
 		t.Fatalf("expected investigation-mode banner; body:\n%s", body)
@@ -192,7 +193,7 @@ func TestBuildPRBody_VerifyDegradedBanner(t *testing.T) {
 	}
 
 	// And: a non-degraded body must not carry the banner.
-	clean := buildPRBody(tk, "Did the thing.", false)
+	clean := worker.BuildPRBody(tk, "Did the thing.", false)
 	if strings.Contains(clean, "Verification failed") {
 		t.Fatalf("clean body should not mention verification failure; body:\n%s", clean)
 	}
@@ -204,7 +205,7 @@ func TestBuildPRBody_VerifyDegradedBanner(t *testing.T) {
 // without duplication.
 func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	plain := "do the work"
-	out := appendRunSummaryDirective(plain)
+	out := worker.AppendRunSummaryDirective(plain)
 	if !strings.Contains(out, "RUN_SUMMARY.md") {
 		t.Fatalf("directive not appended: %q", out)
 	}
@@ -214,7 +215,7 @@ func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 
 	// Idempotent: prompt that already mentions RUN_SUMMARY.md is left alone.
 	already := "please write .aiops/RUN_SUMMARY.md when done"
-	if got := appendRunSummaryDirective(already); got != already {
+	if got := worker.AppendRunSummaryDirective(already); got != already {
 		t.Fatalf("expected no-op when prompt already references RUN_SUMMARY.md, got %q", got)
 	}
 }
@@ -361,7 +362,7 @@ func (s stubRunner) Run(ctx context.Context, _ runner.RunInput) (runner.Result, 
 
 // payloadField round-trips a recorded event payload through JSON and
 // returns the value at key. Centralising this here keeps the
-// runRunnerWithTimeout assertions resilient to the eventEmitter accepting
+// RunRunnerWithTimeout assertions resilient to the EventEmitter accepting
 // `any` payload (map[string]any in this code path).
 func payloadField(t *testing.T, p any, key string) any {
 	t.Helper()
@@ -388,9 +389,9 @@ func TestRunRunnerWithTimeoutEmitsTimeoutEvent(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second}, in, 30*time.Millisecond, "file")
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second}, in, 30*time.Millisecond, "file")
 	if !runner.IsTimeout(err) {
-		t.Fatalf("expected TimeoutError from runRunnerWithTimeout, got %v", err)
+		t.Fatalf("expected TimeoutError from RunRunnerWithTimeout, got %v", err)
 	}
 	if got := len(ev.byKind(task.EventRunnerStart)); got != 1 {
 		t.Fatalf("runner_start count: got=%d want=1", got)
@@ -422,7 +423,7 @@ func TestRunRunnerWithTimeoutHappyPath(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "file"); err != nil {
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "file"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got := len(ev.byKind(task.EventRunnerStart)); got != 1 {
@@ -453,7 +454,7 @@ func TestRunRunnerWithTimeoutNonTimeoutError(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	_, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{err: wantErr}, in, time.Second, "file")
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{err: wantErr}, in, time.Second, "file")
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("err propagation broken: got %v want %v", err, wantErr)
 	}
@@ -479,7 +480,7 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 10 * time.Millisecond}, in, 0, "default"); err != nil {
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 10 * time.Millisecond}, in, 0, "default"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	pe := ev.byKind(task.EventRunnerStart)[0]
@@ -551,8 +552,8 @@ func TestCreatePRWith_ReusesExistingPR(t *testing.T) {
 		findResult: &gitea.PullRequest{Number: 17, HTMLURL: "http://gitea.local/o/r/pulls/17", Title: "chore(ai): fix bug"},
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", false, client); err != nil {
-		t.Fatalf("createPRWith: %v", err)
+	if err := worker.CreatePRWith(context.Background(), ev, tk, cfg, "summary", false, client); err != nil {
+		t.Fatalf("CreatePRWith: %v", err)
 	}
 
 	if len(client.createCalls) != 0 {
@@ -585,8 +586,8 @@ func TestCreatePRWith_CreatesWhenNoneExists(t *testing.T) {
 		createPR:   &gitea.PullRequest{Number: 99, HTMLURL: "http://gitea.local/o/r/pulls/99", Title: "chore(ai): fix bug"},
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
-		t.Fatalf("createPRWith: %v", err)
+	if err := worker.CreatePRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
+		t.Fatalf("CreatePRWith: %v", err)
 	}
 
 	if len(client.createCalls) != 1 {
@@ -619,8 +620,8 @@ func TestCreatePRWith_ListErrorFallsThroughToCreate(t *testing.T) {
 		findErr: errors.New("list pull requests failed: 500"),
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
-		t.Fatalf("createPRWith: %v", err)
+	if err := worker.CreatePRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
+		t.Fatalf("CreatePRWith: %v", err)
 	}
 	if len(client.createCalls) != 1 {
 		t.Fatalf("expected fallback CreatePullRequest call, got %d", len(client.createCalls))
@@ -639,9 +640,9 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	ev := &fakeEmitter{}
-	wf, src, err := resolveWorkflow(context.Background(), ev, "tsk_1", dir)
+	wf, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_1", dir)
 	if err != nil {
-		t.Fatalf("resolveWorkflow: %v", err)
+		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 	if src != "file" {
 		t.Fatalf("workflow_source = %q, want %q", src, "file")
@@ -679,9 +680,9 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
 	dir := t.TempDir()
 	ev := &fakeEmitter{}
-	_, src, err := resolveWorkflow(context.Background(), ev, "tsk_2", dir)
+	_, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_2", dir)
 	if err != nil {
-		t.Fatalf("resolveWorkflow: %v", err)
+		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 	if src != "default" {
 		t.Fatalf("workflow_source = %q, want %q", src, "default")
@@ -707,8 +708,8 @@ func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
 func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
 	ev := &fakeEmitter{}
 	in := runner.RunInput{Task: task.Task{ID: "tsk_1", Model: "mock"}}
-	if _, err := runRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "prompt_only"); err != nil {
-		t.Fatalf("runRunnerWithTimeout: %v", err)
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{}, in, time.Second, "prompt_only"); err != nil {
+		t.Fatalf("RunRunnerWithTimeout: %v", err)
 	}
 	got := ev.byKind(task.EventRunnerStart)
 	if len(got) != 1 {
@@ -721,9 +722,9 @@ func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
 }
 
 // TestVerifyAllowFailure_OpensDegradedDraftPR pins the investigation-override
-// contract: when verify fails AND verify.allow_failure=true, runVerifyPhase
+// contract: when verify fails AND verify.allow_failure=true, RunVerifyPhase
 // returns (true, nil), the caller forces cfg.PR.Draft=true, and the eventual
-// createPRWith call opens a draft PR. A verify_end event with
+// CreatePRWith call opens a draft PR. A verify_end event with
 // status="failed_allowed" must be emitted.
 func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 	ev := &fakeEmitter{}
@@ -737,12 +738,12 @@ func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 		PR: workflow.PRConfig{Draft: false}, // prove override forces draft
 	}
 
-	degraded, err := runVerifyPhase(context.Background(), ev, "tsk_af", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_af", dir, cfg)
 	if err != nil {
-		t.Fatalf("runVerifyPhase with allow_failure=true must not return error, got: %v", err)
+		t.Fatalf("RunVerifyPhase with allow_failure=true must not return error, got: %v", err)
 	}
 	if !degraded {
-		t.Fatal("runVerifyPhase must return degraded=true when verify fails with allow_failure=true")
+		t.Fatal("RunVerifyPhase must return degraded=true when verify fails with allow_failure=true")
 	}
 
 	// Confirm verify_end event with status=failed_allowed.
@@ -755,14 +756,14 @@ func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 		t.Fatalf("verify_end status: got=%q want=%q", status, "failed_allowed")
 	}
 
-	// Now exercise createPRWith with verifyDegraded=true and Draft forced to true.
+	// Now exercise CreatePRWith with verifyDegraded=true and Draft forced to true.
 	if degraded {
 		cfg.PR.Draft = true
 	}
 	tk := samplePRTask()
 	client := &fakePRClient{}
-	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", true, client); err != nil {
-		t.Fatalf("createPRWith: %v", err)
+	if err := worker.CreatePRWith(context.Background(), ev, tk, cfg, "summary", true, client); err != nil {
+		t.Fatalf("CreatePRWith: %v", err)
 	}
 	if len(client.createCalls) != 1 {
 		t.Fatalf("expected one CreatePullRequest call, got %d", len(client.createCalls))
@@ -787,12 +788,12 @@ func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 		},
 	}
 
-	degraded, err := runVerifyPhase(context.Background(), ev, "tsk_naf", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_naf", dir, cfg)
 	if err == nil {
-		t.Fatal("runVerifyPhase must return error when verify fails and allow_failure=false")
+		t.Fatal("RunVerifyPhase must return error when verify fails and allow_failure=false")
 	}
 	if degraded {
-		t.Fatal("runVerifyPhase must return degraded=false when allow_failure=false")
+		t.Fatal("RunVerifyPhase must return degraded=false when allow_failure=false")
 	}
 
 	// Confirm verify_end event with status=failed.
@@ -830,11 +831,11 @@ func TestVerifyAllowFailure_DoesNotMaskParentCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	degraded, err := runVerifyPhase(ctx, ev, "tsk_cancel", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(ctx, ev, "tsk_cancel", dir, cfg)
 	elapsed := time.Since(start)
 
 	if elapsed > 2*time.Second {
-		t.Fatalf("runVerifyPhase did not honor parent cancel; took %v", elapsed)
+		t.Fatalf("RunVerifyPhase did not honor parent cancel; took %v", elapsed)
 	}
 	if degraded {
 		t.Fatalf("degraded must be false on parent cancel even when allow_failure=true")
