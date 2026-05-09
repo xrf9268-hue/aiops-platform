@@ -1,4 +1,10 @@
 ---
+repo:
+  # clone_url is required by the schema validator when front matter is present.
+  # In webhook-triggered tasks the worker uses the task's clone_url (from the
+  # webhook payload), not this field. The value here is never dereferenced by
+  # the worker during a webhook-driven run; it just satisfies the validator.
+  clone_url: http://localhost:3000/aiops-bot/demo-happy.git
 agent:
   default: mock
   timeout: 5m

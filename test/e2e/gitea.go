@@ -43,13 +43,16 @@ func startGitea(ctx context.Context) (*giteaEnv, error) {
 		Image:        giteaImage,
 		ExposedPorts: []string{"3000/tcp"},
 		Env: map[string]string{
-			"GITEA_ADMIN_USER":              "aiops-bot",
-			"GITEA_ADMIN_PASSWORD":          pass,
-			"GITEA_ADMIN_EMAIL":             "aiops-bot@example.invalid",
+			// NOTE: GITEA_ADMIN_USER env var is NOT processed by Gitea's
+			// docker entrypoint in 1.21.x; we create the admin user via
+			// `gitea admin user create` after the server is ready.
 			"GITEA__security__INSTALL_LOCK": "true",
 			"GITEA__security__SECRET_KEY":   secret,
 			"GITEA__database__DB_TYPE":      "sqlite3",
 			"GITEA__server__DISABLE_SSH":    "true",
+			// Allow webhook deliveries to host.docker.internal (the test server
+			// runs on the host; Gitea blocks private IPs by default).
+			"GITEA__webhook__ALLOWED_HOST_LIST": "external,loopback,private",
 		},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		WaitingFor: wait.ForHTTP("/api/v1/version").WithPort("3000/tcp").WithStartupTimeout(90 * time.Second),
@@ -61,6 +64,20 @@ func startGitea(ctx context.Context) (*giteaEnv, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start gitea: %w", err)
+	}
+
+	// Create the admin user via the gitea CLI now that the server is ready.
+	code, _, execErr := c.Exec(ctx, []string{
+		"gitea", "admin", "user", "create",
+		"--admin",
+		"--username", "aiops-bot",
+		"--password", pass,
+		"--email", "aiops-bot@example.invalid",
+		"-c", "/etc/gitea/app.ini",
+	})
+	if execErr != nil || code != 0 {
+		_ = c.Terminate(ctx)
+		return nil, fmt.Errorf("create gitea admin user: exit %d err %v", code, execErr)
 	}
 
 	host, err := c.Host(ctx)
@@ -146,7 +163,7 @@ func (g *giteaEnv) createToken(ctx context.Context, name string) (string, error)
 	}
 	resp, body, err := g.doJSON(ctx, "POST",
 		"/api/v1/users/"+url.PathEscape(g.botUser)+"/tokens",
-		tokReq{Name: name, Scopes: []string{"write:repository", "write:admin", "write:user"}},
+		tokReq{Name: name, Scopes: []string{"write:repository", "write:admin", "write:user", "write:issue"}},
 		true)
 	if err != nil {
 		return "", err

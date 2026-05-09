@@ -47,11 +47,15 @@ func setupTestbed(ctx context.Context) (*testbed, error) {
 
 	// Wrap the queue store so Gitea's clone_url (which embeds the container-
 	// internal hostname) is rewritten to the host-mapped URL the worker can
-	// actually clone from.
+	// actually clone from. We also embed the bot token in the URL so the
+	// worker can push without a credential helper (the token is the same one
+	// used for the Gitea API; Gitea accepts it as an HTTP password).
 	rewriter := &cloneRewriter{
 		store:    queue.New(pg.pool),
 		fromHost: "localhost:3000",
 		toHost:   strings.TrimPrefix(g.baseURL, "http://"),
+		botUser:  g.botUser,
+		botToken: g.botToken,
 	}
 
 	// Listen on tcp4 so triggerSrv.URL is always 127.0.0.1.
@@ -137,17 +141,47 @@ func (b *testbed) resetState(t *testing.T, testStart time.Time) {
 }
 
 // cloneRewriter wraps a queue.Store. On Enqueue, it rewrites the clone URL
-// so the worker can reach Gitea via the host-mapped port instead of the
-// container's internal hostname.
+// so the worker can reach Gitea via the host-mapped HTTP port instead of the
+// container's internal hostname. It also:
+//   - Converts SSH clone URLs (which Gitea includes even when SSH is disabled)
+//     to HTTP, since SSH is not reachable in the testbed environment.
+//   - Embeds the bot credentials in the HTTP URL so the worker can push
+//     without a credential helper.
 type cloneRewriter struct {
 	store    *queue.Store
 	fromHost string
 	toHost   string
+	botUser  string
+	botToken string
 }
 
 func (r *cloneRewriter) Enqueue(ctx context.Context, t task.Task) (task.Task, bool, error) {
 	if t.CloneURL != "" {
-		t.CloneURL = strings.Replace(t.CloneURL, r.fromHost, r.toHost, 1)
+		var repoPath string
+		// Convert SSH URL (ssh://git@host:port/owner/repo.git or
+		// git@host:owner/repo.git) to HTTP using toHost.
+		if strings.HasPrefix(t.CloneURL, "ssh://") {
+			trimmed := strings.TrimPrefix(t.CloneURL, "ssh://")
+			if slash := strings.Index(trimmed, "/"); slash >= 0 {
+				repoPath = trimmed[slash:] // /owner/repo.git
+			}
+		} else if strings.HasPrefix(t.CloneURL, "git@") {
+			if colon := strings.Index(t.CloneURL, ":"); colon >= 0 {
+				repoPath = "/" + t.CloneURL[colon+1:] // /owner/repo.git
+			}
+		}
+		if repoPath != "" {
+			// Build an authenticated HTTP URL for the rewritten host.
+			t.CloneURL = "http://" + r.botUser + ":" + r.botToken + "@" + r.toHost + repoPath
+		} else {
+			// HTTP URL: rewrite the internal container host to the mapped host,
+			// injecting credentials.
+			host := r.toHost
+			if r.botUser != "" && r.botToken != "" {
+				host = r.botUser + ":" + r.botToken + "@" + host
+			}
+			t.CloneURL = strings.Replace(t.CloneURL, r.fromHost, host, 1)
+		}
 	}
 	return r.store.Enqueue(ctx, t)
 }
