@@ -204,17 +204,35 @@ Emitted exactly once per task, after `Resolve` succeeds, before `runner.New`. If
     "tracker": { "api_key": "***", "...": "..." },
     "agent": { "default": "codex", "...": "..." }
   },
-  "prompt_template": "<full prompt body>"
+  "prompt_template": {
+    "length": 1234,
+    "first_line": "You are working on a personal AI coding task."
+  }
 }
 ```
 
 ### Secret masking
 
-Before serialization, walk the `Config` and replace these fields with `"***"` if non-empty:
+Before serialization, replace `Tracker.APIKey` with `"***"` if non-empty.
 
-- `Tracker.APIKey`
+This is the only secret-bearing field today. The list lives next to `printConfig` so a future schema addition has an obvious place to land.
 
-(This is the only secret-bearing field today. The list lives next to `printConfig` so a future schema addition has an obvious place to land.)
+### Why prompt body is summarized, not printed
+
+The prompt template is treated as opaque text by the worker, and `prompt_only` `WORKFLOW.md` files allow the body to be anything an author chooses to put there. `--print-config` output gets pasted into shell history, support bundles, gists, and CI logs — venues with broader visibility than the repo. Echoing the entire prompt verbatim would create an asymmetric safety contract (we mask `api_key` but dump unbounded body bytes next to it).
+
+Instead the debug command emits a small, deterministic summary:
+
+```go
+type promptSummary struct {
+    Length    int    `json:"length"`     // utf-8 byte length of the trimmed body
+    FirstLine string `json:"first_line"` // first non-empty line, truncated at 200 bytes
+}
+```
+
+A reader who needs the full prompt can `cat <resolution.path>` directly — the file is right there. We deliberately do **not** add an `--include-prompt` flag: extra knobs invite misuse, and the local file is the canonical source.
+
+This is a usability/safety contract decision, not a redaction policy: we make no claim that the summary scrubs secrets a determined operator embeds in a prompt. The contract is "this debug command does not enlarge the leak surface beyond the config fields whose schema we own."
 
 ### Wiring
 
@@ -250,6 +268,7 @@ A bare `os.Args` check, not the `flag` package: one sub-command, one positional.
 - Assert `runner_start` payload contains `workflow_source`.
 - `--print-config` against a temp workdir for each of the three layouts (root / `.aiops/` / `.github/`); decode JSON; assert `resolution.source` and `resolution.path`.
 - `--print-config` with `Tracker.APIKey` set in front matter; assert output contains `"api_key":"***"`, never the original value.
+- `--print-config` with a long prompt body (e.g. 5 KB containing a recognizable canary string `SHOULD_NOT_LEAK_xyz`); decode JSON; assert `prompt_template.length` equals the trimmed byte count, `prompt_template.first_line` is truncated at 200 bytes, and the canary string does NOT appear anywhere in stdout.
 
 ## Documentation
 
