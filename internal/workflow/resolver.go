@@ -70,8 +70,12 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	hasFront, err := hasFrontMatterAt(abs)
+	if err != nil {
+		return nil, nil, err
+	}
 	src := SourceFile
-	if !hasFrontMatterAt(abs) {
+	if !hasFront {
 		src = SourcePromptOnly
 	}
 	return wf, &Resolution{Source: src, Path: found}, nil
@@ -83,15 +87,22 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 // workflow files without threading a flag out of Load. Mirrors the
 // detection logic in splitFrontMatter (loader.go) — keep the two in
 // sync if the front-matter syntax ever changes.
-func hasFrontMatterAt(path string) bool {
+//
+// Returns the read error rather than silently classifying as false:
+// after Load(path) has succeeded, a read failure here means the file
+// disappeared or became unreadable mid-resolution (TOCTOU race on
+// network filesystems). Misclassifying that as prompt_only would put
+// a wrong Source value on the workflow_resolved event for a file
+// whose contents we successfully parsed moments earlier.
+func hasFrontMatterAt(path string) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return false
+		return false, err
 	}
 	s := string(b)
 	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
-		return false
+		return false, nil
 	}
 	trimmed := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
-	return strings.Contains(trimmed, "\n---")
+	return strings.Contains(trimmed, "\n---"), nil
 }
