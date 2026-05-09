@@ -573,9 +573,10 @@ const prBodySummaryCap = 8 << 10 // 8 KiB
 // buildPRBody renders the pull request body with the runner-produced
 // RUN_SUMMARY.md content inlined (truncated to prBodySummaryCap) and a link
 // to the full artifact path on the work branch. Callers must pass a summary
-// that has already been validated by workspace.CheckSummary. verifyDegraded
-// indicates the verify phase failed with allow_failure=true; Task 4 will use
-// this flag to render the investigation-mode banner.
+// that has already been validated by workspace.CheckSummary. When
+// verifyDegraded is true (verify failed under verify.allow_failure), the
+// body is prepended with a blockquote banner pointing reviewers at
+// .aiops/VERIFICATION.txt.
 func buildPRBody(t task.Task, summary string, verifyDegraded bool) string {
 	excerpt, truncated := truncateForPR(summary, prBodySummaryCap)
 	var b strings.Builder

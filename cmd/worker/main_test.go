@@ -731,7 +731,7 @@ func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 
 	cfg := workflow.Config{
 		Verify: workflow.VerifyConfig{
-			Commands:     []string{"sh", "-c", "exit 1"},
+			Commands:     []string{"sh -c 'exit 1'"},
 			AllowFailure: true,
 		},
 		PR: workflow.PRConfig{Draft: false}, // prove override forces draft
@@ -782,7 +782,7 @@ func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 
 	cfg := workflow.Config{
 		Verify: workflow.VerifyConfig{
-			Commands:     []string{"sh", "-c", "exit 1"},
+			Commands:     []string{"sh -c 'exit 1'"},
 			AllowFailure: false,
 		},
 	}
