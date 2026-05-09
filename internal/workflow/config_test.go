@@ -397,3 +397,25 @@ func TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries(t *testing.T) {
 		t.Fatalf("explicit zero Agent.MaxTimeoutRetriesValue: got %d want 0", got)
 	}
 }
+
+func TestLoad_VerifyTimeoutAndAllowFailureRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\n" +
+		"repo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\n" +
+		"verify:\n  timeout: 5m\n  allow_failure: true\n  commands:\n    - go test ./...\n" +
+		"---\nprompt\n"
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	wf, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := wf.Config.Verify.Timeout, 5*time.Minute; got != want {
+		t.Fatalf("Verify.Timeout = %v, want %v", got, want)
+	}
+	if !wf.Config.Verify.AllowFailure {
+		t.Fatalf("Verify.AllowFailure = false, want true")
+	}
+}

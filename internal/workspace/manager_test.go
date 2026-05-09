@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -414,36 +415,47 @@ func TestWriteAndReadSummaryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestRunVerifyCapturesOutputAndStopsOnFailure(t *testing.T) {
+// TestRunVerifyCollectsAllFailures pins the post-#18 contract: RunVerify
+// runs every non-empty command and records a result for each, even after
+// a non-zero exit. The aggregate error is non-nil iff at least one
+// command failed; per-command failure detail lives on VerifyResult.Err.
+func TestRunVerifyCollectsAllFailures(t *testing.T) {
 	dir := t.TempDir()
 	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
 		"echo hello-world",
 		"   ", // empty command should be skipped without recording a result
 		"sh -c 'echo to-stderr 1>&2; exit 7'",
-		"echo unreachable",
+		"sh -c 'echo still-running; exit 0'",
+		"sh -c 'exit 3'",
 	}}}
 
 	results, err := RunVerify(context.Background(), dir, cfg)
 	if err == nil {
-		t.Fatalf("RunVerify should report failure when a command exits non-zero")
+		t.Fatalf("RunVerify should report an aggregate error when any command fails")
 	}
-	if len(results) != 2 {
-		t.Fatalf("expected 2 verify results (skip empty + stop after failure), got %d", len(results))
-	}
-	if !strings.Contains(results[0].Output, "hello-world") {
-		t.Fatalf("first result missing stdout: %q", results[0].Output)
+	if got, want := len(results), 4; got != want {
+		t.Fatalf("expected %d verify results (skipping the empty entry), got %d", want, got)
 	}
 	if results[0].ExitCode != 0 || results[0].Err != nil {
-		t.Fatalf("first result should be success, got %+v", results[0])
+		t.Fatalf("result[0] should be success: %+v", results[0])
 	}
-	if results[1].ExitCode != 7 {
-		t.Fatalf("second result exit code = %d, want 7", results[1].ExitCode)
+	if !strings.Contains(results[0].Output, "hello-world") {
+		t.Fatalf("result[0] missing stdout: %q", results[0].Output)
+	}
+	if results[1].ExitCode != 7 || results[1].Err == nil {
+		t.Fatalf("result[1] should record exit=7 and Err: %+v", results[1])
 	}
 	if !strings.Contains(results[1].Output, "to-stderr") {
-		t.Fatalf("second result should capture stderr: %q", results[1].Output)
+		t.Fatalf("result[1] should capture stderr: %q", results[1].Output)
 	}
-	if results[1].Err == nil {
-		t.Fatalf("failed verify result should retain underlying error")
+	if results[2].ExitCode != 0 || results[2].Err != nil {
+		t.Fatalf("result[2] should be success despite earlier failure: %+v", results[2])
+	}
+	if !strings.Contains(results[2].Output, "still-running") {
+		t.Fatalf("result[2] missing stdout: %q", results[2].Output)
+	}
+	if results[3].ExitCode != 3 || results[3].Err == nil {
+		t.Fatalf("result[3] should record exit=3 and Err: %+v", results[3])
 	}
 }
 
@@ -569,6 +581,73 @@ func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AllChangedFiles missing %q in %q", want, got)
 		}
+	}
+}
+
+// TestRunVerify_PhaseTimeout pins the verify-phase deadline behavior:
+// when Verify.Timeout elapses, the in-flight command is killed via
+// context cancellation, remaining commands are not started, and the
+// aggregate error is non-nil. Already-completed results are preserved.
+func TestRunVerify_PhaseTimeout(t *testing.T) {
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{
+		Timeout: 200 * time.Millisecond,
+		Commands: []string{
+			"echo first-finished",
+			"sleep 5",          // killed by phase deadline
+			"echo unreachable", // skipped
+		},
+	}}
+	start := time.Now()
+	results, err := RunVerify(context.Background(), dir, cfg)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("RunVerify should report an aggregate error on timeout")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("phase took %v, expected ~200ms (timeout not enforced)", elapsed)
+	}
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results (first finished + sleep killed), got %d", len(results))
+	}
+	if results[0].ExitCode != 0 || results[0].Err != nil {
+		t.Fatalf("result[0] should be success: %+v", results[0])
+	}
+	if results[1].Err == nil {
+		t.Fatalf("result[1] (sleep) should record an error from context cancel")
+	}
+	for _, r := range results[2:] {
+		if r.Command == "echo unreachable" {
+			t.Fatalf("third command must not have been executed after deadline")
+		}
+	}
+}
+
+// TestRunVerify_ParentContextCancelPropagates pins the contract that
+// when the parent context is canceled (not the inner verify.timeout),
+// RunVerify returns the cancellation error rather than misattributing
+// the killed commands as plain verify failures.
+func TestRunVerify_ParentContextCancelPropagates(t *testing.T) {
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		"sleep 5",
+	}}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := RunVerify(ctx, dir, cfg)
+	elapsed := time.Since(start)
+
+	if elapsed > 2*time.Second {
+		t.Fatalf("RunVerify did not honor parent cancel; took %v", elapsed)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want errors.Is(err, context.Canceled)", err)
 	}
 }
 

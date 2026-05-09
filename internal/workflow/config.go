@@ -98,6 +98,19 @@ func (p PolicyConfig) LineLimit() int {
 type VerifyConfig struct {
 	Commands   []string         `yaml:"commands" json:"commands"`
 	SecretScan SecretScanConfig `yaml:"secret_scan" json:"secret_scan"`
+	// Timeout caps the entire verify phase. Zero (the default) means
+	// unbounded so repos that have not opted in keep their previous
+	// behavior. When exceeded, the in-flight command is killed via
+	// context cancellation and remaining commands are skipped; the
+	// task fails through the normal verify path unless AllowFailure
+	// is set.
+	Timeout time.Duration `yaml:"timeout" json:"timeout"`
+	// AllowFailure, when true, lets the worker open a draft PR even
+	// after verify reports failures, so the human can inspect what
+	// the agent produced and what the verifier saw. The PR body is
+	// annotated with a "verification failed (investigation mode)"
+	// banner. Default false: failed verification blocks PR creation.
+	AllowFailure bool `yaml:"allow_failure" json:"allow_failure"`
 }
 
 // SecretScanConfig describes an optional pre-push secret scanner that runs

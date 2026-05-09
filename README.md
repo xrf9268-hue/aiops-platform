@@ -61,6 +61,21 @@ If none of the three exist, the worker proceeds with built-in defaults:
 
 A `WORKFLOW.md` with no YAML front matter (just a prompt body) is supported: the body becomes the prompt template, all other settings fall through to the defaults above. The `workflow_resolved` event records this as `source: prompt_only` so an operator can tell apart "ran with full Symphony config" from "ran with body-only template".
 
+### `verify.timeout` and `verify.allow_failure`
+
+`verify.timeout` (Go duration string, e.g. `5m`) caps the entire verify phase.
+The default `0` means unbounded, preserving the previous behavior. When the
+deadline elapses, the in-flight command is killed via context cancellation and
+the remaining commands are skipped; the task fails through the normal verify
+path unless `verify.allow_failure` is set.
+
+`verify.allow_failure: true` opts the worker into "investigation mode": when
+verify fails the worker still opens a draft PR (regardless of `pr.draft`),
+emits a `verify_end` event with `status: failed_allowed`, and prepends a
+warning banner to the PR body pointing to `.aiops/VERIFICATION.txt`. Use this
+when you want to inspect what the agent produced even though the checks
+flagged it. Default is `false`; failed verification blocks PR creation.
+
 To inspect the effective configuration for a workdir without consuming a task:
 
 ```bash

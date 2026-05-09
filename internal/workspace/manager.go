@@ -148,37 +148,82 @@ func WritePrompt(workdir string, prompt string) error {
 	return os.WriteFile(filepath.Join(dir, "PROMPT.md"), []byte(prompt), 0o644)
 }
 
-// RunVerify executes the workflow verify commands in order. It returns one
-// VerifyResult per non-empty command (even when one fails) so callers can
-// persist the combined output as a run artifact for post-mortem inspection.
-// On the first failing command the slice is returned together with the
-// underlying error and remaining commands are skipped.
+// RunVerify executes the workflow verify commands in order and returns
+// one VerifyResult per non-empty command. Unlike the original
+// short-circuit semantics, it does not stop on the first failing
+// command: the AI workflow is more efficient when a single rework cycle
+// can address every reported failure. Per-command failure detail stays
+// on VerifyResult.Err and ExitCode.
+//
+// When wf.Verify.Timeout > 0 the entire phase runs under a derived
+// deadline. If the deadline elapses, the in-flight command is killed
+// via context cancellation and remaining commands are skipped (no
+// result is recorded for the skipped tail). The returned aggregate
+// error is non-nil iff at least one command failed or the phase
+// deadline was exceeded; callers inspect individual results to see
+// which.
 func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) {
-	var results []VerifyResult
+	runCtx := ctx
+	if wf.Verify.Timeout > 0 {
+		var cancel context.CancelFunc
+		runCtx, cancel = context.WithTimeout(ctx, wf.Verify.Timeout)
+		defer cancel()
+	}
+
+	var (
+		results  []VerifyResult
+		failures int
+	)
 	for _, command := range wf.Verify.Commands {
 		if strings.TrimSpace(command) == "" {
 			continue
 		}
+		// Stop launching new commands once the phase deadline (or the
+		// parent context) has elapsed. The previous command's cmd.Run
+		// already returned with a context-related error; we don't need
+		// to wait for anything.
+		if runCtx.Err() != nil {
+			break
+		}
 		start := time.Now()
 		buf := &cappedBuffer{Cap: VerifyOutputCap}
-		cmd := exec.CommandContext(ctx, "sh", "-lc", command)
+		cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
 		cmd.Dir = workdir
 		cmd.Stdout = buf
 		cmd.Stderr = buf
 		runErr := cmd.Run()
+		// Nil-guard ProcessState: when the context expires between the
+		// pre-loop check and exec.Cmd.Start(), Go returns an error without
+		// starting the process, leaving ProcessState nil. Calling ExitCode()
+		// on a nil pointer would panic; -1 is Go's documented "no exit code"
+		// sentinel and matches the behaviour callers already expect for
+		// context-cancelled commands.
+		exitCode := -1
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
 		res := VerifyResult{
 			Command:   command,
 			Output:    buf.String(),
 			Truncated: buf.Truncated(),
 			Duration:  time.Since(start),
-			ExitCode:  cmd.ProcessState.ExitCode(),
+			ExitCode:  exitCode,
 		}
 		if runErr != nil {
 			res.Err = runErr
-			results = append(results, res)
-			return results, fmt.Errorf("verify command failed %q: %w", command, runErr)
+			failures++
 		}
 		results = append(results, res)
+	}
+
+	if ctx.Err() != nil {
+		return results, ctx.Err()
+	}
+	if runCtx.Err() == context.DeadlineExceeded {
+		return results, fmt.Errorf("verify phase exceeded timeout %s after %d command(s)", wf.Verify.Timeout, len(results))
+	}
+	if failures > 0 {
+		return results, fmt.Errorf("verify: %d of %d command(s) failed", failures, len(results))
 	}
 	return results, nil
 }
