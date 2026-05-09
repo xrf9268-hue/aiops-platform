@@ -480,13 +480,17 @@ func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) err
 
 // CommitAndPush stages the workdir, commits with a Title-derived message,
 // and pushes to origin/<branch>. Retries for the same task ID reuse the same
-// work branch (see queue.Postgres.Enqueue), so on the second attempt origin
-// already holds the rejected commit from the previous run. We push with
-// --force-with-lease so retries cleanly overwrite that stale tip without
-// silently clobbering anything else: the lease is computed from the
-// remote-tracking ref we refresh just before the push. The pre-fetch is
-// best-effort because the very first push has no upstream branch to fetch;
-// in that case --force-with-lease degrades to a normal create-and-push.
+// work branch (see queue.Postgres.Enqueue), so on retry origin may already
+// hold a commit from the previous attempt. To make that case safe we probe
+// the upstream first and choose the push mode explicitly:
+//
+//   - Remote branch exists: refresh the local tracking ref via `git fetch`
+//     and push with `--force-with-lease`, so the retry overwrites the stale
+//     tip without silently clobbering anything else.
+//   - Remote branch is absent (first attempt, or an operator cleaned up the
+//     branch between retries): delete any stale `refs/remotes/origin/<branch>`
+//     so a leftover tracking ref cannot block a fresh create with `stale info`,
+//     then plain-push to (re)create the branch upstream.
 func CommitAndPush(ctx context.Context, workdir string, title string, branch string) error {
 	if err := run(ctx, workdir, "git", "add", "."); err != nil {
 		return err
@@ -497,8 +501,35 @@ func CommitAndPush(ctx context.Context, workdir string, title string, branch str
 	if err := run(ctx, workdir, "git", "commit", "-m", "chore(ai): "+title); err != nil {
 		return err
 	}
-	_ = runQuiet(ctx, workdir, "git", "fetch", "origin", branch)
-	return run(ctx, workdir, "git", "push", "--force-with-lease", "origin", branch)
+	exists, err := remoteBranchExists(ctx, workdir, branch)
+	if err != nil {
+		return fmt.Errorf("probe remote branch %q: %w", branch, err)
+	}
+	if exists {
+		if err := run(ctx, workdir, "git", "fetch", "origin", branch); err != nil {
+			return fmt.Errorf("fetch origin/%s: %w", branch, err)
+		}
+		return run(ctx, workdir, "git", "push", "--force-with-lease", "origin", branch)
+	}
+	_ = runQuiet(ctx, workdir, "git", "update-ref", "-d", "refs/remotes/origin/"+branch)
+	return run(ctx, workdir, "git", "push", "origin", branch)
+}
+
+// remoteBranchExists reports whether `origin/<branch>` exists upstream by
+// asking `git ls-remote --heads`. It is intentionally separate from
+// `git fetch` so we can distinguish "branch absent upstream" (a normal,
+// non-error state for first push or after manual cleanup) from "fetch
+// failed" (a real connectivity / auth problem we should surface).
+func remoteBranchExists(ctx context.Context, workdir, branch string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
+	cmd.Dir = workdir
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(stdout.String()) != "", nil
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) error {
