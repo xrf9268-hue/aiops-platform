@@ -66,11 +66,30 @@ func Run(ctx context.Context, store *queue.Store, cfg Config) {
 		}
 		if rterr := runTask(ctx, store, *t, cfg); rterr != nil {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
-			handleTaskFailure(ctx, store, *t, rterr.Cfg, rterr.Err)
+			cleanupCtx, cancel := terminalUpdateContext(ctx)
+			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
+			cancel()
+			if ctx.Err() != nil {
+				return
+			}
 			continue
 		}
-		_ = store.Complete(ctx, t.ID)
+		cleanupCtx, cancel := terminalUpdateContext(ctx)
+		_ = store.Complete(cleanupCtx, t.ID)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
 	}
+}
+
+// terminalUpdateContext returns a context derived from ctx that does not
+// inherit cancellation. Used so that SIGTERM/SIGINT-driven shutdown does not
+// leave a task wedged in `running` because the cancel-propagated UPDATE
+// against tasks/task_events was rejected with `context canceled`. Capped at
+// 5s so a genuinely broken DB cannot block shutdown indefinitely.
+func terminalUpdateContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 }
 
 func sleepOrCancel(ctx context.Context, d time.Duration) bool {
