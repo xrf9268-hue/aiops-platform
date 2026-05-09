@@ -46,6 +46,10 @@ verify:
     - go test ./...
 
 pr:
+  # draft: true → worker opens the PR as a Gitea draft. Implementation note:
+  # Gitea has no `draft` API field, so the worker prepends `WIP: ` to the PR
+  # title (Gitea's canonical draft signal). Expect titles like
+  # `WIP: chore(ai): <issue title>`.
   draft: true
   labels:
     - ai-generated
