@@ -3,6 +3,7 @@ package workflow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,6 +148,42 @@ func TestLoadOptionalHonorsExplicitAgentTimeout(t *testing.T) {
 	}
 	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 3 {
 		t.Fatalf("explicit Agent.MaxTimeoutRetriesValue: got %d want 3", got)
+	}
+}
+
+// TestLoad_RejectsRemovedAgentFallback verifies that workflows still
+// carrying the removed `agent.fallback` key fail Load with an error that
+// points the operator at the supported alternative (`agent.default`).
+//
+// `agent.fallback` was historically declared on AgentConfig but never
+// read by the worker (issue #40). Silently dropping the key would let
+// authors keep believing it controlled retry behavior, so Load must
+// surface a clear validation error instead.
+func TestLoad_RejectsRemovedAgentFallback(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: r
+agent:
+  default: mock
+  fallback: claude
+---
+prompt body
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load: expected error for removed agent.fallback, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"agent.fallback", "agent.default"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("Load error %q: want substring %q", msg, want)
+		}
 	}
 }
 

@@ -29,7 +29,6 @@ agent:
   # any other name fails the task with `unknown runner`. Switch to
   # `codex` (or `claude`) only after auditing several mock runs.
   default: mock
-  fallback: mock
   max_concurrent_agents: 1
   max_turns: 6
 

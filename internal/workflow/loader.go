@@ -24,12 +24,35 @@ func Load(path string) (*Workflow, error) {
 	front, body := splitFrontMatter(string(b))
 	cfg := DefaultConfig()
 	if strings.TrimSpace(front) != "" {
+		if err := rejectRemovedFields([]byte(front)); err != nil {
+			return nil, err
+		}
 		if err := yaml.Unmarshal([]byte(front), &cfg); err != nil {
 			return nil, fmt.Errorf("parse workflow front matter: %w", err)
 		}
 	}
 	expandConfig(&cfg)
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body)}, nil
+}
+
+// rejectRemovedFields surfaces a clear error for keys that were once part
+// of the schema but have been removed. The typed Unmarshal above silently
+// drops unknown fields, which would let workflow authors keep believing
+// the key still controls behavior. Targeted detection keeps existing
+// benign extras working while flagging known footguns.
+func rejectRemovedFields(front []byte) error {
+	var raw map[string]any
+	if err := yaml.Unmarshal(front, &raw); err != nil {
+		return nil
+	}
+	agent, ok := raw["agent"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, present := agent["fallback"]; present {
+		return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
+	}
+	return nil
 }
 
 func LoadOptional(path string) (*Workflow, error) {

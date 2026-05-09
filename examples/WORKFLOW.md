@@ -22,7 +22,6 @@ workspace:
 
 agent:
   default: mock
-  fallback: claude
   max_concurrent_agents: 1
   max_turns: 8
 
