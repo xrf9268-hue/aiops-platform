@@ -55,6 +55,9 @@ func resolveWorkflow(ctx context.Context, ev eventEmitter, taskID, workdir strin
 }
 
 func main() {
+	if len(os.Args) >= 3 && os.Args[1] == "--print-config" {
+		os.Exit(printConfig(os.Args[2], os.Stdout, os.Stderr))
+	}
 	ctx := context.Background()
 	dsn := env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable")
 	pool, err := pgxpool.New(ctx, dsn)
