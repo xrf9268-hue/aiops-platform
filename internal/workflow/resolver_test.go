@@ -53,3 +53,51 @@ func TestResolve_FindsRootWorkflowFile(t *testing.T) {
 		t.Fatalf("CloneURL = %q, not loaded from front matter", wf.Config.Repo.CloneURL)
 	}
 }
+
+// TestResolve_LowerPriorityStatErrorIgnored guards against a regression
+// where a permission error on .aiops/WORKFLOW.md (or any non-winning
+// candidate) caused Resolve to fail even though the root WORKFLOW.md
+// had already been picked. We can't portably create a "permission
+// denied" error on macOS without changing process privileges, so we
+// instead trigger an EACCES-equivalent by making the parent directory
+// unreadable and confirming Resolve still succeeds via the root file.
+//
+// The platform-portable angle: turn the candidate path into something
+// os.Stat can't classify cleanly. The simplest cross-platform option is
+// to put a directory at the candidate path; os.Stat then returns
+// info.IsDir()=true, the loop's success branch rejects it, and the
+// error branch never fires — so this isn't really the bug we want to
+// pin. Instead skip the symlink dance and write a test that depends on
+// chmod, which is reliable on Linux/macOS and irrelevant on Windows
+// (the CI matrix is Unix-only).
+func TestResolve_LowerPriorityStatErrorIgnored(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root: chmod-based permission test does not apply")
+	}
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	aiopsDir := filepath.Join(dir, ".aiops")
+	if err := os.Mkdir(aiopsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(aiopsDir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write aiops: %v", err)
+	}
+	// Strip read+execute on the .aiops directory so os.Stat on the file
+	// inside it returns a permission error instead of NotExist.
+	if err := os.Chmod(aiopsDir, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(aiopsDir, 0o755) })
+
+	_, res, err := Resolve(dir)
+	if err != nil {
+		t.Fatalf("Resolve must not fail when winner already found; got: %v", err)
+	}
+	if res.Source != SourceFile || res.Path != "WORKFLOW.md" {
+		t.Fatalf("got Source=%q Path=%q; want file/WORKFLOW.md", res.Source, res.Path)
+	}
+}

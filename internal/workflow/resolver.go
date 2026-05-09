@@ -50,10 +50,13 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 			if found == "" {
 				found = rel
 			}
-			continue
-		}
-		if err != nil && !os.IsNotExist(err) {
-			return nil, nil, err
+		} else if err != nil && !os.IsNotExist(err) {
+			// Hard stat errors (permission denied, I/O) on a lower-priority
+			// candidate must not invalidate a winner already found. Only
+			// propagate when no winner has been picked yet.
+			if found == "" {
+				return nil, nil, err
+			}
 		}
 	}
 	if found == "" {
@@ -73,7 +76,9 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 // hasFrontMatterAt returns true when path begins with a YAML front
 // matter fence (`---\n` or `---\r\n`) followed somewhere by a closing
 // fence. Used by Resolve to distinguish prompt-only files from full
-// workflow files without threading a flag out of Load.
+// workflow files without threading a flag out of Load. Mirrors the
+// detection logic in splitFrontMatter (loader.go) — keep the two in
+// sync if the front-matter syntax ever changes.
 func hasFrontMatterAt(path string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
