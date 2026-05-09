@@ -138,7 +138,7 @@ func TestBuildPRBodyEmbedsRunSummary(t *testing.T) {
 		WorkBranch:    "ai/tsk_42",
 	}
 	summary := "# Run summary\n\nFixed the off-by-one in foo().\nVerified with `go test ./...`.\n"
-	body := buildPRBody(t1, summary)
+	body := buildPRBody(t1, summary, false)
 	for _, want := range []string{
 		"tsk_42",
 		"github_issue / issue#7",
@@ -166,7 +166,7 @@ func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
 	// it into the rendered body.
 	const sentinel = "Z"
 	long := strings.Repeat(sentinel, prBodySummaryCap+1024)
-	body := buildPRBody(t1, long)
+	body := buildPRBody(t1, long, false)
 	if !strings.Contains(body, "_Summary truncated at") {
 		t.Fatalf("expected truncation marker in PR body for oversized summary")
 	}
@@ -528,7 +528,7 @@ func TestCreatePRWith_ReusesExistingPR(t *testing.T) {
 		findResult: &gitea.PullRequest{Number: 17, HTMLURL: "http://gitea.local/o/r/pulls/17", Title: "chore(ai): fix bug"},
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", client); err != nil {
+	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", false, client); err != nil {
 		t.Fatalf("createPRWith: %v", err)
 	}
 
@@ -562,7 +562,7 @@ func TestCreatePRWith_CreatesWhenNoneExists(t *testing.T) {
 		createPR:   &gitea.PullRequest{Number: 99, HTMLURL: "http://gitea.local/o/r/pulls/99", Title: "chore(ai): fix bug"},
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", client); err != nil {
+	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
 		t.Fatalf("createPRWith: %v", err)
 	}
 
@@ -596,7 +596,7 @@ func TestCreatePRWith_ListErrorFallsThroughToCreate(t *testing.T) {
 		findErr: errors.New("list pull requests failed: 500"),
 	}
 
-	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", client); err != nil {
+	if err := createPRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
 		t.Fatalf("createPRWith: %v", err)
 	}
 	if len(client.createCalls) != 1 {
@@ -694,5 +694,91 @@ func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
 	payload, _ := got[0].Payload.(map[string]any)
 	if payload["workflow_source"] != "prompt_only" {
 		t.Fatalf("workflow_source = %v, want %q", payload["workflow_source"], "prompt_only")
+	}
+}
+
+// TestVerifyAllowFailure_OpensDegradedDraftPR pins the investigation-override
+// contract: when verify fails AND verify.allow_failure=true, runVerifyPhase
+// returns (true, nil), the caller forces cfg.PR.Draft=true, and the eventual
+// createPRWith call opens a draft PR. A verify_end event with
+// status="failed_allowed" must be emitted.
+func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
+	ev := &fakeEmitter{}
+	dir := t.TempDir()
+
+	cfg := workflow.Config{
+		Verify: workflow.VerifyConfig{
+			Commands:     []string{"sh", "-c", "exit 1"},
+			AllowFailure: true,
+		},
+		PR: workflow.PRConfig{Draft: false}, // prove override forces draft
+	}
+
+	degraded, err := runVerifyPhase(context.Background(), ev, "tsk_af", dir, cfg)
+	if err != nil {
+		t.Fatalf("runVerifyPhase with allow_failure=true must not return error, got: %v", err)
+	}
+	if !degraded {
+		t.Fatal("runVerifyPhase must return degraded=true when verify fails with allow_failure=true")
+	}
+
+	// Confirm verify_end event with status=failed_allowed.
+	ends := ev.byKind(task.EventVerifyEnd)
+	if len(ends) != 1 {
+		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
+	}
+	status, _ := payloadField(t, ends[0].Payload, "status").(string)
+	if status != "failed_allowed" {
+		t.Fatalf("verify_end status: got=%q want=%q", status, "failed_allowed")
+	}
+
+	// Now exercise createPRWith with verifyDegraded=true and Draft forced to true.
+	if degraded {
+		cfg.PR.Draft = true
+	}
+	tk := samplePRTask()
+	client := &fakePRClient{}
+	if err := createPRWith(context.Background(), ev, tk, cfg, "summary", true, client); err != nil {
+		t.Fatalf("createPRWith: %v", err)
+	}
+	if len(client.createCalls) != 1 {
+		t.Fatalf("expected one CreatePullRequest call, got %d", len(client.createCalls))
+	}
+	if !client.createCalls[0].Draft {
+		t.Fatal("PR must be created as draft when verifyDegraded=true")
+	}
+}
+
+// TestVerifyFails_BlocksPRWhenAllowFailureOff pins the default behavior:
+// a failing verify command without allow_failure prevents PR creation.
+// This locks the contract that the new collect-all semantics did not
+// weaken safety.
+func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
+	ev := &fakeEmitter{}
+	dir := t.TempDir()
+
+	cfg := workflow.Config{
+		Verify: workflow.VerifyConfig{
+			Commands:     []string{"sh", "-c", "exit 1"},
+			AllowFailure: false,
+		},
+	}
+
+	degraded, err := runVerifyPhase(context.Background(), ev, "tsk_naf", dir, cfg)
+	if err == nil {
+		t.Fatal("runVerifyPhase must return error when verify fails and allow_failure=false")
+	}
+	if degraded {
+		t.Fatal("runVerifyPhase must return degraded=false when allow_failure=false")
+	}
+
+	// Confirm verify_end event with status=failed.
+	ends := ev.byKind(task.EventVerifyEnd)
+	if len(ends) != 1 {
+		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
+	}
+	status, _ := payloadField(t, ends[0].Payload, "status").(string)
+	if status != "failed" {
+		t.Fatalf("verify_end status: got=%q want=%q", status, "failed")
 	}
 }

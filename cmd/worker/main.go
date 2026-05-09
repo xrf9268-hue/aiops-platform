@@ -177,24 +177,10 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return cfg, err
 	}
 
-	emit(ctx, ev, t.ID, task.EventVerifyStart, "verify started", map[string]any{"commands": cfg.Verify.Commands})
-	verifyStart := time.Now()
-	verifyResults, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
-	verifyDur := time.Since(verifyStart)
-	if writeErr := workspace.WriteVerification(workdir, verifyResults); writeErr != nil {
-		log.Printf("task %s: write verification artifact: %v", t.ID, writeErr)
+	verifyDegraded, err := runVerifyPhase(ctx, ev, t.ID, workdir, cfg)
+	if err != nil {
+		return cfg, err
 	}
-	verifyPayload := map[string]any{
-		"duration_ms": verifyDur.Milliseconds(),
-		"commands":    summarizeVerifyResults(verifyResults),
-	}
-	if verifyErr != nil {
-		verifyPayload["error"] = errSummary(verifyErr)
-		emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify failed", verifyPayload)
-		writeFailureArtifacts(ctx, workdir, verifyResults, "verify failed: "+errSummary(verifyErr))
-		return cfg, verifyErr
-	}
-	emit(ctx, ev, t.ID, task.EventVerifyEnd, "verify completed", verifyPayload)
 
 	// Gate: the runner is required to write .aiops/RUN_SUMMARY.md describing
 	// the change. If it is missing/empty/a placeholder we refuse to open a PR
@@ -218,7 +204,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 			"reason": "summary_unreadable",
 			"path":   workspace.SummaryPath,
 		})
-		writeFailureArtifacts(ctx, workdir, verifyResults, "RUN_SUMMARY.md unreadable: "+errSummary(checkErr))
+		writeFailureArtifacts(ctx, workdir, nil, "RUN_SUMMARY.md unreadable: "+errSummary(checkErr))
 		return cfg, fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)
 	}
 	if status != workspace.SummaryOK {
@@ -230,7 +216,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 			"reason": "summary_" + string(status),
 			"path":   workspace.SummaryPath,
 		})
-		writeFailureArtifacts(ctx, workdir, verifyResults, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
+		writeFailureArtifacts(ctx, workdir, nil, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
 		return cfg, fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)
 	}
 
@@ -239,7 +225,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 	// Failures flow through writeFailureArtifacts + the existing
 	// failed_attempt path so operators can inspect what the scanner saw.
 	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
-		writeFailureArtifacts(ctx, workdir, verifyResults, "secret scan blocked push: "+errSummary(err))
+		writeFailureArtifacts(ctx, workdir, nil, "secret scan blocked push: "+errSummary(err))
 		return cfg, err
 	}
 
@@ -273,7 +259,10 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		"sample_changes": sampleSlice(changed, 10),
 	})
 
-	return cfg, createPR(ctx, ev, t, cfg, summary)
+	if verifyDegraded {
+		cfg.PR.Draft = true
+	}
+	return cfg, createPR(ctx, ev, t, cfg, summary, verifyDegraded)
 }
 
 // runRunnerWithTimeout invokes the runner under a per-task timeout derived
@@ -329,6 +318,61 @@ func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner,
 	}
 	emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner completed", endPayload)
 	return res, nil
+}
+
+// runVerifyPhase runs the configured verify commands, persists the
+// VERIFICATION.txt artifact, emits the verify_start/verify_end events,
+// and returns whether the run is in degraded mode. Degraded mode means
+// at least one command failed (or the phase deadline elapsed) AND the
+// operator has opted into verify.allow_failure: the caller continues
+// to PR creation but must mark the PR draft and annotate the body.
+//
+// Returns (degraded, err). When err is non-nil, verify failed AND
+// allow_failure was off; the caller propagates the error and skips PR
+// creation. When degraded=true, err is nil but downstream stages must
+// signal the verify failure to the human.
+func runVerifyPhase(ctx context.Context, ev eventEmitter, taskID, workdir string, cfg workflow.Config) (bool, error) {
+	emit(ctx, ev, taskID, task.EventVerifyStart, "verify started", map[string]any{
+		"commands":      cfg.Verify.Commands,
+		"timeout_ms":    cfg.Verify.Timeout.Milliseconds(),
+		"allow_failure": cfg.Verify.AllowFailure,
+	})
+	start := time.Now()
+	results, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
+	if writeErr := workspace.WriteVerification(workdir, results); writeErr != nil {
+		log.Printf("task %s: write verification artifact: %v", taskID, writeErr)
+	}
+	payload := map[string]any{
+		"duration_ms":   time.Since(start).Milliseconds(),
+		"commands":      summarizeVerifyResults(results),
+		"failed_count":  countVerifyFailures(results),
+		"allow_failure": cfg.Verify.AllowFailure,
+	}
+	if verifyErr == nil {
+		payload["status"] = "ok"
+		emit(ctx, ev, taskID, task.EventVerifyEnd, "verify completed", payload)
+		return false, nil
+	}
+	payload["error"] = errSummary(verifyErr)
+	if cfg.Verify.AllowFailure {
+		payload["status"] = "failed_allowed"
+		emit(ctx, ev, taskID, task.EventVerifyEnd, "verify failed (investigation mode)", payload)
+		return true, nil
+	}
+	payload["status"] = "failed"
+	emit(ctx, ev, taskID, task.EventVerifyEnd, "verify failed", payload)
+	writeFailureArtifacts(ctx, workdir, results, "verify failed: "+errSummary(verifyErr))
+	return false, verifyErr
+}
+
+func countVerifyFailures(results []workspace.VerifyResult) int {
+	n := 0
+	for _, r := range results {
+		if r.Err != nil || r.ExitCode != 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // secretScanFn is the indirection used to swap the real workspace scanner
@@ -424,9 +468,9 @@ type prClient interface {
 	CreatePullRequest(ctx context.Context, in gitea.CreatePullRequestInput) (*gitea.PullRequest, error)
 }
 
-func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string) error {
+func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string, verifyDegraded bool) error {
 	client := gitea.Client{BaseURL: os.Getenv("GITEA_BASE_URL"), Token: os.Getenv("GITEA_TOKEN")}
-	return createPRWith(ctx, ev, t, cfg, summary, client)
+	return createPRWith(ctx, ev, t, cfg, summary, verifyDegraded, client)
 }
 
 // createPRWith performs the PR handoff using the supplied client. It first
@@ -436,7 +480,7 @@ func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Co
 // logged and falls through to the create path so a transient Gitea hiccup
 // during the lookup does not block the task; the create call itself remains
 // the source of truth for surfacing real failures.
-func createPRWith(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string, client prClient) error {
+func createPRWith(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string, verifyDegraded bool, client prClient) error {
 	if existing, err := client.FindOpenPullRequest(ctx, gitea.FindOpenPullRequestInput{
 		Owner: t.RepoOwner, Repo: t.RepoName, Head: t.WorkBranch,
 	}); err != nil {
@@ -450,7 +494,7 @@ func createPRWith(ctx context.Context, ev eventEmitter, t task.Task, cfg workflo
 		log.Printf("task %s reused PR #%d %s", t.ID, existing.Number, existing.HTMLURL)
 		return nil
 	}
-	body := buildPRBody(t, summary)
+	body := buildPRBody(t, summary, verifyDegraded)
 	pr, err := client.CreatePullRequest(ctx, gitea.CreatePullRequestInput{Owner: t.RepoOwner, Repo: t.RepoName, Title: "chore(ai): " + t.Title, Body: body, Head: t.WorkBranch, Base: t.BaseBranch, Draft: cfg.PR.Draft})
 	if err != nil {
 		emit(ctx, ev, t.ID, task.EventPRCreated, "pr creation failed", map[string]any{"error": errSummary(err)})
@@ -529,8 +573,11 @@ const prBodySummaryCap = 8 << 10 // 8 KiB
 // buildPRBody renders the pull request body with the runner-produced
 // RUN_SUMMARY.md content inlined (truncated to prBodySummaryCap) and a link
 // to the full artifact path on the work branch. Callers must pass a summary
-// that has already been validated by workspace.CheckSummary.
-func buildPRBody(t task.Task, summary string) string {
+// that has already been validated by workspace.CheckSummary. verifyDegraded
+// indicates the verify phase failed with allow_failure=true; Task 4 will use
+// this flag to render the investigation-mode banner.
+func buildPRBody(t task.Task, summary string, verifyDegraded bool) string {
+	_ = verifyDegraded // banner rendering deferred to Task 4
 	excerpt, truncated := truncateForPR(summary, prBodySummaryCap)
 	var b strings.Builder
 	fmt.Fprintf(&b, "## AI Task\n\nTask ID: `%s`\n\n", t.ID)
