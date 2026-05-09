@@ -184,6 +184,40 @@ func TestResolve_PropagatesSchemaErrors(t *testing.T) {
 	}
 }
 
+// TestResolve_NonExistentWorkdirErrors guards against the silent
+// success that Codex review flagged on PR #52: previously a typo'd
+// path returned SourceDefault, hiding the operator's mistake. Resolve
+// now refuses to proceed when workdir does not exist.
+func TestResolve_NonExistentWorkdirErrors(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "definitely-does-not-exist")
+	_, _, err := Resolve(dir)
+	if err == nil {
+		t.Fatalf("Resolve: expected error for non-existent workdir")
+	}
+	if !strings.Contains(err.Error(), "definitely-does-not-exist") {
+		t.Fatalf("error %q should name the missing path", err.Error())
+	}
+}
+
+// TestResolve_FileWorkdirErrors guards the second precondition: the
+// workdir must be a directory, not a regular file. Without this check
+// Resolve would fall through to "no candidates found" and return
+// defaults, which is the same misleading silent success.
+func TestResolve_FileWorkdirErrors(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "i-am-a-file")
+	if err := os.WriteFile(notDir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, _, err := Resolve(notDir)
+	if err == nil {
+		t.Fatalf("Resolve: expected error when workdir is a file")
+	}
+	if !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("error %q should mention 'not a directory'", err.Error())
+	}
+}
+
 // TestResolve_AlternateLocations covers the .aiops/ and .github/
 // fallback locations declared in the discovery contract. Each case
 // puts WORKFLOW.md in exactly one place; precedence (when multiple

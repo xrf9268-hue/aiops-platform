@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,14 @@ var resolveCandidates = []string{
 // source. When no file is found, the schema defaults are returned with
 // Source=default.
 func Resolve(workdir string) (*Workflow, *Resolution, error) {
+	info, err := os.Stat(workdir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("workdir %q: %w", workdir, err)
+	}
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("workdir %q is not a directory", workdir)
+	}
+
 	var found string
 	var shadows []string
 	for _, rel := range resolveCandidates {
