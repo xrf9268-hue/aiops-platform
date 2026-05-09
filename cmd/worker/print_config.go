@@ -13,8 +13,61 @@ import (
 // Stable: external tooling may consume it.
 type printConfigOutput struct {
 	Resolution     printConfigResolution `json:"resolution"`
-	Config         workflow.Config       `json:"config"`
+	Config         configView            `json:"config"`
 	PromptTemplate promptSummary         `json:"prompt_template"`
+}
+
+// configView mirrors workflow.Config for --print-config output, but
+// substitutes typed-nanosecond fields with human-readable forms. It is
+// deliberately local to this debug command: keeping the conversion here
+// preserves the in-process workflow.Config representation (a typed
+// time.Duration) while ensuring the published JSON contract carries the
+// duration as a string that round-trips through time.ParseDuration.
+//
+// See issue #53 for the rationale and the rejected alternative
+// (a wrapper Duration type with custom MarshalJSON).
+type configView struct {
+	Repo      workflow.RepoConfig      `json:"repo"`
+	Tracker   workflow.TrackerConfig   `json:"tracker"`
+	Workspace workflow.WorkspaceConfig `json:"workspace"`
+	Agent     agentConfigView          `json:"agent"`
+	Codex     workflow.CommandConfig   `json:"codex"`
+	Claude    workflow.CommandConfig   `json:"claude"`
+	Policy    workflow.PolicyConfig    `json:"policy"`
+	Verify    workflow.VerifyConfig    `json:"verify"`
+	PR        workflow.PRConfig        `json:"pr"`
+}
+
+// agentConfigView mirrors workflow.AgentConfig but renders Timeout as a
+// duration string (e.g. "30m0s") rather than a raw nanosecond integer.
+// The remaining fields keep their original JSON tags so external
+// consumers see the same shape.
+type agentConfigView struct {
+	Default             string `json:"default"`
+	MaxConcurrentAgents int    `json:"max_concurrent_agents"`
+	MaxTurns            int    `json:"max_turns"`
+	Timeout             string `json:"timeout"`
+	MaxTimeoutRetries   *int   `json:"max_timeout_retries"`
+}
+
+func newConfigView(cfg workflow.Config) configView {
+	return configView{
+		Repo:      cfg.Repo,
+		Tracker:   cfg.Tracker,
+		Workspace: cfg.Workspace,
+		Agent: agentConfigView{
+			Default:             cfg.Agent.Default,
+			MaxConcurrentAgents: cfg.Agent.MaxConcurrentAgents,
+			MaxTurns:            cfg.Agent.MaxTurns,
+			Timeout:             cfg.Agent.Timeout.String(),
+			MaxTimeoutRetries:   cfg.Agent.MaxTimeoutRetries,
+		},
+		Codex:  cfg.Codex,
+		Claude: cfg.Claude,
+		Policy: cfg.Policy,
+		Verify: cfg.Verify,
+		PR:     cfg.PR,
+	}
 }
 
 type printConfigResolution struct {
@@ -83,7 +136,7 @@ func printConfig(workdir string, stdout, stderr io.Writer) int {
 			Path:       res.Path,
 			ShadowedBy: res.ShadowedBy,
 		},
-		Config:         maskSecrets(wf.Config),
+		Config:         newConfigView(maskSecrets(wf.Config)),
 		PromptTemplate: summarizePrompt(wf.PromptTemplate),
 	}
 	enc := json.NewEncoder(stdout)
