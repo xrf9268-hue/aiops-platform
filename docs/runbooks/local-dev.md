@@ -243,3 +243,26 @@ concurrently without sharing a working tree. See the dedicated
 configuration knobs, and recommended cleanup cadence (the
 `(*workspace.Manager).Cleanup` API or `rm -rf $WORKSPACE_ROOT/*` once
 old tasks no longer matter).
+
+## Running e2e tests locally
+
+The e2e suite under `test/e2e/` validates the full Gitea `/ai-run` mock loop
+against real Postgres and Gitea containers. It is gated by the `e2e` build
+tag and does not run as part of `go test ./...`.
+
+Requirements: a working Docker daemon. Cold first run pulls ~600MB of
+images and takes 2–3 minutes. Warm runs take ~10 seconds for all four tests.
+
+```bash
+go test -tags e2e -race -timeout 15m ./test/e2e/...
+```
+
+Common failure modes:
+
+- `Cannot connect to the Docker daemon` — start Docker Desktop or `colima`.
+- Test hangs on first webhook delivery — check that `triggerSrv.URL` is
+  `127.0.0.1`, not `[::1]`. The testbed forces tcp4 binding to avoid this,
+  but a non-default Docker network setup can still break the
+  `host.docker.internal:host-gateway` mapping the Gitea container relies on.
+- `go test` reports `build constraints exclude all Go files` — the `-tags
+  e2e` flag is missing.

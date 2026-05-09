@@ -74,6 +74,32 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  e2e:
+    name: E2E Gitea mock loop
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Download dependencies
+        run: go mod download
+      - name: Pre-pull container images
+        run: |
+          docker pull postgres:16
+          docker pull gitea/gitea:1.21.11-rootless
+      - name: Run e2e tests
+        run: go test -tags e2e -race -timeout 15m ./test/e2e/...
+
   docker:
     name: Docker image build
     runs-on: ubuntu-latest
