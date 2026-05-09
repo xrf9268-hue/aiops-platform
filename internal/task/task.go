@@ -29,6 +29,7 @@ const (
 	EventVerifyEnd     = "verify_end"
 	EventPush          = "push"
 	EventPRCreated     = "pr_created"
+	EventPRReused      = "pr_reused"
 	EventSucceeded     = "succeeded"
 	EventFailedAttempt = "failed_attempt"
 )

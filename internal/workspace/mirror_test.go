@@ -191,6 +191,169 @@ func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
 	}
 }
 
+// TestCommitAndPush_RetryOverwritesRemoteBranch covers the issue #7 scenario:
+// a previous attempt for the same task ID already pushed a commit to
+// origin/ai/<id>, then the worker retried and produced a different commit on
+// the same work branch. The second push must succeed (using --force-with-lease
+// internally) so the existing PR points at the latest run, instead of failing
+// with a non-fast-forward error and leaving the task stuck.
+func TestCommitAndPush_RetryOverwritesRemoteBranch(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("retry-task", upstream)
+
+	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "first.txt"), []byte("first attempt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureGitIdentity(dir); err != nil {
+		t.Fatalf("configure identity: %v", err)
+	}
+	if err := CommitAndPush(ctx, dir, "first attempt", tk.WorkBranch); err != nil {
+		t.Fatalf("first CommitAndPush: %v", err)
+	}
+
+	// Simulate the worker re-claiming the same task: PrepareGitWorkspace
+	// resets the worktree to a fresh checkout off main, so the retry's local
+	// branch tip diverges from the remote one we just pushed.
+	dir2, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if err := configureGitIdentity(dir2); err != nil {
+		t.Fatalf("configure identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "second.txt"), []byte("retry\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAndPush(ctx, dir2, "retry attempt", tk.WorkBranch); err != nil {
+		t.Fatalf("retry CommitAndPush: %v", err)
+	}
+
+	// Confirm the remote tip is the retry commit (contains second.txt and
+	// not first.txt) — i.e. the retry overwrote the previous push instead
+	// of being silently merged into it.
+	bare := strings.TrimPrefix(upstream, "file://")
+	out, err := exec.Command("git", "--git-dir", bare, "ls-tree", "-r", "--name-only", tk.WorkBranch).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ls-tree: %v\n%s", err, out)
+	}
+	tree := string(out)
+	if !strings.Contains(tree, "second.txt") {
+		t.Fatalf("expected retry commit on remote, missing second.txt; tree=%q", tree)
+	}
+	if strings.Contains(tree, "first.txt") {
+		t.Fatalf("expected retry to overwrite remote, but first.txt still present; tree=%q", tree)
+	}
+}
+
+// TestCommitAndPush_RemoteBranchDeletedRecreates covers the regression
+// flagged in PR #51 review: when a previous attempt pushed origin/<branch>
+// and then an operator (or a separate cleanup workflow) deleted that branch
+// upstream, the retry must not get wedged on a stale local tracking ref. The
+// push is expected to recreate the branch on the remote rather than fail
+// with `stale info` from --force-with-lease.
+func TestCommitAndPush_RemoteBranchDeletedRecreates(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("deleted-task", upstream)
+
+	// First attempt: create the branch upstream.
+	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if err := configureGitIdentity(dir); err != nil {
+		t.Fatalf("configure identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "first.txt"), []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAndPush(ctx, dir, "first", tk.WorkBranch); err != nil {
+		t.Fatalf("first CommitAndPush: %v", err)
+	}
+
+	// Operator cleanup: delete the work branch from the bare upstream.
+	bare := strings.TrimPrefix(upstream, "file://")
+	if out, err := exec.Command("git", "--git-dir", bare, "update-ref", "-d", "refs/heads/"+tk.WorkBranch).CombinedOutput(); err != nil {
+		t.Fatalf("delete remote branch: %v\n%s", err, out)
+	}
+
+	// Seed a stale local tracking ref so the retry's git push has something
+	// to (mis)compute a lease against — the exact condition the review
+	// flagged as breaking the previous unconditional --force-with-lease path.
+	if out, err := exec.Command("git", "-C", dir, "fetch", "origin", "main").CombinedOutput(); err != nil {
+		t.Fatalf("seed: fetch main: %v\n%s", err, out)
+	}
+	mainSHA, err := exec.Command("git", "-C", dir, "rev-parse", "origin/main").Output()
+	if err != nil {
+		t.Fatalf("seed: rev-parse: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "update-ref", "refs/remotes/origin/"+tk.WorkBranch, strings.TrimSpace(string(mainSHA))).CombinedOutput(); err != nil {
+		t.Fatalf("seed stale tracking ref: %v\n%s", err, out)
+	}
+
+	// Retry: same task ID, fresh worktree, new content. Must succeed and
+	// recreate the branch on the bare upstream.
+	dir2, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if err := configureGitIdentity(dir2); err != nil {
+		t.Fatalf("configure identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir2, "retry.txt"), []byte("retry\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAndPush(ctx, dir2, "retry", tk.WorkBranch); err != nil {
+		t.Fatalf("retry CommitAndPush after upstream branch deletion: %v", err)
+	}
+
+	out, err := exec.Command("git", "--git-dir", bare, "ls-tree", "-r", "--name-only", tk.WorkBranch).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ls-tree: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "retry.txt") {
+		t.Fatalf("expected branch to be recreated with retry.txt; tree=%q", out)
+	}
+}
+
+// configureGitIdentity sets a deterministic committer for the per-test
+// worktree. PrepareGitWorkspace inherits config from the bare mirror, but the
+// mirror is created without an identity (we never commit inside it), so a
+// commit issued from the worktree would otherwise fail in CI environments
+// without a global git identity.
+func configureGitIdentity(dir string) error {
+	for _, args := range [][]string{
+		{"git", "-C", dir, "config", "user.email", "u@example.com"},
+		{"git", "-C", dir, "config", "user.name", "u"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			return errFromOut(args, err, out)
+		}
+	}
+	return nil
+}
+
+func errFromOut(args []string, err error, out []byte) error {
+	return &gitCmdError{Args: args, Err: err, Out: string(out)}
+}
+
+type gitCmdError struct {
+	Args []string
+	Err  error
+	Out  string
+}
+
+func (e *gitCmdError) Error() string {
+	return strings.Join(e.Args, " ") + ": " + e.Err.Error() + "\n" + e.Out
+}
+
 func TestCleanup_RemovesOldWorktreesKeepsRecent(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)

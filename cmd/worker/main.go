@@ -382,9 +382,40 @@ func recordPolicyViolation(ctx context.Context, ev eventEmitter, taskID string, 
 	_ = ev.AddEvent(ctx, taskID, "policy_violation", err.Error())
 }
 
+// prClient is the subset of gitea.Client the worker needs for PR handoff.
+// Defined as an interface so tests can inject a fake implementation without
+// standing up a real Gitea HTTP server.
+type prClient interface {
+	FindOpenPullRequest(ctx context.Context, in gitea.FindOpenPullRequestInput) (*gitea.PullRequest, error)
+	CreatePullRequest(ctx context.Context, in gitea.CreatePullRequestInput) (*gitea.PullRequest, error)
+}
+
 func createPR(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string) error {
-	_ = cfg
 	client := gitea.Client{BaseURL: os.Getenv("GITEA_BASE_URL"), Token: os.Getenv("GITEA_TOKEN")}
+	return createPRWith(ctx, ev, t, cfg, summary, client)
+}
+
+// createPRWith performs the PR handoff using the supplied client. It first
+// looks for an existing open PR for the work branch and reuses it instead of
+// asking Gitea to create a duplicate — this is what makes retries safe to
+// re-enter after a previous attempt already produced a PR. A list error is
+// logged and falls through to the create path so a transient Gitea hiccup
+// during the lookup does not block the task; the create call itself remains
+// the source of truth for surfacing real failures.
+func createPRWith(ctx context.Context, ev eventEmitter, t task.Task, cfg workflow.Config, summary string, client prClient) error {
+	if existing, err := client.FindOpenPullRequest(ctx, gitea.FindOpenPullRequestInput{
+		Owner: t.RepoOwner, Repo: t.RepoName, Head: t.WorkBranch,
+	}); err != nil {
+		log.Printf("task %s: list open PRs failed: %v", t.ID, err)
+	} else if existing != nil {
+		emit(ctx, ev, t.ID, task.EventPRReused, "pr reused", map[string]any{
+			"number":   existing.Number,
+			"html_url": existing.HTMLURL,
+			"title":    existing.Title,
+		})
+		log.Printf("task %s reused PR #%d %s", t.ID, existing.Number, existing.HTMLURL)
+		return nil
+	}
 	body := buildPRBody(t, summary)
 	pr, err := client.CreatePullRequest(ctx, gitea.CreatePullRequestInput{Owner: t.RepoOwner, Repo: t.RepoName, Title: "chore(ai): " + t.Title, Body: body, Head: t.WorkBranch, Base: t.BaseBranch, Draft: cfg.PR.Draft})
 	if err != nil {
