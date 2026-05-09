@@ -3,6 +3,7 @@ package workflow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -157,6 +158,28 @@ func TestResolve_ShadowedBy(t *testing.T) {
 	for i := range want {
 		if res.ShadowedBy[i] != want[i] {
 			t.Fatalf("ShadowedBy[%d] = %q, want %q", i, res.ShadowedBy[i], want[i])
+		}
+	}
+}
+
+// TestResolve_PropagatesSchemaErrors guards the contract that Resolve
+// does NOT silently fall back to defaults when a file is found but
+// fails schema validation. Falling back would mask real configuration
+// mistakes and reduce the entire validation effort from #48/#49 to
+// theatre. The error must name the offending field and the file path.
+func TestResolve_PropagatesSchemaErrors(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n---\nprompt\n" // no clone_url
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, _, err := Resolve(dir)
+	if err == nil {
+		t.Fatalf("Resolve: expected error for missing clone_url, got nil")
+	}
+	for _, want := range []string{"repo.clone_url", "WORKFLOW.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q: want substring %q", err.Error(), want)
 		}
 	}
 }
