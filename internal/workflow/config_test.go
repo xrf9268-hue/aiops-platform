@@ -312,6 +312,31 @@ prompt
 	}
 }
 
+// TestLoad_AcceptsPromptOnlyFile guards backward compatibility for
+// WORKFLOW.md files that contain only a prompt template with no `---`
+// front matter. These rely on the same built-in defaults that
+// LoadOptional supplies when the file is absent, so Load must not
+// invoke schema validation against an empty config (issue #9 review
+// from chatgpt-codex-connector).
+func TestLoad_AcceptsPromptOnlyFile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := "just a prompt template, no front matter\n"
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	wf, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: unexpected error %v", err)
+	}
+	if wf.PromptTemplate != "just a prompt template, no front matter" {
+		t.Fatalf("PromptTemplate: got %q", wf.PromptTemplate)
+	}
+	if wf.Config.Repo.CloneURL != "" {
+		t.Fatalf("Config.Repo.CloneURL: got %q want empty (defaults)", wf.Config.Repo.CloneURL)
+	}
+}
+
 // TestLoad_CloneURLViaEnvExpansion confirms that a clone_url provided as
 // an env var reference (e.g. `$REPO_URL`) is considered set as long as
 // the variable resolves to a non-empty value. The validator must run

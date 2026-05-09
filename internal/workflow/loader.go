@@ -23,7 +23,8 @@ func Load(path string) (*Workflow, error) {
 	}
 	front, body := splitFrontMatter(string(b))
 	cfg := DefaultConfig()
-	if strings.TrimSpace(front) != "" {
+	hasFrontMatter := strings.TrimSpace(front) != ""
+	if hasFrontMatter {
 		if err := rejectRemovedFields([]byte(front)); err != nil {
 			return nil, err
 		}
@@ -32,8 +33,16 @@ func Load(path string) (*Workflow, error) {
 		}
 	}
 	expandConfig(&cfg)
-	if err := validateConfig(path, cfg); err != nil {
-		return nil, err
+	// Only validate when the file actually carries a front-matter block.
+	// Prompt-only WORKFLOW.md files are a supported pattern for repos that
+	// rely on the worker's built-in defaults (same semantic as
+	// LoadOptional's no-file fallback). Forcing schema validation on those
+	// would regress every repo that has not yet adopted the explicit
+	// Symphony front matter.
+	if hasFrontMatter {
+		if err := validateConfig(path, cfg); err != nil {
+			return nil, err
+		}
 	}
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body)}, nil
 }
