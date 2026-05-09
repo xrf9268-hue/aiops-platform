@@ -712,7 +712,7 @@ type giteaEnv struct {
 	container  testcontainers.Container
 }
 
-const giteaImage = "gitea/gitea:1.21.11-rootless"
+const giteaImage = "gitea/gitea:1.26.1-rootless"
 
 // startGitea boots Gitea, injects an admin user via env, then exchanges
 // basic auth for an access token. Returns a fully usable client envelope.
@@ -1909,7 +1909,7 @@ Edit `.github/workflows/ci.yml`. After the existing `go:` job block, add:
       - name: Pre-pull container images
         run: |
           docker pull postgres:16
-          docker pull gitea/gitea:1.21.11-rootless
+          docker pull gitea/gitea:1.26.1-rootless
       - name: Run e2e tests
         run: go test -tags e2e -race -timeout 15m ./test/e2e/...
 ```

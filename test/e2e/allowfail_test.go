@@ -82,10 +82,9 @@ func TestVerifyAllowFailure(t *testing.T) {
 		t.Fatalf("want 1 open PR, got %d", len(prs))
 	}
 	pr := prs[0]
-	// See happypath_test.go for the Gitea draft-field gap. The allow_failure
-	// path forces draft on the production-side request, but Gitea does not
-	// honor it; we cannot assert pr.Draft here.
-	_ = pr.Draft
+	if !pr.Draft {
+		t.Errorf("allow_failure path should force draft=true; got draft=%v title=%q", pr.Draft, pr.Title)
+	}
 	if !strings.Contains(pr.Body, "VERIFICATION") && !strings.Contains(pr.Body, "verification") {
 		t.Errorf("PR body should reference verification artifact; got: %s", pr.Body)
 	}
