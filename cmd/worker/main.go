@@ -28,7 +28,40 @@ type eventEmitter interface {
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
 }
 
+// resolveWorkflow performs WORKFLOW.md discovery for a prepared workdir
+// and emits the workflow_resolved event before any runner work begins.
+// Returning the workflow_source string lets callers stamp it onto the
+// runner_start payload as a quick-look field; the full provenance lives
+// on the workflow_resolved event itself.
+func resolveWorkflow(ctx context.Context, ev eventEmitter, taskID, workdir string) (*workflow.Workflow, string, error) {
+	wf, res, err := workflow.Resolve(workdir)
+	if err != nil {
+		return nil, "", err
+	}
+	payload := map[string]any{
+		"source":        string(res.Source),
+		"agent_default": wf.Config.Agent.Default,
+		"policy_mode":   wf.Config.Policy.Mode,
+		"tracker_kind":  wf.Config.Tracker.Kind,
+	}
+	if res.Path != "" {
+		payload["path"] = res.Path
+	}
+	if len(res.ShadowedBy) > 0 {
+		payload["shadowed_by"] = res.ShadowedBy
+	}
+	emit(ctx, ev, taskID, task.EventWorkflowResolved, "workflow resolved", payload)
+	return wf, string(res.Source), nil
+}
+
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "--print-config" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: worker --print-config <workdir>")
+			os.Exit(2)
+		}
+		os.Exit(printConfig(os.Args[2], os.Stdout, os.Stderr))
+	}
 	ctx := context.Background()
 	dsn := env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable")
 	pool, err := pgxpool.New(ctx, dsn)
@@ -92,7 +125,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return workflow.Config{}, err
 	}
 
-	wf, err := workflow.LoadOptional(workdir + "/WORKFLOW.md")
+	wf, workflowSource, err := resolveWorkflow(ctx, ev, t.ID, workdir)
 	if err != nil {
 		return workflow.Config{}, err
 	}
@@ -133,7 +166,7 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 		return cfg, fmt.Errorf("reset run summary: %w", err)
 	}
 
-	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout); runErr != nil {
+	if _, runErr := runRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, Prompt: prompt}, cfg.Agent.Timeout, workflowSource); runErr != nil {
 		writeFailureArtifacts(ctx, workdir, nil, "runner failed: "+errSummary(runErr))
 		return cfg, runErr
 	}
@@ -249,14 +282,15 @@ func runTask(ctx context.Context, ev eventEmitter, t task.Task) (workflow.Config
 // can distinguish a clean exit from a kill due to deadline. The returned
 // runner.Result is what runTask passes to runSummary on the success path;
 // on failure it is zero-valued.
-func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration) (runner.Result, error) {
+func runRunnerWithTimeout(ctx context.Context, ev eventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
 
 	emit(ctx, ev, in.Task.ID, task.EventRunnerStart, "runner started", map[string]any{
-		"model":      in.Task.Model,
-		"timeout_ms": timeout.Milliseconds(),
+		"model":           in.Task.Model,
+		"timeout_ms":      timeout.Milliseconds(),
+		"workflow_source": workflowSource,
 	})
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)

@@ -3,47 +3,47 @@ package workflow
 import "time"
 
 type Config struct {
-	Repo      RepoConfig      `yaml:"repo"`
-	Tracker   TrackerConfig   `yaml:"tracker"`
-	Workspace WorkspaceConfig `yaml:"workspace"`
-	Agent     AgentConfig     `yaml:"agent"`
-	Codex     CommandConfig   `yaml:"codex"`
-	Claude    CommandConfig   `yaml:"claude"`
-	Policy    PolicyConfig    `yaml:"policy"`
-	Verify    VerifyConfig    `yaml:"verify"`
-	PR        PRConfig        `yaml:"pr"`
+	Repo      RepoConfig      `yaml:"repo" json:"repo"`
+	Tracker   TrackerConfig   `yaml:"tracker" json:"tracker"`
+	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
+	Agent     AgentConfig     `yaml:"agent" json:"agent"`
+	Codex     CommandConfig   `yaml:"codex" json:"codex"`
+	Claude    CommandConfig   `yaml:"claude" json:"claude"`
+	Policy    PolicyConfig    `yaml:"policy" json:"policy"`
+	Verify    VerifyConfig    `yaml:"verify" json:"verify"`
+	PR        PRConfig        `yaml:"pr" json:"pr"`
 }
 
 type RepoConfig struct {
-	Owner         string `yaml:"owner"`
-	Name          string `yaml:"name"`
-	CloneURL      string `yaml:"clone_url"`
-	DefaultBranch string `yaml:"default_branch"`
+	Owner         string `yaml:"owner" json:"owner"`
+	Name          string `yaml:"name" json:"name"`
+	CloneURL      string `yaml:"clone_url" json:"clone_url"`
+	DefaultBranch string `yaml:"default_branch" json:"default_branch"`
 }
 
 type TrackerConfig struct {
-	Kind           string   `yaml:"kind"`
-	APIKey         string   `yaml:"api_key"`
-	TeamKey        string   `yaml:"team_key"`
-	ProjectSlug    string   `yaml:"project_slug"`
-	ActiveStates   []string `yaml:"active_states"`
-	TerminalStates []string `yaml:"terminal_states"`
-	PollIntervalMs int      `yaml:"poll_interval_ms"`
+	Kind           string   `yaml:"kind" json:"kind"`
+	APIKey         string   `yaml:"api_key" json:"api_key"`
+	TeamKey        string   `yaml:"team_key" json:"team_key"`
+	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
+	ActiveStates   []string `yaml:"active_states" json:"active_states"`
+	TerminalStates []string `yaml:"terminal_states" json:"terminal_states"`
+	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 }
 
 type WorkspaceConfig struct {
-	Root string `yaml:"root"`
+	Root string `yaml:"root" json:"root"`
 }
 
 type AgentConfig struct {
-	Default             string `yaml:"default"`
-	MaxConcurrentAgents int    `yaml:"max_concurrent_agents"`
-	MaxTurns            int    `yaml:"max_turns"`
+	Default             string `yaml:"default" json:"default"`
+	MaxConcurrentAgents int    `yaml:"max_concurrent_agents" json:"max_concurrent_agents"`
+	MaxTurns            int    `yaml:"max_turns" json:"max_turns"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.
 	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
 	// schema default of 30m.
-	Timeout time.Duration `yaml:"timeout"`
+	Timeout time.Duration `yaml:"timeout" json:"timeout"`
 	// MaxTimeoutRetries bounds how many times a task may be re-queued
 	// after a runner timeout. This is intentionally separate from the
 	// generic max_attempts (which covers verify/policy/other failures)
@@ -52,7 +52,7 @@ type AgentConfig struct {
 	// Pointer-typed so we can distinguish "absent" (nil → schema default
 	// of 1) from "explicitly set to 0" (no retry). Read via
 	// MaxTimeoutRetriesValue() rather than dereferencing directly.
-	MaxTimeoutRetries *int `yaml:"max_timeout_retries"`
+	MaxTimeoutRetries *int `yaml:"max_timeout_retries" json:"max_timeout_retries"`
 }
 
 // MaxTimeoutRetriesValue returns the effective runner-timeout retry
@@ -71,19 +71,19 @@ func (a AgentConfig) MaxTimeoutRetriesValue() int {
 }
 
 type CommandConfig struct {
-	Command string `yaml:"command"`
+	Command string `yaml:"command" json:"command"`
 }
 
 type PolicyConfig struct {
-	Mode            string   `yaml:"mode"`
-	AllowPaths      []string `yaml:"allow_paths"`
-	DenyPaths       []string `yaml:"deny_paths"`
-	MaxChangedFiles int      `yaml:"max_changed_files"`
+	Mode            string   `yaml:"mode" json:"mode"`
+	AllowPaths      []string `yaml:"allow_paths" json:"allow_paths"`
+	DenyPaths       []string `yaml:"deny_paths" json:"deny_paths"`
+	MaxChangedFiles int      `yaml:"max_changed_files" json:"max_changed_files"`
 	// MaxChangedLines bounds the total added+deleted lines reported by
 	// `git diff --numstat`. The legacy YAML key `max_changed_loc` is still
 	// honored via MaxChangedLOC below for back-compat.
-	MaxChangedLines int `yaml:"max_changed_lines"`
-	MaxChangedLOC   int `yaml:"max_changed_loc"`
+	MaxChangedLines int `yaml:"max_changed_lines" json:"max_changed_lines"`
+	MaxChangedLOC   int `yaml:"max_changed_loc" json:"max_changed_loc"`
 }
 
 // LineLimit returns the effective maximum changed lines, preferring the
@@ -96,8 +96,8 @@ func (p PolicyConfig) LineLimit() int {
 }
 
 type VerifyConfig struct {
-	Commands   []string         `yaml:"commands"`
-	SecretScan SecretScanConfig `yaml:"secret_scan"`
+	Commands   []string         `yaml:"commands" json:"commands"`
+	SecretScan SecretScanConfig `yaml:"secret_scan" json:"secret_scan"`
 }
 
 // SecretScanConfig describes an optional pre-push secret scanner that runs
@@ -114,15 +114,15 @@ type VerifyConfig struct {
 type SecretScanConfig struct {
 	// Enabled toggles the hook. When false, the worker skips the scan and
 	// proceeds to push, preserving backward compatibility.
-	Enabled bool `yaml:"enabled"`
+	Enabled bool `yaml:"enabled" json:"enabled"`
 	// Command is argv to exec inside the workspace. The first element is
 	// the binary; remaining elements are passed verbatim. No shell is used,
 	// so quoting/expansion is not performed.
-	Command []string `yaml:"command"`
+	Command []string `yaml:"command" json:"command"`
 	// FailOnFinding controls whether a non-zero exit code blocks the push.
 	// Defaults to true. Set to false to surface findings as a warning event
 	// without aborting (useful while tuning false positives).
-	FailOnFinding *bool `yaml:"fail_on_finding,omitempty"`
+	FailOnFinding *bool `yaml:"fail_on_finding,omitempty" json:"fail_on_finding,omitempty"`
 }
 
 // ShouldFailOnFinding reports whether a non-zero exit from the scanner
@@ -136,9 +136,9 @@ func (s SecretScanConfig) ShouldFailOnFinding() bool {
 }
 
 type PRConfig struct {
-	Draft     bool     `yaml:"draft"`
-	Labels    []string `yaml:"labels"`
-	Reviewers []string `yaml:"reviewers"`
+	Draft     bool     `yaml:"draft" json:"draft"`
+	Labels    []string `yaml:"labels" json:"labels"`
+	Reviewers []string `yaml:"reviewers" json:"reviewers"`
 }
 
 func DefaultConfig() Config {

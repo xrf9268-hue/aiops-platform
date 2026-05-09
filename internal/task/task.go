@@ -20,18 +20,19 @@ const (
 // Event kinds emitted by the queue store and the worker. Keep these in sync
 // with the docs in docs/runbooks/task-api.md and the cmd/worker stage helpers.
 const (
-	EventEnqueued      = "enqueued"
-	EventClaimed       = "claimed"
-	EventRunnerStart   = "runner_start"
-	EventRunnerEnd     = "runner_end"
-	EventRunnerTimeout = "runner_timeout"
-	EventVerifyStart   = "verify_start"
-	EventVerifyEnd     = "verify_end"
-	EventPush          = "push"
-	EventPRCreated     = "pr_created"
-	EventPRReused      = "pr_reused"
-	EventSucceeded     = "succeeded"
-	EventFailedAttempt = "failed_attempt"
+	EventEnqueued         = "enqueued"
+	EventClaimed          = "claimed"
+	EventWorkflowResolved = "workflow_resolved"
+	EventRunnerStart      = "runner_start"
+	EventRunnerEnd        = "runner_end"
+	EventRunnerTimeout    = "runner_timeout"
+	EventVerifyStart      = "verify_start"
+	EventVerifyEnd        = "verify_end"
+	EventPush             = "push"
+	EventPRCreated        = "pr_created"
+	EventPRReused         = "pr_reused"
+	EventSucceeded        = "succeeded"
+	EventFailedAttempt    = "failed_attempt"
 )
 
 type Task struct {
