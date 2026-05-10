@@ -62,9 +62,9 @@ func OnPRCreated(ctx context.Context, ev EventEmitter, tr Transitioner, t task.T
 // preferred path is moving the issue to the configured "rework" state
 // because the poller's Rework re-enqueue logic (cmd/linear-poller's
 // sourceEventID) depends on that transition to retry. When the move
-// itself fails (state name typo, API error, missing permission) we
-// fall back to attaching a comment so the human still has visibility
-// into what happened — better than silent tracker drift.
+// fails (state name typo, missing state, revoked permission, API
+// error) we fall back to attaching a comment so the human still has
+// visibility into what happened — better than silent tracker drift.
 func OnFailure(ctx context.Context, ev EventEmitter, tr Transitioner, t task.Task, cfg workflow.Config, runErr error) {
 	if tr == nil || cfg.Tracker.Kind != "linear" {
 		return
@@ -73,24 +73,23 @@ func OnFailure(ctx context.Context, ev EventEmitter, tr Transitioner, t task.Tas
 	if !ok {
 		return
 	}
-	if state := cfg.Tracker.Statuses.Rework; state != "" {
-		err := tr.MoveIssueToState(ctx, issueID, state)
-		if err == nil {
-			Emit(ctx, ev, t.ID, "tracker_transition", "issue moved to rework", map[string]any{
-				"issue_id":     issueID,
-				"target_state": state,
-				"reason":       "failure",
-			})
-			return
-		}
-		// Record the move failure, then fall through to the comment path so
-		// the human still sees the failure on the issue.
-		Emit(ctx, ev, t.ID, "tracker_transition_error", "move to rework failed", map[string]any{
+	state := cfg.Tracker.Statuses.Rework
+	moveErr := tr.MoveIssueToState(ctx, issueID, state)
+	if moveErr == nil {
+		Emit(ctx, ev, t.ID, "tracker_transition", "issue moved to rework", map[string]any{
 			"issue_id":     issueID,
 			"target_state": state,
-			"error":        ErrSummary(err),
+			"reason":       "failure",
 		})
+		return
 	}
+	// Record the move failure, then fall through to the comment path so
+	// the human still sees the failure on the issue.
+	Emit(ctx, ev, t.ID, "tracker_transition_error", "move to rework failed", map[string]any{
+		"issue_id":     issueID,
+		"target_state": state,
+		"error":        ErrSummary(moveErr),
+	})
 	body := fmt.Sprintf("AI run failed for task `%s`: %s", t.ID, ErrSummary(runErr))
 	if err := tr.AddComment(ctx, issueID, body); err != nil {
 		Emit(ctx, ev, t.ID, "tracker_transition_error", "failure comment failed", map[string]any{

@@ -38,9 +38,10 @@ type TrackerConfig struct {
 // used by the personal profile; teams that customize their workflow
 // states override the names without touching code.
 //
-// An empty Rework name is meaningful: it switches the failure path from
-// "move to Rework" to "post a failure comment" so the operator can opt
-// out of state mutation while still surfacing the failure on the issue.
+// An unrecognized state name (typo, missing permission, deleted state)
+// surfaces from the Linear API as a MoveIssueToState error; the worker
+// then falls back to attaching a failure comment so the human still
+// has visibility on the issue.
 type TrackerStatusConfig struct {
 	InProgress  string `yaml:"in_progress" json:"in_progress"`
 	HumanReview string `yaml:"human_review" json:"human_review"`

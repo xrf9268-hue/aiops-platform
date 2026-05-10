@@ -274,23 +274,26 @@ func TestOnFailure_FallsBackToCommentWhenMoveFails(t *testing.T) {
 	}
 }
 
-// TestOnFailure_CommentOnlyWhenReworkUnconfigured covers the
-// configuration where the operator opts out of state mutation by
-// leaving the rework name empty (post-load): the hook skips the move
-// entirely and goes straight to the comment.
-func TestOnFailure_CommentOnlyWhenReworkUnconfigured(t *testing.T) {
+// TestOnFailure_EmptyReworkStateAttemptsMoveThenComments locks the
+// behavior when a caller hands OnFailure a Config whose Rework name is
+// blank (which workflow.Load always populates with the default, but
+// a direct caller could miss). The hook attempts the move — the
+// Linear client surfaces a "state name is required" error — and then
+// falls back to the comment path. This guards against the failure
+// path silently swallowing such configs.
+func TestOnFailure_EmptyReworkStateAttemptsMoveThenComments(t *testing.T) {
 	ev := &fakeEmitter{}
-	tr := &fakeTransitioner{}
+	tr := &fakeTransitioner{moveErr: errors.New("state name is required")}
 	cfg := linearCfg()
 	cfg.Tracker.Statuses.Rework = ""
 
 	worker.OnFailure(context.Background(), ev, tr, linearTask("issue-uuid"), cfg, errors.New("boom"))
 
-	if len(tr.moves) != 0 {
-		t.Fatalf("expected zero moves when rework name is empty, got %d", len(tr.moves))
+	if len(tr.moves) != 1 {
+		t.Fatalf("expected one move attempt, got %d", len(tr.moves))
 	}
 	if len(tr.comments) != 1 {
-		t.Fatalf("expected single comment, got %d", len(tr.comments))
+		t.Fatalf("expected single comment fallback, got %d", len(tr.comments))
 	}
 }
 
