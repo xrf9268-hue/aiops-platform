@@ -91,18 +91,21 @@ func Run(ctx context.Context, store *queue.Store, cfg Config) {
 		if rterr := runTask(ctx, store, *t, cfg); rterr != nil {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
 			cleanupCtx, cancel := terminalUpdateContext(ctx)
-			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
-			// Fire the tracker-side failure transition under the same
-			// terminal-update context so a parent cancel (SIGTERM) does
-			// not leave the Linear issue stuck in "In Progress" while
-			// the task itself has been moved to failed/queued. The hook
-			// is a no-op when no transitioner factory is configured or
-			// the task did not come from Linear.
-			var tr Transitioner
-			if cfg.NewTransitioner != nil {
-				tr = cfg.NewTransitioner(rterr.Cfg.Tracker)
+			terminal := handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
+			// Only announce the failure to Linear once the queue agrees
+			// the task is done — i.e. attempts >= max_attempts (or the
+			// timeout retry budget exhausted). Firing on every transient
+			// re-queue would flicker the issue between In Progress and
+			// Rework, and the Rework move would trip cmd/linear-poller's
+			// re-enqueue path (#43), creating a duplicate task each time
+			// while the original is still being retried internally.
+			if terminal {
+				var tr Transitioner
+				if cfg.NewTransitioner != nil {
+					tr = cfg.NewTransitioner(rterr.Cfg.Tracker)
+				}
+				OnFailure(cleanupCtx, store, tr, *t, rterr.Cfg, rterr.Err)
 			}
-			OnFailure(cleanupCtx, store, tr, *t, rterr.Cfg, rterr.Err)
 			cancel()
 			if ctx.Err() != nil {
 				return

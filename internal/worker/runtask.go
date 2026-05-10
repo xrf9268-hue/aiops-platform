@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
-	"github.com/xrf9268-hue/aiops-platform/internal/queue"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -72,7 +71,16 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, workdir strin
 	return wf, string(res.Source), nil
 }
 
-// handleTaskFailure routes a task error to the right retry bucket.
+// failingStore is the subset of queue.Store handleTaskFailure needs.
+// Defined as an interface so the terminality-routing logic can be
+// unit-tested with a fake; *queue.Store satisfies it implicitly.
+type failingStore interface {
+	Fail(ctx context.Context, id, msg string) (bool, error)
+	FailTimeout(ctx context.Context, id, msg string, maxTimeoutRetries int) (bool, error)
+}
+
+// handleTaskFailure routes a task error to the right retry bucket and
+// reports whether the task reached its terminal failed state.
 //
 // Runner timeouts use a dedicated budget (agent.max_timeout_retries) so a
 // hung agent cannot consume the generic max_attempts reserved for
@@ -81,15 +89,30 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, workdir strin
 // artifacts (CHANGED_FILES.txt / RUN_SUMMARY.md / VERIFICATION.json) are
 // written by the runTask code path on the way out, so this function is
 // purely concerned with retry routing.
-func handleTaskFailure(ctx context.Context, store *queue.Store, t task.Task, cfg workflow.Config, err error) {
+//
+// terminal=true means the queue actually transitioned the row to
+// 'failed'; the worker's tracker hooks use this to skip status
+// mutations during transient retries (which would otherwise flicker
+// the linked Linear issue between In Progress and Rework, and trigger
+// the poller's Rework re-enqueue path so the same issue accumulates
+// duplicate tasks). A queue-side error propagates as terminal=false so
+// we keep the conservative (no Linear write) behavior on uncertainty.
+func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error) bool {
 	if runner.IsTimeout(err) {
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
-		if _, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget); ferr != nil {
+		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
+		if ferr != nil {
 			log.Printf("task %s FailTimeout error: %v", t.ID, ferr)
+			return false
 		}
-		return
+		return !requeued
 	}
-	_ = store.Fail(ctx, t.ID, err.Error())
+	terminal, ferr := store.Fail(ctx, t.ID, err.Error())
+	if ferr != nil {
+		log.Printf("task %s Fail error: %v", t.ID, ferr)
+		return false
+	}
+	return terminal
 }
 
 // runTask executes a single task end-to-end and returns a *RunTaskError when
