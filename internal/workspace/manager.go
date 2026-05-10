@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
@@ -191,6 +192,30 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		cmd.Dir = workdir
 		cmd.Stdout = buf
 		cmd.Stderr = buf
+		// Run each verify command in its own process group so a
+		// shell-spawned child (e.g. `sleep 5`) doesn't outlive
+		// cancellation as an orphan. Without Setpgid, exec's default
+		// Cancel hook only SIGKILLs the shell pid; the child keeps the
+		// stdout pipe open and cmd.Wait() stalls until the child exits
+		// on its own — turning a 200ms verify timeout into a 5s wait.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			// Negative pid sends to the whole process group. ESRCH
+			// is benign: the process already exited before we got
+			// here. Anything else is logged but not propagated; the
+			// goroutine that waits on the context owns the return
+			// value of Run, not us.
+			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+				return err
+			}
+			return nil
+		}
+		// Final safety net for the rare case where a wedged
+		// grandchild keeps the pipe open even after the group SIGKILL
+		// (e.g. a process with PR_SET_PDEATHSIG suppressed by a
+		// container runtime). After this delay, Go forcibly closes
+		// the pipes so cmd.Wait returns and we unblock.
+		cmd.WaitDelay = 2 * time.Second
 		runErr := cmd.Run()
 		// Nil-guard ProcessState: when the context expires between the
 		// pre-loop check and exec.Cmd.Start(), Go returns an error without
