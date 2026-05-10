@@ -16,6 +16,17 @@ tracker:
     - Done
     - Canceled
   poll_interval_ms: 30000
+  # statuses configures the Linear workflow state names the worker drives
+  # the issue through as a task progresses:
+  #   - claim          -> in_progress
+  #   - PR opened      -> human_review
+  #   - failure        -> rework (or a comment if the move fails)
+  # Defaults match Linear's stock template; uncomment and edit only if
+  # your board uses different labels.
+  # statuses:
+  #   in_progress: "In Progress"
+  #   human_review: "Human Review"
+  #   rework: "Rework"
 
 workspace:
   root: ~/aiops-workspaces/personal

@@ -22,13 +22,29 @@ type RepoConfig struct {
 }
 
 type TrackerConfig struct {
-	Kind           string   `yaml:"kind" json:"kind"`
-	APIKey         string   `yaml:"api_key" json:"api_key"`
-	TeamKey        string   `yaml:"team_key" json:"team_key"`
-	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
-	ActiveStates   []string `yaml:"active_states" json:"active_states"`
-	TerminalStates []string `yaml:"terminal_states" json:"terminal_states"`
-	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
+	Kind           string              `yaml:"kind" json:"kind"`
+	APIKey         string              `yaml:"api_key" json:"api_key"`
+	TeamKey        string              `yaml:"team_key" json:"team_key"`
+	ProjectSlug    string              `yaml:"project_slug" json:"project_slug"`
+	ActiveStates   []string            `yaml:"active_states" json:"active_states"`
+	TerminalStates []string            `yaml:"terminal_states" json:"terminal_states"`
+	PollIntervalMs int                 `yaml:"poll_interval_ms" json:"poll_interval_ms"`
+	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
+}
+
+// TrackerStatusConfig names the workflow states the worker drives the
+// linked tracker issue through as a task progresses. The defaults
+// ("In Progress", "Human Review", "Rework") match the Linear template
+// used by the personal profile; teams that customize their workflow
+// states override the names without touching code.
+//
+// An empty Rework name is meaningful: it switches the failure path from
+// "move to Rework" to "post a failure comment" so the operator can opt
+// out of state mutation while still surfacing the failure on the issue.
+type TrackerStatusConfig struct {
+	InProgress  string `yaml:"in_progress" json:"in_progress"`
+	HumanReview string `yaml:"human_review" json:"human_review"`
+	Rework      string `yaml:"rework" json:"rework"`
 }
 
 type WorkspaceConfig struct {
@@ -161,6 +177,11 @@ func DefaultConfig() Config {
 			ActiveStates:   []string{"AI Ready", "In Progress", "Rework"},
 			TerminalStates: []string{"Done", "Canceled"},
 			PollIntervalMs: 30000,
+			Statuses: TrackerStatusConfig{
+				InProgress:  "In Progress",
+				HumanReview: "Human Review",
+				Rework:      "Rework",
+			},
 		},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/queue"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // Config holds the runtime parameters for the worker process. Fields that were
@@ -22,6 +24,13 @@ type Config struct {
 	GiteaToken      string
 	IdleSleep       time.Duration
 	ClaimErrorSleep time.Duration
+	// NewTransitioner builds the per-task tracker.Transitioner used by
+	// the Linear status-transition hooks (OnClaim / OnPRCreated /
+	// OnFailure). Resolved per-task because each repo carries its own
+	// tracker credentials in WORKFLOW.md, not from worker env. Returning
+	// nil disables the hooks (e.g. for non-Linear trackers, empty
+	// API keys, or tests that do not exercise this path).
+	NewTransitioner func(workflow.TrackerConfig) Transitioner
 }
 
 // LoadConfigFromEnv reads the worker configuration from the environment using
@@ -35,7 +44,22 @@ func LoadConfigFromEnv() Config {
 		GiteaToken:      os.Getenv("GITEA_TOKEN"),
 		IdleSleep:       3 * time.Second,
 		ClaimErrorSleep: 5 * time.Second,
+		NewTransitioner: defaultNewTransitioner,
 	}
+}
+
+// defaultNewTransitioner is the production factory for Transitioner.
+// Linear is the only tracker today that exposes mutation APIs we wired
+// up; gitea webhooks do not need outbound state writes (the state is
+// the issue itself in Gitea), so we return nil for non-Linear kinds and
+// for Linear configs without an API key (e.g. while a workflow is being
+// authored locally without secrets exported). nil is a documented
+// no-op signal, not an error.
+func defaultNewTransitioner(tcfg workflow.TrackerConfig) Transitioner {
+	if tcfg.Kind != "linear" || tcfg.APIKey == "" {
+		return nil
+	}
+	return tracker.NewLinearClient(tcfg)
 }
 
 // PrintConfig dispatches the `worker --print-config <workdir>` subcommand.
@@ -68,6 +92,17 @@ func Run(ctx context.Context, store *queue.Store, cfg Config) {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
 			cleanupCtx, cancel := terminalUpdateContext(ctx)
 			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
+			// Fire the tracker-side failure transition under the same
+			// terminal-update context so a parent cancel (SIGTERM) does
+			// not leave the Linear issue stuck in "In Progress" while
+			// the task itself has been moved to failed/queued. The hook
+			// is a no-op when no transitioner factory is configured or
+			// the task did not come from Linear.
+			var tr Transitioner
+			if cfg.NewTransitioner != nil {
+				tr = cfg.NewTransitioner(rterr.Cfg.Tracker)
+			}
+			OnFailure(cleanupCtx, store, tr, *t, rterr.Cfg, rterr.Err)
 			cancel()
 			if ctx.Err() != nil {
 				return

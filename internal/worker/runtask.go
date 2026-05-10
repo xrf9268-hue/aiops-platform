@@ -115,6 +115,17 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		}
 	}
 
+	// The tracker transitioner is resolved from the workflow's tracker
+	// config (per-task, not per-worker) because each repo carries its
+	// own credentials. Constructed here so OnClaim sees the freshly
+	// loaded config; the same instance is reused for OnPRCreated below
+	// to amortize any future client-internal caching.
+	var tr Transitioner
+	if cfg.NewTransitioner != nil {
+		tr = cfg.NewTransitioner(wcfg.Tracker)
+	}
+	OnClaim(ctx, ev, tr, t, wcfg)
+
 	prompt := workflow.Render(wf.PromptTemplate, map[string]string{
 		"task.id":          t.ID,
 		"task.title":       t.Title,
@@ -240,7 +251,15 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 	if verifyDegraded {
 		wcfg.PR.Draft = true
 	}
-	return wrapErr(wcfg, CreatePR(ctx, ev, t, wcfg, cfg, summary, verifyDegraded))
+	prErr := CreatePR(ctx, ev, t, wcfg, cfg, summary, verifyDegraded)
+	if prErr == nil {
+		// Fired on both create-new and reuse-existing paths so a retry
+		// that lands on an already-open PR still flips the Linear issue
+		// to "Human Review" — the human's signal that hands have been
+		// handed off, regardless of which gitea code path produced the PR.
+		OnPRCreated(ctx, ev, tr, t, wcfg)
+	}
+	return wrapErr(wcfg, prErr)
 }
 
 // wrapErr returns nil if err is nil, otherwise wraps it in a RunTaskError.

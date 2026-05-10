@@ -169,6 +169,19 @@ func expandConfig(cfg *Config) {
 	if cfg.Tracker.PollIntervalMs <= 0 {
 		cfg.Tracker.PollIntervalMs = 30000
 	}
+	// Tracker.Statuses defaults are applied per-field so a YAML override of
+	// a single name (e.g. `statuses.in_progress: "Doing"`) does not require
+	// the operator to also restate the unchanged ones. The defaults match
+	// the Linear template the personal profile ships with.
+	if cfg.Tracker.Statuses.InProgress == "" {
+		cfg.Tracker.Statuses.InProgress = "In Progress"
+	}
+	if cfg.Tracker.Statuses.HumanReview == "" {
+		cfg.Tracker.Statuses.HumanReview = "Human Review"
+	}
+	if cfg.Tracker.Statuses.Rework == "" {
+		cfg.Tracker.Statuses.Rework = "Rework"
+	}
 }
 
 func expandPath(p string) string {
