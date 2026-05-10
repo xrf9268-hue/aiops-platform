@@ -137,12 +137,20 @@ func (s *Store) Complete(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) Fail(ctx context.Context, id string, msg string) error {
-	_, err := s.db.Exec(ctx, `UPDATE tasks SET status=CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END, available_at=now()+interval '60 seconds', updated_at=now() WHERE id=$1`, id)
-	if err == nil {
-		_ = s.AddEvent(ctx, id, task.EventFailedAttempt, msg)
+// Fail records a failed attempt. The task is re-queued (status='queued')
+// until attempts >= max_attempts, after which it transitions to the
+// terminal 'failed' status. Returns terminal=true exactly when the row
+// reached 'failed' so callers can branch on whether the task will be
+// retried — e.g. the worker's tracker hooks announce a final failure
+// to Linear only when the queue agrees the task is done.
+func (s *Store) Fail(ctx context.Context, id string, msg string) (bool, error) {
+	row := s.db.QueryRow(ctx, `UPDATE tasks SET status=CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END, available_at=now()+interval '60 seconds', updated_at=now() WHERE id=$1 RETURNING status`, id)
+	var status string
+	if err := row.Scan(&status); err != nil {
+		return false, err
 	}
-	return err
+	_ = s.AddEvent(ctx, id, task.EventFailedAttempt, msg)
+	return status == string(task.StatusFailed), nil
 }
 
 // FailTimeout records a runner timeout failure for task id and re-queues

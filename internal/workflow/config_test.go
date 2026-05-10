@@ -398,6 +398,100 @@ func TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries(t *testing.T) {
 	}
 }
 
+// TestDefaultConfig_TrackerStatusesPopulated pins the schema-level
+// defaults for tracker.statuses. The names mirror Linear's stock
+// workflow ("In Progress", "Human Review", "Rework") so the personal
+// profile works without extra YAML; teams that customize their
+// workflow override only the names that differ.
+func TestDefaultConfig_TrackerStatusesPopulated(t *testing.T) {
+	got := DefaultConfig().Tracker.Statuses
+	want := TrackerStatusConfig{
+		InProgress:  "In Progress",
+		HumanReview: "Human Review",
+		Rework:      "Rework",
+	}
+	if got != want {
+		t.Fatalf("DefaultConfig().Tracker.Statuses = %#v, want %#v", got, want)
+	}
+}
+
+// TestLoad_TrackerStatusesPartialOverride verifies an operator can
+// override a single status name (here: in_progress) without restating
+// the others — expandConfig fills the remaining defaults so the
+// minimal-edit ergonomic from the issue's "Status names are
+// configurable" criterion is preserved.
+func TestLoad_TrackerStatusesPartialOverride(t *testing.T) {
+	dir := t.TempDir()
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: linear
+  statuses:
+    in_progress: "Doing"
+---
+prompt
+`
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	wf, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := wf.Config.Tracker.Statuses
+	want := TrackerStatusConfig{
+		InProgress:  "Doing",
+		HumanReview: "Human Review", // default
+		Rework:      "Rework",       // default
+	}
+	if got != want {
+		t.Fatalf("Tracker.Statuses = %#v, want %#v", got, want)
+	}
+}
+
+// TestLoad_TrackerStatusesAllOverride confirms all three names round-trip
+// from YAML, so workflows whose Linear board uses non-default labels
+// (e.g. "Coding" / "Review" / "Backlog") work as the issue's acceptance
+// criterion 4 requires.
+func TestLoad_TrackerStatusesAllOverride(t *testing.T) {
+	dir := t.TempDir()
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: linear
+  statuses:
+    in_progress: "Coding"
+    human_review: "Review"
+    rework: "Backlog"
+---
+prompt
+`
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	wf, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := wf.Config.Tracker.Statuses
+	want := TrackerStatusConfig{
+		InProgress:  "Coding",
+		HumanReview: "Review",
+		Rework:      "Backlog",
+	}
+	if got != want {
+		t.Fatalf("Tracker.Statuses = %#v, want %#v", got, want)
+	}
+}
+
 func TestLoad_VerifyTimeoutAndAllowFailureRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\n" +
