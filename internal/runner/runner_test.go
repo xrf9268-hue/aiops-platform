@@ -98,9 +98,9 @@ func TestMockRunnerNoTimeoutWhenSleepShort(t *testing.T) {
 func TestShellRunnerKillsRunawayProcess(t *testing.T) {
 	t.Parallel()
 	wf := workflow.Workflow{Config: workflow.Config{
-		Codex: workflow.CommandConfig{Command: "sleep 30"},
+		Claude: workflow.CommandConfig{Command: "sleep 30"},
 	}}
-	r := ShellRunner{Name: "codex"}
+	r := ShellRunner{Name: "claude"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -132,9 +132,9 @@ func TestShellRunnerKillsRunawayProcess(t *testing.T) {
 func TestShellRunnerNonTimeoutErrorNotMisclassified(t *testing.T) {
 	t.Parallel()
 	wf := workflow.Workflow{Config: workflow.Config{
-		Codex: workflow.CommandConfig{Command: "exit 3"},
+		Claude: workflow.CommandConfig{Command: "exit 3"},
 	}}
-	r := ShellRunner{Name: "codex"}
+	r := ShellRunner{Name: "claude"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
