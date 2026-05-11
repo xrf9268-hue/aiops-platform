@@ -262,3 +262,51 @@ func TestCodexRunner_TimeoutKillsProcess(t *testing.T) {
 		t.Fatalf("process not killed promptly: elapsed=%v", elapsed)
 	}
 }
+
+func TestCodexRunner_CustomProfileUsesShellWithStdin(t *testing.T) {
+	wd := codexWorkdir(t, "custom-profile-canary")
+	in := RunInput{
+		Task: task.Task{ID: "tsk_custom", Model: "codex"},
+		Workflow: workflow.Workflow{Config: workflow.Config{
+			Codex: workflow.CommandConfig{Command: "cat", Profile: "custom"},
+		}},
+		Workdir: wd,
+	}
+	res, err := (CodexRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(wd, ".aiops/CODEX_OUTPUT.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "custom-profile-canary") {
+		t.Fatalf("artifact missing canary; got %q", body)
+	}
+	if res.OutputBytes <= 0 {
+		t.Fatalf("OutputBytes = %d, want > 0", res.OutputBytes)
+	}
+	// Custom profile does NOT write CODEX_LAST_MESSAGE.md (no -o flag);
+	// summary should fall back.
+	if res.Summary != "codex completed" {
+		t.Fatalf("Summary = %q, want default fallback", res.Summary)
+	}
+}
+
+func TestCodexRunner_CustomProfileEmptyCommandRejected(t *testing.T) {
+	wd := codexWorkdir(t, "x")
+	in := RunInput{
+		Task: task.Task{ID: "tsk_custom_empty", Model: "codex"},
+		Workflow: workflow.Workflow{Config: workflow.Config{
+			Codex: workflow.CommandConfig{Profile: "custom"},
+		}},
+		Workdir: wd,
+	}
+	_, err := (CodexRunner{}).Run(context.Background(), in)
+	if err == nil {
+		t.Fatal("expected error for custom profile with empty command")
+	}
+	if !strings.Contains(err.Error(), "codex.command") {
+		t.Fatalf("error %q should mention codex.command", err)
+	}
+}
