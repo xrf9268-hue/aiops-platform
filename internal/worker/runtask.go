@@ -298,7 +298,9 @@ func wrapErr(cfg workflow.Config, err error) *RunTaskError {
 // (runner_start, runner_end, runner_timeout) so retry policy and observers
 // can distinguish a clean exit from a kill due to deadline. The returned
 // runner.Result is what runTask passes to runSummary on the success path;
-// on failure it is zero-valued.
+// on failure (timeout or non-zero exit) the same Result is returned so that
+// any partial output telemetry the runner managed to capture (OutputBytes,
+// OutputHead, OutputTail, etc.) is still available to the caller.
 func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
