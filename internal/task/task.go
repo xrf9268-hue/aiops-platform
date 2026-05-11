@@ -33,6 +33,10 @@ const (
 	EventPRReused         = "pr_reused"
 	EventSucceeded        = "succeeded"
 	EventFailedAttempt    = "failed_attempt"
+
+	EventTrackerTransition      = "tracker_transition"
+	EventTrackerTransitionError = "tracker_transition_error"
+	EventTrackerComment         = "tracker_comment"
 )
 
 type Task struct {
