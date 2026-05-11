@@ -497,7 +497,12 @@ func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, 
 // CreatePR creates a pull request using the gitea client configured from
 // the worker Config. Use CreatePRWith to inject a custom client.
 func CreatePR(ctx context.Context, ev EventEmitter, t task.Task, wcfg workflow.Config, workerCfg Config, summary string, verifyDegraded bool) error {
-	client := gitea.Client{BaseURL: workerCfg.GiteaBaseURL, Token: workerCfg.GiteaToken}
+	var client PRClient
+	if workerCfg.NewPRClient != nil {
+		client = workerCfg.NewPRClient()
+	} else {
+		client = gitea.Client{BaseURL: workerCfg.GiteaBaseURL, Token: workerCfg.GiteaToken}
+	}
 	return CreatePRWith(ctx, ev, t, wcfg, summary, verifyDegraded, client)
 }
 
