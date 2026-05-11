@@ -58,8 +58,18 @@ func setupTestbed(ctx context.Context) (*testbed, error) {
 		botToken: g.botToken,
 	}
 
-	// Listen on tcp4 so triggerSrv.URL is always 127.0.0.1.
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	// Listen on 0.0.0.0 so a sibling Docker container (the Gitea testbed)
+	// can reach this trigger server via host.docker.internal. macOS Docker
+	// Desktop accepts loopback (127.0.0.1) from containers via VPNkit, but
+	// Linux Docker maps host.docker.internal to the docker0 gateway IP and
+	// a 127.0.0.1-only listener rejects connections from that source — the
+	// happypath / allowfail tests then time out because no webhook ever
+	// reaches the worker. Binding 0.0.0.0 fixes both platforms.
+	//
+	// We override httptest's auto-set URL so in-process loopback callers
+	// (dedup_test, badsig_test) keep using 127.0.0.1 explicitly; only the
+	// webhookURL handed to Gitea uses the host.docker.internal hostname.
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		g.close(context.Background())
 		pg.close(context.Background())
@@ -71,14 +81,10 @@ func setupTestbed(ctx context.Context) (*testbed, error) {
 		Config:   &http.Server{Handler: triggerapi.Routes(srv)},
 	}
 	triggerSrv.Start()
-	if !strings.Contains(triggerSrv.URL, "127.0.0.1") {
-		triggerSrv.Close()
-		g.close(context.Background())
-		pg.close(context.Background())
-		return nil, fmt.Errorf("unexpected httptest URL: %s", triggerSrv.URL)
-	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	triggerSrv.URL = fmt.Sprintf("http://127.0.0.1:%d", port)
 
-	webhookURL := strings.Replace(triggerSrv.URL, "127.0.0.1", "host.docker.internal", 1) + "/v1/events/gitea"
+	webhookURL := fmt.Sprintf("http://host.docker.internal:%d/v1/events/gitea", port)
 
 	cfg := worker.Config{
 		WorkspaceRoot:   tmpDir(),

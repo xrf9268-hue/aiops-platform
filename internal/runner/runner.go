@@ -18,7 +18,11 @@ type RunInput struct {
 }
 
 type Result struct {
-	Summary string
+	Summary       string
+	OutputBytes   int64  // bytes the runner kept in its capture buffer
+	OutputDropped int64  // bytes dropped because the buffer hit its cap
+	OutputHead    string // up to CodexEventOutputCap bytes from the start of the captured output
+	OutputTail    string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
 }
 
 type Runner interface {
@@ -30,7 +34,7 @@ func New(name string) (Runner, error) {
 	case "", "mock":
 		return MockRunner{}, nil
 	case "codex":
-		return ShellRunner{Name: "codex"}, nil
+		return CodexRunner{}, nil
 	case "claude":
 		return ShellRunner{Name: "claude"}, nil
 	default:

@@ -298,7 +298,9 @@ func wrapErr(cfg workflow.Config, err error) *RunTaskError {
 // (runner_start, runner_end, runner_timeout) so retry policy and observers
 // can distinguish a clean exit from a kill due to deadline. The returned
 // runner.Result is what runTask passes to runSummary on the success path;
-// on failure it is zero-valued.
+// on failure (timeout or non-zero exit) the same Result is returned so that
+// any partial output telemetry the runner managed to capture (OutputBytes,
+// OutputHead, OutputTail, etc.) is still available to the caller.
 func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
@@ -320,20 +322,24 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	if runErr != nil {
 		var te *runner.TimeoutError
 		if errors.As(runErr, &te) {
-			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, te.Error(), map[string]any{
+			timeoutPayload := map[string]any{
 				"model":      in.Task.Model,
 				"timeout_ms": te.Timeout.Milliseconds(),
 				"elapsed_ms": te.Elapsed.Milliseconds(),
-			})
-			return runner.Result{}, runErr
+			}
+			addOutputFields(timeoutPayload, res)
+			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
+			return res, runErr
 		}
-		Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner failed", map[string]any{
+		failurePayload := map[string]any{
 			"model":       in.Task.Model,
 			"duration_ms": elapsed.Milliseconds(),
 			"error":       ErrSummary(runErr),
 			"ok":          false,
-		})
-		return runner.Result{}, runErr
+		}
+		addOutputFields(failurePayload, res)
+		Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner failed", failurePayload)
+		return res, runErr
 	}
 
 	endPayload := map[string]any{
@@ -344,6 +350,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	if res.Summary != "" {
 		endPayload["summary"] = res.Summary
 	}
+	addOutputFields(endPayload, res)
 	Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner completed", endPayload)
 	return res, nil
 }
@@ -684,4 +691,23 @@ func sampleSlice(items []string, max int) []string {
 		return items
 	}
 	return items[:max]
+}
+
+// addOutputFields merges runner Result output telemetry into a payload map
+// when the runner reported any. Mock runs that leave Result.Output* zero
+// add no keys, preserving payload diffs for tests written before
+// codex/log capture landed.
+func addOutputFields(payload map[string]any, res runner.Result) {
+	if res.OutputBytes > 0 {
+		payload["output_bytes"] = res.OutputBytes
+	}
+	if res.OutputDropped > 0 {
+		payload["output_dropped"] = res.OutputDropped
+	}
+	if res.OutputHead != "" {
+		payload["output_head"] = res.OutputHead
+	}
+	if res.OutputTail != "" {
+		payload["output_tail"] = res.OutputTail
+	}
 }

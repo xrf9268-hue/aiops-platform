@@ -323,6 +323,28 @@ func TestCommitAndPush_RemoteBranchDeletedRecreates(t *testing.T) {
 	}
 }
 
+// unsetEnvForTest unsets the named env vars for the duration of the test,
+// restoring the prior values via t.Cleanup. testing.T.Setenv only supports
+// SET; we need UNSET semantics for tests that simulate a vanilla CI runner
+// where GIT_* identity vars are absent (not "set to empty string", which git
+// treats as "use this empty value" rather than "fall back to next source").
+func unsetEnvForTest(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, k := range keys {
+		old, present := os.LookupEnv(k)
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatalf("unset %s: %v", k, err)
+		}
+		t.Cleanup(func() {
+			if present {
+				_ = os.Setenv(k, old)
+			} else {
+				_ = os.Unsetenv(k)
+			}
+		})
+	}
+}
+
 // configureGitIdentity sets a deterministic committer for the per-test
 // worktree. PrepareGitWorkspace inherits config from the bare mirror, but the
 // mirror is created without an identity (we never commit inside it), so a
@@ -416,6 +438,55 @@ func TestMirrorRoot_OverrideWins(t *testing.T) {
 	}
 	if got := MirrorRoot(""); got == "" {
 		t.Fatal("default mirror root must not be empty")
+	}
+}
+
+// TestCommitAndPush_WorksWithoutHostGitIdent verifies the worker is
+// self-sufficient on a host with NO global git config — the situation on
+// fresh CI runners and hardened container images. Before this fix,
+// `git commit` would error with "empty ident name not allowed" because the
+// per-task worktree inherits no identity from the bare mirror. Now the
+// worker passes its own identity inline via -c flags; the test confirms
+// the commit lands with the expected author/committer fields.
+func TestCommitAndPush_WorksWithoutHostGitIdent(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("no-ident-task", upstream)
+
+	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("payload\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a host with no git ident: point HOME at an empty temp dir
+	// (so ~/.gitconfig does not exist) and unset every GIT_* env var that
+	// could leak an identity from the developer's environment. Without the
+	// production fix, git commit would now fail with "empty ident name".
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	unsetEnvForTest(t,
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL",
+		"GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+	)
+
+	if err := CommitAndPush(ctx, dir, "no-ident attempt", tk.WorkBranch); err != nil {
+		t.Fatalf("CommitAndPush should succeed without host git ident: %v", err)
+	}
+
+	bare := strings.TrimPrefix(upstream, "file://")
+	out, err := exec.Command("git", "--git-dir", bare,
+		"log", "-1", "--format=%an|%ae|%cn|%ce", tk.WorkBranch).CombinedOutput()
+	if err != nil {
+		t.Fatalf("git log on bare: %v\n%s", err, out)
+	}
+	got := strings.TrimSpace(string(out))
+	want := CommitIdentName + "|" + CommitIdentEmail + "|" + CommitIdentName + "|" + CommitIdentEmail
+	if got != want {
+		t.Fatalf("commit identity = %q, want %q", got, want)
 	}
 }
 
