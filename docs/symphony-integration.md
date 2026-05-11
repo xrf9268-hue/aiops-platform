@@ -71,4 +71,8 @@ Not yet implemented:
 - multi-run reconciliation
 - dashboard
 - robust event streaming
-- advanced sandboxing
+- OS-level sandboxing (sandbox-exec, firejail, container isolation). Codex CLI's own sandbox is wired via `codex.profile`.
+
+## Pointers
+
+- Symphony's richer codex integration uses the long-running `codex app-server` JSON-RPC protocol (`elixir/lib/symphony_elixir/codex/app_server.ex`) and exposes per-turn sandbox overrides via `Codex.changeset` (`elixir/lib/symphony_elixir/config/schema.ex`). This platform's M4 stays on one-shot `codex exec`; an app-server-style integration is a candidate for M5+.

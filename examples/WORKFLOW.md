@@ -38,6 +38,14 @@ agent:
 
 codex:
   command: codex exec
+  # profile selects how the runner invokes codex:
+  #   safe   (default) - codex exec --full-auto --skip-git-repo-check ...
+  #   bypass           - codex exec --dangerously-bypass-approvals-and-sandbox ...
+  #                      (only when the worker host is already isolated, e.g. a
+  #                      container; codex bypasses its own sandbox + approval gates)
+  #   custom           - run the literal codex.command via sh -lc; PROMPT.md
+  #                      is piped on stdin. Escape hatch for bespoke wrappers.
+  profile: safe
 
 claude:
   command: claude

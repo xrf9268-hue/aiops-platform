@@ -101,6 +101,16 @@ codex:
   command: codex exec
 ```
 
+**Profiles** select how the runner invokes codex:
+
+- `safe` (default): builds `codex exec --full-auto --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` from argv (no shell). PROMPT.md is piped on stdin. `--full-auto` is codex's documented shorthand for `--sandbox workspace-write --ask-for-approval=never`.
+- `bypass`: same shape but with `--dangerously-bypass-approvals-and-sandbox`. Use only when the worker host is already isolated (container, dedicated VM); the flag turns codex's own sandbox off.
+- `custom`: runs the literal `codex.command` via `sh -lc` with PROMPT.md on stdin. Note the change from earlier versions: the runner no longer appends `< .aiops/PROMPT.md` to the command — your command must consume stdin (which `codex exec` does by default when no positional prompt is given).
+
+### Reading codex output after a run
+
+Each codex run writes `.aiops/CODEX_OUTPUT.txt` (combined stdout+stderr, capped at 1 MiB with a truncation footer when the cap fires) and reads `.aiops/CODEX_LAST_MESSAGE.md` (codex's own `-o` artifact) as the run summary. The `runner_end` task event payload also carries `output_head` (first 4 KiB), `output_tail` (last 4 KiB if non-overlapping), `output_bytes`, and `output_dropped` for at-a-glance triage from `/v1/tasks/<id>/events` without cloning the work branch.
+
 ### `claude`
 
 Same shell runner, invokes `claude.command` (default `claude`).
