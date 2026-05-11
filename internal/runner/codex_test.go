@@ -83,7 +83,7 @@ func TestCodexRunner_SafeProfileBuildsExpectedArgv(t *testing.T) {
 		"--cd",
 		wd,
 		"-o",
-		".aiops/CODEX_LAST_MESSAGE.md",
+		filepath.Join(wd, ".aiops/CODEX_LAST_MESSAGE.md"),
 	}
 	gotLines := strings.Split(strings.TrimRight(string(got), "\n"), "\n")
 	if len(gotLines) != len(want) {

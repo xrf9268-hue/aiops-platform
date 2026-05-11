@@ -92,6 +92,11 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 	if profile == "" {
 		profile = "safe"
 	}
+	// Both safe and bypass set --cd <workdir> for codex's own workspace
+	// hint AND set cmd.Dir = workdir at the OS level. The -o path is made
+	// absolute so that even if the two ever diverge in a future refactor,
+	// the artifact lands in the workdir we own (issue #17 review).
+	lastMessageAbs := filepath.Join(in.Workdir, CodexLastMessagePath)
 	switch profile {
 	case "safe":
 		if _, err := exec.LookPath("codex"); err != nil {
@@ -102,7 +107,7 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 			"--full-auto",
 			"--skip-git-repo-check",
 			"--cd", in.Workdir,
-			"-o", CodexLastMessagePath,
+			"-o", lastMessageAbs,
 		), nil
 	case "bypass":
 		if _, err := exec.LookPath("codex"); err != nil {
@@ -113,7 +118,7 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 			"--dangerously-bypass-approvals-and-sandbox",
 			"--skip-git-repo-check",
 			"--cd", in.Workdir,
-			"-o", CodexLastMessagePath,
+			"-o", lastMessageAbs,
 		), nil
 	case "custom":
 		command := strings.TrimSpace(in.Workflow.Config.Codex.Command)
