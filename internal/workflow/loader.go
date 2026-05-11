@@ -67,6 +67,17 @@ var supportedAgentDefaults = map[string]struct{}{
 	"claude": {},
 }
 
+// supportedCodexProfiles enumerates the codex runner profile names the
+// runner package knows how to dispatch. "safe" injects --full-auto +
+// --skip-git-repo-check; "bypass" swaps in
+// --dangerously-bypass-approvals-and-sandbox for already-isolated hosts;
+// "custom" falls back to the operator-supplied codex.command via sh -lc.
+var supportedCodexProfiles = map[string]struct{}{
+	"safe":   {},
+	"bypass": {},
+	"custom": {},
+}
+
 // validateConfig enforces the required-field and enum constraints that
 // the typed YAML decoder cannot express on its own. It runs after
 // expandConfig so env-var indirections (e.g. `clone_url: $REPO_URL`)
@@ -82,6 +93,12 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
 		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, claude)", path, cfg.Agent.Default)
+	}
+	if _, ok := supportedCodexProfiles[cfg.Codex.Profile]; !ok {
+		return fmt.Errorf("%s: codex.profile %q is not supported (allowed: safe, bypass, custom)", path, cfg.Codex.Profile)
+	}
+	if strings.TrimSpace(cfg.Claude.Profile) != "" {
+		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
 	return nil
 }
@@ -181,6 +198,9 @@ func expandConfig(cfg *Config) {
 	}
 	if cfg.Tracker.Statuses.Rework == "" {
 		cfg.Tracker.Statuses.Rework = "Rework"
+	}
+	if cfg.Codex.Profile == "" {
+		cfg.Codex.Profile = "safe"
 	}
 }
 

@@ -89,6 +89,13 @@ func (a AgentConfig) MaxTimeoutRetriesValue() int {
 
 type CommandConfig struct {
 	Command string `yaml:"command" json:"command"`
+	// Profile is consulted only by the codex runner. Allowed values: "safe"
+	// (default), "bypass", "custom". The field lives on the shared
+	// CommandConfig type to avoid splitting CodexConfig out for one field;
+	// loader validation rejects non-empty Profile on the Claude embed so a
+	// copy-paste mistake fails loud at load time instead of silently doing
+	// nothing.
+	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
 }
 
 type PolicyConfig struct {
@@ -195,7 +202,7 @@ func DefaultConfig() Config {
 			MaxTurns:            8,
 			Timeout:             30 * time.Minute,
 		},
-		Codex:  CommandConfig{Command: "codex exec"},
+		Codex:  CommandConfig{Command: "codex exec", Profile: "safe"},
 		Claude: CommandConfig{Command: "claude"},
 		Policy: PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
 		Verify: VerifyConfig{Commands: []string{}},

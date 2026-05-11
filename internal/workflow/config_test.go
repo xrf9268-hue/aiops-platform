@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+func writeTempWorkflow(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := dir + "/WORKFLOW.md"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 // TestLoad_PRDraftFromFrontMatter verifies the YAML key `pr.draft` is parsed
 // into Config.PR.Draft. This is the schema knob #41 wires through to
 // gitea.CreatePullRequest.
@@ -511,5 +521,113 @@ func TestLoad_VerifyTimeoutAndAllowFailureRoundTrip(t *testing.T) {
 	}
 	if !wf.Config.Verify.AllowFailure {
 		t.Fatalf("Verify.AllowFailure = false, want true")
+	}
+}
+
+func TestDefaultConfig_CodexProfileIsSafe(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	if cfg.Codex.Profile != "safe" {
+		t.Fatalf("DefaultConfig().Codex.Profile = %q, want %q", cfg.Codex.Profile, "safe")
+	}
+}
+
+func TestLoad_AcceptsSupportedCodexProfiles(t *testing.T) {
+	t.Parallel()
+	for _, profile := range []string{"safe", "bypass", "custom"} {
+		profile := profile
+		t.Run(profile, func(t *testing.T) {
+			path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: codex
+codex:
+  command: codex exec
+  profile: `+profile+`
+---
+prompt body
+`)
+			wf, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load(%s): %v", profile, err)
+			}
+			if wf.Config.Codex.Profile != profile {
+				t.Fatalf("Codex.Profile = %q, want %q", wf.Config.Codex.Profile, profile)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsUnknownCodexProfile(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: codex
+codex:
+  command: codex exec
+  profile: yolo
+---
+prompt
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load: expected error for codex.profile=yolo, got nil")
+	}
+	if !strings.Contains(err.Error(), "codex.profile") || !strings.Contains(err.Error(), "yolo") {
+		t.Fatalf("error = %q; want it to mention codex.profile and yolo", err)
+	}
+}
+
+func TestLoad_NormalizesEmptyCodexProfileToSafe(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: codex
+codex:
+  command: codex exec
+---
+prompt
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Codex.Profile != "safe" {
+		t.Fatalf("Codex.Profile = %q, want %q (normalization)", wf.Config.Codex.Profile, "safe")
+	}
+}
+
+func TestLoad_RejectsClaudeProfile(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: claude
+claude:
+  command: claude
+  profile: safe
+---
+prompt
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load: expected error for claude.profile, got nil")
+	}
+	if !strings.Contains(err.Error(), "claude.profile") {
+		t.Fatalf("error = %q; want it to mention claude.profile", err)
 	}
 }
