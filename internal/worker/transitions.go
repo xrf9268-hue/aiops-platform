@@ -76,7 +76,7 @@ func OnFailure(ctx context.Context, ev EventEmitter, tr Transitioner, t task.Tas
 	state := cfg.Tracker.Statuses.Rework
 	moveErr := tr.MoveIssueToState(ctx, issueID, state)
 	if moveErr == nil {
-		Emit(ctx, ev, t.ID, "tracker_transition", "issue moved to rework", map[string]any{
+		Emit(ctx, ev, t.ID, task.EventTrackerTransition, "issue moved to rework", map[string]any{
 			"issue_id":     issueID,
 			"target_state": state,
 			"reason":       "failure",
@@ -85,20 +85,20 @@ func OnFailure(ctx context.Context, ev EventEmitter, tr Transitioner, t task.Tas
 	}
 	// Record the move failure, then fall through to the comment path so
 	// the human still sees the failure on the issue.
-	Emit(ctx, ev, t.ID, "tracker_transition_error", "move to rework failed", map[string]any{
+	Emit(ctx, ev, t.ID, task.EventTrackerTransitionError, "move to rework failed", map[string]any{
 		"issue_id":     issueID,
 		"target_state": state,
 		"error":        ErrSummary(moveErr),
 	})
 	body := fmt.Sprintf("AI run failed for task `%s`: %s", t.ID, ErrSummary(runErr))
 	if err := tr.AddComment(ctx, issueID, body); err != nil {
-		Emit(ctx, ev, t.ID, "tracker_transition_error", "failure comment failed", map[string]any{
+		Emit(ctx, ev, t.ID, task.EventTrackerTransitionError, "failure comment failed", map[string]any{
 			"issue_id": issueID,
 			"error":    ErrSummary(err),
 		})
 		return
 	}
-	Emit(ctx, ev, t.ID, "tracker_comment", "failure comment posted", map[string]any{
+	Emit(ctx, ev, t.ID, task.EventTrackerComment, "failure comment posted", map[string]any{
 		"issue_id": issueID,
 	})
 }
@@ -123,8 +123,8 @@ func transitionTo(ctx context.Context, ev EventEmitter, tr Transitioner, t task.
 	}
 	if err := tr.MoveIssueToState(ctx, issueID, target); err != nil {
 		payload["error"] = ErrSummary(err)
-		Emit(ctx, ev, t.ID, "tracker_transition_error", "issue transition failed", payload)
+		Emit(ctx, ev, t.ID, task.EventTrackerTransitionError, "issue transition failed", payload)
 		return
 	}
-	Emit(ctx, ev, t.ID, "tracker_transition", "issue transitioned", payload)
+	Emit(ctx, ev, t.ID, task.EventTrackerTransition, "issue transitioned", payload)
 }

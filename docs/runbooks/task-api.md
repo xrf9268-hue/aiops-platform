@@ -42,6 +42,14 @@ failed run can be reconstructed from the event timeline alone:
 - `pr_reused` — emitted instead of `pr_created` when the work branch already
   has an open PR from a previous attempt; the worker reuses it (number,
   html_url, title) and skips the create call so retries do not duplicate PRs
+- `tracker_transition` — Linear issue successfully moved to the configured
+  target state (in-progress on claim, human-review on PR open, rework on
+  failure); payload carries `issue_id`, `target_state`, and `reason`
+- `tracker_transition_error` — issue move or fallback comment failed at the
+  Linear API; payload includes the error excerpt so the task can still
+  complete without aborting on a tracker hiccup
+- `tracker_comment` — failure comment posted as a fallback after a rework
+  transition failed, so the human still has visibility on the issue
 - `succeeded`, `failed_attempt` — terminal outcomes
 
 The worker also writes the following artifacts under `.aiops/` in the

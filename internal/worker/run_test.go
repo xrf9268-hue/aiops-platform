@@ -324,6 +324,9 @@ func TestEventKindConstantsAreSnakeCase(t *testing.T) {
 		task.EventPush,
 		task.EventPRCreated,
 		task.EventPRReused,
+		task.EventTrackerTransition,
+		task.EventTrackerTransitionError,
+		task.EventTrackerComment,
 	}
 	for _, kind := range required {
 		if kind == "" {
