@@ -810,6 +810,78 @@ func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 	}
 }
 
+// fakeOutputRunner returns a fixed Result with non-zero output fields so we
+// can assert RunRunnerWithTimeout forwards them onto the runner_end payload.
+type fakeOutputRunner struct{}
+
+func (fakeOutputRunner) Run(_ context.Context, _ runner.RunInput) (runner.Result, error) {
+	return runner.Result{
+		Summary:       "fake done",
+		OutputBytes:   42,
+		OutputDropped: 7,
+		OutputHead:    "head-canary",
+		OutputTail:    "tail-canary",
+	}, nil
+}
+
+// TestRunRunnerWithTimeout_EmitsOutputFieldsOnRunnerEnd verifies that when a
+// runner returns non-zero output telemetry, the runner_end payload carries
+// output_bytes, output_dropped, output_head, and output_tail.
+func TestRunRunnerWithTimeout_EmitsOutputFieldsOnRunnerEnd(t *testing.T) {
+	ev := &fakeEmitter{}
+	in := runner.RunInput{Task: task.Task{ID: "tsk_payload", Model: "codex"}}
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, fakeOutputRunner{}, in, 5*time.Second, "file"); err != nil {
+		t.Fatalf("RunRunnerWithTimeout: %v", err)
+	}
+	ends := ev.byKind(task.EventRunnerEnd)
+	if len(ends) == 0 {
+		t.Fatal("no runner_end event recorded")
+	}
+	pe := ends[len(ends)-1]
+
+	wantInt := map[string]float64{
+		"output_bytes":   42,
+		"output_dropped": 7,
+	}
+	for k, want := range wantInt {
+		got := payloadField(t, pe.Payload, k)
+		if got != want {
+			t.Fatalf("payload[%q] = %v (%T), want %v", k, got, got, want)
+		}
+	}
+	wantStr := map[string]string{
+		"output_head": "head-canary",
+		"output_tail": "tail-canary",
+	}
+	for k, want := range wantStr {
+		got, _ := payloadField(t, pe.Payload, k).(string)
+		if got != want {
+			t.Fatalf("payload[%q] = %q, want %q", k, got, want)
+		}
+	}
+}
+
+// TestRunRunnerWithTimeout_OmitsOutputFieldsForMockRunner verifies that the
+// MockRunner (which leaves all Output* fields zero) does not pollute the
+// runner_end payload with output_* keys.
+func TestRunRunnerWithTimeout_OmitsOutputFieldsForMockRunner(t *testing.T) {
+	ev := &fakeEmitter{}
+	in := runner.RunInput{Task: task.Task{ID: "tsk_mock_payload", Model: "mock"}, Workdir: t.TempDir()}
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, runner.MockRunner{}, in, 5*time.Second, "file"); err != nil {
+		t.Fatalf("RunRunnerWithTimeout: %v", err)
+	}
+	ends := ev.byKind(task.EventRunnerEnd)
+	if len(ends) == 0 {
+		t.Fatal("no runner_end event recorded")
+	}
+	pe := ends[len(ends)-1]
+	for _, k := range []string{"output_bytes", "output_dropped", "output_head", "output_tail"} {
+		if got := payloadField(t, pe.Payload, k); got != nil {
+			t.Fatalf("payload should not contain %q for mock runner; got %v", k, got)
+		}
+	}
+}
+
 // TestVerifyAllowFailure_DoesNotMaskParentCancel pins that allow_failure
 // only downgrades real verification failures, not context cancellation.
 // Codex review on PR #55 caught that the original runVerifyPhase swallowed
