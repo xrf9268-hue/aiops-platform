@@ -7,10 +7,22 @@ import (
 	"os"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/queue"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+// runStore is the subset of queue.Store that Run actually exercises:
+// claim/complete on the loop, AddEvent* via the EventEmitter contract, and
+// Fail/FailTimeout via the failingStore contract. Defined as an interface
+// so the worker loop's tracker-hook gating can be tested against a fake
+// without standing up Postgres. *queue.Store satisfies it implicitly.
+type runStore interface {
+	Claim(ctx context.Context) (*task.Task, error)
+	Complete(ctx context.Context, id string) error
+	EventEmitter
+	failingStore
+}
 
 // Config holds the runtime parameters for the worker process. Fields that were
 // previously read via os.Getenv inside the request path are now threaded
@@ -31,6 +43,11 @@ type Config struct {
 	// nil disables the hooks (e.g. for non-Linear trackers, empty
 	// API keys, or tests that do not exercise this path).
 	NewTransitioner func(workflow.TrackerConfig) Transitioner
+	// NewPRClient builds the per-call PRClient used by CreatePR. When
+	// nil, the default gitea.Client built from GiteaBaseURL/Token is
+	// used. Tests inject a fake here so runTask can be exercised
+	// without a live Gitea server.
+	NewPRClient func() PRClient
 }
 
 // LoadConfigFromEnv reads the worker configuration from the environment using
@@ -69,7 +86,7 @@ func PrintConfig(workdir string, stdout, stderr io.Writer) int {
 
 // Run is the worker's main loop. It claims tasks from the store and executes
 // them until ctx is canceled.
-func Run(ctx context.Context, store *queue.Store, cfg Config) {
+func Run(ctx context.Context, store runStore, cfg Config) {
 	for {
 		t, err := store.Claim(ctx)
 		if err != nil {
