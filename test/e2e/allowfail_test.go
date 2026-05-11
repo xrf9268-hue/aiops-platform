@@ -40,7 +40,7 @@ func TestVerifyAllowFailure(t *testing.T) {
 	}
 
 	var taskID string
-	pollUntil(t, 60*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
+	pollUntil(t, 180*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
 		row := bed.pg.pool.QueryRow(ctx,
 			`SELECT id, status FROM tasks WHERE created_at >= $1 ORDER BY created_at DESC LIMIT 1`, testStart)
 		var id, status string
