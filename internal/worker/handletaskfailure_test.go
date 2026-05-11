@@ -28,8 +28,8 @@ type failCall struct {
 }
 
 type failTimeoutCall struct {
-	ID, Msg            string
-	MaxTimeoutRetries  int
+	ID, Msg           string
+	MaxTimeoutRetries int
 }
 
 func (f *fakeFailingStore) Fail(_ context.Context, id, msg string) (bool, error) {

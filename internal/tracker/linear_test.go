@@ -26,8 +26,8 @@ type fakeLinearServer struct {
 }
 
 type fakeLinearRequest struct {
-	OpName    string
-	Variables map[string]any
+	OpName     string
+	Variables  map[string]any
 	AuthHeader string
 }
 
