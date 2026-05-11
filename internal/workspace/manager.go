@@ -548,6 +548,20 @@ func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) err
 	return nil
 }
 
+// CommitIdentName and CommitIdentEmail are the git author/committer
+// identity the worker stamps on every PR commit. Passing them inline via
+// `git -c` flags keeps the worker self-contained: it works on hosts
+// without a global git config (e.g. a fresh CI runner or a hardened
+// container image) and gives all aiops-platform commits a uniform,
+// recognizable attribution. Operators who want a different identity can
+// still override at runtime via the standard
+// GIT_{AUTHOR,COMMITTER}_{NAME,EMAIL} env vars, which take precedence
+// over the -c session config.
+const (
+	CommitIdentName  = "aiops-platform worker"
+	CommitIdentEmail = "worker@aiops-platform.local"
+)
+
 // CommitAndPush stages the workdir, commits with a Title-derived message,
 // and pushes to origin/<branch>. Retries for the same task ID reuse the same
 // work branch (see queue.Postgres.Enqueue), so on retry origin may already
@@ -568,7 +582,11 @@ func CommitAndPush(ctx context.Context, workdir string, title string, branch str
 	if err := run(ctx, workdir, "git", "diff", "--cached", "--quiet"); err == nil {
 		return fmt.Errorf("no changes to commit")
 	}
-	if err := run(ctx, workdir, "git", "commit", "-m", "chore(ai): "+title); err != nil {
+	if err := run(ctx, workdir, "git",
+		"-c", "user.email="+CommitIdentEmail,
+		"-c", "user.name="+CommitIdentName,
+		"commit", "-m", "chore(ai): "+title,
+	); err != nil {
 		return err
 	}
 	exists, err := remoteBranchExists(ctx, workdir, branch)
