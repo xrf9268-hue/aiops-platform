@@ -34,8 +34,8 @@ The platform's M4 milestone is "switch from mock to codex for small personal tas
 
 | Profile | Argv (after `codex` binary) | Notes |
 |---|---|---|
-| `safe` (default) | `exec --full-auto --skip-git-repo-check --cd <workdir> -o .aiops/CODEX_LAST_MESSAGE.md` | `--full-auto` is codex's documented shorthand for `--sandbox workspace-write --ask-for-approval=never`. PROMPT.md is fed via stdin (codex CLI reads stdin when no positional PROMPT is provided). |
-| `bypass` | `exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --cd <workdir> -o .aiops/CODEX_LAST_MESSAGE.md` | For operators who run the worker inside an already-isolated environment (container, VM) and need codex to write outside the workspace cap. Documented as opt-in. |
+| `safe` (default) | `exec --full-auto --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` | `--full-auto` is codex's documented shorthand for `--sandbox workspace-write --ask-for-approval=never`. PROMPT.md is fed via stdin (codex CLI reads stdin when no positional PROMPT is provided). The `-o` path is absolute so the artifact lands in the workdir even if `--cd` and `cmd.Dir` ever diverge. |
+| `bypass` | `exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` | For operators who run the worker inside an already-isolated environment (container, VM) and need codex to write outside the workspace cap. Documented as opt-in. |
 | `custom` | (n/a — falls back to `ShellRunner` with `sh -lc <codex.command>`) | Escape hatch. Operator-controlled string; no safety promises, but logs/timeout/output capture all still apply. |
 
 `safe` is the default supplied by `expandConfig`. An empty `Codex.Profile` after YAML load is normalized to `safe`. Unknown values fail load with a clear error path/value pair (same pattern as `supportedTrackerKinds` in `loader.go`).

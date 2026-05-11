@@ -86,7 +86,7 @@ agent:
 
 ### `codex`
 
-Shell runner that pipes `.aiops/PROMPT.md` into `codex.command` (default `codex exec`). See `internal/runner/shell.go`.
+Profile-driven runner (`internal/runner/codex.go`) that invokes the codex CLI with sandbox/approval flags chosen by `codex.profile`. PROMPT.md is piped on stdin; output is captured to `.aiops/CODEX_OUTPUT.txt`. The `custom` profile falls back to `sh -lc <codex.command>` (still stdin-fed).
 
 Use when:
 
