@@ -57,7 +57,7 @@ Implemented:
 - Gitea issue comment trigger
 - Linear polling trigger
 - Postgres task queue
-- repo-owned `WORKFLOW.md`
+- repo-owned `WORKFLOW.md` (discovered at three paths — see Deviations below)
 - mock, codex, and claude runner abstraction
 - deterministic local workspace
 - basic path policy
@@ -72,6 +72,23 @@ Not yet implemented:
 - dashboard
 - robust event streaming
 - OS-level sandboxing (sandbox-exec, firejail, container isolation). Codex CLI's own sandbox is wired via `codex.profile`.
+
+## Deviations from SPEC
+
+Tracked centrally in [`DEVIATIONS.md`](../DEVIATIONS.md). One item is worth
+calling out here because it touches workflow discovery directly:
+
+- **Multi-path WORKFLOW.md discovery (D4).** SPEC treats `WORKFLOW.md` as a
+  single, repository-owned source. We extend lookup to three paths
+  (`<repo>/WORKFLOW.md`, `<repo>/.aiops/WORKFLOW.md`, `<repo>/.github/WORKFLOW.md`)
+  with a documented precedence. Lower-priority files that exist but lose
+  precedence are recorded as `shadowed_by` on the `workflow_resolved` event,
+  echoed on the worker's per-task `workflow resolved:` log line, and surfaced
+  at the top level of `worker --print-config` output. This is a deliberate
+  extension to make it convenient to park the workflow under `.aiops/` while
+  keeping the repo root clean; the observability hooks ensure operators can
+  always answer "which file is in effect, and what is being shadowed?"
+  without running tooling.
 
 ## Pointers
 

@@ -88,6 +88,7 @@ For post-hoc inspection, the `workflow_resolved` task event records the source, 
 
 ## Architecture notes
 
+- [SPEC.md deviations](DEVIATIONS.md)
 - [Symphony integration guide](docs/symphony-integration.md)
 - [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)

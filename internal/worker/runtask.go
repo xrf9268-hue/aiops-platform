@@ -68,7 +68,29 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, workdir strin
 		payload["shadowed_by"] = res.ShadowedBy
 	}
 	Emit(ctx, ev, taskID, task.EventWorkflowResolved, "workflow resolved", payload)
+	logWorkflowResolved(taskID, res)
 	return wf, string(res.Source), nil
+}
+
+// logWorkflowResolved prints a single info-level line summarizing how the
+// workflow was discovered. Format:
+//
+//	task <id>: workflow resolved: source=<source> path=<path> shadowed=[a,b]
+//
+// The path and shadowed segments are omitted when empty so the common case
+// (source=default or a clean repo-root WORKFLOW.md with no shadows) stays
+// short. See issue #69 for the deviation rationale: multi-path discovery is
+// a deliberate extension over SPEC, and operators need a fast way to answer
+// "which file is in effect?" without re-parsing events.
+func logWorkflowResolved(taskID string, res *workflow.Resolution) {
+	parts := []string{"source=" + string(res.Source)}
+	if res.Path != "" {
+		parts = append(parts, "path="+res.Path)
+	}
+	if len(res.ShadowedBy) > 0 {
+		parts = append(parts, "shadowed=["+strings.Join(res.ShadowedBy, ",")+"]")
+	}
+	log.Printf("task %s: workflow resolved: %s", taskID, strings.Join(parts, " "))
 }
 
 // failingStore is the subset of queue.Store handleTaskFailure needs.
