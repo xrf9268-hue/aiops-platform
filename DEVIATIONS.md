@@ -1,13 +1,16 @@
 # DEVIATIONS
 
 This document records every known difference between `aiops-platform` and the
-upstream Symphony project. Two sources are jointly authoritative:
+upstream Symphony project. Three sources are jointly authoritative:
 
 - [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md) — the
   protocol contract.
 - [`openai/symphony` Elixir reference implementation](https://github.com/openai/symphony/tree/main/elixir/lib/symphony_elixir) —
   the working reference. When SPEC text is ambiguous, the Elixir module's
   behavior is the tiebreaker.
+- [OpenAI Symphony announcement blog post (2026-04-27)](docs/research/2026-04-27-openai-symphony-blog.md) —
+  authoritative design rationale from the authors. Mirrored in this repo so it
+  cannot drift.
 
 `aiops-platform` is a Go port of that reference. Per the project posture in
 [`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement), SPEC alignment
@@ -27,6 +30,7 @@ The umbrella tracking issue is [#67](https://github.com/xrf9268-hue/aiops-platfo
 | D5 | Sandbox posture relies solely on Codex CLI sandbox | §safety, §harness hardening | Medium | Open | [#70](https://github.com/xrf9268-hue/aiops-platform/issues/70) |
 | D6 | Postgres-backed queue (vs tracker+filesystem recovery) | §restart recovery, §orchestrator runtime state | High | Reverting | [#73](https://github.com/xrf9268-hue/aiops-platform/issues/73) |
 | D7 | Gitea webhook ingress (vs tracker polling) | §triggers | Medium | Reverting | [#74](https://github.com/xrf9268-hue/aiops-platform/issues/74) |
+| D8 | Orchestrator does PR creation / git push / Linear status writes (should be agent tools) | §1 boundary, §tools | **P0** | Reverting | [#76](https://github.com/xrf9268-hue/aiops-platform/issues/76) |
 
 Severity reflects the risk and the gap to SPEC, not the implementation effort.
 

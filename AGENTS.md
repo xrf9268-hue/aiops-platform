@@ -6,22 +6,36 @@ Project guide for AI coding agents (Codex CLI, Claude Code, etc.) working in thi
 
 `aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
 implements the [OpenAI Symphony SPEC](https://github.com/openai/symphony/blob/main/SPEC.md).
-It receives Linear issues or Gitea webhook events, dispatches them through a
-Symphony-style workflow (`mock` / `codex` / `claude` runners) in a deterministic
-workspace, and opens a draft PR.
+The orchestrator polls a tracker (Linear, soon Gitea), prepares a deterministic
+per-issue workspace, runs a coding agent in that workspace, and watches the
+agent's lifecycle. Per SPEC §1, the **agent** is what writes tickets, opens
+PRs, and pushes branches — through tools the orchestrator advertises
+(`linear_graphql` and equivalent for Gitea). The orchestrator is the
+scheduler/runner and tracker *reader*, not a tracker writer.
 
 The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is even if the GitHub repo is temporarily mirrored elsewhere.
 
-> **Transitional note:** the current implementation routes scheduling through a
-> Postgres-backed queue (`internal/queue`, `migrations/`). This is deviation
-> not in SPEC and is being removed under #73 in favor of SPEC's
-> tracker-driven, filesystem-driven recovery model (see also #68). Do not
-> design new code that assumes the queue is permanent; in particular, do not
-> add new tables, indexes, or migration steps without first checking #73.
+> **Transitional notes** — several pieces of the current implementation deviate
+> from this SPEC-aligned picture and are being reverted. Do not design new
+> code that depends on the legacy behavior:
+>
+> - **Postgres queue** (`internal/queue`, `migrations/`): not in SPEC; being
+>   removed under #73 in favor of in-memory + tracker + filesystem recovery
+>   (#68).
+> - **Gitea webhook ingress** (`cmd/trigger-api`, `internal/triggerapi`,
+>   `internal/gitea/webhook*.go`): not in SPEC; being replaced with a Gitea
+>   poller under #74.
+> - **Orchestrator-driven PR creation, git push, and Linear status writes**
+>   (`internal/worker/runtask.go` calls to `CommitAndPush`, `CreatePR`,
+>   `OnClaim`, `OnPRCreated`): SPEC §1 says these are agent responsibilities;
+>   being moved to agent-side dynamic tools under #76 (depends on app-server
+>   protocol, #64).
+> - **Multi-path WORKFLOW.md discovery** (`internal/workflow/resolver.go`):
+>   SPEC says single source; being reverted under #72.
 
 ## SPEC alignment is a hard requirement
 
-This project is positioned as a Symphony port. **Two upstream sources are
+This project is positioned as a Symphony port. **Three upstream sources are
 jointly authoritative**:
 
 1. The protocol contract: [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md).
@@ -32,11 +46,20 @@ jointly authoritative**:
    - [`elixir/lib/symphony_elixir/codex/app_server.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/codex/app_server.ex) — long-running JSON-RPC 2.0 over stdio; not one-shot exec.
    - [`elixir/lib/symphony_elixir/tracker.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/tracker.ex) and adapters — polling model with `:poll_interval_ms`; no webhook ingress.
    - [`elixir/lib/symphony_elixir/config/schema.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/config/schema.ex) — canonical config keys, defaults, and types.
-
-The OpenAI announcement post
-([English](https://openai.com/index/open-source-codex-orchestration-symphony/),
-[简中](https://openai.com/zh-Hans-CN/index/open-source-codex-orchestration-symphony/))
-provides the public framing and design rationale.
+3. The authors' announcement post, mirrored locally as
+   [`docs/research/2026-04-27-openai-symphony-blog.md`](docs/research/2026-04-27-openai-symphony-blog.md).
+   Provides the design rationale and the SPEC §1 problem statement. Direct
+   quotes to anchor on:
+   - "Symphony is a scheduler/runner and tracker reader." (defines our boundary)
+   - "Ticket writes (state transitions, comments, PR links) are typically
+     performed by the coding agent using tools available in the workflow/runtime
+     environment." (where #76 comes from)
+   - "Support restart recovery without requiring a persistent database."
+     (where #73 comes from)
+   - "Poll the issue tracker on a fixed cadence" (where #74 comes from)
+   - "We use [dynamic tool calls] to expose the raw `linear_graphql` function...
+     without relying on MCP or exposing the access token to containers."
+     (where the token-isolation requirement in #76 comes from)
 
 The project is **pre-release** — there are no users to migrate, so the cost of
 aligning with SPEC and the reference is at its minimum **right now**. Treat
