@@ -124,8 +124,8 @@ landings below complete. Until then:
   record. Do not force-push or rewrite it.
 - `main` continues to receive doc-only changes (research mirrors, this
   decision, evaluation drafts) but **does not** receive new architectural
-  code. The nine open alignment issues (#14, #64, #67, #68, #70, #72,
-  #73, #74, #76, #78) will not be worked in this repo; they will be
+  code. The open alignment issues (#14, #64, #67, #68, #70, #72, #73,
+  #74, #76, #78) will not be worked in this repo; they will be
   re-filed (or closed as "wontfix — moved to fork") in the new repo.
 - The harness-engineering posture written into `AGENTS.md` and the
   evaluation work in `DEVIATIONS.md` are the durable artifacts. Both
