@@ -1,9 +1,11 @@
 package worker_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -674,6 +676,87 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	}
 	if _, present := payload["shadowed_by"]; present {
 		t.Fatalf("payload should omit shadowed_by when empty: %#v", payload)
+	}
+}
+
+// TestResolveWorkflow_LogsResolutionLine pins the observability
+// requirement from issue #69: every workflow resolution emits a single
+// info-level log line that summarizes source, path, and the shadow set.
+// The standalone log line lets an operator answer "which file is in
+// effect?" by tailing worker logs, without parsing the structured event
+// stream. When nothing is shadowed, the `shadowed=` segment is omitted
+// so the common case stays terse.
+func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+		t.Fatalf("mkdir .aiops: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write .aiops: %v", err)
+	}
+
+	var buf bytes.Buffer
+	origOut := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(origOut)
+		log.SetFlags(origFlags)
+	})
+
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log", dir); err != nil {
+		t.Fatalf("ResolveWorkflow: %v", err)
+	}
+
+	got := buf.String()
+	wantSubstrings := []string{
+		"task tsk_log: workflow resolved",
+		"source=file",
+		"path=WORKFLOW.md",
+		"shadowed=[.aiops/WORKFLOW.md]",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(got, want) {
+			t.Fatalf("log line missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+// TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed keeps the
+// common no-shadow case readable: when only the canonical path exists,
+// the line carries `source=` and `path=` but no `shadowed=` segment.
+func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	origOut := log.Writer()
+	origFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(origOut)
+		log.SetFlags(origFlags)
+	})
+
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log2", dir); err != nil {
+		t.Fatalf("ResolveWorkflow: %v", err)
+	}
+
+	got := buf.String()
+	if !strings.Contains(got, "source=file") || !strings.Contains(got, "path=WORKFLOW.md") {
+		t.Fatalf("missing source/path in log line:\n%s", got)
+	}
+	if strings.Contains(got, "shadowed=") {
+		t.Fatalf("shadowed= must be omitted when empty:\n%s", got)
 	}
 }
 

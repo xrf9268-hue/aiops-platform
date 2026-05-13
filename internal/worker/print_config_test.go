@@ -169,6 +169,85 @@ func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 	}
 }
 
+// TestPrintConfig_TopLevelSourceAndShadowedBy pins the contract from
+// issue #69: the JSON output surfaces `source` and `shadowed_by` at the
+// top level (not only under `resolution`) so operators answering "which
+// file is in effect, and what is being shadowed?" do not have to drill
+// into a nested object. Also pins the shadow case end-to-end: when both
+// /WORKFLOW.md and /.aiops/WORKFLOW.md exist, the latter is recorded as
+// a shadowed-by entry rather than silently dropped.
+func TestPrintConfig_TopLevelSourceAndShadowedBy(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+		t.Fatalf("mkdir .aiops: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write .aiops: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Source     string   `json:"source"`
+		ShadowedBy []string `json:"shadowed_by"`
+		Resolution struct {
+			Source     string   `json:"source"`
+			Path       string   `json:"path"`
+			ShadowedBy []string `json:"shadowed_by"`
+		} `json:"resolution"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if out.Source != "file" {
+		t.Fatalf("top-level source = %q, want %q", out.Source, "file")
+	}
+	if len(out.ShadowedBy) != 1 || out.ShadowedBy[0] != ".aiops/WORKFLOW.md" {
+		t.Fatalf("top-level shadowed_by = %v, want [\".aiops/WORKFLOW.md\"]", out.ShadowedBy)
+	}
+	// Nested resolution stays as-is for backwards compatibility with
+	// any external tooling that already keys on it.
+	if out.Resolution.Source != "file" {
+		t.Fatalf("resolution.source = %q, want %q", out.Resolution.Source, "file")
+	}
+	if out.Resolution.Path != "WORKFLOW.md" {
+		t.Fatalf("resolution.path = %q, want %q", out.Resolution.Path, "WORKFLOW.md")
+	}
+	if len(out.Resolution.ShadowedBy) != 1 || out.Resolution.ShadowedBy[0] != ".aiops/WORKFLOW.md" {
+		t.Fatalf("resolution.shadowed_by = %v, want [\".aiops/WORKFLOW.md\"]", out.Resolution.ShadowedBy)
+	}
+}
+
+// TestPrintConfig_TopLevelOmitsEmptyShadowedBy keeps the common case
+// terse: when nothing is being shadowed, `shadowed_by` is omitted from
+// the top level (the JSON tag is `,omitempty`). The clean repo-root
+// case is what most users see.
+func TestPrintConfig_TopLevelOmitsEmptyShadowedBy(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), `"shadowed_by"`) {
+		t.Fatalf("shadowed_by must be omitted when empty:\n%s", stdout.String())
+	}
+	var out struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if out.Source != "default" {
+		t.Fatalf("top-level source = %q, want %q", out.Source, "default")
+	}
+}
+
 // TestPrintConfig_SchemaErrorReturnsExitOne pins the contract that
 // schema validation failures produce a non-zero exit and route the
 // human-readable error to stderr. Stdout must remain empty so a script

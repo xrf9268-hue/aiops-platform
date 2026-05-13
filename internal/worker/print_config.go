@@ -11,7 +11,16 @@ import (
 
 // printConfigOutput is the JSON shape of `worker --print-config <dir>`.
 // Stable: external tooling may consume it.
+//
+// Source and ShadowedBy are top-level convenience copies of
+// Resolution.Source and Resolution.ShadowedBy: SPEC treats WORKFLOW.md as a
+// single-source file, and operators answering "which file is in effect, and
+// is anything being shadowed?" should not need to drill into a nested
+// resolution object. The nested Resolution is preserved as the
+// authoritative shape; the top-level fields are a stable shortcut.
 type printConfigOutput struct {
+	Source         string                `json:"source"`
+	ShadowedBy     []string              `json:"shadowed_by,omitempty"`
 	Resolution     printConfigResolution `json:"resolution"`
 	Config         configView            `json:"config"`
 	PromptTemplate promptSummary         `json:"prompt_template"`
@@ -131,6 +140,8 @@ func printConfig(workdir string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	out := printConfigOutput{
+		Source:     string(res.Source),
+		ShadowedBy: res.ShadowedBy,
 		Resolution: printConfigResolution{
 			Source:     string(res.Source),
 			Path:       res.Path,
