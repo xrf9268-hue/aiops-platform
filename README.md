@@ -1,5 +1,17 @@
 # aiops-platform
 
+> **⚠️ Direction change in progress (2026-05-13).** This repo's Go
+> implementation accumulated nine SPEC deviations from upstream Symphony.
+> Rather than rewrite the orchestrator core in Go, we are switching to
+> fork an existing Symphony implementation as the new base. See
+> [`DECISION.md`](DECISION.md) for the reasoning and
+> [`docs/research/symphony-fork-evaluation.md`](docs/research/symphony-fork-evaluation.md)
+> for the candidate comparison.
+>
+> The content below describes the current Go implementation as it stood
+> before this decision. New architectural work happens on the new repo
+> once the fork is chosen; this repo will be archived with a pointer.
+
 A personal-productivity AI coding orchestrator inspired by OpenAI Symphony.
 
 The goal is not to build a heavy enterprise platform first. The goal is to run a practical loop:
