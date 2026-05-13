@@ -58,7 +58,7 @@ existing deviation, (b) be tracked as a new deviation with an issue, or
 
 | Path | What lives there |
 |------|------------------|
-| `cmd/trigger-api` | HTTP server: Gitea webhook ingress + manual task submission |
+| `cmd/trigger-api` | HTTP server: Gitea webhook ingress (transitional — being removed per #74) |
 | `cmd/worker` | Claims queued tasks, runs the Symphony loop, opens PRs |
 | `cmd/linear-poller` | Polls Linear active states and enqueues tasks |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |

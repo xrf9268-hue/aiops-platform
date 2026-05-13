@@ -20,32 +20,34 @@ The umbrella tracking issue is [#67](https://github.com/xrf9268-hue/aiops-platfo
 | D4 | WORKFLOW.md multi-path discovery (vs single source) | §workflow file | Low | Reverting | [#72](https://github.com/xrf9268-hue/aiops-platform/issues/72) (supersedes [#69](https://github.com/xrf9268-hue/aiops-platform/issues/69)) |
 | D5 | Sandbox posture relies solely on Codex CLI sandbox | §safety, §harness hardening | Medium | Open | [#70](https://github.com/xrf9268-hue/aiops-platform/issues/70) |
 | D6 | Postgres-backed queue (vs tracker+filesystem recovery) | §restart recovery, §orchestrator runtime state | High | Reverting | [#73](https://github.com/xrf9268-hue/aiops-platform/issues/73) |
+| D7 | Gitea webhook ingress (vs tracker polling) | §triggers | Medium | Reverting | [#74](https://github.com/xrf9268-hue/aiops-platform/issues/74) |
 
 Severity reflects the risk and the gap to SPEC, not the implementation effort.
 
 ## Deliberate extensions
 
-These are differences from the reference implementation that we have decided
-to keep because they offer functional value beyond what SPEC provides. The
-bar is high: cosmetic convenience does not qualify (see project posture in
-[`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement)).
+There are no current deliberate extensions. The bar is high: SPEC alignment
+is a hard requirement (see project posture in
+[`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement)) and cosmetic
+or marginal convenience does not qualify. Anything that fails the bar moves
+to the deviations table above and gets a tracking issue for reversal.
 
-- **Gitea webhook trigger path.** SPEC describes pull-only via tracker
-  polling. We accept Gitea issue-comment webhooks as an additional task
-  source. Justification: lower latency than poll-and-rate-limit, and
-  webhook signature verification is the natural Gitea-side integration
-  point. (Under review — file an issue if you disagree.)
-
-> **Removed claims.** Earlier revisions of this file listed
-> "PostgreSQL-backed queue", "Runner abstraction supporting
-> mock/codex/claude", and "WORKFLOW.md discovered at 3 paths" as
-> deliberate extensions. None of those clear the bar:
+> **Removed claims.** Earlier revisions of this file listed several
+> "deliberate extensions" that did not survive review under the project's
+> SPEC-alignment posture. They are recorded here so the correction is
+> auditable:
 >
-> - Postgres queue: tracked as D6, being reverted under #73.
-> - Runner abstraction (mock/codex/claude): SPEC is explicitly
->   agent-agnostic, so this is **not a deviation at all** — it was a
->   documentation error.
-> - Multi-path WORKFLOW.md: tracked as D4, being reverted under #72.
+> - **Gitea webhook trigger path** — value (latency, rate limit) was
+>   marginal for self-hosted Gitea against minute-scale agent runs;
+>   tracked as D7, being reverted under #74.
+> - **PostgreSQL-backed queue** — value (concurrent-worker safety) is
+>   unused while the codebase assumes single-worker (#68); tracked as
+>   D6, being reverted under #73.
+> - **Multi-path WORKFLOW.md discovery** — value was cosmetic only;
+>   tracked as D4, being reverted under #72.
+> - **Runner abstraction supporting `mock` / `codex` / `claude`** — SPEC
+>   is explicitly agent-agnostic, so this is **not a deviation at all**.
+>   It was a documentation error in #69.
 
 ## How to use this list
 
