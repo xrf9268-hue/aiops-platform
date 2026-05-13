@@ -12,6 +12,13 @@ upstream Symphony project. Three sources are jointly authoritative:
   authoritative design rationale from the authors. Mirrored in this repo so it
   cannot drift.
 
+Practitioner accounts (advisory; not authoritative on SPEC but useful for
+operational expectations and prompt-engineering patterns):
+
+- [George's Symphony Electron rewrite thread (2026-05)](docs/research/2026-05-george-symphony-electron-rewrite.md) —
+  first-hand operator report (50 tickets → 30 merged PRs overnight), with
+  the user-visible behavior model for Rework / Cancel / Backlog transitions.
+
 `aiops-platform` is a Go port of that reference. Per the project posture in
 [`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement), SPEC alignment
 is a hard requirement and the project is pre-release, so the cost of closing
@@ -31,6 +38,7 @@ The umbrella tracking issue is [#67](https://github.com/xrf9268-hue/aiops-platfo
 | D6 | Postgres-backed queue (vs tracker+filesystem recovery) | §restart recovery, §orchestrator runtime state | High | Reverting | [#73](https://github.com/xrf9268-hue/aiops-platform/issues/73) |
 | D7 | Gitea webhook ingress (vs tracker polling) | §triggers | Medium | Reverting | [#74](https://github.com/xrf9268-hue/aiops-platform/issues/74) |
 | D8 | Orchestrator does PR creation / git push / Linear status writes (should be agent tools) | §1 boundary, §tools | **P0** | Reverting | [#76](https://github.com/xrf9268-hue/aiops-platform/issues/76) |
+| D9 | No per-tick reconciliation; in-flight runs do not stop on tracker state change | §2.1 Goals (stop ineligible runs), §retry/reconciliation | P1 | Reverting | [#78](https://github.com/xrf9268-hue/aiops-platform/issues/78) |
 
 Severity reflects the risk and the gap to SPEC, not the implementation effort.
 

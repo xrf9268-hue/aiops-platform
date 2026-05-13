@@ -30,6 +30,10 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 >   `OnClaim`, `OnPRCreated`): SPEC §1 says these are agent responsibilities;
 >   being moved to agent-side dynamic tools under #76 (depends on app-server
 >   protocol, #64).
+> - **No per-tick reconciliation; in-flight runs ignore tracker state**:
+>   SPEC §2.1 Goal "Stop active runs when issue state changes make them
+>   ineligible" is unimplemented. #68 covers startup reconciliation only;
+>   the per-tick reconcile + agent-cancel propagation lives under #78.
 > - **Multi-path WORKFLOW.md discovery** (`internal/workflow/resolver.go`):
 >   SPEC says single source; being reverted under #72.
 
@@ -57,9 +61,23 @@ jointly authoritative**:
    - "Support restart recovery without requiring a persistent database."
      (where #73 comes from)
    - "Poll the issue tracker on a fixed cadence" (where #74 comes from)
+   - "Symphony continuously watches the task board and ensures that every
+     active task has an agent running in the loop until it's done."
+     (where #78 comes from)
    - "We use [dynamic tool calls] to expose the raw `linear_graphql` function...
      without relying on MCP or exposing the access token to containers."
      (where the token-isolation requirement in #76 comes from)
+
+**Practitioner accounts** (advisory; not authoritative on SPEC, but useful
+for matching observed Symphony behavior in real deployments):
+
+- [`docs/research/2026-05-george-symphony-electron-rewrite.md`](docs/research/2026-05-george-symphony-electron-rewrite.md)
+  — first-hand operator report of running 50 Linear tickets to 30 merged
+  PRs overnight. Pins the user-visible state-machine semantics
+  ("Cancel a ticket — the agent stops on the next poll") and reinforces
+  that the WORKFLOW.md prompt is the leverage point, not the orchestrator
+  ("Symphony is plumbing; the prompt teaches the agent how to plan,
+  test, handle review feedback, and constrain scope").
 
 The project is **pre-release** — there are no users to migrate, so the cost of
 aligning with SPEC and the reference is at its minimum **right now**. Treat
