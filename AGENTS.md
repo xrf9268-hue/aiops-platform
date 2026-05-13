@@ -69,7 +69,8 @@ jointly authoritative**:
      (where the token-isolation requirement in #76 comes from)
 
 **Practitioner accounts** (advisory; not authoritative on SPEC, but useful
-for matching observed Symphony behavior in real deployments):
+for matching observed Symphony behavior in real deployments and for
+calibrating harness-engineering decisions):
 
 - [`docs/research/2026-05-george-symphony-electron-rewrite.md`](docs/research/2026-05-george-symphony-electron-rewrite.md)
   — first-hand operator report of running 50 Linear tickets to 30 merged
@@ -78,10 +79,52 @@ for matching observed Symphony behavior in real deployments):
   that the WORKFLOW.md prompt is the leverage point, not the orchestrator
   ("Symphony is plumbing; the prompt teaches the agent how to plan,
   test, handle review feedback, and constrain scope").
+- [`docs/research/2026-05-addy-osmani-harness-engineering.md`](docs/research/2026-05-addy-osmani-harness-engineering.md)
+  — Addy Osmani's harness-engineering thread. Provides the
+  vocabulary and principles for evaluating components (see "Harness
+  engineering principles" below).
 
 The project is **pre-release** — there are no users to migrate, so the cost of
 aligning with SPEC and the reference is at its minimum **right now**. Treat
 alignment as a non-negotiable goal, not a future cleanup.
+
+## Harness engineering principles
+
+Adopted from
+[Addy Osmani's harness-engineering thread](docs/research/2026-05-addy-osmani-harness-engineering.md).
+These complement (not replace) the SPEC-alignment rules above; they
+govern *how* we evaluate components inside the SPEC-aligned envelope.
+
+1. **Behavior first.** Every component must name the specific behavior
+   it delivers. If you cannot state that behavior in one sentence, the
+   component does not belong in the harness — remove it. This is
+   exactly the test that retired the Postgres queue (#73),
+   Gitea webhook (#74), and multi-path WORKFLOW.md (#72) as
+   "deliberate extensions": none of them had a nameable behavior that
+   SPEC alignment didn't already cover.
+2. **Earned rules.** Every rule in `AGENTS.md`, `WORKFLOW.md`,
+   `DEVIATIONS.md`, and the prompt template should trace back to a
+   specific, observed failure. Treat the files like a pilot's checklist,
+   not a style guide. When in doubt, leave a rule out until you have a
+   failure that demands it. (Pre-release exception: rules derived
+   directly from SPEC or the Elixir reference are earned by the
+   protocol contract itself.)
+3. **Failures are configuration problems.** When the agent does the
+   wrong thing, the default response is to tighten the harness — add
+   a hook, sharpen a tool description, tighten the prompt, narrow a
+   permission — not to wait for a smarter model. The harness is a
+   living artifact: every observed failure should produce a permanent
+   constraint that prevents the same failure next time.
+4. **Constraints have a lifecycle.** Rules added to fix a failure may
+   become redundant when a later model handles the case natively.
+   Periodically audit `AGENTS.md` and the prompt template; remove
+   scaffolding that is no longer earning its keep, and use the
+   freed-up surface to reach the next horizon.
+5. **Few sharp tools beat many overlapping ones.** When the
+   agent's tool surface lands (#76), aim for the smallest set of
+   focused tools (`linear_graphql`, one Gitea PR tool, etc.); resist
+   the temptation to wrap every Gitea / Linear endpoint as a separate
+   tool.
 
 Rules for agents working on this repo:
 

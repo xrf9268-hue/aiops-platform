@@ -13,11 +13,16 @@ upstream Symphony project. Three sources are jointly authoritative:
   cannot drift.
 
 Practitioner accounts (advisory; not authoritative on SPEC but useful for
-operational expectations and prompt-engineering patterns):
+operational expectations and harness-engineering posture):
 
 - [George's Symphony Electron rewrite thread (2026-05)](docs/research/2026-05-george-symphony-electron-rewrite.md) —
   first-hand operator report (50 tickets → 30 merged PRs overnight), with
   the user-visible behavior model for Rework / Cancel / Backlog transitions.
+- [Addy Osmani's harness-engineering thread (2026-05)](docs/research/2026-05-addy-osmani-harness-engineering.md) —
+  the framework we use to evaluate whether a component earns its keep.
+  Every Reverting deviation below survives the "name the behavior it
+  delivers" test described in
+  [`AGENTS.md` §Harness engineering principles](AGENTS.md#harness-engineering-principles).
 
 `aiops-platform` is a Go port of that reference. Per the project posture in
 [`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement), SPEC alignment
