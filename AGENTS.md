@@ -4,9 +4,55 @@ Project guide for AI coding agents (Codex CLI, Claude Code, etc.) working in thi
 
 ## What this project is
 
-`aiops-platform` is a Go-based, self-hostable AI coding orchestrator inspired by OpenAI Symphony. It receives Linear issues or Gitea webhook events, claims them through a Postgres-backed queue, runs them through a Symphony-style workflow (`mock` / `codex` / `claude` runners) in a deterministic workspace, and opens a draft PR.
+`aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
+implements the [OpenAI Symphony SPEC](https://github.com/openai/symphony/blob/main/SPEC.md).
+It receives Linear issues or Gitea webhook events, dispatches them through a
+Symphony-style workflow (`mock` / `codex` / `claude` runners) in a deterministic
+workspace, and opens a draft PR.
 
 The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is even if the GitHub repo is temporarily mirrored elsewhere.
+
+> **Transitional note:** the current implementation routes scheduling through a
+> Postgres-backed queue (`internal/queue`, `migrations/`). This is deviation
+> not in SPEC and is being removed under #73 in favor of SPEC's
+> tracker-driven, filesystem-driven recovery model (see also #68). Do not
+> design new code that assumes the queue is permanent; in particular, do not
+> add new tables, indexes, or migration steps without first checking #73.
+
+## SPEC alignment is a hard requirement
+
+This project is positioned as a Symphony port. The upstream
+[Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md) is the
+authoritative contract. The project is **pre-release** — there are no users to
+migrate, so the cost of aligning with SPEC is at its minimum **right now**. Treat
+alignment as a non-negotiable goal, not a future cleanup.
+
+Rules for agents working on this repo:
+
+1. **Read SPEC.md before designing any architectural change.** When SPEC describes
+   the behavior of a subsystem you are touching (workflow file, agent runner,
+   tracker, state machine, recovery, sandboxing, tools), the SPEC text is the
+   default; deviations require a written justification.
+2. **Every accepted deviation lives in [`DEVIATIONS.md`](DEVIATIONS.md).** If you
+   find behavior that violates SPEC and is not already listed there, **do not
+   add a new "deliberate extension" to make the discrepancy disappear**. File
+   an issue with the `area:spec-alignment` label so the deviation is visible and
+   tracked. The umbrella tracker is [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
+3. **"Has better value than SPEC" is a high bar.** Cosmetic convenience (e.g.
+   "let users park a config file in a hidden directory") does not clear it.
+   Genuine functional capability (e.g. low-latency Gitea webhook ingress vs. poll)
+   may. When in doubt, default to SPEC and open an issue to discuss.
+4. **Do not introduce new deviations to fix bugs.** If a SPEC-aligned design
+   would make the bug easier to fix, prefer that over patching around a deviation.
+5. **Observability is not a substitute for alignment during pre-release.** The
+   project briefly chose to *document* a deviation rather than fix it (#69 for
+   D4); that approach has since been reversed (#72) and should not be the
+   default playbook again. If a deviation is wrong, fix it; do not log it.
+
+The current set of open deviations is in `DEVIATIONS.md` (D1–D5 reference SPEC
+sections). Any new SPEC-violating change you make must either (a) close an
+existing deviation, (b) be tracked as a new deviation with an issue, or
+(c) be reverted.
 
 ## Layout
 
@@ -16,7 +62,7 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 | `cmd/worker` | Claims queued tasks, runs the Symphony loop, opens PRs |
 | `cmd/linear-poller` | Polls Linear active states and enqueues tasks |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
-| `internal/queue` | Postgres queue using `FOR UPDATE SKIP LOCKED` |
+| `internal/queue` | Postgres queue (transitional — being removed per #73) |
 | `internal/runner` | Runner abstraction: `mock`, `codex`, `claude` |
 | `internal/workspace` | Deterministic git workspace, verify, policy checks |
 | `internal/tracker` | Tracker abstraction with Linear client |
@@ -65,13 +111,23 @@ Go toolchain: pinned via `go.mod` (Go 1.25). Don't edit `go.mod`'s `go` directiv
 
 ## WORKFLOW.md discovery (worker side)
 
-The worker resolves `WORKFLOW.md` from a target clone in this priority order:
+Per SPEC §workflow file, `WORKFLOW.md` is a single repository-owned source at
+the repo root:
 
-1. `<repo>/WORKFLOW.md`
-2. `<repo>/.aiops/WORKFLOW.md`
-3. `<repo>/.github/WORKFLOW.md`
+```
+<repo>/WORKFLOW.md
+```
 
-Missing front matter is allowed — the body becomes the prompt template, all other settings fall back to defaults (see `README.md` table). The `workflow_resolved` task event captures the resolved source, path, and shadowed candidates.
+Missing front matter is allowed — the body becomes the prompt template, all
+other settings fall back to defaults (see `README.md` table). The
+`workflow_resolved` task event captures the resolved source and path.
+
+> **Note (transitional):** the current implementation still searches three
+> paths (`<repo>/WORKFLOW.md`, `<repo>/.aiops/WORKFLOW.md`,
+> `<repo>/.github/WORKFLOW.md`) — this is deviation D4 (#69) and is being
+> reverted to single-source under #72. Treat single-source as the canonical
+> answer when designing new code; do not add features that depend on the
+> alternate paths.
 
 ## Where to read next
 
