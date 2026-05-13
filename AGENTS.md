@@ -21,33 +21,55 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 
 ## SPEC alignment is a hard requirement
 
-This project is positioned as a Symphony port. The upstream
-[Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md) is the
-authoritative contract. The project is **pre-release** — there are no users to
-migrate, so the cost of aligning with SPEC is at its minimum **right now**. Treat
+This project is positioned as a Symphony port. **Two upstream sources are
+jointly authoritative**:
+
+1. The protocol contract: [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md).
+2. The reference implementation: [`openai/symphony` Elixir tree](https://github.com/openai/symphony/tree/main/elixir).
+   When SPEC text is ambiguous, the reference's behavior is the tiebreaker.
+   Pay particular attention to:
+   - [`elixir/lib/symphony_elixir/orchestrator.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/orchestrator.ex) — in-process GenServer state; no DB; reconcile-on-startup via tracker fetch.
+   - [`elixir/lib/symphony_elixir/codex/app_server.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/codex/app_server.ex) — long-running JSON-RPC 2.0 over stdio; not one-shot exec.
+   - [`elixir/lib/symphony_elixir/tracker.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/tracker.ex) and adapters — polling model with `:poll_interval_ms`; no webhook ingress.
+   - [`elixir/lib/symphony_elixir/config/schema.ex`](https://github.com/openai/symphony/blob/main/elixir/lib/symphony_elixir/config/schema.ex) — canonical config keys, defaults, and types.
+
+The OpenAI announcement post
+([English](https://openai.com/index/open-source-codex-orchestration-symphony/),
+[简中](https://openai.com/zh-Hans-CN/index/open-source-codex-orchestration-symphony/))
+provides the public framing and design rationale.
+
+The project is **pre-release** — there are no users to migrate, so the cost of
+aligning with SPEC and the reference is at its minimum **right now**. Treat
 alignment as a non-negotiable goal, not a future cleanup.
 
 Rules for agents working on this repo:
 
-1. **Read SPEC.md before designing any architectural change.** When SPEC describes
-   the behavior of a subsystem you are touching (workflow file, agent runner,
-   tracker, state machine, recovery, sandboxing, tools), the SPEC text is the
-   default; deviations require a written justification.
+1. **Read SPEC.md and the relevant Elixir module before designing any
+   architectural change.** When SPEC describes the behavior of a subsystem you
+   are touching (workflow file, agent runner, tracker, state machine, recovery,
+   sandboxing, tools), the SPEC text is the default and the Elixir reference
+   resolves any ambiguity. Deviations require a written justification.
 2. **Every accepted deviation lives in [`DEVIATIONS.md`](DEVIATIONS.md).** If you
-   find behavior that violates SPEC and is not already listed there, **do not
-   add a new "deliberate extension" to make the discrepancy disappear**. File
-   an issue with the `area:spec-alignment` label so the deviation is visible and
-   tracked. The umbrella tracker is [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
+   find behavior that violates SPEC or contradicts the reference and is not
+   already listed there, **do not add a new "deliberate extension" to make the
+   discrepancy disappear**. File an issue with the `area:spec-alignment` label
+   so the deviation is visible and tracked. The umbrella tracker is
+   [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
 3. **"Has better value than SPEC" is a high bar.** Cosmetic convenience (e.g.
    "let users park a config file in a hidden directory") does not clear it.
-   Genuine functional capability (e.g. low-latency Gitea webhook ingress vs. poll)
-   may. When in doubt, default to SPEC and open an issue to discuss.
+   Things that initially look like better value but match neither SPEC nor the
+   Elixir reference are usually wrong on closer inspection — see #74 (Gitea
+   webhook ingress, sold as "lower latency" but ultimately reverted) for a
+   recent worked example. When in doubt, default to SPEC and open an issue.
 4. **Do not introduce new deviations to fix bugs.** If a SPEC-aligned design
    would make the bug easier to fix, prefer that over patching around a deviation.
 5. **Observability is not a substitute for alignment during pre-release.** The
    project briefly chose to *document* a deviation rather than fix it (#69 for
    D4); that approach has since been reversed (#72) and should not be the
    default playbook again. If a deviation is wrong, fix it; do not log it.
+6. **When in doubt, port from the Elixir tree.** This project is a Go port of a
+   working Elixir reference. If you are unsure how a subsystem should behave,
+   read the corresponding Elixir module first; the answer is usually there.
 
 The current set of open deviations is in `DEVIATIONS.md` (D1–D5 reference SPEC
 sections). Any new SPEC-violating change you make must either (a) close an

@@ -1,12 +1,18 @@
 # DEVIATIONS
 
 This document records every known difference between `aiops-platform` and the
-upstream [Symphony specification](https://github.com/openai/symphony/blob/main/SPEC.md).
+upstream Symphony project. Two sources are jointly authoritative:
 
-`aiops-platform` is positioned as "inspired by Symphony", not a 1:1 port. Some
-deviations are deliberate scope reductions or extensions for our Gitea-friendly,
-locally customizable workflow; others are gaps we intend to close. Either way
-they should be visible to anyone evaluating SPEC alignment.
+- [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md) — the
+  protocol contract.
+- [`openai/symphony` Elixir reference implementation](https://github.com/openai/symphony/tree/main/elixir/lib/symphony_elixir) —
+  the working reference. When SPEC text is ambiguous, the Elixir module's
+  behavior is the tiebreaker.
+
+`aiops-platform` is a Go port of that reference. Per the project posture in
+[`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement), SPEC alignment
+is a hard requirement and the project is pre-release, so the cost of closing
+deviations is at its minimum right now.
 
 The umbrella tracking issue is [#67](https://github.com/xrf9268-hue/aiops-platform/issues/67).
 
