@@ -245,20 +245,25 @@ func TestCodexTotals_AddTokensAndSeconds(t *testing.T) {
 	}
 }
 
-func TestRecordRateLimits_LastWriteWins(t *testing.T) {
+func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	st := NewOrchestratorState(15000, 4)
 	if st.CodexRateLimits != nil {
 		t.Fatalf("initial CodexRateLimits should be nil")
 	}
-	a := &RateLimitSnapshot{}
-	st.RecordRateLimits(a)
-	if st.CodexRateLimits != a {
-		t.Errorf("RecordRateLimits did not store snapshot a")
+	// RateLimitSnapshot is currently a zero-sized struct (D1 fills it
+	// in). Go reserves the right to alias pointers to zero-sized
+	// allocations (runtime.zerobase), so pointer-identity comparisons
+	// between two `&RateLimitSnapshot{}` values are a no-op assertion.
+	// Until D1 adds fields, exercise the nil-vs-non-nil transition
+	// instead, which is what callers actually depend on.
+	snap := &RateLimitSnapshot{}
+	st.RecordRateLimits(snap)
+	if st.CodexRateLimits == nil {
+		t.Errorf("RecordRateLimits did not store snapshot (still nil)")
 	}
-	b := &RateLimitSnapshot{}
-	st.RecordRateLimits(b)
-	if st.CodexRateLimits != b {
-		t.Errorf("RecordRateLimits did not replace with snapshot b")
+	st.RecordRateLimits(nil)
+	if st.CodexRateLimits != nil {
+		t.Errorf("RecordRateLimits(nil) should clear the field")
 	}
 }
 
@@ -304,6 +309,86 @@ func TestSnapshot_ShapeMatches13_3(t *testing.T) {
 	again := st.Snapshot()
 	if again.Completed[0] != id3 {
 		t.Errorf("Snapshot returned a slice aliased to internal state")
+	}
+}
+
+// Regression for the IsClaimed window: after ReleaseClaim (used by
+// reconciliation) the Running entry persists until the worker goroutine
+// exits and the actor processes the FinishRun* op. During that window
+// IsClaimed must still report true, otherwise SPEC §7.4's
+// duplicate-dispatch guard fails and a second tick dispatches a second
+// worker for the same issue.
+func TestIsClaimed_CoversRunningAfterReleaseClaim(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	iss := issue("ENG-1")
+	id := IssueID(iss.ID)
+
+	st.BeginDispatch(id, runningEntry(t, iss))
+	st.ReleaseClaim(id)
+
+	if !st.IsClaimed(id) {
+		t.Errorf("IsClaimed must remain true while Running[%s] still holds the entry", id)
+	}
+}
+
+// Same idea, but for the retry-queued window: ScheduleRetry adds to
+// Claimed + RetryAttempts; if a future change ever drops the Claimed
+// add (or the actor races on ReleaseClaim mid-retry), IsClaimed must
+// still report claimed via RetryAttempts.
+func TestIsClaimed_CoversRetryAttemptsWhenClaimedMissing(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	id := IssueID("ENG-1")
+	st.RetryAttempts[id] = &RetryEntry{IssueID: id, Identifier: "ENG-1", Attempt: 1}
+	// Deliberately do not seed Claimed[id]; the test asserts the
+	// fallback through RetryAttempts.
+	if !st.IsClaimed(id) {
+		t.Errorf("IsClaimed must report true when only RetryAttempts[%s] is set", id)
+	}
+}
+
+// Snapshot must deep-copy RetryAttempt so a consumer mutating the
+// pointee cannot reach back into orchestrator state.
+func TestSnapshot_DeepCopiesRetryAttemptPointer(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	iss := issue("ENG-1")
+	id := IssueID(iss.ID)
+	attempt := 3
+	entry := runningEntry(t, iss)
+	entry.RetryAttempt = &attempt
+	st.BeginDispatch(id, entry)
+
+	view := st.Snapshot()
+	if len(view.Running) != 1 {
+		t.Fatalf("expected one Running entry in snapshot, got %d", len(view.Running))
+	}
+	got := view.Running[0].RetryAttempt
+	if got == nil || *got != 3 {
+		t.Fatalf("RetryAttempt not surfaced: %v", got)
+	}
+	if got == entry.RetryAttempt {
+		t.Errorf("Snapshot aliased RetryAttempt pointer; consumer mutation would leak into state")
+	}
+	*got = 999
+	if *entry.RetryAttempt != 3 {
+		t.Errorf("mutating snapshot's RetryAttempt mutated live state: %d", *entry.RetryAttempt)
+	}
+}
+
+// Nil RetryAttempt (first-run, SPEC §4.1.5) must survive the deep copy
+// as still-nil — flattening to a zero int would silently turn a first
+// run into "attempt 0".
+func TestSnapshot_NilRetryAttemptStaysNil(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	iss := issue("ENG-1")
+	id := IssueID(iss.ID)
+	st.BeginDispatch(id, runningEntry(t, iss))
+
+	view := st.Snapshot()
+	if len(view.Running) != 1 {
+		t.Fatalf("expected one Running entry, got %d", len(view.Running))
+	}
+	if view.Running[0].RetryAttempt != nil {
+		t.Errorf("first-run RetryAttempt must stay nil, got %d", *view.Running[0].RetryAttempt)
 	}
 }
 

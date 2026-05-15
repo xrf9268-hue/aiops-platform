@@ -145,12 +145,28 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 }
 
 // IsClaimed reports whether id is currently held by any of Running,
-// RetryAttempts, or the "claimed but not yet running" window. SPEC §7.4
-// REQUIRES this check before launching any worker; making it a method
-// on the state keeps the rule discoverable.
+// RetryAttempts, or the "claimed but not yet running" Claimed set. SPEC
+// §7.4 REQUIRES this check before launching any worker; making it a
+// method on the state keeps the rule discoverable.
+//
+// All three maps are checked because the invariants are intentionally
+// asymmetric: ReleaseClaim (used by reconciliation, SPEC §8.5 Part B)
+// removes the Claimed entry immediately, but the Running entry is
+// removed asynchronously by the worker goroutine exiting after
+// CancelWorker. During that window Running[id] still exists with no
+// Claimed[id] backing it, and a second dispatch for the same issue
+// would violate SPEC §7.4 unless this check looks at Running too.
 func (s *OrchestratorState) IsClaimed(id IssueID) bool {
-	_, ok := s.Claimed[id]
-	return ok
+	if _, ok := s.Claimed[id]; ok {
+		return true
+	}
+	if _, ok := s.Running[id]; ok {
+		return true
+	}
+	if _, ok := s.RetryAttempts[id]; ok {
+		return true
+	}
+	return false
 }
 
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
@@ -305,11 +321,20 @@ func (s *OrchestratorState) Snapshot() StateView {
 		CodexRateLimits:     s.CodexRateLimits,
 	}
 	for id, r := range s.Running {
+		// Deep-copy RetryAttempt so a snapshot consumer mutating the
+		// pointee cannot reach back into orchestrator state. The
+		// pointer-vs-nil distinction matters (SPEC §4.1.5 first-run
+		// semantic) so we cannot flatten to an int.
+		var retryAttempt *int
+		if r.RetryAttempt != nil {
+			n := *r.RetryAttempt
+			retryAttempt = &n
+		}
 		view.Running = append(view.Running, RunningView{
 			IssueID:       id,
 			Identifier:    r.Identifier,
 			StartedAt:     r.StartedAt,
-			RetryAttempt:  r.RetryAttempt,
+			RetryAttempt:  retryAttempt,
 			WorkspacePath: r.Workspace.Path,
 			LastCodexAt:   r.LastCodexAt,
 		})
