@@ -384,13 +384,21 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.result.Err == nil {
 		st.FinishRunSucceeded(f.id, elapsed)
-	} else {
-		st.FinishRunFailed(f.id, elapsed)
-	}
-	close(f.done)
-	if f.result.Err == nil {
+		close(f.done)
 		return nil
 	}
+	st.FinishRunFailed(f.id, elapsed)
+	// Hold the Claimed slot across the gap between this apply (which
+	// returns control to the actor's select loop) and the
+	// scheduleRetryOp that the followup enqueues. Without this re-set,
+	// any RequestDispatch op already queued behind finalizeRunOp would
+	// observe IsClaimed=false (Running gone, Claimed gone, RetryAttempts
+	// not yet set) and dispatch the issue immediately — bypassing
+	// backoff and racing a phantom retry timer against a live worker.
+	// scheduleRetryOp's call to OrchestratorState.ScheduleRetry re-sets
+	// Claimed idempotently, so this is safe.
+	st.Claimed[f.id] = struct{}{}
+	close(f.done)
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
 	// and so on.

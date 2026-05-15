@@ -291,6 +291,84 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 }
 
+// TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap is a
+// regression for the gap that Codex flagged on PR #102: finalizeRunOp's
+// apply ran FinishRunFailed (which dropped Claimed[id]) and then
+// returned a followup that enqueued ScheduleRetry asynchronously.
+// Between the actor returning to its select loop and the
+// scheduleRetryOp being processed, any RequestDispatch op already
+// queued for the same id observed IsClaimed=false and dispatched the
+// issue immediately — bypassing backoff and racing a phantom retry
+// timer against a live worker.
+//
+// This test pins the fix: spam RequestDispatch from many goroutines
+// while the worker is exiting abnormally, and verify the dispatcher
+// is asked to spawn exactly once for the lifetime of the issue. With
+// the bug present, additional Spawn calls slip through the gap; with
+// the fix (Claimed re-set inside apply before the followup runs), the
+// gap is invisible to other ops.
+func TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap(t *testing.T) {
+	disp := &fakeDispatcher{}
+	// Long delay so the retry timer never fires during the test;
+	// we're testing the gap, not the eventual re-dispatch.
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RACE", Identifier: "ENG-RACE"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("first RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	// Start spammers BEFORE finishAt so the actor's ops channel is
+	// hot with dispatchOps the instant finalizeRunOp returns. Whoever
+	// wins the channel-send race lands behind finalizeRunOp; with the
+	// bug, those dispatchOps would see IsClaimed=false in the gap.
+	stop := make(chan struct{})
+	var spammerWG sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		spammerWG.Add(1)
+		go func() {
+			defer spammerWG.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = o.RequestDispatch(context.Background(), iss, nil)
+			}
+		}()
+	}
+	// Give the spammers a moment to ramp up so several dispatchOps
+	// are guaranteed to be queued behind finalizeRunOp by the time
+	// the actor processes it.
+	time.Sleep(10 * time.Millisecond)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("fail"), Elapsed: 0})
+
+	// Wait for the retry to be scheduled (the followup's
+	// scheduleRetryOp has been processed by the actor).
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 && len(v.Running) == 0
+	}, 2*time.Second)
+
+	// Stop spammers and let in-flight RequestDispatch attempts drain.
+	close(stop)
+	spammerWG.Wait()
+
+	// The single accepted dispatch from the start of the test is the
+	// only one that should have reached the dispatcher. Any extra
+	// Spawn means a spammer slipped through the gap.
+	if got := disp.count(); got != 1 {
+		t.Errorf("Dispatcher.Spawn calls = %d, want 1 (Claimed must be held across FinishRunFailed → ScheduleRetry gap)", got)
+	}
+}
+
 // TestApply_FollowupRunsOffActorAndCanResubmit pins the design's
 // "apply must not block on the ops channel" invariant: a followup
 // returned by apply runs on a fresh goroutine, so it can submit
