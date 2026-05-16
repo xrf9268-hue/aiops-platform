@@ -87,6 +87,40 @@ func TestSandboxBubblewrapBuildsWrappedCommandAndScopesEnvironment(t *testing.T)
 	}
 }
 
+func TestSandboxBubblewrapSkipsMissingLib64Bind(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "exec")
+	base.Dir = workdir
+
+	wrapped, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:     true,
+		Backend:     "bubblewrap",
+		NetworkMode: "none",
+	}), base)
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+
+	for i := 0; i+2 < len(wrapped.Args); i++ {
+		if wrapped.Args[i] == "--ro-bind" && wrapped.Args[i+1] == "/lib64" && wrapped.Args[i+2] == "/lib64" {
+			if _, err := os.Stat("/lib64"); os.IsNotExist(err) {
+				t.Fatalf("bubblewrap must not require missing /lib64 source, args=%#v", wrapped.Args)
+			}
+		}
+	}
+}
+
 func TestSandboxEnabledFailsWhenDependencyMissing(t *testing.T) {
 	t.Setenv("PATH", "")
 	workdir := t.TempDir()
@@ -352,6 +386,45 @@ func TestFirejailNetfilterFileIsRemovedWhenWrappedCommandExits(t *testing.T) {
 	}
 	if _, err := os.Stat(filterPath); !os.IsNotExist(err) {
 		t.Fatalf("netfilter file should be removed after command exit, stat err = %v", err)
+	}
+}
+
+func TestFirejailNetfilterFileIsRemovedWhenCredentialValidationFails(t *testing.T) {
+	binDir := t.TempDir()
+	firejail := filepath.Join(binDir, "firejail")
+	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMPDIR", t.TempDir())
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "app-server")
+	base.Dir = workdir
+
+	missingCredential := filepath.Join(t.TempDir(), "missing-token")
+	_, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:               true,
+		Backend:               "firejail",
+		NetworkMode:           "allowlist",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+		NetworkInterface:      "aiops0",
+		CredentialFiles:       []string{missingCredential},
+	}), base)
+	if err == nil {
+		t.Fatal("expected missing credential file error")
+	}
+
+	matches, globErr := filepath.Glob(filepath.Join(os.Getenv("TMPDIR"), "aiops-firejail-netfilter-*.conf"))
+	if globErr != nil {
+		t.Fatalf("glob netfilter files: %v", globErr)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("firejail setup error should remove netfilter files, left %v", matches)
 	}
 }
 

@@ -131,10 +131,14 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 		"--ro-bind", "/usr", "/usr",
 		"--ro-bind", "/bin", "/bin",
 		"--ro-bind", "/lib", "/lib",
-		"--ro-bind", "/lib64", "/lib64",
 		"--tmpfs", "/tmp",
 		"--bind", workdir, workdir,
 		"--chdir", workdir,
+	}
+	if _, err := os.Stat("/lib64"); err == nil {
+		args = append(args, "--ro-bind", "/lib64", "/lib64")
+	} else if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("check optional bubblewrap /lib64 bind source: %w", err)
 	}
 	if cfg.NetworkMode == "none" || cfg.NetworkMode == "" {
 		args = append(args, "--unshare-net")
@@ -178,12 +182,19 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	}
 	args := []string{"--quiet", "--noprofile", "--private=" + workdir, "--whitelist=" + workdir, "--private-tmp"}
 	var cleanupFiles []string
+	cleanupOnError := false
 	if cfg.NetworkMode == "allowlist" {
 		filter, err := writeFirejailNetfilter(cfg.NetworkAllowlistCIDRs)
 		if err != nil {
 			return nil, err
 		}
 		cleanupFiles = append(cleanupFiles, filter)
+		cleanupOnError = true
+		defer func() {
+			if cleanupOnError {
+				removeFiles(cleanupFiles)
+			}
+		}()
 		netArg, err := firejailAllowlistNetArg(cfg)
 		if err != nil {
 			return nil, err
@@ -220,17 +231,22 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	wrapped.Dir = workdir
 	wrapped.Env = env
 	if len(cleanupFiles) > 0 {
+		cleanupOnError = false
 		wrapped.Cancel = func() error {
-			var firstErr error
-			for _, path := range cleanupFiles {
-				if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
-					firstErr = err
-				}
-			}
-			return firstErr
+			return removeFiles(cleanupFiles)
 		}
 	}
 	return wrapped, nil
+}
+
+func removeFiles(paths []string) error {
+	var firstErr error
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func firejailAllowlistNetArg(cfg workflow.SandboxConfig) (string, error) {
