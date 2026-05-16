@@ -75,8 +75,8 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	}
 
 	auth, body, _ := server.recorded()
-	if auth != token {
-		t.Fatalf("Authorization = %q, want raw Linear token held by orchestrator", auth)
+	if auth != "Bearer "+token {
+		t.Fatalf("Authorization = %q, want Bearer token matching tracker client auth", auth)
 	}
 	if strings.Contains(body, token) {
 		t.Fatalf("GraphQL request body leaked token to agent-controlled payload: %s", body)

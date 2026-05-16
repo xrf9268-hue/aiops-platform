@@ -139,7 +139,7 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 		})
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", p.apiKey)
+	req.Header.Set("Authorization", linearAuthorizationHeader(p.apiKey))
 
 	httpClient := p.http
 	if httpClient == nil {
@@ -183,6 +183,14 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 		})
 	}
 	return linearGraphQLToolResponse(respBody.Bytes())
+}
+
+func linearAuthorizationHeader(apiKey string) string {
+	apiKey = strings.TrimSpace(apiKey)
+	if strings.HasPrefix(strings.ToLower(apiKey), "bearer ") {
+		return apiKey
+	}
+	return "Bearer " + apiKey
 }
 
 func countGraphQLOperations(query string) int {
