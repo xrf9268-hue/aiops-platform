@@ -49,8 +49,11 @@ services:
       GITEA_BASE_URL: ${GITEA_BASE_URL}
       GITEA_TOKEN: ${GITEA_TOKEN}
       WORKSPACE_ROOT: /workspaces
+      AIOPS_WORKFLOW_PATH: /app/examples/WORKFLOW.md
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
     volumes:
       - workspaces:/workspaces
+      - ../examples:/app/examples:ro
       - ~/.ssh:/root/.ssh:ro
 
 volumes:

@@ -28,6 +28,13 @@ func main() {
 	}
 }
 
+func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
+	if path := os.Getenv("AIOPS_WORKFLOW_PATH"); path != "" {
+		return workflow.Load(path)
+	}
+	return workflow.LoadOptional("WORKFLOW.md")
+}
+
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -40,7 +47,7 @@ func run() error {
 	defer pool.Close()
 
 	store := queue.New(pool)
-	if wf, err := workflow.LoadOptional("WORKFLOW.md"); err != nil {
+	if wf, err := loadWorkflowForStartupReconcile(); err != nil {
 		return err
 	} else if wf.Config.Tracker.Kind == "linear" {
 		if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
