@@ -131,14 +131,17 @@ type appServerClient struct {
 	lastMessage    string
 	continueRun    bool
 	tools          DynamicToolSet
+	turnTimeoutMs  int
 	readTimeoutMs  int
 	stallTimeoutMs int
+	lastTerminal   time.Time
 }
 
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
 	c.nextID = 1
 	c.continueRun = false
 	c.tools = DynamicToolsForWorkflow(workflow.Workflow{Config: in.Workflow.Config})
+	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
 	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
 	if _, err := c.request(ctx, "initialize", map[string]any{
@@ -200,7 +203,19 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			return fmt.Errorf("codex app-server turn/start: %w", err)
 		}
 		c.continueRun = false
-		if err := c.awaitTurnCompletion(ctx); err != nil {
+		turnCtx := ctx
+		var cancel context.CancelFunc
+		if c.turnTimeoutMs > 0 {
+			turnCtx, cancel = context.WithTimeout(ctx, time.Duration(c.turnTimeoutMs)*time.Millisecond)
+		}
+		err = c.awaitTurnCompletion(turnCtx)
+		if cancel != nil {
+			cancel()
+		}
+		if err != nil {
+			if c.turnTimeoutMs > 0 && errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("codex app-server turn timeout after %dms", c.turnTimeoutMs)
+			}
 			return err
 		}
 		if !c.continueRun {
@@ -299,6 +314,7 @@ func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
 }
 
 func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
+	c.lastTerminal = time.Now()
 	for {
 		msg, err := c.readMessage(ctx)
 		if err != nil {
@@ -315,10 +331,14 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			case "turn/failed", "turn/cancelled":
 				return fmt.Errorf("%s: %v", method, msg["params"])
 			case "item/tool/call":
+				c.lastTerminal = time.Now()
 				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
 					return err
 				}
 			default:
+				if c.stallTimeoutMs > 0 && time.Since(c.lastTerminal) > time.Duration(c.stallTimeoutMs)*time.Millisecond {
+					return fmt.Errorf("codex app-server stall timeout after %dms without terminal progress", c.stallTimeoutMs)
+				}
 				c.handleNotification(msg)
 			}
 		}

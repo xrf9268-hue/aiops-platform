@@ -402,3 +402,60 @@ func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchang
 		t.Fatalf("cmd.Args = %#v, want codex app-server", cmd.Args)
 	}
 }
+
+func TestCodexAppServerRunnerUsesTurnTimeout(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        time.sleep(2)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'too late'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.TurnTimeoutMs = 25
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err == nil || !strings.Contains(err.Error(), "turn timeout") {
+		t.Fatalf("Run error = %v, want app-server turn timeout", err)
+	}
+}
+
+func TestCodexAppServerRunnerUsesStallTimeoutForNonTerminalTraffic(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        for i in range(20):
+            print(json.dumps({'method': 'item/updated', 'params': {'message': 'progress %d' % i}}), flush=True)
+            time.sleep(0.02)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 25
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err == nil || !strings.Contains(err.Error(), "stall timeout") {
+		t.Fatalf("Run error = %v, want app-server stall timeout", err)
+	}
+}
