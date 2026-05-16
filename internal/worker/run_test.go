@@ -127,29 +127,49 @@ func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
 }
 
 // TestAppendRunSummaryDirectiveAppendsRunSummaryContract verifies the runner
-// contract is appended and remains focused on the pre-publication summary gate.
+// contract is appended without overriding workflow-directed publication steps.
 func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	plain := "do the work"
 	out := worker.AppendRunSummaryDirective(plain)
 	if !strings.Contains(out, "RUN_SUMMARY.md") {
 		t.Fatalf("directive not appended: %q", out)
 	}
-	if !strings.Contains(out, "Do not push branches or open pull requests") {
-		t.Fatalf("directive must prevent in-run publication before worker gates: %q", out)
+	if strings.Contains(out, "Do not push branches or open pull requests") {
+		t.Fatalf("directive must not forbid in-run publication without a post-gate handoff: %q", out)
 	}
 
 	// A prompt that merely mentions RUN_SUMMARY.md still receives the full
-	// no-publication guidance; old workflows commonly mentioned the artifact
+	// worker-enforced contract; old workflows commonly mentioned the artifact
 	// without knowing about the SPEC §1 boundary fix.
-	already := "please write .aiops/RUN_SUMMARY.md when done"
-	got := worker.AppendRunSummaryDirective(already)
-	if !strings.Contains(got, "Do not push branches or open pull requests") {
-		t.Fatalf("expected publication guidance even when summary is mentioned, got %q", got)
+	mentionsSummary := "please write .aiops/RUN_SUMMARY.md when done"
+	got := worker.AppendRunSummaryDirective(mentionsSummary)
+	if got == mentionsSummary {
+		t.Fatalf("expected full directive even when summary is mentioned, got %q", got)
 	}
 
 	// Idempotent once the full directive is already present.
 	if gotAgain := worker.AppendRunSummaryDirective(got); gotAgain != got {
 		t.Fatalf("expected no-op when full directive is present, got %q", gotAgain)
+	}
+}
+
+func TestAppendRunSummaryDirectiveDoesNotSuppressOnPartialLegacyPhrases(t *testing.T) {
+	cases := []string{
+		"do not push from inside this runner",
+		"wait until worker-side gates pass",
+		"inside this runner, do the work; worker-side gates pass later",
+	}
+
+	for _, prompt := range cases {
+		t.Run(prompt, func(t *testing.T) {
+			got := worker.AppendRunSummaryDirective(prompt)
+			if got == prompt {
+				t.Fatalf("directive was suppressed by partial legacy phrase: %q", prompt)
+			}
+			if !strings.Contains(got, "RUN_SUMMARY.md") {
+				t.Fatalf("directive missing RUN_SUMMARY.md: %q", got)
+			}
+		})
 	}
 }
 

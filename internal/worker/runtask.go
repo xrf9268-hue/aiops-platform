@@ -518,25 +518,18 @@ func SummarizeVerifyResults(results []workspace.VerifyResult) []map[string]any {
 }
 
 // runSummaryDirective is appended to every rendered prompt so runners know the
-// worker requires a RUN_SUMMARY.md artifact. The directive intentionally does
-// not tell the in-run agent to push or open a PR: worker-side policy,
-// verification, summary, and secret-scan gates run after the runner exits, so
-// publication must happen only in a post-gate agent/tool handoff. Per SPEC §1,
-// push and PR creation are not orchestrator responsibilities either.
+// worker requires a RUN_SUMMARY.md artifact. Per SPEC §1, push, PR creation,
+// and tracker writes are not orchestrator responsibilities; workflow/tooling
+// instructions control whether the in-run agent performs those actions.
 const runSummaryDirective = "\n\n---\n\n" +
-	"**Required output:** before exiting, you MUST:\n" +
-	"1. Write `.aiops/RUN_SUMMARY.md` describing what you changed, why, and how " +
-	"it was verified. The task will fail if this file is missing, empty, or " +
-	"contains only a placeholder.\n" +
-	"2. Do not push branches or open pull requests from inside this runner. " +
-	"Those publication steps are performed by agent/tool handoff only after " +
-	"worker-side gates pass."
+	"**Required output:** before exiting, you MUST write `.aiops/RUN_SUMMARY.md` " +
+	"describing what you changed, why, and how it was verified. The task will " +
+	"fail if this file is missing, empty, or contains only a placeholder."
 
 // AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
-// prompt unless it is already present (so workflow templates that already
-// include the directive do not get a duplicate).
+// prompt unless the full directive is already present.
 func AppendRunSummaryDirective(prompt string) string {
-	if strings.Contains(prompt, "worker-side gates pass") || strings.Contains(prompt, "inside this runner") {
+	if strings.Contains(prompt, strings.TrimSpace(runSummaryDirective)) {
 		return prompt
 	}
 	return prompt + runSummaryDirective
