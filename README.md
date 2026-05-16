@@ -177,9 +177,18 @@ agent:
 
 ## Safety notes
 
+See [`docs/security-posture.md`](docs/security-posture.md) for the current
+sandbox model, threat model, and operator checklist. In short: this platform
+currently relies on the coding agent's own sandbox/approval behavior, such as
+Codex CLI's sandbox selected by `codex.profile`; it does not yet add OS-level,
+container, VM, or network-egress isolation around the agent process.
+
+- Do not use this platform against untrusted issue authors, untrusted
+  repositories, or shared production secrets until external sandboxing and
+  per-run credential scoping are implemented.
 - Keep branch protection enabled.
 - The agent opens PRs through its workflow/tool surface; the worker does not
   push, open, or merge PRs.
-- Use a low-privilege bot account for Gitea.
+- Use a low-privilege bot account for Git hosting and tracker access.
 - Keep company repositories in draft-PR or analysis-only mode until the workflow is trusted.
 - Do not commit real credentials to `.env`, `.env.example`, or `WORKFLOW.md`.
