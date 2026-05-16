@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,6 +80,17 @@ var supportedCodexProfiles = map[string]struct{}{
 	"custom": {},
 }
 
+var supportedSandboxBackends = map[string]struct{}{
+	"none":       {},
+	"bubblewrap": {},
+	"firejail":   {},
+}
+
+var supportedSandboxNetworks = map[string]struct{}{
+	"none":      {},
+	"allowlist": {},
+}
+
 // validateConfig enforces the required-field and enum constraints that
 // the typed YAML decoder cannot express on its own. It runs after
 // expandConfig so env-var indirections (e.g. `clone_url: $REPO_URL`)
@@ -97,6 +109,31 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if _, ok := supportedCodexProfiles[cfg.Codex.Profile]; !ok {
 		return fmt.Errorf("%s: codex.profile %q is not supported (allowed: safe, bypass, custom)", path, cfg.Codex.Profile)
+	}
+	if _, ok := supportedSandboxBackends[cfg.Sandbox.Backend]; !ok {
+		return fmt.Errorf("%s: sandbox.backend %q is not supported (allowed: none, bubblewrap, firejail)", path, cfg.Sandbox.Backend)
+	}
+	if cfg.Sandbox.Enabled && cfg.Sandbox.Backend == "none" {
+		return fmt.Errorf("%s: sandbox.enabled requires sandbox.backend to be bubblewrap or firejail", path)
+	}
+	if cfg.Sandbox.Enabled && len(cfg.Sandbox.EnvAllowlist) == 0 {
+		return fmt.Errorf("%s: sandbox.enabled requires sandbox.env_allowlist to explicitly scope child environment", path)
+	}
+	if _, ok := supportedSandboxNetworks[cfg.Sandbox.NetworkMode]; !ok {
+		return fmt.Errorf("%s: sandbox.network %q is not supported (allowed: none, allowlist)", path, cfg.Sandbox.NetworkMode)
+	}
+	if cfg.Sandbox.NetworkMode == "allowlist" {
+		if cfg.Sandbox.Backend != "firejail" {
+			return fmt.Errorf("%s: sandbox.network=allowlist requires sandbox.backend firejail", path)
+		}
+		if len(cfg.Sandbox.NetworkAllowlistCIDRs) == 0 {
+			return fmt.Errorf("%s: sandbox.network=allowlist requires sandbox.network_allowlist_cidrs", path)
+		}
+		for _, cidr := range cfg.Sandbox.NetworkAllowlistCIDRs {
+			if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+				return fmt.Errorf("%s: sandbox.network_allowlist_cidrs contains invalid CIDR %q: %w", path, cidr, err)
+			}
+		}
 	}
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
@@ -180,6 +217,9 @@ func expandConfig(cfg *Config) {
 	cfg.Workspace.Root = expandPath(os.ExpandEnv(cfg.Workspace.Root))
 	cfg.Codex.Command = os.ExpandEnv(cfg.Codex.Command)
 	cfg.Claude.Command = os.ExpandEnv(cfg.Claude.Command)
+	for i := range cfg.Sandbox.CredentialFiles {
+		cfg.Sandbox.CredentialFiles[i] = expandPath(os.ExpandEnv(cfg.Sandbox.CredentialFiles[i]))
+	}
 	if cfg.Repo.DefaultBranch == "" {
 		cfg.Repo.DefaultBranch = "main"
 	}
@@ -215,6 +255,12 @@ func expandConfig(cfg *Config) {
 	}
 	if cfg.Codex.Profile == "" {
 		cfg.Codex.Profile = "safe"
+	}
+	if cfg.Sandbox.Backend == "" {
+		cfg.Sandbox.Backend = "none"
+	}
+	if cfg.Sandbox.NetworkMode == "" {
+		cfg.Sandbox.NetworkMode = "none"
 	}
 	if cfg.Codex.ThreadSandbox == "" {
 		cfg.Codex.ThreadSandbox = "workspace-write"

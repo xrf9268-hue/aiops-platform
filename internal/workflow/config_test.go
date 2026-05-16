@@ -122,6 +122,264 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigSandboxDisabled(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Sandbox.Enabled {
+		t.Fatal("sandbox hardening must be disabled by default for backward compatibility")
+	}
+	if cfg.Sandbox.Backend != "none" {
+		t.Fatalf("default Sandbox.Backend: got %q want none", cfg.Sandbox.Backend)
+	}
+}
+
+func TestLoadSandboxEnforcementConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: allowlist
+  network_allowlist_cidrs:
+    - 203.0.113.10/32
+  env_allowlist:
+    - PATH
+    - HOME
+  credential_files:
+    - ~/.config/aiops/token
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !wf.Config.Sandbox.Enabled {
+		t.Fatal("Sandbox.Enabled = false, want true")
+	}
+	if wf.Config.Sandbox.Backend != "firejail" {
+		t.Fatalf("Sandbox.Backend = %q, want firejail", wf.Config.Sandbox.Backend)
+	}
+	if wf.Config.Sandbox.NetworkMode != "allowlist" {
+		t.Fatalf("Sandbox.NetworkMode = %q, want allowlist", wf.Config.Sandbox.NetworkMode)
+	}
+	if !reflect.DeepEqual(wf.Config.Sandbox.NetworkAllowlistCIDRs, []string{"203.0.113.10/32"}) {
+		t.Fatalf("NetworkAllowlistCIDRs = %#v", wf.Config.Sandbox.NetworkAllowlistCIDRs)
+	}
+	if !reflect.DeepEqual(wf.Config.Sandbox.EnvAllowlist, []string{"PATH", "HOME"}) {
+		t.Fatalf("EnvAllowlist = %#v", wf.Config.Sandbox.EnvAllowlist)
+	}
+	wantCredential := filepath.Join(os.Getenv("HOME"), ".config/aiops/token")
+	if !reflect.DeepEqual(wf.Config.Sandbox.CredentialFiles, []string{wantCredential}) {
+		t.Fatalf("CredentialFiles = %#v, want %#v", wf.Config.Sandbox.CredentialFiles, []string{wantCredential})
+	}
+}
+
+func TestLoadRejectsSandboxNetworkAllowlistWithoutCIDRs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: allowlist
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected allowlist without CIDRs error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network=allowlist") || !strings.Contains(err.Error(), "network_allowlist_cidrs") {
+		t.Fatalf("Load error = %q, want allowlist CIDR guidance", err)
+	}
+}
+
+func TestLoadRejectsUnsupportedSandboxNetwork(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: open-internet
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected unsupported sandbox network error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network") || !strings.Contains(err.Error(), "open-internet") {
+		t.Fatalf("Load error = %q, want sandbox.network open-internet", err)
+	}
+}
+
+func TestLoadRejectsSandboxNetworkAllowlistWithoutFirejail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: bubblewrap
+  network: allowlist
+  network_allowlist_cidrs:
+    - 203.0.113.10/32
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected allowlist without firejail error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network=allowlist") || !strings.Contains(err.Error(), "firejail") {
+		t.Fatalf("Load error = %q, want firejail allowlist guidance", err)
+	}
+}
+
+func TestLoadRejectsSandboxNetworkAllowlistInvalidCIDR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: allowlist
+  network_allowlist_cidrs:
+    - "0.0.0.0/0 -j ACCEPT\n-A OUTPUT -j ACCEPT"
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected invalid CIDR error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network_allowlist_cidrs") || !strings.Contains(err.Error(), "invalid CIDR") {
+		t.Fatalf("Load error = %q, want invalid CIDR guidance", err)
+	}
+}
+
+func TestLoadRejectsEnabledSandboxWithoutEnvAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: bubblewrap
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected enabled sandbox without env_allowlist error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.env_allowlist") {
+		t.Fatalf("Load error = %q, want env_allowlist guidance", err)
+	}
+}
+
+func TestLoadRejectsUnsupportedSandboxBackend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: vmagic
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected unsupported sandbox backend error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.backend") || !strings.Contains(err.Error(), "vmagic") {
+		t.Fatalf("Load error = %q, want sandbox.backend vmagic", err)
+	}
+}
+
+func TestLoadRejectsEnabledSandboxWithoutBackend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: none
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected enabled sandbox without backend error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.enabled") || !strings.Contains(err.Error(), "backend") {
+		t.Fatalf("Load error = %q, want sandbox.enabled backend guidance", err)
+	}
+}
+
 // TestLoadOptionalAppliesAgentTimeoutDefaults verifies that a workflow
 // missing agent.timeout in its front matter still ends up with the
 // schema default after expandConfig runs.

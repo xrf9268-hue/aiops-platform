@@ -34,6 +34,11 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command+" < .aiops/PROMPT.md")
 	cmd.Dir = in.Workdir
+	wrapped, err := applySandbox(ctx, in, cmd)
+	if err != nil {
+		return Result{}, err
+	}
+	cmd = wrapped
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	// Wire platform-specific group-kill semantics. On Unix we put the
@@ -43,7 +48,7 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	configurePlatformKill(cmd)
 	cmd.WaitDelay = killGrace
 
-	err := cmd.Run()
+	err = cmd.Run()
 	elapsed := time.Since(start)
 	if err != nil {
 		// Distinguish ctx-driven termination (timeout/cancel) from a

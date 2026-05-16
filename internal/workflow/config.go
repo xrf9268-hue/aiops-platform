@@ -11,6 +11,7 @@ type Config struct {
 	Claude    CommandConfig   `yaml:"claude" json:"claude"`
 	Policy    PolicyConfig    `yaml:"policy" json:"policy"`
 	Safety    SafetyConfig    `yaml:"safety" json:"safety"`
+	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
 	Verify    VerifyConfig    `yaml:"verify" json:"verify"`
 	PR        PRConfig        `yaml:"pr" json:"pr"`
 }
@@ -127,13 +128,26 @@ func (p PolicyConfig) LineLimit() int {
 }
 
 // SafetyConfig documents the policy envelope operators expect agents and
-// reviewers to honor. It is intentionally descriptive in this phase: enforcement
-// beyond PolicyConfig remains a separate sandbox-hardening task.
+// reviewers to honor. It remains descriptive and operator-facing; SandboxConfig
+// carries the opt-in worker-enforced controls.
 type SafetyConfig struct {
 	AllowedNetworks []string `yaml:"allowed_networks" json:"allowed_networks"`
 	AllowedPaths    []string `yaml:"allowed_paths" json:"allowed_paths"`
 	AllowedCommands []string `yaml:"allowed_commands" json:"allowed_commands"`
 	Forbidden       []string `yaml:"forbidden" json:"forbidden"`
+}
+
+// SandboxConfig controls optional worker-side process hardening around agent
+// invocation. It is disabled by default because Symphony does not mandate one
+// universal sandbox posture; operators opt in per workflow when the host has a
+// supported sandbox backend installed.
+type SandboxConfig struct {
+	Enabled               bool     `yaml:"enabled" json:"enabled"`
+	Backend               string   `yaml:"backend" json:"backend"`
+	NetworkMode           string   `yaml:"network" json:"network"`
+	NetworkAllowlistCIDRs []string `yaml:"network_allowlist_cidrs" json:"network_allowlist_cidrs"`
+	EnvAllowlist          []string `yaml:"env_allowlist" json:"env_allowlist"`
+	CredentialFiles       []string `yaml:"credential_files" json:"credential_files"`
 }
 
 type VerifyConfig struct {
@@ -228,9 +242,10 @@ func DefaultConfig() Config {
 			ReadTimeoutMs:  5000,
 			StallTimeoutMs: 300000,
 		},
-		Claude: CommandConfig{Command: "claude"},
-		Policy: PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
-		Verify: VerifyConfig{Commands: []string{}},
+		Claude:  CommandConfig{Command: "claude"},
+		Policy:  PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
+		Sandbox: SandboxConfig{Backend: "none", NetworkMode: "none"},
+		Verify:  VerifyConfig{Commands: []string{}},
 		// PR.Draft defaults to false so workflows that omit `pr.draft` keep
 		// the historical worker behavior of opening ready-for-review PRs.
 		// Profiles that want draft PRs (e.g. company-cautious) opt in by

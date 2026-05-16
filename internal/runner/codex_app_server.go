@@ -38,6 +38,10 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		return Result{}, err
 	}
 	cmd.Dir = in.Workdir
+	cmd, err = applySandbox(ctx, in, cmd)
+	if err != nil {
+		return Result{}, err
+	}
 	configurePlatformKill(cmd)
 	cmd.WaitDelay = killGrace
 
