@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -85,8 +84,6 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 
 const defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
 
-var graphQLOperationRegexp = regexp.MustCompile(`\b(query|mutation|subscription)\b`)
-
 type linearGraphQLProxy struct {
 	apiKey  string
 	baseURL string
@@ -102,8 +99,7 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 			},
 		})
 	}
-	operations := graphQLOperationRegexp.FindAllString(query, -1)
-	if len(operations) > 1 {
+	if countGraphQLOperations(query) > 1 {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
 				"message": "linear_graphql query must contain exactly one operation",
@@ -174,6 +170,85 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 		})
 	}
 	return linearGraphQLToolResponse(respBody.Bytes())
+}
+
+func countGraphQLOperations(query string) int {
+	count := 0
+	depth := 0
+	for i := 0; i < len(query); {
+		ch := query[i]
+		switch ch {
+		case '#':
+			for i < len(query) && query[i] != '\n' && query[i] != '\r' {
+				i++
+			}
+			continue
+		case '"':
+			if strings.HasPrefix(query[i:], `"""`) {
+				i += 3
+				for i < len(query) && !strings.HasPrefix(query[i:], `"""`) {
+					i++
+				}
+				if i < len(query) {
+					i += 3
+				}
+				continue
+			}
+			i++
+			for i < len(query) {
+				if query[i] == '\\' {
+					i += 2
+					continue
+				}
+				if query[i] == '"' {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		case '{':
+			depth++
+			i++
+			continue
+		case '}':
+			if depth > 0 {
+				depth--
+			}
+			i++
+			continue
+		case '\n', '\r':
+			i++
+			continue
+		case ' ', '\t', ',':
+			i++
+			continue
+		}
+
+		if depth == 0 && isGraphQLNameStart(ch) {
+			start := i
+			i++
+			for i < len(query) && isGraphQLNameContinue(query[i]) {
+				i++
+			}
+			switch query[start:i] {
+			case "query", "mutation", "subscription":
+				count++
+			}
+			continue
+		}
+
+		i++
+	}
+	return count
+}
+
+func isGraphQLNameStart(ch byte) bool {
+	return ch == '_' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+}
+
+func isGraphQLNameContinue(ch byte) bool {
+	return isGraphQLNameStart(ch) || (ch >= '0' && ch <= '9')
 }
 
 func linearGraphQLToolResponse(body []byte) (string, error) {
