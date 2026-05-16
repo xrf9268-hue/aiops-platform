@@ -96,7 +96,7 @@ func newTestClient(t *testing.T, srv *httptest.Server, cfg workflow.TrackerConfi
 // TestMoveIssueToState_LooksUpStateThenMutates verifies the two-step
 // flow: a workflowStates lookup (scoped to TeamKey when present)
 // resolves the human-readable state name to its UUID, then issueUpdate
-// mutates the issue. Both calls must carry the bearer token.
+// mutates the issue. Both calls must carry the orchestrator-held Linear token.
 func TestMoveIssueToState_LooksUpStateThenMutates(t *testing.T) {
 	srv := newFakeLinearServer()
 	srv.responses["StateByName"] = `{"data":{"workflowStates":{"nodes":[{"id":"state-uuid-1","name":"In Progress"}]}}}`
@@ -124,7 +124,7 @@ func TestMoveIssueToState_LooksUpStateThenMutates(t *testing.T) {
 		t.Fatalf("lookup teamKey = %v, want \"ENG\"", lookup.Variables["teamKey"])
 	}
 	if lookup.AuthHeader != "Bearer test-key" {
-		t.Fatalf("lookup Authorization = %q, want \"Bearer test-key\"", lookup.AuthHeader)
+		t.Fatalf("lookup Authorization = %q, want Bearer token", lookup.AuthHeader)
 	}
 
 	mutate := srv.requests[1]

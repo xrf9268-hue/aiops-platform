@@ -32,16 +32,12 @@ type TrackerConfig struct {
 	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
 }
 
-// TrackerStatusConfig names the workflow states the worker drives the
-// linked tracker issue through as a task progresses. The defaults
-// ("In Progress", "Human Review", "Rework") match the Linear template
-// used by the personal profile; teams that customize their workflow
-// states override the names without touching code.
-//
-// An unrecognized state name (typo, missing permission, deleted state)
-// surfaces from the Linear API as a MoveIssueToState error; the worker
-// then falls back to attaching a failure comment so the human still
-// has visibility on the issue.
+// TrackerStatusConfig names the workflow states used for tracker handoff
+// updates. The defaults ("In Progress", "Human Review", "Rework") match the
+// Linear template used by the personal profile; teams that customize their
+// workflow states override the names without touching code. Per SPEC §1,
+// tracker writes belong on the agent/tool side; transitional worker-side
+// writes remain only until the app-server tool transport is complete.
 type TrackerStatusConfig struct {
 	InProgress  string `yaml:"in_progress" json:"in_progress"`
 	HumanReview string `yaml:"human_review" json:"human_review"`
