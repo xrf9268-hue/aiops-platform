@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -250,5 +251,54 @@ for line in sys.stdin:
 	}
 	if res.Summary != "done after turn 3" {
 		t.Fatalf("Summary = %q, want final third-turn summary", res.Summary)
+	}
+}
+
+func TestCodexAppServerRunnerTreatsFailedTurnCompletedAsError(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'status': 'failed', 'reason': 'tool crashed'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "turn/completed failed") || !strings.Contains(err.Error(), "tool crashed") {
+		t.Fatalf("Run error = %v, want failed turn/completed error with reason", err)
+	}
+}
+
+func TestCodexAppServerRunnerUsesReadTimeout(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        time.sleep(2)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 25
+	in.Workflow.Config.Codex.StallTimeoutMs = 5000
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err == nil || !strings.Contains(err.Error(), "read timeout") {
+		t.Fatalf("Run error = %v, want app-server read timeout", err)
 	}
 }

@@ -123,20 +123,24 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error)
 }
 
 type appServerClient struct {
-	stdin       io.Writer
-	reader      *bufio.Reader
-	out         io.Writer
-	nextID      int
-	threadID    string
-	lastMessage string
-	continueRun bool
-	tools       DynamicToolSet
+	stdin          io.Writer
+	reader         *bufio.Reader
+	out            io.Writer
+	nextID         int
+	threadID       string
+	lastMessage    string
+	continueRun    bool
+	tools          DynamicToolSet
+	readTimeoutMs  int
+	stallTimeoutMs int
 }
 
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
 	c.nextID = 1
 	c.continueRun = false
 	c.tools = DynamicToolsForWorkflow(workflow.Workflow{Config: in.Workflow.Config})
+	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
+	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
 	if _, err := c.request(ctx, "initialize", map[string]any{
 		"capabilities": map[string]any{"experimentalApi": true},
 		"clientInfo": map[string]any{
@@ -248,7 +252,7 @@ func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, erro
 		return nil, ctx.Err()
 	default:
 	}
-	line, err := c.reader.ReadBytes('\n')
+	line, err := c.readLine(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +264,37 @@ func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, erro
 	return msg, nil
 }
 
+func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
+	type readResult struct {
+		line []byte
+		err  error
+	}
+	ch := make(chan readResult, 1)
+	go func() {
+		line, err := c.reader.ReadBytes('\n')
+		ch <- readResult{line: line, err: err}
+	}()
+
+	var timeout <-chan time.Time
+	if c.readTimeoutMs > 0 {
+		timer := time.NewTimer(time.Duration(c.readTimeoutMs) * time.Millisecond)
+		defer timer.Stop()
+		timeout = timer.C
+	}
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-timeout:
+		return nil, fmt.Errorf("codex app-server read timeout after %dms", c.readTimeoutMs)
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.line, nil
+	}
+}
+
 func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 	for {
 		msg, err := c.readMessage(ctx)
@@ -269,6 +304,9 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 		if method, _ := msg["method"].(string); method != "" {
 			switch method {
 			case "turn/completed":
+				if err := completedTurnError(msg); err != nil {
+					return err
+				}
 				c.handleNotification(msg)
 				return nil
 			case "turn/failed", "turn/cancelled":
@@ -295,6 +333,26 @@ func (c *appServerClient) handleNotification(msg map[string]any) {
 			return
 		}
 	}
+}
+
+func completedTurnError(msg map[string]any) error {
+	params, _ := msg["params"].(map[string]any)
+	status, _ := params["status"].(string)
+	status = strings.ToLower(strings.TrimSpace(status))
+	if status == "" || status == "completed" || status == "succeeded" || status == "success" {
+		return nil
+	}
+	reason := ""
+	for _, key := range []string{"reason", "error", "message"} {
+		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
+			reason = strings.TrimSpace(v)
+			break
+		}
+	}
+	if reason == "" {
+		reason = fmt.Sprint(params)
+	}
+	return fmt.Errorf("turn/completed failed with status %q: %s", status, reason)
 }
 
 func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[string]any) error {
