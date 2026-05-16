@@ -312,7 +312,7 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 	if filepath.Base(wrapped.Path) != "firejail" && !strings.Contains(joined, "firejail") {
 		t.Fatalf("wrapped command should execute firejail directly or via cleanup wrapper, path=%q args=%#v", wrapped.Path, wrapped.Args)
 	}
-	for _, want := range []string{"--noprofile", "--net=aiops0", "--netfilter=", "--env=AIOPS_RUN_TOKEN=allowed-secret", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
+	for _, want := range []string{"--quiet", "--noprofile", "--net=aiops0", "--netfilter=", "--env=AIOPS_RUN_TOKEN=allowed-secret", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("wrapped args missing %q in %#v", want, wrapped.Args)
 		}

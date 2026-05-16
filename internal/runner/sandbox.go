@@ -214,7 +214,7 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 		}
 		cleanupScript := `cleanup_file=$1; shift; "$@"; status=$?; rm -f "$cleanup_file"; exit "$status"`
 		shellArgs := []string{"-c", cleanupScript, "aiops-firejail-cleanup", cleanupFiles[0], firejail}
-		shellArgs = append(shellArgs, args[1:]...)
+		shellArgs = append(shellArgs, args...)
 		wrapped = exec.CommandContext(ctx, "/bin/sh", shellArgs...)
 	}
 	wrapped.Dir = workdir
