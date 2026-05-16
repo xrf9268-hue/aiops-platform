@@ -15,13 +15,17 @@ import (
 // grandchildren orphaned, blocking workspace cleanup.
 func configurePlatformKill(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	previousCancel := cmd.Cancel
+	cleanupCancel := cmd.Cancel
+	if cmd.WaitDelay == 0 {
+		cleanupCancel = nil
+	}
 	cmd.Cancel = func() error {
-		terminateProcess(cmd)
-		if previousCancel != nil {
-			return previousCancel()
+		var cleanupErr error
+		if cleanupCancel != nil {
+			cleanupErr = cleanupCancel()
 		}
-		return nil
+		terminateProcess(cmd)
+		return cleanupErr
 	}
 }
 

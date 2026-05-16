@@ -232,21 +232,15 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	wrapped.Env = env
 	if len(cleanupFiles) > 0 {
 		cleanupOnError = false
-		wrapped.Cancel = cleanupCancel(wrapped, wrapped.Cancel, cleanupFiles)
+		wrapped.Cancel = cleanupCancel(cleanupFiles)
 		wrapped.WaitDelay = 1
 	}
 	return wrapped, nil
 }
 
-func cleanupCancel(cmd *exec.Cmd, previousCancel func() error, cleanupFiles []string) func() error {
+func cleanupCancel(cleanupFiles []string) func() error {
 	return func() error {
-		cleanupErr := removeFiles(cleanupFiles)
-		if previousCancel != nil && cmd.Process != nil {
-			if err := previousCancel(); err != nil {
-				return err
-			}
-		}
-		return cleanupErr
+		return removeFiles(cleanupFiles)
 	}
 }
 
