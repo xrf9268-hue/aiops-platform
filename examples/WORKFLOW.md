@@ -16,11 +16,10 @@ tracker:
     - Done
     - Canceled
   poll_interval_ms: 30000
-  # statuses configures the Linear workflow state names the worker drives
-  # the issue through as a task progresses:
-  #   - claim          -> in_progress
-  #   - PR opened      -> human_review
-  #   - failure        -> rework (or a comment if the move fails)
+  # statuses names the Linear workflow states the agent may move the
+  # issue through via the advertised tracker tool (for example claim ->
+  # in_progress, PR opened -> human_review, failure -> rework). The
+  # orchestrator reads tracker state; ticket writes are agent/tool actions.
   # Defaults match Linear's stock template; uncomment and edit only if
   # your board uses different labels.
   # statuses:
@@ -65,10 +64,9 @@ verify:
     - go test ./...
 
 pr:
-  # draft: true → worker opens the PR as a Gitea draft. Implementation note:
-  # Gitea has no `draft` API field, so the worker prepends `WIP: ` to the PR
-  # title (Gitea's canonical draft signal). Expect titles like
-  # `WIP: chore(ai): <issue title>`.
+  # draft: true tells the agent/tooling to open the PR as a draft. For Gitea,
+  # this may be represented by a `WIP: ` title prefix (Gitea's canonical draft
+  # signal) when the PR tool/CLI creates the handoff.
   draft: true
   labels:
     - ai-generated
@@ -94,10 +92,13 @@ Process:
 3. Keep changes inside the allowed scope.
 4. Run the verification commands.
 5. Write a concise summary in `.aiops/RUN_SUMMARY.md`.
-6. Stop and explain the blocker if the task is ambiguous or unsafe.
+6. Commit your changes, push the work branch to the remote, and open a draft pull request from the work branch to the base branch.
+7. If tracker tooling is available, move/comment on the ticket from the agent/tool surface rather than expecting the orchestrator to do it.
+8. Stop and explain the blocker if the task is ambiguous or unsafe.
 
 Rules:
 - Do not touch secrets, credentials, production deployment files, or database migrations.
 - Do not do broad refactors unless explicitly requested.
 - Prefer small reviewable changes.
 - Draft PRs require human review.
+- The orchestrator will not push, open PRs, or write tracker state for you; those are agent responsibilities per SPEC §1.

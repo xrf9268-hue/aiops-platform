@@ -1,7 +1,6 @@
 package worker_test
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
@@ -128,97 +126,30 @@ func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
 	}
 }
 
-// TestBuildPRBodyEmbedsRunSummary verifies the PR body includes the runner-
-// produced RUN_SUMMARY.md content, the source/task fields, and a link back
-// to the artifact path so reviewers can find the full file even when the
-// excerpt is truncated.
-func TestBuildPRBodyEmbedsRunSummary(t *testing.T) {
-	t1 := task.Task{
-		ID:            "tsk_42",
-		Title:         "fix bug",
-		SourceType:    "github_issue",
-		SourceEventID: "issue#7",
-		WorkBranch:    "ai/tsk_42",
-	}
-	summary := "# Run summary\n\nFixed the off-by-one in foo().\nVerified with `go test ./...`.\n"
-	body := worker.BuildPRBody(t1, summary, false)
-	for _, want := range []string{
-		"tsk_42",
-		"github_issue / issue#7",
-		"Run summary",
-		"Fixed the off-by-one in foo().",
-		"`.aiops/RUN_SUMMARY.md`",
-		"`ai/tsk_42`",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("PR body missing %q:\n%s", want, body)
-		}
-	}
-	if strings.Contains(body, "_Summary truncated") {
-		t.Fatalf("PR body should not advertise truncation for short summaries")
-	}
-}
-
-// TestBuildPRBodyTruncatesLongSummary confirms the PR body excerpt is capped
-// at PRBodySummaryCap and surfaces a truncation marker so reviewers know to
-// open the artifact for the rest.
-func TestBuildPRBodyTruncatesLongSummary(t *testing.T) {
-	t1 := task.Task{ID: "tsk_big", WorkBranch: "ai/tsk_big"}
-	// Use a sentinel char that does not appear elsewhere in the PR chrome
-	// so we can count exactly how much of the user-provided summary made
-	// it into the rendered body.
-	const sentinel = "Z"
-	long := strings.Repeat(sentinel, worker.PRBodySummaryCap+1024)
-	body := worker.BuildPRBody(t1, long, false)
-	if !strings.Contains(body, "_Summary truncated at") {
-		t.Fatalf("expected truncation marker in PR body for oversized summary")
-	}
-	if got := strings.Count(body, sentinel); got > worker.PRBodySummaryCap {
-		t.Fatalf("excerpt exceeded PRBodySummaryCap: %d > %d", got, worker.PRBodySummaryCap)
-	}
-}
-
-// TestBuildPRBody_VerifyDegradedBanner pins the contract that a
-// degraded run (verify.allow_failure took effect) prepends a clear
-// warning banner to the PR body so a human reviewer cannot miss it.
-func TestBuildPRBody_VerifyDegradedBanner(t *testing.T) {
-	tk := task.Task{ID: "tsk_demo", SourceType: "linear", SourceEventID: "ABC-1", WorkBranch: "ai/tsk_demo"}
-	body := worker.BuildPRBody(tk, "Did the thing.", true)
-
-	if !strings.Contains(body, "Verification failed (investigation mode)") {
-		t.Fatalf("expected investigation-mode banner; body:\n%s", body)
-	}
-	bannerIdx := strings.Index(body, "Verification failed (investigation mode)")
-	taskHeaderIdx := strings.Index(body, "## AI Task")
-	if bannerIdx < 0 || taskHeaderIdx < 0 || bannerIdx > taskHeaderIdx {
-		t.Fatalf("banner must precede the AI Task heading; banner=%d task=%d body:\n%s", bannerIdx, taskHeaderIdx, body)
-	}
-
-	// And: a non-degraded body must not carry the banner.
-	clean := worker.BuildPRBody(tk, "Did the thing.", false)
-	if strings.Contains(clean, "Verification failed") {
-		t.Fatalf("clean body should not mention verification failure; body:\n%s", clean)
-	}
-}
-
-// TestAppendRunSummaryDirectiveAppendsOnce verifies the runner contract is
-// only appended when the rendered prompt does not already mention it. This
-// keeps workflow templates free to embed their own (more detailed) version
-// without duplication.
+// TestAppendRunSummaryDirectiveAppendsRunSummaryContract verifies the runner
+// contract is appended and remains focused on the pre-publication summary gate.
 func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	plain := "do the work"
 	out := worker.AppendRunSummaryDirective(plain)
 	if !strings.Contains(out, "RUN_SUMMARY.md") {
 		t.Fatalf("directive not appended: %q", out)
 	}
-	if !strings.Contains(out, "**Required output:**") {
-		t.Fatalf("expected Required output marker in appended directive")
+	if !strings.Contains(out, "Do not push branches or open pull requests") {
+		t.Fatalf("directive must prevent in-run publication before worker gates: %q", out)
 	}
 
-	// Idempotent: prompt that already mentions RUN_SUMMARY.md is left alone.
+	// A prompt that merely mentions RUN_SUMMARY.md still receives the full
+	// no-publication guidance; old workflows commonly mentioned the artifact
+	// without knowing about the SPEC §1 boundary fix.
 	already := "please write .aiops/RUN_SUMMARY.md when done"
-	if got := worker.AppendRunSummaryDirective(already); got != already {
-		t.Fatalf("expected no-op when prompt already references RUN_SUMMARY.md, got %q", got)
+	got := worker.AppendRunSummaryDirective(already)
+	if !strings.Contains(got, "Do not push branches or open pull requests") {
+		t.Fatalf("expected publication guidance even when summary is mentioned, got %q", got)
+	}
+
+	// Idempotent once the full directive is already present.
+	if gotAgain := worker.AppendRunSummaryDirective(got); gotAgain != got {
+		t.Fatalf("expected no-op when full directive is present, got %q", gotAgain)
 	}
 }
 
@@ -496,143 +427,6 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 	}
 }
 
-// fakePRClient lets PR-handoff tests script the responses from the gitea
-// client without going through HTTP. It also records every call so tests can
-// assert on whether CreatePullRequest was even attempted on the reuse path.
-type fakePRClient struct {
-	findResult *gitea.PullRequest
-	findErr    error
-	createPR   *gitea.PullRequest
-	createErr  error
-
-	mu          sync.Mutex
-	findCalls   []gitea.FindOpenPullRequestInput
-	createCalls []gitea.CreatePullRequestInput
-}
-
-func (f *fakePRClient) FindOpenPullRequest(_ context.Context, in gitea.FindOpenPullRequestInput) (*gitea.PullRequest, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.findCalls = append(f.findCalls, in)
-	return f.findResult, f.findErr
-}
-
-func (f *fakePRClient) CreatePullRequest(_ context.Context, in gitea.CreatePullRequestInput) (*gitea.PullRequest, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.createCalls = append(f.createCalls, in)
-	if f.createErr != nil {
-		return nil, f.createErr
-	}
-	if f.createPR != nil {
-		return f.createPR, nil
-	}
-	return &gitea.PullRequest{Number: 1, HTMLURL: "http://gitea.local/o/r/pulls/1", Title: in.Title}, nil
-}
-
-func samplePRTask() task.Task {
-	return task.Task{
-		ID:            "tsk_42",
-		Title:         "fix bug",
-		SourceType:    "gitea_issue",
-		SourceEventID: "evt-1",
-		RepoOwner:     "o",
-		RepoName:      "r",
-		BaseBranch:    "main",
-		WorkBranch:    "ai/tsk_42",
-	}
-}
-
-// TestCreatePRWith_ReusesExistingPR is the core of issue #7: when a previous
-// attempt already opened a PR for the work branch, the retry must reuse it
-// rather than asking Gitea to create a duplicate (which would fail with 422
-// and surface as a task failure). The test asserts both that CreatePullRequest
-// is NOT called and that a pr_reused event is emitted with the existing PR's
-// metadata so observers can attribute the handoff.
-func TestCreatePRWith_ReusesExistingPR(t *testing.T) {
-	ev := &fakeEmitter{}
-	tk := samplePRTask()
-	cfg := workflow.Config{}
-	client := &fakePRClient{
-		findResult: &gitea.PullRequest{Number: 17, HTMLURL: "http://gitea.local/o/r/pulls/17", Title: "chore(ai): fix bug"},
-	}
-
-	if err := worker.CreatePRWith(context.Background(), ev, tk, cfg, "summary", false, client); err != nil {
-		t.Fatalf("CreatePRWith: %v", err)
-	}
-
-	if len(client.createCalls) != 0 {
-		t.Fatalf("expected zero CreatePullRequest calls when reusing, got %d", len(client.createCalls))
-	}
-	if len(client.findCalls) != 1 || client.findCalls[0].Head != tk.WorkBranch {
-		t.Fatalf("expected single FindOpenPullRequest with head=%q, got %#v", tk.WorkBranch, client.findCalls)
-	}
-	reused := ev.byKind(task.EventPRReused)
-	if len(reused) != 1 {
-		t.Fatalf("expected one pr_reused event, got %d (events=%#v)", len(reused), ev.events)
-	}
-	number, _ := payloadField(t, reused[0].Payload, "number").(float64)
-	if int(number) != 17 {
-		t.Fatalf("pr_reused number: got %v want 17", number)
-	}
-	if got := len(ev.byKind(task.EventPRCreated)); got != 0 {
-		t.Fatalf("pr_created must not fire on reuse, got %d", got)
-	}
-}
-
-// TestCreatePRWith_CreatesWhenNoneExists confirms the unchanged happy path:
-// when the lookup returns no match, the worker still calls CreatePullRequest
-// exactly once and emits pr_created with the new PR metadata.
-func TestCreatePRWith_CreatesWhenNoneExists(t *testing.T) {
-	ev := &fakeEmitter{}
-	tk := samplePRTask()
-	client := &fakePRClient{
-		findResult: nil,
-		createPR:   &gitea.PullRequest{Number: 99, HTMLURL: "http://gitea.local/o/r/pulls/99", Title: "chore(ai): fix bug"},
-	}
-
-	if err := worker.CreatePRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
-		t.Fatalf("CreatePRWith: %v", err)
-	}
-
-	if len(client.createCalls) != 1 {
-		t.Fatalf("expected exactly one CreatePullRequest call, got %d", len(client.createCalls))
-	}
-	if got := len(ev.byKind(task.EventPRReused)); got != 0 {
-		t.Fatalf("pr_reused must not fire on create path, got %d", got)
-	}
-	created := ev.byKind(task.EventPRCreated)
-	if len(created) != 1 {
-		t.Fatalf("expected one pr_created event, got %d", len(created))
-	}
-	number, _ := payloadField(t, created[0].Payload, "number").(float64)
-	if int(number) != 99 {
-		t.Fatalf("pr_created number: got %v want 99", number)
-	}
-}
-
-// TestCreatePRWith_ListErrorFallsThroughToCreate ensures that a transient
-// failure in the list step does not block the worker: we still attempt to
-// create. This is the safer fallback because if a PR really does already
-// exist, Gitea will surface a 422 from CreatePullRequest, which then flows
-// through the existing failure-attribution path; meanwhile a real
-// "no PR exists yet" lookup that just happened to fail (network hiccup,
-// 5xx) still completes the handoff.
-func TestCreatePRWith_ListErrorFallsThroughToCreate(t *testing.T) {
-	ev := &fakeEmitter{}
-	tk := samplePRTask()
-	client := &fakePRClient{
-		findErr: errors.New("list pull requests failed: 500"),
-	}
-
-	if err := worker.CreatePRWith(context.Background(), ev, tk, workflow.Config{}, "summary", false, client); err != nil {
-		t.Fatalf("CreatePRWith: %v", err)
-	}
-	if len(client.createCalls) != 1 {
-		t.Fatalf("expected fallback CreatePullRequest call, got %d", len(client.createCalls))
-	}
-}
-
 // TestResolveWorkflow_EmitsResolvedEvent verifies the worker emits a
 // workflow_resolved event whose payload carries Source, Path, and the
 // effective config quick-look fields (agent_default, policy_mode,
@@ -699,7 +493,7 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 		t.Fatalf("write .aiops: %v", err)
 	}
 
-	var buf bytes.Buffer
+	var buf strings.Builder
 	origOut := log.Writer()
 	origFlags := log.Flags()
 	log.SetOutput(&buf)
@@ -737,7 +531,7 @@ func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	var buf bytes.Buffer
+	var buf strings.Builder
 	origOut := log.Writer()
 	origFlags := log.Flags()
 	log.SetOutput(&buf)
@@ -807,12 +601,11 @@ func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
 	}
 }
 
-// TestVerifyAllowFailure_OpensDegradedDraftPR pins the investigation-override
-// contract: when verify fails AND verify.allow_failure=true, RunVerifyPhase
-// returns (true, nil), the caller forces cfg.PR.Draft=true, and the eventual
-// CreatePRWith call opens a draft PR. A verify_end event with
-// status="failed_allowed" must be emitted.
-func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
+// TestVerifyAllowFailure_ReturnsDegradedWithoutError pins the investigation-
+// override contract: when verify fails AND verify.allow_failure=true,
+// RunVerifyPhase returns (true, nil) and emits verify_end with
+// status="failed_allowed".
+func TestVerifyAllowFailure_ReturnsDegradedWithoutError(t *testing.T) {
 	ev := &fakeEmitter{}
 	dir := t.TempDir()
 
@@ -821,7 +614,6 @@ func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 			Commands:     []string{"sh -c 'exit 1'"},
 			AllowFailure: true,
 		},
-		PR: workflow.PRConfig{Draft: false}, // prove override forces draft
 	}
 
 	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_af", dir, cfg)
@@ -841,28 +633,11 @@ func TestVerifyAllowFailure_OpensDegradedDraftPR(t *testing.T) {
 	if status != "failed_allowed" {
 		t.Fatalf("verify_end status: got=%q want=%q", status, "failed_allowed")
 	}
-
-	// Now exercise CreatePRWith with verifyDegraded=true and Draft forced to true.
-	if degraded {
-		cfg.PR.Draft = true
-	}
-	tk := samplePRTask()
-	client := &fakePRClient{}
-	if err := worker.CreatePRWith(context.Background(), ev, tk, cfg, "summary", true, client); err != nil {
-		t.Fatalf("CreatePRWith: %v", err)
-	}
-	if len(client.createCalls) != 1 {
-		t.Fatalf("expected one CreatePullRequest call, got %d", len(client.createCalls))
-	}
-	if !client.createCalls[0].Draft {
-		t.Fatal("PR must be created as draft when verifyDegraded=true")
-	}
 }
 
 // TestVerifyFails_BlocksPRWhenAllowFailureOff pins the default behavior:
-// a failing verify command without allow_failure prevents PR creation.
-// This locks the contract that the new collect-all semantics did not
-// weaken safety.
+// a failing verify command without allow_failure prevents the task from
+// completing.
 func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 	ev := &fakeEmitter{}
 	dir := t.TempDir()

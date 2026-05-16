@@ -246,7 +246,8 @@ other settings fall back to defaults (see `README.md` table). The
 
 ## Safety posture for agents
 
-- The worker opens PRs; it never merges. Don't add auto-merge logic.
+- The agent opens PRs through its workflow/tool surface; the worker must not
+  push, open, merge, or otherwise manage PR handoff on the agent's behalf.
 - Keep first-time real runs on `agent.default: mock` until the loop is trusted on the target repo.
 - Use low-privilege bot accounts for Gitea / Linear / GitHub tokens.
 - When in doubt about scope, prefer a narrower change and a clear PR description over speculative refactors.

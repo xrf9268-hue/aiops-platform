@@ -67,10 +67,9 @@ verify:
     - go test ./...
 
 pr:
-  # draft: true → worker opens the PR as a Gitea draft. Gitea has no `draft`
-  # API field; the worker prepends `WIP: ` to the PR title (Gitea's canonical
-  # draft signal). Cautious profile titles look like
-  # `WIP: chore(ai): <issue title>`.
+  # draft: true tells the agent/tooling to open the PR as a draft. For Gitea,
+  # this may be represented by a `WIP: ` title prefix (Gitea's canonical draft
+  # signal) when the PR tool/CLI creates the handoff.
   draft: true
   labels:
     - ai-generated

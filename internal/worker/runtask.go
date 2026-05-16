@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -24,14 +23,6 @@ import (
 type EventEmitter interface {
 	AddEvent(ctx context.Context, taskID, typ, msg string) error
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
-}
-
-// PRClient is the subset of gitea.Client the worker needs for PR handoff.
-// Defined as an interface so tests can inject a fake implementation without
-// standing up a real Gitea HTTP server.
-type PRClient interface {
-	FindOpenPullRequest(ctx context.Context, in gitea.FindOpenPullRequestInput) (*gitea.PullRequest, error)
-	CreatePullRequest(ctx context.Context, in gitea.CreatePullRequestInput) (*gitea.PullRequest, error)
 }
 
 // secretScanFn is the indirection used to swap the real workspace scanner
@@ -111,14 +102,6 @@ type failingStore interface {
 // artifacts (CHANGED_FILES.txt / RUN_SUMMARY.md / VERIFICATION.json) are
 // written by the runTask code path on the way out, so this function is
 // purely concerned with retry routing.
-//
-// terminal=true means the queue actually transitioned the row to
-// 'failed'; the worker's tracker hooks use this to skip status
-// mutations during transient retries (which would otherwise flicker
-// the linked Linear issue between In Progress and Rework, and trigger
-// the poller's Rework re-enqueue path so the same issue accumulates
-// duplicate tasks). A queue-side error propagates as terminal=false so
-// we keep the conservative (no Linear write) behavior on uncertainty.
 func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error) bool {
 	if runner.IsTimeout(err) {
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
@@ -140,6 +123,11 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 // runTask executes a single task end-to-end and returns a *RunTaskError when
 // the task fails, bundling the resolved workflow config so callers can route
 // retries by failure class. Returns nil on success.
+//
+// Per SPEC §1, push, PR creation, and tracker state writes are the agent's
+// responsibility. The worker's role is: claim, prepare workspace, resolve
+// workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
+// emit events, and clean up.
 func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
 	mgr := workspace.New(cfg.WorkspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
@@ -159,17 +147,6 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 			t.Model = "mock"
 		}
 	}
-
-	// The tracker transitioner is resolved from the workflow's tracker
-	// config (per-task, not per-worker) because each repo carries its
-	// own credentials. Constructed here so OnClaim sees the freshly
-	// loaded config; the same instance is reused for OnPRCreated below
-	// to amortize any future client-internal caching.
-	var tr Transitioner
-	if cfg.NewTransitioner != nil {
-		tr = cfg.NewTransitioner(wcfg.Tracker)
-	}
-	OnClaim(ctx, ev, tr, t, wcfg)
 
 	prompt := workflow.Render(wf.PromptTemplate, map[string]string{
 		"task.id":          t.ID,
@@ -211,24 +188,21 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	verifyDegraded, err := RunVerifyPhase(ctx, ev, t.ID, workdir, wcfg)
-	if err != nil {
+	if _, err := RunVerifyPhase(ctx, ev, t.ID, workdir, wcfg); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
 	// Gate: the runner is required to write .aiops/RUN_SUMMARY.md describing
-	// the change. If it is missing/empty/a placeholder we refuse to open a PR
-	// and emit `summary_missing` + `failed_attempt` events so the human can
-	// see exactly why the task did not progress. We do NOT fall back to a
-	// worker-generated summary here on purpose: the artifact must come from
-	// the runner so it reflects intent, not a synthesized recap. The failure
-	// path below (WriteFailureArtifacts) still seeds a worker summary for
-	// post-mortem inspection — that is observed but never gates a PR.
+	// the change. If it is missing/empty/a placeholder we refuse to record
+	// success and emit `summary_missing` + `failed_attempt` events so the
+	// human can see exactly why the task did not progress. We do NOT fall
+	// back to a worker-generated summary here on purpose: the artifact must
+	// come from the runner so it reflects intent, not a synthesized recap.
 	//
 	// This gate runs BEFORE the secret scanner: a run with no real summary
-	// is not allowed to push regardless of scanner outcome, and skipping the
-	// scanner on this path keeps the failure attribution unambiguous.
-	summary, status, checkErr := workspace.CheckSummary(workdir)
+	// is not allowed to proceed regardless of scanner outcome, and skipping
+	// the scanner on this path keeps the failure attribution unambiguous.
+	_, status, checkErr := workspace.CheckSummary(workdir)
 	if checkErr != nil {
 		Emit(ctx, ev, t.ID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
 			"path":  workspace.SummaryPath,
@@ -254,21 +228,18 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
 	}
 
-	// Run the optional pre-push secret scanner between the summary gate and
-	// push so a branch carrying credential leaks never reaches the remote.
-	// Failures flow through WriteFailureArtifacts + the existing
-	// failed_attempt path so operators can inspect what the scanner saw.
+	// Run the optional pre-push secret scanner. The scanner runs even
+	// though push is now the agent's responsibility — it acts as a final
+	// gate that fails the task before the orchestrator records success, so
+	// a branch carrying credential leaks is never considered complete.
 	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
-		WriteFailureArtifacts(ctx, workdir, nil, "secret scan blocked push: "+ErrSummary(err))
+		WriteFailureArtifacts(ctx, workdir, nil, "secret scan blocked: "+ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	// Snapshot the changed files AFTER the gate has accepted the runner's
-	// summary and the secret scanner has cleared the tree. We seed
-	// CHANGED_FILES.txt as an empty stub so it shows up in
-	// `git status --porcelain` alongside the runner-produced summary, then
-	// rewrite it with the final list. RUN_SUMMARY.md is intentionally NOT
-	// rewritten by the worker on the success path — see gate above.
+	// Snapshot the changed files after all gates have passed so
+	// CHANGED_FILES.txt is available as a workspace artifact for post-run
+	// inspection. This does not push anything; that is the agent's job.
 	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
 		log.Printf("task %s: seed changed files artifact: %v", t.ID, err)
 	}
@@ -277,42 +248,7 @@ func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
 	}
 
-	pushStart := time.Now()
-	if err := workspace.CommitAndPush(ctx, workdir, t.Title, t.WorkBranch); err != nil {
-		Emit(ctx, ev, t.ID, task.EventPush, "push failed", map[string]any{
-			"branch":      t.WorkBranch,
-			"duration_ms": time.Since(pushStart).Milliseconds(),
-			"error":       ErrSummary(err),
-		})
-		return &RunTaskError{Cfg: wcfg, Err: err}
-	}
-	Emit(ctx, ev, t.ID, task.EventPush, "push completed", map[string]any{
-		"branch":         t.WorkBranch,
-		"duration_ms":    time.Since(pushStart).Milliseconds(),
-		"changed_files":  len(changed),
-		"sample_changes": sampleSlice(changed, 10),
-	})
-
-	if verifyDegraded {
-		wcfg.PR.Draft = true
-	}
-	prErr := CreatePR(ctx, ev, t, wcfg, cfg, summary, verifyDegraded)
-	if prErr == nil {
-		// Fired on both create-new and reuse-existing paths so a retry
-		// that lands on an already-open PR still flips the Linear issue
-		// to "Human Review" — the human's signal that hands have been
-		// handed off, regardless of which gitea code path produced the PR.
-		OnPRCreated(ctx, ev, tr, t, wcfg)
-	}
-	return wrapErr(wcfg, prErr)
-}
-
-// wrapErr returns nil if err is nil, otherwise wraps it in a RunTaskError.
-func wrapErr(cfg workflow.Config, err error) *RunTaskError {
-	if err == nil {
-		return nil
-	}
-	return &RunTaskError{Cfg: cfg, Err: err}
+	return nil
 }
 
 // RunRunnerWithTimeout invokes the runner under a per-task timeout derived
@@ -382,12 +318,12 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 // and returns whether the run is in degraded mode. Degraded mode means
 // at least one command failed (or the phase deadline elapsed) AND the
 // operator has opted into verify.allow_failure: the caller continues
-// to PR creation but must mark the PR draft and annotate the body.
+// but must annotate the result. The agent is responsible for deciding
+// whether to open a draft PR when degraded=true.
 //
 // Returns (degraded, err). When err is non-nil, verify failed AND
-// allow_failure was off; the caller propagates the error and skips PR
-// creation. When degraded=true, err is nil but downstream stages must
-// signal the verify failure to the human.
+// allow_failure was off; the caller propagates the error. When
+// degraded=true, err is nil.
 func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string, cfg workflow.Config) (bool, error) {
 	Emit(ctx, ev, taskID, task.EventVerifyStart, "verify started", map[string]any{
 		"commands":      cfg.Verify.Commands,
@@ -414,7 +350,7 @@ func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string
 	// Parent context cancellation (worker shutdown, task abort) must always
 	// propagate, even when allow_failure is on. allow_failure only downgrades
 	// real verification failures — a canceled task is not an "investigation"
-	// case and must not result in a degraded PR being opened. RunVerify
+	// case and must not result in the task completing. RunVerify
 	// returns ctx.Err() directly on parent-cancel, so errors.Is matches.
 	if errors.Is(verifyErr, context.Canceled) || errors.Is(verifyErr, context.DeadlineExceeded) {
 		payload["status"] = "canceled"
@@ -444,8 +380,8 @@ func countVerifyFailures(results []workspace.VerifyResult) int {
 
 // runSecretScan executes the configured pre-push secret scanner and
 // records structured task events for the start, clean exit, finding, or
-// execution error cases. It returns a non-nil error only when the push
-// should be aborted, so the caller can simply propagate the error and let
+// execution error cases. It returns a non-nil error only when the task
+// should be failed, so the caller can simply propagate the error and let
 // the existing failed_attempt path take over.
 //
 // Event kinds emitted (mirroring the existing event vocabulary):
@@ -496,11 +432,11 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, work
 		msg := fmt.Sprintf("secret scan failed to execute: %v", res.Err)
 		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
 		// Execution errors always block: an operator-misconfigured scanner
-		// must not silently allow pushes.
+		// must not silently allow the task to complete.
 		return errors.New(msg)
 	default:
 		// Defensive: an unexpected status should not leak through. Treat
-		// like a violation so pushes are blocked rather than waved through.
+		// like a violation so the task is blocked rather than waved through.
 		msg := fmt.Sprintf("secret scan returned unexpected status %q", res.Status)
 		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
 		return errors.New(msg)
@@ -508,8 +444,7 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, work
 }
 
 // recordPolicyViolation writes a structured `policy_violation` task event
-// before the worker fails the task. The push/PR step is skipped because the
-// caller returns the error immediately after this call.
+// before the worker fails the task.
 func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error) {
 	if ev == nil {
 		return
@@ -521,54 +456,6 @@ func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, 
 		}
 	}
 	_ = ev.AddEvent(ctx, taskID, "policy_violation", err.Error())
-}
-
-// CreatePR creates a pull request using the gitea client configured from
-// the worker Config. Use CreatePRWith to inject a custom client.
-func CreatePR(ctx context.Context, ev EventEmitter, t task.Task, wcfg workflow.Config, workerCfg Config, summary string, verifyDegraded bool) error {
-	var client PRClient
-	if workerCfg.NewPRClient != nil {
-		client = workerCfg.NewPRClient()
-	} else {
-		client = gitea.Client{BaseURL: workerCfg.GiteaBaseURL, Token: workerCfg.GiteaToken}
-	}
-	return CreatePRWith(ctx, ev, t, wcfg, summary, verifyDegraded, client)
-}
-
-// CreatePRWith performs the PR handoff using the supplied client. It first
-// looks for an existing open PR for the work branch and reuses it instead of
-// asking Gitea to create a duplicate — this is what makes retries safe to
-// re-enter after a previous attempt already produced a PR. A list error is
-// logged and falls through to the create path so a transient Gitea hiccup
-// during the lookup does not block the task; the create call itself remains
-// the source of truth for surfacing real failures.
-func CreatePRWith(ctx context.Context, ev EventEmitter, t task.Task, cfg workflow.Config, summary string, verifyDegraded bool, client PRClient) error {
-	if existing, err := client.FindOpenPullRequest(ctx, gitea.FindOpenPullRequestInput{
-		Owner: t.RepoOwner, Repo: t.RepoName, Head: t.WorkBranch,
-	}); err != nil {
-		log.Printf("task %s: list open PRs failed: %v", t.ID, err)
-	} else if existing != nil {
-		Emit(ctx, ev, t.ID, task.EventPRReused, "pr reused", map[string]any{
-			"number":   existing.Number,
-			"html_url": existing.HTMLURL,
-			"title":    existing.Title,
-		})
-		log.Printf("task %s reused PR #%d %s", t.ID, existing.Number, existing.HTMLURL)
-		return nil
-	}
-	body := BuildPRBody(t, summary, verifyDegraded)
-	pr, err := client.CreatePullRequest(ctx, gitea.CreatePullRequestInput{Owner: t.RepoOwner, Repo: t.RepoName, Title: "chore(ai): " + t.Title, Body: body, Head: t.WorkBranch, Base: t.BaseBranch, Draft: cfg.PR.Draft})
-	if err != nil {
-		Emit(ctx, ev, t.ID, task.EventPRCreated, "pr creation failed", map[string]any{"error": ErrSummary(err)})
-		return err
-	}
-	Emit(ctx, ev, t.ID, task.EventPRCreated, "pr created", map[string]any{
-		"number":   pr.Number,
-		"html_url": pr.HTMLURL,
-		"title":    pr.Title,
-	})
-	log.Printf("task %s created PR #%d %s", t.ID, pr.Number, pr.HTMLURL)
-	return nil
 }
 
 func writeTaskFiles(workdir string, t task.Task, prompt string) error {
@@ -630,89 +517,29 @@ func SummarizeVerifyResults(results []workspace.VerifyResult) []map[string]any {
 	return out
 }
 
-// PRBodySummaryCap bounds how much of the runner-produced RUN_SUMMARY.md
-// we inline into the PR body. 8 KiB is well under Gitea's body limit and
-// keeps the rendered review page navigable; the full file is always
-// available via the .aiops/RUN_SUMMARY.md path linked beneath the excerpt.
-const PRBodySummaryCap = 8 << 10 // 8 KiB
-
-// BuildPRBody renders the pull request body with the runner-produced
-// RUN_SUMMARY.md content inlined (truncated to PRBodySummaryCap) and a link
-// to the full artifact path on the work branch. Callers must pass a summary
-// that has already been validated by workspace.CheckSummary. When
-// verifyDegraded is true (verify failed under verify.allow_failure), the
-// body is prepended with a blockquote banner pointing reviewers at
-// .aiops/VERIFICATION.txt.
-func BuildPRBody(t task.Task, summary string, verifyDegraded bool) string {
-	excerpt, truncated := truncateForPR(summary, PRBodySummaryCap)
-	var b strings.Builder
-	if verifyDegraded {
-		b.WriteString("> ⚠️ **Verification failed (investigation mode).** ")
-		b.WriteString("This PR was opened despite a failing verify phase because ")
-		b.WriteString("`verify.allow_failure` is enabled. Inspect ")
-		b.WriteString("`.aiops/VERIFICATION.txt` before merging.\n\n")
-	}
-	fmt.Fprintf(&b, "## AI Task\n\nTask ID: `%s`\n\n", t.ID)
-	fmt.Fprintf(&b, "## Source\n\n%s / %s\n\n", t.SourceType, t.SourceEventID)
-	b.WriteString("## Run summary\n\n")
-	if excerpt == "" {
-		// Should not happen because CheckSummary gates this, but stay safe.
-		b.WriteString("_No summary provided._\n\n")
-	} else {
-		b.WriteString(excerpt)
-		if !strings.HasSuffix(excerpt, "\n") {
-			b.WriteString("\n")
-		}
-		if truncated {
-			fmt.Fprintf(&b, "\n_Summary truncated at %d bytes; see full artifact below._\n", PRBodySummaryCap)
-		}
-		b.WriteString("\n")
-	}
-	fmt.Fprintf(&b, "Full artifact: `%s` on `%s`.\n\n", workspace.SummaryPath, t.WorkBranch)
-	b.WriteString("## Verification\n\nSee `.aiops/VERIFICATION.txt` and worker logs.\n\n")
-	b.WriteString("## Risk\n\nHuman review required.\n")
-	return b.String()
-}
-
-// truncateForPR returns the head of s up to cap bytes (UTF-8 safe at the
-// boundary) along with a flag indicating whether truncation occurred.
-func truncateForPR(s string, cap int) (string, bool) {
-	if cap <= 0 || len(s) <= cap {
-		return s, false
-	}
-	cut := cap
-	// Walk back to a rune boundary so we never split a multi-byte sequence.
-	for cut > 0 && (s[cut]&0xC0) == 0x80 {
-		cut--
-	}
-	return s[:cut], true
-}
-
-// runSummaryDirective is the line we append to every rendered prompt so
-// runners (codex/claude) know the worker will reject the task without a
-// runner-produced .aiops/RUN_SUMMARY.md. The mock runner writes one
-// directly; this directive is the contract for shell-based runners.
+// runSummaryDirective is appended to every rendered prompt so runners know the
+// worker requires a RUN_SUMMARY.md artifact. The directive intentionally does
+// not tell the in-run agent to push or open a PR: worker-side policy,
+// verification, summary, and secret-scan gates run after the runner exits, so
+// publication must happen only in a post-gate agent/tool handoff. Per SPEC §1,
+// push and PR creation are not orchestrator responsibilities either.
 const runSummaryDirective = "\n\n---\n\n" +
-	"**Required output:** before exiting, you MUST write " +
-	"`.aiops/RUN_SUMMARY.md` describing what you changed, why, and how it " +
-	"was verified. The task will fail if this file is missing, empty, or " +
-	"contains only a placeholder."
+	"**Required output:** before exiting, you MUST:\n" +
+	"1. Write `.aiops/RUN_SUMMARY.md` describing what you changed, why, and how " +
+	"it was verified. The task will fail if this file is missing, empty, or " +
+	"contains only a placeholder.\n" +
+	"2. Do not push branches or open pull requests from inside this runner. " +
+	"Those publication steps are performed by agent/tool handoff only after " +
+	"worker-side gates pass."
 
 // AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
 // prompt unless it is already present (so workflow templates that already
 // include the directive do not get a duplicate).
 func AppendRunSummaryDirective(prompt string) string {
-	if strings.Contains(prompt, "RUN_SUMMARY.md") {
+	if strings.Contains(prompt, "worker-side gates pass") || strings.Contains(prompt, "inside this runner") {
 		return prompt
 	}
 	return prompt + runSummaryDirective
-}
-
-func sampleSlice(items []string, max int) []string {
-	if len(items) <= max {
-		return items
-	}
-	return items[:max]
 }
 
 // addOutputFields merges runner Result output telemetry into a payload map
