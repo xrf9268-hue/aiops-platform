@@ -524,7 +524,12 @@ log=open(os.environ['CODEX_STDIN_LOG'], 'w')
 approval_methods = [
     ('approval-command', 'item/commandExecution/requestApproval', {'command': 'go test ./...'}, {'decision': 'acceptForSession'}),
     ('approval-file', 'item/fileChange/requestApproval', {'path': 'main.go'}, {'decision': 'acceptForSession'}),
-    ('approval-permissions', 'item/permissions/requestApproval', {'permissions': ['filesystem.write']}, {'permissions': ['filesystem.write']}),
+    (
+        'approval-permissions',
+        'item/permissions/requestApproval',
+        {'permissions': {'filesystem': {'write': True}, 'network': {'enabled': False}}},
+        {'permissions': {'filesystem': {'write': True}, 'network': {'enabled': False}}},
+    ),
 ]
 pending = list(approval_methods)
 for line in sys.stdin:
@@ -566,7 +571,7 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"decision":"acceptForSession"`, `"permissions":["filesystem.write"]`} {
+	for _, want := range []string{`"decision":"acceptForSession"`, `"permissions":{"filesystem":{"write":true},"network":{"enabled":false}}`} {
 		if !strings.Contains(string(stdin), want) {
 			t.Fatalf("stdin missing %s in approval responses: %s", want, stdin)
 		}

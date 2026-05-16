@@ -380,8 +380,7 @@ func protocolValidApprovalResult(method string, msg map[string]any) (map[string]
 		return map[string]any{"decision": "acceptForSession"}, true
 	case "item/permissions/requestApproval":
 		params, _ := msg["params"].(map[string]any)
-		permissions, _ := params["permissions"].([]any)
-		return map[string]any{"permissions": permissions}, true
+		return map[string]any{"permissions": params["permissions"]}, true
 	default:
 		return nil, false
 	}
