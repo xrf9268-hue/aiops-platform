@@ -97,7 +97,7 @@ func (m *Manager) PathFor(t task.Task) string {
 
 func issueWorkspaceKey(t task.Task) string {
 	if strings.TrimSpace(t.SourceType) != "" && strings.TrimSpace(t.SourceEventID) != "" {
-		return sanitize(t.SourceType + "-" + t.SourceEventID)
+		return filepath.Join(sanitize(t.SourceType), sanitize(t.SourceEventID))
 	}
 	return sanitize(t.ID)
 }

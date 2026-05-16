@@ -215,7 +215,7 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	second.ID = "tsk-second"
 	second.WorkBranch = "ai/tsk-second"
 
-	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear-issue-issue-abc-123-needs-fix"); got != want {
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear-issue", "issue-abc-123-needs-fix"); got != want {
 		t.Fatalf("PathFor() = %q, want %q", got, want)
 	}
 	collidingOwner := first
@@ -232,6 +232,13 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	other.SourceEventID = "Issue/ABC 124"
 	if got := mgr.PathFor(other); got == mgr.PathFor(first) {
 		t.Fatalf("different issue identifiers collided at %q", got)
+	}
+
+	collidingSourceBoundary := first
+	collidingSourceBoundary.SourceType = "linear_issue-issue"
+	collidingSourceBoundary.SourceEventID = "ABC 123!!Needs_Fix"
+	if got := mgr.PathFor(collidingSourceBoundary); got == mgr.PathFor(first) {
+		t.Fatalf("source type/event boundary collapsed into colliding workspace path %q", got)
 	}
 
 	fallback := first
