@@ -30,9 +30,44 @@ func main() {
 
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 	if path := os.Getenv("AIOPS_WORKFLOW_PATH"); path != "" {
-		return workflow.Load(path)
+		wf, err := workflow.Load(path)
+		if err != nil {
+			return nil, err
+		}
+		hasFront, err := workflow.HasFrontMatterAt(path)
+		if err != nil {
+			return nil, err
+		}
+		source := workflow.SourceFile
+		if !hasFront {
+			source = workflow.SourcePromptOnly
+		}
+		logStartupReconcileWorkflow(&workflow.Resolution{Source: source, Path: path}, wf)
+		return wf, nil
 	}
-	return workflow.LoadOptional("WORKFLOW.md")
+
+	workdir, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	wf, resolution, err := workflow.Resolve(workdir)
+	if err != nil {
+		return nil, err
+	}
+	logStartupReconcileWorkflow(resolution, wf)
+	return wf, nil
+}
+
+func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.Workflow) {
+	if resolution.Source == workflow.SourceDefault {
+		log.Printf("startup reconciliation: workflow source=%s tracker.kind=%s; reconciliation will be skipped unless tracker.kind is linear", resolution.Source, wf.Config.Tracker.Kind)
+		return
+	}
+	if wf.Config.Tracker.Kind != "linear" {
+		log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s; reconciliation will be skipped unless tracker.kind is linear", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
+		return
+	}
+	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 
 func run() error {
