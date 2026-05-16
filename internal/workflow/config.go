@@ -92,6 +92,16 @@ type CommandConfig struct {
 	// copy-paste mistake fails loud at load time instead of silently doing
 	// nothing.
 	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
+	// App-server runtime settings mirror the Symphony/Codex app-server
+	// protocol fields. They are pass-through values for the Codex runtime,
+	// so the loader validates only presence/timeout bounds rather than
+	// maintaining Codex-owned enums.
+	ApprovalPolicy    any            `yaml:"approval_policy,omitempty" json:"approval_policy,omitempty"`
+	ThreadSandbox     string         `yaml:"thread_sandbox,omitempty" json:"thread_sandbox,omitempty"`
+	TurnSandboxPolicy map[string]any `yaml:"turn_sandbox_policy,omitempty" json:"turn_sandbox_policy,omitempty"`
+	TurnTimeoutMs     int            `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
+	ReadTimeoutMs     int            `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
+	StallTimeoutMs    int            `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
 }
 
 type PolicyConfig struct {
@@ -195,10 +205,18 @@ func DefaultConfig() Config {
 		Agent: AgentConfig{
 			Default:             "mock",
 			MaxConcurrentAgents: 1,
-			MaxTurns:            8,
+			MaxTurns:            20,
 			Timeout:             30 * time.Minute,
 		},
-		Codex:  CommandConfig{Command: "codex exec", Profile: "safe"},
+		Codex: CommandConfig{
+			Command:        "codex exec",
+			Profile:        "safe",
+			ApprovalPolicy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}},
+			ThreadSandbox:  "workspace-write",
+			TurnTimeoutMs:  3600000,
+			ReadTimeoutMs:  5000,
+			StallTimeoutMs: 300000,
+		},
 		Claude: CommandConfig{Command: "claude"},
 		Policy: PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
 		Verify: VerifyConfig{Commands: []string{}},

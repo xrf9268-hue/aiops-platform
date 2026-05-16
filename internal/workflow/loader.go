@@ -62,9 +62,10 @@ var supportedTrackerKinds = map[string]struct{}{
 // claimed and the workspace prepared — into a load-time configuration
 // error with the workflow file path attached.
 var supportedAgentDefaults = map[string]struct{}{
-	"mock":   {},
-	"codex":  {},
-	"claude": {},
+	"mock":             {},
+	"codex":            {},
+	"codex-app-server": {},
+	"claude":           {},
 }
 
 // supportedCodexProfiles enumerates the codex runner profile names the
@@ -92,13 +93,26 @@ func validateConfig(path string, cfg Config) error {
 		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, linear)", path, cfg.Tracker.Kind)
 	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
-		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, claude)", path, cfg.Agent.Default)
+		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, codex-app-server, claude)", path, cfg.Agent.Default)
 	}
 	if _, ok := supportedCodexProfiles[cfg.Codex.Profile]; !ok {
 		return fmt.Errorf("%s: codex.profile %q is not supported (allowed: safe, bypass, custom)", path, cfg.Codex.Profile)
 	}
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
+	}
+	var invalid []string
+	if cfg.Codex.TurnTimeoutMs <= 0 {
+		invalid = append(invalid, "codex.turn_timeout_ms")
+	}
+	if cfg.Codex.ReadTimeoutMs <= 0 {
+		invalid = append(invalid, "codex.read_timeout_ms")
+	}
+	if cfg.Codex.StallTimeoutMs < 0 {
+		invalid = append(invalid, "codex.stall_timeout_ms")
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("%s: invalid codex app-server timeout settings: %s", path, strings.Join(invalid, ", "))
 	}
 	return nil
 }
@@ -201,6 +215,12 @@ func expandConfig(cfg *Config) {
 	}
 	if cfg.Codex.Profile == "" {
 		cfg.Codex.Profile = "safe"
+	}
+	if cfg.Codex.ThreadSandbox == "" {
+		cfg.Codex.ThreadSandbox = "workspace-write"
+	}
+	if cfg.Codex.ApprovalPolicy == nil {
+		cfg.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}}
 	}
 }
 

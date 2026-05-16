@@ -631,3 +631,92 @@ prompt
 		t.Fatalf("error = %q; want it to mention claude.profile", err)
 	}
 }
+
+func TestLoad_AcceptsCodexAppServerRunnerAndRuntimeSettings(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: codex-app-server
+codex:
+  command: codex app-server
+  approval_policy: never
+  thread_sandbox: workspace-write
+  turn_sandbox_policy:
+    mode: workspace-write
+  turn_timeout_ms: 120000
+  read_timeout_ms: 250
+  stall_timeout_ms: 0
+---
+prompt
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Agent.Default != "codex-app-server" {
+		t.Fatalf("Agent.Default = %q, want codex-app-server", wf.Config.Agent.Default)
+	}
+	if wf.Config.Codex.Command != "codex app-server" {
+		t.Fatalf("Codex.Command = %q, want codex app-server", wf.Config.Codex.Command)
+	}
+	if wf.Config.Codex.ApprovalPolicy != "never" {
+		t.Fatalf("Codex.ApprovalPolicy = %#v, want never", wf.Config.Codex.ApprovalPolicy)
+	}
+	if wf.Config.Codex.ThreadSandbox != "workspace-write" {
+		t.Fatalf("Codex.ThreadSandbox = %q, want workspace-write", wf.Config.Codex.ThreadSandbox)
+	}
+	if got := wf.Config.Codex.TurnSandboxPolicy["mode"]; got != "workspace-write" {
+		t.Fatalf("Codex.TurnSandboxPolicy[mode] = %#v, want workspace-write", got)
+	}
+	if wf.Config.Codex.TurnTimeoutMs != 120000 || wf.Config.Codex.ReadTimeoutMs != 250 || wf.Config.Codex.StallTimeoutMs != 0 {
+		t.Fatalf("Codex timeouts = turn %d read %d stall %d, want 120000/250/0", wf.Config.Codex.TurnTimeoutMs, wf.Config.Codex.ReadTimeoutMs, wf.Config.Codex.StallTimeoutMs)
+	}
+}
+
+func TestDefaultConfig_CodexAppServerDefaultsPreserveOneShotCommand(t *testing.T) {
+	t.Parallel()
+	cfg := DefaultConfig()
+	if cfg.Codex.Command != "codex exec" {
+		t.Fatalf("Default Codex.Command = %q, want legacy codex exec", cfg.Codex.Command)
+	}
+	if cfg.Agent.MaxTurns != 20 {
+		t.Fatalf("Default Agent.MaxTurns = %d, want Symphony default 20", cfg.Agent.MaxTurns)
+	}
+	if cfg.Codex.ThreadSandbox != "workspace-write" {
+		t.Fatalf("Default Codex.ThreadSandbox = %q, want workspace-write", cfg.Codex.ThreadSandbox)
+	}
+	if cfg.Codex.TurnTimeoutMs != 3600000 || cfg.Codex.ReadTimeoutMs != 5000 || cfg.Codex.StallTimeoutMs != 300000 {
+		t.Fatalf("Codex timeout defaults = turn %d read %d stall %d", cfg.Codex.TurnTimeoutMs, cfg.Codex.ReadTimeoutMs, cfg.Codex.StallTimeoutMs)
+	}
+}
+
+func TestLoad_RejectsInvalidCodexAppServerTimeouts(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+agent:
+  default: codex-app-server
+codex:
+  turn_timeout_ms: 0
+  read_timeout_ms: 0
+  stall_timeout_ms: -1
+---
+prompt
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load: expected error for invalid codex app-server timeouts, got nil")
+	}
+	for _, want := range []string{"codex.turn_timeout_ms", "codex.read_timeout_ms", "codex.stall_timeout_ms"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q; want substring %q", err, want)
+		}
+	}
+}

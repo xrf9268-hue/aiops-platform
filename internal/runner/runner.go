@@ -35,6 +35,8 @@ func New(name string) (Runner, error) {
 		return MockRunner{}, nil
 	case "codex":
 		return CodexRunner{}, nil
+	case "codex-app-server":
+		return CodexAppServerRunner{}, nil
 	case "claude":
 		return ShellRunner{Name: "claude"}, nil
 	default:
