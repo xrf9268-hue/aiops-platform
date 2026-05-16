@@ -231,6 +231,9 @@ func countGraphQLOperations(query string) int {
 			}
 			continue
 		case '{':
+			if depth == 0 && !operationHeader {
+				count++
+			}
 			depth++
 			operationHeader = false
 			i++

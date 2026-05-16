@@ -220,6 +220,46 @@ func TestLinearGraphQLRejectsMultipleOperationsWithoutHTTPRequest(t *testing.T) 
 	}
 }
 
+func TestLinearGraphQLRejectsMultipleAnonymousOperationsWithoutHTTPRequest(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+		call(context.Background(), ToolCall{Query: `{ viewer { id } }
+{ issue(id: "1") { title } }`})
+	assertStructuredFailure(t, result, err, "linear_graphql query must contain exactly one operation")
+	_, _, requests := server.recorded()
+	if requests != 0 {
+		t.Fatalf("server received %d requests, want 0", requests)
+	}
+}
+
+func TestLinearGraphQLAllowsSingleAnonymousOperation(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+		call(context.Background(), ToolCall{Query: `{ viewer { id } }`})
+	if err != nil {
+		t.Fatalf("linear_graphql call: %v", err)
+	}
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("result is not structured JSON: %v", err)
+	}
+	if !payload.Success {
+		t.Fatalf("success = false, want true; result=%s", result)
+	}
+	_, _, requests := server.recorded()
+	if requests != 1 {
+		t.Fatalf("server received %d requests, want 1", requests)
+	}
+}
+
 func TestLinearGraphQLAllowsOperationWordsInsideSingleOperationBody(t *testing.T) {
 	server := &fakeLinearGraphQLServer{}
 	httpServer := httptest.NewServer(server.handler())
