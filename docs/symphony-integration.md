@@ -18,7 +18,7 @@ Linear or Gitea task
   -> WORKFLOW.md
   -> runner
   -> verification
-  -> pull request handoff
+  -> agent-side branch push + pull request handoff
 ```
 
 ## Mapping
@@ -30,7 +30,7 @@ Linear or Gitea task
 | Workspace manager | `internal/workspace` |
 | Agent runner | `internal/runner` |
 | Status history | `tasks` and `task_events` tables |
-| Git handoff | `internal/gitea` |
+| Git handoff | agent via dynamic tool / CLI (`internal/gitea` backs the tool implementation) |
 
 ## Usage model
 
@@ -41,7 +41,7 @@ agent:
   default: mock
 ```
 
-After the queue, workspace, branch, and pull request loop works, switch personal projects to:
+After the queue, workspace, and agent-side branch/PR handoff loop works, switch personal projects to:
 
 ```yaml
 agent:
@@ -62,11 +62,11 @@ Implemented:
 - deterministic local workspace
 - basic path policy
 - verification commands
-- Gitea pull request creation
+- Gitea PR client code for the agent-side PR tool
 
 Not yet implemented:
 
-- Linear status update after completion
+- dynamic `linear_graphql` / PR tools exposed through the app-server protocol
 - pull request labels and reviewers
 - multi-run reconciliation
 - dashboard

@@ -8,14 +8,12 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
-	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
-	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // runStore is the subset of queue.Store that Run actually exercises:
 // claim/complete on the loop, AddEvent* via the EventEmitter contract, and
 // Fail/FailTimeout via the failingStore contract. Defined as an interface
-// so the worker loop's tracker-hook gating can be tested against a fake
+// so the worker loop's failure-handling logic can be tested against a fake
 // without standing up Postgres. *queue.Store satisfies it implicitly.
 type runStore interface {
 	Claim(ctx context.Context) (*task.Task, error)
@@ -28,26 +26,17 @@ type runStore interface {
 // previously read via os.Getenv inside the request path are now threaded
 // through Config so callers (including in-process e2e tests) can inject them
 // without environment mutation.
+//
+// Per SPEC §1, push, PR creation, and tracker state writes are the agent's
+// responsibility. The worker no longer holds Gitea tokens or tracker
+// transitioner factories — those are provided to the agent via dynamic
+// tools (pending #64).
 type Config struct {
 	DSN             string
 	WorkspaceRoot   string
 	MirrorRoot      string
-	GiteaBaseURL    string
-	GiteaToken      string
 	IdleSleep       time.Duration
 	ClaimErrorSleep time.Duration
-	// NewTransitioner builds the per-task tracker.Transitioner used by
-	// the Linear status-transition hooks (OnClaim / OnPRCreated /
-	// OnFailure). Resolved per-task because each repo carries its own
-	// tracker credentials in WORKFLOW.md, not from worker env. Returning
-	// nil disables the hooks (e.g. for non-Linear trackers, empty
-	// API keys, or tests that do not exercise this path).
-	NewTransitioner func(workflow.TrackerConfig) Transitioner
-	// NewPRClient builds the per-call PRClient used by CreatePR. When
-	// nil, the default gitea.Client built from GiteaBaseURL/Token is
-	// used. Tests inject a fake here so runTask can be exercised
-	// without a live Gitea server.
-	NewPRClient func() PRClient
 }
 
 // LoadConfigFromEnv reads the worker configuration from the environment using
@@ -57,26 +46,9 @@ func LoadConfigFromEnv() Config {
 		DSN:             env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
 		WorkspaceRoot:   env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"),
 		MirrorRoot:      os.Getenv("AIOPS_MIRROR_ROOT"),
-		GiteaBaseURL:    os.Getenv("GITEA_BASE_URL"),
-		GiteaToken:      os.Getenv("GITEA_TOKEN"),
 		IdleSleep:       3 * time.Second,
 		ClaimErrorSleep: 5 * time.Second,
-		NewTransitioner: defaultNewTransitioner,
 	}
-}
-
-// defaultNewTransitioner is the production factory for Transitioner.
-// Linear is the only tracker today that exposes mutation APIs we wired
-// up; gitea webhooks do not need outbound state writes (the state is
-// the issue itself in Gitea), so we return nil for non-Linear kinds and
-// for Linear configs without an API key (e.g. while a workflow is being
-// authored locally without secrets exported). nil is a documented
-// no-op signal, not an error.
-func defaultNewTransitioner(tcfg workflow.TrackerConfig) Transitioner {
-	if tcfg.Kind != "linear" || tcfg.APIKey == "" {
-		return nil
-	}
-	return tracker.NewLinearClient(tcfg)
 }
 
 // PrintConfig dispatches the `worker --print-config <workdir>` subcommand.
@@ -108,21 +80,7 @@ func Run(ctx context.Context, store runStore, cfg Config) {
 		if rterr := runTask(ctx, store, *t, cfg); rterr != nil {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
 			cleanupCtx, cancel := terminalUpdateContext(ctx)
-			terminal := handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
-			// Only announce the failure to Linear once the queue agrees
-			// the task is done — i.e. attempts >= max_attempts (or the
-			// timeout retry budget exhausted). Firing on every transient
-			// re-queue would flicker the issue between In Progress and
-			// Rework, and the Rework move would trip cmd/linear-poller's
-			// re-enqueue path (#43), creating a duplicate task each time
-			// while the original is still being retried internally.
-			if terminal {
-				var tr Transitioner
-				if cfg.NewTransitioner != nil {
-					tr = cfg.NewTransitioner(rterr.Cfg.Tracker)
-				}
-				OnFailure(cleanupCtx, store, tr, *t, rterr.Cfg, rterr.Err)
-			}
+			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
 			cancel()
 			if ctx.Err() != nil {
 				return

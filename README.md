@@ -23,7 +23,7 @@ Linear or Gitea task
   -> WORKFLOW.md policy + prompt
   -> mock / Codex / Claude runner
   -> verification
-  -> draft PR handoff
+  -> agent-side branch push + PR handoff
 ```
 
 ## Two-track workflow
@@ -45,7 +45,7 @@ This repository implements the second track.
 - `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
 - `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
 - `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
-- `internal/gitea`: webhook parser, signature verification, and PR client.
+- `internal/gitea`: webhook parser, signature verification, and the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
 
 ## WORKFLOW.md discovery
 
@@ -82,11 +82,12 @@ the remaining commands are skipped; the task fails through the normal verify
 path unless `verify.allow_failure` is set.
 
 `verify.allow_failure: true` opts the worker into "investigation mode": when
-verify fails the worker still opens a draft PR (regardless of `pr.draft`),
-emits a `verify_end` event with `status: failed_allowed`, and prepends a
-warning banner to the PR body pointing to `.aiops/VERIFICATION.txt`. Use this
-when you want to inspect what the agent produced even though the checks
-flagged it. Default is `false`; failed verification blocks PR creation.
+verify fails the worker emits a `verify_end` event with
+`status: failed_allowed` and still requires the agent-produced summary. The
+agent remains responsible for any branch push or PR handoff it performs from
+the workflow/tool surface. Use this when you want to inspect what the agent
+produced even though the checks flagged it. Default is `false`; failed
+verification blocks the worker from marking the run successful.
 
 To inspect the effective configuration for a workdir without consuming a task:
 
@@ -177,7 +178,8 @@ agent:
 ## Safety notes
 
 - Keep branch protection enabled.
-- The worker opens PRs; it does not merge them.
+- The agent opens PRs through its workflow/tool surface; the worker does not
+  push, open, or merge PRs.
 - Use a low-privilege bot account for Gitea.
 - Keep company repositories in draft-PR or analysis-only mode until the workflow is trusted.
 - Do not commit real credentials to `.env`, `.env.example`, or `WORKFLOW.md`.

@@ -89,8 +89,6 @@ func setupTestbed(ctx context.Context) (*testbed, error) {
 	cfg := worker.Config{
 		WorkspaceRoot:   tmpDir(),
 		MirrorRoot:      tmpDir(),
-		GiteaBaseURL:    g.baseURL,
-		GiteaToken:      g.botToken,
 		IdleSleep:       200 * time.Millisecond,
 		ClaimErrorSleep: 200 * time.Millisecond,
 	}

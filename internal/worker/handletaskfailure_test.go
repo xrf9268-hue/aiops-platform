@@ -13,7 +13,7 @@ import (
 
 // fakeFailingStore mocks the queue.Store subset handleTaskFailure
 // uses. Tests script Fail/FailTimeout return values to drive the
-// terminality decision the worker hands to OnFailure.
+// terminality decision returned to the worker loop.
 type fakeFailingStore struct {
 	failResult      bool
 	failErr         error
@@ -48,7 +48,7 @@ func sampleTask() task.Task {
 
 // TestHandleTaskFailure_NonTimeoutTerminalReportsTrue locks the
 // contract that the queue's Fail returning terminal=true propagates
-// back to the caller, which is what gates the OnFailure tracker move.
+// back to the caller for retry accounting.
 func TestHandleTaskFailure_NonTimeoutTerminalReportsTrue(t *testing.T) {
 	store := &fakeFailingStore{failResult: true}
 	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("policy violation"))
@@ -66,9 +66,7 @@ func TestHandleTaskFailure_NonTimeoutTerminalReportsTrue(t *testing.T) {
 // TestHandleTaskFailure_NonTimeoutRequeueReportsFalse pins the
 // behaviour the spec criterion 3 hinges on: when the queue re-queues
 // the task for another attempt, the worker must not announce a
-// terminal failure (otherwise OnFailure would move the Linear issue to
-// Rework, the poller would re-enqueue, and the original re-queued task
-// plus the new poller task would race on the same issue).
+// terminal failure to its retry accounting.
 func TestHandleTaskFailure_NonTimeoutRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failResult: false}
 	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("verify failed"))
@@ -79,8 +77,7 @@ func TestHandleTaskFailure_NonTimeoutRequeueReportsFalse(t *testing.T) {
 
 // TestHandleTaskFailure_NonTimeoutErrorIsConservative covers the rare
 // path where the queue write itself fails. We can't tell whether the
-// task is terminal, so we report false and skip the tracker mutation
-// — better to leave the Linear issue stale than to falsely announce a
+// task is terminal, so we report false rather than falsely announcing a
 // final failure based on indeterminate queue state.
 func TestHandleTaskFailure_NonTimeoutErrorIsConservative(t *testing.T) {
 	store := &fakeFailingStore{failErr: errors.New("db down")}
@@ -111,10 +108,10 @@ func TestHandleTaskFailure_TimeoutRequeueReportsFalse(t *testing.T) {
 }
 
 // TestHandleTaskFailure_TimeoutBudgetExhaustedReportsTrue confirms
-// timeouts that exhaust the dedicated retry budget do reach Linear:
-// the operator needs the issue surfaced so they can intervene
-// (raise the budget, switch runners, etc.) rather than have the
-// worker silently drop the failure.
+// timeouts that exhaust the dedicated retry budget are terminal: the
+// operator needs the failure surfaced so they can intervene (raise the
+// budget, switch runners, etc.) rather than have the worker silently
+// drop the failure.
 func TestHandleTaskFailure_TimeoutBudgetExhaustedReportsTrue(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: false} // permanently failed
 	cfg := workflow.Config{}

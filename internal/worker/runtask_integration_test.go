@@ -9,10 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
-	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // initBareUpstreamWithWorkflow seeds a bare upstream repo containing the
@@ -95,119 +93,58 @@ agent:
 do the work for {{task.title}}
 `
 
-// workerCfgForIntegration assembles the Config the integration tests share:
-// per-test workspace/mirror roots plus the fake transitioner/PR-client
-// factories. Returns the cfg with fakes already wired.
-func workerCfgForIntegration(t *testing.T, tr *fakeTransitioner, pr *fakePRClient) worker.Config {
+// workerCfgForIntegration assembles the Config the integration tests share.
+func workerCfgForIntegration(t *testing.T) worker.Config {
 	t.Helper()
 	return worker.Config{
 		WorkspaceRoot: t.TempDir(),
 		MirrorRoot:    t.TempDir(),
-		NewTransitioner: func(_ workflow.TrackerConfig) worker.Transitioner {
-			return tr
-		},
-		NewPRClient: func() worker.PRClient { return pr },
 	}
 }
 
-// TestRunTask_FiresClaimThenPRCreatedOnSuccess pins acceptance criterion 1
-// for issue #60: when runTask completes successfully against a linear
-// tracker config, the transitioner sees the move calls in order
-// (InProgress on claim, then HumanReview on PR open), and the
-// tracker_transition events are sequenced after workflow_resolved so a
-// future refactor that reorders OnClaim ahead of ResolveWorkflow is
-// caught.
-func TestRunTask_FiresClaimThenPRCreatedOnSuccess(t *testing.T) {
+// TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1
+// boundary: a successful worker run prepares the workspace, executes the
+// agent, and enforces gates, but it does not push branches, create PRs, or
+// mutate tracker state. Those writes belong to the agent/tool surface.
+func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
 
-	tr := &fakeTransitioner{}
-	pr := &fakePRClient{
-		createPR: &gitea.PullRequest{Number: 7, HTMLURL: "http://gitea.local/acme/demo/pulls/7", Title: "chore(ai): integration"},
-	}
 	ev := &fakeEmitter{}
-	cfg := workerCfgForIntegration(t, tr, pr)
+	cfg := workerCfgForIntegration(t)
 
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
 
-	if len(tr.moves) != 2 {
-		t.Fatalf("MoveIssueToState calls = %d, want 2 (claim + pr); got %#v", len(tr.moves), tr.moves)
+	for _, forbidden := range []string{
+		task.EventPush,
+		task.EventPRCreated,
+		task.EventPRReused,
+		task.EventTrackerTransition,
+		task.EventTrackerTransitionError,
+		task.EventTrackerComment,
+	} {
+		if got := len(ev.byKind(forbidden)); got != 0 {
+			t.Fatalf("worker emitted forbidden event %q %d time(s); events=%#v", forbidden, got, ev.events)
+		}
 	}
-	if tr.moves[0] != (moveCall{IssueID: "issue-uuid", State: "In Progress"}) {
-		t.Fatalf("first move = %#v, want issue-uuid -> In Progress", tr.moves[0])
-	}
-	if tr.moves[1] != (moveCall{IssueID: "issue-uuid", State: "Human Review"}) {
-		t.Fatalf("second move = %#v, want issue-uuid -> Human Review", tr.moves[1])
-	}
-
-	// The PR client must have been asked to create (not just looked up):
-	// guards the create-new path explicitly.
-	if len(pr.createCalls) != 1 {
-		t.Fatalf("CreatePullRequest calls = %d, want 1 on create-new path", len(pr.createCalls))
-	}
-
-	// Order: workflow_resolved (from ResolveWorkflow) must appear before
-	// the first tracker_transition (from OnClaim). Guards against a
-	// refactor that fires OnClaim before the workflow is loaded, which
-	// would race the per-task tracker config we resolve from
-	// wf.Config.Tracker.
-	idxResolved := indexOfEvent(ev, task.EventWorkflowResolved)
-	idxFirstTransition := indexOfEvent(ev, task.EventTrackerTransition)
-	if idxResolved < 0 {
+	if idxResolved := indexOfEvent(ev, task.EventWorkflowResolved); idxResolved < 0 {
 		t.Fatalf("workflow_resolved event not emitted; events=%#v", ev.events)
 	}
-	if idxFirstTransition < 0 {
-		t.Fatalf("tracker_transition event not emitted")
+	if got := len(ev.byKind(task.EventRunnerEnd)); got != 1 {
+		t.Fatalf("runner_end events = %d, want 1; events=%#v", got, ev.events)
 	}
-	if idxFirstTransition < idxResolved {
-		t.Fatalf("tracker_transition (idx=%d) fired before workflow_resolved (idx=%d); OnClaim must run after ResolveWorkflow", idxFirstTransition, idxResolved)
-	}
-
-	// Order: pr_created must appear before the second tracker_transition,
-	// because OnPRCreated only runs when CreatePR returned nil.
-	idxPRCreated := indexOfEvent(ev, task.EventPRCreated)
-	idxLastTransition := lastIndexOfEvent(ev, task.EventTrackerTransition)
-	if idxPRCreated < 0 {
-		t.Fatalf("pr_created event not emitted")
-	}
-	if idxLastTransition <= idxPRCreated {
-		t.Fatalf("second tracker_transition (idx=%d) must fire after pr_created (idx=%d)", idxLastTransition, idxPRCreated)
-	}
-}
-
-// TestRunTask_FiresPRCreatedOnReusePath covers the second half of AC1:
-// when CreatePR takes the reuse-existing branch (FindOpenPullRequest
-// returns a PR), OnPRCreated must still fire so the linked Linear issue
-// flips to Human Review. A retry that lands on an already-open PR should
-// not skip the tracker handoff.
-func TestRunTask_FiresPRCreatedOnReusePath(t *testing.T) {
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
-	t.Setenv("REPO_URL", cloneURL)
-
-	tr := &fakeTransitioner{}
-	pr := &fakePRClient{
-		findResult: &gitea.PullRequest{Number: 13, HTMLURL: "http://gitea.local/acme/demo/pulls/13", Title: "chore(ai): integration"},
-	}
-	cfg := workerCfgForIntegration(t, tr, pr)
-	ev := &fakeEmitter{}
-
-	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
-		t.Fatalf("runTask: %v", rterr.Err)
+	if got := len(ev.byKind(task.EventVerifyEnd)); got != 1 {
+		t.Fatalf("verify_end events = %d, want 1; events=%#v", got, ev.events)
 	}
 
-	if len(pr.createCalls) != 0 {
-		t.Fatalf("CreatePullRequest must not be called on reuse path; got %d", len(pr.createCalls))
+	refs, err := exec.Command("git", "--git-dir", cloneURL[len("file://"):], "for-each-ref", "--format=%(refname:short)", "refs/heads").CombinedOutput()
+	if err != nil {
+		t.Fatalf("list upstream refs: %v\n%s", err, refs)
 	}
-	if len(tr.moves) != 2 {
-		t.Fatalf("MoveIssueToState calls = %d, want 2 even on reuse path; got %#v", len(tr.moves), tr.moves)
-	}
-	if tr.moves[1].State != "Human Review" {
-		t.Fatalf("second move state = %q, want \"Human Review\" on PR reuse", tr.moves[1].State)
-	}
-	if got := len(ev.byKind(task.EventPRReused)); got != 1 {
-		t.Fatalf("pr_reused events = %d, want 1", got)
+	if string(refs) != "main\n" {
+		t.Fatalf("worker must not push work branches; upstream refs:\n%s", refs)
 	}
 }
 
@@ -220,17 +157,6 @@ func indexOfEvent(ev *fakeEmitter, kind string) int {
 	defer ev.mu.Unlock()
 	for i, e := range ev.events {
 		if e.Kind == kind {
-			return i
-		}
-	}
-	return -1
-}
-
-func lastIndexOfEvent(ev *fakeEmitter, kind string) int {
-	ev.mu.Lock()
-	defer ev.mu.Unlock()
-	for i := len(ev.events) - 1; i >= 0; i-- {
-		if ev.events[i].Kind == kind {
 			return i
 		}
 	}
@@ -300,88 +226,70 @@ func (s *fakeRunStore) FailTimeout(_ context.Context, _, _ string, _ int) (bool,
 	return false, nil
 }
 
-// TestRun_OnFailureGatedByTerminality pins acceptance criterion 2: the
-// worker loop must call cfg.NewTransitioner(rterr.Cfg.Tracker) (the entry
-// point for OnFailure) only when handleTaskFailure reports terminal=true.
-// A re-queued failure (terminal=false) must skip the tracker write so the
-// linked Linear issue does not flicker between In Progress and Rework
-// during transient retries, which would otherwise trip the poller's
-// Rework re-enqueue path.
-func TestRun_OnFailureGatedByTerminality(t *testing.T) {
-	cases := []struct {
-		name          string
-		failResult    bool
-		wantNewTrCall int
-	}{
-		{"requeue_skips_onfailure", false, 0},
-		{"terminal_invokes_onfailure", true, 1},
+func (s *fakeRunStore) byKind(kind string) []recordedEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []recordedEvent
+	for _, e := range s.events {
+		if e.Kind == kind {
+			out = append(out, e)
+		}
 	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			// Drive runTask to fail at PrepareGitWorkspace by pointing
-			// CloneURL at a path that cannot be cloned. This keeps
-			// rterr.Cfg empty (Kind="") so cfg.NewTransitioner's call
-			// count is the cleanest signal of which branch Run took.
-			tk := &task.Task{
-				ID:            "tsk_fail",
-				CloneURL:      "file:///definitely-not-a-real-path/" + tc.name,
-				BaseBranch:    "main",
-				WorkBranch:    "ai/tsk_fail",
-				SourceType:    "linear_issue",
-				SourceEventID: "issue-uuid",
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			store := &fakeRunStore{
-				task:       tk,
-				failResult: tc.failResult,
-			}
-			store.onClaimed = func() {
-				// Cancel after Fail returns so Run exits the loop
-				// before re-entering Claim. The brief delay defers
-				// cancellation until after the terminal-branch
-				// NewTransitioner call has happened.
-				go func() {
-					time.Sleep(20 * time.Millisecond)
-					cancel()
-				}()
-			}
+	return out
+}
 
-			var newTrCalls int
-			var trMu sync.Mutex
-			cfg := worker.Config{
-				WorkspaceRoot: t.TempDir(),
-				MirrorRoot:    t.TempDir(),
-				NewTransitioner: func(_ workflow.TrackerConfig) worker.Transitioner {
-					trMu.Lock()
-					newTrCalls++
-					trMu.Unlock()
-					return nil
-				},
-			}
+// TestRun_DoesNotWriteTrackerOnFailure pins the SPEC §1 boundary for the
+// failure path: terminality only controls queue retry state. The worker must
+// not construct tracker transitioners or move the linked issue to Rework.
+func TestRun_DoesNotWriteTrackerOnFailure(t *testing.T) {
+	tk := &task.Task{
+		ID:            "tsk_fail",
+		CloneURL:      "file:///definitely-not-a-real-path/spec-boundary",
+		BaseBranch:    "main",
+		WorkBranch:    "ai/tsk_fail",
+		SourceType:    "linear_issue",
+		SourceEventID: "issue-uuid",
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := &fakeRunStore{
+		task:       tk,
+		failResult: true,
+	}
+	store.onClaimed = func() {
+		go func() {
+			time.Sleep(20 * time.Millisecond)
+			cancel()
+		}()
+	}
 
-			done := make(chan struct{})
-			go func() {
-				worker.Run(ctx, store, cfg)
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				cancel()
-				t.Fatal("Run did not exit within 5s")
-			}
+	cfg := worker.Config{
+		WorkspaceRoot: t.TempDir(),
+		MirrorRoot:    t.TempDir(),
+	}
 
-			if store.failCalls != 1 {
-				t.Fatalf("Fail calls = %d, want 1", store.failCalls)
-			}
-			trMu.Lock()
-			got := newTrCalls
-			trMu.Unlock()
-			if got != tc.wantNewTrCall {
-				t.Fatalf("NewTransitioner calls = %d, want %d (terminal=%v)", got, tc.wantNewTrCall, tc.failResult)
-			}
-		})
+	done := make(chan struct{})
+	go func() {
+		worker.Run(ctx, store, cfg)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("Run did not exit within 5s")
+	}
+
+	if store.failCalls != 1 {
+		t.Fatalf("Fail calls = %d, want 1", store.failCalls)
+	}
+	for _, forbidden := range []string{
+		task.EventTrackerTransition,
+		task.EventTrackerTransitionError,
+		task.EventTrackerComment,
+	} {
+		if got := len(store.byKind(forbidden)); got != 0 {
+			t.Fatalf("worker emitted forbidden tracker event %q %d time(s); events=%#v", forbidden, got, store.events)
+		}
 	}
 }

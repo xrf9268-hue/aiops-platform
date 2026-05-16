@@ -78,14 +78,7 @@ func TestVerifyAllowFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listOpenPRs: %v", err)
 	}
-	if len(prs) != 1 {
-		t.Fatalf("want 1 open PR, got %d", len(prs))
-	}
-	pr := prs[0]
-	if !pr.Draft {
-		t.Errorf("allow_failure path should force draft=true; got draft=%v title=%q", pr.Draft, pr.Title)
-	}
-	if !strings.Contains(pr.Body, "VERIFICATION") && !strings.Contains(pr.Body, "verification") {
-		t.Errorf("PR body should reference verification artifact; got: %s", pr.Body)
+	if len(prs) != 0 {
+		t.Fatalf("worker must not open PRs; got %d open PR(s): %+v", len(prs), prs)
 	}
 }

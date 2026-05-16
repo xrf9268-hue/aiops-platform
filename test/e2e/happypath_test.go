@@ -5,7 +5,6 @@ package e2e
 import (
 	"context"
 	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -71,7 +70,7 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 	wantEvents := []string{
 		task.EventWorkflowResolved,
 		task.EventRunnerStart,
-		task.EventPRCreated,
+		task.EventRunnerEnd,
 	}
 	for _, want := range wantEvents {
 		var n int
@@ -86,22 +85,18 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 	}
 
 	exists, err := bed.gitea.getBranch(ctx, owner, repo, workBranch)
-	if err != nil || !exists {
-		t.Fatalf("getBranch %s: exists=%v err=%v", workBranch, exists, err)
+	if err != nil {
+		t.Fatalf("getBranch %s: %v", workBranch, err)
+	}
+	if exists {
+		t.Fatalf("worker must not push branch %s; branch unexpectedly exists", workBranch)
 	}
 
 	prs, err := bed.gitea.listOpenPRs(ctx, owner, repo)
 	if err != nil {
 		t.Fatalf("listOpenPRs: %v", err)
 	}
-	if len(prs) != 1 {
-		t.Fatalf("want 1 open PR, got %d: %+v", len(prs), prs)
-	}
-	pr := prs[0]
-	if !pr.Draft {
-		t.Errorf("PR should be draft (workflow says draft:true); got draft=%v title=%q", pr.Draft, pr.Title)
-	}
-	if !strings.Contains(pr.Body, ".aiops/") {
-		t.Errorf("PR body should reference .aiops/ artifacts; got: %s", pr.Body)
+	if len(prs) != 0 {
+		t.Fatalf("worker must not open PRs; got %d open PR(s): %+v", len(prs), prs)
 	}
 }
