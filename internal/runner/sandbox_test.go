@@ -278,6 +278,40 @@ func TestSandboxFirejailNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
 	}
 }
 
+func TestSandboxBubblewrapNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "app-server")
+	base.Dir = workdir
+
+	wrapped, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:               true,
+		Backend:               "bubblewrap",
+		NetworkMode:           "none",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+	}), base)
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+	joined := strings.Join(wrapped.Args, "\x00")
+	if !strings.Contains(joined, "--unshare-net") {
+		t.Fatalf("bubblewrap network none must disable egress even when stale allowlist CIDRs are present, args=%#v", wrapped.Args)
+	}
+	if strings.Contains(joined, "--netfilter=") {
+		t.Fatalf("bubblewrap network none must not enable allowlist mode from stale CIDRs, args=%#v", wrapped.Args)
+	}
+}
+
 func TestSandboxFirejailAllowlistRequiresExplicitNetworkInterface(t *testing.T) {
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
@@ -367,8 +401,7 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 }
 
 func TestFirejailNetfilterFileIsRemovedWhenSandboxCommandIsCanceled(t *testing.T) {
-	filterPath, wrapped := firejailAllowlistCommandForCleanupTest(t)
-	configurePlatformKill(wrapped)
+	filterPath, wrapped := firejailAllowlistCommandForCleanupTest(t, "#!/usr/bin/env sh\nsleep 30\n")
 
 	if err := wrapped.Cancel(); err != nil {
 		t.Fatalf("cancel failed: %v", err)
@@ -379,13 +412,32 @@ func TestFirejailNetfilterFileIsRemovedWhenSandboxCommandIsCanceled(t *testing.T
 }
 
 func TestFirejailNetfilterFileIsRemovedWhenWrappedCommandExits(t *testing.T) {
-	filterPath, wrapped := firejailAllowlistCommandForCleanupTest(t)
+	filterPath, wrapped := firejailAllowlistCommandForCleanupTest(t, "#!/usr/bin/env sh\nexit 0\n")
 
 	if err := wrapped.Run(); err != nil {
 		t.Fatalf("wrapped command failed: %v", err)
 	}
 	if _, err := os.Stat(filterPath); !os.IsNotExist(err) {
 		t.Fatalf("netfilter file should be removed after command exit, stat err = %v", err)
+	}
+}
+
+func TestFirejailNetfilterFileIsRemovedWhenTerminateProcessKillsWrapper(t *testing.T) {
+	filterPath, wrapped := firejailAllowlistCommandForCleanupTest(t, "#!/usr/bin/env sh\nsleep 30\n")
+	configurePlatformKill(wrapped)
+
+	if err := wrapped.Start(); err != nil {
+		t.Fatalf("start wrapped command: %v", err)
+	}
+	if wrapped.Cancel == nil {
+		t.Fatal("expected sandbox command to register cleanup cancellation hook")
+	}
+	if err := wrapped.Cancel(); err != nil {
+		t.Fatalf("cancel wrapped command: %v", err)
+	}
+	_ = wrapped.Wait()
+	if _, err := os.Stat(filterPath); !os.IsNotExist(err) {
+		t.Fatalf("netfilter file should be removed after forced process termination, stat err = %v", err)
 	}
 }
 
@@ -428,11 +480,11 @@ func TestFirejailNetfilterFileIsRemovedWhenCredentialValidationFails(t *testing.
 	}
 }
 
-func firejailAllowlistCommandForCleanupTest(t *testing.T) (string, *exec.Cmd) {
+func firejailAllowlistCommandForCleanupTest(t *testing.T, firejailScript string) (string, *exec.Cmd) {
 	t.Helper()
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
-	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(firejail, []byte(firejailScript), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	codex := filepath.Join(binDir, "codex")
