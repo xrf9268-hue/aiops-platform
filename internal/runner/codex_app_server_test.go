@@ -26,7 +26,7 @@ func appServerInput(workdir string) RunInput {
 					"mode": "workspace-write",
 				},
 				TurnTimeoutMs:  1000,
-				ReadTimeoutMs:  100,
+				ReadTimeoutMs:  1000,
 				StallTimeoutMs: 1000,
 			},
 		}},
