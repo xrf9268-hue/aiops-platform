@@ -165,18 +165,23 @@ func TestReconcileStartupRemovesUnknownWorkspacesWhenNoIssuesReturned(t *testing
 func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
 	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-1-needs-fix")
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
 	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-2-done")
-	for _, path := range []string{activePath, terminalPath} {
+	for _, path := range []string{activePath, reworkPath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
 		}
 	}
 
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:   root,
-		ActiveStates:    []string{"In Progress"},
-		TerminalStates:  []string{"Done"},
-		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN 1 Needs/Fix", State: "In Progress"}, {ID: "issue-2", Identifier: "LIN 2 Done", State: "Done"}}},
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"In Progress", "Rework"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-1", Identifier: "LIN 1 Needs/Fix", State: "In Progress"},
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: "2026-05-16T10:00:00Z"},
+			{ID: "issue-2", Identifier: "LIN 2 Done", State: "Done"},
+		}},
 		Emitter:         &fakeEmitter{},
 		ReconcileTaskID: "reconcile-startup",
 	})
@@ -185,6 +190,9 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(activePath); err != nil {
 		t.Fatalf("active workspace in current layout should remain: %v", err)
+	}
+	if _, err := os.Stat(reworkPath); err != nil {
+		t.Fatalf("active Rework workspace in current source_event_id layout should remain: %v", err)
 	}
 	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
 		t.Fatalf("terminal workspace in current layout should be removed, stat err=%v", err)

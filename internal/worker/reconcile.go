@@ -178,7 +178,11 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 func issueWorkspaceKeys(issue tracker.Issue) []string {
 	seen := map[string]struct{}{}
 	var keys []string
-	for _, raw := range []string{issue.Identifier, issue.ID} {
+	rawKeys := []string{issue.Identifier, issue.ID}
+	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && issue.UpdatedAt != "" {
+		rawKeys = append(rawKeys, issue.ID+"|rework|"+issue.UpdatedAt)
+	}
+	for _, raw := range rawKeys {
 		for _, key := range []string{workspace.SanitizeComponent(raw), sanitizeLegacyWorkspaceKey(raw)} {
 			if key == "" {
 				continue
