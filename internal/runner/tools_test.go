@@ -226,7 +226,7 @@ func TestLinearGraphQLAllowsOperationWordsInsideSingleOperationBody(t *testing.T
 	defer httpServer.Close()
 
 	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
-		call(context.Background(), ToolCall{Query: `query Viewer($query: String!, $mutation: String!) {
+		call(context.Background(), ToolCall{Query: `query Viewer(query: String, $query: String!, $mutation: String!) {
   # mutation and subscription are words inside this operation body, not operations.
   mutation: viewer { id }
   search(term: "query mutation subscription") { id }

@@ -220,7 +220,7 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", c.APIKey)
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = http.DefaultClient

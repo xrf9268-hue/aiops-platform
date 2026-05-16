@@ -32,12 +32,12 @@ type TrackerConfig struct {
 	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
 }
 
-// TrackerStatusConfig names the workflow states an agent may use when it
-// writes tracker handoff updates through the advertised tool surface. The
-// defaults ("In Progress", "Human Review", "Rework") match the Linear
-// template used by the personal profile; teams that customize their workflow
-// states override the names without touching code. Per SPEC §1, the worker
-// reads tracker state and runs agents; ticket writes are agent/tool actions.
+// TrackerStatusConfig names the workflow states used for tracker handoff
+// updates. The defaults ("In Progress", "Human Review", "Rework") match the
+// Linear template used by the personal profile; teams that customize their
+// workflow states override the names without touching code. Per SPEC §1,
+// tracker writes belong on the agent/tool side; transitional worker-side
+// writes remain only until the app-server tool transport is complete.
 type TrackerStatusConfig struct {
 	InProgress  string `yaml:"in_progress" json:"in_progress"`
 	HumanReview string `yaml:"human_review" json:"human_review"`

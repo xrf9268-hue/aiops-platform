@@ -123,8 +123,8 @@ func TestMoveIssueToState_LooksUpStateThenMutates(t *testing.T) {
 	if lookup.Variables["teamKey"] != "ENG" {
 		t.Fatalf("lookup teamKey = %v, want \"ENG\"", lookup.Variables["teamKey"])
 	}
-	if lookup.AuthHeader != "test-key" {
-		t.Fatalf("lookup Authorization = %q, want raw Linear token", lookup.AuthHeader)
+	if lookup.AuthHeader != "Bearer test-key" {
+		t.Fatalf("lookup Authorization = %q, want Bearer token", lookup.AuthHeader)
 	}
 
 	mutate := srv.requests[1]

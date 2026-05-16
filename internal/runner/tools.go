@@ -175,6 +175,8 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 func countGraphQLOperations(query string) int {
 	count := 0
 	depth := 0
+	parenDepth := 0
+	operationHeader := false
 	for i := 0; i < len(query); {
 		ch := query[i]
 		switch ch {
@@ -209,11 +211,22 @@ func countGraphQLOperations(query string) int {
 			continue
 		case '{':
 			depth++
+			operationHeader = false
 			i++
 			continue
 		case '}':
 			if depth > 0 {
 				depth--
+			}
+			i++
+			continue
+		case '(':
+			parenDepth++
+			i++
+			continue
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
 			}
 			i++
 			continue
@@ -231,15 +244,19 @@ func countGraphQLOperations(query string) int {
 			continue
 		}
 
-		if depth == 0 && isGraphQLNameStart(ch) {
+		if depth == 0 && parenDepth == 0 && isGraphQLNameStart(ch) {
 			start := i
 			i++
 			for i < len(query) && isGraphQLNameContinue(query[i]) {
 				i++
 			}
-			switch query[start:i] {
-			case "query", "mutation", "subscription":
-				count++
+			name := query[start:i]
+			if !operationHeader {
+				switch name {
+				case "query", "mutation", "subscription":
+					count++
+					operationHeader = true
+				}
 			}
 			continue
 		}
