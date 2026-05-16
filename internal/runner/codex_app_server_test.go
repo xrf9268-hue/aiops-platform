@@ -276,6 +276,31 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerTreatsInterruptedTurnCompletedAsSuccess(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'status': 'interrupted', 'lastAssistantMessage': 'cancelled cleanly'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v, want interrupted turn/completed to be a normal terminal state", err)
+	}
+	if res.Summary != "cancelled cleanly" {
+		t.Fatalf("Summary = %q, want interrupted turn summary", res.Summary)
+	}
+}
+
 func TestCodexAppServerRunnerUsesReadTimeout(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json, time
@@ -489,6 +514,62 @@ for line in sys.stdin:
 	}
 	if elapsed >= time.Second {
 		t.Fatalf("Run elapsed %s, want return before outer context deadline", elapsed)
+	}
+}
+
+func TestCodexAppServerRunnerRepliesToApprovalRequestsWithProtocolValidResults(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+approval_methods = [
+    ('approval-command', 'item/commandExecution/requestApproval', {'command': 'go test ./...'}, {'decision': 'acceptForSession'}),
+    ('approval-file', 'item/fileChange/requestApproval', {'path': 'main.go'}, {'decision': 'acceptForSession'}),
+    ('approval-permissions', 'item/permissions/requestApproval', {'permissions': ['filesystem.write']}, {'permissions': ['filesystem.write']}),
+]
+pending = list(approval_methods)
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        req_id, method, params, expected = pending.pop(0)
+        print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
+    elif msg.get('id', '').startswith('approval-'):
+        req_id = msg['id']
+        expected = next(item[3] for item in approval_methods if item[0] == req_id)
+        if msg.get('result') != expected:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected approval response', 'got': msg.get('result'), 'want': expected}}), flush=True)
+            break
+        if pending:
+            req_id, method, params, _expected = pending.pop(0)
+            print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'approvals handled'}}), flush=True)
+            break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "approvals handled" {
+		t.Fatalf("Summary = %q, want approvals handled", res.Summary)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"decision":"acceptForSession"`, `"permissions":["filesystem.write"]`} {
+		if !strings.Contains(string(stdin), want) {
+			t.Fatalf("stdin missing %s in approval responses: %s", want, stdin)
+		}
 	}
 }
 

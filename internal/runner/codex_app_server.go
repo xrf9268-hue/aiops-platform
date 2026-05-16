@@ -359,6 +359,10 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 
 func (c *appServerClient) replyUnsupportedServerRequest(msg map[string]any) error {
 	method, _ := msg["method"].(string)
+	if result, ok := protocolValidApprovalResult(method, msg); ok {
+		return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result})
+	}
+
 	result, err := dynamicToolResult(false, "unsupported server request: "+method)
 	if err != nil {
 		return err
@@ -368,6 +372,19 @@ func (c *appServerClient) replyUnsupportedServerRequest(msg map[string]any) erro
 		payload = map[string]any{"success": false, "output": result}
 	}
 	return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": payload})
+}
+
+func protocolValidApprovalResult(method string, msg map[string]any) (map[string]any, bool) {
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		return map[string]any{"decision": "acceptForSession"}, true
+	case "item/permissions/requestApproval":
+		params, _ := msg["params"].(map[string]any)
+		permissions, _ := params["permissions"].([]any)
+		return map[string]any{"permissions": permissions}, true
+	default:
+		return nil, false
+	}
 }
 
 func (c *appServerClient) handleNotification(msg map[string]any) {
@@ -391,7 +408,7 @@ func completedTurnError(msg map[string]any) error {
 		status, _ = turn["status"].(string)
 	}
 	status = strings.ToLower(strings.TrimSpace(status))
-	if status == "" || status == "completed" || status == "succeeded" || status == "success" {
+	if status == "" || status == "completed" || status == "succeeded" || status == "success" || status == "interrupted" {
 		return nil
 	}
 	reason := ""
