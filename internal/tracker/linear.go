@@ -23,43 +23,61 @@ func NewLinearClient(cfg workflow.TrackerConfig) *LinearClient {
 }
 
 func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
+	return c.ListIssuesByStates(ctx, c.Config.ActiveStates)
+}
+
+func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("Linear API key is required")
 	}
-	query := `query ListIssues($states: [String!]) {
-  issues(filter: { state: { name: { in: $states } } }, first: 50) {
+	query := `query ListIssues($states: [String!], $after: String) {
+  issues(filter: { state: { name: { in: $states } } }, first: 50, after: $after) {
     nodes { id identifier title description url updatedAt state { name } }
+    pageInfo { hasNextPage endCursor }
   }
 }`
-	var out struct {
-		Data struct {
-			Issues struct {
-				Nodes []struct {
-					ID          string `json:"id"`
-					Identifier  string `json:"identifier"`
-					Title       string `json:"title"`
-					Description string `json:"description"`
-					URL         string `json:"url"`
-					UpdatedAt   string `json:"updatedAt"`
-					State       struct {
-						Name string `json:"name"`
-					} `json:"state"`
-				} `json:"nodes"`
-			} `json:"issues"`
-		} `json:"data"`
-		Errors []map[string]any `json:"errors"`
+	var issues []Issue
+	var after any
+	for {
+		var out struct {
+			Data struct {
+				Issues struct {
+					Nodes []struct {
+						ID          string `json:"id"`
+						Identifier  string `json:"identifier"`
+						Title       string `json:"title"`
+						Description string `json:"description"`
+						URL         string `json:"url"`
+						UpdatedAt   string `json:"updatedAt"`
+						State       struct {
+							Name string `json:"name"`
+						} `json:"state"`
+					} `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"issues"`
+			} `json:"data"`
+			Errors []map[string]any `json:"errors"`
+		}
+		if err := c.graphql(ctx, query, map[string]any{"states": states, "after": after}, &out); err != nil {
+			return nil, err
+		}
+		if len(out.Errors) > 0 {
+			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+		}
+		for _, n := range out.Data.Issues.Nodes {
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, UpdatedAt: n.UpdatedAt, State: n.State.Name})
+		}
+		if !out.Data.Issues.PageInfo.HasNextPage {
+			return issues, nil
+		}
+		if out.Data.Issues.PageInfo.EndCursor == "" {
+			return nil, fmt.Errorf("linear pagination missing endCursor")
+		}
+		after = out.Data.Issues.PageInfo.EndCursor
 	}
-	if err := c.graphql(ctx, query, map[string]any{"states": c.Config.ActiveStates}, &out); err != nil {
-		return nil, err
-	}
-	if len(out.Errors) > 0 {
-		return nil, fmt.Errorf("linear errors: %v", out.Errors)
-	}
-	issues := make([]Issue, 0, len(out.Data.Issues.Nodes))
-	for _, n := range out.Data.Issues.Nodes {
-		issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, UpdatedAt: n.UpdatedAt, State: n.State.Name})
-	}
-	return issues, nil
 }
 
 // MoveIssueToState updates the named Linear issue so its workflowState

@@ -10,7 +10,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/xrf9268-hue/aiops-platform/internal/queue"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 func main() {
@@ -32,5 +34,22 @@ func main() {
 	}
 	defer pool.Close()
 
-	worker.Run(ctx, queue.New(pool), cfg)
+	store := queue.New(pool)
+	if wf, err := workflow.LoadOptional("WORKFLOW.md"); err != nil {
+		log.Fatal(err)
+	} else if wf.Config.Tracker.Kind == "linear" {
+		if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
+			WorkspaceRoot:   cfg.WorkspaceRoot,
+			ActiveStates:    wf.Config.Tracker.ActiveStates,
+			TerminalStates:  wf.Config.Tracker.TerminalStates,
+			Tracker:         tracker.NewLinearClient(wf.Config.Tracker),
+			Emitter:         worker.LogEventEmitter{},
+			ReconcileTaskID: "reconcile-startup",
+		}); err != nil {
+			worker.LogReconcileError(err)
+			os.Exit(1)
+		}
+	}
+
+	worker.Run(ctx, store, cfg)
 }
