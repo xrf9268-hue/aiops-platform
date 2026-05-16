@@ -184,7 +184,7 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 			return nil, err
 		}
 		cleanupFiles = append(cleanupFiles, filter)
-		args = append(args, "--netfilter="+filter)
+		args = append(args, "--net=none", "--netfilter="+filter)
 	} else {
 		args = append(args, "--net=none")
 	}

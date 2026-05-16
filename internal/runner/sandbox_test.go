@@ -247,7 +247,7 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 	if filepath.Base(wrapped.Path) != "firejail" && !strings.Contains(joined, "firejail") {
 		t.Fatalf("wrapped command should execute firejail directly or via cleanup wrapper, path=%q args=%#v", wrapped.Path, wrapped.Args)
 	}
-	for _, want := range []string{"--noprofile", "--netfilter=", "--env=AIOPS_RUN_TOKEN=allowed-secret", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
+	for _, want := range []string{"--noprofile", "--net=", "--netfilter=", "--env=AIOPS_RUN_TOKEN=allowed-secret", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("wrapped args missing %q in %#v", want, wrapped.Args)
 		}
@@ -255,11 +255,6 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 	for _, arg := range wrapped.Args {
 		if arg == "--env=AIOPS_RUN_TOKEN" {
 			t.Fatalf("firejail env allowlist must preserve values with name=value args, got %#v", wrapped.Args)
-		}
-	}
-	for _, arg := range wrapped.Args {
-		if arg == "--net=none" {
-			t.Fatalf("network allowlist must not also disable all networking with --net=none: %#v", wrapped.Args)
 		}
 	}
 	for _, env := range wrapped.Env {
