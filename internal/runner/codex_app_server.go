@@ -72,6 +72,9 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		out:    buf,
 	}
 	runErr := client.run(ctx, in, string(prompt))
+	if runErr != nil && !errors.Is(runErr, context.DeadlineExceeded) && ctx.Err() == nil {
+		terminateProcess(cmd)
+	}
 	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	<-stderrDone
@@ -307,6 +310,9 @@ func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("codex app-server read timeout after %dms", c.readTimeoutMs)
 	case res := <-ch:
 		if res.err != nil {
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, ctx.Err()
+			}
 			return nil, res.err
 		}
 		return res.line, nil
@@ -336,6 +342,12 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					return err
 				}
 			default:
+				if _, ok := msg["id"]; ok {
+					if err := c.replyUnsupportedServerRequest(msg); err != nil {
+						return err
+					}
+					continue
+				}
 				if c.stallTimeoutMs > 0 && time.Since(c.lastTerminal) > time.Duration(c.stallTimeoutMs)*time.Millisecond {
 					return fmt.Errorf("codex app-server stall timeout after %dms without terminal progress", c.stallTimeoutMs)
 				}
@@ -343,6 +355,19 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func (c *appServerClient) replyUnsupportedServerRequest(msg map[string]any) error {
+	method, _ := msg["method"].(string)
+	result, err := dynamicToolResult(false, "unsupported server request: "+method)
+	if err != nil {
+		return err
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		payload = map[string]any{"success": false, "output": result}
+	}
+	return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": payload})
 }
 
 func (c *appServerClient) handleNotification(msg map[string]any) {

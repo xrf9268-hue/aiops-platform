@@ -10,3 +10,10 @@ import "os/exec"
 // Job-object based group kill could be added later if Windows worker
 // hosting becomes a real target.
 func configurePlatformKill(_ *exec.Cmd) {}
+
+func terminateProcess(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Kill()
+}

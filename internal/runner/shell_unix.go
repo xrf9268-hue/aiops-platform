@@ -16,18 +16,22 @@ import (
 func configurePlatformKill(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		// Negative pid targets the process group leader created above.
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		// Backstop: if the group is still alive after killGrace, send
-		// SIGKILL to the whole group. cmd.WaitDelay only handles the
-		// direct child; grandchildren can survive otherwise.
-		go func(pid int) {
-			time.Sleep(killGrace)
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
-		}(cmd.Process.Pid)
+		terminateProcess(cmd)
 		return nil
 	}
+}
+
+func terminateProcess(cmd *exec.Cmd) {
+	if cmd.Process == nil {
+		return
+	}
+	// Negative pid targets the process group leader created above.
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	// Backstop: if the group is still alive after killGrace, send
+	// SIGKILL to the whole group. cmd.WaitDelay only handles the
+	// direct child; grandchildren can survive otherwise.
+	go func(pid int) {
+		time.Sleep(killGrace)
+		_ = syscall.Kill(-pid, syscall.SIGKILL)
+	}(cmd.Process.Pid)
 }

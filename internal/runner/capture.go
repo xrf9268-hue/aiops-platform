@@ -1,5 +1,7 @@
 package runner
 
+import "sync"
+
 // CodexOutputCap is the upper bound on bytes the codex runner buffers in
 // memory from a single run. Matches workspace.VerifyOutputCap so artifact
 // ergonomics are uniform across the verify and runner phases.
@@ -15,12 +17,16 @@ const CodexEventOutputCap = 4 << 10 // 4 KiB
 // runner-side twin of workspace.cappedBuffer; the duplication avoids an
 // import cycle and keeps each package's IO contract local.
 type cappedWriter struct {
+	mu      sync.Mutex
 	Cap     int
 	buf     []byte
 	dropped int64
 }
 
 func (c *cappedWriter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.Cap <= 0 {
 		c.dropped += int64(len(p))
 		return len(p), nil
@@ -42,10 +48,20 @@ func (c *cappedWriter) Write(p []byte) (int, error) {
 }
 
 // Bytes returns the buffered bytes (post-cap). Callers must not mutate.
-func (c *cappedWriter) Bytes() []byte { return c.buf }
+func (c *cappedWriter) Bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.buf
+}
 
 // Dropped reports how many bytes were dropped because Cap was reached.
-func (c *cappedWriter) Dropped() int64 { return c.dropped }
+func (c *cappedWriter) Dropped() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.dropped
+}
 
 // headTail returns the first headCap bytes and (when body is longer than
 // headCap) the last headCap bytes. tail is empty when the entire body

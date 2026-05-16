@@ -459,3 +459,77 @@ for line in sys.stdin:
 		t.Fatalf("Run error = %v, want app-server stall timeout", err)
 	}
 }
+
+func TestCodexAppServerRunnerReturnsTurnTimeoutWithoutWaitingForOuterContext(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        time.sleep(2)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.TurnTimeoutMs = 25
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	elapsed := time.Since(start)
+	if err == nil || !strings.Contains(err.Error(), "turn timeout") {
+		t.Fatalf("Run error = %v, want app-server turn timeout", err)
+	}
+	if elapsed >= time.Second {
+		t.Fatalf("Run elapsed %s, want return before outer context deadline", elapsed)
+	}
+}
+
+func TestCodexAppServerRunnerRepliesToUnsupportedServerRequests(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'approval-1', 'method': 'approval/request', 'params': {'reason': 'need approval'}}), flush=True)
+    elif msg.get('id') == 'approval-1':
+        result = msg.get('result', {})
+        if result.get('success') is not False or 'unsupported server request' not in result.get('output', ''):
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected unsupported request response', 'got': result}}), flush=True)
+            break
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'request rejected'}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "request rejected" {
+		t.Fatalf("Summary = %q, want request rejected", res.Summary)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stdin), `"id":"approval-1"`) || !strings.Contains(string(stdin), "unsupported server request") {
+		t.Fatalf("stdin did not include unsupported server request response: %s", stdin)
+	}
+}
