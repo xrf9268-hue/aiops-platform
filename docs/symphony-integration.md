@@ -59,7 +59,7 @@ Implemented:
 - Postgres task queue
 - repo-owned `WORKFLOW.md` (discovered at three paths — see Deviations below)
 - mock, codex, and claude runner abstraction
-- deterministic local workspace
+- deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout
 - basic path policy
 - verification commands
 - Gitea PR client code for the agent-side PR tool

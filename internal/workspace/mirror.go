@@ -35,13 +35,13 @@ func MirrorRoot(override string) string {
 // ".git" is preserved to keep the layout recognisable when inspected by hand.
 func mirrorPathFor(root, cloneURL string) string {
 	host, repoPath := splitCloneURL(cloneURL)
-	host = sanitize(host)
+	host = sanitizeMirrorComponent(host)
 	repoPath = strings.TrimSuffix(repoPath, ".git")
 	// Preserve owner/name structure so multiple repos under the same owner
 	// share a parent directory, which makes manual cleanup easier.
 	parts := strings.Split(repoPath, "/")
 	for i, p := range parts {
-		parts[i] = sanitize(p)
+		parts[i] = sanitizeMirrorComponent(p)
 	}
 	repoPath = strings.Join(parts, string(filepath.Separator))
 	if repoPath == "" {
@@ -76,7 +76,16 @@ func splitCloneURL(cloneURL string) (host, path string) {
 			return rest[:colon], rest[colon+1:]
 		}
 	}
-	return "unknown", sanitize(cloneURL)
+	return "unknown", sanitizeMirrorComponent(cloneURL)
+}
+
+func sanitizeMirrorComponent(s string) string {
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, " ", "_")
+	if s == "" {
+		return "unknown"
+	}
+	return s
 }
 
 // EnsureMirror returns the local path to a bare mirror clone of cloneURL,
