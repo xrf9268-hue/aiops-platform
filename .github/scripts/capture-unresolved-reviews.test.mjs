@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
   buildFollowUpIssue,
@@ -159,6 +160,15 @@ test('captureUnresolvedReviewThreads reports already tracked unresolved outdated
       reason: 'outdated',
     },
   ]);
+});
+
+test('capture workflow uses pull_request_target so fork-origin merges can file follow-up issues', async () => {
+  const workflow = await readFile(new URL('../workflows/capture-unresolved-reviews.yml', import.meta.url), 'utf8');
+
+  assert.match(workflow, /^  pull_request_target:\n    types:\n      - closed$/m);
+  assert.match(workflow, /github\.event_name == 'pull_request_target'/);
+  assert.doesNotMatch(workflow, /^  pull_request:\n/m);
+  assert.doesNotMatch(workflow, /github\.event_name == 'pull_request'/);
 });
 
 test('captureUnresolvedReviewThreads creates one issue per unique unresolved non-outdated discussion permalink', async () => {
