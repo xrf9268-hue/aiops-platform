@@ -63,10 +63,11 @@ Implemented:
 - basic path policy
 - verification commands
 - Gitea PR client code for the agent-side PR tool
+- `linear_graphql` dynamic tool implementation that proxies Linear GraphQL using orchestrator-held auth without exposing the Linear token to the agent process
 
 Not yet implemented:
 
-- dynamic `linear_graphql` / PR tools exposed through the app-server protocol
+- full app-server protocol integration for dynamic tool advertisement/invocation (the `linear_graphql` proxy exists as the tool implementation used by that future transport)
 - pull request labels and reviewers
 - multi-run reconciliation
 - dashboard

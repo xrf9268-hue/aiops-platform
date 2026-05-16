@@ -1,0 +1,192 @@
+package runner
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+)
+
+// ToolCall is the JSON-shaped input accepted by the dynamic linear_graphql
+// tool. Query and Variables are agent-controlled; endpoint is test-only and is
+// intentionally ignored by the advertised schema/description so production
+// calls always use the configured Linear endpoint held by the orchestrator.
+type ToolCall struct {
+	Query     string         `json:"query"`
+	Variables map[string]any `json:"variables,omitempty"`
+	Endpoint  string         `json:"-"`
+}
+
+// DynamicTool is a client-side tool implemented by the orchestrator and made
+// available to an app-server-capable agent session. Tool metadata must never
+// include raw tracker tokens; Call closes over orchestrator config instead.
+type DynamicTool struct {
+	Name        string
+	Description string
+	Call        func(context.Context, ToolCall) (string, error)
+}
+
+type dynamicToolResponse struct {
+	Success      bool                     `json:"success"`
+	Output       string                   `json:"output"`
+	ContentItems []dynamicToolContentItem `json:"contentItems"`
+}
+
+type dynamicToolContentItem struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// DynamicToolSet is the runtime tool surface advertised to the coding agent.
+type DynamicToolSet struct {
+	tools map[string]DynamicTool
+}
+
+func (s DynamicToolSet) Lookup(name string) (DynamicTool, bool) {
+	tool, ok := s.tools[name]
+	return tool, ok
+}
+
+func (s DynamicToolSet) Names() []string {
+	names := make([]string, 0, len(s.tools))
+	for name := range s.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// DynamicToolsForWorkflow builds the SPEC §10.5 client-side tool surface for
+// the runner. linear_graphql is advertised only when Linear auth is configured;
+// the token stays captured in this process and is never copied into tool
+// metadata, agent environment, prompt text, or the GraphQL JSON payload.
+func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
+	tools := DynamicToolSet{tools: map[string]DynamicTool{}}
+	trackerCfg := wf.Config.Tracker
+	if strings.EqualFold(trackerCfg.Kind, "linear") && trackerCfg.APIKey != "" {
+		client := linearGraphQLProxy{
+			apiKey:  trackerCfg.APIKey,
+			baseURL: defaultLinearGraphQLEndpoint,
+			http:    http.DefaultClient,
+		}
+		tools.tools["linear_graphql"] = DynamicTool{
+			Name:        "linear_graphql",
+			Description: "Execute a raw Linear GraphQL query or mutation using the orchestrator-configured Linear auth. Input: {query:string, variables?:object}. The Linear API token is never exposed to the agent process.",
+			Call:        client.call,
+		}
+	}
+	return tools
+}
+
+const defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
+
+type linearGraphQLProxy struct {
+	apiKey  string
+	baseURL string
+	http    *http.Client
+}
+
+func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) {
+	query := strings.TrimSpace(call.Query)
+	if query == "" {
+		return "", fmt.Errorf("linear_graphql query is required")
+	}
+	endpoint := p.baseURL
+	if call.Endpoint != "" {
+		endpoint = call.Endpoint
+	}
+	if endpoint == "" {
+		endpoint = defaultLinearGraphQLEndpoint
+	}
+
+	payload := map[string]any{"query": query}
+	if call.Variables != nil {
+		payload["variables"] = call.Variables
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "`linear_graphql.variables` must be a JSON object that can be encoded as GraphQL variables.",
+				"reason":  err.Error(),
+			},
+		})
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	httpClient := p.http
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	var respBody bytes.Buffer
+	if _, err := respBody.ReadFrom(resp.Body); err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL request failed before receiving a successful response.",
+				"status":  resp.Status,
+				"body":    respBody.String(),
+			},
+		})
+	}
+	return linearGraphQLToolResponse(respBody.Bytes())
+}
+
+func linearGraphQLToolResponse(body []byte) (string, error) {
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL response was not valid JSON.",
+				"reason":  err.Error(),
+				"body":    string(body),
+			},
+		})
+	}
+	success := true
+	if errors, ok := decoded["errors"].([]any); ok && len(errors) > 0 {
+		success = false
+	}
+	return dynamicToolResult(success, string(body))
+}
+
+func dynamicToolFailure(payload any) (string, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		body = []byte(fmt.Sprintf(`{"error":{"message":"Linear GraphQL tool execution failed.","reason":%q}}`, err.Error()))
+	}
+	return dynamicToolResult(false, string(body))
+}
+
+func dynamicToolResult(success bool, output string) (string, error) {
+	body, err := json.Marshal(dynamicToolResponse{
+		Success: success,
+		Output:  output,
+		ContentItems: []dynamicToolContentItem{{
+			Type: "inputText",
+			Text: output,
+		}},
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}

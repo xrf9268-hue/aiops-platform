@@ -16,12 +16,12 @@ tracker:
     - Done
     - Canceled
   poll_interval_ms: 30000
-  # statuses names the Linear workflow states the agent may move the
-  # issue through via the advertised tracker tool (for example claim ->
-  # in_progress, PR opened -> human_review, failure -> rework). The
-  # orchestrator reads tracker state; ticket writes are agent/tool actions.
-  # Defaults match Linear's stock template; uncomment and edit only if
-  # your board uses different labels.
+  # statuses names the Linear workflow states the agent may use when it
+  # writes tracker handoff updates through the advertised linear_graphql
+  # tool (for example claim -> in_progress, PR opened -> human_review,
+  # failure -> rework). The orchestrator reads tracker state; ticket
+  # writes are agent/tool actions. Defaults match Linear's stock template;
+  # uncomment and edit only if your board uses different labels.
   # statuses:
   #   in_progress: "In Progress"
   #   human_review: "Human Review"

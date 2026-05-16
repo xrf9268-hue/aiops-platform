@@ -17,8 +17,8 @@ Per-state rules:
 
 - `Backlog`: not picked up. Use this for anything you have not refined yet.
 - `AI Ready`: refined and small enough that an agent can attempt it. The poller picks these up.
-- `In Progress`: the worker has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
-- `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself.
+- `In Progress`: the agent has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
+- `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself. Per SPEC §1, the agent moves the issue here through its tool surface; the worker does not write tracker state on completion.
 - `Rework`: review found issues and you want another attempt. Moving the Linear issue into `Rework` re-enqueues a fresh task automatically. The poller composes `source_event_id` as `<issue.ID>|rework|<issue.updatedAt>` whenever the state is `Rework`, so each transition into Rework is a brand-new dedupe key and Postgres INSERTs a new task row. While the issue stays parked in Rework, repeated polls reuse the same `updatedAt` and dedupe (no enqueue loop). Non-Rework states still use plain `issue.ID`, so `AI Ready` -> `In Progress` iteration on a single task is unchanged. See `cmd/linear-poller/main.go` (`sourceEventID`) and `internal/queue/postgres.go` (`Enqueue`).
 - `Done` / `Canceled`: terminal. Listed under `tracker.terminal_states`.
 
