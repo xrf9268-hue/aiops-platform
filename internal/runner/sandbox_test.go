@@ -441,6 +441,32 @@ func TestFirejailNetfilterFileIsRemovedWhenTerminateProcessKillsWrapper(t *testi
 	}
 }
 
+func TestFirejailNetfilterRejectsIPv6CIDR(t *testing.T) {
+	_, err := writeFirejailNetfilter([]string{"2001:db8::/32"})
+	if err == nil {
+		t.Fatal("expected IPv6 CIDR to be rejected for firejail IPv4 netfilter")
+	}
+	if !strings.Contains(err.Error(), "IPv4") || !strings.Contains(err.Error(), "2001:db8::/32") {
+		t.Fatalf("error = %q, want IPv4-only guidance for IPv6 CIDR", err)
+	}
+}
+
+func TestFirejailNetfilterAcceptsIPv4CIDR(t *testing.T) {
+	path, err := writeFirejailNetfilter([]string{"203.0.113.10/32"})
+	if err != nil {
+		t.Fatalf("writeFirejailNetfilter: %v", err)
+	}
+	defer os.Remove(path)
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read netfilter file: %v", err)
+	}
+	if !strings.Contains(string(content), "-A OUTPUT -d 203.0.113.10/32 -j ACCEPT") {
+		t.Fatalf("netfilter file missing IPv4 allow rule: %s", content)
+	}
+}
+
 func TestFirejailNetfilterFileIsRemovedWhenCredentialValidationFails(t *testing.T) {
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")

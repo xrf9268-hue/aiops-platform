@@ -279,9 +279,12 @@ func writeFirejailNetfilter(cidrs []string) (string, error) {
 		if cidr == "" {
 			continue
 		}
-		_, parsed, err := net.ParseCIDR(cidr)
+		ip, parsed, err := net.ParseCIDR(cidr)
 		if err != nil {
 			return "", fmt.Errorf("sandbox network allowlist contains invalid CIDR %q: %w", cidr, err)
+		}
+		if ip.To4() == nil {
+			return "", fmt.Errorf("sandbox network allowlist CIDR %q is IPv6; Firejail --netfilter supports IPv4 rules only", cidr)
 		}
 		b.WriteString("-A OUTPUT -d ")
 		b.WriteString(parsed.String())
