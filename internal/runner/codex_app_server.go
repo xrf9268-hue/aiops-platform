@@ -509,7 +509,11 @@ func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 		if !ok {
 			continue
 		}
-		specs = append(specs, map[string]any{"name": tool.Name, "description": tool.Description})
+		schema := tool.InputSchema
+		if schema == nil {
+			schema = map[string]any{"type": "object"}
+		}
+		specs = append(specs, map[string]any{"name": tool.Name, "description": tool.Description, "inputSchema": schema})
 	}
 	return specs
 }

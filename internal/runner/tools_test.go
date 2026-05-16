@@ -61,6 +61,13 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	if strings.Contains(tool.Description, token) {
 		t.Fatalf("tool description leaked Linear token: %q", tool.Description)
 	}
+	schemaBytes, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatalf("tool input schema is not JSON-marshalable: %v", err)
+	}
+	if !strings.Contains(string(schemaBytes), `"query"`) || strings.Contains(string(schemaBytes), token) {
+		t.Fatalf("tool input schema = %s, want query field and no token leak", schemaBytes)
+	}
 
 	proxy := linearGraphQLProxy{apiKey: token, baseURL: httpServer.URL, http: httpServer.Client()}
 	result, err := proxy.call(context.Background(), ToolCall{

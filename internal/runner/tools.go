@@ -28,6 +28,7 @@ type ToolCall struct {
 type DynamicTool struct {
 	Name        string
 	Description string
+	InputSchema map[string]any
 	Call        func(context.Context, ToolCall) (string, error)
 }
 
@@ -77,7 +78,23 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 		tools.tools["linear_graphql"] = DynamicTool{
 			Name:        "linear_graphql",
 			Description: "Execute a raw Linear GraphQL query or mutation using the orchestrator-configured Linear auth. Input: {query:string, variables?:object}. The Linear API token is never exposed to the agent process.",
-			Call:        client.call,
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{
+						"type":        "string",
+						"description": "A single Linear GraphQL query or mutation.",
+					},
+					"variables": map[string]any{
+						"type":                 "object",
+						"description":          "Optional GraphQL variables object.",
+						"additionalProperties": true,
+					},
+				},
+				"required":             []string{"query"},
+				"additionalProperties": false,
+			},
+			Call: client.call,
 		}
 	}
 	return tools
