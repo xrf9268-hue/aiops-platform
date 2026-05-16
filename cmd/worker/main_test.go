@@ -75,6 +75,38 @@ func TestLoadWorkflowForStartupReconcileWarnsWhenConfiguredWorkflowIsNonLinear(t
 	}
 }
 
+func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "prompt-only-workflow.md")
+	body := "Follow the repository workflow without YAML front matter.\n"
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	t.Setenv("AIOPS_WORKFLOW_PATH", workflowPath)
+
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldOutput)
+
+	wf, err := loadWorkflowForStartupReconcile()
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	if wf.Config.Tracker.Kind != workflow.DefaultConfig().Tracker.Kind {
+		t.Fatalf("tracker kind = %q, want default %q", wf.Config.Tracker.Kind, workflow.DefaultConfig().Tracker.Kind)
+	}
+	gotLog := logs.String()
+	for _, want := range []string{"startup reconciliation: workflow source=prompt_only", "path=" + workflowPath, "tracker.kind=gitea", "reconciliation will be skipped"} {
+		if !strings.Contains(gotLog, want) {
+			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
+		}
+	}
+	if strings.Contains(gotLog, "workflow source=file") {
+		t.Fatalf("startup reconciliation log = %q, did not expect file source for prompt-only workflow", gotLog)
+	}
+}
+
 func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"

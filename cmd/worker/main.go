@@ -34,7 +34,15 @@ func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 		if err != nil {
 			return nil, err
 		}
-		logStartupReconcileWorkflow(&workflow.Resolution{Source: workflow.SourceFile, Path: path}, wf)
+		hasFront, err := workflow.HasFrontMatterAt(path)
+		if err != nil {
+			return nil, err
+		}
+		source := workflow.SourceFile
+		if !hasFront {
+			source = workflow.SourcePromptOnly
+		}
+		logStartupReconcileWorkflow(&workflow.Resolution{Source: source, Path: path}, wf)
 		return wf, nil
 	}
 

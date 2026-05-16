@@ -82,7 +82,7 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	hasFront, err := hasFrontMatterAt(abs)
+	hasFront, err := HasFrontMatterAt(abs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,12 +93,13 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	return wf, &Resolution{Source: src, Path: found, ShadowedBy: shadows}, nil
 }
 
-// hasFrontMatterAt returns true when path begins with a YAML front
+// HasFrontMatterAt returns true when path begins with a YAML front
 // matter fence (`---\n` or `---\r\n`) followed somewhere by a closing
-// fence. Used by Resolve to distinguish prompt-only files from full
-// workflow files without threading a flag out of Load. Mirrors the
-// detection logic in splitFrontMatter (loader.go) — keep the two in
-// sync if the front-matter syntax ever changes.
+// fence. Used by Resolve and explicit workflow-path callers to
+// distinguish prompt-only files from full workflow files without
+// threading a flag out of Load. Mirrors the detection logic in
+// splitFrontMatter (loader.go) — keep the two in sync if the
+// front-matter syntax ever changes.
 //
 // Returns the read error rather than silently classifying as false:
 // after Load(path) has succeeded, a read failure here means the file
@@ -106,7 +107,7 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 // network filesystems). Misclassifying that as prompt_only would put
 // a wrong Source value on the workflow_resolved event for a file
 // whose contents we successfully parsed moments earlier.
-func hasFrontMatterAt(path string) (bool, error) {
+func HasFrontMatterAt(path string) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
