@@ -223,6 +223,12 @@ func countGraphQLOperations(query string) int {
 		case ' ', '\t', ',':
 			i++
 			continue
+		case '$':
+			i++
+			for i < len(query) && isGraphQLNameContinue(query[i]) {
+				i++
+			}
+			continue
 		}
 
 		if depth == 0 && isGraphQLNameStart(ch) {
