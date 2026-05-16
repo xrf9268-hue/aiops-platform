@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -61,10 +62,10 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 		t.Fatalf("tool description leaked Linear token: %q", tool.Description)
 	}
 
-	result, err := tool.Call(context.Background(), ToolCall{
+	proxy := linearGraphQLProxy{apiKey: token, baseURL: httpServer.URL, http: httpServer.Client()}
+	result, err := proxy.call(context.Background(), ToolCall{
 		Query:     "mutation IssueUpdate($id: String!) { issueUpdate(id: $id, input: {}) { success } }",
 		Variables: map[string]any{"id": "issue-1"},
-		Endpoint:  httpServer.URL,
 	})
 	if err != nil {
 		t.Fatalf("linear_graphql call: %v", err)
@@ -74,8 +75,8 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	}
 
 	auth, body, _ := server.recorded()
-	if auth != "Bearer "+token {
-		t.Fatalf("Authorization = %q, want bearer token held by orchestrator", auth)
+	if auth != token {
+		t.Fatalf("Authorization = %q, want raw Linear token held by orchestrator", auth)
 	}
 	if strings.Contains(body, token) {
 		t.Fatalf("GraphQL request body leaked token to agent-controlled payload: %s", body)
@@ -89,6 +90,35 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	}
 	if payload.Query == "" || payload.Variables["id"] != "issue-1" {
 		t.Fatalf("unexpected GraphQL payload: %#v", payload)
+	}
+}
+
+func TestLinearGraphQLIgnoresAgentSuppliedEndpoint(t *testing.T) {
+	good := &fakeLinearGraphQLServer{}
+	goodServer := httptest.NewServer(good.handler())
+	defer goodServer.Close()
+
+	evil := &fakeLinearGraphQLServer{}
+	evilServer := httptest.NewServer(evil.handler())
+	defer evilServer.Close()
+
+	var call ToolCall
+	if err := json.Unmarshal([]byte(`{"query":"query { viewer { id } }","endpoint":"`+evilServer.URL+`"}`), &call); err != nil {
+		t.Fatalf("unmarshal ToolCall: %v", err)
+	}
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: goodServer.URL, http: goodServer.Client()}
+	if _, err := proxy.call(context.Background(), call); err != nil {
+		t.Fatalf("linear_graphql call: %v", err)
+	}
+
+	_, _, goodRequests := good.recorded()
+	_, _, evilRequests := evil.recorded()
+	if goodRequests != 1 {
+		t.Fatalf("configured endpoint requests = %d, want 1", goodRequests)
+	}
+	if evilRequests != 0 {
+		t.Fatalf("agent-supplied endpoint received %d requests, want 0", evilRequests)
 	}
 }
 
@@ -117,6 +147,7 @@ func TestLinearGraphQLReturnsFailurePayloadForGraphQLErrors(t *testing.T) {
 		Call: linearGraphQLProxy{
 			apiKey:  "token",
 			baseURL: httpServer.URL,
+			http:    httpServer.Client(),
 		}.call,
 	}
 
@@ -149,6 +180,7 @@ func TestLinearGraphQLRejectsInvalidVariablesWithoutHTTPRequest(t *testing.T) {
 		Call: linearGraphQLProxy{
 			apiKey:  "token",
 			baseURL: httpServer.URL,
+			http:    httpServer.Client(),
 		}.call,
 	}
 
@@ -165,5 +197,97 @@ func TestLinearGraphQLRejectsInvalidVariablesWithoutHTTPRequest(t *testing.T) {
 	}
 	if !strings.Contains(result, "success") || !strings.Contains(result, "false") {
 		t.Fatalf("result did not look like structured failure payload: %s", result)
+	}
+}
+
+func TestLinearGraphQLReturnsStructuredFailureForEmptyQuery(t *testing.T) {
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: defaultLinearGraphQLEndpoint}.
+		call(context.Background(), ToolCall{Query: "   "})
+	assertStructuredFailure(t, result, err, "linear_graphql query is required")
+}
+
+func TestLinearGraphQLReturnsStructuredFailureForHTTPStatus(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"errors":[{"message":"unauthorized"}]}`, http.StatusUnauthorized)
+	}))
+	defer httpServer.Close()
+
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+		call(context.Background(), ToolCall{Query: "query { viewer { id } }"})
+	assertStructuredFailure(t, result, err, "401 Unauthorized", "unauthorized")
+}
+
+func TestLinearGraphQLReturnsStructuredFailureForRequestBuildError(t *testing.T) {
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: ":// bad-url"}.
+		call(context.Background(), ToolCall{Query: "query { viewer { id } }"})
+	assertStructuredFailure(t, result, err, "Linear GraphQL request could not be built")
+}
+
+func TestLinearGraphQLReturnsStructuredFailureForTransportError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network down")
+	})}
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: defaultLinearGraphQLEndpoint, http: client}.
+		call(context.Background(), ToolCall{Query: "query { viewer { id } }"})
+	assertStructuredFailure(t, result, err, "Linear GraphQL request failed during transport", "network down")
+}
+
+func TestLinearGraphQLReturnsStructuredFailureForBodyReadError(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: errReadCloser{}}, nil
+	})}
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: defaultLinearGraphQLEndpoint, http: client}.
+		call(context.Background(), ToolCall{Query: "query { viewer { id } }"})
+	assertStructuredFailure(t, result, err, "Linear GraphQL response body could not be read", "read boom")
+}
+
+func TestDynamicToolResultUsesSymphonyContentItemType(t *testing.T) {
+	result, err := dynamicToolResult(true, `{"data":{}}`)
+	if err != nil {
+		t.Fatalf("dynamicToolResult: %v", err)
+	}
+	var payload struct {
+		ContentItems []struct {
+			Type string `json:"type"`
+		} `json:"contentItems"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("result is not JSON: %v", err)
+	}
+	if len(payload.ContentItems) != 1 || payload.ContentItems[0].Type != "inputText" {
+		t.Fatalf("contentItems = %#v, want Symphony inputText item", payload.ContentItems)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type errReadCloser struct{}
+
+func (errReadCloser) Read([]byte) (int, error) { return 0, errors.New("read boom") }
+func (errReadCloser) Close() error             { return nil }
+
+func assertStructuredFailure(t *testing.T, result string, err error, substrings ...string) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("returned Go error %v; want structured tool failure", err)
+	}
+	var payload struct {
+		Success bool   `json:"success"`
+		Output  string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		t.Fatalf("result is not structured JSON: %v\n%s", err, result)
+	}
+	if payload.Success {
+		t.Fatalf("success = true, want false; result=%s", result)
+	}
+	for _, substring := range substrings {
+		if !strings.Contains(payload.Output, substring) {
+			t.Fatalf("output %q does not contain %q", payload.Output, substring)
+		}
 	}
 }

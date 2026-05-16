@@ -13,13 +13,12 @@ import (
 )
 
 // ToolCall is the JSON-shaped input accepted by the dynamic linear_graphql
-// tool. Query and Variables are agent-controlled; endpoint is test-only and is
-// intentionally ignored by the advertised schema/description so production
-// calls always use the configured Linear endpoint held by the orchestrator.
+// tool. Query and Variables are agent-controlled. The Linear endpoint is held
+// by the orchestrator-side proxy and is not part of this public call shape, so
+// an agent cannot redirect the orchestrator-held token to another host.
 type ToolCall struct {
 	Query     string         `json:"query"`
 	Variables map[string]any `json:"variables,omitempty"`
-	Endpoint  string         `json:"-"`
 }
 
 // DynamicTool is a client-side tool implemented by the orchestrator and made
@@ -94,12 +93,13 @@ type linearGraphQLProxy struct {
 func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) {
 	query := strings.TrimSpace(call.Query)
 	if query == "" {
-		return "", fmt.Errorf("linear_graphql query is required")
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "linear_graphql query is required",
+			},
+		})
 	}
 	endpoint := p.baseURL
-	if call.Endpoint != "" {
-		endpoint = call.Endpoint
-	}
 	if endpoint == "" {
 		endpoint = defaultLinearGraphQLEndpoint
 	}
@@ -120,10 +120,15 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL request could not be built.",
+				"reason":  err.Error(),
+			},
+		})
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Authorization", p.apiKey)
 
 	httpClient := p.http
 	if httpClient == nil {
@@ -131,12 +136,22 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL request failed during transport.",
+				"reason":  err.Error(),
+			},
+		})
 	}
 	defer resp.Body.Close()
 	var respBody bytes.Buffer
 	if _, err := respBody.ReadFrom(resp.Body); err != nil {
-		return "", err
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL response body could not be read.",
+				"reason":  err.Error(),
+			},
+		})
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return dynamicToolFailure(map[string]any{
