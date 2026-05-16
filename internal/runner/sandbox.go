@@ -178,13 +178,17 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	}
 	args := []string{"--quiet", "--noprofile", "--private=" + workdir, "--whitelist=" + workdir, "--private-tmp"}
 	var cleanupFiles []string
-	if cfg.NetworkMode == "allowlist" || len(cfg.NetworkAllowlistCIDRs) > 0 {
+	if cfg.NetworkMode == "allowlist" {
 		filter, err := writeFirejailNetfilter(cfg.NetworkAllowlistCIDRs)
 		if err != nil {
 			return nil, err
 		}
 		cleanupFiles = append(cleanupFiles, filter)
-		args = append(args, firejailAllowlistNetArg(cfg), "--netfilter="+filter)
+		netArg, err := firejailAllowlistNetArg(cfg)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, netArg, "--netfilter="+filter)
 	} else {
 		args = append(args, "--net=none")
 	}
@@ -229,17 +233,12 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	return wrapped, nil
 }
 
-func firejailAllowlistNetArg(cfg workflow.SandboxConfig) string {
+func firejailAllowlistNetArg(cfg workflow.SandboxConfig) (string, error) {
 	iface := strings.TrimSpace(cfg.NetworkInterface)
 	if iface == "" {
-		// Firejail only applies --netfilter inside a Firejail-created network
-		// namespace; --net=none would create an unconnected namespace and make
-		// allowlist mode equivalent to total network denial. Default to the
-		// conventional default route interface while allowing operators to set a
-		// host-specific interface explicitly in WORKFLOW.md.
-		iface = "eth0"
+		return "", fmt.Errorf("sandbox.network=allowlist requires sandbox.network_interface because Firejail --netfilter must attach to an explicit host interface")
 	}
-	return "--net=" + iface
+	return "--net=" + iface, nil
 }
 
 func writeFirejailNetfilter(cidrs []string) (string, error) {

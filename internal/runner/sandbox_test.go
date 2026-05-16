@@ -210,6 +210,70 @@ func TestSandboxNetworkAllowlistRequiresFirejail(t *testing.T) {
 	}
 }
 
+func TestSandboxFirejailNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
+	binDir := t.TempDir()
+	firejail := filepath.Join(binDir, "firejail")
+	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "app-server")
+	base.Dir = workdir
+
+	wrapped, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:               true,
+		Backend:               "firejail",
+		NetworkMode:           "none",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+	}), base)
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+	joined := strings.Join(wrapped.Args, "\x00")
+	if !strings.Contains(joined, "--net=none") {
+		t.Fatalf("network none must disable egress even when stale allowlist CIDRs are present, args=%#v", wrapped.Args)
+	}
+	if strings.Contains(joined, "--netfilter=") || strings.Contains(joined, "--net=eth0") {
+		t.Fatalf("network none must not enable firejail allowlist mode from stale CIDRs, args=%#v", wrapped.Args)
+	}
+}
+
+func TestSandboxFirejailAllowlistRequiresExplicitNetworkInterface(t *testing.T) {
+	binDir := t.TempDir()
+	firejail := filepath.Join(binDir, "firejail")
+	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "app-server")
+	base.Dir = workdir
+
+	_, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:               true,
+		Backend:               "firejail",
+		NetworkMode:           "allowlist",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+	}), base)
+	if err == nil {
+		t.Fatal("expected explicit firejail allowlist network_interface error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network_interface") || !strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("error = %q, want explicit network_interface guidance", err)
+	}
+}
+
 func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
@@ -313,6 +377,7 @@ func firejailAllowlistCommandForCleanupTest(t *testing.T) (string, *exec.Cmd) {
 		Backend:               "firejail",
 		NetworkMode:           "allowlist",
 		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+		NetworkInterface:      "aiops0",
 	}), base)
 	if err != nil {
 		t.Fatalf("applySandbox: %v", err)

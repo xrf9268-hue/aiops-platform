@@ -146,6 +146,7 @@ sandbox:
   network: allowlist
   network_allowlist_cidrs:
     - 203.0.113.10/32
+  network_interface: aiops0
   env_allowlist:
     - PATH
     - HOME
@@ -172,6 +173,9 @@ hello
 	}
 	if !reflect.DeepEqual(wf.Config.Sandbox.NetworkAllowlistCIDRs, []string{"203.0.113.10/32"}) {
 		t.Fatalf("NetworkAllowlistCIDRs = %#v", wf.Config.Sandbox.NetworkAllowlistCIDRs)
+	}
+	if wf.Config.Sandbox.NetworkInterface != "aiops0" {
+		t.Fatalf("NetworkInterface = %q, want aiops0", wf.Config.Sandbox.NetworkInterface)
 	}
 	if !reflect.DeepEqual(wf.Config.Sandbox.EnvAllowlist, []string{"PATH", "HOME"}) {
 		t.Fatalf("EnvAllowlist = %#v", wf.Config.Sandbox.EnvAllowlist)
@@ -271,6 +275,37 @@ hello
 	}
 }
 
+func TestLoadRejectsSandboxNetworkAllowlistWithoutInterface(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: allowlist
+  network_allowlist_cidrs:
+    - 203.0.113.10/32
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected allowlist without network_interface error")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network=allowlist") || !strings.Contains(err.Error(), "network_interface") {
+		t.Fatalf("Load error = %q, want explicit network_interface guidance", err)
+	}
+}
+
 func TestLoadRejectsSandboxNetworkAllowlistInvalidCIDR(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
@@ -285,6 +320,7 @@ sandbox:
   network: allowlist
   network_allowlist_cidrs:
     - "0.0.0.0/0 -j ACCEPT\n-A OUTPUT -j ACCEPT"
+  network_interface: aiops0
   env_allowlist:
     - PATH
 ---

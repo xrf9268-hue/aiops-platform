@@ -129,6 +129,9 @@ func validateConfig(path string, cfg Config) error {
 		if len(cfg.Sandbox.NetworkAllowlistCIDRs) == 0 {
 			return fmt.Errorf("%s: sandbox.network=allowlist requires sandbox.network_allowlist_cidrs", path)
 		}
+		if strings.TrimSpace(cfg.Sandbox.NetworkInterface) == "" {
+			return fmt.Errorf("%s: sandbox.network=allowlist requires sandbox.network_interface so Firejail can attach --netfilter to an explicit host interface", path)
+		}
 		for _, cidr := range cfg.Sandbox.NetworkAllowlistCIDRs {
 			if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
 				return fmt.Errorf("%s: sandbox.network_allowlist_cidrs contains invalid CIDR %q: %w", path, cidr, err)
