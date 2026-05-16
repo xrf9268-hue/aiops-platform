@@ -16,6 +16,10 @@ type Client interface {
 	ListActiveIssues(ctx context.Context) ([]Issue, error)
 }
 
+type StateIssueLister interface {
+	ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error)
+}
+
 // Transitioner is the subset of a tracker client used by the worker to
 // drive the linked issue through its lifecycle. The worker calls these
 // methods at task claim, PR handoff, and failure so the tracker view

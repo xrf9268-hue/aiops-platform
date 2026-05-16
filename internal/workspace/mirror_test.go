@@ -252,17 +252,17 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 func TestSanitizeLowercasesCollapsesSeparatorsAndCapsLength(t *testing.T) {
 	long := strings.Repeat("A", maxSanitizedLength+20)
 	unicodeLong := strings.Repeat("界", maxSanitizedLength+20)
-	if got, want := sanitize("  Issue/ABC 123!!Needs_Fix  "), "issue-abc-123-needs-fix"; got != want {
-		t.Fatalf("sanitize() = %q, want %q", got, want)
+	if got, want := SanitizeComponent("  Issue/ABC 123!!Needs_Fix  "), "issue-abc-123-needs-fix"; got != want {
+		t.Fatalf("SanitizeComponent() = %q, want %q", got, want)
 	}
-	if got := sanitize(long); len(got) != maxSanitizedLength {
-		t.Fatalf("sanitize(long) length = %d, want %d", len(got), maxSanitizedLength)
+	if got := SanitizeComponent(long); len(got) != maxSanitizedLength {
+		t.Fatalf("SanitizeComponent(long) length = %d, want %d", len(got), maxSanitizedLength)
 	}
-	if got := sanitize("!!!"); got != "unknown" {
-		t.Fatalf("sanitize(separators only) = %q, want unknown", got)
+	if got := SanitizeComponent("!!!"); got != "unknown" {
+		t.Fatalf("SanitizeComponent(separators only) = %q, want unknown", got)
 	}
-	if got := sanitize(unicodeLong); len([]rune(got)) != maxSanitizedLength || !utf8.ValidString(got) {
-		t.Fatalf("sanitize(unicode long) = %q (runes=%d valid=%v), want %d valid runes", got, len([]rune(got)), utf8.ValidString(got), maxSanitizedLength)
+	if got := SanitizeComponent(unicodeLong); len([]rune(got)) != maxSanitizedLength || !utf8.ValidString(got) {
+		t.Fatalf("SanitizeComponent(unicode long) = %q (runes=%d valid=%v), want %d valid runes", got, len([]rune(got)), utf8.ValidString(got), maxSanitizedLength)
 	}
 }
 

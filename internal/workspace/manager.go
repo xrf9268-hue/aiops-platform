@@ -92,14 +92,14 @@ type Manager struct {
 func New(root string) *Manager { return &Manager{Root: root} }
 
 func (m *Manager) PathFor(t task.Task) string {
-	return filepath.Join(m.Root, sanitize(t.RepoOwner), sanitize(t.RepoName), issueWorkspaceKey(t))
+	return filepath.Join(m.Root, SanitizeComponent(t.RepoOwner), SanitizeComponent(t.RepoName), issueWorkspaceKey(t))
 }
 
 func issueWorkspaceKey(t task.Task) string {
 	if strings.TrimSpace(t.SourceType) != "" && strings.TrimSpace(t.SourceEventID) != "" {
-		return filepath.Join(sanitize(t.SourceType), sanitize(t.SourceEventID))
+		return filepath.Join(SanitizeComponent(t.SourceType), SanitizeComponent(t.SourceEventID))
 	}
-	return sanitize(t.ID)
+	return SanitizeComponent(t.ID)
 }
 
 // PrepareGitWorkspace materialises a per-issue workspace by adding a fresh
@@ -650,6 +650,12 @@ func runQuiet(ctx context.Context, dir string, name string, args ...string) erro
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	return cmd.Run()
+}
+
+// SanitizeComponent returns the stable filesystem-safe representation used for
+// workspace path components.
+func SanitizeComponent(s string) string {
+	return sanitize(s)
 }
 
 func sanitize(s string) string {

@@ -274,3 +274,85 @@ func TestAddComment_FailureSurfacesError(t *testing.T) {
 func TestLinearClient_SatisfiesTransitioner(t *testing.T) {
 	var _ Transitioner = (*LinearClient)(nil)
 }
+
+func TestListIssuesByStatesPaginates(t *testing.T) {
+	var mu sync.Mutex
+	var requests []fakeLinearRequest
+	pages := []string{
+		`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
+		`{"data":{"issues":{"nodes":[{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}`,
+	}
+	page := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		mu.Lock()
+		requests = append(requests, fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Variables: payload.Variables, AuthHeader: r.Header.Get("Authorization")})
+		idx := page
+		page++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if idx >= len(pages) {
+			t.Fatalf("unexpected extra ListIssues request")
+		}
+		_, _ = io.WriteString(w, pages[idx])
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready", "In Progress"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if got, want := len(issues), 2; got != want {
+		t.Fatalf("issues = %d, want %d", got, want)
+	}
+	if issues[0].Identifier != "LIN-1" || issues[1].Identifier != "LIN-2" {
+		t.Fatalf("issue identifiers = %q, %q; want LIN-1, LIN-2", issues[0].Identifier, issues[1].Identifier)
+	}
+	if got, want := len(requests), 2; got != want {
+		t.Fatalf("requests = %d, want %d", got, want)
+	}
+	if requests[0].Variables["after"] != nil {
+		t.Fatalf("first request after = %v, want nil", requests[0].Variables["after"])
+	}
+	if requests[1].Variables["after"] != "cursor-1" {
+		t.Fatalf("second request after = %v, want cursor-1", requests[1].Variables["after"])
+	}
+}
+
+func TestListIssuesByStatesErrorsWhenNextPageCursorMissing(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "linear pagination missing endCursor") {
+		t.Fatalf("ListIssuesByStates error = %v, want missing cursor error", err)
+	}
+}
+
+func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-cursor"}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "linear pagination exceeded") {
+		t.Fatalf("ListIssuesByStates error = %v, want max pages error", err)
+	}
+}
+
+func TestLinearClient_SatisfiesStateIssueLister(t *testing.T) {
+	var _ StateIssueLister = (*LinearClient)(nil)
+}
