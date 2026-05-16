@@ -131,7 +131,7 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
 	mgr := workspace.New(cfg.WorkspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
-	workdir, err := mgr.PrepareGitWorkspace(ctx, t)
+	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
 		return &RunTaskError{Err: err}
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -23,6 +24,8 @@ import (
 // can emit tens of MiB; capping prevents unbounded RAM use and the duplicate
 // allocation that happens when the output is later written as an artifact.
 const VerifyOutputCap = 1 << 20 // 1 MiB
+
+const maxSanitizedLength = 120
 
 // VerifyResult captures the outcome of running a workflow verify command.
 // Output contains the combined stdout+stderr so it can be persisted as a
@@ -73,13 +76,13 @@ func (c *cappedBuffer) Dropped() int64  { return c.dropped }
 // Compile-time check that cappedBuffer satisfies io.Writer.
 var _ io.Writer = (*cappedBuffer)(nil)
 
-// Manager owns per-task workspace creation, layered on top of a process-wide
-// bare mirror cache. Each task gets its own detached worktree under Root so
-// concurrent workers cannot stomp on each other, while the heavy network IO
+// Manager owns per-issue workspace creation, layered on top of a process-wide
+// bare mirror cache. Each issue gets its own detached worktree under Root so
+// unrelated issues cannot stomp on each other, while the heavy network IO
 // (object download) happens once per repo in the mirror cache and is
 // reused on every subsequent task.
 type Manager struct {
-	// Root is the per-task worktree root, typically WORKSPACE_ROOT.
+	// Root is the per-issue worktree root, typically WORKSPACE_ROOT.
 	Root string
 	// MirrorRoot overrides the bare mirror cache location. When empty,
 	// MirrorRoot() resolves it from os.UserCacheDir or os.TempDir.
@@ -89,26 +92,38 @@ type Manager struct {
 func New(root string) *Manager { return &Manager{Root: root} }
 
 func (m *Manager) PathFor(t task.Task) string {
-	repo := sanitize(t.RepoOwner + "_" + t.RepoName)
-	return filepath.Join(m.Root, repo, t.ID)
+	return filepath.Join(m.Root, sanitize(t.RepoOwner), sanitize(t.RepoName), issueWorkspaceKey(t))
 }
 
-// PrepareGitWorkspace materialises a per-task workspace by adding a fresh
+func issueWorkspaceKey(t task.Task) string {
+	if strings.TrimSpace(t.SourceType) != "" && strings.TrimSpace(t.SourceEventID) != "" {
+		return filepath.Join(sanitize(t.SourceType), sanitize(t.SourceEventID))
+	}
+	return sanitize(t.ID)
+}
+
+// PrepareGitWorkspace materialises a per-issue workspace by adding a fresh
 // worktree off the cached bare mirror for t.CloneURL. The worktree is
 // created at PathFor(t) on the work branch, with origin set back to the
 // upstream URL so `git push origin <branch>` works without further setup.
 //
 // On every call we refresh the mirror first so the worktree starts from
-// up-to-date refs; this replaces the previous behaviour of running a fresh
-// `git clone` per task, which was both slow and wasteful for large repos.
-func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, error) {
+// up-to-date refs. The returned createdNow flag reports whether this call
+// first touched the issue workspace path; reruns still receive a fresh
+// checkout at the same path to preserve the existing clean-worktree behavior.
+func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) {
 	workdir := m.PathFor(t)
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
-		return "", err
+		return "", false, err
+	}
+	_, statErr := os.Stat(workdir)
+	createdNow := os.IsNotExist(statErr)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return "", false, statErr
 	}
 	mirror, err := m.EnsureMirror(ctx, t.CloneURL)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	// Drop any leftover worktree from a previous run *before* asking git to
 	// add a new one at the same path. We deliberately ignore failures and
@@ -117,7 +132,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	_ = runQuiet(ctx, mirror, "git", "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
 	if err := runQuiet(ctx, mirror, "git", "worktree", "prune"); err != nil {
-		return "", fmt.Errorf("worktree prune: %w", err)
+		return "", false, fmt.Errorf("worktree prune: %w", err)
 	}
 	// Create the worktree on the work branch, branched from the requested
 	// base ref. We resolve the base via `origin/<base>` because the bare
@@ -131,14 +146,14 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 		startRef = t.BaseBranch
 	}
 	if err := run(ctx, mirror, "git", "worktree", "add", "-B", t.WorkBranch, workdir, startRef); err != nil {
-		return "", fmt.Errorf("worktree add: %w", err)
+		return "", false, fmt.Errorf("worktree add: %w", err)
 	}
 	// The mirror's "origin" remote points at the upstream URL, but inside
 	// the worktree git resolves remotes via the linked repo, so push works
 	// out of the box. We still set the URL explicitly for clarity in case
 	// downstream tooling inspects `git remote -v` from within the worktree.
 	_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
-	return workdir, nil
+	return workdir, createdNow, nil
 }
 
 func WritePrompt(workdir string, prompt string) error {
@@ -638,7 +653,27 @@ func runQuiet(ctx context.Context, dir string, name string, args ...string) erro
 }
 
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, "/", "_")
-	s = strings.ReplaceAll(s, " ", "_")
-	return s
+	var b strings.Builder
+	b.Grow(len(s))
+	inSeparator := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			inSeparator = false
+			continue
+		}
+		if !inSeparator && b.Len() > 0 {
+			b.WriteByte('-')
+			inSeparator = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	runes := []rune(out)
+	if len(runes) > maxSanitizedLength {
+		out = strings.TrimRight(string(runes[:maxSanitizedLength]), "-")
+	}
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
@@ -62,12 +63,14 @@ func newTestManager(t *testing.T) *Manager {
 
 func makeTask(id, cloneURL string) task.Task {
 	return task.Task{
-		ID:         id,
-		RepoOwner:  "acme",
-		RepoName:   "demo",
-		CloneURL:   cloneURL,
-		BaseBranch: "main",
-		WorkBranch: "ai/" + id,
+		ID:            id,
+		SourceType:    "linear_issue",
+		SourceEventID: id,
+		RepoOwner:     "acme",
+		RepoName:      "demo",
+		CloneURL:      cloneURL,
+		BaseBranch:    "main",
+		WorkBranch:    "ai/" + id,
 	}
 }
 
@@ -115,13 +118,19 @@ func TestPrepareGitWorkspace_IsolatedWorktreesShareMirror(t *testing.T) {
 	t1 := makeTask("task-a", upstream)
 	t2 := makeTask("task-b", upstream)
 
-	dir1, err := mgr.PrepareGitWorkspace(ctx, t1)
+	dir1, createdNow, err := mgr.PrepareGitWorkspace(ctx, t1)
 	if err != nil {
 		t.Fatalf("prepare t1: %v", err)
 	}
-	dir2, err := mgr.PrepareGitWorkspace(ctx, t2)
+	if !createdNow {
+		t.Fatal("first prepare for t1 reported createdNow=false")
+	}
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, t2)
 	if err != nil {
 		t.Fatalf("prepare t2: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare for t2 reported createdNow=false")
 	}
 	if dir1 == dir2 {
 		t.Fatalf("expected isolated worktrees, both at %s", dir1)
@@ -170,24 +179,90 @@ func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
 	ctx := context.Background()
 	tk := makeTask("task-x", upstream)
 
-	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
 	}
 	// Simulate a partial run leaving an extra file behind. The next
 	// PrepareGitWorkspace must give us a clean checkout.
 	if err := os.WriteFile(filepath.Join(dir, "stale.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	dir2, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("second prepare: %v", err)
+	}
+	if createdNow {
+		t.Fatal("second prepare reported createdNow=true")
 	}
 	if dir != dir2 {
 		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
 	}
 	if _, err := os.Stat(filepath.Join(dir2, "stale.txt")); !os.IsNotExist(err) {
 		t.Fatalf("stale file survived re-prepare: %v", err)
+	}
+}
+
+func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
+	mgr := &Manager{Root: "/workspaces"}
+
+	first := makeTask("tsk-first", "file:///tmp/repo.git")
+	first.SourceEventID = "Issue/ABC 123!!Needs_Fix"
+	second := first
+	second.ID = "tsk-second"
+	second.WorkBranch = "ai/tsk-second"
+
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear-issue", "issue-abc-123-needs-fix"); got != want {
+		t.Fatalf("PathFor() = %q, want %q", got, want)
+	}
+	collidingOwner := first
+	collidingOwner.RepoOwner = "acme-demo"
+	collidingOwner.RepoName = ""
+	if got := mgr.PathFor(collidingOwner); got == mgr.PathFor(first) {
+		t.Fatalf("owner/name boundary collapsed into colliding workspace path %q", got)
+	}
+	if got := mgr.PathFor(second); got != mgr.PathFor(first) {
+		t.Fatalf("same source issue used different paths: %q vs %q", got, mgr.PathFor(first))
+	}
+
+	other := first
+	other.SourceEventID = "Issue/ABC 124"
+	if got := mgr.PathFor(other); got == mgr.PathFor(first) {
+		t.Fatalf("different issue identifiers collided at %q", got)
+	}
+
+	collidingSourceBoundary := first
+	collidingSourceBoundary.SourceType = "linear_issue-issue"
+	collidingSourceBoundary.SourceEventID = "ABC 123!!Needs_Fix"
+	if got := mgr.PathFor(collidingSourceBoundary); got == mgr.PathFor(first) {
+		t.Fatalf("source type/event boundary collapsed into colliding workspace path %q", got)
+	}
+
+	fallback := first
+	fallback.SourceType = "manual"
+	fallback.SourceEventID = ""
+	if got, want := mgr.PathFor(fallback), filepath.Join("/workspaces", "acme", "demo", "tsk-first"); got != want {
+		t.Fatalf("PathFor() fallback = %q, want %q", got, want)
+	}
+}
+
+func TestSanitizeLowercasesCollapsesSeparatorsAndCapsLength(t *testing.T) {
+	long := strings.Repeat("A", maxSanitizedLength+20)
+	unicodeLong := strings.Repeat("界", maxSanitizedLength+20)
+	if got, want := sanitize("  Issue/ABC 123!!Needs_Fix  "), "issue-abc-123-needs-fix"; got != want {
+		t.Fatalf("sanitize() = %q, want %q", got, want)
+	}
+	if got := sanitize(long); len(got) != maxSanitizedLength {
+		t.Fatalf("sanitize(long) length = %d, want %d", len(got), maxSanitizedLength)
+	}
+	if got := sanitize("!!!"); got != "unknown" {
+		t.Fatalf("sanitize(separators only) = %q, want unknown", got)
+	}
+	if got := sanitize(unicodeLong); len([]rune(got)) != maxSanitizedLength || !utf8.ValidString(got) {
+		t.Fatalf("sanitize(unicode long) = %q (runes=%d valid=%v), want %d valid runes", got, len([]rune(got)), utf8.ValidString(got), maxSanitizedLength)
 	}
 }
 
@@ -203,7 +278,7 @@ func TestCommitAndPush_RetryOverwritesRemoteBranch(t *testing.T) {
 	ctx := context.Background()
 	tk := makeTask("retry-task", upstream)
 
-	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("first prepare: %v", err)
 	}
@@ -220,7 +295,7 @@ func TestCommitAndPush_RetryOverwritesRemoteBranch(t *testing.T) {
 	// Simulate the worker re-claiming the same task: PrepareGitWorkspace
 	// resets the worktree to a fresh checkout off main, so the retry's local
 	// branch tip diverges from the remote one we just pushed.
-	dir2, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir2, _, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("second prepare: %v", err)
 	}
@@ -264,7 +339,7 @@ func TestCommitAndPush_RemoteBranchDeletedRecreates(t *testing.T) {
 	tk := makeTask("deleted-task", upstream)
 
 	// First attempt: create the branch upstream.
-	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("first prepare: %v", err)
 	}
@@ -300,7 +375,7 @@ func TestCommitAndPush_RemoteBranchDeletedRecreates(t *testing.T) {
 
 	// Retry: same task ID, fresh worktree, new content. Must succeed and
 	// recreate the branch on the bare upstream.
-	dir2, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir2, _, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("second prepare: %v", err)
 	}
@@ -384,11 +459,11 @@ func TestCleanup_RemovesOldWorktreesKeepsRecent(t *testing.T) {
 	old := makeTask("old", upstream)
 	recent := makeTask("recent", upstream)
 
-	oldDir, err := mgr.PrepareGitWorkspace(ctx, old)
+	oldDir, _, err := mgr.PrepareGitWorkspace(ctx, old)
 	if err != nil {
 		t.Fatalf("prepare old: %v", err)
 	}
-	recentDir, err := mgr.PrepareGitWorkspace(ctx, recent)
+	recentDir, _, err := mgr.PrepareGitWorkspace(ctx, recent)
 	if err != nil {
 		t.Fatalf("prepare recent: %v", err)
 	}
@@ -454,7 +529,7 @@ func TestCommitAndPush_WorksWithoutHostGitIdent(t *testing.T) {
 	ctx := context.Background()
 	tk := makeTask("no-ident-task", upstream)
 
-	dir, err := mgr.PrepareGitWorkspace(ctx, tk)
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("prepare workspace: %v", err)
 	}
