@@ -176,19 +176,20 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 		}
 		childArgs = append([]string{resolved}, childArgs[1:]...)
 	}
-	args := []string{"--quiet", "--private=" + workdir, "--whitelist=" + workdir, "--private-tmp"}
+	args := []string{"--quiet", "--noprofile", "--private=" + workdir, "--whitelist=" + workdir, "--private-tmp"}
+	var cleanupFiles []string
 	if cfg.NetworkMode == "allowlist" || len(cfg.NetworkAllowlistCIDRs) > 0 {
 		filter, err := writeFirejailNetfilter(cfg.NetworkAllowlistCIDRs)
 		if err != nil {
 			return nil, err
 		}
+		cleanupFiles = append(cleanupFiles, filter)
 		args = append(args, "--netfilter="+filter)
 	} else {
 		args = append(args, "--net=none")
 	}
 	for _, envPair := range env {
-		name, _, _ := strings.Cut(envPair, "=")
-		args = append(args, "--env="+name)
+		args = append(args, "--env="+envPair)
 	}
 	for _, f := range cfg.CredentialFiles {
 		f = strings.TrimSpace(f)
@@ -203,8 +204,28 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 	args = append(args, "--")
 	args = append(args, childArgs...)
 	wrapped := exec.CommandContext(ctx, firejail, args...)
+	if len(cleanupFiles) > 0 {
+		if len(cleanupFiles) != 1 {
+			return nil, fmt.Errorf("firejail sandbox expected one cleanup file, got %d", len(cleanupFiles))
+		}
+		cleanupScript := `cleanup_file=$1; shift; "$@"; status=$?; rm -f "$cleanup_file"; exit "$status"`
+		shellArgs := []string{"-c", cleanupScript, "aiops-firejail-cleanup", cleanupFiles[0], firejail}
+		shellArgs = append(shellArgs, args[1:]...)
+		wrapped = exec.CommandContext(ctx, "/bin/sh", shellArgs...)
+	}
 	wrapped.Dir = workdir
 	wrapped.Env = env
+	if len(cleanupFiles) > 0 {
+		wrapped.Cancel = func() error {
+			var firstErr error
+			for _, path := range cleanupFiles {
+				if err := os.Remove(path); err != nil && !os.IsNotExist(err) && firstErr == nil {
+					firstErr = err
+				}
+			}
+			return firstErr
+		}
+	}
 	return wrapped, nil
 }
 

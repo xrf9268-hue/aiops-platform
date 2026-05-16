@@ -243,13 +243,18 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applySandbox: %v", err)
 	}
-	if filepath.Base(wrapped.Path) != "firejail" {
-		t.Fatalf("wrapped.Path = %q, want firejail", wrapped.Path)
-	}
 	joined := strings.Join(wrapped.Args, "\x00")
-	for _, want := range []string{"--netfilter=", "--env=AIOPS_RUN_TOKEN", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
+	if filepath.Base(wrapped.Path) != "firejail" && !strings.Contains(joined, "firejail") {
+		t.Fatalf("wrapped command should execute firejail directly or via cleanup wrapper, path=%q args=%#v", wrapped.Path, wrapped.Args)
+	}
+	for _, want := range []string{"--noprofile", "--netfilter=", "--env=AIOPS_RUN_TOKEN=allowed-secret", "--read-only=" + credential, "--whitelist=" + credential, "--", "codex", "app-server"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("wrapped args missing %q in %#v", want, wrapped.Args)
+		}
+	}
+	for _, arg := range wrapped.Args {
+		if arg == "--env=AIOPS_RUN_TOKEN" {
+			t.Fatalf("firejail env allowlist must preserve values with name=value args, got %#v", wrapped.Args)
 		}
 	}
 	for _, arg := range wrapped.Args {
@@ -261,5 +266,50 @@ func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
 		if strings.HasPrefix(env, "GITHUB_TOKEN=") {
 			t.Fatalf("sandbox env leaked non-allowlisted credential: %q", wrapped.Env)
 		}
+	}
+}
+
+func TestFirejailNetfilterFileIsRemovedWhenWrappedCommandExits(t *testing.T) {
+	binDir := t.TempDir()
+	firejail := filepath.Join(binDir, "firejail")
+	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "app-server")
+	base.Dir = workdir
+
+	wrapped, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:               true,
+		Backend:               "firejail",
+		NetworkMode:           "allowlist",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+	}), base)
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+	var filterPath string
+	for _, arg := range wrapped.Args {
+		if strings.HasPrefix(arg, "--netfilter=") {
+			filterPath = strings.TrimPrefix(arg, "--netfilter=")
+		}
+	}
+	if filterPath == "" {
+		t.Fatalf("wrapped args missing --netfilter path: %#v", wrapped.Args)
+	}
+	if _, err := os.Stat(filterPath); err != nil {
+		t.Fatalf("netfilter file should exist before command starts: %v", err)
+	}
+	if err := wrapped.Run(); err != nil {
+		t.Fatalf("wrapped command failed: %v", err)
+	}
+	if _, err := os.Stat(filterPath); !os.IsNotExist(err) {
+		t.Fatalf("netfilter file should be removed after command exit, stat err = %v", err)
 	}
 }
