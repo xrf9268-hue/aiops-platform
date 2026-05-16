@@ -106,7 +106,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 
 func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 	command := strings.TrimSpace(in.Workflow.Config.Codex.Command)
-	if command == "" {
+	if command == "" || command == "codex exec" {
 		command = "codex app-server"
 	}
 	fields := strings.Fields(command)
@@ -175,7 +175,10 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		maxTurns = 20
 	}
 	for turn := 1; turn <= maxTurns; turn++ {
-		input := []map[string]any(nil)
+		input := []map[string]any{{
+			"type": "text",
+			"text": appServerContinuationPrompt(in, turn),
+		}}
 		if turn == 1 {
 			input = []map[string]any{{
 				"type": "text",
@@ -338,15 +341,36 @@ func (c *appServerClient) handleNotification(msg map[string]any) {
 func completedTurnError(msg map[string]any) error {
 	params, _ := msg["params"].(map[string]any)
 	status, _ := params["status"].(string)
+	if status == "" {
+		turn, _ := params["turn"].(map[string]any)
+		status, _ = turn["status"].(string)
+	}
 	status = strings.ToLower(strings.TrimSpace(status))
 	if status == "" || status == "completed" || status == "succeeded" || status == "success" {
 		return nil
 	}
 	reason := ""
-	for _, key := range []string{"reason", "error", "message"} {
-		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
-			reason = strings.TrimSpace(v)
+	reasonSources := []map[string]any{params}
+	if turn, _ := params["turn"].(map[string]any); turn != nil {
+		reasonSources = append(reasonSources, turn)
+	}
+	for _, source := range reasonSources {
+		for _, key := range []string{"reason", "error", "message"} {
+			if v, _ := source[key].(string); strings.TrimSpace(v) != "" {
+				reason = strings.TrimSpace(v)
+				break
+			}
+		}
+		if reason != "" {
 			break
+		}
+	}
+	if reason == "" {
+		for _, key := range []string{"reason", "error", "message"} {
+			if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
+				reason = strings.TrimSpace(v)
+				break
+			}
 		}
 	}
 	if reason == "" {
@@ -437,6 +461,14 @@ func appServerTurnTitle(in RunInput) string {
 		return in.Task.Title
 	}
 	return in.Task.ID
+}
+
+func appServerContinuationPrompt(in RunInput, turn int) string {
+	subject := appServerTurnTitle(in)
+	if strings.TrimSpace(subject) == "" {
+		subject = "the current task"
+	}
+	return fmt.Sprintf("Continue working on %s. This is continuation turn %d; use the existing thread context, address any remaining requirements, and finish only when the task is complete.", subject, turn)
 }
 
 func extractString(m map[string]any, outer, inner string) (string, error) {

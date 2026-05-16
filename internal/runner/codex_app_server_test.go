@@ -302,3 +302,103 @@ for line in sys.stdin:
 		t.Fatalf("Run error = %v, want app-server read timeout", err)
 	}
 }
+
+func TestCodexAppServerRunnerTreatsNestedFailedTurnCompletedAsError(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turn': {'status': 'failed', 'error': 'nested tool failure'}}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "turn/completed failed") || !strings.Contains(err.Error(), "nested tool failure") {
+		t.Fatalf("Run error = %v, want nested failed turn/completed error with reason", err)
+	}
+}
+
+func TestCodexAppServerRunnerSendsContinuationInputAfterContinueRequest(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        if turns == 1:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'needs follow-up', 'continue': True}}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done'}}), flush=True)
+            break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 2
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var turnInputs []any
+	for _, line := range strings.Split(strings.TrimSpace(string(stdin)), "\n") {
+		if line == "" {
+			continue
+		}
+		var msg map[string]any
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			t.Fatalf("decode stdin JSON line %q: %v", line, err)
+		}
+		if msg["method"] == "turn/start" {
+			params := msg["params"].(map[string]any)
+			turnInputs = append(turnInputs, params["input"])
+		}
+	}
+	if len(turnInputs) != 2 {
+		t.Fatalf("turn/start count = %d, want 2", len(turnInputs))
+	}
+	items, ok := turnInputs[1].([]any)
+	if !ok || len(items) == 0 {
+		t.Fatalf("second turn input = %#v, want non-empty continuation guidance items", turnInputs[1])
+	}
+	text, _ := items[0].(map[string]any)["text"].(string)
+	if !strings.Contains(strings.ToLower(text), "continue") || !strings.Contains(text, "AIOPS-64") {
+		t.Fatalf("continuation text = %q, want task-specific continuation guidance", text)
+	}
+}
+
+func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchanged(t *testing.T) {
+	codexAppServerStubScript(t, `
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = "codex exec"
+
+	cmd, err := buildCodexAppServerCmd(context.Background(), in)
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if len(cmd.Args) < 2 || cmd.Args[0] != "codex" || cmd.Args[1] != "app-server" {
+		t.Fatalf("cmd.Args = %#v, want codex app-server", cmd.Args)
+	}
+}
