@@ -10,6 +10,7 @@ type Config struct {
 	Codex     CommandConfig   `yaml:"codex" json:"codex"`
 	Claude    CommandConfig   `yaml:"claude" json:"claude"`
 	Policy    PolicyConfig    `yaml:"policy" json:"policy"`
+	Safety    SafetyConfig    `yaml:"safety" json:"safety"`
 	Verify    VerifyConfig    `yaml:"verify" json:"verify"`
 	PR        PRConfig        `yaml:"pr" json:"pr"`
 }
@@ -123,6 +124,16 @@ func (p PolicyConfig) LineLimit() int {
 		return p.MaxChangedLines
 	}
 	return p.MaxChangedLOC
+}
+
+// SafetyConfig documents the policy envelope operators expect agents and
+// reviewers to honor. It is intentionally descriptive in this phase: enforcement
+// beyond PolicyConfig remains a separate sandbox-hardening task.
+type SafetyConfig struct {
+	AllowedNetworks []string `yaml:"allowed_networks" json:"allowed_networks"`
+	AllowedPaths    []string `yaml:"allowed_paths" json:"allowed_paths"`
+	AllowedCommands []string `yaml:"allowed_commands" json:"allowed_commands"`
+	Forbidden       []string `yaml:"forbidden" json:"forbidden"`
 }
 
 type VerifyConfig struct {

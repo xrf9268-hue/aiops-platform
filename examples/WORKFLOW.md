@@ -59,6 +59,27 @@ policy:
   max_changed_files: 12
   max_changed_loc: 300
 
+# Safety policy for the agent and human reviewers. The current worker records
+# these expectations in the repository-owned workflow, but network/path/command
+# enforcement beyond `policy.deny_paths` remains a Phase 2 hardening item.
+safety:
+  allowed_networks:
+    - git remote for this repository
+    - configured issue tracker API
+    - configured pull-request host
+  allowed_paths:
+    - repository workspace for this task
+    - language/tool caches that do not contain shared credentials
+  allowed_commands:
+    - repository build, test, lint, and formatting commands
+    - git commands needed to commit and push the work branch
+    - tracker/PR tool calls needed for the workflow handoff
+  forbidden:
+    - reading host files outside the workspace unless explicitly required
+    - using shared production secrets or personal credentials
+    - contacting unrelated external services
+    - changing deployment, infrastructure, migration, or secret paths
+
 verify:
   commands:
     - go test ./...

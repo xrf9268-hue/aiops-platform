@@ -3,6 +3,7 @@ package workflow
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -629,6 +630,43 @@ prompt
 	}
 	if !strings.Contains(err.Error(), "claude.profile") {
 		t.Fatalf("error = %q; want it to mention claude.profile", err)
+	}
+}
+
+func TestLoad_PreservesSafetyPolicyForOperatorInspection(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+safety:
+  allowed_networks:
+    - git remote for this repository
+  allowed_paths:
+    - repository workspace for this task
+  allowed_commands:
+    - go test ./...
+  forbidden:
+    - reading host files outside the workspace
+---
+prompt
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := wf.Config.Safety.AllowedNetworks, []string{"git remote for this repository"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Safety.AllowedNetworks = %#v, want %#v", got, want)
+	}
+	if got, want := wf.Config.Safety.AllowedPaths, []string{"repository workspace for this task"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Safety.AllowedPaths = %#v, want %#v", got, want)
+	}
+	if got, want := wf.Config.Safety.AllowedCommands, []string{"go test ./..."}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Safety.AllowedCommands = %#v, want %#v", got, want)
+	}
+	if got, want := wf.Config.Safety.Forbidden, []string{"reading host files outside the workspace"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Safety.Forbidden = %#v, want %#v", got, want)
 	}
 }
 

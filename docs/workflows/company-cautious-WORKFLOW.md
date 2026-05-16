@@ -62,6 +62,28 @@ policy:
   max_changed_files: 8
   max_changed_loc: 200
 
+# Safety policy for cautious company runs. These entries make the expected
+# network/path/command envelope explicit for the agent and reviewers; sandbox
+# enforcement beyond `policy.deny_paths` is still a separate hardening phase.
+safety:
+  allowed_networks:
+    - company Git host for this repository
+    - configured Linear/Gitea tracker API
+    - configured pull-request host
+    - package registries required by the repository lockfiles
+  allowed_paths:
+    - repository workspace for this task
+    - tool caches without shared credentials
+  allowed_commands:
+    - repository build, test, lint, and formatting commands
+    - git commands for the work branch
+    - tracker/PR tool calls needed for draft handoff
+  forbidden:
+    - reading files outside the workspace unless explicitly required
+    - using production, customer, or personal credentials
+    - contacting unrelated external services
+    - modifying denied policy paths
+
 verify:
   commands:
     - go test ./...
