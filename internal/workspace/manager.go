@@ -92,8 +92,7 @@ type Manager struct {
 func New(root string) *Manager { return &Manager{Root: root} }
 
 func (m *Manager) PathFor(t task.Task) string {
-	repo := sanitize(t.RepoOwner + "-" + t.RepoName)
-	return filepath.Join(m.Root, repo, issueWorkspaceKey(t))
+	return filepath.Join(m.Root, sanitize(t.RepoOwner), sanitize(t.RepoName), issueWorkspaceKey(t))
 }
 
 func issueWorkspaceKey(t task.Task) string {

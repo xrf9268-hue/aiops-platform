@@ -164,34 +164,45 @@ func (m *Manager) Cleanup(ctx context.Context, maxAge time.Duration) (CleanupRep
 		if !repoEntry.IsDir() {
 			continue
 		}
-		repoDir := filepath.Join(m.Root, repoEntry.Name())
-		taskEntries, err := os.ReadDir(repoDir)
-		if err != nil {
-			report.Failed++
-			continue
-		}
-		for _, te := range taskEntries {
-			if !te.IsDir() {
-				continue
-			}
-			taskDir := filepath.Join(repoDir, te.Name())
-			info, err := os.Stat(taskDir)
-			if err != nil {
-				report.Failed++
-				continue
-			}
-			if maxAge > 0 && info.ModTime().After(cutoff) {
-				report.Skipped++
-				continue
-			}
-			if removeWorktree(ctx, taskDir) {
-				report.Removed++
-			} else {
-				report.Failed++
-			}
-		}
+		cleanupWorktreeDirs(ctx, filepath.Join(m.Root, repoEntry.Name()), cutoff, maxAge, &report)
 	}
 	return report, nil
+}
+
+func cleanupWorktreeDirs(ctx context.Context, dir string, cutoff time.Time, maxAge time.Duration, report *CleanupReport) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		report.Failed++
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+			cleanupWorktree(ctx, path, cutoff, maxAge, report)
+			continue
+		}
+		cleanupWorktreeDirs(ctx, path, cutoff, maxAge, report)
+	}
+}
+
+func cleanupWorktree(ctx context.Context, taskDir string, cutoff time.Time, maxAge time.Duration, report *CleanupReport) {
+	info, err := os.Stat(taskDir)
+	if err != nil {
+		report.Failed++
+		return
+	}
+	if maxAge > 0 && info.ModTime().After(cutoff) {
+		report.Skipped++
+		return
+	}
+	if removeWorktree(ctx, taskDir) {
+		report.Removed++
+	} else {
+		report.Failed++
+	}
 }
 
 // removeWorktree best-effort detaches a task directory from its owning bare
