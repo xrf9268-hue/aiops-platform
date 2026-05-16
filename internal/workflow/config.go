@@ -146,6 +146,7 @@ type SandboxConfig struct {
 	Backend               string   `yaml:"backend" json:"backend"`
 	NetworkMode           string   `yaml:"network" json:"network"`
 	NetworkAllowlistCIDRs []string `yaml:"network_allowlist_cidrs" json:"network_allowlist_cidrs"`
+	NetworkInterface      string   `yaml:"network_interface" json:"network_interface"`
 	EnvAllowlist          []string `yaml:"env_allowlist" json:"env_allowlist"`
 	CredentialFiles       []string `yaml:"credential_files" json:"credential_files"`
 }
