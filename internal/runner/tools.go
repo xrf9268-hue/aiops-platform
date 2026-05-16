@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -84,6 +85,8 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 
 const defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
 
+var graphQLOperationRegexp = regexp.MustCompile(`\b(query|mutation|subscription)\b`)
+
 type linearGraphQLProxy struct {
 	apiKey  string
 	baseURL string
@@ -96,6 +99,14 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
 				"message": "linear_graphql query is required",
+			},
+		})
+	}
+	operations := graphQLOperationRegexp.FindAllString(query, -1)
+	if len(operations) > 1 {
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "linear_graphql query must contain exactly one operation",
 			},
 		})
 	}

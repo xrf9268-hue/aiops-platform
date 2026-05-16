@@ -206,6 +206,20 @@ func TestLinearGraphQLReturnsStructuredFailureForEmptyQuery(t *testing.T) {
 	assertStructuredFailure(t, result, err, "linear_graphql query is required")
 }
 
+func TestLinearGraphQLRejectsMultipleOperationsWithoutHTTPRequest(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+		call(context.Background(), ToolCall{Query: "query Viewer { viewer { id } } mutation Update { issueUpdate(id: \"1\", input: {}) { success } }"})
+	assertStructuredFailure(t, result, err, "linear_graphql query must contain exactly one operation")
+	_, _, requests := server.recorded()
+	if requests != 0 {
+		t.Fatalf("server received %d requests, want 0", requests)
+	}
+}
+
 func TestLinearGraphQLReturnsStructuredFailureForHTTPStatus(t *testing.T) {
 	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, `{"errors":[{"message":"unauthorized"}]}`, http.StatusUnauthorized)
