@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -82,7 +83,10 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 	return tools
 }
 
-const defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
+const (
+	defaultLinearGraphQLEndpoint  = "https://api.linear.app/graphql"
+	maxLinearGraphQLResponseBytes = 1 << 20
+)
 
 type linearGraphQLProxy struct {
 	apiKey  string
@@ -152,11 +156,20 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 	}
 	defer resp.Body.Close()
 	var respBody bytes.Buffer
-	if _, err := respBody.ReadFrom(resp.Body); err != nil {
+	n, err := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
+	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
 				"message": "Linear GraphQL response body could not be read.",
 				"reason":  err.Error(),
+			},
+		})
+	}
+	if n > maxLinearGraphQLResponseBytes {
+		return dynamicToolFailure(map[string]any{
+			"error": map[string]any{
+				"message": "Linear GraphQL response exceeded maximum size.",
+				"limit":   maxLinearGraphQLResponseBytes,
 			},
 		})
 	}

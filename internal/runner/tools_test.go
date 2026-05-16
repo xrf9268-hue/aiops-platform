@@ -285,6 +285,19 @@ func TestLinearGraphQLReturnsStructuredFailureForBodyReadError(t *testing.T) {
 	assertStructuredFailure(t, result, err, "Linear GraphQL response body could not be read", "read boom")
 }
 
+func TestLinearGraphQLReturnsStructuredFailureForOversizedResponse(t *testing.T) {
+	oversized := strings.Repeat("a", maxLinearGraphQLResponseBytes+1)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, oversized)
+	}))
+	defer httpServer.Close()
+
+	result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+		call(context.Background(), ToolCall{Query: "query { viewer { id } }"})
+	assertStructuredFailure(t, result, err, "Linear GraphQL response exceeded maximum size")
+}
+
 func TestDynamicToolResultUsesSymphonyContentItemType(t *testing.T) {
 	result, err := dynamicToolResult(true, `{"data":{}}`)
 	if err != nil {
