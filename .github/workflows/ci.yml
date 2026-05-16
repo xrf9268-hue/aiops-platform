@@ -39,6 +39,14 @@ jobs:
             go.mod
             go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Run GitHub script tests
+        run: node --test .github/scripts/capture-unresolved-reviews.test.mjs
+
       - name: Download dependencies
         run: go mod download
 

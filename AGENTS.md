@@ -214,6 +214,7 @@ Go toolchain: pinned via `go.mod` (Go 1.25). Don't edit `go.mod`'s `go` directiv
 - **Don't mock the database in integration tests** — hit real Postgres (testcontainers or the E2E harness).
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.
 - **PRs from the worker are draft + labeled by default**; respect `policy.max_changed_files` (12) and `policy.max_changed_loc` (300) defaults when shaping changes.
+- **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is a recovery guardrail, not a required merge check; agents should still handle actionable review feedback before merging.
 
 ## WORKFLOW.md discovery (worker side)
 

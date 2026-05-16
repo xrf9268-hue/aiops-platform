@@ -1,0 +1,61 @@
+name: Capture unresolved reviews
+
+on:
+  pull_request:
+    types:
+      - closed
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Pull request number to scan retroactively
+        required: true
+        type: number
+      dry_run:
+        description: Log follow-up issues without creating them
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: capture-unresolved-reviews-${{ github.event.pull_request.number || inputs.pull_number }}
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    name: Capture unresolved review threads
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Capture unresolved review threads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          args=()
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            args+=(--pull-number "${{ inputs.pull_number }}")
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              args+=(--dry-run)
+            fi
+          fi
+          node .github/scripts/capture-unresolved-reviews.mjs "${args[@]}"
