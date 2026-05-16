@@ -325,6 +325,34 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	}
 }
 
+func TestListIssuesByStatesErrorsWhenNextPageCursorMissing(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "linear pagination missing endCursor") {
+		t.Fatalf("ListIssuesByStates error = %v, want missing cursor error", err)
+	}
+}
+
+func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-cursor"}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "linear pagination exceeded") {
+		t.Fatalf("ListIssuesByStates error = %v, want max pages error", err)
+	}
+}
+
 func TestLinearClient_SatisfiesStateIssueLister(t *testing.T) {
 	var _ StateIssueLister = (*LinearClient)(nil)
 }

@@ -116,18 +116,22 @@ func TestReconcileStartupIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReconcileStartupRemovesUnknownWorkspaces(t *testing.T) {
+func TestReconcileStartupRemovesUnknownWorkspacesWhenTerminalIssuesObserved(t *testing.T) {
 	root := t.TempDir()
 	unknownPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-404")
 	if err := os.MkdirAll(unknownPath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	fake := &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
+		{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}},
+		{{ID: "issue-2", Identifier: "LIN-2", State: "Done"}},
+	}}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
 		ActiveStates:    []string{"AI Ready"},
 		TerminalStates:  []string{"Done"},
-		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}},
+		Tracker:         fake,
 		Emitter:         &fakeEmitter{},
 		ReconcileTaskID: "reconcile-startup",
 	})
@@ -135,11 +139,11 @@ func TestReconcileStartupRemovesUnknownWorkspaces(t *testing.T) {
 		t.Fatalf("ReconcileStartup: %v", err)
 	}
 	if _, err := os.Stat(unknownPath); !os.IsNotExist(err) {
-		t.Fatalf("unknown workspace should be removed, stat err=%v", err)
+		t.Fatalf("unknown workspace should be removed after terminal state is observed, stat err=%v", err)
 	}
 }
 
-func TestReconcileStartupRemovesUnknownWorkspacesWhenNoIssuesReturned(t *testing.T) {
+func TestReconcileStartupRefusesToRemoveWhenTrackerReturnsNoIssues(t *testing.T) {
 	root := t.TempDir()
 	unknownPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-404")
 	if err := os.MkdirAll(unknownPath, 0o755); err != nil {
@@ -154,11 +158,11 @@ func TestReconcileStartupRemovesUnknownWorkspacesWhenNoIssuesReturned(t *testing
 		Emitter:         &fakeEmitter{},
 		ReconcileTaskID: "reconcile-startup",
 	})
-	if err != nil {
-		t.Fatalf("ReconcileStartup: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "tracker returned no active or terminal issues") {
+		t.Fatalf("ReconcileStartup error = %v, want empty tracker safety error", err)
 	}
-	if _, err := os.Stat(unknownPath); !os.IsNotExist(err) {
-		t.Fatalf("unknown workspace should be removed even when tracker returns no active issues, stat err=%v", err)
+	if _, err := os.Stat(unknownPath); err != nil {
+		t.Fatalf("workspace should remain when tracker returns no issues: %v", err)
 	}
 }
 
@@ -199,6 +203,32 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	}
 }
 
+func TestReconcileStartupKeepsReworkWorkspaceWhenUpdatedAtChanged(t *testing.T) {
+	root := t.TempDir()
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
+	if err := os.MkdirAll(reworkPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"Rework"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: "2026-05-16T11:30:00Z"},
+			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
+		}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(reworkPath); err != nil {
+		t.Fatalf("active Rework workspace should remain even when issue updatedAt changed: %v", err)
+	}
+}
+
 func TestReconcileStartupReturnsTrackerError(t *testing.T) {
 	root := t.TempDir()
 	if err := ReconcileStartup(context.Background(), ReconcileConfig{
@@ -210,6 +240,50 @@ func TestReconcileStartupReturnsTrackerError(t *testing.T) {
 		ReconcileTaskID: "reconcile-startup",
 	}); err == nil {
 		t.Fatal("ReconcileStartup error = nil, want tracker error")
+	}
+}
+
+func TestReconcileStartupRejectsEmptyActiveStatesBeforeCleanup(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-1")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		TerminalStates:  []string{"Done"},
+		Tracker:         fakeReconcileTracker{},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err == nil || !strings.Contains(err.Error(), "active states are required") {
+		t.Fatalf("ReconcileStartup error = %v, want active states config error", err)
+	}
+	if _, statErr := os.Stat(workspacePath); statErr != nil {
+		t.Fatalf("workspace should remain when config is unsafe: %v", statErr)
+	}
+}
+
+func TestReconcileStartupRejectsEmptyTerminalStatesBeforeCleanup(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-1")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"AI Ready"},
+		Tracker:         fakeReconcileTracker{},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err == nil || !strings.Contains(err.Error(), "terminal states are required") {
+		t.Fatalf("ReconcileStartup error = %v, want terminal states config error", err)
+	}
+	if _, statErr := os.Stat(workspacePath); statErr != nil {
+		t.Fatalf("workspace should remain when config is unsafe: %v", statErr)
 	}
 }
 
@@ -266,6 +340,35 @@ func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *test
 	}
 	if _, err := os.Stat(workspacePath); err != nil {
 		t.Fatalf("conflicting active workspace should be preserved: %v", err)
+	}
+}
+
+func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *testing.T) {
+	root := t.TempDir()
+	unknownPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-unknown")
+	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-active")
+	for _, path := range []string{unknownPath, activePath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"In Progress"},
+		TerminalStates:  []string{"Done"},
+		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "active", Identifier: "LIN Active", State: "In Progress"}}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active workspace should remain: %v", err)
+	}
+	if _, err := os.Stat(unknownPath); err != nil {
+		t.Fatalf("unknown workspace should remain when terminal query is empty: %v", err)
 	}
 }
 

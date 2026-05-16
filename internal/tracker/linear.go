@@ -10,6 +10,8 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+const maxLinearIssuePages = 200
+
 type LinearClient struct {
 	APIKey  string
 	BaseURL string
@@ -38,7 +40,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 }`
 	var issues []Issue
 	var after any
-	for {
+	for page := 0; page < maxLinearIssuePages; page++ {
 		var out struct {
 			Data struct {
 				Issues struct {
@@ -78,6 +80,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 		}
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
+	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
 }
 
 // MoveIssueToState updates the named Linear issue so its workflowState

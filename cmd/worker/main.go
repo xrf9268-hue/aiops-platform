@@ -23,20 +23,25 @@ func main() {
 		}
 		os.Exit(worker.PrintConfig(os.Args[2], os.Stdout, os.Stderr))
 	}
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	cfg := worker.LoadConfigFromEnv()
 	pool, err := pgxpool.New(ctx, cfg.DSN)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer pool.Close()
 
 	store := queue.New(pool)
 	if wf, err := workflow.LoadOptional("WORKFLOW.md"); err != nil {
-		log.Fatal(err)
+		return err
 	} else if wf.Config.Tracker.Kind == "linear" {
 		if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
 			WorkspaceRoot:   cfg.WorkspaceRoot,
@@ -47,9 +52,10 @@ func main() {
 			ReconcileTaskID: "reconcile-startup",
 		}); err != nil {
 			worker.LogReconcileError(err)
-			os.Exit(1)
+			return err
 		}
 	}
 
 	worker.Run(ctx, store, cfg)
+	return nil
 }

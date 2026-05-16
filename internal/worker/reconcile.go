@@ -47,6 +47,12 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if cfg.Tracker == nil {
 		return fmt.Errorf("reconcile tracker is required")
 	}
+	if len(nonEmptyStates(cfg.ActiveStates)) == 0 {
+		return fmt.Errorf("active states are required for startup reconciliation")
+	}
+	if len(nonEmptyStates(cfg.TerminalStates)) == 0 {
+		return fmt.Errorf("terminal states are required for startup reconciliation")
+	}
 	taskID := cfg.ReconcileTaskID
 	if taskID == "" {
 		taskID = defaultReconcileTaskID
@@ -57,11 +63,13 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		"terminal_states": cfg.TerminalStates,
 	})
 
-	activeIssues, err := cfg.Tracker.ListIssuesByStates(ctx, cfg.ActiveStates)
+	activeStates := nonEmptyStates(cfg.ActiveStates)
+	terminalStates := nonEmptyStates(cfg.TerminalStates)
+	activeIssues, err := cfg.Tracker.ListIssuesByStates(ctx, activeStates)
 	if err != nil {
 		return fmt.Errorf("fetch active issues: %w", err)
 	}
-	terminalIssues, err := cfg.Tracker.ListIssuesByStates(ctx, cfg.TerminalStates)
+	terminalIssues, err := cfg.Tracker.ListIssuesByStates(ctx, terminalStates)
 	if err != nil {
 		return fmt.Errorf("fetch terminal issues: %w", err)
 	}
@@ -71,6 +79,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 			activeKeys[key] = issue
 		}
 	}
+	canRemoveUnknown := len(terminalIssues) > 0
 	terminalKeys := make(map[string]tracker.Issue, len(terminalIssues))
 	for _, issue := range terminalIssues {
 		for _, key := range issueWorkspaceKeys(issue) {
@@ -82,8 +91,14 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if err != nil {
 		return err
 	}
+	if len(workspaces) > 0 && len(activeIssues)+len(terminalIssues) == 0 {
+		return fmt.Errorf("tracker returned no active or terminal issues; refusing to remove %d existing workspaces", len(workspaces))
+	}
 	var removed, kept int
 	for _, workspace := range workspaces {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, ok := activeKeys[workspace.Key]; ok {
 			kept++
 			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept active workspace", map[string]any{
@@ -91,6 +106,18 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 				"key":    workspace.Key,
 				"action": "keep",
 				"reason": "active",
+			})
+			continue
+		}
+		if activeIssue, ok := activeReworkIssueForWorkspace(workspace.Key, activeIssues); ok {
+			kept++
+			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept active workspace", map[string]any{
+				"path":       workspace.Path,
+				"key":        workspace.Key,
+				"issue_id":   activeIssue.ID,
+				"identifier": activeIssue.Identifier,
+				"action":     "keep",
+				"reason":     "active_rework",
 			})
 			continue
 		}
@@ -102,6 +129,16 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 			if removedOne {
 				removed++
 			}
+			continue
+		}
+		if !canRemoveUnknown {
+			kept++
+			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept unknown workspace", map[string]any{
+				"path":   workspace.Path,
+				"key":    workspace.Key,
+				"action": "keep",
+				"reason": "unknown_terminal_state_unconfirmed",
+			})
 			continue
 		}
 		removedOne, err := removeWorkspace(ctx, cfg, taskID, workspace.Path, tracker.Issue{}, "unknown")
@@ -128,33 +165,45 @@ type issueWorkspace struct {
 }
 
 func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
-	patterns := []string{
-		filepath.Join(root, "*", "*", "linear_issue", "*"),
-		filepath.Join(root, "*", "*", "linear-issue", "*"),
-	}
-	seen := map[string]struct{}{}
-	var workspaces []issueWorkspace
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			return nil, fmt.Errorf("glob issue workspaces: %w", err)
+	ownerEntries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
 		}
-		for _, path := range matches {
-			if _, ok := seen[path]; ok {
+		return nil, fmt.Errorf("read workspace root %s: %w", root, err)
+	}
+	var workspaces []issueWorkspace
+	for _, ownerEntry := range ownerEntries {
+		if !ownerEntry.IsDir() {
+			continue
+		}
+		ownerPath := filepath.Join(root, ownerEntry.Name())
+		repoEntries, err := os.ReadDir(ownerPath)
+		if err != nil {
+			return nil, fmt.Errorf("read workspace owner %s: %w", ownerPath, err)
+		}
+		for _, repoEntry := range repoEntries {
+			if !repoEntry.IsDir() {
 				continue
 			}
-			seen[path] = struct{}{}
-			info, err := os.Stat(path)
-			if err != nil {
-				if os.IsNotExist(err) {
-					continue
+			repoPath := filepath.Join(ownerPath, repoEntry.Name())
+			for _, sourceDir := range []string{"linear_issue", "linear-issue"} {
+				sourcePath := filepath.Join(repoPath, sourceDir)
+				workspaceEntries, err := os.ReadDir(sourcePath)
+				if err != nil {
+					if os.IsNotExist(err) {
+						continue
+					}
+					return nil, fmt.Errorf("read issue workspace source %s: %w", sourcePath, err)
 				}
-				return nil, fmt.Errorf("stat workspace %s: %w", path, err)
+				for _, workspaceEntry := range workspaceEntries {
+					if !workspaceEntry.IsDir() {
+						continue
+					}
+					path := filepath.Join(sourcePath, workspaceEntry.Name())
+					workspaces = append(workspaces, issueWorkspace{Path: path, Key: workspaceEntry.Name()})
+				}
 			}
-			if !info.IsDir() {
-				continue
-			}
-			workspaces = append(workspaces, issueWorkspace{Path: path, Key: filepath.Base(path)})
 		}
 	}
 	return workspaces, nil
@@ -173,6 +222,48 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 		"reason":     reason,
 	})
 	return true, nil
+}
+
+func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
+	for _, issue := range issues {
+		if !strings.EqualFold(issue.State, "Rework") || strings.TrimSpace(issue.ID) == "" {
+			continue
+		}
+		for _, prefix := range reworkWorkspaceKeyPrefixes(issue.ID) {
+			if strings.HasPrefix(workspaceKey, prefix) {
+				return issue, true
+			}
+		}
+	}
+	return tracker.Issue{}, false
+}
+
+func reworkWorkspaceKeyPrefixes(issueID string) []string {
+	seen := map[string]struct{}{}
+	var prefixes []string
+	for _, key := range []string{workspace.SanitizeComponent(issueID), sanitizeLegacyWorkspaceKey(issueID)} {
+		if key == "" {
+			continue
+		}
+		prefix := key + "-rework-"
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes
+}
+
+func nonEmptyStates(states []string) []string {
+	out := make([]string, 0, len(states))
+	for _, state := range states {
+		state = strings.TrimSpace(state)
+		if state != "" {
+			out = append(out, state)
+		}
+	}
+	return out
 }
 
 func issueWorkspaceKeys(issue tracker.Issue) []string {
