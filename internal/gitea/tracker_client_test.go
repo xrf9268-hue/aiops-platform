@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,19 +15,62 @@ import (
 )
 
 func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
-	var requestedPath string
+	var requestedLabels []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestedPath = r.URL.String()
+		requestedLabels = append(requestedLabels, r.URL.Query().Get("labels"))
 		if r.Header.Get("Authorization") != "token secret" {
 			t.Fatalf("Authorization = %q, want token secret", r.Header.Get("Authorization"))
 		}
-		if !strings.Contains(r.URL.Query().Get("labels"), "aiops/todo") || !strings.Contains(r.URL.Query().Get("labels"), "aiops/rework") {
-			t.Fatalf("labels query = %q, want active aiops labels", r.URL.Query().Get("labels"))
+		if r.URL.Path != "/api/v1/repos/owner/repo/issues" {
+			t.Fatalf("requested path = %q", r.URL.Path)
 		}
+		if r.URL.Query().Get("labels") == "aiops/todo" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Issue{
+				{ID: 101, Number: 1, Title: "first", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/1", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
+			})
+			return
+		}
+		if r.URL.Query().Get("labels") == "aiops/rework" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Issue{
+				{ID: 102, Number: 2, Title: "second", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/2", UpdatedAt: "2026-05-17T00:01:00Z", Labels: []Label{{Name: "aiops/rework"}}},
+			})
+			return
+		}
+		t.Fatalf("labels query = %q, want one active aiops label per request", r.URL.Query().Get("labels"))
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{
+		APIKey:       "secret",
+		ActiveStates: []string{"AI Ready", "Rework"},
+	}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if !slices.Equal(requestedLabels, []string{"aiops/todo", "aiops/rework"}) {
+		t.Fatalf("labels queries = %#v, want one request per active aiops label", requestedLabels)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("issues len = %d, want 2", len(issues))
+	}
+	if issues[0].ID != "101" || issues[0].Identifier != "#1" || issues[0].State != "AI Ready" {
+		t.Fatalf("first issue = %#v, want mapped AI Ready state", issues[0])
+	}
+	if issues[1].State != "Rework" {
+		t.Fatalf("second issue state = %q, want Rework", issues[1].State)
+	}
+}
+
+func TestTrackerClientListIssuesByStatesDeduplicatesIssuesReturnedForMultipleLabels(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]Issue{
-			{ID: 101, Number: 1, Title: "first", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/1", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
-			{ID: 102, Number: 2, Title: "second", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/2", UpdatedAt: "2026-05-17T00:01:00Z", Labels: []Label{{Name: "aiops/rework"}}},
+			{ID: 101, Number: 1, Title: "conflict", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/1", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}, {Name: "aiops/rework"}}},
 		})
 	}))
 	defer server.Close()
@@ -41,17 +85,11 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListActiveIssues: %v", err)
 	}
-	if !strings.HasPrefix(requestedPath, "/api/v1/repos/owner/repo/issues?") {
-		t.Fatalf("requested path = %q", requestedPath)
+	if len(issues) != 1 {
+		t.Fatalf("issues len = %d, want deduplicated issue", len(issues))
 	}
-	if len(issues) != 2 {
-		t.Fatalf("issues len = %d, want 2", len(issues))
-	}
-	if issues[0].ID != "101" || issues[0].Identifier != "#1" || issues[0].State != "AI Ready" {
-		t.Fatalf("first issue = %#v, want mapped AI Ready state", issues[0])
-	}
-	if issues[1].State != "Rework" {
-		t.Fatalf("second issue state = %q, want Rework", issues[1].State)
+	if issues[0].ID != "101" || issues[0].State != "Rework" {
+		t.Fatalf("issue = %#v, want conflict resolved once", issues[0])
 	}
 }
 

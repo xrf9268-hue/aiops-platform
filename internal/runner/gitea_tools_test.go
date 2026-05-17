@@ -204,6 +204,20 @@ func TestGiteaIssueLabelsRejectsMultipleAIOpsStateLabelsWithoutHTTPRequest(t *te
 	}
 }
 
+func TestGiteaIssueLabelsRejectsUnknownAIOpsStateLabelWithoutHTTPRequest(t *testing.T) {
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/inprogress"}})
+	assertStructuredFailure(t, result, err, "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo")
+	_, _, _, _, requests := server.recorded()
+	if requests != 0 {
+		t.Fatalf("server received %d requests, want 0", requests)
+	}
+}
+
 func TestGiteaIssueLabelsRejectsMissingIssueNumberWithoutHTTPRequest(t *testing.T) {
 	server := &fakeGiteaLabelServer{}
 	httpServer := httptest.NewServer(server.handler())

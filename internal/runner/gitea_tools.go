@@ -41,6 +41,11 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 				"error": map[string]any{"message": "gitea_issue_labels only accepts aiops/* labels"},
 			})
 		}
+		if _, ok := validGiteaStateLabels()[strings.ToLower(label)]; !ok {
+			return dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo"},
+			})
+		}
 		desiredStateLabels = append(desiredStateLabels, label)
 	}
 
@@ -139,6 +144,17 @@ func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *h
 		}
 	}
 	return out, ""
+}
+
+func validGiteaStateLabels() map[string]struct{} {
+	return map[string]struct{}{
+		"aiops/canceled":     {},
+		"aiops/done":         {},
+		"aiops/human-review": {},
+		"aiops/in-progress":  {},
+		"aiops/rework":       {},
+		"aiops/todo":         {},
+	}
 }
 
 func replaceAIOpsLabels(currentLabels, desiredStateLabels []string) []string {
