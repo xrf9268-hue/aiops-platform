@@ -352,6 +352,44 @@ func TestGiteaIssueLabelsAcceptsGiteaAddLabelArrayResponse(t *testing.T) {
 	}
 }
 
+func TestGiteaIssueLabelsTreatsMissingStaleStateAsSuccess(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/todo"}]`)
+		case http.MethodPost:
+			_, _ = io.WriteString(w, `[{"id":303,"name":"aiops/in-progress"}]`)
+		case http.MethodDelete:
+			http.Error(w, `{"message":"label not found"}`, http.StatusNotFound)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: server.URL, owner: "owner", repo: "repo", http: server.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	if err != nil {
+		t.Fatalf("gitea_issue_labels call: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Fatalf("result = %q, want success when stale aiops label is already missing", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,POST,DELETE" {
+		t.Fatalf("methods = %#v, want GET, POST, DELETE", methods)
+	}
+}
+
 func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 	for _, wf := range []workflow.Workflow{
 		{},

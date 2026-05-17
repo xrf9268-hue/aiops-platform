@@ -223,6 +223,9 @@ func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *htt
 		})
 		return failure
 	}
+	if resp.StatusCode == http.StatusNotFound {
+		return ""
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label delete request failed", "status": resp.Status, "body": respBody.String()},
