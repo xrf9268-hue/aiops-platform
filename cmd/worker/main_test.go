@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,14 +15,21 @@ import (
 )
 
 func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {
-	if err := normalizeRunError(context.Canceled); err != nil {
-		t.Fatalf("normalizeRunError(context.Canceled) = %v, want nil", err)
+	if err := normalizeRunError(context.Canceled, context.Canceled); err != nil {
+		t.Fatalf("normalizeRunError(context.Canceled, context.Canceled) = %v, want nil", err)
 	}
-	if err := normalizeRunError(context.DeadlineExceeded); err != nil {
-		t.Fatalf("normalizeRunError(context.DeadlineExceeded) = %v, want nil", err)
+	if err := normalizeRunError(context.DeadlineExceeded, context.DeadlineExceeded); err != nil {
+		t.Fatalf("normalizeRunError(context.DeadlineExceeded, context.DeadlineExceeded) = %v, want nil", err)
 	}
-	if err := normalizeRunError(os.ErrNotExist); err == nil {
+	if err := normalizeRunError(os.ErrNotExist, nil); err == nil {
 		t.Fatal("normalizeRunError(non-context error) = nil, want original error")
+	}
+}
+
+func TestRunDoesNotTreatUnrelatedDeadlineErrorAsGracefulShutdown(t *testing.T) {
+	err := normalizeRunError(context.DeadlineExceeded, nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("normalizeRunError(context.DeadlineExceeded, nil) = %v, want deadline error", err)
 	}
 }
 

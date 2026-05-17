@@ -26,13 +26,15 @@ func main() {
 		}
 		os.Exit(worker.PrintConfig(os.Args[2], os.Stdout, os.Stderr))
 	}
-	if err := normalizeRunError(run()); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := normalizeRunError(run(ctx), ctx.Err()); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func normalizeRunError(err error) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+func normalizeRunError(err error, runCtxErr error) error {
+	if runCtxErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return nil
 	}
 	return err
@@ -76,10 +78,7 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 
-func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
+func run(ctx context.Context) error {
 	cfg := worker.LoadConfigFromEnv()
 	wf, err := loadWorkflowForStartupReconcile()
 	if err != nil {
