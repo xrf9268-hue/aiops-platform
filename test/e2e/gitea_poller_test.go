@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,17 +131,28 @@ func TestGiteaPollerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 }
 
 type fakeE2EDispatcher struct {
+	mu     sync.Mutex
 	issues []tracker.Issue
 }
 
 func (f *fakeE2EDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan orchestrator.WorkerResult {
+	f.mu.Lock()
 	f.issues = append(f.issues, issue)
+	f.mu.Unlock()
 	return make(chan orchestrator.WorkerResult)
 }
 
-func (f *fakeE2EDispatcher) count() int { return len(f.issues) }
+func (f *fakeE2EDispatcher) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.issues)
+}
 
-func (f *fakeE2EDispatcher) issueAt(i int) tracker.Issue { return f.issues[i] }
+func (f *fakeE2EDispatcher) issueAt(i int) tracker.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.issues[i]
+}
 
 func waitForE2E(t *testing.T, pred func() bool, timeout time.Duration) {
 	t.Helper()

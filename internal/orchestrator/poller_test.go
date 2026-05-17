@@ -78,15 +78,33 @@ func (e *completingEmitter) count() int {
 	return len(e.completed)
 }
 
+func (e *completingEmitter) completedID(i int) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.completed[i]
+}
+
 func TestCompleteRecordedTaskMarksOptionalQueueRowTerminal(t *testing.T) {
 	ctx := context.Background()
 	emitter := &completingEmitter{}
 
-	if err := completeRecordedTask(ctx, emitter, "issue-1"); err != nil {
+	if err := completeRecordedTask(ctx, emitter, "row-1", "issue-1"); err != nil {
 		t.Fatalf("completeRecordedTask returned error: %v", err)
 	}
 	if got := emitter.count(); got != 1 {
 		t.Fatalf("completed task rows = %d, want 1", got)
+	}
+}
+
+func TestCompleteRecordedTaskUsesRecordedQueueRowID(t *testing.T) {
+	ctx := context.Background()
+	emitter := &completingEmitter{}
+
+	if err := completeRecordedTask(ctx, emitter, "tsk_recorded", "issue-1"); err != nil {
+		t.Fatalf("completeRecordedTask returned error: %v", err)
+	}
+	if got := emitter.completedID(0); got != "tsk_recorded" {
+		t.Fatalf("completed task id = %q, want recorded queue row id", got)
 	}
 }
 

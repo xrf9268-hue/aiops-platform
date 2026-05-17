@@ -103,6 +103,17 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 // path and the legacy task execution API; it is intentionally in-memory only.
 type TaskBuilder func(issue tracker.Issue) (task.Task, error)
 
+type BuiltTask struct {
+	Task            task.Task
+	RecordedQueueID string
+}
+
+// RecordedTaskBuilder converts a tracker candidate into a worker task and can
+// return the queue row ID recorded by transitional compatibility paths. When a
+// queue assigns the row ID, it may differ from the worker task's stable
+// tracker-derived ID.
+type RecordedTaskBuilder func(issue tracker.Issue) (BuiltTask, error)
+
 // TaskCompleter is the optional queue compatibility hook implemented by
 // queue.Store. The SPEC-aligned runtime path does not require durable rows, but
 // tests and transitional tools that record a task row need it marked terminal
@@ -116,9 +127,10 @@ type TaskCompleter interface {
 // the orchestrator owns scheduling/claim state, while worker.RunTask
 // continues to prepare workspaces and run the configured agent.
 type WorkerTaskDispatcher struct {
-	BuildTask TaskBuilder
-	Config    worker.Config
-	Emitter   worker.EventEmitter
+	BuildTask         TaskBuilder
+	BuildRecordedTask RecordedTaskBuilder
+	Config            worker.Config
+	Emitter           worker.EventEmitter
 }
 
 // Spawn implements Dispatcher.
@@ -127,11 +139,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 	go func() {
 		defer close(out)
 		start := time.Now()
-		if d.BuildTask == nil {
-			out <- WorkerResult{Err: errors.New("worker task dispatcher requires task builder"), NonRetryable: true, Elapsed: time.Since(start)}
-			return
-		}
-		tk, err := d.BuildTask(issue)
+		tk, recordedTaskID, err := d.buildTask(issue)
 		if err != nil {
 			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
 			return
@@ -140,7 +148,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 			out <- WorkerResult{Err: rterr.Err, Elapsed: time.Since(start)}
 			return
 		}
-		if err := completeRecordedTask(ctx, d.Emitter, tk.ID); err != nil {
+		if err := completeRecordedTask(ctx, d.Emitter, recordedTaskID, tk.ID); err != nil {
 			out <- WorkerResult{Err: err, Elapsed: time.Since(start)}
 			return
 		}
@@ -149,12 +157,27 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 	return out
 }
 
+func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, string, error) {
+	if d.BuildRecordedTask != nil {
+		built, err := d.BuildRecordedTask(issue)
+		return built.Task, built.RecordedQueueID, err
+	}
+	if d.BuildTask == nil {
+		return task.Task{}, "", errors.New("worker task dispatcher requires task builder")
+	}
+	tk, err := d.BuildTask(issue)
+	return tk, tk.ID, err
+}
+
 // TaskFromIssue builds the in-memory task handed to worker execution for a
 // tracker candidate. Dedupe/claiming lives in OrchestratorState, not in this
 // task ID: the ID is only a stable per-run/workspace identifier.
-func completeRecordedTask(ctx context.Context, ev worker.EventEmitter, taskID string) error {
+func completeRecordedTask(ctx context.Context, ev worker.EventEmitter, recordedTaskID, fallbackTaskID string) error {
 	if completer, ok := ev.(TaskCompleter); ok {
-		return completer.Complete(ctx, taskID)
+		if recordedTaskID != "" {
+			return completer.Complete(ctx, recordedTaskID)
+		}
+		return completer.Complete(ctx, fallbackTaskID)
 	}
 	return nil
 }

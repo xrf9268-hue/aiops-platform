@@ -101,15 +101,16 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 
 	store := queue.New(bed.pg.pool)
 	dispatcher := orchestrator.WorkerTaskDispatcher{
-		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+		BuildRecordedTask: func(issue tracker.Issue) (orchestrator.BuiltTask, error) {
 			tk, err := orchestrator.TaskFromIssue(issue, cfg)
 			if err != nil {
-				return task.Task{}, err
+				return orchestrator.BuiltTask{}, err
 			}
-			if _, _, err := store.Enqueue(ctx, tk); err != nil {
-				return task.Task{}, fmt.Errorf("record task row: %w", err)
+			recorded, _, err := store.Enqueue(ctx, tk)
+			if err != nil {
+				return orchestrator.BuiltTask{}, fmt.Errorf("record task row: %w", err)
 			}
-			return tk, nil
+			return orchestrator.BuiltTask{Task: tk, RecordedQueueID: recorded.ID}, nil
 		},
 		Config: worker.Config{
 			WorkspaceRoot: tmpDir(),
