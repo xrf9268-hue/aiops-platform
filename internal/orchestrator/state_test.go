@@ -99,9 +99,10 @@ func TestFinishRunSucceeded_RemovesRunningAddsCompletedFoldsSeconds(t *testing.T
 	st := NewOrchestratorState(15000, 4)
 	iss := issue("ENG-1")
 	id := IssueID(iss.ID)
-	st.BeginDispatch(id, runningEntry(t, iss))
+	entry := runningEntry(t, iss)
+	st.BeginDispatch(id, entry)
 
-	if ok := st.FinishRunSucceeded(id, 750*time.Millisecond); !ok {
+	if ok := st.FinishRunSucceeded(id, entry, 750*time.Millisecond); !ok {
 		t.Fatalf("FinishRunSucceeded returned false for running issue %s", id)
 	}
 
@@ -127,9 +128,10 @@ func TestFinishRunFailed_RemovesRunningReleasesClaimDoesNotMarkCompleted(t *test
 	st := NewOrchestratorState(15000, 4)
 	iss := issue("ENG-1")
 	id := IssueID(iss.ID)
-	st.BeginDispatch(id, runningEntry(t, iss))
+	entry := runningEntry(t, iss)
+	st.BeginDispatch(id, entry)
 
-	if ok := st.FinishRunFailed(id, 2*time.Second); !ok {
+	if ok := st.FinishRunFailed(id, entry, 2*time.Second); !ok {
 		t.Fatalf("FinishRunFailed returned false for running issue %s", id)
 	}
 
@@ -239,7 +241,7 @@ func TestFinishRunIgnoresUnknownRunningEntry(t *testing.T) {
 	id := IssueID("ENG-MISSING")
 	st.Claimed[id] = struct{}{}
 
-	if ok := st.FinishRunSucceeded(id, time.Second); ok {
+	if ok := st.FinishRunSucceeded(id, nil, time.Second); ok {
 		t.Fatalf("FinishRunSucceeded returned true for issue with no Running entry")
 	}
 	if _, ok := st.Claimed[id]; !ok {
@@ -252,7 +254,7 @@ func TestFinishRunIgnoresUnknownRunningEntry(t *testing.T) {
 		t.Fatalf("FinishRunSucceeded added elapsed seconds for unknown run: %v", got)
 	}
 
-	if ok := st.FinishRunFailed(id, time.Second); ok {
+	if ok := st.FinishRunFailed(id, nil, time.Second); ok {
 		t.Fatalf("FinishRunFailed returned true for issue with no Running entry")
 	}
 	if _, ok := st.Claimed[id]; !ok {
@@ -260,6 +262,46 @@ func TestFinishRunIgnoresUnknownRunningEntry(t *testing.T) {
 	}
 	if got := st.CodexTotals.SecondsRunning; got != 0 {
 		t.Fatalf("FinishRunFailed added elapsed seconds for unknown run: %v", got)
+	}
+}
+
+func TestFinishRunIgnoresStaleRunIdentity(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	iss := issue("ENG-1")
+	id := IssueID(iss.ID)
+	oldEntry := runningEntry(t, iss)
+	newEntry := runningEntry(t, iss)
+
+	st.BeginDispatch(id, oldEntry)
+	st.BeginDispatch(id, newEntry)
+
+	if ok := st.FinishRunSucceeded(id, oldEntry, time.Second); ok {
+		t.Fatalf("FinishRunSucceeded returned true for stale run identity")
+	}
+	if got := st.Running[id]; got != newEntry {
+		t.Fatalf("FinishRunSucceeded replaced/removed current run for stale finalization: got %p want %p", got, newEntry)
+	}
+	if _, ok := st.Claimed[id]; !ok {
+		t.Fatalf("FinishRunSucceeded released claim for stale finalization")
+	}
+	if _, ok := st.Completed[id]; ok {
+		t.Fatalf("FinishRunSucceeded marked Completed[%s] for stale finalization", id)
+	}
+	if got := st.CodexTotals.SecondsRunning; got != 0 {
+		t.Fatalf("FinishRunSucceeded added elapsed seconds for stale finalization: %v", got)
+	}
+
+	if ok := st.FinishRunFailed(id, oldEntry, time.Second); ok {
+		t.Fatalf("FinishRunFailed returned true for stale run identity")
+	}
+	if got := st.Running[id]; got != newEntry {
+		t.Fatalf("FinishRunFailed replaced/removed current run for stale finalization: got %p want %p", got, newEntry)
+	}
+	if _, ok := st.Claimed[id]; !ok {
+		t.Fatalf("FinishRunFailed released claim for stale finalization")
+	}
+	if got := st.CodexTotals.SecondsRunning; got != 0 {
+		t.Fatalf("FinishRunFailed added elapsed seconds for stale finalization: %v", got)
 	}
 }
 
@@ -316,8 +358,9 @@ func TestSnapshot_ShapeMatches13_3(t *testing.T) {
 		Error:      "bad",
 	})
 	// Completed is fed via FinishRunSucceeded.
-	st.BeginDispatch(id3, runningEntry(t, iss3))
-	st.FinishRunSucceeded(id3, 500*time.Millisecond)
+	entry3 := runningEntry(t, iss3)
+	st.BeginDispatch(id3, entry3)
+	st.FinishRunSucceeded(id3, entry3, 500*time.Millisecond)
 
 	view := st.Snapshot()
 

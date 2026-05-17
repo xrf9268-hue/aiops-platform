@@ -374,6 +374,7 @@ type finalizeRunOp struct {
 	attempt    *int
 	result     WorkerResult
 	started    time.Time
+	entry      *RunningEntry
 	done       chan struct{}
 }
 
@@ -383,11 +384,17 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		elapsed = time.Since(f.started)
 	}
 	if f.result.Err == nil {
-		st.FinishRunSucceeded(f.id, elapsed)
+		if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
 		close(f.done)
 		return nil
 	}
-	st.FinishRunFailed(f.id, elapsed)
+	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
+		close(f.done)
+		return nil
+	}
 	// Hold the Claimed slot across the gap between this apply (which
 	// returns control to the actor's select loop) and the
 	// scheduleRetryOp that the followup enqueues. Without this re-set,
@@ -466,6 +473,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int) {
 			attempt:    attempt,
 			result:     res,
 			started:    startedAt,
+			entry:      entry,
 			done:       workerDone,
 		})
 	}()
