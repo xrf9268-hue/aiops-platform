@@ -74,7 +74,7 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if found == "" {
 		cfg := DefaultConfig()
 		expandConfig(&cfg)
-		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt()}
+		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt(), Source: SourceDefault}
 		return wf, &Resolution{Source: SourceDefault}, nil
 	}
 	abs := filepath.Join(workdir, found)

@@ -2,11 +2,11 @@
 
 This runbook describes how to use `aiops-platform` day to day so it stays a useful tool instead of another system to babysit.
 
-The defaults below match `examples/WORKFLOW.md` and the active state list hardcoded in `internal/workflow/config.go`.
+The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is now the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state. Postgres and the legacy queue remain only for transitional webhook/manual ingress while D7 cleanup is pending.
 
 ## Linear states
 
-The Linear poller in `cmd/linear-poller` only enqueues issues whose state name appears in `tracker.active_states` of your `WORKFLOW.md`. Use a simple lifecycle:
+The worker poll tick reads issues whose state name appears in `tracker.active_states` of your `WORKFLOW.md`. Use a simple lifecycle:
 
 ```text
 Backlog -> AI Ready -> In Progress -> Human Review -> Rework -> Done
@@ -16,10 +16,10 @@ Backlog -> AI Ready -> In Progress -> Human Review -> Rework -> Done
 Per-state rules:
 
 - `Backlog`: not picked up. Use this for anything you have not refined yet.
-- `AI Ready`: refined and small enough that an agent can attempt it. The poller picks these up.
+- `AI Ready`: refined and small enough that an agent can attempt it. The worker poll tick picks these up.
 - `In Progress`: the agent has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
-- `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself. Per SPEC §1, tracker updates belong on the agent/tool side; while the app-server transport is still being wired, the transitional worker may still perform this handoff on behalf of the run.
-- `Rework`: review found issues and you want another attempt. Moving the Linear issue into `Rework` re-enqueues a fresh task automatically. The poller composes `source_event_id` as `<issue.ID>|rework|<issue.updatedAt>` whenever the state is `Rework`, so each transition into Rework is a brand-new dedupe key and Postgres INSERTs a new task row. While the issue stays parked in Rework, repeated polls reuse the same `updatedAt` and dedupe (no enqueue loop). Non-Rework states still use plain `issue.ID`, so `AI Ready` -> `In Progress` iteration on a single task is unchanged. See `cmd/linear-poller/main.go` (`sourceEventID`) and `internal/queue/postgres.go` (`Enqueue`).
+- `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself. Per SPEC §1, tracker updates belong on the agent/tool side, not in the worker scheduler.
+- `Rework`: review found issues and you want another attempt. Keep `Rework` in `active_states` so the worker can pick the issue up again after the tracker state changes. The in-memory orchestrator state, not Postgres queue rows, is the scheduling authority for the running worker process.
 - `Done` / `Canceled`: terminal. Listed under `tracker.terminal_states`.
 
 Default `active_states` in code:
@@ -75,9 +75,9 @@ What it does: writes a stub file under `.aiops/<task-id>.md` and returns success
 
 Use when:
 
-- you just changed `WORKFLOW.md`, queue plumbing, or PR handoff and want to confirm the loop end-to-end.
+- you just changed `WORKFLOW.md`, tracker polling, startup reconciliation, or PR handoff and want to confirm the loop end-to-end.
 - you are onboarding a new repository and want a safe first PR before pointing a real model at it.
-- the model API is rate-limited or down and you still want to verify queue and worker behavior.
+- the model API is rate-limited or down and you still want to verify tracker polling and worker behavior.
 
 ```yaml
 agent:
@@ -148,7 +148,7 @@ multi-file or reasoning-heavy    -> claude
 
 ## Handling failed tasks
 
-A task is `failed` only after `attempts` reaches `max_attempts`. Until then, a failing attempt sets the status back to `queued` with a 60s backoff (`internal/queue/postgres.go`). Status values are defined in `internal/task/task.go`: `queued`, `running`, `succeeded`, `failed`.
+The SPEC-aligned worker does not persist scheduler attempts in Postgres. It polls the tracker, records in-flight/completed/retry state in the in-memory orchestrator runtime, and starts with fresh scheduler state after restart. Startup reconciliation compares tracker state with deterministic workspaces before the first poll so terminal/unknown workspace directories are cleaned without reading queue rows.
 
 ### Triage with the debugging API
 
@@ -160,7 +160,7 @@ curl 'http://localhost:8080/v1/tasks/<task-id>'
 curl 'http://localhost:8080/v1/tasks/<task-id>/events'
 ```
 
-`/events` is the most useful endpoint. Look for `enqueued`, `claimed`, `failed_attempt`, `succeeded`, `failed` in order, and read the messages.
+For legacy queue runs, `/events` is the most useful endpoint. Look for `enqueued`, `claimed`, `failed_attempt`, `succeeded`, `failed` in order, and read the messages. For the worker-owned poll path, prefer process logs and task events emitted by `worker.RunTask` such as `workflow_resolved`, `runner_start`, `verify_*`, and reconciliation events.
 
 ### Common causes and fixes
 
@@ -168,15 +168,15 @@ curl 'http://localhost:8080/v1/tasks/<task-id>/events'
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` or `claude.command` resolves on the worker host. The shell runner uses `sh -lc`, so PATH must be set in the worker's login shell.
-- Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework`. The state change alone re-enqueues a fresh task (the poller keys Rework by `issue.ID|rework|updatedAt`). `/ai-run` on Gitea and `POST /v1/tasks` are still available as fallbacks if the poller is paused.
+- Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label). `/ai-run` on Gitea and `POST /v1/tasks` are legacy queue fallbacks only while D7 cleanup is pending.
 
 ### Re-running a failed task
 
 Three options, in order of preference:
 
-1. Move the Linear issue to `Rework`. The poller composes `source_event_id` as `<issue.ID>|rework|<updatedAt>` for the Rework state, so the transition INSERTs a new task row instead of deduping against the original. Subsequent polls while the issue stays in Rework reuse the same `updatedAt` and stay deduped, so you do not get an enqueue loop.
-2. Re-trigger from Gitea by commenting `/ai-run` on the issue. The trigger API uses the Gitea delivery ID (or `comment-<id>`) as `source_event_id`, so each comment produces a new queued task. Useful when you want to retry without changing Linear state.
-3. Manual enqueue against the trigger API (each call defaults `source_event_id` to `manual-<unix-nanos>`, so it is always fresh):
+1. Move the tracker issue to an active retry state such as `Rework`, or keep it in another configured `active_states` value after tightening the issue body. The worker poll tick sees active tracker state and asks the in-memory orchestrator to dispatch it.
+2. Restart the worker if you need to clear in-memory retry state. Startup reconciliation runs first, then the next poll can dispatch still-active tracker issues without reading queue rows.
+3. Legacy fallback only while D7 cleanup is pending: re-trigger from Gitea by commenting `/ai-run` or manually enqueue against the trigger API. The trigger API uses a fresh delivery/comment/manual key for queue dedupe.
 
    ```bash
    curl -X POST http://localhost:8080/v1/tasks \

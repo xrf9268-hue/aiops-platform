@@ -29,6 +29,22 @@ type fakeDispatcher struct {
 	onSpawn func(ctx context.Context, issue tracker.Issue, attempt *int)
 }
 
+type sequenceScheduler struct {
+	mu     sync.Mutex
+	delays []time.Duration
+}
+
+func (s *sequenceScheduler) NextDelay(int) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.delays) == 0 {
+		return time.Hour
+	}
+	d := s.delays[0]
+	s.delays = s.delays[1:]
+	return d
+}
+
 func (f *fakeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -62,7 +78,7 @@ func (f *fakeDispatcher) finishAt(i int, res WorkerResult) {
 
 func startActor(t *testing.T, deps Deps) (*Orchestrator, context.CancelFunc) {
 	t.Helper()
-	st := NewOrchestratorState(15000, 4)
+	st := NewOrchestratorState(15000, 100)
 	o := New(st, deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	go o.Run(ctx)
@@ -366,6 +382,110 @@ func TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap(t *testing.T) {
 	// Spawn means a spammer slipped through the gap.
 	if got := disp.count(); got != 1 {
 		t.Errorf("Dispatcher.Spawn calls = %d, want 1 (Claimed must be held across FinishRunFailed → ScheduleRetry gap)", got)
+	}
+}
+
+// TestRetryFire_RespectsCapacityBeforeSpawning is a regression for retry
+// timers bypassing the max_concurrent_agents gate. A failed issue may sit in
+// RetryAttempts while another issue starts; when the retry timer fires, it must
+// not spawn over the configured cap.
+func TestRetryFire_RespectsCapacityBeforeSpawning(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 1)
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  FixedDelayScheduler{Delay: 20 * time.Millisecond},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	issueA := tracker.Issue{ID: "ENG-A", Identifier: "ENG-A", Title: "retry later"}
+	issueB := tracker.Issue{ID: "ENG-B", Identifier: "ENG-B", Title: "running now"}
+	if err := o.RequestDispatch(context.Background(), issueA, nil); err != nil {
+		t.Fatalf("dispatch A: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0 && len(v.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
+		t.Fatalf("dispatch B while A is retrying: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	time.Sleep(80 * time.Millisecond)
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 2; retry must not spawn while capacity is full", got)
+	}
+	if len(v.Running) != 1 || len(v.Retrying) != 1 {
+		t.Fatalf("state after retry fire at capacity: running=%+v retrying=%+v, want B running and A still retrying", v.Running, v.Retrying)
+	}
+	if v.Running[0].IssueID != IssueID(issueB.ID) {
+		t.Fatalf("running entries = %+v, want issue B to be the only running issue", v.Running)
+	}
+	if v.Retrying[0].IssueID != IssueID(issueA.ID) {
+		t.Fatalf("retrying entries = %+v, want issue A preserved for later retry", v.Retrying)
+	}
+}
+
+// TestRetryFire_CapacityDeferralUsesShortRecheckDelay is a regression for
+// capacity-blocked retries being re-enqueued through the normal scheduler
+// backoff. Temporary capacity pressure should recheck soon, not wait a full
+// retry interval while the issue stays claimed and poll ticks cannot help it.
+func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 1)
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{50 * time.Millisecond}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	issueA := tracker.Issue{ID: "ENG-A", Identifier: "ENG-A", Title: "retry soon"}
+	issueB := tracker.Issue{ID: "ENG-B", Identifier: "ENG-B", Title: "running now"}
+	if err := o.RequestDispatch(context.Background(), issueA, nil); err != nil {
+		t.Fatalf("dispatch A: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
+		t.Fatalf("dispatch B while A is retrying: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	// Let A's retry timer fire while B occupies the only slot; then free B.
+	time.Sleep(150 * time.Millisecond)
+	disp.finishAt(1, WorkerResult{Err: nil, Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return disp.count() == 3 }, time.Second)
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Running) != 1 || v.Running[0].IssueID != IssueID(issueA.ID) {
+		t.Fatalf("running entries after capacity frees = %+v, want retry issue A re-dispatched by short recheck", v.Running)
 	}
 }
 

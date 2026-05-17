@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/xrf9268-hue/aiops-platform/internal/queue"
+	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -23,9 +26,18 @@ func main() {
 		}
 		os.Exit(worker.PrintConfig(os.Args[2], os.Stdout, os.Stderr))
 	}
-	if err := run(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := normalizeRunError(run(ctx), ctx.Err()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func normalizeRunError(err error, runCtxErr error) error {
+	if runCtxErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return nil
+	}
+	return err
 }
 
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
@@ -60,44 +72,92 @@ func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 
 func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.Workflow) {
 	if resolution.Source == workflow.SourceDefault {
-		log.Printf("startup reconciliation: workflow source=%s tracker.kind=%s; reconciliation will be skipped unless tracker.kind is linear", resolution.Source, wf.Config.Tracker.Kind)
-		return
-	}
-	if wf.Config.Tracker.Kind != "linear" {
-		log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s; reconciliation will be skipped unless tracker.kind is linear", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
+		log.Printf("startup reconciliation: workflow source=%s tracker.kind=%s", resolution.Source, wf.Config.Tracker.Kind)
 		return
 	}
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 
-func run() error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
+	if cfg.Repo.CloneURL == "" {
+		if source == workflow.SourceDefault {
+			path = "built-in workflow defaults"
+		}
+		return fmt.Errorf("%s: repo.clone_url is required for poll-based worker runtime", path)
+	}
+	return nil
+}
 
+func run(ctx context.Context) error {
 	cfg := worker.LoadConfigFromEnv()
-	pool, err := pgxpool.New(ctx, cfg.DSN)
+	wf, err := loadWorkflowForStartupReconcile()
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
-
-	store := queue.New(pool)
-	if wf, err := loadWorkflowForStartupReconcile(); err != nil {
+	if err := validateWorkflowForRuntime(wf.Path, wf.Source, wf.Config); err != nil {
 		return err
-	} else if wf.Config.Tracker.Kind == "linear" {
-		if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
-			WorkspaceRoot:   cfg.WorkspaceRoot,
-			ActiveStates:    wf.Config.Tracker.ActiveStates,
-			TerminalStates:  wf.Config.Tracker.TerminalStates,
-			Tracker:         tracker.NewLinearClient(wf.Config.Tracker),
-			Emitter:         worker.LogEventEmitter{},
-			ReconcileTaskID: "reconcile-startup",
-		}); err != nil {
-			worker.LogReconcileError(err)
-			return err
-		}
 	}
 
-	worker.Run(ctx, store, cfg)
-	return nil
+	trackerClient, err := trackerClientForWorkflow(wf.Config)
+	if err != nil {
+		return err
+	}
+	if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
+		WorkspaceRoot:   cfg.WorkspaceRoot,
+		ActiveStates:    wf.Config.Tracker.ActiveStates,
+		TerminalStates:  wf.Config.Tracker.TerminalStates,
+		TrackerKind:     wf.Config.Tracker.Kind,
+		Tracker:         trackerClient,
+		Emitter:         worker.LogEventEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	}); err != nil {
+		worker.LogReconcileError(err)
+		return err
+	}
+
+	pollInterval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
+	state := orchestrator.NewOrchestratorState(int64(wf.Config.Tracker.PollIntervalMs), wf.Config.Agent.MaxConcurrentAgents)
+	dispatcher := orchestrator.WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return orchestrator.TaskFromIssue(issue, wf.Config)
+		},
+		Config:  cfg,
+		Emitter: worker.LogEventEmitter{},
+	}
+	orch := orchestrator.New(state, orchestrator.Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  orchestrator.FixedDelayScheduler{Delay: 60 * time.Second},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		return err
+	}
+	return orchestrator.RunPollLoop(ctx, orchestrator.NewPoller(trackerClient, orch), pollInterval)
+}
+
+type trackerRuntimeClient interface {
+	orchestrator.ActiveIssueLister
+	worker.ReconcileTracker
+}
+
+func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error) {
+	switch cfg.Tracker.Kind {
+	case "linear":
+		return tracker.NewLinearClient(cfg.Tracker), nil
+	case "gitea":
+		baseURL := cfg.Tracker.ProjectSlug
+		if baseURL == "" {
+			baseURL = env("GITEA_BASE_URL", "http://localhost:3000")
+		}
+		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
+	default:
+		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
+	}
+}
+
+func env(k, d string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return d
 }

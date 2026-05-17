@@ -36,13 +36,15 @@ import (
 )
 
 // WorkerResult is the per-run outcome the Dispatcher delivers when its
-// spawned worker exits. Err is nil for SPEC §7.3 normal exit; any
-// non-nil Err is treated as abnormal exit and triggers
-// ScheduleRetry(attempt+1). Elapsed is folded into
-// CodexTotals.SecondsRunning per SPEC §13.3.
+// spawned worker exits. Err is nil for SPEC §7.3 normal exit; retryable
+// errors are treated as abnormal exits and trigger ScheduleRetry(attempt+1).
+// NonRetryable errors fail fast and release the claim so deterministic
+// configuration/task-build failures do not spin forever. Elapsed is folded
+// into CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
-	Err     error
-	Elapsed time.Duration
+	Err          error
+	NonRetryable bool
+	Elapsed      time.Duration
 }
 
 // Dispatcher is the seam through which the actor spawns a per-issue
@@ -73,6 +75,8 @@ type Scheduler interface {
 type FixedDelayScheduler struct {
 	Delay time.Duration
 }
+
+const retryCapacityRecheckDelay = 100 * time.Millisecond
 
 // NextDelay implements Scheduler.
 func (f FixedDelayScheduler) NextDelay(int) time.Duration { return f.Delay }
@@ -207,6 +211,12 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (StateView, error) {
 // distinguish "rejected" from "succeeded" by inspecting it.
 var ErrNotDispatched = errors.New("orchestrator: issue already claimed")
 
+// ErrCapacityFull is returned by RequestDispatch when the issue is eligible and
+// unclaimed, but the orchestrator is already running the configured maximum
+// number of agents. Callers should keep the issue eligible for a future poll
+// tick rather than treating it as a duplicate dispatch.
+var ErrCapacityFull = errors.New("orchestrator: max_concurrent_agents reached")
+
 // RequestDispatch is the public entry to dispatch issue if no other
 // claim exists. It returns nil on accepted dispatch (a worker is being
 // spawned) and ErrNotDispatched if the actor saw an existing claim.
@@ -215,17 +225,14 @@ var ErrNotDispatched = errors.New("orchestrator: issue already claimed")
 // for the same issue produce at most one Running entry, even when many
 // goroutines race on the same id.
 func (o *Orchestrator) RequestDispatch(ctx context.Context, issue tracker.Issue, attempt *int) error {
-	reply := make(chan bool, 1)
-	op := &dispatchOp{o: o, issue: issue, attempt: attempt, accepted: reply}
+	reply := make(chan error, 1)
+	op := &dispatchOp{o: o, issue: issue, attempt: attempt, result: reply}
 	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
 	select {
-	case ok := <-reply:
-		if !ok {
-			return ErrNotDispatched
-		}
-		return nil
+	case err := <-reply:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -258,16 +265,21 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 // dispatch decision atomic against concurrent claims while keeping I/O
 // off the actor goroutine.
 type dispatchOp struct {
-	o        *Orchestrator
-	issue    tracker.Issue
-	attempt  *int
-	accepted chan<- bool
+	o       *Orchestrator
+	issue   tracker.Issue
+	attempt *int
+	result  chan<- error
 }
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
+	st.ReleaseFailedIfIssueChanged(d.issue)
 	if st.IsClaimed(id) {
-		d.accepted <- false
+		d.result <- ErrNotDispatched
+		return nil
+	}
+	if st.RunningCount() >= st.MaxConcurrentAgents {
+		d.result <- ErrCapacityFull
 		return nil
 	}
 	// Reserve the slot synchronously so a concurrent dispatchOp aborts
@@ -277,10 +289,10 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	o := d.o
 	issue := d.issue
 	attempt := d.attempt
-	accepted := d.accepted
+	result := d.result
 	return func() {
 		o.spawn(id, issue, attempt)
-		accepted <- true
+		result <- nil
 	}
 }
 
@@ -351,6 +363,28 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// re-dispatch on its own timer.
 		return nil
 	}
+	if st.RunningCount() >= st.MaxConcurrentAgents {
+		// Retry timers must obey the same capacity gate as fresh dispatch.
+		// Leave the retry queued and arm a short follow-up timer so the issue
+		// is retried after capacity can free instead of spawning over the cap.
+		if entry.Timer != nil {
+			entry.Timer.Stop()
+		}
+		o := r.o
+		id := r.id
+		issue := r.issue
+		attempt := r.attempt
+		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
+		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+			_ = o.submit(o.runCtx, &retryFireOp{
+				o:       o,
+				id:      id,
+				issue:   issue,
+				attempt: attempt,
+			})
+		})
+		return nil
+	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
 	// would let a concurrent tick race in.
@@ -385,6 +419,14 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.result.Err == nil {
 		if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
+		close(f.done)
+		return nil
+	}
+	if f.result.NonRetryable {
+		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
 		}

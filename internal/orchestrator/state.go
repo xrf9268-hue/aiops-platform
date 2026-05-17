@@ -116,10 +116,19 @@ type OrchestratorState struct {
 	Running       map[IssueID]*RunningEntry
 	Claimed       map[IssueID]struct{}
 	RetryAttempts map[IssueID]*RetryEntry
+	Failed        map[IssueID]FailedEntry
 	Completed     map[IssueID]struct{} // bookkeeping only per SPEC §4.1.8
 
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
+}
+
+// FailedEntry suppresses a deterministic non-retryable failure only while the
+// tracker issue is unchanged. A later tracker state/update change means a human
+// or agent may have fixed the configuration/input, so the poller may retry.
+type FailedEntry struct {
+	State     string
+	UpdatedAt string
 }
 
 // NewOrchestratorState mirrors the SPEC §16.1 reference initializer:
@@ -140,6 +149,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		Running:             map[IssueID]*RunningEntry{},
 		Claimed:             map[IssueID]struct{}{},
 		RetryAttempts:       map[IssueID]*RetryEntry{},
+		Failed:              map[IssueID]FailedEntry{},
 		Completed:           map[IssueID]struct{}{},
 	}
 }
@@ -166,7 +176,43 @@ func (s *OrchestratorState) IsClaimed(id IssueID) bool {
 	if _, ok := s.RetryAttempts[id]; ok {
 		return true
 	}
+	if _, ok := s.Failed[id]; ok {
+		return true
+	}
 	return false
+}
+
+// ReleaseFailedIfIssueChanged clears a non-retryable failure suppression when
+// the tracker issue has visibly changed since the failure was recorded.
+func (s *OrchestratorState) ReleaseFailedIfIssueChanged(issue tracker.Issue) bool {
+	id := IssueID(issue.ID)
+	failed, ok := s.Failed[id]
+	if !ok {
+		return false
+	}
+	if failed.State == issue.State && failed.UpdatedAt == issue.UpdatedAt {
+		return false
+	}
+	delete(s.Failed, id)
+	return true
+}
+
+// RunningCount reports in-flight work that consumes agent concurrency. Claimed
+// entries are included because dispatchOp reserves the slot before its followup
+// records Running; without counting those reservations, one poll tick can queue
+// more workers than max_concurrent_agents before any Running entry is visible.
+func (s *OrchestratorState) RunningCount() int {
+	counted := make(map[IssueID]struct{}, len(s.Running)+len(s.Claimed))
+	for id := range s.Running {
+		counted[id] = struct{}{}
+	}
+	for id := range s.Claimed {
+		counted[id] = struct{}{}
+	}
+	for id := range s.RetryAttempts {
+		delete(counted, id)
+	}
+	return len(counted)
 }
 
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
@@ -186,6 +232,7 @@ func (s *OrchestratorState) BeginDispatch(id IssueID, entry *RunningEntry) {
 	s.Claimed[id] = struct{}{}
 	s.Running[id] = entry
 	delete(s.RetryAttempts, id)
+	delete(s.Failed, id)
 }
 
 // FinishRunSucceeded is the transition for a worker that exited cleanly
@@ -223,6 +270,18 @@ func (s *OrchestratorState) FinishRunFailed(id IssueID, run *RunningEntry, elaps
 	delete(s.Running, id)
 	delete(s.Claimed, id)
 	s.CodexTotals.AddSeconds(elapsed)
+	return true
+}
+
+// FinishRunNonRetryableFailed records a deterministic failure that should not
+// be re-dispatched while the issue remains active in the same process. This is
+// used for task-construction/configuration failures that would otherwise spin
+// on every tracker poll tick.
+func (s *OrchestratorState) FinishRunNonRetryableFailed(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	if !s.FinishRunFailed(id, run, elapsed) {
+		return false
+	}
+	s.Failed[id] = FailedEntry{State: run.Issue.State, UpdatedAt: run.Issue.UpdatedAt}
 	return true
 }
 

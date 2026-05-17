@@ -32,7 +32,6 @@ type runStore interface {
 // transitioner factories — those are provided to the agent via dynamic
 // tools (pending #64).
 type Config struct {
-	DSN             string
 	WorkspaceRoot   string
 	MirrorRoot      string
 	IdleSleep       time.Duration
@@ -43,7 +42,6 @@ type Config struct {
 // the same defaults the original cmd/worker/main.go used.
 func LoadConfigFromEnv() Config {
 	return Config{
-		DSN:             env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable"),
 		WorkspaceRoot:   env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"),
 		MirrorRoot:      os.Getenv("AIOPS_MIRROR_ROOT"),
 		IdleSleep:       3 * time.Second,
@@ -77,7 +75,7 @@ func Run(ctx context.Context, store runStore, cfg Config) {
 			}
 			continue
 		}
-		if rterr := runTask(ctx, store, *t, cfg); rterr != nil {
+		if rterr := RunTask(ctx, store, *t, cfg); rterr != nil {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
 			cleanupCtx, cancel := terminalUpdateContext(ctx)
 			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
