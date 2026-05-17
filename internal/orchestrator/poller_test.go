@@ -270,7 +270,8 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 		{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"},
 		{ID: "issue-2", Identifier: "LIN-2", State: "AI Ready"},
 	}}
-	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	firstRunBlocked := make(chan struct{})
+	dispatcher := &recordingDispatcher{releaseCh: firstRunBlocked}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
 		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
@@ -289,10 +290,13 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 		t.Fatalf("first dispatched issue ID = %q, want issue-1", got)
 	}
 
-	close(dispatcher.releaseCh)
+	close(firstRunBlocked)
 	waitForCompleted(t, ctx, orch, "issue-1")
-	dispatcher.releaseCh = nil
 
+	secondRunBlocked := make(chan struct{})
+	dispatcher.mu.Lock()
+	dispatcher.releaseCh = secondRunBlocked
+	dispatcher.mu.Unlock()
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("second poll once after capacity freed: %v", err)
 	}
@@ -300,6 +304,7 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 	if got := dispatcher.issueAt(1).ID; got != "issue-2" {
 		t.Fatalf("second dispatched issue ID = %q, want overflow issue-2", got)
 	}
+	close(secondRunBlocked)
 }
 
 func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
