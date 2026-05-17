@@ -266,7 +266,7 @@ type dispatchOp struct {
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
-	if st.IsClaimed(id) {
+	if st.IsClaimed(id) || st.RunningCount() >= st.MaxConcurrentAgents {
 		d.accepted <- false
 		return nil
 	}

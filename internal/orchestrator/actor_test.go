@@ -62,7 +62,7 @@ func (f *fakeDispatcher) finishAt(i int, res WorkerResult) {
 
 func startActor(t *testing.T, deps Deps) (*Orchestrator, context.CancelFunc) {
 	t.Helper()
-	st := NewOrchestratorState(15000, 4)
+	st := NewOrchestratorState(15000, 100)
 	o := New(st, deps)
 	ctx, cancel := context.WithCancel(context.Background())
 	go o.Run(ctx)

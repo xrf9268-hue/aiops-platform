@@ -169,6 +169,24 @@ func (s *OrchestratorState) IsClaimed(id IssueID) bool {
 	return false
 }
 
+// RunningCount reports in-flight work that consumes agent concurrency. Claimed
+// entries are included because dispatchOp reserves the slot before its followup
+// records Running; without counting those reservations, one poll tick can queue
+// more workers than max_concurrent_agents before any Running entry is visible.
+func (s *OrchestratorState) RunningCount() int {
+	counted := make(map[IssueID]struct{}, len(s.Running)+len(s.Claimed))
+	for id := range s.Running {
+		counted[id] = struct{}{}
+	}
+	for id := range s.Claimed {
+		counted[id] = struct{}{}
+	}
+	for id := range s.RetryAttempts {
+		delete(counted, id)
+	}
+	return len(counted)
+}
+
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
 // candidate transitions from "fetched" to "claimed and running".
 //

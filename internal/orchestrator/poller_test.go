@@ -60,6 +60,30 @@ func (d erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int
 	return ch
 }
 
+type blockingDispatcher struct {
+	mu     sync.Mutex
+	issues []tracker.Issue
+}
+
+func (d *blockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+	d.mu.Lock()
+	d.issues = append(d.issues, issue)
+	d.mu.Unlock()
+	ch := make(chan WorkerResult, 1)
+	go func() {
+		<-ctx.Done()
+		ch <- WorkerResult{Err: ctx.Err(), Elapsed: time.Millisecond}
+		close(ch)
+	}()
+	return ch
+}
+
+func (d *blockingDispatcher) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.issues)
+}
+
 func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -157,7 +181,49 @@ func TestPollOnceRetriesAfterBuildTaskFailureWithoutLeakingRunningState(t *testi
 	}
 }
 
+func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"},
+		{ID: "issue-2", Identifier: "LIN-2", State: "AI Ready"},
+		{ID: "issue-3", Identifier: "LIN-3", State: "AI Ready"},
+	}}
+	dispatcher := &blockingDispatcher{}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForBlockingDispatcherCount(t, dispatcher, 2)
+
+	if got := dispatcher.count(); got != 2 {
+		t.Fatalf("dispatcher issues = %d, want max_concurrent_agents limit 2", got)
+	}
+}
+
 func waitForDispatcherCount(t *testing.T, dispatcher *recordingDispatcher, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := dispatcher.count(); got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("dispatcher issues = %d, want %d", dispatcher.count(), want)
+}
+
+func waitForBlockingDispatcherCount(t *testing.T, dispatcher *blockingDispatcher, want int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

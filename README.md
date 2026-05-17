@@ -151,7 +151,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```bash
 cp .env.example .env
 # edit GITEA_BASE_URL, GITEA_TOKEN, GITEA_WEBHOOK_SECRET
-docker compose --env-file .env -f deploy/docker-compose.yml up --build
+docker compose --env-file .env -f deploy/docker-compose.yml --profile legacy-queue up --build trigger-api
 ```
 
 Configure a Gitea issue-comment webhook pointing at:
