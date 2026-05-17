@@ -271,6 +271,7 @@ type dispatchOp struct {
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
+	st.ReleaseFailedIfIssueChanged(d.issue)
 	if st.IsClaimed(id) {
 		d.result <- ErrNotDispatched
 		return nil

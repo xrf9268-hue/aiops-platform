@@ -175,7 +175,7 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}}
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready", UpdatedAt: "2026-05-17T00:00:00Z"}}}
 	dispatcher := &erroringTaskDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
@@ -198,6 +198,37 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 	if got := dispatcher.count(); got != 1 {
 		t.Fatalf("deterministic build failure dispatched %d times, want 1", got)
+	}
+}
+
+func TestPollOnceReleasesNonRetryableFailureAfterTrackerStateChanges(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready", UpdatedAt: "2026-05-17T00:00:00Z"}}}
+	dispatcher := &erroringTaskDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+
+	trackerClient.issues = []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Rework", UpdatedAt: "2026-05-17T00:05:00Z"}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once after tracker state changed: %v", err)
+	}
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	if got := dispatcher.count(); got != 2 {
+		t.Fatalf("changed tracker issue dispatched %d times, want retry after state change", got)
 	}
 }
 

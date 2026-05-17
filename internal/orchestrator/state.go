@@ -116,11 +116,19 @@ type OrchestratorState struct {
 	Running       map[IssueID]*RunningEntry
 	Claimed       map[IssueID]struct{}
 	RetryAttempts map[IssueID]*RetryEntry
-	Failed        map[IssueID]struct{}
+	Failed        map[IssueID]FailedEntry
 	Completed     map[IssueID]struct{} // bookkeeping only per SPEC §4.1.8
 
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
+}
+
+// FailedEntry suppresses a deterministic non-retryable failure only while the
+// tracker issue is unchanged. A later tracker state/update change means a human
+// or agent may have fixed the configuration/input, so the poller may retry.
+type FailedEntry struct {
+	State     string
+	UpdatedAt string
 }
 
 // NewOrchestratorState mirrors the SPEC §16.1 reference initializer:
@@ -141,7 +149,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		Running:             map[IssueID]*RunningEntry{},
 		Claimed:             map[IssueID]struct{}{},
 		RetryAttempts:       map[IssueID]*RetryEntry{},
-		Failed:              map[IssueID]struct{}{},
+		Failed:              map[IssueID]FailedEntry{},
 		Completed:           map[IssueID]struct{}{},
 	}
 }
@@ -172,6 +180,21 @@ func (s *OrchestratorState) IsClaimed(id IssueID) bool {
 		return true
 	}
 	return false
+}
+
+// ReleaseFailedIfIssueChanged clears a non-retryable failure suppression when
+// the tracker issue has visibly changed since the failure was recorded.
+func (s *OrchestratorState) ReleaseFailedIfIssueChanged(issue tracker.Issue) bool {
+	id := IssueID(issue.ID)
+	failed, ok := s.Failed[id]
+	if !ok {
+		return false
+	}
+	if failed.State == issue.State && failed.UpdatedAt == issue.UpdatedAt {
+		return false
+	}
+	delete(s.Failed, id)
+	return true
 }
 
 // RunningCount reports in-flight work that consumes agent concurrency. Claimed
@@ -258,7 +281,7 @@ func (s *OrchestratorState) FinishRunNonRetryableFailed(id IssueID, run *Running
 	if !s.FinishRunFailed(id, run, elapsed) {
 		return false
 	}
-	s.Failed[id] = struct{}{}
+	s.Failed[id] = FailedEntry{State: run.Issue.State, UpdatedAt: run.Issue.UpdatedAt}
 	return true
 }
 
