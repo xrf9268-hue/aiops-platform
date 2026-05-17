@@ -83,9 +83,10 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var pollErr error
 	if p.reconcileKnown {
 		if err := p.reconcileTick(ctx, issues); err != nil {
-			return err
+			pollErr = errors.Join(pollErr, err)
 		}
 	}
 	candidates := mergeOverflowCandidates(p.overflow, issues)
@@ -106,7 +107,7 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 			}
 		}
 	}
-	return dispatchErr
+	return errors.Join(pollErr, dispatchErr)
 }
 
 type activeIssueListerFromStates struct {

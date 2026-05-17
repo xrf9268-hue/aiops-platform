@@ -458,6 +458,42 @@ func TestPollOnceReturnsErrorWhenCanceledWorkerDoesNotExitBeforeTimeout(t *testi
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 }
 
+func TestPollOnceDispatchesActiveCandidatesWhenCanceledWorkerDoesNotExitBeforeTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &stuckCancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		WorkerExitTimeout: time.Millisecond,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", State: "Cancelled"},
+		{ID: "issue-2", Identifier: "LIN-2", State: "In Progress"},
+	})
+	if err := poller.PollOnce(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancel poll once error = %v, want context deadline exceeded", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 2)
+}
+
 func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
