@@ -29,9 +29,9 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 			"error": map[string]any{"message": "gitea_issue_labels issue_number is required"},
 		})
 	}
-	if len(call.Labels) == 0 {
+	if len(call.Labels) != 1 {
 		return dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "gitea_issue_labels labels must contain at least one aiops/* label"},
+			"error": map[string]any{"message": "gitea_issue_labels labels must contain exactly one aiops/* state label"},
 		})
 	}
 	desiredStateLabels := make([]string, 0, len(call.Labels))

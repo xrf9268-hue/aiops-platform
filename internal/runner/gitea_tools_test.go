@@ -161,6 +161,20 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 	}
 }
 
+func TestGiteaIssueLabelsRejectsMultipleAIOpsStateLabelsWithoutHTTPRequest(t *testing.T) {
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress", "aiops/done"}})
+	assertStructuredFailure(t, result, err, "gitea_issue_labels labels must contain exactly one aiops/* state label")
+	_, _, _, _, requests := server.recorded()
+	if requests != 0 {
+		t.Fatalf("server received %d requests, want 0", requests)
+	}
+}
+
 func TestGiteaIssueLabelsRejectsMissingIssueNumberWithoutHTTPRequest(t *testing.T) {
 	server := &fakeGiteaLabelServer{}
 	httpServer := httptest.NewServer(server.handler())

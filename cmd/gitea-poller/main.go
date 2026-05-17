@@ -32,7 +32,7 @@ func main() {
 	if wf.Config.Tracker.Kind != "gitea" {
 		log.Fatalf("tracker.kind must be gitea, got %q", wf.Config.Tracker.Kind)
 	}
-	dsn := env("DATABASE_URL", "postgres://aiops:***@localhost:5432/aiops?sslmode=disable")
+	dsn := databaseURL()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		log.Fatal(err)
@@ -95,6 +95,10 @@ func giteaBaseURL(cfg workflow.TrackerConfig) string {
 		return strings.TrimRight(cfg.ProjectSlug, "/")
 	}
 	return env("GITEA_BASE_URL", "http://localhost:3000")
+}
+
+func databaseURL() string {
+	return env("DATABASE_URL", "postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable")
 }
 
 func env(k, d string) string {

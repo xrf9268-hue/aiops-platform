@@ -19,6 +19,13 @@ func (f *fakeStore) Enqueue(_ context.Context, in task.Task) (task.Task, bool, e
 	return in, false, nil
 }
 
+func TestDefaultDatabaseURLIsUsablePostgresDSN(t *testing.T) {
+	got := databaseURL()
+	if got == "" || got == "postgres://aiops:***@localhost:5432/aiops?sslmode=disable" {
+		t.Fatalf("databaseURL default = %q, want usable local Postgres DSN without placeholder credentials", got)
+	}
+}
+
 func TestProcessIssuesEnqueuesGiteaIssueTasks(t *testing.T) {
 	store := &fakeStore{}
 	cfg := &workflow.Config{

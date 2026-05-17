@@ -110,7 +110,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 		}
 		tools.tools["gitea_issue_labels"] = DynamicTool{
 			Name:        "gitea_issue_labels",
-			Description: "Replace the aiops/* labels on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]}. The Gitea API token is never exposed to the agent process.",
+			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]} with exactly one aiops/* label. The Gitea API token is never exposed to the agent process.",
 			InputSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -120,8 +120,10 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 					},
 					"labels": map[string]any{
 						"type":        "array",
-						"description": "Complete desired aiops/* state label set for the issue, usually exactly one label.",
+						"description": "Complete desired aiops/* state label set for the issue; exactly one label is accepted.",
 						"items":       map[string]any{"type": "string"},
+						"minItems":    1,
+						"maxItems":    1,
 					},
 				},
 				"required":             []string{"issue_number", "labels"},
