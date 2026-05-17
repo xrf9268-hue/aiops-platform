@@ -105,6 +105,11 @@ func (p linearWorkpadProxy) call(ctx context.Context, call ToolCall) (string, er
 	if !ok {
 		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad mutation returned a failure", "output": mutateResult}})
 	}
+	if ok, err := linearWorkpadMutationSucceeded(mutateOutput); err != nil {
+		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad mutation response could not be decoded", "reason": err.Error()}})
+	} else if !ok {
+		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad mutation did not succeed", "output": mutateOutput}})
+	}
 	return dynamicToolResult(true, mutateOutput)
 }
 
@@ -179,6 +184,29 @@ func decodeSuccessfulToolOutput(result string) (string, bool) {
 		return "", false
 	}
 	return payload.Output, payload.Success
+}
+
+func linearWorkpadMutationSucceeded(output string) (bool, error) {
+	var payload struct {
+		Data struct {
+			CommentCreate *struct {
+				Success bool `json:"success"`
+			} `json:"commentCreate"`
+			CommentUpdate *struct {
+				Success bool `json:"success"`
+			} `json:"commentUpdate"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(output), &payload); err != nil {
+		return false, err
+	}
+	if payload.Data.CommentCreate != nil {
+		return payload.Data.CommentCreate.Success, nil
+	}
+	if payload.Data.CommentUpdate != nil {
+		return payload.Data.CommentUpdate.Success, nil
+	}
+	return false, nil
 }
 
 type linearWorkpadCommentPage struct {

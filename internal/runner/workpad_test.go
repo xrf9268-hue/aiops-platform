@@ -145,6 +145,23 @@ func TestLinearWorkpadCreatesCommentWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLinearWorkpadFailsWhenLinearMutationReportsFailure(t *testing.T) {
+	linearGraphQL := DynamicTool{
+		Name: "linear_graphql",
+		Call: func(_ context.Context, call ToolCall) (string, error) {
+			if strings.Contains(call.Query, "AIWorkpadFind") {
+				return dynamicToolResult(true, `{"data":{"issue":{"comments":{"nodes":[]}}}}`)
+			}
+			return dynamicToolResult(true, `{"data":{"commentCreate":{"success":false,"comment":null}}}`)
+		},
+	}
+	tool := NewLinearWorkpadTool(linearGraphQL)
+
+	result, err := tool.Call(context.Background(), ToolCall{Variables: map[string]any{"issueId": "LIN-123"}})
+
+	assertStructuredFailure(t, result, err, "AI Workpad mutation did not succeed")
+}
+
 func TestLinearWorkpadAcceptsSchemaNestedVariables(t *testing.T) {
 	calls := []recordedToolCall{}
 	linearGraphQL := DynamicTool{
