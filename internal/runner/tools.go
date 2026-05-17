@@ -100,7 +100,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 		}
 		tools.tools["linear_ai_workpad"] = NewLinearWorkpadTool(tools.tools["linear_graphql"])
 	}
-	if strings.EqualFold(trackerCfg.Kind, "gitea") && trackerCfg.APIKey != "" && wf.Config.Repo.Owner != "" && wf.Config.Repo.Name != "" {
+	if strings.EqualFold(trackerCfg.Kind, "gitea") && trackerCfg.APIKey != "" && wf.Config.Repo.Owner != "" && wf.Config.Repo.Name != "" && giteaBaseURLFromTracker(trackerCfg) != "" {
 		client := giteaIssueLabelsProxy{
 			token:   trackerCfg.APIKey,
 			baseURL: giteaBaseURLFromTracker(trackerCfg),

@@ -69,8 +69,9 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
 		Tracker: workflow.TrackerConfig{
-			Kind:   "gitea",
-			APIKey: token,
+			Kind:        "gitea",
+			APIKey:      token,
+			ProjectSlug: "https://gitea.example.test/",
 		},
 	}})
 
@@ -158,6 +159,19 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 		if _, ok := tools.Lookup("gitea_issue_labels"); ok {
 			t.Fatalf("gitea_issue_labels advertised without configured Gitea token: %#v", wf.Config.Tracker)
 		}
+	}
+}
+
+func TestDynamicToolsDoNotExposeGiteaToolsWithoutBaseURL(t *testing.T) {
+	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{
+			Kind:   "gitea",
+			APIKey: "token",
+		},
+	}})
+	if _, ok := tools.Lookup("gitea_issue_labels"); ok {
+		t.Fatalf("gitea_issue_labels advertised without configured Gitea base URL")
 	}
 }
 

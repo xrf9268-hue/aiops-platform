@@ -13,8 +13,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-const defaultGiteaBaseURL = "http://localhost:3000"
-
 type giteaIssueLabelsProxy struct {
 	token   string
 	baseURL string
@@ -173,8 +171,5 @@ func replaceAIOpsLabels(currentLabels, desiredStateLabels []string) []string {
 }
 
 func giteaBaseURLFromTracker(cfg workflow.TrackerConfig) string {
-	if cfg.ProjectSlug != "" {
-		return strings.TrimRight(cfg.ProjectSlug, "/")
-	}
-	return defaultGiteaBaseURL
+	return strings.TrimRight(cfg.ProjectSlug, "/")
 }
