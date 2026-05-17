@@ -101,7 +101,9 @@ func TestFinishRunSucceeded_RemovesRunningAddsCompletedFoldsSeconds(t *testing.T
 	id := IssueID(iss.ID)
 	st.BeginDispatch(id, runningEntry(t, iss))
 
-	st.FinishRunSucceeded(id, 750*time.Millisecond)
+	if ok := st.FinishRunSucceeded(id, 750*time.Millisecond); !ok {
+		t.Fatalf("FinishRunSucceeded returned false for running issue %s", id)
+	}
 
 	if _, ok := st.Running[id]; ok {
 		t.Errorf("Running[%s] should be removed after FinishRunSucceeded", id)
@@ -127,7 +129,9 @@ func TestFinishRunFailed_RemovesRunningReleasesClaimDoesNotMarkCompleted(t *test
 	id := IssueID(iss.ID)
 	st.BeginDispatch(id, runningEntry(t, iss))
 
-	st.FinishRunFailed(id, 2*time.Second)
+	if ok := st.FinishRunFailed(id, 2*time.Second); !ok {
+		t.Fatalf("FinishRunFailed returned false for running issue %s", id)
+	}
 
 	if _, ok := st.Running[id]; ok {
 		t.Errorf("Running[%s] should be removed after FinishRunFailed", id)
@@ -227,6 +231,35 @@ func TestReleaseClaim_DoesNotTouchRunning(t *testing.T) {
 	// Done; ReleaseClaim is the non-running half of reconciliation.
 	if _, ok := st.Running[id]; !ok {
 		t.Errorf("ReleaseClaim must not remove Running[%s]; that's the worker goroutine's job", id)
+	}
+}
+
+func TestFinishRunIgnoresUnknownRunningEntry(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	id := IssueID("ENG-MISSING")
+	st.Claimed[id] = struct{}{}
+
+	if ok := st.FinishRunSucceeded(id, time.Second); ok {
+		t.Fatalf("FinishRunSucceeded returned true for issue with no Running entry")
+	}
+	if _, ok := st.Claimed[id]; !ok {
+		t.Fatalf("FinishRunSucceeded removed Claimed[%s] even though no Running entry existed", id)
+	}
+	if _, ok := st.Completed[id]; ok {
+		t.Fatalf("FinishRunSucceeded marked Completed[%s] even though no Running entry existed", id)
+	}
+	if got := st.CodexTotals.SecondsRunning; got != 0 {
+		t.Fatalf("FinishRunSucceeded added elapsed seconds for unknown run: %v", got)
+	}
+
+	if ok := st.FinishRunFailed(id, time.Second); ok {
+		t.Fatalf("FinishRunFailed returned true for issue with no Running entry")
+	}
+	if _, ok := st.Claimed[id]; !ok {
+		t.Fatalf("FinishRunFailed removed Claimed[%s] even though no Running entry existed", id)
+	}
+	if got := st.CodexTotals.SecondsRunning; got != 0 {
+		t.Fatalf("FinishRunFailed added elapsed seconds for unknown run: %v", got)
 	}
 }
 

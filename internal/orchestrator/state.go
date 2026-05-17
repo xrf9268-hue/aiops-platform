@@ -199,11 +199,15 @@ func (s *OrchestratorState) BeginDispatch(id IssueID, entry *RunningEntry) {
 //     is NOT consulted for dispatch gating; it exists so operator views
 //     and §13.7's /api/v1/state can report it).
 //   - Folds elapsed into CodexTotals.SecondsRunning.
-func (s *OrchestratorState) FinishRunSucceeded(id IssueID, elapsed time.Duration) {
+func (s *OrchestratorState) FinishRunSucceeded(id IssueID, elapsed time.Duration) bool {
+	if _, ok := s.Running[id]; !ok {
+		return false
+	}
 	delete(s.Running, id)
 	delete(s.Claimed, id)
 	s.Completed[id] = struct{}{}
 	s.CodexTotals.AddSeconds(elapsed)
+	return true
 }
 
 // FinishRunFailed is the transition for a worker that exited abnormally
@@ -212,10 +216,14 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, elapsed time.Duration
 // the next migration step; this method only releases the run slot and
 // folds elapsed time so the caller can decide whether to enqueue a
 // retry via ScheduleRetry.
-func (s *OrchestratorState) FinishRunFailed(id IssueID, elapsed time.Duration) {
+func (s *OrchestratorState) FinishRunFailed(id IssueID, elapsed time.Duration) bool {
+	if _, ok := s.Running[id]; !ok {
+		return false
+	}
 	delete(s.Running, id)
 	delete(s.Claimed, id)
 	s.CodexTotals.AddSeconds(elapsed)
+	return true
 }
 
 // ScheduleRetry records a RetryEntry under RetryAttempts and keeps the
