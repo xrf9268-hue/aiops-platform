@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +12,18 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {
+	if err := normalizeRunError(context.Canceled); err != nil {
+		t.Fatalf("normalizeRunError(context.Canceled) = %v, want nil", err)
+	}
+	if err := normalizeRunError(context.DeadlineExceeded); err != nil {
+		t.Fatalf("normalizeRunError(context.DeadlineExceeded) = %v, want nil", err)
+	}
+	if err := normalizeRunError(os.ErrNotExist); err == nil {
+		t.Fatal("normalizeRunError(non-context error) = nil, want original error")
+	}
+}
 
 func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
 	src, err := os.ReadFile("main.go")

@@ -203,6 +203,38 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	}
 }
 
+func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-1")
+	terminalPath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-2")
+	for _, path := range []string{activePath, terminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"AI Ready"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-1", Identifier: "GIT-1", State: "AI Ready"},
+			{ID: "issue-2", Identifier: "GIT-2", State: "Done"},
+		}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active gitea workspace should remain: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("terminal gitea workspace should be removed, stat err=%v", err)
+	}
+}
+
 func TestReconcileStartupKeepsReworkWorkspaceWhenUpdatedAtChanged(t *testing.T) {
 	root := t.TempDir()
 	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")

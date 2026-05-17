@@ -187,7 +187,7 @@ func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
 				continue
 			}
 			repoPath := filepath.Join(ownerPath, repoEntry.Name())
-			for _, sourceDir := range []string{"linear_issue", "linear-issue"} {
+			for _, sourceDir := range []string{"linear_issue", "linear-issue", "gitea_issue", "gitea-issue"} {
 				sourcePath := filepath.Join(repoPath, sourceDir)
 				workspaceEntries, err := os.ReadDir(sourcePath)
 				if err != nil {

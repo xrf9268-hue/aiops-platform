@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -25,9 +26,16 @@ func main() {
 		}
 		os.Exit(worker.PrintConfig(os.Args[2], os.Stdout, os.Stderr))
 	}
-	if err := run(); err != nil {
+	if err := normalizeRunError(run()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func normalizeRunError(err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
