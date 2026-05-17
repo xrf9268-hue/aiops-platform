@@ -73,13 +73,21 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 		return fresh
 	}
 	candidates := make([]tracker.Issue, 0, len(overflow)+len(fresh))
+	freshByID := make(map[string]tracker.Issue, len(fresh))
 	seen := make(map[string]struct{}, len(overflow)+len(fresh))
-	for _, issue := range overflow {
+	for _, issue := range fresh {
 		if issue.ID == "" {
 			continue
 		}
+		freshByID[issue.ID] = issue
+	}
+	for _, issue := range overflow {
+		freshIssue, ok := freshByID[issue.ID]
+		if !ok {
+			continue
+		}
 		seen[issue.ID] = struct{}{}
-		candidates = append(candidates, issue)
+		candidates = append(candidates, freshIssue)
 	}
 	for _, issue := range fresh {
 		if _, ok := seen[issue.ID]; ok {
