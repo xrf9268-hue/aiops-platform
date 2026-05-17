@@ -145,7 +145,7 @@ func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issu
 			return "", fmt.Errorf("lookup response could not be decoded: %w", err)
 		}
 		for _, node := range page.Nodes {
-			if strings.Contains(node.Body, linearWorkpadMarker) {
+			if isLinearWorkpadCommentBody(node.Body) {
 				return node.ID, nil
 			}
 		}
@@ -249,6 +249,11 @@ func decodeLinearWorkpadCommentPage(output string) (linearWorkpadCommentPage, er
 		EndCursor:   payload.Data.Issue.Comments.PageInfo.EndCursor,
 		Nodes:       payload.Data.Issue.Comments.Nodes,
 	}, nil
+}
+
+func isLinearWorkpadCommentBody(body string) bool {
+	trimmed := strings.TrimLeft(body, " \t\r\n")
+	return strings.HasPrefix(trimmed, linearWorkpadMarker+"\n# AI Workpad") || strings.HasPrefix(trimmed, linearWorkpadMarker+"\r\n# AI Workpad")
 }
 
 func renderLinearWorkpadBody(input linearWorkpadInput) string {

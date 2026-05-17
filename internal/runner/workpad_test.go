@@ -66,6 +66,38 @@ func TestLinearWorkpadUpsertsExistingWorkpadComment(t *testing.T) {
 	}
 }
 
+func TestLinearWorkpadIgnoresQuotedMarkerWithoutCanonicalHeading(t *testing.T) {
+	calls := []recordedToolCall{}
+	linearGraphQL := DynamicTool{
+		Name: "linear_graphql",
+		Call: func(_ context.Context, call ToolCall) (string, error) {
+			calls = append(calls, recordedToolCall{Query: call.Query, Variables: call.Variables})
+			switch len(calls) {
+			case 1:
+				return dynamicToolResult(true, `{"data":{"issue":{"comments":{"nodes":[{"id":"human-comment","body":"I copied this from the bot: <!-- aiops:ai-workpad -->"}]}}}}`)
+			case 2:
+				return dynamicToolResult(true, `{"data":{"commentCreate":{"success":true,"comment":{"id":"comment-new"}}}}`)
+			default:
+				t.Fatalf("unexpected extra linear_graphql call %#v", call)
+				return "", nil
+			}
+		},
+	}
+	tool := NewLinearWorkpadTool(linearGraphQL)
+
+	result, err := tool.Call(context.Background(), ToolCall{Variables: map[string]any{"issueId": "LIN-123"}})
+	if err != nil {
+		t.Fatalf("linear_ai_workpad call: %v", err)
+	}
+	assertToolSuccess(t, result)
+	if len(calls) != 2 {
+		t.Fatalf("linear_graphql calls = %d, want lookup then create", len(calls))
+	}
+	if !strings.Contains(calls[1].Query, "commentCreate") || strings.Contains(calls[1].Query, "commentUpdate") {
+		t.Fatalf("quoted marker should not be updated as managed workpad: %s", calls[1].Query)
+	}
+}
+
 func TestLinearWorkpadFindsExistingWorkpadCommentPastFirstPage(t *testing.T) {
 	calls := []recordedToolCall{}
 	linearGraphQL := DynamicTool{
