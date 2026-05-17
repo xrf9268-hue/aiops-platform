@@ -109,6 +109,25 @@ func TestLinearWorkpadFindsExistingWorkpadCommentPastFirstPage(t *testing.T) {
 	}
 }
 
+func TestLinearWorkpadFailsWhenLookupCursorDoesNotAdvance(t *testing.T) {
+	calls := []recordedToolCall{}
+	linearGraphQL := DynamicTool{
+		Name: "linear_graphql",
+		Call: func(_ context.Context, call ToolCall) (string, error) {
+			calls = append(calls, recordedToolCall{Query: call.Query, Variables: call.Variables})
+			if len(calls) > 2 {
+				t.Fatalf("lookup continued after cursor stopped advancing: %#v", calls)
+			}
+			return dynamicToolResult(true, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":true,"endCursor":"same-cursor"},"nodes":[{"id":"comment-1","body":"human note"}]}}}}`)
+		},
+	}
+	tool := NewLinearWorkpadTool(linearGraphQL)
+
+	result, err := tool.Call(context.Background(), ToolCall{Variables: map[string]any{"issueId": "LIN-123"}})
+
+	assertStructuredFailure(t, result, err, "lookup pagination did not advance")
+}
+
 func TestLinearWorkpadCreatesCommentWhenMissing(t *testing.T) {
 	calls := []recordedToolCall{}
 	linearGraphQL := DynamicTool{

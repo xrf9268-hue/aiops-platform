@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	linearWorkpadToolName = "linear_ai_workpad"
-	linearWorkpadMarker   = "<!-- aiops:ai-workpad -->"
+	linearWorkpadToolName       = "linear_ai_workpad"
+	linearWorkpadMarker         = "<!-- aiops:ai-workpad -->"
+	linearWorkpadMaxLookupPages = 100
 )
 
 // NewLinearWorkpadTool returns a thin helper over linear_graphql. The helper is
@@ -114,10 +115,10 @@ func (p linearWorkpadProxy) call(ctx context.Context, call ToolCall) (string, er
 }
 
 func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issueID string) (string, error) {
-	var after any
-	for {
+	var after string
+	for pageCount := 0; pageCount < linearWorkpadMaxLookupPages; pageCount++ {
 		variables := map[string]any{"issueId": issueID}
-		if after != nil {
+		if after != "" {
 			variables["after"] = after
 		}
 		findResult, err := p.linearGraphQL.Call(ctx, ToolCall{
@@ -151,8 +152,13 @@ func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issu
 		if !page.HasNextPage || strings.TrimSpace(page.EndCursor) == "" {
 			return "", nil
 		}
-		after = page.EndCursor
+		nextCursor := strings.TrimSpace(page.EndCursor)
+		if nextCursor == after {
+			return "", fmt.Errorf("lookup pagination did not advance after cursor %q", nextCursor)
+		}
+		after = nextCursor
 	}
+	return "", fmt.Errorf("lookup exceeded %d pages", linearWorkpadMaxLookupPages)
 }
 
 func normalizeLinearWorkpadInput(call ToolCall) linearWorkpadInput {
