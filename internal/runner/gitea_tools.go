@@ -77,6 +77,17 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 		if failure != "" {
 			return failure, nil
 		}
+		confirmedLabels, confirmationFailure := p.decodeIssueLabelsFromToolResult(result, "Gitea label add response")
+		if confirmationFailure != "" {
+			return confirmationFailure, nil
+		}
+		for _, desired := range desiredStateLabels {
+			if !containsIssueLabelFold(confirmedLabels, desired) {
+				return dynamicToolFailure(map[string]any{
+					"error": map[string]any{"message": "Gitea label add response did not include desired aiops label", "label": desired},
+				})
+			}
+		}
 	} else {
 		result, _ = dynamicToolResult(true, `{"labels":[]}`)
 	}
@@ -219,6 +230,37 @@ func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *htt
 		return failure
 	}
 	return ""
+}
+
+func (p giteaIssueLabelsProxy) decodeIssueLabelsFromToolResult(result, source string) ([]giteaIssueLabel, string) {
+	var envelope struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(result), &envelope); err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": source + " envelope could not be decoded", "reason": err.Error()},
+		})
+		return nil, failure
+	}
+	var payload struct {
+		Labels []struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal([]byte(envelope.Output), &payload); err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": source + " body could not be decoded", "reason": err.Error(), "body": envelope.Output},
+		})
+		return nil, failure
+	}
+	out := make([]giteaIssueLabel, 0, len(payload.Labels))
+	for _, label := range payload.Labels {
+		if strings.TrimSpace(label.Name) != "" {
+			out = append(out, giteaIssueLabel{ID: label.ID, Name: label.Name})
+		}
+	}
+	return out, ""
 }
 
 func validGiteaStateLabels() map[string]struct{} {

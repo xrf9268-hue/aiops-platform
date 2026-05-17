@@ -281,6 +281,39 @@ func TestGiteaIssueLabelsDoesNotDeleteExistingStateWhenAddingDesiredStateFails(t
 	}
 }
 
+func TestGiteaIssueLabelsDoesNotDeleteExistingStateWhenDesiredStateIsMissingAfterAdd(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/todo"}]`)
+		case http.MethodPost:
+			_, _ = io.WriteString(w, `{"labels":[{"name":"aiops/todo"}]}`)
+		case http.MethodDelete:
+			t.Fatalf("DELETE must not run until the desired aiops label is confirmed present")
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: server.URL, owner: "owner", repo: "repo", http: server.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	assertStructuredFailure(t, result, err, "Gitea label add response did not include desired aiops label")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,POST" {
+		t.Fatalf("methods = %#v, want GET then POST only", methods)
+	}
+}
+
 func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 	for _, wf := range []workflow.Workflow{
 		{},
