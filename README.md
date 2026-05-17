@@ -1,18 +1,12 @@
 # aiops-platform
 
-> **⚠️ Direction change in progress (2026-05-13).** This repo's Go
-> implementation accumulated nine SPEC deviations from upstream Symphony.
-> Rather than rewrite the orchestrator core in Go, we are switching to
-> fork an existing Symphony implementation as the new base. See
-> [`DECISION.md`](DECISION.md) for the reasoning and
-> [`docs/research/symphony-fork-evaluation.md`](docs/research/symphony-fork-evaluation.md)
-> for the candidate comparison.
->
-> The content below describes the current Go implementation as it stood
-> before this decision. New architectural work happens on the new repo
-> once the fork is chosen; this repo will be archived with a pointer.
+> **Direction update (2026-05-15).** `aiops-platform` continues as a
+> Go implementation of OpenAI Symphony in this repository. `SPEC.md` is
+> the contract; the Elixir reference is the tie-breaker when SPEC text is
+> ambiguous. See [`DECISION.md`](DECISION.md) and the D1–D24 tracker in
+> [`DEVIATIONS.md`](DEVIATIONS.md).
 
-A personal-productivity AI coding orchestrator inspired by OpenAI Symphony.
+A personal-productivity AI coding orchestrator implementing OpenAI Symphony.
 
 The goal is not to build a heavy enterprise platform first. The goal is to run a practical loop:
 
@@ -26,26 +20,22 @@ Linear or Gitea task
   -> agent-side branch push + PR handoff
 ```
 
-## Two-track workflow
+## Workflow
 
-Use both tracks:
-
-1. **OpenAI Symphony directly** for quick Linear + Codex experiments.
-2. **aiops-platform** for your own Go-based, Gitea-friendly, locally customizable workflow.
-
-This repository implements the second track.
+Use `aiops-platform` as the Go-based, Gitea-friendly, locally customizable
+Symphony implementation while D1–D24 are closed systematically.
 
 ## Components
 
 - `cmd/trigger-api`: receives Gitea webhooks and manual task submissions.
 - `cmd/linear-poller`: polls Linear issues in configured active states and enqueues tasks.
-- `cmd/worker`: claims queued tasks and runs the Symphony-style workflow.
+- `cmd/worker`: claims/dispatches tasks and runs the Symphony-style workflow.
 - `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
 - `internal/tracker`: tracker abstraction with a Linear client.
 - `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
 - `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
 - `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
-- `internal/gitea`: webhook parser, signature verification, and the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
+- `internal/gitea`: transitional webhook parser/signature verification plus the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
 
 ## WORKFLOW.md discovery
 

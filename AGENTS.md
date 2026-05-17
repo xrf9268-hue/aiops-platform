@@ -25,11 +25,9 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 > - **Gitea webhook ingress** (`cmd/trigger-api`, `internal/triggerapi`,
 >   `internal/gitea/webhook*.go`): not in SPEC; being replaced with a Gitea
 >   poller under #74.
-> - **Orchestrator-driven PR creation, git push, and Linear status writes**
->   (`internal/worker/runtask.go` calls to `CommitAndPush`, `CreatePR`,
->   `OnClaim`, `OnPRCreated`): SPEC §1 says these are agent responsibilities;
->   being moved to agent-side dynamic tools under #76 (depends on app-server
->   protocol, #64).
+> - **Orchestrator-driven PR creation, git push, and Linear status writes**:
+>   closed under #76 after #64/#14; the worker must not reintroduce
+>   `CommitAndPush`, `CreatePR`, `OnClaim`, or `OnPRCreated`-style handoff.
 > - **No per-tick reconciliation; in-flight runs ignore tracker state**:
 >   SPEC §2.1 Goal "Stop active runs when issue state changes make them
 >   ineligible" is unimplemented. #68 covers startup reconciliation only;
@@ -155,25 +153,25 @@ Rules for agents working on this repo:
    working Elixir reference. If you are unsure how a subsystem should behave,
    read the corresponding Elixir module first; the answer is usually there.
 
-The current set of open deviations is in `DEVIATIONS.md` (D1–D5 reference SPEC
-sections). Any new SPEC-violating change you make must either (a) close an
-existing deviation, (b) be tracked as a new deviation with an issue, or
-(c) be reverted.
+The current set of tracked deviations is in `DEVIATIONS.md` (D1–D24, with
+status showing whether each row is open, partial, reverting, or closed). Any
+new SPEC-violating change you make must either (a) close an existing deviation,
+(b) be tracked as a new deviation with an issue, or (c) be reverted.
 
 ## Layout
 
 | Path | What lives there |
 |------|------------------|
 | `cmd/trigger-api` | HTTP server: Gitea webhook ingress (transitional — being removed per #74) |
-| `cmd/worker` | Claims queued tasks, runs the Symphony loop, opens PRs |
+| `cmd/worker` | Claims/dispatches queued tasks and runs the Symphony loop; PR handoff is agent-side |
 | `cmd/linear-poller` | Polls Linear active states and enqueues tasks |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
 | `internal/queue` | Postgres queue (transitional — being removed per #73) |
 | `internal/runner` | Runner abstraction: `mock`, `codex`, `claude` |
 | `internal/workspace` | Deterministic git workspace, verify, policy checks |
 | `internal/tracker` | Tracker abstraction with Linear client |
-| `internal/gitea` | Webhook parser, signature verification, PR client |
-| `internal/triggerapi`, `internal/worker` | HTTP handlers and worker lifecycle |
+| `internal/gitea` | Webhook parser/signature verification (transitional) and Gitea PR client/tool support |
+| `internal/triggerapi`, `internal/worker` | Transitional webhook handlers and worker lifecycle |
 | `internal/task`, `internal/policy` | Task event constants, policy helpers |
 | `migrations/` | SQL migrations for the Postgres queue |
 | `docs/adr/` | Architectural decisions (start here for "why") |
@@ -238,7 +236,7 @@ other settings fall back to defaults (see `README.md` table). The
 
 ## Where to read next
 
-- `README.md` — user-facing quick start (Gitea webhook path, Linear polling path)
+- `README.md` — user-facing quick start and current component overview
 - `docs/runbooks/local-dev.md` — local dev loop
 - `docs/runbooks/ci.md` — CI behavior, release flow, pre-push checks
 - `docs/runbooks/secret-scanning.md` — opt-in pre-push leak scan
