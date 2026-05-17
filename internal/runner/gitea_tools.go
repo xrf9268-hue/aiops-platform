@@ -242,20 +242,27 @@ func (p giteaIssueLabelsProxy) decodeIssueLabelsFromToolResult(result, source st
 		})
 		return nil, failure
 	}
-	var payload struct {
-		Labels []struct {
-			ID   int64  `json:"id"`
-			Name string `json:"name"`
-		} `json:"labels"`
+	var rawLabels []struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(envelope.Output), &payload); err != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": source + " body could not be decoded", "reason": err.Error(), "body": envelope.Output},
-		})
-		return nil, failure
+	if err := json.Unmarshal([]byte(envelope.Output), &rawLabels); err != nil {
+		var payload struct {
+			Labels []struct {
+				ID   int64  `json:"id"`
+				Name string `json:"name"`
+			} `json:"labels"`
+		}
+		if objectErr := json.Unmarshal([]byte(envelope.Output), &payload); objectErr != nil {
+			failure, _ := dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": source + " body could not be decoded", "reason": err.Error(), "body": envelope.Output},
+			})
+			return nil, failure
+		}
+		rawLabels = payload.Labels
 	}
-	out := make([]giteaIssueLabel, 0, len(payload.Labels))
-	for _, label := range payload.Labels {
+	out := make([]giteaIssueLabel, 0, len(rawLabels))
+	for _, label := range rawLabels {
 		if strings.TrimSpace(label.Name) != "" {
 			out = append(out, giteaIssueLabel{ID: label.ID, Name: label.Name})
 		}
