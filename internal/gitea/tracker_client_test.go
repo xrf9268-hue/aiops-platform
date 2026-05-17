@@ -226,3 +226,42 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 		t.Fatalf("last requested page = %s, want probe page %s", got, want)
 	}
 }
+
+func TestTrackerClientListIssuesByStatesContinuesWhenServerCapsPageBelowRequestedLimit(t *testing.T) {
+	var requestedPages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPages = append(requestedPages, r.URL.Query().Get("page"))
+		w.Header().Set("Content-Type", "application/json")
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		if err != nil {
+			t.Fatalf("page query = %q: %v", r.URL.Query().Get("page"), err)
+		}
+		if page < 2 {
+			w.Header().Add("Link", fmt.Sprintf(`<%s%s?page=%d>; rel="next"`, serverURL(r), r.URL.Path, page+1))
+		}
+		issues := make([]Issue, 2)
+		for i := range issues {
+			number := (page-1)*2 + i + 1
+			issues[i] = Issue{ID: int64(number), Number: number, Title: "todo", HTMLURL: fmt.Sprintf("https://gitea.local/o/r/issues/%d", number), Labels: []Label{{Name: "aiops/todo"}}}
+		}
+		_ = json.NewEncoder(w).Encode(issues)
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 4 {
+		t.Fatalf("issues len = %d, want all 4 issues across server-capped pages", len(issues))
+	}
+	if !slices.Equal(requestedPages, []string{"1", "2"}) {
+		t.Fatalf("requested pages = %#v, want pagination to follow Link rel=next", requestedPages)
+	}
+}
+
+func serverURL(r *http.Request) string {
+	return "http://" + r.Host
+}

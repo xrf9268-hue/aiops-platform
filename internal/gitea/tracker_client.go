@@ -86,7 +86,7 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, error) {
 	var out []tracker.Issue
 	for page := 1; page <= listIssuesMaxPages+1; page++ {
-		batch, err := c.listIssuesPage(ctx, labelName, issueState, page)
+		batch, hasNext, err := c.listIssuesPage(ctx, labelName, issueState, page)
 		if err != nil {
 			return nil, err
 		}
@@ -125,18 +125,18 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 				UpdatedAt:   issue.UpdatedAt,
 			})
 		}
-		if len(batch) < listIssuesPageSize {
+		if !hasNext && len(batch) < listIssuesPageSize {
 			return out, nil
 		}
 	}
 	return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
 }
 
-func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, issueState string, page int) ([]Issue, error) {
+func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, issueState string, page int) ([]Issue, bool, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo))
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	q := u.Query()
 	q.Set("state", issueState)
@@ -150,7 +150,7 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	req.Header.Set("Authorization", "token "+c.Token)
 	client := c.HTTP
@@ -159,17 +159,28 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("list Gitea issues failed: %s", resp.Status)
+		return nil, false, fmt.Errorf("list Gitea issues failed: %s", resp.Status)
 	}
 	var issues []Issue
 	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return issues, nil
+	return issues, hasNextPage(resp.Header.Values("Link")), nil
+}
+
+func hasNextPage(linkHeaders []string) bool {
+	for _, header := range linkHeaders {
+		for _, part := range strings.Split(header, ",") {
+			if strings.Contains(part, `rel="next"`) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func giteaAPIStateForWorkflowStates(states, terminalStateNames []string) string {
