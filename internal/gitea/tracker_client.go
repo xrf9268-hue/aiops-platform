@@ -68,10 +68,16 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	labelNames := StateLabelNamesForStates(states, DefaultStateLabelMappings())
 
 	var out []tracker.Issue
-	for page := 1; page <= listIssuesMaxPages; page++ {
+	for page := 1; page <= listIssuesMaxPages+1; page++ {
 		batch, err := c.listIssuesPage(ctx, labelNames, page)
 		if err != nil {
 			return nil, err
+		}
+		if page > listIssuesMaxPages {
+			if len(batch) == 0 {
+				return out, nil
+			}
+			return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
 		}
 		for _, issue := range batch {
 			state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())

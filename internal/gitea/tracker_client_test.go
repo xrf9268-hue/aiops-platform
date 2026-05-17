@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -100,5 +101,38 @@ func TestTrackerClientListIssuesByStatesUsesDeterministicConflictState(t *testin
 	}
 	if len(diagnostics) == 0 || !strings.Contains(diagnostics[0], "gitea issue #1 label diagnostic") {
 		t.Fatalf("diagnostics = %#v, want logged conflict diagnostic", diagnostics)
+	}
+}
+
+func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) {
+	var requestedPages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPages = append(requestedPages, r.URL.Query().Get("page"))
+		w.Header().Set("Content-Type", "application/json")
+		page := r.URL.Query().Get("page")
+		if page == strconv.Itoa(listIssuesMaxPages+1) {
+			_ = json.NewEncoder(w).Encode([]Issue{})
+			return
+		}
+		issues := make([]Issue, listIssuesPageSize)
+		for i := range issues {
+			number := (len(requestedPages)-1)*listIssuesPageSize + i + 1
+			issues[i] = Issue{ID: int64(number), Number: number, Title: "todo", HTMLURL: fmt.Sprintf("https://gitea.local/o/r/issues/%d", number), Labels: []Label{{Name: "aiops/todo"}}}
+		}
+		_ = json.NewEncoder(w).Encode(issues)
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates returned error for exactly full max pages: %v", err)
+	}
+	if len(issues) != listIssuesMaxPages*listIssuesPageSize {
+		t.Fatalf("issues len = %d, want %d", len(issues), listIssuesMaxPages*listIssuesPageSize)
+	}
+	if got, want := requestedPages[len(requestedPages)-1], strconv.Itoa(listIssuesMaxPages+1); got != want {
+		t.Fatalf("last requested page = %s, want probe page %s", got, want)
 	}
 }
