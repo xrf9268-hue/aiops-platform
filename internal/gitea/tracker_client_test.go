@@ -56,7 +56,9 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 }
 
 func TestTrackerClientListIssuesByStatesFiltersTerminalAndMissingStates(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var requestedState string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedState = r.URL.Query().Get("state")
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]Issue{
 			{ID: 201, Number: 1, Title: "done", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/done"}}},
@@ -74,6 +76,34 @@ func TestTrackerClientListIssuesByStatesFiltersTerminalAndMissingStates(t *testi
 	}
 	if len(issues) != 1 || issues[0].Identifier != "#3" || issues[0].State != "AI Ready" {
 		t.Fatalf("issues = %#v, want only AI Ready issue", issues)
+	}
+	if requestedState != "open" {
+		t.Fatalf("state query = %q, want open for active states", requestedState)
+	}
+}
+
+func TestTrackerClientListIssuesByStatesQueriesAllForTerminalStates(t *testing.T) {
+	var requestedState string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedState = r.URL.Query().Get("state")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 211, Number: 11, Title: "closed done", HTMLURL: "https://gitea.local/o/r/issues/11", Labels: []Label{{Name: "aiops/done"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Done"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if requestedState != "all" {
+		t.Fatalf("state query = %q, want all for terminal states", requestedState)
+	}
+	if len(issues) != 1 || issues[0].Identifier != "#11" || issues[0].State != "Done" {
+		t.Fatalf("issues = %#v, want Done issue", issues)
 	}
 }
 

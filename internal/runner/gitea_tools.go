@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -171,5 +172,8 @@ func replaceAIOpsLabels(currentLabels, desiredStateLabels []string) []string {
 }
 
 func giteaBaseURLFromTracker(cfg workflow.TrackerConfig) string {
-	return strings.TrimRight(cfg.ProjectSlug, "/")
+	if cfg.ProjectSlug != "" {
+		return strings.TrimRight(cfg.ProjectSlug, "/")
+	}
+	return strings.TrimRight(os.Getenv("GITEA_BASE_URL"), "/")
 }

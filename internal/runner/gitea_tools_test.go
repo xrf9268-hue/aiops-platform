@@ -163,6 +163,7 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutGiteaToken(t *testing.T) {
 }
 
 func TestDynamicToolsDoNotExposeGiteaToolsWithoutBaseURL(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "")
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
 		Tracker: workflow.TrackerConfig{
@@ -172,6 +173,20 @@ func TestDynamicToolsDoNotExposeGiteaToolsWithoutBaseURL(t *testing.T) {
 	}})
 	if _, ok := tools.Lookup("gitea_issue_labels"); ok {
 		t.Fatalf("gitea_issue_labels advertised without configured Gitea base URL")
+	}
+}
+
+func TestDynamicToolsExposeGiteaIssueLabelsWithEnvBaseURL(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea.env.example/")
+	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{
+			Kind:   "gitea",
+			APIKey: "token",
+		},
+	}})
+	if _, ok := tools.Lookup("gitea_issue_labels"); !ok {
+		t.Fatalf("gitea_issue_labels not advertised with env Gitea base URL; tools=%#v", tools.Names())
 	}
 }
 

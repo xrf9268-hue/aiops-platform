@@ -66,10 +66,11 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	}
 	wantedStates := normalizedStateSet(states)
 	labelNames := StateLabelNamesForStates(states, DefaultStateLabelMappings())
+	issueState := giteaAPIStateForWorkflowStates(states)
 
 	var out []tracker.Issue
 	for page := 1; page <= listIssuesMaxPages+1; page++ {
-		batch, err := c.listIssuesPage(ctx, labelNames, page)
+		batch, err := c.listIssuesPage(ctx, labelNames, issueState, page)
 		if err != nil {
 			return nil, err
 		}
@@ -107,14 +108,14 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
 }
 
-func (c *TrackerClient) listIssuesPage(ctx context.Context, labelNames []string, page int) ([]Issue, error) {
+func (c *TrackerClient) listIssuesPage(ctx context.Context, labelNames []string, issueState string, page int) ([]Issue, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo))
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
 	q := u.Query()
-	q.Set("state", "open")
+	q.Set("state", issueState)
 	q.Set("type", "issues")
 	q.Set("page", strconv.Itoa(page))
 	q.Set("limit", strconv.Itoa(listIssuesPageSize))
@@ -145,6 +146,16 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelNames []string,
 		return nil, err
 	}
 	return issues, nil
+}
+
+func giteaAPIStateForWorkflowStates(states []string) string {
+	terminalStates := normalizedStateSet(workflow.DefaultConfig().Tracker.TerminalStates)
+	for _, state := range states {
+		if _, ok := terminalStates[strings.ToLower(strings.TrimSpace(state))]; ok {
+			return "all"
+		}
+	}
+	return "open"
 }
 
 func (c *TrackerClient) logDiagnostics(issue Issue, diagnostics []StateDiagnostic) {
