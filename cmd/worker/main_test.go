@@ -177,6 +177,36 @@ func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testi
 	}
 }
 
+func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress", "Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if len(reconcile.InactiveStates) == 0 {
+		t.Fatalf("inactive reconciliation states = %v, want non-empty states for explicit inactive tracker observations", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "AI Ready") || containsState(reconcile.InactiveStates, "In Progress") || containsState(reconcile.InactiveStates, "Rework") {
+		t.Fatalf("inactive reconciliation states = %v, must not include configured active states", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "Done") || containsState(reconcile.InactiveStates, "Canceled") {
+		t.Fatalf("inactive reconciliation states = %v, must not duplicate terminal states", reconcile.InactiveStates)
+	}
+	if !containsState(reconcile.InactiveStates, "Backlog") || !containsState(reconcile.InactiveStates, "Human Review") {
+		t.Fatalf("inactive reconciliation states = %v, want Backlog and Human Review", reconcile.InactiveStates)
+	}
+}
+
+func containsState(states []string, want string) bool {
+	for _, state := range states {
+		if state == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestValidateWorkflowForRuntimeRejectsFrontMatterWorkflowMissingTaskFields(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 

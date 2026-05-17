@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -132,12 +133,49 @@ func run(ctx context.Context) error {
 	if err := orch.WaitStarted(ctx); err != nil {
 		return err
 	}
-	poller := orchestrator.NewPollerWithReconciliation(trackerClient, orch, orchestrator.ReconciliationConfig{
-		ActiveStates:      wf.Config.Tracker.ActiveStates,
-		TerminalStates:    wf.Config.Tracker.TerminalStates,
-		WorkerExitTimeout: 30 * time.Second,
-	})
+	poller := orchestrator.NewPollerWithReconciliation(trackerClient, orch, reconciliationConfigForWorkflow(wf.Config))
 	return orchestrator.RunPollLoop(ctx, poller, pollInterval)
+}
+
+func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {
+	return orchestrator.ReconciliationConfig{
+		ActiveStates:      cfg.Tracker.ActiveStates,
+		TerminalStates:    cfg.Tracker.TerminalStates,
+		InactiveStates:    inferredInactiveStates(cfg.Tracker),
+		WorkerExitTimeout: 30 * time.Second,
+	}
+}
+
+func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
+	candidates := []string{"Backlog", "Human Review"}
+	active := stateSet(cfg.ActiveStates)
+	terminal := stateSet(cfg.TerminalStates)
+	out := make([]string, 0, len(candidates))
+	for _, state := range candidates {
+		key := normalizeState(state)
+		if _, ok := active[key]; ok {
+			continue
+		}
+		if _, ok := terminal[key]; ok {
+			continue
+		}
+		out = append(out, state)
+	}
+	return out
+}
+
+func stateSet(states []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		if key := normalizeState(state); key != "" {
+			out[key] = struct{}{}
+		}
+	}
+	return out
+}
+
+func normalizeState(state string) string {
+	return strings.ToLower(strings.TrimSpace(state))
 }
 
 type trackerRuntimeClient interface {
