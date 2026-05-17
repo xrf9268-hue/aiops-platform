@@ -361,6 +361,17 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// re-dispatch on its own timer.
 		return nil
 	}
+	if st.RunningCount() >= st.MaxConcurrentAgents {
+		// Retry timers must obey the same capacity gate as fresh dispatch.
+		// Leave the retry queued and arm a short follow-up timer so the issue
+		// is retried after capacity can free instead of spawning over the cap.
+		o := r.o
+		issue := r.issue
+		attempt := r.attempt
+		return func() {
+			_ = o.ScheduleRetry(o.runCtx, issue, entry.Identifier, attempt, entry.Error)
+		}
+	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
 	// would let a concurrent tick race in.
