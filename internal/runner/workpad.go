@@ -71,27 +71,9 @@ func (p linearWorkpadProxy) call(ctx context.Context, call ToolCall) (string, er
 		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "linear_ai_workpad requires the linear_graphql dynamic tool"}})
 	}
 
-	findResult, err := p.linearGraphQL.Call(ctx, ToolCall{
-		Query: `query AIWorkpadFind($issueId: String!) {
-  issue(id: $issueId) {
-    comments(first: 50) {
-      nodes { id body }
-    }
-  }
-}`,
-		Variables: map[string]any{"issueId": input.IssueID},
-	})
+	commentID, err := p.findLinearWorkpadCommentID(ctx, input.IssueID)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad lookup failed", "reason": err.Error()}})
-	}
-	findOutput, ok := decodeSuccessfulToolOutput(findResult)
-	if !ok {
-		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad lookup returned a failure", "output": findResult}})
-	}
-
-	commentID, err := findLinearWorkpadCommentID(findOutput)
-	if err != nil {
-		return dynamicToolFailure(map[string]any{"error": map[string]any{"message": "AI Workpad lookup response could not be decoded", "reason": err.Error()}})
 	}
 
 	body := renderLinearWorkpadBody(input)
@@ -126,6 +108,48 @@ func (p linearWorkpadProxy) call(ctx context.Context, call ToolCall) (string, er
 	return dynamicToolResult(true, mutateOutput)
 }
 
+func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issueID string) (string, error) {
+	var after any
+	for {
+		variables := map[string]any{"issueId": issueID}
+		if after != nil {
+			variables["after"] = after
+		}
+		findResult, err := p.linearGraphQL.Call(ctx, ToolCall{
+			Query: `query AIWorkpadFind($issueId: String!, $after: String) {
+  issue(id: $issueId) {
+    comments(first: 50, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id body }
+    }
+  }
+}`,
+			Variables: variables,
+		})
+		if err != nil {
+			return "", err
+		}
+		findOutput, ok := decodeSuccessfulToolOutput(findResult)
+		if !ok {
+			return "", fmt.Errorf("lookup returned a failure: %s", findResult)
+		}
+
+		page, err := decodeLinearWorkpadCommentPage(findOutput)
+		if err != nil {
+			return "", fmt.Errorf("lookup response could not be decoded: %w", err)
+		}
+		for _, node := range page.Nodes {
+			if strings.Contains(node.Body, linearWorkpadMarker) {
+				return node.ID, nil
+			}
+		}
+		if !page.HasNextPage || strings.TrimSpace(page.EndCursor) == "" {
+			return "", nil
+		}
+		after = page.EndCursor
+	}
+}
+
 func normalizeLinearWorkpadInput(call ToolCall) linearWorkpadInput {
 	vars := call.Variables
 	if nested, ok := vars["variables"].(map[string]any); ok {
@@ -157,11 +181,24 @@ func decodeSuccessfulToolOutput(result string) (string, bool) {
 	return payload.Output, payload.Success
 }
 
-func findLinearWorkpadCommentID(output string) (string, error) {
+type linearWorkpadCommentPage struct {
+	HasNextPage bool
+	EndCursor   string
+	Nodes       []struct {
+		ID   string `json:"id"`
+		Body string `json:"body"`
+	}
+}
+
+func decodeLinearWorkpadCommentPage(output string) (linearWorkpadCommentPage, error) {
 	var payload struct {
 		Data struct {
 			Issue struct {
 				Comments struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
 					Nodes []struct {
 						ID   string `json:"id"`
 						Body string `json:"body"`
@@ -171,14 +208,13 @@ func findLinearWorkpadCommentID(output string) (string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(output), &payload); err != nil {
-		return "", err
+		return linearWorkpadCommentPage{}, err
 	}
-	for _, node := range payload.Data.Issue.Comments.Nodes {
-		if strings.Contains(node.Body, linearWorkpadMarker) {
-			return node.ID, nil
-		}
-	}
-	return "", nil
+	return linearWorkpadCommentPage{
+		HasNextPage: payload.Data.Issue.Comments.PageInfo.HasNextPage,
+		EndCursor:   payload.Data.Issue.Comments.PageInfo.EndCursor,
+		Nodes:       payload.Data.Issue.Comments.Nodes,
+	}, nil
 }
 
 func renderLinearWorkpadBody(input linearWorkpadInput) string {

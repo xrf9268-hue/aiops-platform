@@ -66,6 +66,49 @@ func TestLinearWorkpadUpsertsExistingWorkpadComment(t *testing.T) {
 	}
 }
 
+func TestLinearWorkpadFindsExistingWorkpadCommentPastFirstPage(t *testing.T) {
+	calls := []recordedToolCall{}
+	linearGraphQL := DynamicTool{
+		Name: "linear_graphql",
+		Call: func(_ context.Context, call ToolCall) (string, error) {
+			calls = append(calls, recordedToolCall{Query: call.Query, Variables: call.Variables})
+			switch len(calls) {
+			case 1:
+				if _, ok := call.Variables["after"]; ok {
+					t.Fatalf("first lookup should not pass an after cursor: %#v", call.Variables)
+				}
+				return dynamicToolResult(true, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"id":"comment-1","body":"human note"}]}}}}`)
+			case 2:
+				if call.Variables["after"] != "cursor-1" {
+					t.Fatalf("second lookup after cursor = %#v, want cursor-1", call.Variables["after"])
+				}
+				return dynamicToolResult(true, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"},"nodes":[{"id":"comment-2","body":"<!-- aiops:ai-workpad -->\n# AI Workpad\nold"}]}}}}`)
+			case 3:
+				return dynamicToolResult(true, `{"data":{"commentUpdate":{"success":true,"comment":{"id":"comment-2"}}}}`)
+			default:
+				t.Fatalf("unexpected extra linear_graphql call %#v", call)
+				return "", nil
+			}
+		},
+	}
+	tool := NewLinearWorkpadTool(linearGraphQL)
+
+	result, err := tool.Call(context.Background(), ToolCall{Variables: map[string]any{"issueId": "LIN-123"}})
+	if err != nil {
+		t.Fatalf("linear_ai_workpad call: %v", err)
+	}
+	assertToolSuccess(t, result)
+	if len(calls) != 3 {
+		t.Fatalf("linear_graphql calls = %d, want two lookup pages then update", len(calls))
+	}
+	if !strings.Contains(calls[2].Query, "commentUpdate") || strings.Contains(calls[2].Query, "commentCreate") {
+		t.Fatalf("final call should update existing paginated workpad only: %s", calls[2].Query)
+	}
+	if calls[2].Variables["commentId"] != "comment-2" {
+		t.Fatalf("commentId = %#v, want comment-2", calls[2].Variables["commentId"])
+	}
+}
+
 func TestLinearWorkpadCreatesCommentWhenMissing(t *testing.T) {
 	calls := []recordedToolCall{}
 	linearGraphQL := DynamicTool{
