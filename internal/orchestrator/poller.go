@@ -130,10 +130,12 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		}
 	}
 	inactiveByID := make(map[string]tracker.Issue)
+	var fetchErr error
 	for _, states := range p.reconcileInactiveStateGroups() {
 		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
 		if err != nil {
-			return err
+			fetchErr = errors.Join(fetchErr, err)
+			continue
 		}
 		for _, issue := range issues {
 			if issue.ID == "" {
@@ -145,7 +147,8 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 			inactiveByID[issue.ID] = issue
 		}
 	}
-	return p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, p.reconcile.WorkerExitTimeout)
+	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, p.reconcile.WorkerExitTimeout)
+	return errors.Join(reconcileErr, fetchErr)
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {

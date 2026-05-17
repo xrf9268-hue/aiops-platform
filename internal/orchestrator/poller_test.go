@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -160,6 +161,13 @@ type fakeIssueStateTracker struct {
 	err    error
 }
 
+type fakeIssueStateTrackerByCall struct {
+	mu        sync.Mutex
+	issues    [][]tracker.Issue
+	errByCall []error
+	calls     int
+}
+
 func (f *fakeIssueStateTracker) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
 	return f.ListIssuesByStates(ctx, nil)
 }
@@ -190,6 +198,20 @@ func (f *fakeIssueStateTracker) setErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.err = err
+}
+
+func (f *fakeIssueStateTrackerByCall) ListIssuesByStates(_ context.Context, _ []string) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	call := f.calls
+	f.calls++
+	if call < len(f.errByCall) && f.errByCall[call] != nil {
+		return nil, f.errByCall[call]
+	}
+	if call < len(f.issues) {
+		return f.issues[call], nil
+	}
+	return nil, nil
 }
 
 type cancellationDispatcher struct {
@@ -351,6 +373,52 @@ func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
 		t.Fatalf("running issue context was canceled after tracker error")
 	default:
 	}
+}
+
+func TestPollOnceCancelsTerminalIssueBeforeReturningLaterInactiveFetchError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTrackerByCall{issues: [][]tracker.Issue{
+		{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}},
+		{},
+		{},
+		{},
+		{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}},
+	}, errByCall: []error{
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		fmt.Errorf("inactive state fetch failed"),
+	}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "inactive state fetch failed") {
+		t.Fatalf("terminal poll once error = %v, want inactive fetch error", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 }
 
 func TestPollOnceDoesNotCancelRunningIssueStillInActiveTrackerListing(t *testing.T) {
