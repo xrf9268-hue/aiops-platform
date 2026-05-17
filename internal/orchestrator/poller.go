@@ -139,7 +139,7 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 			}
 		}
 	}
-	return p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, issuesByID, normalizedStates(p.reconcile.ActiveStates), p.reconcile.WorkerExitTimeout)
+	return p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, issuesByID, p.reconcile.WorkerExitTimeout)
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {

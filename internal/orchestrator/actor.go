@@ -241,6 +241,10 @@ func (o *Orchestrator) ReconcileTrackerIssuesAndWait(ctx context.Context, issues
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+	return waitForReconciledWorkers(ctx, canceled, wait)
+}
+
+func waitForReconciledWorkers(ctx context.Context, canceled []*RunningEntry, wait time.Duration) error {
 	if wait <= 0 {
 		return nil
 	}
@@ -278,6 +282,25 @@ func (o *Orchestrator) RequestDispatch(ctx context.Context, issue tracker.Issue,
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
+// in a terminal or configured inactive tracker state. Missing issues are
+// treated as unknown instead of inactive because tracker adapters may return
+// partial state listings under pagination caps.
+func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, workerExitTimeout time.Duration) error {
+	reply := make(chan []*RunningEntry, 1)
+	op := &reconcileInactiveTrackerIssuesOp{issuesByID: issuesByID, result: reply}
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	var canceled []*RunningEntry
+	select {
+	case canceled = <-reply:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return waitForReconciledWorkers(ctx, canceled, workerExitTimeout)
 }
 
 // ScheduleRetry enters the SPEC §7.1 retry-queued substate for issue.
@@ -325,14 +348,42 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
+	return reconcileCancelFollowup(cancelEntries, r.result)
+}
+
+type reconcileInactiveTrackerIssuesOp struct {
+	issuesByID map[string]tracker.Issue
+	result     chan<- []*RunningEntry
+}
+
+func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
+	var cancelEntries []*RunningEntry
+	for id, run := range st.Running {
+		if _, ok := r.issuesByID[string(id)]; !ok {
+			continue
+		}
+		st.ReleaseClaim(id)
+		run.ReconcileCancel = true
+		cancelEntries = append(cancelEntries, run)
+	}
+	for id := range st.RetryAttempts {
+		if _, ok := r.issuesByID[string(id)]; !ok {
+			continue
+		}
+		st.ReleaseClaim(id)
+	}
+	return reconcileCancelFollowup(cancelEntries, r.result)
+}
+
+func reconcileCancelFollowup(cancelEntries []*RunningEntry, result chan<- []*RunningEntry) func() {
 	return func() {
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
 				entry.CancelWorker()
 			}
 		}
-		if r.result != nil {
-			r.result <- cancelEntries
+		if result != nil {
+			result <- cancelEntries
 		}
 	}
 }
