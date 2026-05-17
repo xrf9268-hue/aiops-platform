@@ -33,13 +33,16 @@ func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, e
 	if err != nil {
 		return nil, fmt.Errorf("resolve sandbox workdir: %w", err)
 	}
-	root := strings.TrimSpace(in.Workflow.Config.Workspace.Root)
+	root := strings.TrimSpace(in.WorkspaceRoot)
 	if root == "" {
-		return nil, fmt.Errorf("sandbox requires workspace.root so the workspace-root invariant can be enforced")
+		root = strings.TrimSpace(in.Workflow.Config.Workspace.Root)
+	}
+	if root == "" {
+		return nil, fmt.Errorf("sandbox requires runtime workspace root so the workspace-root invariant can be enforced")
 	}
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf("resolve workspace root: %w", err)
+		return nil, fmt.Errorf("resolve runtime workspace root: %w", err)
 	}
 	if err := ensurePathWithinRoot(workdir, rootAbs); err != nil {
 		return nil, err

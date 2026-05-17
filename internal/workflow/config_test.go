@@ -338,6 +338,38 @@ hello
 	}
 }
 
+func TestLoadRejectsSandboxNetworkAllowlistIPv6CIDR(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+sandbox:
+  enabled: true
+  backend: firejail
+  network: allowlist
+  network_allowlist_cidrs:
+    - 2001:db8::/32
+  network_interface: aiops0
+  env_allowlist:
+    - PATH
+---
+hello
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected IPv6 CIDR to be rejected at workflow load time")
+	}
+	if !strings.Contains(err.Error(), "sandbox.network_allowlist_cidrs") || !strings.Contains(err.Error(), "IPv4") || !strings.Contains(err.Error(), "2001:db8::/32") {
+		t.Fatalf("Load error = %q, want IPv4-only CIDR guidance", err)
+	}
+}
+
 func TestLoadRejectsEnabledSandboxWithoutEnvAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")

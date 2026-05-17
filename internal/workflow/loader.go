@@ -133,8 +133,12 @@ func validateConfig(path string, cfg Config) error {
 			return fmt.Errorf("%s: sandbox.network=allowlist requires sandbox.network_interface so Firejail can attach --netfilter to an explicit host interface", path)
 		}
 		for _, cidr := range cfg.Sandbox.NetworkAllowlistCIDRs {
-			if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
+			ip, _, err := net.ParseCIDR(strings.TrimSpace(cidr))
+			if err != nil {
 				return fmt.Errorf("%s: sandbox.network_allowlist_cidrs contains invalid CIDR %q: %w", path, cidr, err)
+			}
+			if ip.To4() == nil {
+				return fmt.Errorf("%s: sandbox.network_allowlist_cidrs contains non-IPv4 CIDR %q; Firejail netfilter allowlists currently support IPv4 only", path, cidr)
 			}
 		}
 	}

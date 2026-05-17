@@ -215,6 +215,45 @@ func TestSandboxRejectsSymlinkEscapeOutsideWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestSandboxAllowsWorkdirUnderRuntimeWorkspaceRootWhenWorkflowRootDiffers(t *testing.T) {
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	runtimeRoot := t.TempDir()
+	workdir := filepath.Join(runtimeRoot, "issue-123")
+	if err := os.Mkdir(workdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workflowRoot := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "exec")
+	base.Dir = workdir
+	in := RunInput{
+		Task: task.Task{ID: "tsk_sandbox", Model: "codex"},
+		Workflow: workflow.Workflow{Config: workflow.Config{
+			Workspace: workflow.WorkspaceConfig{Root: workflowRoot},
+			Sandbox:   workflow.SandboxConfig{Enabled: true, Backend: "bubblewrap", EnvAllowlist: []string{"PATH"}},
+		}},
+		Workdir:       workdir,
+		WorkspaceRoot: runtimeRoot,
+	}
+
+	wrapped, err := applySandbox(context.Background(), in, base)
+	if err != nil {
+		t.Fatalf("applySandbox should validate against runtime workspace root: %v", err)
+	}
+	if wrapped.Dir != workdir {
+		t.Fatalf("wrapped.Dir = %q, want %q", wrapped.Dir, workdir)
+	}
+}
+
 func TestSandboxNetworkAllowlistRequiresFirejail(t *testing.T) {
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
