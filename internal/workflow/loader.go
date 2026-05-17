@@ -15,6 +15,7 @@ type Workflow struct {
 	Path           string
 	Config         Config
 	PromptTemplate string
+	Source         Source
 }
 
 func Load(path string) (*Workflow, error) {
@@ -45,7 +46,11 @@ func Load(path string) (*Workflow, error) {
 			return nil, err
 		}
 	}
-	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body)}, nil
+	source := SourceFile
+	if !hasFrontMatter {
+		source = SourcePromptOnly
+	}
+	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body), Source: source}, nil
 }
 
 // supportedTrackerKinds enumerates the tracker integrations the platform

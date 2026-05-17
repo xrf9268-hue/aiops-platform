@@ -138,12 +138,23 @@ func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing
 	}
 }
 
-func TestValidateWorkflowForRuntimeRejectsPromptOnlyWorkflowMissingTaskFields(t *testing.T) {
+func TestValidateWorkflowForRuntimePreservesPromptOnlyWorkflowCompatibility(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 
-	err := validateWorkflowForRuntime("WORKFLOW.md", cfg)
+	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourcePromptOnly, cfg); err != nil {
+		t.Fatalf("validateWorkflowForRuntime(prompt-only defaults) = %v, want nil", err)
+	}
+	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceDefault, cfg); err != nil {
+		t.Fatalf("validateWorkflowForRuntime(default workflow) = %v, want nil", err)
+	}
+}
+
+func TestValidateWorkflowForRuntimeRejectsFrontMatterWorkflowMissingTaskFields(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+
+	err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceFile, cfg)
 	if err == nil {
-		t.Fatal("validateWorkflowForRuntime(prompt-only defaults) = nil, want repo.clone_url error")
+		t.Fatal("validateWorkflowForRuntime(file source defaults) = nil, want repo.clone_url error")
 	}
 	if !strings.Contains(err.Error(), "WORKFLOW.md: repo.clone_url is required") {
 		t.Fatalf("validateWorkflowForRuntime error = %v, want repo.clone_url guidance", err)

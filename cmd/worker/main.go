@@ -78,7 +78,10 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 
-func validateWorkflowForRuntime(path string, cfg workflow.Config) error {
+func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
+	if source != workflow.SourceFile {
+		return nil
+	}
 	if cfg.Repo.CloneURL == "" {
 		return fmt.Errorf("%s: repo.clone_url is required", path)
 	}
@@ -91,7 +94,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := validateWorkflowForRuntime(wf.Path, wf.Config); err != nil {
+	if err := validateWorkflowForRuntime(wf.Path, wf.Source, wf.Config); err != nil {
 		return err
 	}
 

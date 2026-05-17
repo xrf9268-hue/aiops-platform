@@ -76,6 +76,8 @@ type FixedDelayScheduler struct {
 	Delay time.Duration
 }
 
+const retryCapacityRecheckDelay = 100 * time.Millisecond
+
 // NextDelay implements Scheduler.
 func (f FixedDelayScheduler) NextDelay(int) time.Duration { return f.Delay }
 
@@ -365,12 +367,23 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Leave the retry queued and arm a short follow-up timer so the issue
 		// is retried after capacity can free instead of spawning over the cap.
+		if entry.Timer != nil {
+			entry.Timer.Stop()
+		}
 		o := r.o
+		id := r.id
 		issue := r.issue
 		attempt := r.attempt
-		return func() {
-			_ = o.ScheduleRetry(o.runCtx, issue, entry.Identifier, attempt, entry.Error)
-		}
+		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
+		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+			_ = o.submit(o.runCtx, &retryFireOp{
+				o:       o,
+				id:      id,
+				issue:   issue,
+				attempt: attempt,
+			})
+		})
+		return nil
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
