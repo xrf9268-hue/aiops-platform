@@ -66,7 +66,7 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	}
 	wantedStates := normalizedStateSet(states)
 	labelNames := StateLabelNamesForStates(states, DefaultStateLabelMappings())
-	issueState := giteaAPIStateForWorkflowStates(states)
+	issueState := giteaAPIStateForWorkflowStates(states, c.Config.TerminalStates)
 
 	var out []tracker.Issue
 	for page := 1; page <= listIssuesMaxPages+1; page++ {
@@ -148,8 +148,11 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelNames []string,
 	return issues, nil
 }
 
-func giteaAPIStateForWorkflowStates(states []string) string {
-	terminalStates := normalizedStateSet(workflow.DefaultConfig().Tracker.TerminalStates)
+func giteaAPIStateForWorkflowStates(states, terminalStateNames []string) string {
+	terminalStates := normalizedStateSet(terminalStateNames)
+	if len(terminalStates) == 0 {
+		terminalStates = normalizedStateSet(workflow.DefaultConfig().Tracker.TerminalStates)
+	}
 	for _, state := range states {
 		if _, ok := terminalStates[strings.ToLower(strings.TrimSpace(state))]; ok {
 			return "all"

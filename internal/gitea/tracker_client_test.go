@@ -107,6 +107,28 @@ func TestTrackerClientListIssuesByStatesQueriesAllForTerminalStates(t *testing.T
 	}
 }
 
+func TestTrackerClientListIssuesByStatesUsesConfiguredTerminalStatesForGiteaState(t *testing.T) {
+	var requestedState string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedState = r.URL.Query().Get("state")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 212, Number: 12, Title: "custom closed", HTMLURL: "https://gitea.local/o/r/issues/12", Labels: []Label{{Name: "aiops/done"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", TerminalStates: []string{"Shipped"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Shipped"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if requestedState != "all" {
+		t.Fatalf("state query = %q, want all for configured terminal state", requestedState)
+	}
+}
+
 func TestTrackerClientListIssuesByStatesUsesDeterministicConflictState(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
