@@ -8,8 +8,26 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	for _, forbidden := range []string{"internal/queue", "pgxpool", "DATABASE_URL"} {
+		if strings.Contains(string(src), forbidden) {
+			t.Fatalf("cmd/worker/main.go contains %q; worker startup must use tracker + orchestrator runtime state, not the Postgres queue", forbidden)
+		}
+	}
+	for _, required := range []string{"orchestrator.NewOrchestratorState", "orchestrator.NewPoller", "orchestrator.RunPollLoop"} {
+		if !strings.Contains(string(src), required) {
+			t.Fatalf("cmd/worker/main.go missing %q; worker startup must poll tracker issues through orchestrator runtime state", required)
+		}
+	}
+}
 
 func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
@@ -42,11 +60,11 @@ func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T)
 		}
 	}
 	if strings.Contains(gotLog, "reconciliation will be skipped") {
-		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic for linear tracker", gotLog)
+		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
 	}
 }
 
-func TestLoadWorkflowForStartupReconcileWarnsWhenConfiguredWorkflowIsNonLinear(t *testing.T) {
+func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "gitea-workflow.md")
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n---\nprompt\n"
@@ -68,10 +86,34 @@ func TestLoadWorkflowForStartupReconcileWarnsWhenConfiguredWorkflowIsNonLinear(t
 		t.Fatalf("tracker kind = %q, want gitea", wf.Config.Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + workflowPath, "tracker.kind=gitea", "reconciliation will be skipped"} {
+	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + workflowPath, "tracker.kind=gitea"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
+	}
+	if strings.Contains(gotLog, "reconciliation will be skipped") {
+		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
+	}
+}
+
+func TestTrackerClientForWorkflowUsesGiteaBaseURLEvenWithProjectSlug(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea.example.test/")
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ProjectSlug = "owner/repo"
+	cfg.Repo.Owner = "owner"
+	cfg.Repo.Name = "repo"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+	giteaClient, ok := client.(*gitea.TrackerClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
+	}
+	if giteaClient.BaseURL != "https://gitea.example.test" {
+		t.Fatalf("base URL = %q, want env GITEA_BASE_URL without trailing slash", giteaClient.BaseURL)
 	}
 }
 
@@ -97,13 +139,15 @@ func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t
 		t.Fatalf("tracker kind = %q, want default %q", wf.Config.Tracker.Kind, workflow.DefaultConfig().Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=prompt_only", "path=" + workflowPath, "tracker.kind=gitea", "reconciliation will be skipped"} {
+	for _, want := range []string{"startup reconciliation: workflow source=prompt_only", "path=" + workflowPath, "tracker.kind=gitea"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
 	}
-	if strings.Contains(gotLog, "workflow source=file") {
-		t.Fatalf("startup reconciliation log = %q, did not expect file source for prompt-only workflow", gotLog)
+	for _, forbidden := range []string{"workflow source=file", "reconciliation will be skipped"} {
+		if strings.Contains(gotLog, forbidden) {
+			t.Fatalf("startup reconciliation log = %q, did not expect %q", gotLog, forbidden)
+		}
 	}
 }
 
@@ -177,9 +221,12 @@ func TestLoadWorkflowForStartupReconcileDefaultsWhenNoWorkflowExists(t *testing.
 		t.Fatalf("tracker kind = %q, want default %q", wf.Config.Tracker.Kind, workflow.DefaultConfig().Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=default", "tracker.kind=gitea", "reconciliation will be skipped"} {
+	for _, want := range []string{"startup reconciliation: workflow source=default", "tracker.kind=gitea"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
+	}
+	if strings.Contains(gotLog, "reconciliation will be skipped") {
+		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
 	}
 }

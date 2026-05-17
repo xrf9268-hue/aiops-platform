@@ -1,4 +1,22 @@
 services:
+  worker:
+    build:
+      context: ..
+    command: ["worker"]
+    environment:
+      GITEA_BASE_URL: ${GITEA_BASE_URL}
+      GITEA_TOKEN: ${GITEA_TOKEN}
+      WORKSPACE_ROOT: /workspaces
+      AIOPS_WORKFLOW_PATH: /app/examples/WORKFLOW.md
+      LINEAR_API_KEY: ${LINEAR_API_KEY}
+    volumes:
+      - workspaces:/workspaces
+      - ../examples:/app/examples:ro
+      - ~/.ssh:/root/.ssh:ro
+
+  # Transitional services retained until D7 retires webhook/manual enqueue
+  # ingress. They still use the legacy queue and Postgres; cmd/worker no longer
+  # depends on either service for tracker polling or dispatch.
   postgres:
     image: postgres:16
     environment:
@@ -10,6 +28,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ../migrations:/docker-entrypoint-initdb.d:ro
+    profiles:
+      - legacy-queue
 
   trigger-api:
     build:
@@ -23,6 +43,8 @@ services:
       ADDR: :8080
     ports:
       - "8080:8080"
+    profiles:
+      - legacy-queue
 
   linear-poller:
     build:
@@ -36,25 +58,7 @@ services:
     volumes:
       - ../examples:/app/examples:ro
     profiles:
-      - linear
-
-  worker:
-    build:
-      context: ..
-    command: ["worker"]
-    depends_on:
-      - postgres
-    environment:
-      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
-      GITEA_BASE_URL: ${GITEA_BASE_URL}
-      GITEA_TOKEN: ${GITEA_TOKEN}
-      WORKSPACE_ROOT: /workspaces
-      AIOPS_WORKFLOW_PATH: /app/examples/WORKFLOW.md
-      LINEAR_API_KEY: ${LINEAR_API_KEY}
-    volumes:
-      - workspaces:/workspaces
-      - ../examples:/app/examples:ro
-      - ~/.ssh:/root/.ssh:ro
+      - legacy-queue
 
 volumes:
   pgdata:

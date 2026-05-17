@@ -27,15 +27,16 @@ Symphony implementation while D1–D24 are closed systematically.
 
 ## Components
 
-- `cmd/trigger-api`: receives Gitea webhooks and manual task submissions.
-- `cmd/linear-poller`: polls Linear issues in configured active states and enqueues tasks.
-- `cmd/gitea-poller`: polls Gitea issues whose mutually-exclusive `aiops/*` labels map to configured active states and enqueues tasks.
-- `cmd/worker`: claims/dispatches tasks and runs the Symphony-style workflow.
+- `cmd/worker`: polls the configured tracker, reconciles startup workspaces, owns the in-memory orchestrator runtime state, dispatches eligible issues, and runs the Symphony-style workflow without Postgres.
+- `cmd/trigger-api`: transitional Gitea webhook/manual task ingress retained under the legacy queue profile until D7 cleanup.
+- `cmd/linear-poller`: transitional Linear-to-queue poller retained under the legacy queue profile; the worker now owns the SPEC-aligned poll tick.
+- `cmd/gitea-poller`: transitional Gitea-to-queue poller retained until D7 cleanup; the worker can read Gitea issues directly through `tracker.kind: gitea`.
 - `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
 - `internal/tracker`: tracker abstraction with a Linear client.
 - `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
 - `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
-- `internal/queue`: PostgreSQL-backed task queue using `FOR UPDATE SKIP LOCKED`.
+- `internal/orchestrator`: single in-memory runtime state, serialized dispatch authority, retry bookkeeping, and worker spawn bridge.
+- `internal/queue`: legacy PostgreSQL-backed task queue still used by transitional ingress binaries, not by `cmd/worker`.
 - `internal/gitea`: transitional webhook parser/signature verification plus the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
 
 ## WORKFLOW.md discovery
@@ -119,7 +120,33 @@ CI expectations on each run:
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
 release flow, and local pre-push checks.
 
-## Quick start: Gitea webhook path
+## Quick start: worker-owned tracker polling path
+
+Edit `examples/WORKFLOW.md` with your repository and tracker settings, then run the worker. The worker performs startup reconciliation before the first poll tick, then repeatedly fetches active issues and dispatches them through the in-memory orchestrator state:
+
+```bash
+export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
+export WORKSPACE_ROOT=$PWD/.aiops/workspaces
+
+# For tracker.kind: linear
+export LINEAR_API_KEY=your-linear-personal-key
+
+# For tracker.kind: gitea
+export GITEA_BASE_URL=https://gitea.example.com
+export GITEA_TOKEN=your-gitea-bot-token
+
+go run ./cmd/worker
+```
+
+No `DATABASE_URL` or Postgres service is required for `cmd/worker`. Restart recovery follows SPEC §14.3: the worker starts with fresh runtime state, cleans terminal workspaces from tracker state, and re-dispatches eligible active issues on the next poll rather than restoring queue rows, retry timers, or running sessions from a database.
+
+The default Compose service now starts only `worker` unless a legacy profile is requested:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
+```
+
+## Legacy quick start: Gitea webhook path
 
 ```bash
 cp .env.example .env
@@ -139,18 +166,18 @@ Comment on a Gitea issue:
 /ai-run
 ```
 
-## Quick start: Linear polling path
+## Legacy quick start: Linear queue polling path
 
 Edit `examples/WORKFLOW.md` with your repo and Linear settings, then run:
 
 ```bash
 export LINEAR_API_KEY=your-linear-personal-key
-docker compose --env-file .env -f deploy/docker-compose.yml --profile linear up --build
+docker compose --env-file .env -f deploy/docker-compose.yml --profile legacy-queue up --build linear-poller worker
 ```
 
 The poller watches active Linear states such as `AI Ready`, `In Progress`, and `Rework`, then enqueues tasks for the worker.
 
-## Quick start: Gitea polling path
+## Legacy quick start: Gitea queue polling path
 
 For SPEC-aligned Gitea polling, encode issue state as exactly one `aiops/*` label:
 
@@ -170,7 +197,7 @@ export GITEA_TOKEN=your-gitea-bot-token
 go run ./cmd/gitea-poller examples/WORKFLOW.md
 ```
 
-The poller reads issues whose labels map to configured active states and enqueues them for the worker. State changes are still performed by the agent through the advertised tool surface, not by the poller.
+The legacy poller reads issues whose labels map to configured active states and enqueues them for the transitional queue path. For SPEC-aligned operation, prefer running `cmd/worker` directly so the worker owns tracker polling and orchestrator runtime state.
 
 ## First safe mode
 

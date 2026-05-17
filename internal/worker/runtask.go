@@ -128,7 +128,10 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 // responsibility. The worker's role is: claim, prepare workspace, resolve
 // workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
 // emit events, and clean up.
-func runTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
+// RunTask executes a single in-memory task. The orchestrator-backed worker path
+// uses this directly after claiming a tracker issue in runtime state; the
+// legacy queue loop also calls it for remaining tests/compatibility.
+func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
 	mgr := workspace.New(cfg.WorkspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
 	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
