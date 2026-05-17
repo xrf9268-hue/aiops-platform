@@ -63,58 +63,78 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	if failure != "" {
 		return failure, nil
 	}
+	staleStateLabels := make([]giteaIssueLabel, 0, len(currentLabels))
 	for _, label := range currentLabels {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "aiops/") && !containsLabelFold(desiredStateLabels, label.Name) {
-			if label.ID == 0 {
-				return dynamicToolFailure(map[string]any{
-					"error": map[string]any{"message": "Gitea label response omitted id for stale aiops label", "label": label.Name},
-				})
-			}
-			if failure := p.deleteIssueLabel(ctx, client, endpoint, label.ID); failure != "" {
-				return failure, nil
-			}
+			staleStateLabels = append(staleStateLabels, label)
 		}
 	}
 	labelsToAdd := missingLabels(currentLabels, desiredStateLabels)
-	if len(labelsToAdd) == 0 {
-		return dynamicToolResult(true, `{"labels":[]}`)
+	var result string
+	if len(labelsToAdd) > 0 {
+		var failure string
+		result, failure = p.addIssueLabels(ctx, client, endpoint, labelsToAdd)
+		if failure != "" {
+			return failure, nil
+		}
+	} else {
+		result, _ = dynamicToolResult(true, `{"labels":[]}`)
 	}
-	payload := map[string]any{"labels": labelsToAdd}
+	for _, label := range staleStateLabels {
+		if label.ID == 0 {
+			return dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": "Gitea label response omitted id for stale aiops label", "label": label.Name},
+			})
+		}
+		if failure := p.deleteIssueLabel(ctx, client, endpoint, label.ID); failure != "" {
+			return failure, nil
+		}
+	}
+	return result, nil
+}
+
+func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.Client, endpoint string, labels []string) (string, string) {
+	payload := map[string]any{"labels": labels}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return dynamicToolFailure(map[string]any{
+		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "gitea_issue_labels payload could not be encoded", "reason": err.Error()},
 		})
+		return "", failure
 	}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return dynamicToolFailure(map[string]any{
+		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label request could not be built", "reason": err.Error()},
 		})
+		return "", failure
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "token "+strings.TrimSpace(p.token))
 	resp, err := client.Do(req)
 	if err != nil {
-		return dynamicToolFailure(map[string]any{
+		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label request failed during transport", "reason": err.Error()},
 		})
+		return "", failure
 	}
 	defer resp.Body.Close()
 	var respBody bytes.Buffer
 	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
 	if readErr != nil {
-		return dynamicToolFailure(map[string]any{
+		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label response body could not be read", "reason": readErr.Error()},
 		})
+		return "", failure
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return dynamicToolFailure(map[string]any{
+		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label request failed", "status": resp.Status, "body": respBody.String()},
 		})
+		return "", failure
 	}
-	return dynamicToolResult(true, respBody.String())
+	result, _ := dynamicToolResult(true, respBody.String())
+	return result, ""
 }
 
 func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *http.Client, endpoint string) ([]giteaIssueLabel, string) {
