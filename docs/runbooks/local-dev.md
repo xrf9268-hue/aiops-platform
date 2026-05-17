@@ -120,9 +120,13 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d worker
 
 For first-time local testing, keep `agent.default: mock` in `examples/WORKFLOW.md`. The mock runner produces a deterministic change without calling any external model.
 
-## 5. Run the Linear poller (optional)
+## 5. Run a tracker poller (optional)
 
-The poller reads `examples/WORKFLOW.md` for the repo, tracker, and poll interval, then enqueues a task per active Linear issue.
+The Linear and Gitea pollers read `examples/WORKFLOW.md` for the repo, tracker, and poll interval, then enqueue a task per active issue.
+
+### Linear
+
+The Linear poller enqueues issues in configured active Linear workflow states.
 
 Option A: from source.
 
@@ -139,6 +143,29 @@ docker compose --env-file .env -f deploy/docker-compose.yml --profile linear up 
 ```
 
 The poller exits immediately with `tracker.kind must be linear` if `examples/WORKFLOW.md` is not configured for Linear, and logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
+
+### Gitea
+
+The Gitea poller treats Gitea as a tracker reader: issues are selected by `aiops/*` state labels, and label writes happen through the agent tool surface rather than the poller. The default state labels are:
+
+| Workflow state | Gitea label |
+| --- | --- |
+| `AI Ready` | `aiops/todo` |
+| `In Progress` | `aiops/in-progress` |
+| `Rework` | `aiops/rework` |
+| `Done` | `aiops/done` |
+| `Canceled` | `aiops/canceled` |
+
+Option A: from source.
+
+```bash
+export DATABASE_URL=postgres://aiops:***@localhost:5432/aiops?sslmode=disable
+export GITEA_BASE_URL=http://localhost:3000
+export GITEA_TOKEN=your-gitea-bot-token
+go run ./cmd/gitea-poller examples/WORKFLOW.md
+```
+
+The poller exits immediately with `tracker.kind must be gitea` if `examples/WORKFLOW.md` is not configured for Gitea. It logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
 
 ## 6. Smoke test
 

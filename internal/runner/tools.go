@@ -18,8 +18,10 @@ import (
 // by the orchestrator-side proxy and is not part of this public call shape, so
 // an agent cannot redirect the orchestrator-held token to another host.
 type ToolCall struct {
-	Query     string         `json:"query"`
-	Variables map[string]any `json:"variables,omitempty"`
+	Query       string         `json:"query"`
+	Variables   map[string]any `json:"variables,omitempty"`
+	IssueNumber int            `json:"issue_number,omitempty"`
+	Labels      []string       `json:"labels,omitempty"`
 }
 
 // DynamicTool is a client-side tool implemented by the orchestrator and made
@@ -97,6 +99,38 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 			Call: client.call,
 		}
 		tools.tools["linear_ai_workpad"] = NewLinearWorkpadTool(tools.tools["linear_graphql"])
+	}
+	if strings.EqualFold(trackerCfg.Kind, "gitea") && trackerCfg.APIKey != "" && wf.Config.Repo.Owner != "" && wf.Config.Repo.Name != "" && giteaBaseURLFromTracker(trackerCfg) != "" {
+		client := giteaIssueLabelsProxy{
+			token:   trackerCfg.APIKey,
+			baseURL: giteaBaseURLFromTracker(trackerCfg),
+			owner:   wf.Config.Repo.Owner,
+			repo:    wf.Config.Repo.Name,
+			http:    http.DefaultClient,
+		}
+		tools.tools["gitea_issue_labels"] = DynamicTool{
+			Name:        "gitea_issue_labels",
+			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]} with exactly one aiops/* label. The Gitea API token is never exposed to the agent process.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"issue_number": map[string]any{
+						"type":        "integer",
+						"description": "Gitea issue number whose aiops/* state labels should be replaced.",
+					},
+					"labels": map[string]any{
+						"type":        "array",
+						"description": "Complete desired aiops/* state label set for the issue; exactly one label is accepted.",
+						"items":       map[string]any{"type": "string"},
+						"minItems":    1,
+						"maxItems":    1,
+					},
+				},
+				"required":             []string{"issue_number", "labels"},
+				"additionalProperties": false,
+			},
+			Call: client.call,
+		}
 	}
 	return tools
 }
