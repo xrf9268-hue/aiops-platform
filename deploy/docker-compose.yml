@@ -37,7 +37,7 @@ services:
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgres://aiops:***@postgres:5432/aiops?sslmode=disable
+      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
       LINEAR_API_KEY: ${LINEAR_API_KEY}
     volumes:
       - ../examples:/app/examples:ro
@@ -51,7 +51,7 @@ services:
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgres://aiops:***@postgres:5432/aiops?sslmode=disable
+      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
       GITEA_BASE_URL: ${GITEA_BASE_URL}
       GITEA_TOKEN: ${GITEA_TOKEN}
     volumes:
