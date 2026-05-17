@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -18,19 +19,54 @@ type ActiveIssueLister interface {
 	ListActiveIssues(ctx context.Context) ([]tracker.Issue, error)
 }
 
+// IssueStateLister is the tracker reader required for per-tick
+// reconciliation. Unlike ListActiveIssues, it can fetch explicit terminal and
+// inactive workflow states so a poll tick can cancel already-running work when
+// the tracker says the issue left the active set.
+type IssueStateLister interface {
+	ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error)
+}
+
+// ReconciliationConfig names the workflow states the poller uses to decide
+// whether in-process work is still eligible to run. A running issue absent from
+// active states is canceled once it is observed in either terminal states or in
+// the known inactive states listed here.
+type ReconciliationConfig struct {
+	ActiveStates   []string
+	TerminalStates []string
+	InactiveStates []string
+
+	// WorkerExitTimeout bounds how long a poll tick waits after issuing a
+	// reconciliation cancel. Zero means the poll tick only requests cancellation;
+	// the worker watcher will clean up asynchronously.
+	WorkerExitTimeout time.Duration
+}
+
 // Poller connects tracker polling to the orchestrator runtime state. It has no
 // durable queue dependency: candidates are read from the tracker and claimed by
 // the in-process Orchestrator actor.
 type Poller struct {
-	tracker      ActiveIssueLister
-	orchestrator *Orchestrator
-	overflow     []tracker.Issue
+	tracker        ActiveIssueLister
+	stateTracker   IssueStateLister
+	orchestrator   *Orchestrator
+	overflow       []tracker.Issue
+	reconcile      ReconciliationConfig
+	reconcileKnown bool
 }
 
 // NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
 // runtime state instead of the legacy Postgres task queue.
 func NewPoller(tracker ActiveIssueLister, orchestrator *Orchestrator) *Poller {
 	return &Poller{tracker: tracker, orchestrator: orchestrator}
+}
+
+// NewPollerWithReconciliation returns a poller that reconciles the
+// orchestrator's in-memory running/retry state against tracker state on every
+// tick before considering new dispatches. It preserves the SPEC boundary: the
+// orchestrator reads tracker state and cancels workers, while tracker writes
+// remain agent-side.
+func NewPollerWithReconciliation(tracker IssueStateLister, orchestrator *Orchestrator, cfg ReconciliationConfig) *Poller {
+	return &Poller{tracker: activeIssueListerFromStates{tracker: tracker, states: cfg.ActiveStates}, stateTracker: tracker, orchestrator: orchestrator, reconcile: cfg, reconcileKnown: true}
 }
 
 // PollOnce performs one tracker tick: fetch active issues and ask the
@@ -46,6 +82,11 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	issues, err := p.tracker.ListActiveIssues(ctx)
 	if err != nil {
 		return err
+	}
+	if p.reconcileKnown {
+		if err := p.reconcileTick(ctx, issues); err != nil {
+			return err
+		}
 	}
 	candidates := mergeOverflowCandidates(p.overflow, issues)
 	p.overflow = nil
@@ -66,6 +107,71 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		}
 	}
 	return dispatchErr
+}
+
+type activeIssueListerFromStates struct {
+	tracker IssueStateLister
+	states  []string
+}
+
+func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	return l.tracker.ListIssuesByStates(ctx, l.states)
+}
+
+func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) error {
+	if p.stateTracker == nil {
+		return errors.New("orchestrator poller reconciliation requires state tracker")
+	}
+	issuesByID := make(map[string]tracker.Issue, len(activeIssues))
+	for _, issue := range activeIssues {
+		if issue.ID != "" {
+			issuesByID[issue.ID] = issue
+		}
+	}
+	for _, states := range p.reconcileInactiveStateGroups() {
+		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
+		if err != nil {
+			return err
+		}
+		for _, issue := range issues {
+			if issue.ID != "" {
+				issuesByID[issue.ID] = issue
+			}
+		}
+	}
+	return p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, issuesByID, normalizedStates(p.reconcile.ActiveStates), p.reconcile.WorkerExitTimeout)
+}
+
+func (p *Poller) reconcileInactiveStateGroups() [][]string {
+	groups := make([][]string, 0, 2)
+	if states := nonEmptyStateList(p.reconcile.TerminalStates); len(states) > 0 {
+		groups = append(groups, states)
+	}
+	if states := nonEmptyStateList(p.reconcile.InactiveStates); len(states) > 0 {
+		groups = append(groups, states)
+	}
+	return groups
+}
+
+func nonEmptyStateList(states []string) []string {
+	out := make([]string, 0, len(states))
+	for _, state := range states {
+		if strings.TrimSpace(state) != "" {
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
+func normalizedStates(states []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		state = strings.ToLower(strings.TrimSpace(state))
+		if state != "" {
+			out[state] = struct{}{}
+		}
+	}
+	return out
 }
 
 func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {

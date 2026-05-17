@@ -132,7 +132,12 @@ func run(ctx context.Context) error {
 	if err := orch.WaitStarted(ctx); err != nil {
 		return err
 	}
-	return orchestrator.RunPollLoop(ctx, orchestrator.NewPoller(trackerClient, orch), pollInterval)
+	poller := orchestrator.NewPollerWithReconciliation(trackerClient, orch, orchestrator.ReconciliationConfig{
+		ActiveStates:      wf.Config.Tracker.ActiveStates,
+		TerminalStates:    wf.Config.Tracker.TerminalStates,
+		WorkerExitTimeout: 30 * time.Second,
+	})
+	return orchestrator.RunPollLoop(ctx, poller, pollInterval)
 }
 
 type trackerRuntimeClient interface {

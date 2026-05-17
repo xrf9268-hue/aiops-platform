@@ -30,6 +30,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -217,6 +218,47 @@ var ErrNotDispatched = errors.New("orchestrator: issue already claimed")
 // tick rather than treating it as a duplicate dispatch.
 var ErrCapacityFull = errors.New("orchestrator: max_concurrent_agents reached")
 
+// ReconcileTrackerIssues cancels or releases in-process work that is no longer
+// tracker-eligible. It is the per-tick half of SPEC §2.1/#78: each tracker poll
+// revalidates active runs against the latest tracker state and cancels workers
+// whose issues moved out of active states.
+func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}) error {
+	return o.ReconcileTrackerIssuesAndWait(ctx, issuesByID, activeStates, 0)
+}
+
+// ReconcileTrackerIssuesAndWait performs the same reconciliation as
+// ReconcileTrackerIssues, then optionally waits for canceled workers to exit.
+// This lets poll ticks provide prompt cancellation semantics without making the
+// actor itself block on worker goroutines.
+func (o *Orchestrator) ReconcileTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}, wait time.Duration) error {
+	reply := make(chan []*RunningEntry, 1)
+	if err := o.submit(ctx, &reconcileTrackerIssuesOp{issuesByID: issuesByID, activeStates: activeStates, result: reply}); err != nil {
+		return err
+	}
+	var canceled []*RunningEntry
+	select {
+	case canceled = <-reply:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if wait <= 0 {
+		return nil
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	for _, entry := range canceled {
+		if entry.Done == nil {
+			continue
+		}
+		select {
+		case <-entry.Done:
+		case <-waitCtx.Done():
+			return waitCtx.Err()
+		}
+	}
+	return nil
+}
+
 // RequestDispatch is the public entry to dispatch issue if no other
 // claim exists. It returns nil on accepted dispatch (a worker is being
 // spawned) and ErrNotDispatched if the actor saw an existing claim.
@@ -257,6 +299,50 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 		runErr:     runErr,
 	}
 	return o.submit(ctx, op)
+}
+
+type reconcileTrackerIssuesOp struct {
+	issuesByID   map[string]tracker.Issue
+	activeStates map[string]struct{}
+	result       chan<- []*RunningEntry
+}
+
+func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
+	var cancelEntries []*RunningEntry
+	for id, run := range st.Running {
+		issue, ok := r.issuesByID[string(id)]
+		if ok && isActiveTrackerState(issue.State, r.activeStates) {
+			continue
+		}
+		st.ReleaseClaim(id)
+		run.ReconcileCancel = true
+		cancelEntries = append(cancelEntries, run)
+	}
+	for id := range st.RetryAttempts {
+		issue, ok := r.issuesByID[string(id)]
+		if ok && isActiveTrackerState(issue.State, r.activeStates) {
+			continue
+		}
+		st.ReleaseClaim(id)
+	}
+	return func() {
+		for _, entry := range cancelEntries {
+			if entry.CancelWorker != nil {
+				entry.CancelWorker()
+			}
+		}
+		if r.result != nil {
+			r.result <- cancelEntries
+		}
+	}
+}
+
+func isActiveTrackerState(state string, activeStates map[string]struct{}) bool {
+	if len(activeStates) == 0 {
+		return false
+	}
+	_, ok := activeStates[strings.ToLower(strings.TrimSpace(state))]
+	return ok
 }
 
 // dispatchOp is the actor-side half of RequestDispatch: it checks
@@ -427,6 +513,14 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.result.NonRetryable {
 		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
+		close(f.done)
+		return nil
+	}
+	if f.entry.ReconcileCancel {
+		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
 		}
