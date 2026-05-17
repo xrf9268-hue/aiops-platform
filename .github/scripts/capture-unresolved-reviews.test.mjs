@@ -7,6 +7,8 @@ import {
   captureUnresolvedReviewThreads,
   extractPriorityLabel,
   normalizeDiscussionPermalink,
+  searchTermsForDiscussionPermalink,
+  verifyTrackingForActionableThreads,
 } from './capture-unresolved-reviews.mjs';
 
 const repository = {
@@ -211,4 +213,95 @@ test('captureUnresolvedReviewThreads creates one issue per unique unresolved non
   assert.match(created[1].body, /Author: @human-reviewer/);
   assert.match(created[1].body, /Location: `README\.md:12`/);
   assert.deepEqual(result.created.map((issue) => issue.number), [124, 124]);
+});
+
+
+test('verifyTrackingForActionableThreads fails loudly when an actionable thread has no tracking issue', async () => {
+  await assert.rejects(
+    verifyTrackingForActionableThreads({
+      repository,
+      pullRequest: { ...pullRequest, reviewThreads: [pullRequest.reviewThreads[0]] },
+      github: {
+        async searchIssuesByDiscussionPermalink() {
+          return [];
+        },
+      },
+    }),
+    /Post-capture verification failed/,
+  );
+});
+
+test('searchTermsForDiscussionPermalink includes the discussion anchor because manual backfills may cite only that stable id', () => {
+  assert.deepEqual(
+    searchTermsForDiscussionPermalink('https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490'),
+    [
+      'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+      'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+      'discussion_r3253405490',
+    ],
+  );
+});
+
+test('captureUnresolvedReviewThreads treats anchor-only manual issues as existing tracking', async () => {
+  const result = await captureUnresolvedReviewThreads({
+    repository,
+    pullRequest: {
+      ...pullRequest,
+      reviewThreads: [
+        {
+          ...pullRequest.reviewThreads[0],
+          comments: [
+            {
+              ...pullRequest.reviewThreads[0].comments[0],
+              url: 'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+            },
+          ],
+        },
+      ],
+    },
+    github: {
+      async searchIssuesByDiscussionPermalink({ permalink }) {
+        assert.equal(permalink, 'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490');
+        return [{ number: 121, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/121' }];
+      },
+      async createIssue() {
+        throw new Error('already tracked anchor-only discussion should not create a duplicate issue');
+      },
+    },
+  });
+
+  assert.deepEqual(result.skippedAlreadyTracked, [
+    {
+      permalink: 'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+      issues: [{ number: 121, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/121' }],
+    },
+  ]);
+});
+
+test('captureUnresolvedReviewThreads reuses tracking lookups for duplicate verification', async () => {
+  let searches = 0;
+  const result = await captureUnresolvedReviewThreads({
+    repository,
+    pullRequest: { ...pullRequest, reviewThreads: [pullRequest.reviewThreads[0]] },
+    github: {
+      async searchIssuesByDiscussionPermalink() {
+        searches += 1;
+        return [{ number: 121, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/121' }];
+      },
+      async createIssue() {
+        throw new Error('existing tracked issue should avoid creation');
+      },
+    },
+  });
+
+  assert.equal(searches, 1);
+  assert.equal(result.created.length, 0);
+});
+
+test('capture workflow has scheduled retroactive sweep and failure notification job', async () => {
+  const workflow = await readFile(new URL('../workflows/capture-unresolved-reviews.yml', import.meta.url), 'utf8');
+
+  assert.match(workflow, /^  schedule:\n    - cron: /m);
+  assert.match(workflow, /--recent-merged-days/);
+  assert.match(workflow, /Notify capture workflow failure/);
 });

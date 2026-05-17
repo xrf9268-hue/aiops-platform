@@ -16,6 +16,10 @@ function githubToken() {
   return process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? requiredEnv('GITHUB_TOKEN');
 }
 
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 async function githubRequest(path, { method = 'GET', body } = {}) {
   const response = await fetch(`https://api.github.com${path}`, {
     method,
@@ -160,8 +164,43 @@ export function buildFollowUpIssue({ repository, pullRequest, thread }) {
   };
 }
 
+export async function verifyTrackingForActionableThreads({
+  repository,
+  pullRequest,
+  github,
+  createdPermalinks = [],
+  existingTrackedPermalinks = [],
+}) {
+  const created = new Set(createdPermalinks);
+  const existingTracked = new Set(existingTrackedPermalinks);
+  const { actionable } = classifyThreads(pullRequest.reviewThreads ?? []);
+  const missing = [];
+
+  for (const thread of actionable) {
+    const permalink = thread.discussionPermalink;
+    if (created.has(permalink) || existingTracked.has(permalink)) {
+      continue;
+    }
+
+    const existingIssues = await github.searchIssuesByDiscussionPermalink({ repository, permalink });
+    if (existingIssues.length === 0) {
+      missing.push(permalink);
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Post-capture verification failed: ${missing.length} actionable review thread(s) have no created or existing tracking issue: ${missing.join(', ')}`,
+    );
+  }
+
+  return { actionableCount: actionable.length, missingCount: missing.length };
+}
+
 export async function captureUnresolvedReviewThreads({ repository, pullRequest, github, dryRun = false }) {
   const created = [];
+  const createdPermalinks = [];
+  const existingTrackedPermalinks = [];
   const skippedAlreadyTracked = [];
   const skippedNonActionableAlreadyTracked = [];
   const { actionable, nonActionable } = classifyThreads(pullRequest.reviewThreads ?? []);
@@ -170,12 +209,9 @@ export async function captureUnresolvedReviewThreads({ repository, pullRequest, 
     const permalink = thread.discussionPermalink;
     const existingIssues = await github.searchIssuesByDiscussionPermalink({ repository, permalink });
     if (existingIssues.length > 0) {
-      console.log(
-        `Skipping ${permalink}; already tracked by ${existingIssues
-          .map((issue) => `#${issue.number}`)
-          .join(', ')}.`,
-      );
+      console.log(`Skipping ${permalink}; already tracked by ${existingIssues.map((issue) => `#${issue.number}`).join(', ')}.`);
       skippedAlreadyTracked.push({ permalink, issues: existingIssues });
+      existingTrackedPermalinks.push(permalink);
       continue;
     }
 
@@ -183,12 +219,14 @@ export async function captureUnresolvedReviewThreads({ repository, pullRequest, 
     if (dryRun) {
       console.log(`Dry run: would create follow-up issue for ${permalink}.`);
       created.push({ ...issue, dryRun: true });
+      createdPermalinks.push(permalink);
       continue;
     }
 
     const response = await github.createIssue(issue);
     console.log(`Created follow-up issue #${response.number} for ${permalink}.`);
     created.push(response);
+    createdPermalinks.push(permalink);
   }
 
   for (const thread of nonActionable) {
@@ -208,11 +246,20 @@ export async function captureUnresolvedReviewThreads({ repository, pullRequest, 
     }
   }
 
+  await verifyTrackingForActionableThreads({
+    repository,
+    pullRequest,
+    github,
+    createdPermalinks,
+    existingTrackedPermalinks,
+  });
+
   return {
     created,
     skippedAlreadyTracked,
     skippedNonActionableAlreadyTracked,
     actionableCount: actionable.length,
+    createdPermalinks,
   };
 }
 
@@ -274,16 +321,52 @@ async function loadPullRequest({ owner, repo, pullNumber }) {
   return { number: pullRequest.number, title: pullRequest.title, url: pullRequest.url, reviewThreads };
 }
 
-function searchQuery({ repository, permalink }) {
-  return `${JSON.stringify(permalink)} repo:${repository.owner}/${repository.name} in:body type:issue`;
+
+async function loadRecentlyMergedPullNumbers({ owner, repo, days }) {
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  const payload = await githubRequest(
+    `/repos/${owner}/${repo}/pulls?${new URLSearchParams({ state: 'closed', sort: 'updated', direction: 'desc', per_page: '100' })}`,
+  );
+  return (payload ?? [])
+    .filter((pull) => pull.merged_at && Date.parse(pull.merged_at) >= since)
+    .map((pull) => pull.number)
+    .sort((left, right) => left - right);
+}
+
+export function searchTermsForDiscussionPermalink(permalink) {
+  const parsed = new URL(permalink);
+  const discussion = parsed.hash.slice(1);
+  return [permalink, `${parsed.origin}${parsed.pathname}${parsed.hash}`, discussion];
+}
+
+function uniqueIssues(issues) {
+  const seen = new Set();
+  const result = [];
+  for (const issue of issues) {
+    const key = issue.url ?? issue.number;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(issue);
+  }
+  return result;
+}
+
+function searchQuery({ repository, term }) {
+  return `${JSON.stringify(term)} repo:${repository.owner}/${repository.name} in:body type:issue`;
 }
 
 function createGitHubClient() {
   return {
     async searchIssuesByDiscussionPermalink({ repository, permalink }) {
-      const query = new URLSearchParams({ q: searchQuery({ repository, permalink }), per_page: '20' });
-      const payload = await githubRequest(`/search/issues?${query.toString()}`);
-      return (payload.items ?? []).map((issue) => ({ number: issue.number, state: issue.state, url: issue.html_url }));
+      const issues = [];
+      for (const term of searchTermsForDiscussionPermalink(permalink)) {
+        const query = new URLSearchParams({ q: searchQuery({ repository, term }), per_page: '20' });
+        const payload = await githubRequest(`/search/issues?${query.toString()}`);
+        issues.push(...(payload.items ?? []).map((issue) => ({ number: issue.number, state: issue.state, url: issue.html_url })));
+      }
+      return uniqueIssues(issues);
     },
     async createIssue({ title, body, labels }) {
       const owner = requiredEnv('REPO_OWNER');
@@ -297,19 +380,38 @@ function createGitHubClient() {
   };
 }
 
+function parsePositiveNumber(value, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) {
+    throw new Error(`${name} must be a positive number.`);
+  }
+  return number;
+}
+
 function parseArgs(argv) {
-  const args = { dryRun: false };
+  const args = { dryRun: false, settleSeconds: 0 };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--dry-run') {
       args.dryRun = true;
     } else if (arg === '--pull-number') {
-      args.pullNumber = Number(argv[++index]);
+      args.pullNumber = parsePositiveNumber(argv[++index], '--pull-number');
     } else if (arg.startsWith('--pull-number=')) {
-      args.pullNumber = Number(arg.slice('--pull-number='.length));
+      args.pullNumber = parsePositiveNumber(arg.slice('--pull-number='.length), '--pull-number');
+    } else if (arg === '--recent-merged-days') {
+      args.recentMergedDays = parsePositiveNumber(argv[++index], '--recent-merged-days');
+    } else if (arg.startsWith('--recent-merged-days=')) {
+      args.recentMergedDays = parsePositiveNumber(arg.slice('--recent-merged-days='.length), '--recent-merged-days');
+    } else if (arg === '--settle-seconds') {
+      args.settleSeconds = parsePositiveNumber(argv[++index], '--settle-seconds');
+    } else if (arg.startsWith('--settle-seconds=')) {
+      args.settleSeconds = parsePositiveNumber(arg.slice('--settle-seconds='.length), '--settle-seconds');
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+  if (args.pullNumber && args.recentMergedDays) {
+    throw new Error('Pass either --pull-number or --recent-merged-days, not both.');
   }
   return args;
 }
@@ -332,6 +434,21 @@ async function resolveEventPullNumber(args) {
   return pullNumber;
 }
 
+async function capturePullRequest({ owner, repo, pullNumber, repository, github, dryRun }) {
+  const pullRequest = await loadPullRequest({ owner, repo, pullNumber });
+  const result = await captureUnresolvedReviewThreads({
+    repository,
+    pullRequest,
+    github,
+    dryRun,
+  });
+
+  console.log(
+    `Capture complete for PR #${pullNumber}: ${result.actionableCount} actionable thread(s), ${result.created.length} created/would-create, ${result.skippedAlreadyTracked.length} already tracked.`,
+  );
+  return result;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const owner = process.env.REPO_OWNER ?? process.env.GITHUB_REPOSITORY_OWNER;
@@ -340,19 +457,24 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error('Repository owner/name not found; set REPO_OWNER and REPO_NAME.');
   }
 
-  const pullNumber = await resolveEventPullNumber(args);
-  const repository = { owner, name: repo };
-  const pullRequest = await loadPullRequest({ owner, repo, pullNumber });
-  const result = await captureUnresolvedReviewThreads({
-    repository,
-    pullRequest,
-    github: createGitHubClient(),
-    dryRun: args.dryRun,
-  });
+  if (args.settleSeconds > 0) {
+    console.log(`Waiting ${args.settleSeconds}s for asynchronous review threads to settle before capture.`);
+    await sleep(args.settleSeconds * 1000);
+  }
 
-  console.log(
-    `Capture complete: ${result.actionableCount} actionable thread(s), ${result.created.length} created/would-create, ${result.skippedAlreadyTracked.length} already tracked.`,
-  );
+  const repository = { owner, name: repo };
+  const github = createGitHubClient();
+  if (args.recentMergedDays) {
+    const pullNumbers = await loadRecentlyMergedPullNumbers({ owner, repo, days: args.recentMergedDays });
+    console.log(`Retroactive sweep found ${pullNumbers.length} merged PR(s) in the last ${args.recentMergedDays} day(s).`);
+    for (const pullNumber of pullNumbers) {
+      await capturePullRequest({ owner, repo, pullNumber, repository, github, dryRun: args.dryRun });
+    }
+    return;
+  }
+
+  const pullNumber = await resolveEventPullNumber(args);
+  await capturePullRequest({ owner, repo, pullNumber, repository, github, dryRun: args.dryRun });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
