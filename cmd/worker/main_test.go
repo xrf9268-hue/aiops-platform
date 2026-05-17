@@ -138,14 +138,42 @@ func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing
 	}
 }
 
-func TestValidateWorkflowForRuntimePreservesPromptOnlyWorkflowCompatibility(t *testing.T) {
+func TestValidateWorkflowForRuntimeRejectsPromptOnlyWorkflowMissingTaskFields(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 
-	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourcePromptOnly, cfg); err != nil {
-		t.Fatalf("validateWorkflowForRuntime(prompt-only defaults) = %v, want nil", err)
+	err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourcePromptOnly, cfg)
+	if err == nil {
+		t.Fatal("validateWorkflowForRuntime(prompt-only defaults) = nil, want repo.clone_url error")
 	}
-	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceDefault, cfg); err != nil {
-		t.Fatalf("validateWorkflowForRuntime(default workflow) = %v, want nil", err)
+	for _, want := range []string{"WORKFLOW.md", "repo.clone_url", "poll-based worker runtime"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("validateWorkflowForRuntime error = %v, want substring %q", err, want)
+		}
+	}
+}
+
+func TestValidateWorkflowForRuntimeRejectsDefaultWorkflowMissingTaskFields(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+
+	err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceDefault, cfg)
+	if err == nil {
+		t.Fatal("validateWorkflowForRuntime(default workflow) = nil, want repo.clone_url error")
+	}
+	for _, want := range []string{"built-in workflow defaults", "repo.clone_url", "poll-based worker runtime"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("validateWorkflowForRuntime error = %v, want substring %q", err, want)
+		}
+	}
+}
+
+func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+
+	for _, source := range []workflow.Source{workflow.SourceFile, workflow.SourcePromptOnly, workflow.SourceDefault} {
+		if err := validateWorkflowForRuntime("WORKFLOW.md", source, cfg); err != nil {
+			t.Fatalf("validateWorkflowForRuntime(source=%s) = %v, want nil", source, err)
+		}
 	}
 }
 
@@ -156,8 +184,10 @@ func TestValidateWorkflowForRuntimeRejectsFrontMatterWorkflowMissingTaskFields(t
 	if err == nil {
 		t.Fatal("validateWorkflowForRuntime(file source defaults) = nil, want repo.clone_url error")
 	}
-	if !strings.Contains(err.Error(), "WORKFLOW.md: repo.clone_url is required") {
-		t.Fatalf("validateWorkflowForRuntime error = %v, want repo.clone_url guidance", err)
+	for _, want := range []string{"WORKFLOW.md", "repo.clone_url", "poll-based worker runtime"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("validateWorkflowForRuntime error = %v, want substring %q", err, want)
+		}
 	}
 }
 

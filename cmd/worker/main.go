@@ -79,11 +79,11 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 }
 
 func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
-	if source != workflow.SourceFile {
-		return nil
-	}
 	if cfg.Repo.CloneURL == "" {
-		return fmt.Errorf("%s: repo.clone_url is required", path)
+		if source == workflow.SourceDefault {
+			path = "built-in workflow defaults"
+		}
+		return fmt.Errorf("%s: repo.clone_url is required for poll-based worker runtime", path)
 	}
 	return nil
 }
