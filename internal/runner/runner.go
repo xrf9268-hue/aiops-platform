@@ -14,7 +14,11 @@ type RunInput struct {
 	Task     task.Task
 	Workflow workflow.Workflow
 	Workdir  string
-	Prompt   string
+	// WorkspaceRoot is the runtime root that created Workdir. When set,
+	// sandbox invariant checks must use this value instead of the workflow
+	// default so runner sandboxing matches the worker's actual checkout root.
+	WorkspaceRoot string
+	Prompt        string
 }
 
 type Result struct {

@@ -59,9 +59,9 @@ policy:
   max_changed_files: 12
   max_changed_loc: 300
 
-# Safety policy for the agent and human reviewers. The current worker records
-# these expectations in the repository-owned workflow, but network/path/command
-# enforcement beyond `policy.deny_paths` remains a Phase 2 hardening item.
+# Safety policy for the agent and human reviewers. This block is descriptive:
+# it documents the expected envelope but does not itself enforce network/path or
+# command controls. Worker-enforced process hardening lives under `sandbox:`.
 safety:
   allowed_networks:
     - git remote for this repository
@@ -79,6 +79,19 @@ safety:
     - using shared production secrets or personal credentials
     - contacting unrelated external services
     - changing deployment, infrastructure, migration, or secret paths
+
+# Optional worker-enforced process hardening. Disabled by default so personal
+# workflows continue to rely on the selected coding agent's own sandbox. Enable
+# only after installing and validating the backend on the worker host.
+sandbox:
+  enabled: false
+  backend: none      # none, bubblewrap, or firejail
+  network: none      # none, or allowlist (allowlist requires firejail)
+  # network_allowlist_cidrs:
+  #   - 203.0.113.10/32
+  # env_allowlist:
+  #   - PATH
+  # credential_files: []
 
 verify:
   commands:

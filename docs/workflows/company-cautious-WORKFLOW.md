@@ -62,9 +62,9 @@ policy:
   max_changed_files: 8
   max_changed_loc: 200
 
-# Safety policy for cautious company runs. These entries make the expected
-# network/path/command envelope explicit for the agent and reviewers; sandbox
-# enforcement beyond `policy.deny_paths` is still a separate hardening phase.
+# Safety policy for cautious company runs. These entries are descriptive: they
+# make the expected network/path/command envelope explicit for the agent and
+# reviewers. Worker-enforced process hardening lives under `sandbox:`.
 safety:
   allowed_networks:
     - company Git host for this repository
@@ -83,6 +83,19 @@ safety:
     - using production, customer, or personal credentials
     - contacting unrelated external services
     - modifying denied policy paths
+
+# Optional worker-enforced process hardening. Keep disabled while validating the
+# mock runner; enable only on worker hosts where the selected backend is
+# installed and tested. `network: allowlist` requires the firejail backend.
+sandbox:
+  enabled: false
+  backend: none
+  network: none
+  # network_allowlist_cidrs:
+  #   - 203.0.113.10/32
+  # env_allowlist:
+  #   - PATH
+  # credential_files: []
 
 verify:
   commands:

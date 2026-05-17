@@ -7,23 +7,52 @@ harness hardening as part of the core safety model, not as an optional add-on.
 
 ## Current sandbox model
 
-`aiops-platform` currently relies on the selected coding agent's own sandbox and
+`aiops-platform` always relies on the selected coding agent's own sandbox and
 approval behavior. For Codex runs, that means the Codex CLI sandbox selected by
 `codex.profile` in `WORKFLOW.md`.
 
-The platform does not currently add an external OS, container, VM, or network
-sandbox around the agent process. In particular, it does not yet provide:
+The platform now also supports an optional Linux process sandbox wrapper for
+agent invocation. It is disabled by default; operators enable it explicitly with
+the worker-enforced `sandbox:` workflow block when the host has a supported
+backend installed:
 
-- bubblewrap, firejail, `sandbox-exec`, or VM isolation;
+```yaml
+sandbox:
+  enabled: true
+  backend: firejail        # firejail or bubblewrap
+  network: allowlist       # none or allowlist
+  network_allowlist_cidrs:
+    - 203.0.113.10/32
+  env_allowlist:
+    - PATH
+    - AIOPS_RUN_TOKEN
+  credential_files:
+    - ~/.config/aiops/run-token
+```
+
+Supported enforcement today:
+
+- `bubblewrap` or `firejail` wraps the agent process when configured;
+- the agent working directory must remain under `workspace.root` before the
+  sandbox wrapper is applied;
+- the child process environment is reduced to `sandbox.env_allowlist`;
+- explicitly listed credential files are checked for readability and bound into
+  the sandbox read-only;
+- `network: none` disables network access for supported backends;
+- `network: allowlist` is supported through `firejail --netfilter` and CIDR
+  allowlist rules.
+
+Still not provided:
+
 - Docker-per-run workspace isolation;
-- a sandbox-layer network egress allowlist;
-- a filesystem allowlist beyond the workspace and policy checks already wired in
-  the worker;
+- VM isolation or macOS `sandbox-exec` support;
 - a credential vault that mints per-run credentials.
 
-This is the tracked D5 deviation: the present posture is acceptable for personal
-repositories and trusted internal codebases where the operator understands the
-risk, but it is not a hardened untrusted-code execution environment.
+Docker-based workspace isolation should be a follow-up rather than part of this
+phase: it changes workspace creation, cache ownership, Git remotes/credentials,
+and artifact handoff semantics, while the current phase only wraps the already
+selected agent invocation. Track Docker isolation separately so it can preserve
+the workspace-root invariant and SPEC workspace lifecycle behavior deliberately.
 
 ## Trust boundary
 
@@ -61,8 +90,8 @@ make arbitrary repositories, issue authors, dependencies, or commands safe.
 
 ## What is not defended today
 
-Until an external sandbox layer exists, do not assume the platform prevents a
-malicious or compromised agent run from:
+Unless the optional sandbox wrapper is enabled and validated on the worker host,
+do not assume the platform prevents a malicious or compromised agent run from:
 
 - reading host files that are accessible to the worker OS user;
 - reading credentials present in the process environment or filesystem;
@@ -83,9 +112,9 @@ for the workflow.
 
 Do not use this platform against untrusted issue authors, untrusted repositories,
 unreviewed third-party dependency trees, or shared production secrets. If you
-need that deployment model, first add and validate an external sandbox such as a
-container, VM, bubblewrap, or firejail profile plus network egress controls and
-per-run credential scoping.
+need that deployment model, first enable and validate an external sandbox such
+as bubblewrap or firejail, or add a stronger container/VM isolation layer, plus
+network egress controls and per-run credential scoping.
 
 ## Operator checklist
 
@@ -140,20 +169,19 @@ lands:
 If any item above is not available, do not run the coding agent on that company
 repository yet. Use mock or analysis-only workflows instead.
 
-## Phase 2 hardening roadmap
+## Remaining hardening roadmap
 
-The next enforcement phase should add optional external isolation rather than
-expanding the trust boundary of the current host process. Planned work includes:
+The Linux wrapper is a first enforcement layer, not a complete untrusted-code
+sandbox. Remaining work includes:
 
-- a Linux sandbox wrapper such as bubblewrap or firejail around the agent
-  invocation;
-- Docker-based workspace isolation as an alternative to bare-filesystem
+- Docker-based or VM workspace isolation as an alternative to bare-filesystem
   workspaces;
-- network egress allowlists enforced by the sandbox layer;
-- a documented way to pass only the minimum credentials needed by the run;
-- validation that the agent cwd and workspace path remain under the configured
-  workspace root after isolation is applied.
+- stronger credential-vault integration that mints per-run credentials instead
+  of binding existing files;
+- backend-specific operational validation on each supported host distribution;
+- broader lifecycle-hook integration once SPEC workspace hooks are implemented.
 
-Until those controls are implemented and tested, document this platform as a
-trusted-environment orchestrator with review and policy guardrails, not as a
-strong sandbox for untrusted code.
+Until those controls are implemented and tested for your deployment, document
+this platform as a trusted-environment orchestrator with optional process
+sandboxing, review, and policy guardrails, not as a strong sandbox for arbitrary
+untrusted code.
