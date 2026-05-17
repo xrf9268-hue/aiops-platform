@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 )
 
 type fakeIssueTracker struct {
@@ -56,6 +57,37 @@ func (d *recordingDispatcher) issueAt(i int) tracker.Issue {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.issues[i]
+}
+
+type completingEmitter struct {
+	worker.LogEventEmitter
+	mu        sync.Mutex
+	completed []string
+}
+
+func (e *completingEmitter) Complete(_ context.Context, id string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.completed = append(e.completed, id)
+	return nil
+}
+
+func (e *completingEmitter) count() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.completed)
+}
+
+func TestCompleteRecordedTaskMarksOptionalQueueRowTerminal(t *testing.T) {
+	ctx := context.Background()
+	emitter := &completingEmitter{}
+
+	if err := completeRecordedTask(ctx, emitter, "issue-1"); err != nil {
+		t.Fatalf("completeRecordedTask returned error: %v", err)
+	}
+	if got := emitter.count(); got != 1 {
+		t.Fatalf("completed task rows = %d, want 1", got)
+	}
 }
 
 type erroringTaskDispatcher struct {

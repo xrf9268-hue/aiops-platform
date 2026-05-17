@@ -26,7 +26,7 @@ Checks:
 - `gofmt` check
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
-- build `trigger-api`, `worker`, and `linear-poller`
+- build `worker`, `linear-poller`, and `gitea-poller`
 - upload short-lived CI binaries
 - Docker image build validation
 

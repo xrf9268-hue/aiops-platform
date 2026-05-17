@@ -23,8 +23,8 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 >   removed under #73 in favor of in-memory + tracker + filesystem recovery
 >   (#68).
 > - **Gitea webhook ingress** (`cmd/trigger-api`, `internal/triggerapi`,
->   `internal/gitea/webhook*.go`): not in SPEC; being replaced with a Gitea
->   poller under #74.
+>   `internal/gitea/webhook*.go`): not in SPEC; removed under #74 in favor
+>   of tracker polling.
 > - **Orchestrator-driven PR creation, git push, and Linear status writes**:
 >   closed under #76 after #64/#14; the worker must not reintroduce
 >   `CommitAndPush`, `CreatePR`, `OnClaim`, or `OnPRCreated`-style handoff.
@@ -162,16 +162,16 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 
 | Path | What lives there |
 |------|------------------|
-| `cmd/trigger-api` | HTTP server: Gitea webhook ingress (transitional — being removed per #74) |
 | `cmd/worker` | Claims/dispatches queued tasks and runs the Symphony loop; PR handoff is agent-side |
 | `cmd/linear-poller` | Polls Linear active states and enqueues tasks |
+| `cmd/gitea-poller` | Polls Gitea `aiops/*` label states and enqueues tasks for the transitional queue path |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
 | `internal/queue` | Postgres queue (transitional — being removed per #73) |
 | `internal/runner` | Runner abstraction: `mock`, `codex`, `claude` |
 | `internal/workspace` | Deterministic git workspace, verify, policy checks |
 | `internal/tracker` | Tracker abstraction with Linear client |
-| `internal/gitea` | Webhook parser/signature verification (transitional) and Gitea PR client/tool support |
-| `internal/triggerapi`, `internal/worker` | Transitional webhook handlers and worker lifecycle |
+| `internal/gitea` | Gitea tracker/client support and PR/tool helpers |
+| `internal/worker` | Worker lifecycle |
 | `internal/task`, `internal/policy` | Task event constants, policy helpers |
 | `migrations/` | SQL migrations for the Postgres queue |
 | `docs/adr/` | Architectural decisions (start here for "why") |
@@ -186,7 +186,7 @@ The CI gate is the authoritative checklist — match it locally before pushing:
 gofmt -l $(git ls-files '*.go')         # must be empty
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go test -race -covermode=atomic ./...
-go build ./cmd/trigger-api ./cmd/worker ./cmd/linear-poller
+go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller
 ```
 
 E2E (requires Docker, pulls `postgres:16` and `gitea/gitea:1.26.1-rootless`):

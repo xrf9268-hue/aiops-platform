@@ -103,6 +103,14 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 // path and the legacy task execution API; it is intentionally in-memory only.
 type TaskBuilder func(issue tracker.Issue) (task.Task, error)
 
+// TaskCompleter is the optional queue compatibility hook implemented by
+// queue.Store. The SPEC-aligned runtime path does not require durable rows, but
+// tests and transitional tools that record a task row need it marked terminal
+// after the in-memory worker exits successfully.
+type TaskCompleter interface {
+	Complete(ctx context.Context, id string) error
+}
+
 // WorkerTaskDispatcher runs the existing worker task executor for issues
 // accepted by the orchestrator actor. It replaces the old Postgres claim loop:
 // the orchestrator owns scheduling/claim state, while worker.RunTask
@@ -132,6 +140,10 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 			out <- WorkerResult{Err: rterr.Err, Elapsed: time.Since(start)}
 			return
 		}
+		if err := completeRecordedTask(ctx, d.Emitter, tk.ID); err != nil {
+			out <- WorkerResult{Err: err, Elapsed: time.Since(start)}
+			return
+		}
 		out <- WorkerResult{Elapsed: time.Since(start)}
 	}()
 	return out
@@ -140,6 +152,13 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 // TaskFromIssue builds the in-memory task handed to worker execution for a
 // tracker candidate. Dedupe/claiming lives in OrchestratorState, not in this
 // task ID: the ID is only a stable per-run/workspace identifier.
+func completeRecordedTask(ctx context.Context, ev worker.EventEmitter, taskID string) error {
+	if completer, ok := ev.(TaskCompleter); ok {
+		return completer.Complete(ctx, taskID)
+	}
+	return nil
+}
+
 func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) {
 	if cfg.Repo.CloneURL == "" {
 		return task.Task{}, fmt.Errorf("repo.clone_url missing in WORKFLOW.md")

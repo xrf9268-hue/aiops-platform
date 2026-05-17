@@ -28,16 +28,15 @@ Symphony implementation while D1–D24 are closed systematically.
 ## Components
 
 - `cmd/worker`: polls the configured tracker, reconciles startup workspaces, owns the in-memory orchestrator runtime state, dispatches eligible issues, and runs the Symphony-style workflow without Postgres.
-- `cmd/trigger-api`: transitional Gitea webhook/manual task ingress retained under the legacy queue profile until D7 cleanup.
 - `cmd/linear-poller`: transitional Linear-to-queue poller retained under the legacy queue profile; the worker now owns the SPEC-aligned poll tick.
-- `cmd/gitea-poller`: transitional Gitea-to-queue poller retained until D7 cleanup; the worker can read Gitea issues directly through `tracker.kind: gitea`.
+- `cmd/gitea-poller`: transitional Gitea-to-queue poller for `aiops/*` label state; the worker can read Gitea issues directly through `tracker.kind: gitea`.
 - `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
 - `internal/tracker`: tracker abstraction with a Linear client.
 - `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
 - `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
 - `internal/orchestrator`: single in-memory runtime state, serialized dispatch authority, retry bookkeeping, and worker spawn bridge.
-- `internal/queue`: legacy PostgreSQL-backed task queue still used by transitional ingress binaries, not by `cmd/worker`.
-- `internal/gitea`: transitional webhook parser/signature verification plus the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
+- `internal/queue`: legacy PostgreSQL-backed task queue still used by transitional poller binaries, not by `cmd/worker`.
+- `internal/gitea`: Gitea tracker client support plus the Gitea PR-tool implementation consumed through the agent/tool surface (not a worker-side PR handoff).
 
 ## WORKFLOW.md discovery
 
@@ -114,7 +113,7 @@ CI expectations on each run:
 - `gofmt` check on all tracked Go files (no diff).
 - `go mod tidy` check (`go.mod` and `go.sum` clean).
 - `go test -race -covermode=atomic ./...`.
-- `go build` of `cmd/trigger-api`, `cmd/worker`, and `cmd/linear-poller`.
+- `go build` of `cmd/worker`, `cmd/linear-poller`, and `cmd/gitea-poller`.
 - Docker image build of the repository `Dockerfile`.
 
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
@@ -144,26 +143,6 @@ The default Compose service now starts only `worker` unless a legacy profile is 
 
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
-```
-
-## Legacy quick start: Gitea webhook path
-
-```bash
-cp .env.example .env
-# edit GITEA_BASE_URL, GITEA_TOKEN, GITEA_WEBHOOK_SECRET
-docker compose --env-file .env -f deploy/docker-compose.yml --profile legacy-queue up --build trigger-api
-```
-
-Configure a Gitea issue-comment webhook pointing at:
-
-```text
-http://<trigger-host>:8080/v1/events/gitea
-```
-
-Comment on a Gitea issue:
-
-```text
-/ai-run
 ```
 
 ## Legacy Linear queue polling path

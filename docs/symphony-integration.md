@@ -12,8 +12,8 @@ closure backlog.
 ## Architecture
 
 ```text
-Linear or Gitea task
-  -> task queue
+Linear or Gitea tracker poll
+  -> in-memory scheduler/runtime
   -> deterministic workspace
   -> WORKFLOW.md
   -> runner
@@ -25,11 +25,11 @@ Linear or Gitea task
 
 | Symphony concept | aiops-platform module |
 |---|---|
-| Issue tracker | `internal/tracker` and `cmd/linear-poller` |
+| Issue tracker | `internal/tracker`, `cmd/linear-poller`, and `cmd/gitea-poller` |
 | Workflow contract | `internal/workflow` and `WORKFLOW.md` |
 | Workspace manager | `internal/workspace` |
 | Agent runner | `internal/runner` |
-| Status history | `tasks` and `task_events` tables |
+| Runtime state | in-process orchestrator state with tracker/filesystem restart recovery |
 | Git handoff | agent via dynamic tool / CLI (`internal/gitea` backs the tool implementation) |
 
 ## Usage model
@@ -54,7 +54,7 @@ For company repositories, keep human review in the loop and prefer draft pull re
 
 Implemented:
 
-- Gitea issue comment trigger
+- Gitea label polling trigger
 - Linear polling trigger
 - Postgres task queue
 - repo-owned `WORKFLOW.md` (discovered at three paths — see Deviations below)

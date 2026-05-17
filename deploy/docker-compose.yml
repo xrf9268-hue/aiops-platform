@@ -14,9 +14,8 @@ services:
       - ../examples:/app/examples:ro
       - ~/.ssh:/root/.ssh:ro
 
-  # Transitional services retained until D7 retires webhook/manual enqueue
-  # ingress. They still use the legacy queue and Postgres; cmd/worker no longer
-  # depends on either service for tracker polling or dispatch.
+  # Transitional queue services retained only for legacy poller compatibility;
+  # cmd/worker no longer depends on Postgres for tracker polling or dispatch.
   postgres:
     image: postgres:16
     environment:
@@ -31,21 +30,6 @@ services:
     profiles:
       - legacy-queue
 
-  trigger-api:
-    build:
-      context: ..
-    command: ["trigger-api"]
-    depends_on:
-      - postgres
-    environment:
-      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
-      GITEA_WEBHOOK_SECRET: ${GITEA_WEBHOOK_SECRET:-dev-secret}
-      ADDR: :8080
-    ports:
-      - "8080:8080"
-    profiles:
-      - legacy-queue
-
   linear-poller:
     build:
       context: ..
@@ -53,8 +37,23 @@ services:
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgres://aiops:aiops@postgres:5432/aiops?sslmode=disable
+      DATABASE_URL: postgres://aiops:***@postgres:5432/aiops?sslmode=disable
       LINEAR_API_KEY: ${LINEAR_API_KEY}
+    volumes:
+      - ../examples:/app/examples:ro
+    profiles:
+      - legacy-queue
+
+  gitea-poller:
+    build:
+      context: ..
+    command: ["gitea-poller", "/app/examples/WORKFLOW.md"]
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://aiops:***@postgres:5432/aiops?sslmode=disable
+      GITEA_BASE_URL: ${GITEA_BASE_URL}
+      GITEA_TOKEN: ${GITEA_TOKEN}
     volumes:
       - ../examples:/app/examples:ro
     profiles:

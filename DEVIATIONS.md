@@ -44,7 +44,7 @@ The 2026-05-15 gap audit (PR [#82](https://github.com/xrf9268-hue/aiops-platform
 | D4  | WORKFLOW.md multi-path discovery (vs single source); subset of D10                                | §workflow file                                            | Low      | Reverting               | [#72](https://github.com/xrf9268-hue/aiops-platform/issues/72) (supersedes [#69](https://github.com/xrf9268-hue/aiops-platform/issues/69)) |
 | D5  | Sandbox posture relies solely on Codex CLI sandbox                                                | §safety, §harness hardening                               | Medium   | Closed                  | [#70](https://github.com/xrf9268-hue/aiops-platform/issues/70) / [#114](https://github.com/xrf9268-hue/aiops-platform/issues/114) / PR [#115](https://github.com/xrf9268-hue/aiops-platform/pull/115) |
 | D6  | Postgres-backed queue (vs tracker+filesystem recovery); partial of D21                            | §restart recovery, §orchestrator runtime state            | High     | Reverting               | [#73](https://github.com/xrf9268-hue/aiops-platform/issues/73)                                                                       |
-| D7  | Gitea webhook ingress (vs tracker polling)                                                        | §triggers                                                 | Medium   | Reverting               | [#74](https://github.com/xrf9268-hue/aiops-platform/issues/74)                                                                       |
+| D7  | Gitea webhook ingress (vs tracker polling)                                                        | §triggers                                                 | Medium   | Closed                  | [#74](https://github.com/xrf9268-hue/aiops-platform/issues/74)                                                                       |
 | D8  | Orchestrator does PR creation / git push / Linear status writes (should be agent tools)           | §1 boundary, §tools                                       | **P0**   | Closed                  | [#76](https://github.com/xrf9268-hue/aiops-platform/issues/76)                                                                       |
 | D9  | No per-tick reconciliation; in-flight runs do not stop on tracker state change (stall: see D14)   | §2.1 Goals, §8.5                                          | P1       | Reverting               | [#78](https://github.com/xrf9268-hue/aiops-platform/issues/78)                                                                       |
 | D10 | Workflow file is per-service, not per-repo-per-task (supersedes D4)                               | §5.1, §17.7                                               | High     | Open                    | [#84](https://github.com/xrf9268-hue/aiops-platform/issues/84)                                                                       |
@@ -91,7 +91,8 @@ to the deviations table above and gets a tracking issue for reversal.
 >
 > - **Gitea webhook trigger path** — value (latency, rate limit) was
 >   marginal for self-hosted Gitea against minute-scale agent runs;
->   tracked as D7, being reverted under #74.
+>   tracked as D7 and closed by #74 after replacing webhook ingress with
+>   tracker polling.
 > - **PostgreSQL-backed queue** — value (concurrent-worker safety) is
 >   unused while the codebase assumes single-worker (#68); tracked as
 >   D6, being reverted under #73.

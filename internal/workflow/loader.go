@@ -54,9 +54,9 @@ func Load(path string) (*Workflow, error) {
 }
 
 // supportedTrackerKinds enumerates the tracker integrations the platform
-// actually wires up today (see cmd/linear-poller and the Gitea webhook
-// path in cmd/api). Anything outside this set would parse as a typed
-// string but go nowhere at runtime, so reject it at Load.
+// actually wires up today (see cmd/linear-poller and cmd/gitea-poller).
+// Anything outside this set would parse as a typed config but could not be
+// claimed by the worker.
 var supportedTrackerKinds = map[string]struct{}{
 	"gitea":  {},
 	"linear": {},

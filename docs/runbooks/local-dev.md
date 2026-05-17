@@ -1,6 +1,6 @@
 # Local development runbook
 
-This is the first document to open after cloning. It walks through bootstrapping the full loop locally: Postgres, the trigger API, the worker, and the optional Linear poller, and ends with a smoke test that exercises the queue end-to-end.
+This is the first document to open after cloning. It walks through bootstrapping the local loop: the worker, optional transitional pollers, and smoke checks for tracker polling.
 
 The repository ships with a `deploy/docker-compose.yml` that runs the same components in containers. This runbook documents both the all-in-one Docker path and the run-from-source path that is more convenient when iterating on Go code.
 
@@ -9,7 +9,7 @@ The repository ships with a `deploy/docker-compose.yml` that runs the same compo
 - Go 1.25 or newer (matches `go.mod`).
 - Docker and Docker Compose v2.
 - `git` and `curl`.
-- Optional: a Gitea instance and bot token if you want to exercise the webhook path.
+- Optional: a Gitea instance and bot token if you want to exercise the Gitea poller path.
 - Optional: a Linear personal API key if you want to exercise the Linear poller path.
 
 ## 1. Configure environment
@@ -54,36 +54,7 @@ To wipe state during development:
 docker compose --env-file .env -f deploy/docker-compose.yml down -v
 ```
 
-## 3. Run the trigger API
-
-Option A: from source.
-
-```bash
-export DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
-export GITEA_WEBHOOK_SECRET=dev-secret
-export ADDR=:8080
-go run ./cmd/trigger-api
-```
-
-Option B: in Docker.
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml up -d trigger-api
-```
-
-Health check:
-
-```bash
-curl -fsS http://localhost:8080/healthz
-```
-
-Expected response:
-
-```json
-{"ok":true}
-```
-
-## 4. Run the worker
+## 3. Run the worker
 
 The worker claims queued tasks, prepares a deterministic Git workspace, runs the configured runner (`mock`, `codex`, or `claude`), enforces policy, and opens a draft PR through the Gitea client.
 
@@ -120,7 +91,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d worker
 
 For first-time local testing, keep `agent.default: mock` in `examples/WORKFLOW.md`. The mock runner produces a deterministic change without calling any external model.
 
-## 5. Run a tracker poller (optional)
+## 4. Run a tracker poller (optional)
 
 The Linear and Gitea pollers read `examples/WORKFLOW.md` for the repo, tracker, and poll interval, then enqueue a task per active issue.
 
@@ -167,41 +138,20 @@ go run ./cmd/gitea-poller examples/WORKFLOW.md
 
 The poller exits immediately with `tracker.kind must be gitea` if `examples/WORKFLOW.md` is not configured for Gitea. It logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
 
-## 6. Smoke test
+## 5. Smoke test
 
-The fastest way to verify the full local loop without a real Gitea or Linear is to enqueue a manual task with the helper script and inspect the resulting rows.
-
-Enqueue a task. The `CLONE_URL` must be one the running worker can actually
-clone, because `internal/workspace.PrepareGitWorkspace` runs `git clone $CLONE_URL`
-before any agent runs. For a fully local smoke test we point at this checkout
-through a `file://` URL so no network or remote Gitea is needed:
+The fastest way to verify local configuration without a real Gitea or Linear is
+to load the workflow and print the effective worker config:
 
 ```bash
-export AIOPS_API_URL=http://localhost:8080
-export REPO_OWNER=local
-export REPO_NAME=aiops-platform
-export CLONE_URL="file://$(git rev-parse --show-toplevel)/.git"
-export BASE_BRANCH=main
-export TITLE="Local smoke task"
-export MODEL=mock
-scripts/enqueue-manual-task.sh
+go run ./cmd/worker --print-config .
 ```
 
-If you only want to verify that the trigger API enqueues the row and do not
-plan to start the worker, any value in `CLONE_URL` works (the worker is what
-actually performs the clone). To fully exercise the worker offline without
-starting the API, run `scripts/test-enqueue-manual-task.sh` instead, which
-stubs `curl`.
-
-The script prints the assigned `task_id` and a follow-up `psql` command. Inspect the task and its events through the trigger API:
-
-```bash
-curl 'http://localhost:8080/v1/tasks?status=queued'
-curl 'http://localhost:8080/v1/tasks/<task_id>'
-curl 'http://localhost:8080/v1/tasks/<task_id>/events'
-```
-
-See [Task debugging API](task-api.md) for the full reference.
+To exercise dispatch, configure `examples/WORKFLOW.md` for a real Linear or
+Gitea tracker, keep `agent.default: mock`, move one issue into an active state,
+and run the worker plus the matching poller. The poller discovers the active
+tracker issue; there is no webhook or manual enqueue endpoint in the normal
+loop.
 
 You can also inspect the queue directly:
 
@@ -211,36 +161,20 @@ docker compose --env-file .env -f deploy/docker-compose.yml exec postgres \
   "select id,status,repo_owner,repo_name,work_branch,updated_at from tasks order by created_at desc limit 5;"
 ```
 
-There is also an offline smoke test that exercises the script with a fake `curl`, useful in CI or when you do not want to start the API:
-
-```bash
-scripts/test-enqueue-manual-task.sh
-```
-
-It prints `PASS: enqueue-manual-task smoke test` on success.
-
 ## Common failure modes
 
 ### `connection refused` against Postgres
 
-The trigger API or worker logs `dial tcp 127.0.0.1:5432: connect: connection refused`.
+A transitional poller logs `dial tcp 127.0.0.1:5432: connect: connection refused`.
 
 - Check `docker compose ps` and ensure the `postgres` service is healthy.
 - Confirm `DATABASE_URL` matches the host you are running from. Inside compose use `postgres:5432`, from your host use `localhost:5432`.
 
 ### `tasks` table does not exist
 
-The trigger API returns 500 and the logs mention `relation "tasks" does not exist`.
+A transitional poller logs `relation "tasks" does not exist`.
 
 - This means the init script in `migrations/001_init.sql` did not run. It only runs on the very first start of the Postgres volume. Run `docker compose down -v` to drop the volume and start again, or apply the SQL manually as shown in step 2.
-
-### Manual enqueue returns `409` or `deduped: true`
-
-Each task is unique on `(source_type, source_event_id)`. Either pass a fresh `SOURCE_EVENT_ID` to the script or omit it so the script generates one.
-
-### Worker logs `bad signature` for Gitea webhooks
-
-`GITEA_WEBHOOK_SECRET` does not match the secret configured in Gitea. Both the trigger API and the Gitea webhook configuration must use the same value.
 
 ### Linear poller exits with `tracker.kind must be linear`
 
@@ -251,9 +185,9 @@ Each task is unique on `(source_type, source_event_id)`. Either pass a fresh `SO
 - `GITEA_BASE_URL` and `GITEA_TOKEN` must be set and the bot user must have write access to the target repository.
 - The worker bind-mounts `~/.ssh` read-only into the container. SSH clone URLs require a working key on the host, with the Gitea host already in `~/.ssh/known_hosts`.
 
-### Port `5432` or `8080` already in use
+### Port `5432` already in use
 
-Stop the conflicting local service or change the published port in `deploy/docker-compose.yml` and `ADDR` / `DATABASE_URL` accordingly.
+Stop the conflicting local service or change the published port in `deploy/docker-compose.yml` and `DATABASE_URL` accordingly.
 
 ### `go: module lookup disabled` or `go.sum` mismatch
 
@@ -273,9 +207,9 @@ old tasks no longer matter).
 
 ## Running e2e tests locally
 
-The e2e suite under `test/e2e/` validates the full Gitea `/ai-run` mock loop
-against real Postgres and Gitea containers. It is gated by the `e2e` build
-tag and does not run as part of `go test ./...`.
+The e2e suite under `test/e2e/` validates the Gitea poller loop against real
+Postgres and Gitea containers. It is gated by the `e2e` build tag and does not
+run as part of `go test ./...`.
 
 Requirements: a working Docker daemon. Cold first run pulls ~600MB of
 images and takes 2–3 minutes. Warm runs take ~10 seconds for all four tests.
@@ -287,9 +221,5 @@ go test -tags e2e -race -timeout 15m ./test/e2e/...
 Common failure modes:
 
 - `Cannot connect to the Docker daemon` — start Docker Desktop or `colima`.
-- Test hangs on first webhook delivery — check that `triggerSrv.URL` is
-  `127.0.0.1`, not `[::1]`. The testbed forces tcp4 binding to avoid this,
-  but a non-default Docker network setup can still break the
-  `host.docker.internal:host-gateway` mapping the Gitea container relies on.
 - `go test` reports `build constraints exclude all Go files` — the `-tags
   e2e` flag is missing.

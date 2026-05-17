@@ -32,9 +32,7 @@ const giteaImage = "gitea/gitea:1.26.1-rootless"
 
 // startGitea boots Gitea with admin credentials injected via env, then
 // exchanges basic auth for an access token. Returns a fully usable client
-// envelope. The clone-URL host mismatch (container-internal vs host-mapped)
-// is handled by services.go via a rewriter on the trigger-api Store, NOT
-// here.
+// envelope.
 func startGitea(ctx context.Context) (*giteaEnv, error) {
 	pass := randomHex(16)
 	secret := randomHex(32)
@@ -50,11 +48,7 @@ func startGitea(ctx context.Context) (*giteaEnv, error) {
 			"GITEA__security__SECRET_KEY":   secret,
 			"GITEA__database__DB_TYPE":      "sqlite3",
 			"GITEA__server__DISABLE_SSH":    "true",
-			// Allow webhook deliveries to host.docker.internal (the test server
-			// runs on the host; Gitea blocks private IPs by default).
-			"GITEA__webhook__ALLOWED_HOST_LIST": "external,loopback,private",
 		},
-		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		WaitingFor: wait.ForHTTP("/api/v1/version").WithPort("3000/tcp").WithStartupTimeout(90 * time.Second),
 	}
 
@@ -226,35 +220,6 @@ func (g *giteaEnv) putFile(ctx context.Context, owner, repo, path string, conten
 	return nil
 }
 
-func (g *giteaEnv) createWebhook(ctx context.Context, owner, repo, hookURL, secret string) error {
-	type req struct {
-		Type   string            `json:"type"`
-		Config map[string]string `json:"config"`
-		Events []string          `json:"events"`
-		Active bool              `json:"active"`
-	}
-	resp, body, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/hooks", owner, repo),
-		req{
-			Type: "gitea",
-			Config: map[string]string{
-				"content_type": "json",
-				"url":          hookURL,
-				"secret":       secret,
-			},
-			Events: []string{"issue_comment"},
-			Active: true,
-		},
-		false)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("createWebhook: status %d body %s", resp.StatusCode, body)
-	}
-	return nil
-}
-
 func (g *giteaEnv) createIssue(ctx context.Context, owner, repo, title, body string) (int, error) {
 	type req struct {
 		Title string `json:"title"`
@@ -290,6 +255,44 @@ func (g *giteaEnv) commentIssue(ctx context.Context, owner, repo string, issue i
 	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("commentIssue: status %d body %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
+func (g *giteaEnv) ensureLabels(ctx context.Context, owner, repo string, labels []string) error {
+	type req struct {
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	for _, label := range labels {
+		resp, respBody, err := g.doJSON(ctx, "POST",
+			fmt.Sprintf("/api/v1/repos/%s/%s/labels", owner, repo),
+			req{Name: label, Color: "ededed"}, false)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode == http.StatusConflict {
+			continue
+		}
+		if resp.StatusCode/100 != 2 {
+			return fmt.Errorf("ensureLabels: status %d body %s", resp.StatusCode, respBody)
+		}
+	}
+	return nil
+}
+
+func (g *giteaEnv) addIssueLabels(ctx context.Context, owner, repo string, issue int, labels []string) error {
+	type req struct {
+		Labels []string `json:"labels"`
+	}
+	resp, respBody, err := g.doJSON(ctx, "POST",
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", owner, repo, issue),
+		req{Labels: labels}, false)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("addIssueLabels: status %d body %s", resp.StatusCode, respBody)
 	}
 	return nil
 }

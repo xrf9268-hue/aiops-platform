@@ -2,7 +2,7 @@
 
 This runbook describes how to use `aiops-platform` day to day so it stays a useful tool instead of another system to babysit.
 
-The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is now the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state. Postgres and the legacy queue remain only for transitional webhook/manual ingress while D7 cleanup is pending.
+The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is now the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state. Postgres and the legacy queue remain only for transitional poller compatibility while D6 cleanup is pending.
 
 ## Linear states
 
@@ -40,7 +40,7 @@ The issue title and description are passed to the runner via the `PROMPT.md` tem
 
 Checklist before moving an issue to `AI Ready`:
 
-- One clear outcome. Not "improve logging" but "log request id in `cmd/trigger-api` access log".
+- One clear outcome. Not "improve logging" but "log tracker issue id in worker poll dispatch output".
 - Concrete file or package hints. Mention paths like `internal/runner/shell.go` so the agent does not wander.
 - Acceptance criteria as a bullet list. The verification section in `WORKFLOW.md` runs `go test ./...`, but tests do not catch design intent.
 - Out-of-scope notes. Call out things you do not want touched, especially anything under `policy.deny_paths` (`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`).
@@ -168,7 +168,7 @@ For legacy queue runs, `/events` is the most useful endpoint. Look for `enqueued
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` or `claude.command` resolves on the worker host. The shell runner uses `sh -lc`, so PATH must be set in the worker's login shell.
-- Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label). `/ai-run` on Gitea and `POST /v1/tasks` are legacy queue fallbacks only while D7 cleanup is pending.
+- Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).
 
 ### Re-running a failed task
 
@@ -176,24 +176,7 @@ Three options, in order of preference:
 
 1. Move the tracker issue to an active retry state such as `Rework`, or keep it in another configured `active_states` value after tightening the issue body. The worker poll tick sees active tracker state and asks the in-memory orchestrator to dispatch it.
 2. Restart the worker if you need to clear in-memory retry state. Startup reconciliation runs first, then the next poll can dispatch still-active tracker issues without reading queue rows.
-3. Legacy fallback only while D7 cleanup is pending: re-trigger from Gitea by commenting `/ai-run` or manually enqueue against the trigger API. The trigger API uses a fresh delivery/comment/manual key for queue dedupe.
-
-   ```bash
-   curl -X POST http://localhost:8080/v1/tasks \
-     -H 'Content-Type: application/json' \
-     -d '{
-       "repo_owner": "your-user",
-       "repo_name": "your-repo",
-       "clone_url": "git@gitea.local:your-user/your-repo.git",
-       "base_branch": "main",
-       "title": "retry: <original title>",
-       "description": "...",
-       "model": "claude",
-       "priority": 50
-     }'
-   ```
-
-   Set `model` to switch runner for this attempt only.
+3. If a tracker issue still does not dispatch after its state is active and the worker has restarted cleanly, inspect the worker logs and open a focused bug. Do not reintroduce manual queue enqueue as the normal retry path.
 
 ### When to give up on automation
 

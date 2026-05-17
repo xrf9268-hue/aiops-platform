@@ -31,7 +31,7 @@ The worker uses a single Gitea personal access token, exported as `GITEA_TOKEN`.
 
 - `git push origin <work-branch>` over HTTPS using the token.
 - `POST /api/v1/repos/{owner}/{repo}/pulls` to open a pull request.
-- Webhook delivery is verified with an HMAC secret and does not require a token.
+- Gitea issue polling reads repository issues and labels with the token.
 
 Recommended token scopes (Gitea 1.20+ scoped token model):
 
@@ -102,14 +102,15 @@ Every worker-authored pull request must be reviewed by a human before merge. Rev
 
 If the reviewer is uncertain, the expected action is to request changes or close the PR. Do not merge to "see what happens".
 
-## Webhook security
+## Poller security
 
-The worker validates incoming Gitea webhooks with HMAC SHA-256 (`internal/gitea/webhook.go`). Operational requirements:
+Gitea issue discovery is poll-based. Do not configure repository webhooks for
+aiops-platform; the retired trigger API and HMAC webhook secret are not part of
+the SPEC-aligned runtime. Operational requirements:
 
-- Configure a strong, random `GITEA_WEBHOOK_SECRET` per repository.
-- Restrict webhook events to `issue_comment` (and any others the worker explicitly handles).
-- Restrict the source IP ranges of the webhook receiver if the network allows it.
-- Do not log the raw webhook body; the payload may contain user-authored content.
+- Scope `GITEA_TOKEN` to the repositories the poller and agent tools actually need.
+- Keep tracker state in `aiops/*` labels so the poller can select active issues without receiving webhooks.
+- Treat issue titles, bodies, labels, and comments as user-authored content; avoid logging more than the minimal diagnostics needed to identify a task.
 
 ## Incident response checklist
 
@@ -120,8 +121,7 @@ If the bot account or its token may be compromised:
 3. Audit recent pushes by the bot account (`git log --author=aiops-bot` on each repo, plus Gitea audit log).
 4. Force-close any open PRs the bot opened during the suspect window.
 5. Confirm `main` is unaffected (branch protection should guarantee this, but verify).
-6. Rotate the webhook secret.
-7. Issue a new token with the recommended scopes above and resume the worker.
+6. Issue a new token with the recommended scopes above and resume the worker.
 
 ## Pre-production checklist
 
@@ -133,5 +133,5 @@ Before enabling the worker against company repositories, confirm:
 - [ ] Branch protection on `main` blocks direct push, requires PR review, requires status checks, blocks force push, blocks deletion.
 - [ ] The bot is not in any push-allowlist on protected branches.
 - [ ] Worker host stores the token only in environment variables sourced from a secret manager.
-- [ ] Webhook secret is configured and verified by the worker.
+- [ ] Gitea issues use the configured `aiops/*` state labels for poller discovery.
 - [ ] Reviewer expectations above are documented for the team that owns the repositories.
