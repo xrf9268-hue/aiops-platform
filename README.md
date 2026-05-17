@@ -166,7 +166,7 @@ Then run the poller from source:
 ```bash
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
-go run ./cmd/gitea-poller examples/WORKFLOW.md
+go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
 ```
 
 The legacy poller reads issues whose labels map to configured active states and enqueues them for the transitional queue path. For SPEC-aligned operation, prefer running `cmd/worker` directly so the worker owns tracker polling and orchestrator runtime state.

@@ -47,7 +47,7 @@ services:
   gitea-poller:
     build:
       context: ..
-    command: ["gitea-poller", "/app/examples/WORKFLOW.md"]
+    command: ["gitea-poller", "/app/examples/gitea-WORKFLOW.md"]
     depends_on:
       - postgres
     environment:

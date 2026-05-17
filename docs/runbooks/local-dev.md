@@ -130,13 +130,13 @@ The Gitea poller treats Gitea as a tracker reader: issues are selected by `aiops
 Option A: from source.
 
 ```bash
-export DATABASE_URL=postgres://aiops:***@localhost:5432/aiops?sslmode=disable
+export DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
 export GITEA_BASE_URL=http://localhost:3000
 export GITEA_TOKEN=your-gitea-bot-token
-go run ./cmd/gitea-poller examples/WORKFLOW.md
+go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
 ```
 
-The poller exits immediately with `tracker.kind must be gitea` if `examples/WORKFLOW.md` is not configured for Gitea. It logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
+The poller exits immediately with `tracker.kind must be gitea` if its workflow is not configured for Gitea. It logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
 
 ## 5. Smoke test
 
