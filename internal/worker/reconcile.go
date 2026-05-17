@@ -30,6 +30,7 @@ type ReconcileConfig struct {
 	WorkspaceRoot   string
 	ActiveStates    []string
 	TerminalStates  []string
+	TrackerKind     string
 	Tracker         ReconcileTracker
 	Emitter         EventEmitter
 	ReconcileTaskID string
@@ -87,7 +88,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		}
 	}
 
-	workspaces, err := listIssueWorkspaces(cfg.WorkspaceRoot)
+	workspaces, err := listIssueWorkspaces(cfg.WorkspaceRoot, cfg.TrackerKind)
 	if err != nil {
 		return err
 	}
@@ -164,7 +165,7 @@ type issueWorkspace struct {
 	Key  string
 }
 
-func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
+func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) {
 	ownerEntries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -172,6 +173,7 @@ func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
 		}
 		return nil, fmt.Errorf("read workspace root %s: %w", root, err)
 	}
+	sourceDirs := issueWorkspaceSourceDirs(trackerKind)
 	var workspaces []issueWorkspace
 	for _, ownerEntry := range ownerEntries {
 		if !ownerEntry.IsDir() {
@@ -187,7 +189,7 @@ func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
 				continue
 			}
 			repoPath := filepath.Join(ownerPath, repoEntry.Name())
-			for _, sourceDir := range []string{"linear_issue", "linear-issue", "gitea_issue", "gitea-issue"} {
+			for _, sourceDir := range sourceDirs {
 				sourcePath := filepath.Join(repoPath, sourceDir)
 				workspaceEntries, err := os.ReadDir(sourcePath)
 				if err != nil {
@@ -207,6 +209,17 @@ func listIssueWorkspaces(root string) ([]issueWorkspace, error) {
 		}
 	}
 	return workspaces, nil
+}
+
+func issueWorkspaceSourceDirs(trackerKind string) []string {
+	switch strings.ToLower(strings.TrimSpace(trackerKind)) {
+	case "gitea":
+		return []string{"gitea_issue", "gitea-issue"}
+	case "", "linear":
+		return []string{"linear_issue", "linear-issue"}
+	default:
+		return nil
+	}
 }
 
 func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path string, issue tracker.Issue, reason string) (bool, error) {

@@ -93,6 +93,7 @@ func run(ctx context.Context) error {
 		WorkspaceRoot:   cfg.WorkspaceRoot,
 		ActiveStates:    wf.Config.Tracker.ActiveStates,
 		TerminalStates:  wf.Config.Tracker.TerminalStates,
+		TrackerKind:     wf.Config.Tracker.Kind,
 		Tracker:         trackerClient,
 		Emitter:         worker.LogEventEmitter{},
 		ReconcileTaskID: "reconcile-startup",

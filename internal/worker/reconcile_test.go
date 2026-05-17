@@ -217,6 +217,7 @@ func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 		WorkspaceRoot:  root,
 		ActiveStates:   []string{"AI Ready"},
 		TerminalStates: []string{"Done"},
+		TrackerKind:    "gitea",
 		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
 			{ID: "issue-1", Identifier: "GIT-1", State: "AI Ready"},
 			{ID: "issue-2", Identifier: "GIT-2", State: "Done"},
@@ -232,6 +233,36 @@ func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 	}
 	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
 		t.Fatalf("terminal gitea workspace should be removed, stat err=%v", err)
+	}
+}
+
+func TestReconcileStartupSkipsOtherTrackerWorkspaceLayouts(t *testing.T) {
+	root := t.TempDir()
+	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-2-done")
+	giteaOtherTrackerPath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-owned-by-gitea-worker")
+	for _, path := range []string{linearTerminalPath, giteaOtherTrackerPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"In Progress"},
+		TerminalStates:  []string{"Done"},
+		TrackerKind:     "linear",
+		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-2", Identifier: "LIN 2 Done", State: "Done"}}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(linearTerminalPath); !os.IsNotExist(err) {
+		t.Fatalf("linear terminal workspace should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(giteaOtherTrackerPath); err != nil {
+		t.Fatalf("gitea workspace should be ignored by linear reconciliation: %v", err)
 	}
 }
 
