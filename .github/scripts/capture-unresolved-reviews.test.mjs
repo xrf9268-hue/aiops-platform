@@ -6,7 +6,9 @@ import {
   buildFollowUpIssue,
   captureUnresolvedReviewThreads,
   extractPriorityLabel,
+  loadRecentlyMergedPullNumbers,
   normalizeDiscussionPermalink,
+  parseArgs,
   searchTermsForDiscussionPermalink,
   verifyTrackingForActionableThreads,
 } from './capture-unresolved-reviews.mjs';
@@ -231,15 +233,50 @@ test('verifyTrackingForActionableThreads fails loudly when an actionable thread 
   );
 });
 
-test('searchTermsForDiscussionPermalink includes the discussion anchor because manual backfills may cite only that stable id', () => {
+test('searchTermsForDiscussionPermalink returns distinct terms including the discussion anchor', () => {
   assert.deepEqual(
     searchTermsForDiscussionPermalink('https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490'),
     [
       'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
-      'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
       'discussion_r3253405490',
     ],
   );
+});
+
+test('captureUnresolvedReviewThreads falls back to anchor-only search without duplicate URL searches', async () => {
+  const searches = [];
+  const result = await captureUnresolvedReviewThreads({
+    repository,
+    pullRequest: {
+      ...pullRequest,
+      reviewThreads: [
+        {
+          ...pullRequest.reviewThreads[0],
+          comments: [
+            {
+              ...pullRequest.reviewThreads[0].comments[0],
+              url: 'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+            },
+          ],
+        },
+      ],
+    },
+    github: {
+      async searchIssuesByDiscussionPermalink({ permalink }) {
+        searches.push(...searchTermsForDiscussionPermalink(permalink));
+        return [{ number: 121, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/121' }];
+      },
+      async createIssue() {
+        throw new Error('anchor-only discussion should already be tracked');
+      },
+    },
+  });
+
+  assert.deepEqual(searches, [
+    'https://github.com/xrf9268-hue/aiops-platform/pull/112#discussion_r3253405490',
+    'discussion_r3253405490',
+  ]);
+  assert.equal(result.created.length, 0);
 });
 
 test('captureUnresolvedReviewThreads treats anchor-only manual issues as existing tracking', async () => {
@@ -296,6 +333,54 @@ test('captureUnresolvedReviewThreads reuses tracking lookups for duplicate verif
 
   assert.equal(searches, 1);
   assert.equal(result.created.length, 0);
+});
+
+test('parseArgs allows explicit zero settle seconds but rejects invalid positive-only counts', () => {
+  assert.deepEqual(parseArgs(['--settle-seconds', '0']), { dryRun: false, settleSeconds: 0 });
+  assert.throws(() => parseArgs(['--pull-number', '0']), /--pull-number must be a positive number/);
+  assert.throws(
+    () => parseArgs(['--pull-number', '112', '--recent-merged-days', '3']),
+    /Pass either --pull-number or --recent-merged-days/,
+  );
+});
+
+test('loadRecentlyMergedPullNumbers paginates until the updated window is exhausted', async () => {
+  const now = Date.now();
+  const requests = [];
+  const page1 = Array.from({ length: 100 }, (_, index) => ({
+    number: index + 1,
+    merged_at: index === 0 ? null : new Date(now - 60 * 60 * 1000).toISOString(),
+    updated_at: new Date(now - 60 * 60 * 1000).toISOString(),
+  }));
+  const page2 = [
+    {
+      number: 200,
+      merged_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+      updated_at: new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+    },
+    {
+      number: 201,
+      merged_at: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      updated_at: new Date(now - 10 * 24 * 60 * 60 * 1000).toISOString(),
+    },
+  ];
+
+  const result = await loadRecentlyMergedPullNumbers({
+    owner: repository.owner,
+    repo: repository.name,
+    days: 3,
+    async request(path) {
+      requests.push(path);
+      return requests.length === 1 ? page1 : page2;
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /page=1/);
+  assert.match(requests[1], /page=2/);
+  assert.equal(result.includes(1), false);
+  assert.equal(result.includes(200), true);
+  assert.equal(result.includes(201), false);
 });
 
 test('capture workflow has scheduled retroactive sweep and failure notification job', async () => {

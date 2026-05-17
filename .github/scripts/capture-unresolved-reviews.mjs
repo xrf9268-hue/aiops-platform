@@ -322,21 +322,32 @@ async function loadPullRequest({ owner, repo, pullNumber }) {
 }
 
 
-async function loadRecentlyMergedPullNumbers({ owner, repo, days }) {
+export async function loadRecentlyMergedPullNumbers({ owner, repo, days, request = githubRequest }) {
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
-  const payload = await githubRequest(
-    `/repos/${owner}/${repo}/pulls?${new URLSearchParams({ state: 'closed', sort: 'updated', direction: 'desc', per_page: '100' })}`,
-  );
-  return (payload ?? [])
-    .filter((pull) => pull.merged_at && Date.parse(pull.merged_at) >= since)
-    .map((pull) => pull.number)
-    .sort((left, right) => left - right);
+  const merged = [];
+  for (let page = 1; ; page += 1) {
+    const payload = await request(
+      `/repos/${owner}/${repo}/pulls?${new URLSearchParams({
+        state: 'closed',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: '100',
+        page: String(page),
+      })}`,
+    );
+    const pulls = payload ?? [];
+    merged.push(...pulls.filter((pull) => pull.merged_at && Date.parse(pull.merged_at) >= since));
+    if (pulls.length < 100 || pulls.every((pull) => Date.parse(pull.updated_at ?? pull.closed_at ?? pull.merged_at ?? 0) < since)) {
+      break;
+    }
+  }
+  return merged.map((pull) => pull.number).sort((left, right) => left - right);
 }
 
 export function searchTermsForDiscussionPermalink(permalink) {
   const parsed = new URL(permalink);
   const discussion = parsed.hash.slice(1);
-  return [permalink, `${parsed.origin}${parsed.pathname}${parsed.hash}`, discussion];
+  return [...new Set([permalink, discussion])];
 }
 
 function uniqueIssues(issues) {
@@ -388,7 +399,15 @@ function parsePositiveNumber(value, name) {
   return number;
 }
 
-function parseArgs(argv) {
+function parseNonNegativeNumber(value, name) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new Error(`${name} must be a non-negative number.`);
+  }
+  return number;
+}
+
+export function parseArgs(argv) {
   const args = { dryRun: false, settleSeconds: 0 };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -403,9 +422,9 @@ function parseArgs(argv) {
     } else if (arg.startsWith('--recent-merged-days=')) {
       args.recentMergedDays = parsePositiveNumber(arg.slice('--recent-merged-days='.length), '--recent-merged-days');
     } else if (arg === '--settle-seconds') {
-      args.settleSeconds = parsePositiveNumber(argv[++index], '--settle-seconds');
+      args.settleSeconds = parseNonNegativeNumber(argv[++index], '--settle-seconds');
     } else if (arg.startsWith('--settle-seconds=')) {
-      args.settleSeconds = parsePositiveNumber(arg.slice('--settle-seconds='.length), '--settle-seconds');
+      args.settleSeconds = parseNonNegativeNumber(arg.slice('--settle-seconds='.length), '--settle-seconds');
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
