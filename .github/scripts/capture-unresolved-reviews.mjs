@@ -147,6 +147,8 @@ export function buildFollowUpIssue({ repository, pullRequest, thread }) {
   return {
     title: `Follow up unresolved review thread from PR #${pullRequest.number}`,
     labels: [priorityLabel, ...defaultLabels],
+    owner: repository.owner,
+    repo: repository.name,
     body: [
       'A merged PR still had an unresolved, non-outdated review discussion. This issue was filed automatically so the feedback is not lost after merge.',
       '',
@@ -178,7 +180,12 @@ export async function verifyTrackingForActionableThreads({
 
   for (const thread of actionable) {
     const permalink = thread.discussionPermalink;
-    if (created.has(permalink) || existingTracked.has(permalink)) {
+    if (existingTracked.has(permalink)) {
+      continue;
+    }
+
+    if (!created.has(permalink)) {
+      missing.push(permalink);
       continue;
     }
 
@@ -220,6 +227,7 @@ export async function captureUnresolvedReviewThreads({ repository, pullRequest, 
       console.log(`Dry run: would create follow-up issue for ${permalink}.`);
       created.push({ ...issue, dryRun: true });
       createdPermalinks.push(permalink);
+      existingTrackedPermalinks.push(permalink);
       continue;
     }
 
@@ -227,6 +235,9 @@ export async function captureUnresolvedReviewThreads({ repository, pullRequest, 
     console.log(`Created follow-up issue #${response.number} for ${permalink}.`);
     created.push(response);
     createdPermalinks.push(permalink);
+    if (response?.url || response?.html_url) {
+      existingTrackedPermalinks.push(permalink);
+    }
   }
 
   for (const thread of nonActionable) {
@@ -322,6 +333,11 @@ async function loadPullRequest({ owner, repo, pullNumber }) {
 }
 
 
+function parseTimestampOrOldest(value) {
+  const timestamp = Date.parse(value ?? '');
+  return Number.isFinite(timestamp) ? timestamp : -Infinity;
+}
+
 export async function loadRecentlyMergedPullNumbers({ owner, repo, days, request = githubRequest }) {
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const merged = [];
@@ -336,8 +352,8 @@ export async function loadRecentlyMergedPullNumbers({ owner, repo, days, request
       })}`,
     );
     const pulls = payload ?? [];
-    merged.push(...pulls.filter((pull) => pull.merged_at && Date.parse(pull.merged_at) >= since));
-    if (pulls.length < 100 || pulls.every((pull) => Date.parse(pull.updated_at ?? pull.closed_at ?? pull.merged_at ?? 0) < since)) {
+    merged.push(...pulls.filter((pull) => parseTimestampOrOldest(pull.merged_at) >= since));
+    if (pulls.length < 100 || pulls.every((pull) => parseTimestampOrOldest(pull.updated_at ?? pull.closed_at ?? pull.merged_at) < since)) {
       break;
     }
   }
@@ -379,9 +395,7 @@ function createGitHubClient() {
       }
       return uniqueIssues(issues);
     },
-    async createIssue({ title, body, labels }) {
-      const owner = requiredEnv('REPO_OWNER');
-      const repo = requiredEnv('REPO_NAME');
+    async createIssue({ title, body, labels, owner = requiredEnv('REPO_OWNER'), repo = requiredEnv('REPO_NAME') }) {
       const issue = await githubRequest(`/repos/${owner}/${repo}/issues`, {
         method: 'POST',
         body: { title, body, labels },

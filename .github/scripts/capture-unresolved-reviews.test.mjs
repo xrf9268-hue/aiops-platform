@@ -92,6 +92,8 @@ test('buildFollowUpIssue includes PR link, discussion permalink, file line, auth
   const issue = buildFollowUpIssue({ repository, pullRequest, thread: pullRequest.reviewThreads[0] });
 
   assert.equal(issue.title, 'Follow up unresolved review thread from PR #106');
+  assert.equal(issue.owner, repository.owner);
+  assert.equal(issue.repo, repository.name);
   assert.deepEqual(issue.labels, ['priority:p1', 'type:chore']);
   assert.match(issue.body, /Merged PR: https:\/\/github\.com\/xrf9268-hue\/aiops-platform\/pull\/106/);
   assert.match(issue.body, /Discussion: https:\/\/github\.com\/xrf9268-hue\/aiops-platform\/pull\/106#discussion_r3252794498/);
@@ -231,6 +233,45 @@ test('verifyTrackingForActionableThreads fails loudly when an actionable thread 
     }),
     /Post-capture verification failed/,
   );
+});
+
+test('verifyTrackingForActionableThreads rechecks newly created issues after search indexing settles', async () => {
+  const searches = [];
+
+  await assert.rejects(
+    verifyTrackingForActionableThreads({
+      repository,
+      pullRequest: { ...pullRequest, reviewThreads: [pullRequest.reviewThreads[0]] },
+      createdPermalinks: ['https://github.com/xrf9268-hue/aiops-platform/pull/106#discussion_r3252794498'],
+      github: {
+        async searchIssuesByDiscussionPermalink({ permalink }) {
+          searches.push(permalink);
+          return [];
+        },
+      },
+    }),
+    /Post-capture verification failed/,
+  );
+
+  assert.deepEqual(searches, ['https://github.com/xrf9268-hue/aiops-platform/pull/106#discussion_r3252794498']);
+});
+
+test('verifyTrackingForActionableThreads passes when newly created issues are searchable', async () => {
+  const searches = [];
+
+  await verifyTrackingForActionableThreads({
+    repository,
+    pullRequest: { ...pullRequest, reviewThreads: [pullRequest.reviewThreads[0]] },
+    createdPermalinks: ['https://github.com/xrf9268-hue/aiops-platform/pull/106#discussion_r3252794498'],
+    github: {
+      async searchIssuesByDiscussionPermalink({ permalink }) {
+        searches.push(permalink);
+        return [{ number: 123, state: 'open' }];
+      },
+    },
+  });
+
+  assert.deepEqual(searches, ['https://github.com/xrf9268-hue/aiops-platform/pull/106#discussion_r3252794498']);
 });
 
 test('searchTermsForDiscussionPermalink returns distinct terms including the discussion anchor', () => {
