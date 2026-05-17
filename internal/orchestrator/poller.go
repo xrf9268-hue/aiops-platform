@@ -80,12 +80,12 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ 
 		defer close(out)
 		start := time.Now()
 		if d.BuildTask == nil {
-			out <- WorkerResult{Err: errors.New("worker task dispatcher requires task builder"), Elapsed: time.Since(start)}
+			out <- WorkerResult{Err: errors.New("worker task dispatcher requires task builder"), NonRetryable: true, Elapsed: time.Since(start)}
 			return
 		}
 		tk, err := d.BuildTask(issue)
 		if err != nil {
-			out <- WorkerResult{Err: err, Elapsed: time.Since(start)}
+			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
 			return
 		}
 		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {

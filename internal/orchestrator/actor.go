@@ -36,13 +36,15 @@ import (
 )
 
 // WorkerResult is the per-run outcome the Dispatcher delivers when its
-// spawned worker exits. Err is nil for SPEC §7.3 normal exit; any
-// non-nil Err is treated as abnormal exit and triggers
-// ScheduleRetry(attempt+1). Elapsed is folded into
-// CodexTotals.SecondsRunning per SPEC §13.3.
+// spawned worker exits. Err is nil for SPEC §7.3 normal exit; retryable
+// errors are treated as abnormal exits and trigger ScheduleRetry(attempt+1).
+// NonRetryable errors fail fast and release the claim so deterministic
+// configuration/task-build failures do not spin forever. Elapsed is folded
+// into CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
-	Err     error
-	Elapsed time.Duration
+	Err          error
+	NonRetryable bool
+	Elapsed      time.Duration
 }
 
 // Dispatcher is the seam through which the actor spawns a per-issue
@@ -392,6 +394,10 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		return nil
 	}
 	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
+		close(f.done)
+		return nil
+	}
+	if f.result.NonRetryable {
 		close(f.done)
 		return nil
 	}

@@ -62,7 +62,7 @@ type erroringTaskDispatcher struct{}
 
 func (d erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int) <-chan WorkerResult {
 	ch := make(chan WorkerResult, 1)
-	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), Elapsed: time.Millisecond}
+	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), NonRetryable: true, Elapsed: time.Millisecond}
 	close(ch)
 	return ch
 }
@@ -159,7 +159,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	waitForDispatcherCount(t, dispatcher, 2)
 }
 
-func TestPollOnceRetriesAfterBuildTaskFailureWithoutLeakingRunningState(t *testing.T) {
+func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -177,17 +177,12 @@ func TestPollOnceRetriesAfterBuildTaskFailureWithoutLeakingRunningState(t *testi
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForRetryQueued(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 
-	view, err := orch.Snapshot(ctx)
-	if err != nil {
-		t.Fatalf("snapshot: %v", err)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll once: %v", err)
 	}
-	for _, running := range view.Running {
-		if running.IssueID == "issue-1" {
-			t.Fatalf("issue-1 still running after build-task failure")
-		}
-	}
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 }
 
 func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
@@ -262,7 +257,7 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 	t.Fatalf("issue %s was not marked completed", id)
 }
 
-func waitForRetryQueued(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+func waitForNoRunningOrRetrying(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -270,12 +265,29 @@ func waitForRetryQueued(t *testing.T, ctx context.Context, orch *Orchestrator, i
 		if err != nil {
 			t.Fatalf("snapshot: %v", err)
 		}
-		for _, retry := range view.Retrying {
-			if retry.IssueID == id {
-				return
-			}
+		if !hasRunningOrRetrying(view, id) {
+			return
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("issue %s was not retry queued", id)
+
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	t.Fatalf("issue %s still running or retrying after deterministic build failure: running=%v retrying=%v", id, view.Running, view.Retrying)
+}
+
+func hasRunningOrRetrying(view StateView, id IssueID) bool {
+	for _, running := range view.Running {
+		if running.IssueID == id {
+			return true
+		}
+	}
+	for _, retry := range view.Retrying {
+		if retry.IssueID == id {
+			return true
+		}
+	}
+	return false
 }
