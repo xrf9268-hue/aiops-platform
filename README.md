@@ -29,6 +29,7 @@ Symphony implementation while D1–D24 are closed systematically.
 
 - `cmd/trigger-api`: receives Gitea webhooks and manual task submissions.
 - `cmd/linear-poller`: polls Linear issues in configured active states and enqueues tasks.
+- `cmd/gitea-poller`: polls Gitea issues whose mutually-exclusive `aiops/*` labels map to configured active states and enqueues tasks.
 - `cmd/worker`: claims/dispatches tasks and runs the Symphony-style workflow.
 - `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
 - `internal/tracker`: tracker abstraction with a Linear client.
@@ -148,6 +149,28 @@ docker compose --env-file .env -f deploy/docker-compose.yml --profile linear up 
 ```
 
 The poller watches active Linear states such as `AI Ready`, `In Progress`, and `Rework`, then enqueues tasks for the worker.
+
+## Quick start: Gitea polling path
+
+For SPEC-aligned Gitea polling, encode issue state as exactly one `aiops/*` label:
+
+| Workflow state | Gitea label |
+| --- | --- |
+| `AI Ready` | `aiops/todo` |
+| `In Progress` | `aiops/in-progress` |
+| `Rework` | `aiops/rework` |
+| `Done` | `aiops/done` |
+| `Canceled` | `aiops/canceled` |
+
+Then run the poller from source:
+
+```bash
+export GITEA_BASE_URL=https://gitea.example.com
+export GITEA_TOKEN=your-gitea-bot-token
+go run ./cmd/gitea-poller examples/WORKFLOW.md
+```
+
+The poller reads issues whose labels map to configured active states and enqueues them for the worker. State changes are still performed by the agent through the advertised tool surface, not by the poller.
 
 ## First safe mode
 
