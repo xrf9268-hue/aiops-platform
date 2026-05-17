@@ -24,6 +24,7 @@ type ActiveIssueLister interface {
 type Poller struct {
 	tracker      ActiveIssueLister
 	orchestrator *Orchestrator
+	overflow     []tracker.Issue
 }
 
 // NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
@@ -46,16 +47,47 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	candidates := mergeOverflowCandidates(p.overflow, issues)
+	p.overflow = nil
 	var dispatchErr error
-	for _, issue := range issues {
+	for _, issue := range candidates {
 		if issue.ID == "" {
 			continue
 		}
-		if err := p.orchestrator.RequestDispatch(ctx, issue, nil); err != nil && !errors.Is(err, ErrNotDispatched) {
-			dispatchErr = errors.Join(dispatchErr, fmt.Errorf("dispatch %s: %w", issue.ID, err))
+		if err := p.orchestrator.RequestDispatch(ctx, issue, nil); err != nil {
+			switch {
+			case errors.Is(err, ErrNotDispatched):
+				continue
+			case errors.Is(err, ErrCapacityFull):
+				p.overflow = append(p.overflow, issue)
+			default:
+				dispatchErr = errors.Join(dispatchErr, fmt.Errorf("dispatch %s: %w", issue.ID, err))
+			}
 		}
 	}
 	return dispatchErr
+}
+
+func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
+	if len(overflow) == 0 {
+		return fresh
+	}
+	candidates := make([]tracker.Issue, 0, len(overflow)+len(fresh))
+	seen := make(map[string]struct{}, len(overflow)+len(fresh))
+	for _, issue := range overflow {
+		if issue.ID == "" {
+			continue
+		}
+		seen[issue.ID] = struct{}{}
+		candidates = append(candidates, issue)
+	}
+	for _, issue := range fresh {
+		if _, ok := seen[issue.ID]; ok {
+			continue
+		}
+		candidates = append(candidates, issue)
+	}
+	return candidates
 }
 
 // TaskBuilder converts a tracker candidate into the task shape consumed by the

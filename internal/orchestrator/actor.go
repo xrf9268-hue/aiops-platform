@@ -209,6 +209,12 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (StateView, error) {
 // distinguish "rejected" from "succeeded" by inspecting it.
 var ErrNotDispatched = errors.New("orchestrator: issue already claimed")
 
+// ErrCapacityFull is returned by RequestDispatch when the issue is eligible and
+// unclaimed, but the orchestrator is already running the configured maximum
+// number of agents. Callers should keep the issue eligible for a future poll
+// tick rather than treating it as a duplicate dispatch.
+var ErrCapacityFull = errors.New("orchestrator: max_concurrent_agents reached")
+
 // RequestDispatch is the public entry to dispatch issue if no other
 // claim exists. It returns nil on accepted dispatch (a worker is being
 // spawned) and ErrNotDispatched if the actor saw an existing claim.
@@ -217,17 +223,14 @@ var ErrNotDispatched = errors.New("orchestrator: issue already claimed")
 // for the same issue produce at most one Running entry, even when many
 // goroutines race on the same id.
 func (o *Orchestrator) RequestDispatch(ctx context.Context, issue tracker.Issue, attempt *int) error {
-	reply := make(chan bool, 1)
-	op := &dispatchOp{o: o, issue: issue, attempt: attempt, accepted: reply}
+	reply := make(chan error, 1)
+	op := &dispatchOp{o: o, issue: issue, attempt: attempt, result: reply}
 	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
 	select {
-	case ok := <-reply:
-		if !ok {
-			return ErrNotDispatched
-		}
-		return nil
+	case err := <-reply:
+		return err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -260,16 +263,20 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 // dispatch decision atomic against concurrent claims while keeping I/O
 // off the actor goroutine.
 type dispatchOp struct {
-	o        *Orchestrator
-	issue    tracker.Issue
-	attempt  *int
-	accepted chan<- bool
+	o       *Orchestrator
+	issue   tracker.Issue
+	attempt *int
+	result  chan<- error
 }
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
-	if st.IsClaimed(id) || st.RunningCount() >= st.MaxConcurrentAgents {
-		d.accepted <- false
+	if st.IsClaimed(id) {
+		d.result <- ErrNotDispatched
+		return nil
+	}
+	if st.RunningCount() >= st.MaxConcurrentAgents {
+		d.result <- ErrCapacityFull
 		return nil
 	}
 	// Reserve the slot synchronously so a concurrent dispatchOp aborts
@@ -279,10 +286,10 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	o := d.o
 	issue := d.issue
 	attempt := d.attempt
-	accepted := d.accepted
+	result := d.result
 	return func() {
 		o.spawn(id, issue, attempt)
-		accepted <- true
+		result <- nil
 	}
 }
 

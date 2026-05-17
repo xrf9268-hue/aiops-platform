@@ -231,6 +231,46 @@ func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
 	}
 }
 
+func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"},
+		{ID: "issue-2", Identifier: "LIN-2", State: "AI Ready"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("first poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "issue-1" {
+		t.Fatalf("first dispatched issue ID = %q, want issue-1", got)
+	}
+
+	close(dispatcher.releaseCh)
+	waitForCompleted(t, ctx, orch, "issue-1")
+	dispatcher.releaseCh = nil
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll once after capacity freed: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	if got := dispatcher.issueAt(1).ID; got != "issue-2" {
+		t.Fatalf("second dispatched issue ID = %q, want overflow issue-2", got)
+	}
+}
+
 func waitForDispatcherCount(t *testing.T, dispatcher *recordingDispatcher, want int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
