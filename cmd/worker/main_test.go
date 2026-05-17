@@ -138,6 +138,18 @@ func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing
 	}
 }
 
+func TestValidateWorkflowForRuntimeRejectsPromptOnlyWorkflowMissingTaskFields(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+
+	err := validateWorkflowForRuntime("WORKFLOW.md", cfg)
+	if err == nil {
+		t.Fatal("validateWorkflowForRuntime(prompt-only defaults) = nil, want repo.clone_url error")
+	}
+	if !strings.Contains(err.Error(), "WORKFLOW.md: repo.clone_url is required") {
+		t.Fatalf("validateWorkflowForRuntime error = %v, want repo.clone_url guidance", err)
+	}
+}
+
 func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "prompt-only-workflow.md")

@@ -78,10 +78,20 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 
+func validateWorkflowForRuntime(path string, cfg workflow.Config) error {
+	if cfg.Repo.CloneURL == "" {
+		return fmt.Errorf("%s: repo.clone_url is required", path)
+	}
+	return nil
+}
+
 func run(ctx context.Context) error {
 	cfg := worker.LoadConfigFromEnv()
 	wf, err := loadWorkflowForStartupReconcile()
 	if err != nil {
+		return err
+	}
+	if err := validateWorkflowForRuntime(wf.Path, wf.Config); err != nil {
 		return err
 	}
 
