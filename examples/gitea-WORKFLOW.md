@@ -14,6 +14,8 @@ tracker:
   terminal_states:
     - Done
     - Canceled
+  inactive_states:
+    - Human Review
   poll_interval_ms: 30000
 
 workspace:

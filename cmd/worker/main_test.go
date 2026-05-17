@@ -180,6 +180,7 @@ func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testi
 func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.Kind = "linear"
 	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress", "Rework"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
 
@@ -195,6 +196,38 @@ func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
 	}
 	if !containsState(reconcile.InactiveStates, "Backlog") || !containsState(reconcile.InactiveStates, "Human Review") {
 		t.Fatalf("inactive reconciliation states = %v, want Backlog and Human Review", reconcile.InactiveStates)
+	}
+}
+
+func TestWorkerReconciliationConfigDoesNotProbeUnmappedGiteaInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress", "Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if containsState(reconcile.InactiveStates, "Backlog") {
+		t.Fatalf("inactive reconciliation states = %v, must not include unmapped Gitea Backlog state", reconcile.InactiveStates)
+	}
+	if !containsState(reconcile.InactiveStates, "Human Review") {
+		t.Fatalf("inactive reconciliation states = %v, want mapped Gitea Human Review state", reconcile.InactiveStates)
+	}
+}
+
+func TestWorkerReconciliationConfigUsesWorkflowInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+	cfg.Tracker.InactiveStates = []string{"Paused", "Blocked", "Done", "AI Ready"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if !containsState(reconcile.InactiveStates, "Paused") || !containsState(reconcile.InactiveStates, "Blocked") {
+		t.Fatalf("inactive reconciliation states = %v, want workflow-configured inactive states", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "Done") || containsState(reconcile.InactiveStates, "AI Ready") {
+		t.Fatalf("inactive reconciliation states = %v, must exclude configured active/terminal states", reconcile.InactiveStates)
 	}
 }
 

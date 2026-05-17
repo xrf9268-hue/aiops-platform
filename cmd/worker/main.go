@@ -147,21 +147,41 @@ func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.Reconcili
 }
 
 func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
-	candidates := []string{"Backlog", "Human Review"}
+	candidates := cfg.InactiveStates
+	if len(candidates) == 0 {
+		candidates = defaultInactiveStateCandidates(cfg.Kind)
+	}
 	active := stateSet(cfg.ActiveStates)
 	terminal := stateSet(cfg.TerminalStates)
 	out := make([]string, 0, len(candidates))
+	seen := map[string]struct{}{}
 	for _, state := range candidates {
 		key := normalizeState(state)
+		if key == "" {
+			continue
+		}
 		if _, ok := active[key]; ok {
 			continue
 		}
 		if _, ok := terminal[key]; ok {
 			continue
 		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
 		out = append(out, state)
 	}
 	return out
+}
+
+func defaultInactiveStateCandidates(kind string) []string {
+	switch normalizeState(kind) {
+	case "gitea":
+		return []string{"Human Review"}
+	default:
+		return []string{"Backlog", "Human Review"}
+	}
 }
 
 func stateSet(states []string) map[string]struct{} {

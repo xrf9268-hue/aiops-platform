@@ -15,6 +15,9 @@ tracker:
   terminal_states:
     - Done
     - Canceled
+  inactive_states:
+    - Backlog
+    - Human Review
   poll_interval_ms: 30000
   # statuses names the Linear workflow states used for handoff updates
   # (for example claim -> in_progress, PR opened -> human_review, failure
