@@ -22,6 +22,11 @@ type giteaIssueLabelsProxy struct {
 	http    *http.Client
 }
 
+type giteaIssueLabel struct {
+	ID   int64
+	Name string
+}
+
 func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string, error) {
 	if call.IssueNumber <= 0 {
 		return dynamicToolFailure(map[string]any{
@@ -58,8 +63,23 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	if failure != "" {
 		return failure, nil
 	}
-	labels := replaceAIOpsLabels(currentLabels, desiredStateLabels)
-	payload := map[string]any{"labels": labels}
+	for _, label := range currentLabels {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "aiops/") && !containsLabelFold(desiredStateLabels, label.Name) {
+			if label.ID == 0 {
+				return dynamicToolFailure(map[string]any{
+					"error": map[string]any{"message": "Gitea label response omitted id for stale aiops label", "label": label.Name},
+				})
+			}
+			if failure := p.deleteIssueLabel(ctx, client, endpoint, label.ID); failure != "" {
+				return failure, nil
+			}
+		}
+	}
+	labelsToAdd := missingLabels(currentLabels, desiredStateLabels)
+	if len(labelsToAdd) == 0 {
+		return dynamicToolResult(true, `{"labels":[]}`)
+	}
+	payload := map[string]any{"labels": labelsToAdd}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
@@ -67,7 +87,7 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 		})
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label request could not be built", "reason": err.Error()},
@@ -97,7 +117,7 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	return dynamicToolResult(true, respBody.String())
 }
 
-func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *http.Client, endpoint string) ([]string, string) {
+func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *http.Client, endpoint string) ([]giteaIssueLabel, string) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		failure, _ := dynamicToolFailure(map[string]any{
@@ -129,6 +149,7 @@ func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *h
 		return nil, failure
 	}
 	var labels []struct {
+		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(respBody.Bytes(), &labels); err != nil {
@@ -137,13 +158,47 @@ func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *h
 		})
 		return nil, failure
 	}
-	out := make([]string, 0, len(labels))
+	out := make([]giteaIssueLabel, 0, len(labels))
 	for _, label := range labels {
 		if strings.TrimSpace(label.Name) != "" {
-			out = append(out, label.Name)
+			out = append(out, giteaIssueLabel{ID: label.ID, Name: label.Name})
 		}
 	}
 	return out, ""
+}
+
+func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *http.Client, endpoint string, labelID int64) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, labelID), nil)
+	if err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "Gitea label delete request could not be built", "reason": err.Error()},
+		})
+		return failure
+	}
+	req.Header.Set("Authorization", "token "+strings.TrimSpace(p.token))
+	resp, err := client.Do(req)
+	if err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "Gitea label delete request failed during transport", "reason": err.Error()},
+		})
+		return failure
+	}
+	defer resp.Body.Close()
+	var respBody bytes.Buffer
+	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
+	if readErr != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "Gitea label delete response body could not be read", "reason": readErr.Error()},
+		})
+		return failure
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "Gitea label delete request failed", "status": resp.Status, "body": respBody.String()},
+		})
+		return failure
+	}
+	return ""
 }
 
 func validGiteaStateLabels() map[string]struct{} {
@@ -185,6 +240,36 @@ func replaceAIOpsLabels(currentLabels, desiredStateLabels []string) []string {
 		labels = append(labels, trimmed)
 	}
 	return labels
+}
+
+func containsLabelFold(labels []string, label string) bool {
+	want := strings.ToLower(strings.TrimSpace(label))
+	for _, candidate := range labels {
+		if strings.ToLower(strings.TrimSpace(candidate)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func missingLabels(currentLabels []giteaIssueLabel, desiredLabels []string) []string {
+	out := make([]string, 0, len(desiredLabels))
+	for _, desired := range desiredLabels {
+		if !containsIssueLabelFold(currentLabels, desired) {
+			out = append(out, strings.TrimSpace(desired))
+		}
+	}
+	return out
+}
+
+func containsIssueLabelFold(labels []giteaIssueLabel, label string) bool {
+	want := strings.ToLower(strings.TrimSpace(label))
+	for _, candidate := range labels {
+		if strings.ToLower(strings.TrimSpace(candidate.Name)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func giteaBaseURLFromTracker(cfg workflow.TrackerConfig) string {

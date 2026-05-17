@@ -34,11 +34,16 @@ func (f *fakeGiteaLabelServer) handler() http.Handler {
 		f.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		if r.Method == http.MethodGet {
-			_, _ = io.WriteString(w, `[{"name":"bug"},{"name":"aiops/todo"}]`)
-			return
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/todo"},{"id":202,"name":"bug"}]`)
+		case http.MethodDelete:
+			_, _ = io.WriteString(w, `{}`)
+		case http.MethodPost:
+			_, _ = io.WriteString(w, `{"labels":[{"name":"aiops/in-progress"}]}`)
+		default:
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
 		}
-		_, _ = io.WriteString(w, `{"labels":[{"name":"aiops/in-progress"}]}`)
 	})
 }
 
@@ -106,14 +111,14 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	}
 
 	auth, method, path, body, requests := server.recorded()
-	if requests != 2 {
-		t.Fatalf("requests = %d, want GET then PUT", requests)
+	if requests != 3 {
+		t.Fatalf("requests = %d, want GET, DELETE, POST", requests)
 	}
 	if auth != "token "+token {
 		t.Fatalf("Authorization = %q, want token auth", auth)
 	}
-	if method != http.MethodPut {
-		t.Fatalf("method = %q, want PUT", method)
+	if method != http.MethodPost {
+		t.Fatalf("method = %q, want POST", method)
 	}
 	if path != "/api/v1/repos/owner/repo/issues/7/labels" {
 		t.Fatalf("path = %q", path)
@@ -138,14 +143,64 @@ func TestGiteaIssueLabelsPreservesNonAIOpsLabelsWhenReplacingState(t *testing.T)
 	}
 
 	methods, paths, bodies := server.recordedSequence()
-	if len(methods) != 2 || methods[0] != http.MethodGet || methods[1] != http.MethodPut {
-		t.Fatalf("methods = %#v, want GET then PUT", methods)
+	if len(methods) != 3 || methods[0] != http.MethodGet || methods[1] != http.MethodDelete || methods[2] != http.MethodPost {
+		t.Fatalf("methods = %#v, want GET then DELETE stale aiops label then POST desired label", methods)
 	}
-	if paths[0] != "/api/v1/repos/owner/repo/issues/7/labels" || paths[1] != "/api/v1/repos/owner/repo/issues/7/labels" {
+	if paths[0] != "/api/v1/repos/owner/repo/issues/7/labels" || paths[1] != "/api/v1/repos/owner/repo/issues/7/labels/101" || paths[2] != "/api/v1/repos/owner/repo/issues/7/labels" {
 		t.Fatalf("paths = %#v", paths)
 	}
-	if !strings.Contains(bodies[1], "bug") || !strings.Contains(bodies[1], "aiops/in-progress") || strings.Contains(bodies[1], "aiops/todo") {
-		t.Fatalf("PUT body = %s, want existing non-aiops label preserved and stale aiops state removed", bodies[1])
+	if strings.Contains(bodies[2], "bug") || !strings.Contains(bodies[2], "aiops/in-progress") || strings.Contains(bodies[2], "aiops/todo") {
+		t.Fatalf("POST body = %s, want only desired aiops label added without replacing non-aiops labels", bodies[2])
+	}
+}
+
+func TestGiteaIssueLabelsDoesNotOverwriteConcurrentNonAIOpsLabelChanges(t *testing.T) {
+	var mu sync.Mutex
+	var methods, paths, bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.String())
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/todo"},{"id":202,"name":"bug"}]`)
+		case http.MethodDelete:
+			_, _ = io.WriteString(w, `{}`)
+		case http.MethodPost:
+			if strings.Contains(string(body), "bug") || strings.Contains(string(body), "urgent") {
+				t.Fatalf("POST body = %s, must not replace a full label snapshot that can drop concurrent labels", body)
+			}
+			_, _ = io.WriteString(w, `{"labels":[{"name":"aiops/in-progress"},{"name":"bug"},{"name":"urgent"}]}`)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: server.URL, owner: "owner", repo: "repo", http: server.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	if err != nil {
+		t.Fatalf("gitea_issue_labels call: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Fatalf("result = %q, want success", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,DELETE,POST" {
+		t.Fatalf("methods = %#v, want GET, DELETE, POST", methods)
+	}
+	if paths[1] != "/api/v1/repos/owner/repo/issues/7/labels/101" {
+		t.Fatalf("DELETE path = %q, want stale aiops label id endpoint", paths[1])
+	}
+	if !strings.Contains(bodies[2], "aiops/in-progress") {
+		t.Fatalf("POST body = %s, want desired aiops label", bodies[2])
 	}
 }
 
