@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -48,6 +49,15 @@ func (d *recordingDispatcher) issueAt(i int) tracker.Issue {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.issues[i]
+}
+
+type erroringTaskDispatcher struct{}
+
+func (d erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int) <-chan WorkerResult {
+	ch := make(chan WorkerResult, 1)
+	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), Elapsed: time.Millisecond}
+	close(ch)
+	return ch
 }
 
 func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *testing.T) {
@@ -116,6 +126,37 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	waitForDispatcherCount(t, dispatcher, 2)
 }
 
+func TestPollOnceRetriesAfterBuildTaskFailureWithoutLeakingRunningState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: erroringTaskDispatcher{},
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForRetryQueued(t, ctx, orch, "issue-1")
+
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	for _, running := range view.Running {
+		if running.IssueID == "issue-1" {
+			t.Fatalf("issue-1 still running after build-task failure")
+		}
+	}
+}
+
 func waitForDispatcherCount(t *testing.T, dispatcher *recordingDispatcher, want int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -144,4 +185,22 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("issue %s was not marked completed", id)
+}
+
+func waitForRetryQueued(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		view, err := orch.Snapshot(ctx)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		for _, retry := range view.Retrying {
+			if retry.IssueID == id {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("issue %s was not retry queued", id)
 }

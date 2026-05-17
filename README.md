@@ -166,16 +166,9 @@ Comment on a Gitea issue:
 /ai-run
 ```
 
-## Legacy quick start: Linear queue polling path
+## Legacy Linear queue polling path
 
-Edit `examples/WORKFLOW.md` with your repo and Linear settings, then run:
-
-```bash
-export LINEAR_API_KEY=your-linear-personal-key
-docker compose --env-file .env -f deploy/docker-compose.yml --profile legacy-queue up --build linear-poller worker
-```
-
-The poller watches active Linear states such as `AI Ready`, `In Progress`, and `Rework`, then enqueues tasks for the worker.
+`cmd/linear-poller` is retained only as transitional queue-ingress code until D7 cleanup. The SPEC-aligned `worker` no longer drains Postgres queue rows, so do not start `linear-poller worker` as a working legacy stack. For active Linear issue execution, configure `tracker.kind: linear` in `WORKFLOW.md` and run the worker-owned tracker polling path above.
 
 ## Legacy quick start: Gitea queue polling path
 

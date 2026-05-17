@@ -96,11 +96,11 @@ func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T
 	}
 }
 
-func TestTrackerClientForWorkflowUsesGiteaBaseURLEvenWithProjectSlug(t *testing.T) {
-	t.Setenv("GITEA_BASE_URL", "https://gitea.example.test/")
+func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.ProjectSlug = "owner/repo"
+	cfg.Tracker.ProjectSlug = "https://gitea-workflow.example.test/"
 	cfg.Repo.Owner = "owner"
 	cfg.Repo.Name = "repo"
 
@@ -112,8 +112,8 @@ func TestTrackerClientForWorkflowUsesGiteaBaseURLEvenWithProjectSlug(t *testing.
 	if !ok {
 		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
 	}
-	if giteaClient.BaseURL != "https://gitea.example.test" {
-		t.Fatalf("base URL = %q, want env GITEA_BASE_URL without trailing slash", giteaClient.BaseURL)
+	if giteaClient.BaseURL != "https://gitea-workflow.example.test" {
+		t.Fatalf("base URL = %q, want tracker.project_slug without trailing slash", giteaClient.BaseURL)
 	}
 }
 

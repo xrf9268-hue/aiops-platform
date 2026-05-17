@@ -124,7 +124,10 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 	case "linear":
 		return tracker.NewLinearClient(cfg.Tracker), nil
 	case "gitea":
-		baseURL := env("GITEA_BASE_URL", "http://localhost:3000")
+		baseURL := cfg.Tracker.ProjectSlug
+		if baseURL == "" {
+			baseURL = env("GITEA_BASE_URL", "http://localhost:3000")
+		}
 		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	default:
 		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
