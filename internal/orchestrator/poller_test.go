@@ -25,17 +25,24 @@ func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue,
 }
 
 type recordingDispatcher struct {
-	mu     sync.Mutex
-	issues []tracker.Issue
+	mu        sync.Mutex
+	issues    []tracker.Issue
+	releaseCh chan struct{}
 }
 
 func (d *recordingDispatcher) Spawn(_ context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
+	releaseCh := d.releaseCh
 	d.mu.Unlock()
 	ch := make(chan WorkerResult, 1)
-	ch <- WorkerResult{Elapsed: time.Millisecond}
-	close(ch)
+	go func() {
+		if releaseCh != nil {
+			<-releaseCh
+		}
+		ch <- WorkerResult{Elapsed: time.Millisecond}
+		close(ch)
+	}()
 	return ch
 }
 
@@ -89,7 +96,8 @@ func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *t
 	defer cancel()
 
 	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}}
-	dispatcher := &recordingDispatcher{}
+	releaseCh := make(chan struct{})
+	dispatcher := &recordingDispatcher{releaseCh: releaseCh}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
 		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
@@ -120,6 +128,7 @@ func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *t
 	if got := dispatcher.count(); got != 1 {
 		t.Fatalf("dispatcher issues after duplicate poll = %d, want 1", got)
 	}
+	close(releaseCh)
 }
 
 func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
