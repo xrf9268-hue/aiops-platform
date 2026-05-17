@@ -129,15 +129,17 @@ func TestLinearGraphQLIgnoresAgentSuppliedEndpoint(t *testing.T) {
 	}
 }
 
-func TestDynamicToolsDoNotExposeLinearGraphQLWithoutLinearToken(t *testing.T) {
+func TestDynamicToolsDoNotExposeLinearToolsWithoutLinearToken(t *testing.T) {
 	for _, wf := range []workflow.Workflow{
 		{},
 		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "linear"}}},
 		{Config: workflow.Config{Tracker: workflow.TrackerConfig{Kind: "gitea", APIKey: "token"}}},
 	} {
 		tools := DynamicToolsForWorkflow(wf)
-		if _, ok := tools.Lookup("linear_graphql"); ok {
-			t.Fatalf("linear_graphql advertised without configured Linear token: %#v", wf.Config.Tracker)
+		for _, name := range []string{"linear_graphql", "linear_ai_workpad"} {
+			if _, ok := tools.Lookup(name); ok {
+				t.Fatalf("%s advertised without configured Linear token: %#v", name, wf.Config.Tracker)
+			}
 		}
 	}
 }

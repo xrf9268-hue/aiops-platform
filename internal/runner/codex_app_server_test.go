@@ -155,8 +155,12 @@ for line in sys.stdin:
     elif msg.get('method') == 'thread/start':
         tools = msg.get('params', {}).get('dynamicTools', [])
         linear = next((tool for tool in tools if tool.get('name') == 'linear_graphql'), None)
+        workpad = next((tool for tool in tools if tool.get('name') == 'linear_ai_workpad'), None)
         if linear is None or 'inputSchema' not in linear or 'query' not in linear.get('inputSchema', {}).get('properties', {}):
             print(json.dumps({'id': msg['id'], 'error': {'message': 'linear_graphql missing inputSchema', 'tool': linear}}), flush=True)
+            break
+        if workpad is None or 'inputSchema' not in workpad or 'variables' not in workpad.get('inputSchema', {}).get('properties', {}):
+            print(json.dumps({'id': msg['id'], 'error': {'message': 'linear_ai_workpad missing inputSchema', 'tool': workpad}}), flush=True)
             break
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':

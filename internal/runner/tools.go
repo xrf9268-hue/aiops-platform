@@ -96,6 +96,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 			},
 			Call: client.call,
 		}
+		tools.tools["linear_ai_workpad"] = NewLinearWorkpadTool(tools.tools["linear_graphql"])
 	}
 	return tools
 }
