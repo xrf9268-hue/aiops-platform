@@ -65,6 +65,9 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
 	}
 	wantedStates := normalizedStateSet(states)
+	if len(wantedStates) == 0 {
+		return nil, nil
+	}
 	labelNames := StateLabelNamesForStates(states, DefaultStateLabelMappings())
 	issueState := giteaAPIStateForWorkflowStates(states, c.Config.TerminalStates)
 
@@ -94,7 +97,10 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			if len(batch) == 0 {
 				return out, nil
 			}
-			return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
+			if c.Logf != nil {
+				c.Logf("gitea issue pagination exceeded %d pages for label %q; returning capped result set", listIssuesMaxPages, labelName)
+			}
+			return out, nil
 		}
 		for _, issue := range batch {
 			issueKey := strconv.FormatInt(issue.ID, 10)

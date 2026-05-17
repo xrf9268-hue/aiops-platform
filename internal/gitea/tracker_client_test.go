@@ -14,6 +14,31 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+func TestTrackerClientListIssuesByStatesReturnsNoIssuesWhenNoStatesRequested(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 100, Number: 100, Title: "todo", HTMLURL: "https://gitea.local/o/r/issues/100", Labels: []Label{{Name: "aiops/todo"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v, want no issues for an empty workflow state filter", issues)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want no unfiltered Gitea request for empty states", requests)
+	}
+}
+
 func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	var requestedLabels []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -224,6 +249,41 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 	}
 	if got, want := requestedPages[len(requestedPages)-1], strconv.Itoa(listIssuesMaxPages+1); got != want {
 		t.Fatalf("last requested page = %s, want probe page %s", got, want)
+	}
+}
+
+func TestTrackerClientListIssuesByStatesReturnsCappedResultsInsteadOfFailingWhenPageLimitExceeded(t *testing.T) {
+	var logs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		if err != nil {
+			t.Fatalf("page query = %q: %v", r.URL.Query().Get("page"), err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Add("Link", fmt.Sprintf(`<%s%s?page=%d>; rel="next"`, serverURL(r), r.URL.Path, page+1))
+		issues := make([]Issue, listIssuesPageSize)
+		for i := range issues {
+			number := (page-1)*listIssuesPageSize + i + 1
+			issues[i] = Issue{ID: int64(number), Number: number, Title: "todo", HTMLURL: fmt.Sprintf("https://gitea.local/o/r/issues/%d", number), Labels: []Label{{Name: "aiops/todo"}}}
+		}
+		_ = json.NewEncoder(w).Encode(issues)
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	client.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates must return capped results instead of failing the poll cycle: %v", err)
+	}
+	if len(issues) != listIssuesMaxPages*listIssuesPageSize {
+		t.Fatalf("issues len = %d, want capped %d issues", len(issues), listIssuesMaxPages*listIssuesPageSize)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "gitea issue pagination exceeded") {
+		t.Fatalf("logs = %#v, want pagination cap diagnostic", logs)
 	}
 }
 
