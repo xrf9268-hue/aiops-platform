@@ -43,9 +43,9 @@ func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
 			t.Fatalf("cmd/worker/main.go contains %q; worker startup must use tracker + orchestrator runtime state, not the Postgres queue", forbidden)
 		}
 	}
-	for _, required := range []string{"orchestrator.NewOrchestratorState", "orchestrator.NewPoller", "orchestrator.RunPollLoop"} {
+	for _, required := range []string{"orchestrator.NewOrchestratorState", "orchestrator.NewPollerWithReconciliation", "orchestrator.RunPollLoop"} {
 		if !strings.Contains(string(src), required) {
-			t.Fatalf("cmd/worker/main.go missing %q; worker startup must poll tracker issues through orchestrator runtime state", required)
+			t.Fatalf("cmd/worker/main.go missing %q; worker startup must poll tracker issues through reconciled orchestrator runtime state", required)
 		}
 	}
 }
@@ -175,6 +175,69 @@ func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testi
 			t.Fatalf("validateWorkflowForRuntime(source=%s) = %v, want nil", source, err)
 		}
 	}
+}
+
+func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress", "Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if len(reconcile.InactiveStates) == 0 {
+		t.Fatalf("inactive reconciliation states = %v, want non-empty states for explicit inactive tracker observations", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "AI Ready") || containsState(reconcile.InactiveStates, "In Progress") || containsState(reconcile.InactiveStates, "Rework") {
+		t.Fatalf("inactive reconciliation states = %v, must not include configured active states", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "Done") || containsState(reconcile.InactiveStates, "Canceled") {
+		t.Fatalf("inactive reconciliation states = %v, must not duplicate terminal states", reconcile.InactiveStates)
+	}
+	if !containsState(reconcile.InactiveStates, "Backlog") || !containsState(reconcile.InactiveStates, "Human Review") {
+		t.Fatalf("inactive reconciliation states = %v, want Backlog and Human Review", reconcile.InactiveStates)
+	}
+}
+
+func TestWorkerReconciliationConfigDoesNotProbeUnmappedGiteaInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress", "Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if containsState(reconcile.InactiveStates, "Backlog") {
+		t.Fatalf("inactive reconciliation states = %v, must not include unmapped Gitea Backlog state", reconcile.InactiveStates)
+	}
+	if !containsState(reconcile.InactiveStates, "Human Review") {
+		t.Fatalf("inactive reconciliation states = %v, want mapped Gitea Human Review state", reconcile.InactiveStates)
+	}
+}
+
+func TestWorkerReconciliationConfigUsesWorkflowInactiveStates(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+	cfg.Tracker.InactiveStates = []string{"Paused", "Blocked", "Done", "AI Ready"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if !containsState(reconcile.InactiveStates, "Paused") || !containsState(reconcile.InactiveStates, "Blocked") {
+		t.Fatalf("inactive reconciliation states = %v, want workflow-configured inactive states", reconcile.InactiveStates)
+	}
+	if containsState(reconcile.InactiveStates, "Done") || containsState(reconcile.InactiveStates, "AI Ready") {
+		t.Fatalf("inactive reconciliation states = %v, must exclude configured active/terminal states", reconcile.InactiveStates)
+	}
+}
+
+func containsState(states []string, want string) bool {
+	for _, state := range states {
+		if state == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestValidateWorkflowForRuntimeRejectsFrontMatterWorkflowMissingTaskFields(t *testing.T) {

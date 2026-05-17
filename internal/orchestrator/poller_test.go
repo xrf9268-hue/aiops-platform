@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -151,6 +153,413 @@ func (d *blockingDispatcher) count() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return len(d.issues)
+}
+
+type fakeIssueStateTracker struct {
+	mu     sync.Mutex
+	issues []tracker.Issue
+	err    error
+}
+
+type fakeIssueStateTrackerByCall struct {
+	mu        sync.Mutex
+	issues    [][]tracker.Issue
+	errByCall []error
+	calls     int
+}
+
+func (f *fakeIssueStateTracker) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	return f.ListIssuesByStates(ctx, nil)
+}
+
+func (f *fakeIssueStateTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	wanted := normalizedStates(states)
+	out := make([]tracker.Issue, 0, len(f.issues))
+	for _, issue := range f.issues {
+		if isActiveTrackerState(issue.State, wanted) {
+			out = append(out, issue)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeIssueStateTracker) setIssues(issues []tracker.Issue) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.issues = issues
+}
+
+func (f *fakeIssueStateTracker) setErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakeIssueStateTrackerByCall) ListIssuesByStates(_ context.Context, _ []string) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	call := f.calls
+	f.calls++
+	if call < len(f.errByCall) && f.errByCall[call] != nil {
+		return nil, f.errByCall[call]
+	}
+	if call < len(f.issues) {
+		return f.issues[call], nil
+	}
+	return nil, nil
+}
+
+type cancellationDispatcher struct {
+	mu       sync.Mutex
+	issues   []tracker.Issue
+	contexts []context.Context
+}
+
+func (d *cancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+	d.mu.Lock()
+	d.issues = append(d.issues, issue)
+	d.contexts = append(d.contexts, ctx)
+	d.mu.Unlock()
+	ch := make(chan WorkerResult, 1)
+	go func() {
+		<-ctx.Done()
+		ch <- WorkerResult{Err: ctx.Err(), Elapsed: time.Millisecond}
+		close(ch)
+	}()
+	return ch
+}
+
+func (d *cancellationDispatcher) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.issues)
+}
+
+func (d *cancellationDispatcher) contextAt(i int) context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.contexts[i]
+}
+
+type stuckCancellationDispatcher struct {
+	mu       sync.Mutex
+	issues   []tracker.Issue
+	contexts []context.Context
+}
+
+func (d *stuckCancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+	d.mu.Lock()
+	d.issues = append(d.issues, issue)
+	d.contexts = append(d.contexts, ctx)
+	d.mu.Unlock()
+	return make(chan WorkerResult)
+}
+
+func (d *stuckCancellationDispatcher) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.issues)
+}
+
+func (d *stuckCancellationDispatcher) contextAt(i int) context.Context {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.contexts[i]
+}
+
+func TestPollOnceCancelsRunningIssueWhenTrackerMovesToCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Cancelled"}})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("cancelled poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Backlog"}})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("backlog poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setErr(fmt.Errorf("tracker 5xx"))
+	if err := poller.PollOnce(ctx); err == nil {
+		t.Fatalf("tracker-error poll once returned nil, want error")
+	}
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatalf("running issue context was canceled after tracker error")
+	default:
+	}
+}
+
+func TestPollOnceCancelsTerminalIssueBeforeReturningLaterInactiveFetchError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTrackerByCall{issues: [][]tracker.Issue{
+		{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}},
+		{},
+		{},
+		{},
+		{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}},
+	}, errByCall: []error{
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		fmt.Errorf("inactive state fetch failed"),
+	}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "inactive state fetch failed") {
+		t.Fatalf("terminal poll once error = %v, want inactive fetch error", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceDoesNotCancelRunningIssueStillInActiveTrackerListing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("active-listing poll once: %v", err)
+	}
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatalf("running issue context was canceled while still in active tracker listing")
+	default:
+	}
+}
+
+func TestPollOnceDoesNotCancelRunningIssueMissingFromPartialTrackerListing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues(nil)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("partial-listing poll once: %v", err)
+	}
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatalf("running issue context was canceled after missing from partial tracker listing")
+	default:
+	}
+}
+
+func TestPollOnceReturnsErrorWhenCanceledWorkerDoesNotExitBeforeTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &stuckCancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		WorkerExitTimeout: time.Millisecond,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Cancelled"}})
+	if err := poller.PollOnce(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancel poll once error = %v, want context deadline exceeded", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+}
+
+func TestPollOnceDispatchesActiveCandidatesWhenCanceledWorkerDoesNotExitBeforeTimeout(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &stuckCancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		WorkerExitTimeout: time.Millisecond,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", State: "Cancelled"},
+		{ID: "issue-2", Identifier: "LIN-2", State: "In Progress"},
+	})
+	if err := poller.PollOnce(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("cancel poll once error = %v, want context deadline exceeded", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 2)
 }
 
 func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *testing.T) {
@@ -392,6 +801,39 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	waitForDispatcherCount(t, dispatcher, 2)
 	if got := dispatcher.issueAt(1).ID; got != "issue-1" {
 		t.Fatalf("second dispatched issue ID = %q, want fresh active issue-1", got)
+	}
+}
+
+func waitForCancellationDispatcherCount(t *testing.T, dispatcher *cancellationDispatcher, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := dispatcher.count(); got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("dispatcher issues = %d, want %d", dispatcher.count(), want)
+}
+
+func waitForStuckCancellationDispatcherCount(t *testing.T, dispatcher *stuckCancellationDispatcher, want int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := dispatcher.count(); got == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("dispatcher issues = %d, want %d", dispatcher.count(), want)
+}
+
+func waitForContextCanceled(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatalf("context was not canceled")
 	}
 }
 

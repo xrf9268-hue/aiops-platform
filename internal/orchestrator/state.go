@@ -98,6 +98,12 @@ type RunningEntry struct {
 
 	CancelWorker context.CancelFunc
 	Done         <-chan struct{}
+
+	// ReconcileCancel is set by per-tick reconciliation before it cancels a
+	// worker whose tracker issue left the active set. The worker still reports a
+	// context cancellation, but finalization must release the run without
+	// scheduling a retry because the tracker made the issue ineligible.
+	ReconcileCancel bool
 }
 
 // OrchestratorState is the single authoritative in-memory state owned
@@ -264,6 +270,18 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 // folds elapsed time so the caller can decide whether to enqueue a
 // retry via ScheduleRetry.
 func (s *OrchestratorState) FinishRunFailed(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	return s.finishRunAborted(id, run, elapsed)
+}
+
+// FinishRunReconciledCancelled releases a run that was stopped because the
+// tracker made it ineligible. It is intentionally separate from
+// FinishRunFailed so reconciliation cancellations are not counted as worker
+// failures and cannot consume retry budget.
+func (s *OrchestratorState) FinishRunReconciledCancelled(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	return s.finishRunAborted(id, run, elapsed)
+}
+
+func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
 	if current, ok := s.Running[id]; !ok || current != run {
 		return false
 	}

@@ -24,12 +24,17 @@ type RepoConfig struct {
 }
 
 type TrackerConfig struct {
-	Kind           string              `yaml:"kind" json:"kind"`
-	APIKey         string              `yaml:"api_key" json:"api_key"`
-	TeamKey        string              `yaml:"team_key" json:"team_key"`
-	ProjectSlug    string              `yaml:"project_slug" json:"project_slug"`
-	ActiveStates   []string            `yaml:"active_states" json:"active_states"`
-	TerminalStates []string            `yaml:"terminal_states" json:"terminal_states"`
+	Kind           string   `yaml:"kind" json:"kind"`
+	APIKey         string   `yaml:"api_key" json:"api_key"`
+	TeamKey        string   `yaml:"team_key" json:"team_key"`
+	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
+	ActiveStates   []string `yaml:"active_states" json:"active_states"`
+	TerminalStates []string `yaml:"terminal_states" json:"terminal_states"`
+	// InactiveStates names non-terminal tracker states that make an already
+	// running issue ineligible. Poll-tick reconciliation probes these states so
+	// operator pauses such as Backlog/Human Review cancel in-flight workers
+	// without treating issues missing from partial tracker listings as inactive.
+	InactiveStates []string            `yaml:"inactive_states" json:"inactive_states"`
 	PollIntervalMs int                 `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
 }
