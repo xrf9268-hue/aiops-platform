@@ -393,11 +393,15 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		close(f.done)
 		return nil
 	}
-	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
+	if f.result.NonRetryable {
+		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
 		close(f.done)
 		return nil
 	}
-	if f.result.NonRetryable {
+	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil
 	}

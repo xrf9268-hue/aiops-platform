@@ -58,13 +58,25 @@ func (d *recordingDispatcher) issueAt(i int) tracker.Issue {
 	return d.issues[i]
 }
 
-type erroringTaskDispatcher struct{}
+type erroringTaskDispatcher struct {
+	mu    sync.Mutex
+	calls int
+}
 
-func (d erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int) <-chan WorkerResult {
+	d.mu.Lock()
+	d.calls++
+	d.mu.Unlock()
 	ch := make(chan WorkerResult, 1)
 	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), NonRetryable: true, Elapsed: time.Millisecond}
 	close(ch)
 	return ch
+}
+
+func (d *erroringTaskDispatcher) count() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.calls
 }
 
 type blockingDispatcher struct {
@@ -164,8 +176,9 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	defer cancel()
 
 	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}}
+	dispatcher := &erroringTaskDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
-		Dispatcher: erroringTaskDispatcher{},
+		Dispatcher: dispatcher,
 		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
 	})
 	go orch.Run(ctx)
@@ -183,6 +196,9 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 		t.Fatalf("second poll once: %v", err)
 	}
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("deterministic build failure dispatched %d times, want 1", got)
+	}
 }
 
 func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
