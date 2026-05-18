@@ -279,8 +279,8 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	var mu sync.Mutex
 	var requests []fakeLinearRequest
 	pages := []string{
-		`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
-		`{"data":{"issues":{"nodes":[{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}`,
+		`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"},"blockedBy":{"nodes":[{"id":"blocker-1","identifier":"LIN-0","state":{"name":"In Progress"}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
+		`{"data":{"issues":{"nodes":[{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","priority":2,"createdAt":"2026-05-15T00:01:00Z","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"},"blockedBy":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}`,
 	}
 	page := 0
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -313,6 +313,15 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	}
 	if issues[0].Identifier != "LIN-1" || issues[1].Identifier != "LIN-2" {
 		t.Fatalf("issue identifiers = %q, %q; want LIN-1, LIN-2", issues[0].Identifier, issues[1].Identifier)
+	}
+	if issues[0].Priority != 1 || issues[0].CreatedAt != "2026-05-15T00:00:00Z" {
+		t.Fatalf("issue metadata = priority %d createdAt %q, want priority 1 createdAt 2026-05-15T00:00:00Z", issues[0].Priority, issues[0].CreatedAt)
+	}
+	if got := len(issues[0].BlockedBy); got != 1 {
+		t.Fatalf("issue blockers = %d, want 1", got)
+	}
+	if blocker := issues[0].BlockedBy[0]; blocker.Identifier != "LIN-0" || blocker.State != "In Progress" {
+		t.Fatalf("issue blocker = %#v, want LIN-0 in In Progress", blocker)
 	}
 	if got, want := len(requests), 2; got != want {
 		t.Fatalf("requests = %d, want %d", got, want)

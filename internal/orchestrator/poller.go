@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,7 +90,8 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	candidates := mergeOverflowCandidates(p.overflow, issues)
+	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates)
+	sortCandidates(candidates)
 	p.overflow = nil
 	var dispatchErr error
 	for _, issue := range candidates {
@@ -175,6 +177,50 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
+	terminal := normalizedStates(terminalStates)
+	if len(terminal) == 0 {
+		terminal = normalizedStates([]string{"Done", "Canceled", "Cancelled"})
+	}
+	out := issues[:0]
+	for _, issue := range issues {
+		if todoIssueBlockedByOpenDependency(issue, terminal) {
+			continue
+		}
+		out = append(out, issue)
+	}
+	return out
+}
+
+func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
+	if !strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
+		return false
+	}
+	for _, blocker := range issue.BlockedBy {
+		state := strings.ToLower(strings.TrimSpace(blocker.State))
+		if state == "" {
+			return true
+		}
+		if _, terminal := terminalStates[state]; !terminal {
+			return true
+		}
+	}
+	return false
+}
+
+func sortCandidates(issues []tracker.Issue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		left, right := issues[i], issues[j]
+		if left.Priority != right.Priority {
+			return left.Priority < right.Priority
+		}
+		if left.CreatedAt != right.CreatedAt {
+			return left.CreatedAt < right.CreatedAt
+		}
+		return left.Identifier < right.Identifier
+	})
 }
 
 func normalizedStates(states []string) map[string]struct{} {

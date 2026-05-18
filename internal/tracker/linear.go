@@ -34,7 +34,18 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	}
 	query := `query ListIssues($states: [String!], $after: String) {
   issues(filter: { state: { name: { in: $states } } }, first: 50, after: $after) {
-    nodes { id identifier title description url updatedAt state { name } }
+    nodes {
+      id
+      identifier
+      title
+      description
+      url
+      priority
+      createdAt
+      updatedAt
+      state { name }
+      blockedBy(first: 50) { nodes { id identifier state { name } } }
+    }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -50,10 +61,21 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 						Title       string `json:"title"`
 						Description string `json:"description"`
 						URL         string `json:"url"`
+						Priority    int    `json:"priority"`
+						CreatedAt   string `json:"createdAt"`
 						UpdatedAt   string `json:"updatedAt"`
 						State       struct {
 							Name string `json:"name"`
 						} `json:"state"`
+						BlockedBy struct {
+							Nodes []struct {
+								ID         string `json:"id"`
+								Identifier string `json:"identifier"`
+								State      struct {
+									Name string `json:"name"`
+								} `json:"state"`
+							} `json:"nodes"`
+						} `json:"blockedBy"`
 					} `json:"nodes"`
 					PageInfo struct {
 						HasNextPage bool   `json:"hasNextPage"`
@@ -70,7 +92,11 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return nil, fmt.Errorf("linear errors: %v", out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, UpdatedAt: n.UpdatedAt, State: n.State.Name})
+			blockers := make([]Blocker, 0, len(n.BlockedBy.Nodes))
+			for _, b := range n.BlockedBy.Nodes {
+				blockers = append(blockers, Blocker{ID: b.ID, Identifier: b.Identifier, State: b.State.Name})
+			}
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, State: n.State.Name, BlockedBy: blockers})
 		}
 		if !out.Data.Issues.PageInfo.HasNextPage {
 			return issues, nil
