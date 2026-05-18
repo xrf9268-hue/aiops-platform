@@ -32,6 +32,13 @@ type StateIssueLister interface {
 	ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error)
 }
 
+// IssueStateRefresher fetches the current tracker state for explicit issue IDs.
+// Poll-tick reconciliation uses this to refresh already-running issues without
+// relying on candidate pagination side effects.
+type IssueStateRefresher interface {
+	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
+}
+
 // Transitioner is the subset of a tracker client used by the worker to
 // drive the linked issue through its lifecycle. The worker calls these
 // methods at task claim, PR handoff, and failure so the tracker view

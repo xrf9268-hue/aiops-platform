@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -277,6 +278,206 @@ func TestLinearClient_SatisfiesTransitioner(t *testing.T) {
 	var _ Transitioner = (*LinearClient)(nil)
 }
 
+func TestLinearClient_SatisfiesIssueStateRefresher(t *testing.T) {
+	var _ IssueStateRefresher = (*LinearClient)(nil)
+}
+
+func TestListIssuesByStatesRequiresProjectSlugAndUsesProjectFilter(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if !strings.Contains(payload.Query, "project: { slugId: { eq: $projectSlug } }") {
+			t.Fatalf("ListIssues query = %s, want project slugId filter", payload.Query)
+		}
+		if payload.Variables["projectSlug"] != "aiops" {
+			t.Fatalf("projectSlug variable = %v, want aiops", payload.Variables["projectSlug"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+
+	missingSlug := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	_, err := missingSlug.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if err == nil || !strings.Contains(err.Error(), "Linear project slug is required") {
+		t.Fatalf("ListIssuesByStates without project slug error = %v, want missing project slug", err)
+	}
+
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"Todo"}); err != nil {
+		t.Fatalf("ListIssuesByStates with project slug: %v", err)
+	}
+}
+
+func TestListIssuesByStatesUsesDefaultPageSizeAndAggregatesMoreThanFiftyIssues(t *testing.T) {
+	var mu sync.Mutex
+	var requests []fakeLinearRequest
+	page := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		mu.Lock()
+		requests = append(requests, fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables})
+		idx := page
+		page++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if idx == 0 {
+			_, _ = io.WriteString(w, linearIssuesPageJSON(1, 50, true, "cursor-50"))
+			return
+		}
+		if idx == 1 {
+			_, _ = io.WriteString(w, linearIssuesPageJSON(51, 55, false, ""))
+			return
+		}
+		t.Fatalf("unexpected extra ListIssues request %d", idx+1)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if got, want := len(issues), 55; got != want {
+		t.Fatalf("issues = %d, want %d", got, want)
+	}
+	if issues[0].Identifier != "LIN-1" || issues[54].Identifier != "LIN-55" {
+		t.Fatalf("issue range = %s..%s, want LIN-1..LIN-55", issues[0].Identifier, issues[54].Identifier)
+	}
+	if got, want := requests[0].Variables["first"], float64(50); got != want {
+		t.Fatalf("first page size variable = %#v, want %#v", got, want)
+	}
+	if requests[0].Variables["after"] != nil || requests[1].Variables["after"] != "cursor-50" {
+		t.Fatalf("after variables = %#v then %#v, want nil then cursor-50", requests[0].Variables["after"], requests[1].Variables["after"])
+	}
+}
+
+func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
+	var recorded fakeLinearRequest
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		recorded = fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"}},{"id":"issue-2","state":{"name":"Done"}}]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+	if got, want := states, map[string]string{"issue-1": "Todo", "issue-2": "Done"}; len(got) != len(want) || got["issue-1"] != want["issue-1"] || got["issue-2"] != want["issue-2"] {
+		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if recorded.OpName != "IssueStatesByIDs" {
+		t.Fatalf("op = %q, want IssueStatesByIDs", recorded.OpName)
+	}
+	if !strings.Contains(recorded.Query, "$ids: [ID!]!") || !strings.Contains(recorded.Query, "id: { in: $ids }") || !strings.Contains(recorded.Query, "state { name }") {
+		t.Fatalf("state refresh query = %s, want [ID!] id filter and state name", recorded.Query)
+	}
+	ids, ok := recorded.Variables["ids"].([]any)
+	if !ok || len(ids) != 2 || ids[0] != "issue-1" || ids[1] != "issue-2" {
+		t.Fatalf("ids variable = %#v, want []string{issue-1, issue-2}", recorded.Variables["ids"])
+	}
+}
+
+func TestFetchIssueStatesByIDsChunksLargeBatches(t *testing.T) {
+	var mu sync.Mutex
+	var requests []fakeLinearRequest
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		mu.Lock()
+		requests = append(requests, fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables})
+		mu.Unlock()
+		ids := payload.Variables["ids"].([]any)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, linearIssueStatesJSON(ids))
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, 0, linearIssuePageSize+5)
+	for i := 1; i <= linearIssuePageSize+5; i++ {
+		ids = append(ids, fmt.Sprintf("issue-%d", i))
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+	if got, want := len(states), linearIssuePageSize+5; got != want {
+		t.Fatalf("states = %d, want %d", got, want)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	if got, want := requests[0].Variables["first"], float64(linearIssuePageSize); got != want {
+		t.Fatalf("first chunk size = %#v, want %#v", got, want)
+	}
+	firstIDs := requests[0].Variables["ids"].([]any)
+	secondIDs := requests[1].Variables["ids"].([]any)
+	if len(firstIDs) != linearIssuePageSize || len(secondIDs) != 5 {
+		t.Fatalf("chunk lengths = %d, %d; want %d, 5", len(firstIDs), len(secondIDs), linearIssuePageSize)
+	}
+}
+
+func linearIssueStatesJSON(ids []any) string {
+	var b strings.Builder
+	b.WriteString(`{"data":{"issues":{"nodes":[`)
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"id":"`)
+		b.WriteString(id.(string))
+		b.WriteString(`","state":{"name":"Todo"}}`)
+	}
+	b.WriteString(`]}}}`)
+	return b.String()
+}
+
+func linearIssuesPageJSON(start, end int, hasNext bool, cursor string) string {
+	var b strings.Builder
+	b.WriteString(`{"data":{"issues":{"nodes":[`)
+	for i := start; i <= end; i++ {
+		if i > start {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"id":"issue-`)
+		b.WriteString(fmt.Sprint(i))
+		b.WriteString(`","identifier":"LIN-`)
+		b.WriteString(fmt.Sprint(i))
+		b.WriteString(`","title":"Issue","description":"","url":"https://linear.app/acme/issue/LIN-`)
+		b.WriteString(fmt.Sprint(i))
+		b.WriteString(`","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"In Progress"}}`)
+	}
+	b.WriteString(`],"pageInfo":{"hasNextPage":`)
+	b.WriteString(fmt.Sprint(hasNext))
+	b.WriteString(`,"endCursor":"`)
+	b.WriteString(cursor)
+	b.WriteString(`"}}}}`)
+	return b.String()
+}
+
 func TestListIssuesByStatesPaginates(t *testing.T) {
 	var mu sync.Mutex
 	var requests []fakeLinearRequest
@@ -311,7 +512,7 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 		_, _ = io.WriteString(w, pages[idx])
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready", "In Progress"})
 	if err != nil {
@@ -386,7 +587,7 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 		}
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
 	if err != nil {
@@ -415,7 +616,7 @@ func TestListIssuesByStatesErrorsWhenNextPageCursorMissing(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
 	if err == nil || !strings.Contains(err.Error(), "linear pagination missing endCursor") {
@@ -429,7 +630,7 @@ func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-cursor"}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
 	if err == nil || !strings.Contains(err.Error(), "linear pagination exceeded") {
@@ -452,7 +653,7 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 		_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-relation-cursor"}}}}}`)
 	}))
 	defer httpSrv.Close()
-	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil || !strings.Contains(err.Error(), "linear inverse relation pagination exceeded") {
