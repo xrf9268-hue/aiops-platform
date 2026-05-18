@@ -38,6 +38,9 @@ func defaultTrackerIssueTitles(issues []tracker.Issue) []tracker.Issue {
 		if out[i].Title == "" {
 			out[i].Title = out[i].Identifier
 		}
+		if out[i].CreatedAt == "" {
+			out[i].CreatedAt = "2026-05-15T00:00:00Z"
+		}
 	}
 	return out
 }
@@ -626,7 +629,8 @@ func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
 		{ID: "missing-identifier", Title: "Missing identifier", State: "AI Ready"},
 		{ID: "missing-title", Identifier: "LIN-2", State: "AI Ready"},
 		{ID: "missing-state", Identifier: "LIN-3", Title: "Missing state"},
-		{ID: "valid", Identifier: "LIN-4", Title: "Ready work", State: "AI Ready"},
+		{ID: "missing-created-at", Identifier: "LIN-5", Title: "Missing created timestamp", State: "AI Ready"},
+		{ID: "valid", Identifier: "LIN-4", Title: "Ready work", State: "AI Ready", CreatedAt: "2026-05-15T00:00:00Z"},
 	}}
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
 	orch := New(NewOrchestratorState(30000, 4), Deps{
@@ -677,6 +681,36 @@ func TestPollOnceIgnoresBlockersForNonTodoStates(t *testing.T) {
 	close(dispatcher.releaseCh)
 }
 
+func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "todo-closed", Identifier: "LIN-1", Title: "Closed blocker", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "blocker-1", Identifier: "LIN-0", State: "Closed"}}},
+		{ID: "todo-duplicate", Identifier: "LIN-2", Title: "Duplicate blocker", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "blocker-2", Identifier: "LIN-3", State: "Duplicate"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	poller.reconcile.TerminalStates = []string{"Done", "Canceled"}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	if got, want := dispatcher.issueIDs(), []string{"todo-closed", "todo-duplicate"}; got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("dispatched issue IDs = %v, want %v", got, want)
+	}
+	close(dispatcher.releaseCh)
+}
+
 func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -686,10 +720,11 @@ func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.
 		{ID: "later-high", Identifier: "LIN-9", State: "AI Ready", Priority: 2, CreatedAt: "2026-05-17T00:00:00Z"},
 		{ID: "middle-tie-b", Identifier: "LIN-B", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-16T00:00:00Z"},
 		{ID: "oldest", Identifier: "LIN-1", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T00:00:00Z"},
+		{ID: "offset-newer", Identifier: "LIN-O", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T01:00:00+02:00"},
 		{ID: "middle-tie-a", Identifier: "LIN-A", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-16T00:00:00Z"},
 	}}
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
-	orch := New(NewOrchestratorState(30000, 5), Deps{
+	orch := New(NewOrchestratorState(30000, 6), Deps{
 		Dispatcher: dispatcher,
 		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
@@ -702,9 +737,9 @@ func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForDispatcherCount(t, dispatcher, 5)
+	waitForDispatcherCount(t, dispatcher, 6)
 	got := dispatcher.issueIDs()
-	want := []string{"oldest", "middle-tie-a", "middle-tie-b", "later-high", "unprioritized"}
+	want := []string{"offset-newer", "oldest", "middle-tie-a", "middle-tie-b", "later-high", "unprioritized"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("dispatch order = %v, want %v", got, want)

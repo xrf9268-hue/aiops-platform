@@ -281,8 +281,8 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	var mu sync.Mutex
 	var requests []fakeLinearRequest
 	pages := []string{
-		`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"},"inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-1","identifier":"LIN-0","state":{"name":"In Progress"}},"relatedIssue":{"id":"issue-1","identifier":"LIN-1","state":{"name":"AI Ready"}}}]}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
-		`{"data":{"issues":{"nodes":[{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","priority":2,"createdAt":"2026-05-15T00:01:00Z","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"},"inverseRelations":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}`,
+		`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`,
+		`{"data":{"issues":{"nodes":[{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","priority":2,"createdAt":"2026-05-15T00:01:00Z","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":"cursor-2"}}}}`,
 	}
 	page := 0
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -292,12 +292,19 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 			Variables map[string]any `json:"variables"`
 		}
 		_ = json.Unmarshal(body, &payload)
+		op := opNameFromQuery(payload.Query)
 		mu.Lock()
-		requests = append(requests, fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables, AuthHeader: r.Header.Get("Authorization")})
+		requests = append(requests, fakeLinearRequest{OpName: op, Query: payload.Query, Variables: payload.Variables, AuthHeader: r.Header.Get("Authorization")})
 		idx := page
-		page++
+		if op == "ListIssues" {
+			page++
+		}
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if op == "ListIssueInverseRelations" {
+			_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-1","identifier":"LIN-0","state":{"name":"In Progress"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`)
+			return
+		}
 		if idx >= len(pages) {
 			t.Fatalf("unexpected extra ListIssues request")
 		}
@@ -325,14 +332,17 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	if blocker := issues[0].BlockedBy[0]; blocker.Identifier != "LIN-0" || blocker.State != "In Progress" {
 		t.Fatalf("issue blocker = %#v, want LIN-0 in In Progress", blocker)
 	}
-	if got, want := len(requests), 2; got != want {
+	if got, want := len(requests), 3; got != want {
 		t.Fatalf("requests = %d, want %d", got, want)
 	}
 	if requests[0].Variables["after"] != nil {
 		t.Fatalf("first request after = %v, want nil", requests[0].Variables["after"])
 	}
-	if requests[1].Variables["after"] != "cursor-1" {
-		t.Fatalf("second request after = %v, want cursor-1", requests[1].Variables["after"])
+	if requests[1].Variables["id"] != "issue-1" {
+		t.Fatalf("blocker request id = %v, want issue-1", requests[1].Variables["id"])
+	}
+	if requests[2].Variables["after"] != "cursor-1" {
+		t.Fatalf("second ListIssues request after = %v, want cursor-1", requests[2].Variables["after"])
 	}
 	if strings.Contains(requests[0].Query, "blockedBy") {
 		t.Fatalf("ListIssues query uses unsupported blockedBy field: %s", requests[0].Query)
@@ -340,8 +350,11 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	if strings.Contains(requests[0].Query, "\n      relations") {
 		t.Fatalf("ListIssues query uses outgoing relations for blockers: %s", requests[0].Query)
 	}
-	if !strings.Contains(requests[0].Query, "inverseRelations") || !strings.Contains(requests[0].Query, "issue { id identifier state") {
-		t.Fatalf("ListIssues query = %s, want inverse relation blocker issue fields", requests[0].Query)
+	if strings.Contains(requests[0].Query, "inverseRelations") {
+		t.Fatalf("ListIssues query should not fetch relation metadata for every candidate: %s", requests[0].Query)
+	}
+	if !strings.Contains(requests[1].Query, "inverseRelations") || !strings.Contains(requests[1].Query, "issue { id identifier state") {
+		t.Fatalf("ListIssueInverseRelations query = %s, want inverse relation blocker issue fields", requests[1].Query)
 	}
 }
 
@@ -363,8 +376,10 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 		w.Header().Set("Content-Type", "application/json")
 		switch idx {
 		case 1:
-			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"},"inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-1","identifier":"LIN-0","state":{"name":"Done"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"relation-cursor"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 		case 2:
+			_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-1","identifier":"LIN-0","state":{"name":"Done"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"relation-cursor"}}}}}`)
+		case 3:
 			_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-2","identifier":"LIN-2","state":{"name":"In Progress"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`)
 		default:
 			t.Fatalf("unexpected extra Linear request %d", idx)
@@ -383,11 +398,14 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 	if blocker := issues[0].BlockedBy[1]; blocker.Identifier != "LIN-2" || blocker.State != "In Progress" {
 		t.Fatalf("second-page blocker = %#v, want LIN-2 in In Progress", blocker)
 	}
-	if got := len(requests); got != 2 {
-		t.Fatalf("requests = %d, want candidate page plus inverse relation page", got)
+	if got := len(requests); got != 3 {
+		t.Fatalf("requests = %d, want candidate page plus inverse relation pages", got)
 	}
-	if requests[1].Variables["id"] != "issue-1" || requests[1].Variables["after"] != "relation-cursor" {
-		t.Fatalf("second request variables = %#v, want issue id and relation cursor", requests[1].Variables)
+	if requests[1].Variables["id"] != "issue-1" || requests[1].Variables["after"] != nil {
+		t.Fatalf("first relation request variables = %#v, want issue id and nil cursor", requests[1].Variables)
+	}
+	if requests[2].Variables["id"] != "issue-1" || requests[2].Variables["after"] != "relation-cursor" {
+		t.Fatalf("second relation request variables = %#v, want issue id and relation cursor", requests[2].Variables)
 	}
 }
 
@@ -428,7 +446,7 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 		_ = json.Unmarshal(body, &payload)
 		w.Header().Set("Content-Type", "application/json")
 		if opNameFromQuery(payload.Query) == "ListIssues" {
-			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"relation-cursor"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 			return
 		}
 		_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-relation-cursor"}}}}}`)
@@ -436,7 +454,7 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
 
-	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil || !strings.Contains(err.Error(), "linear inverse relation pagination exceeded") {
 		t.Fatalf("ListIssuesByStates error = %v, want inverse relation max pages error", err)
 	}

@@ -181,8 +181,8 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 
 func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
 	terminal := normalizedStates(terminalStates)
-	if len(terminal) == 0 {
-		terminal = normalizedStates([]string{"Done", "Canceled", "Cancelled"})
+	for state := range normalizedStates([]string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"}) {
+		terminal[state] = struct{}{}
 	}
 	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
@@ -201,7 +201,8 @@ func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
 	return strings.TrimSpace(issue.ID) != "" &&
 		strings.TrimSpace(issue.Identifier) != "" &&
 		strings.TrimSpace(issue.Title) != "" &&
-		strings.TrimSpace(issue.State) != ""
+		strings.TrimSpace(issue.State) != "" &&
+		strings.TrimSpace(issue.CreatedAt) != ""
 }
 
 func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
@@ -228,13 +229,36 @@ func sortCandidates(issues []tracker.Issue) {
 		if leftPriority != rightPriority {
 			return leftPriority < rightPriority
 		}
-		// Linear timestamps are RFC3339 strings, so lexical order matches
-		// chronological order and keeps malformed/missing values deterministic.
-		if left.CreatedAt != right.CreatedAt {
-			return left.CreatedAt < right.CreatedAt
+		if compareCreatedAt(left.CreatedAt, right.CreatedAt) < 0 {
+			return true
+		}
+		if compareCreatedAt(left.CreatedAt, right.CreatedAt) > 0 {
+			return false
 		}
 		return left.Identifier < right.Identifier
 	})
+}
+
+func compareCreatedAt(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftTime.Before(rightTime):
+			return -1
+		case leftTime.After(rightTime):
+			return 1
+		default:
+			return 0
+		}
+	}
+	if left != right {
+		if left < right {
+			return -1
+		}
+		return 1
+	}
+	return 0
 }
 
 func linearPrioritySortKey(priority int) int {
