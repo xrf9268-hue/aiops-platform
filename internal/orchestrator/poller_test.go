@@ -280,7 +280,7 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToCancelled(t *testing.T) {
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -313,7 +313,7 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -347,7 +347,7 @@ func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -396,7 +396,7 @@ func TestPollOnceCancelsTerminalIssueBeforeReturningLaterInactiveFetchError(t *t
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -429,7 +429,7 @@ func TestPollOnceDoesNotCancelRunningIssueStillInActiveTrackerListing(t *testing
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -465,7 +465,7 @@ func TestPollOnceDoesNotCancelRunningIssueMissingFromPartialTrackerListing(t *te
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -502,7 +502,7 @@ func TestPollOnceReturnsErrorWhenCanceledWorkerDoesNotExitBeforeTimeout(t *testi
 	dispatcher := &stuckCancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -534,7 +534,7 @@ func TestPollOnceDispatchesActiveCandidatesWhenCanceledWorkerDoesNotExitBeforeTi
 	dispatcher := &stuckCancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 2), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -571,7 +571,7 @@ func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *t
 	dispatcher := &recordingDispatcher{releaseCh: releaseCh}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -610,7 +610,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	dispatcher := &recordingDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -638,7 +638,7 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	dispatcher := &erroringTaskDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -668,7 +668,7 @@ func TestPollOnceReleasesNonRetryableFailureAfterTrackerStateChanges(t *testing.
 	dispatcher := &erroringTaskDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -703,7 +703,7 @@ func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
 	dispatcher := &blockingDispatcher{}
 	orch := New(NewOrchestratorState(30000, 2), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -733,7 +733,7 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 	dispatcher := &recordingDispatcher{releaseCh: firstRunBlocked}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -777,7 +777,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {

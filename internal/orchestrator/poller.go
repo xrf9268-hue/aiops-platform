@@ -96,7 +96,7 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		if issue.ID == "" {
 			continue
 		}
-		if err := p.orchestrator.RequestDispatch(ctx, issue, nil); err != nil {
+		if err := p.orchestrator.RequestDispatchAfterTrackerRecheck(ctx, issue, nil); err != nil {
 			switch {
 			case errors.Is(err, ErrNotDispatched):
 				continue

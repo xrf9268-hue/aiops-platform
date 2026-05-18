@@ -128,7 +128,7 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 	}
 	orch := orchestrator.New(orchestrator.NewOrchestratorState(15000, 1), orchestrator.Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  orchestrator.FixedDelayScheduler{Delay: time.Minute},
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Minute},
 	})
 	orchCtx, orchCancel := context.WithCancel(ctx)
 	t.Cleanup(orchCancel)

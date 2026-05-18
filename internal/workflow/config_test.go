@@ -120,6 +120,49 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != 1 {
 		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want 1", got)
 	}
+	if cfg.Agent.MaxRetryBackoffMs != 300000 {
+		t.Fatalf("default Agent.MaxRetryBackoffMs: got %d want 300000", cfg.Agent.MaxRetryBackoffMs)
+	}
+}
+
+func TestLoadParsesAgentMaxRetryBackoffMs(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_retry_backoff_ms: 45000
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Agent.MaxRetryBackoffMs != 45000 {
+		t.Fatalf("Agent.MaxRetryBackoffMs = %d, want 45000", wf.Config.Agent.MaxRetryBackoffMs)
+	}
+}
+
+func TestLoadRejectsNonPositiveAgentMaxRetryBackoffMs(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_retry_backoff_ms: 0
+---
+prompt body
+`
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded with agent.max_retry_backoff_ms=0, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.max_retry_backoff_ms must be positive") {
+		t.Fatalf("Load error = %v, want agent.max_retry_backoff_ms positivity guidance", err)
+	}
 }
 
 func TestLoadParsesTopLevelWorkspaceHooks(t *testing.T) {

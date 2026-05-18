@@ -28,6 +28,7 @@ type RetryEntry struct {
 	DueAt      time.Time
 	Timer      *time.Timer
 	Error      string
+	Kind       RetryKind
 }
 
 // IsDue reports whether the retry's DueAt has passed relative to now.

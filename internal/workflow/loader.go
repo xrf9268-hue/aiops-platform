@@ -158,6 +158,9 @@ func validateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
+	if cfg.Agent.MaxRetryBackoffMs <= 0 {
+		return fmt.Errorf("%s: agent.max_retry_backoff_ms must be positive", path)
+	}
 	if cfg.Hooks.TimeoutMs < 0 {
 		return fmt.Errorf("%s: hooks.timeout_ms must be non-negative", path)
 	}

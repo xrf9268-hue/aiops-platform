@@ -20,12 +20,9 @@ package orchestrator
 // mutation flowing through handle_call / handle_cast / handle_info
 // (orchestrator.ex:6,52,74-217); the Go actor here is the direct analog.
 //
-// PR 2 of the D21+D6 migration plan only ships this actor, the
-// Dispatcher seam, and the FixedDelayScheduler matching the legacy
-// queue's 60-second behavior. The poll-tick loop (PR 3) and the worker
-// rewire (PR 4) layer on top without further changes to the actor's
-// shape; D16 swaps FixedDelayScheduler for the SPEC §8.4 exponential
-// formula by replacing the Scheduler binding only.
+// PR 2 of the D21+D6 migration plan shipped this actor, the Dispatcher seam,
+// and a scheduler seam. D16 wires that seam to SPEC §8.4 exponential failure
+// backoff plus SPEC §16.6's short continuation retry.
 
 import (
 	"context"
@@ -61,26 +58,61 @@ type Dispatcher interface {
 	Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult
 }
 
-// Scheduler computes the delay before the next retry of a given
-// 1-based attempt counter. PR 2 ships FixedDelayScheduler matching the
-// legacy queue's 60-second retry so behavior is unchanged when the
-// worker migrates to the actor; D16 (#90) swaps in the SPEC §8.4
-// exponential-backoff formula by replacing the Scheduler binding only.
+// Scheduler computes the delay before the next retry request.
 type Scheduler interface {
-	NextDelay(attempt int) time.Duration
+	NextDelay(RetryRequest) time.Duration
 }
 
-// FixedDelayScheduler returns the same delay regardless of attempt.
-// Matches the existing internal/queue/postgres.go retry interval so the
-// PR 4 cutover is observably equivalent.
-type FixedDelayScheduler struct {
-	Delay time.Duration
+// RetryKind identifies whether the retry follows a failed worker run or a
+// clean continuation turn.
+type RetryKind string
+
+const (
+	RetryKindFailure      RetryKind = "failure"
+	RetryKindContinuation RetryKind = "continuation"
+)
+
+// RetryRequest describes the retry being scheduled. Attempt is the 1-based
+// failure retry attempt for RetryKindFailure. Continuation retries ignore it
+// and always use the short SPEC §16.6 delay.
+type RetryRequest struct {
+	Kind    RetryKind
+	Attempt int
+}
+
+// RetryScheduler implements the SPEC retry delays: clean continuation retries
+// use one second; failure retries use delay=min(10s*2^(attempt-1), MaxBackoff).
+type RetryScheduler struct {
+	MaxBackoff time.Duration
 }
 
 const retryCapacityRecheckDelay = 100 * time.Millisecond
+const continuationRetryDelay = time.Second
 
 // NextDelay implements Scheduler.
-func (f FixedDelayScheduler) NextDelay(int) time.Duration { return f.Delay }
+func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
+	if req.Kind == RetryKindContinuation {
+		return continuationRetryDelay
+	}
+	if req.Attempt < 1 {
+		req.Attempt = 1
+	}
+	maxBackoff := s.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 5 * time.Minute
+	}
+	delay := 10 * time.Second
+	for i := 1; i < req.Attempt; i++ {
+		if delay >= maxBackoff/2 {
+			return maxBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxBackoff {
+		return maxBackoff
+	}
+	return delay
+}
 
 // Deps bundles construction-time dependencies so adding a new one
 // later doesn't ripple through every call site.
@@ -308,6 +340,20 @@ func (o *Orchestrator) RequestDispatch(ctx context.Context, issue tracker.Issue,
 	}
 }
 
+func (o *Orchestrator) RequestDispatchAfterTrackerRecheck(ctx context.Context, issue tracker.Issue, attempt *int) error {
+	reply := make(chan error, 1)
+	op := &dispatchOp{o: o, issue: issue, attempt: attempt, result: reply, trackerRechecked: true}
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case err := <-reply:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
@@ -336,7 +382,15 @@ func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context
 // The 1-based attempt counter is the attempt number this retry will
 // run as (i.e. the prior run was attempt-1, or 0 for first-run).
 func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string) error {
-	delay := o.scheduler.NextDelay(attempt)
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr)
+}
+
+func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation}, 0, "")
+}
+
+func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string) error {
+	delay := o.scheduler.NextDelay(req)
 	op := &scheduleRetryOp{
 		o:          o,
 		issue:      issue,
@@ -344,6 +398,7 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 		attempt:    attempt,
 		delay:      delay,
 		runErr:     runErr,
+		kind:       req.Kind,
 	}
 	return o.submit(ctx, op)
 }
@@ -426,15 +481,25 @@ func isActiveTrackerState(state string, activeStates map[string]struct{}) bool {
 // dispatch decision atomic against concurrent claims while keeping I/O
 // off the actor goroutine.
 type dispatchOp struct {
-	o       *Orchestrator
-	issue   tracker.Issue
-	attempt *int
-	result  chan<- error
+	o                *Orchestrator
+	issue            tracker.Issue
+	attempt          *int
+	result           chan<- error
+	trackerRechecked bool
 }
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
 	st.ReleaseFailedIfIssueChanged(d.issue)
+	if d.trackerRechecked {
+		if entry, ok := st.RetryAttempts[id]; ok && entry.Kind == RetryKindContinuation {
+			if entry.Timer != nil {
+				entry.Timer.Stop()
+			}
+			delete(st.RetryAttempts, id)
+			delete(st.Claimed, id)
+		}
+	}
 	if st.IsClaimed(id) {
 		d.result <- ErrNotDispatched
 		return nil
@@ -468,6 +533,7 @@ type scheduleRetryOp struct {
 	attempt    int
 	delay      time.Duration
 	runErr     string
+	kind       RetryKind
 }
 
 func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
@@ -485,6 +551,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		Attempt:    attempt,
 		DueAt:      time.Now().Add(s.delay),
 		Error:      s.runErr,
+		Kind:       s.kind,
 	}
 	entry.Timer = time.AfterFunc(s.delay, func() {
 		_ = o.submit(o.runCtx, &retryFireOp{
@@ -583,8 +650,14 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			close(f.done)
 			return nil
 		}
+		st.Claimed[f.id] = struct{}{}
 		close(f.done)
-		return nil
+		o := f.o
+		issue := f.issue
+		identifier := f.identifier
+		return func() {
+			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier)
+		}
 	}
 	if f.result.NonRetryable {
 		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {

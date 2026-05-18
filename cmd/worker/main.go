@@ -174,7 +174,7 @@ func run(ctx context.Context, args []string) error {
 	}
 	orch := orchestrator.New(state, orchestrator.Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  orchestrator.FixedDelayScheduler{Delay: 60 * time.Second},
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {

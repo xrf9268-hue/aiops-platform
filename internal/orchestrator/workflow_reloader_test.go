@@ -135,7 +135,7 @@ func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T
 		{ID: "issue-rework", Identifier: "ISSUE-2", Title: "rework", State: "Rework"},
 	}}
 	dispatcher := &fakeDispatcher{}
-	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "AI Ready"},
 	}}
 	dispatcher := &blockingDispatcher{}
-	orch := New(NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents), Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	orch := New(NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("wait for orchestrator: %v", err)
@@ -225,7 +225,7 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 	}
 	factoryCalls := 0
 	dispatcher := &fakeDispatcher{}
-	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
 		factoryCalls++

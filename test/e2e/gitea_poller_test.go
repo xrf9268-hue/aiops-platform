@@ -45,7 +45,7 @@ func TestGiteaPollerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T) 
 	disp := &fakeE2EDispatcher{}
 	orch := orchestrator.New(orchestrator.NewOrchestratorState(15000, 1), orchestrator.Deps{
 		Dispatcher: disp,
-		Scheduler:  orchestrator.FixedDelayScheduler{Delay: time.Minute},
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Minute},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -112,7 +112,7 @@ func TestGiteaPollerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 	disp := &fakeE2EDispatcher{}
 	orch := orchestrator.New(orchestrator.NewOrchestratorState(15000, 1), orchestrator.Deps{
 		Dispatcher: disp,
-		Scheduler:  orchestrator.FixedDelayScheduler{Delay: time.Minute},
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Minute},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

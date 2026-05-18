@@ -34,7 +34,7 @@ type sequenceScheduler struct {
 	delays []time.Duration
 }
 
-func (s *sequenceScheduler) NextDelay(int) time.Duration {
+func (s *sequenceScheduler) NextDelay(RetryRequest) time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.delays) == 0 {
@@ -103,7 +103,7 @@ func startActor(t *testing.T, deps Deps) (*Orchestrator, context.CancelFunc) {
 // the mechanism that delivers it.
 func TestRequestDispatch_ConcurrentSameIssueProducesOneRunning(t *testing.T) {
 	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
 	iss := tracker.Issue{ID: "ENG-1", Identifier: "ENG-1", Title: "race"}
@@ -168,7 +168,7 @@ func TestScheduleRetry_TimerFireProducesExactlyOneReDispatch(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{
 		Dispatcher: disp,
-		Scheduler:  FixedDelayScheduler{Delay: 5 * time.Millisecond},
+		Scheduler:  RetryScheduler{MaxBackoff: 5 * time.Millisecond},
 	})
 	defer cancel()
 
@@ -236,7 +236,7 @@ func TestScheduleRetry_TimerFireProducesExactlyOneReDispatch(t *testing.T) {
 // silently regress it.
 func TestRequestDispatch_DedupesAgainstRunning(t *testing.T) {
 	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
 	iss := tracker.Issue{ID: "ENG-2", Identifier: "ENG-2", Title: "dedupe"}
@@ -255,13 +255,13 @@ func TestRequestDispatch_DedupesAgainstRunning(t *testing.T) {
 	}
 }
 
-// TestFinalize_NormalExitMarksCompletedNoRetry covers the §7.3 normal
-// exit branch end-to-end through the actor: dispatch, the dispatcher
-// returns a successful WorkerResult, the finalize op moves the entry
-// into Completed and does not schedule a retry.
-func TestFinalize_NormalExitMarksCompletedNoRetry(t *testing.T) {
+// TestFinalize_NormalExitMarksCompletedAndSchedulesContinuationRetry covers
+// the §7.3 normal exit branch end-to-end through the actor: dispatch, the
+// dispatcher returns a successful WorkerResult, the finalize op records
+// Completed and schedules a short continuation retry.
+func TestFinalize_NormalExitMarksCompletedAndSchedulesContinuationRetry(t *testing.T) {
 	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
 	iss := tracker.Issue{ID: "ENG-3", Identifier: "ENG-3", Title: "ok"}
@@ -275,7 +275,7 @@ func TestFinalize_NormalExitMarksCompletedNoRetry(t *testing.T) {
 
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
-		return len(v.Running) == 0 && len(v.Completed) == 1 && len(v.Retrying) == 0
+		return len(v.Running) == 0 && len(v.Completed) == 1 && len(v.Retrying) == 1
 	}, time.Second)
 }
 
@@ -287,7 +287,7 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{
 		Dispatcher: disp,
-		Scheduler:  FixedDelayScheduler{Delay: 250 * time.Millisecond},
+		Scheduler:  RetryScheduler{MaxBackoff: 250 * time.Millisecond},
 	})
 	defer cancel()
 
@@ -335,7 +335,7 @@ func TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap(t *testing.T) {
 	// we're testing the gap, not the eventual re-dispatch.
 	o, cancel := startActor(t, Deps{
 		Dispatcher: disp,
-		Scheduler:  FixedDelayScheduler{Delay: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})
 	defer cancel()
 
@@ -400,7 +400,7 @@ func TestRetryFire_RespectsCapacityBeforeSpawning(t *testing.T) {
 	st := NewOrchestratorState(15000, 1)
 	o := New(st, Deps{
 		Dispatcher: disp,
-		Scheduler:  FixedDelayScheduler{Delay: 20 * time.Millisecond},
+		Scheduler:  RetryScheduler{MaxBackoff: 20 * time.Millisecond},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -503,7 +503,7 @@ func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
 // would deadlock and time out.
 func TestApply_FollowupRunsOffActorAndCanResubmit(t *testing.T) {
 	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
 	resubmitted := make(chan struct{})
@@ -538,7 +538,7 @@ func TestApply_FollowupRunsOffActorAndCanResubmit(t *testing.T) {
 func TestRun_ContextCancelStopsActor(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 4)
-	o := New(st, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -564,7 +564,7 @@ func TestRun_ContextCancelStopsActor(t *testing.T) {
 // followup submitted, so the Running entry is always visible.
 func TestSnapshot_SerializedThroughActor(t *testing.T) {
 	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
 	for i := 0; i < 10; i++ {
@@ -582,13 +582,20 @@ func TestSnapshot_SerializedThroughActor(t *testing.T) {
 	}
 }
 
-// TestFixedDelayScheduler_NextDelay is a one-line guard so the legacy
-// 60-second behavior the PR 4 cutover preserves cannot drift silently.
-func TestFixedDelayScheduler_NextDelay(t *testing.T) {
-	s := FixedDelayScheduler{Delay: 60 * time.Second}
-	for attempt := 1; attempt <= 5; attempt++ {
-		if got := s.NextDelay(attempt); got != 60*time.Second {
-			t.Errorf("NextDelay(%d) = %v, want 60s", attempt, got)
+func TestRetryScheduler_FailureBackoffDoublesUntilCap(t *testing.T) {
+	s := RetryScheduler{MaxBackoff: 25 * time.Second}
+	tests := []struct {
+		attempt int
+		want    time.Duration
+	}{
+		{attempt: 1, want: 10 * time.Second},
+		{attempt: 2, want: 20 * time.Second},
+		{attempt: 3, want: 25 * time.Second},
+		{attempt: 4, want: 25 * time.Second},
+	}
+	for _, tt := range tests {
+		if got := s.NextDelay(RetryRequest{Attempt: tt.attempt}); got != tt.want {
+			t.Errorf("failure retry delay attempt %d = %v, want %v", tt.attempt, got, tt.want)
 		}
 	}
 }
