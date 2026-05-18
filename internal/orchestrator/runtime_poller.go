@@ -8,14 +8,16 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 type RuntimePoller struct {
-	tracker      IssueStateLister
-	orchestrator *Orchestrator
-	runtime      *WorkflowRuntime
-	config       worker.Config
-	emitter      worker.EventEmitter
+	trackerFactory func(workflow.Config) (IssueStateLister, error)
+	tracker        IssueStateLister
+	orchestrator   *Orchestrator
+	runtime        *WorkflowRuntime
+	config         worker.Config
+	emitter        worker.EventEmitter
 
 	mu              sync.Mutex
 	poller          *Poller
@@ -24,8 +26,14 @@ type RuntimePoller struct {
 }
 
 func NewRuntimePoller(tracker IssueStateLister, orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
-	if tracker == nil {
-		return nil, errors.New("runtime poller requires tracker")
+	return NewRuntimePollerWithTrackerFactory(func(workflow.Config) (IssueStateLister, error) {
+		return tracker, nil
+	}, orchestrator, runtime, cfg, emitter)
+}
+
+func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (IssueStateLister, error), orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
+	if trackerFactory == nil {
+		return nil, errors.New("runtime poller requires tracker factory")
 	}
 	if orchestrator == nil {
 		return nil, errors.New("runtime poller requires orchestrator")
@@ -37,8 +45,12 @@ func NewRuntimePoller(tracker IssueStateLister, orchestrator *Orchestrator, runt
 	if err != nil {
 		return nil, err
 	}
-	rp := &RuntimePoller{tracker: tracker, orchestrator: orchestrator, runtime: runtime, config: cfg, emitter: emitter, dispatcher: dispatcher}
-	rp.poller = NewPollerWithReconciliation(tracker, orchestrator, runtime.Current().Reconciliation)
+	rp := &RuntimePoller{trackerFactory: trackerFactory, orchestrator: orchestrator, runtime: runtime, config: cfg, emitter: emitter, dispatcher: dispatcher}
+	initialPoller, err := rp.pollerForSnapshot(runtime.Current())
+	if err != nil {
+		return nil, err
+	}
+	rp.poller = initialPoller
 	return rp, nil
 }
 
@@ -47,19 +59,32 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 		return errors.New("runtime poller is nil")
 	}
 	p.mu.Lock()
-	p.poller = p.pollerForSnapshot(p.runtime.Current())
-	poller := p.poller
+	poller, err := p.pollerForSnapshot(p.runtime.Current())
+	if err == nil {
+		p.poller = poller
+	}
 	p.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	return poller.PollOnce(ctx)
 }
 
-func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) *Poller {
+func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error) {
 	key := snapshotWorkflowKey(snap)
 	if p.poller != nil && p.lastSnapshotKey == key {
-		return p.poller
+		return p.poller, nil
 	}
+	trackerClient, err := p.trackerFactory(snap.Workflow.Config)
+	if err != nil {
+		return nil, err
+	}
+	if trackerClient == nil {
+		return nil, errors.New("runtime poller tracker factory returned nil tracker")
+	}
+	p.tracker = trackerClient
 	p.lastSnapshotKey = key
-	return NewPollerWithReconciliation(p.tracker, p.orchestrator, snap.Reconciliation)
+	return NewPollerWithReconciliation(trackerClient, p.orchestrator, snap.Reconciliation), nil
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {

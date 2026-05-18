@@ -164,6 +164,58 @@ func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T
 	}
 }
 
+func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackersByKind := map[string]*fakeIssueStateTracker{
+		"linear": {issues: []tracker.Issue{{ID: "linear-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"}}},
+		"gitea":  {issues: []tracker.Issue{{ID: "gitea-rework", Identifier: "ISSUE-2", Title: "rework", State: "Rework"}}},
+	}
+	factoryCalls := 0
+	dispatcher := &fakeDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		factoryCalls++
+		return trackersByKind[cfg.Tracker.Kind], nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	if got := dispatcher.issueAt(0).ID; got != "linear-ready" {
+		t.Fatalf("first dispatched issue = %q, want linear-ready", got)
+	}
+
+	dispatcher.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	writeWorkflowForReloadTestAt(t, path, "gitea", 30000, "Rework")
+	if err := runtime.ReloadOnce(ctx); err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 2 }, time.Second)
+	if got := dispatcher.issueAt(1).ID; got != "gitea-rework" {
+		t.Fatalf("second dispatched issue after tracker config reload = %q, want gitea-rework", got)
+	}
+	if factoryCalls < 2 {
+		t.Fatalf("tracker factory calls = %d, want at least 2 after tracker config reload", factoryCalls)
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)

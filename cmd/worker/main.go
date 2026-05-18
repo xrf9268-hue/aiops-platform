@@ -171,7 +171,9 @@ func run(ctx context.Context, args []string) error {
 	if err := orch.WaitStarted(ctx); err != nil {
 		return err
 	}
-	poller, err := orchestrator.NewRuntimePoller(trackerClient, orch, runtime, cfg, worker.LogEventEmitter{})
+	poller, err := orchestrator.NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (orchestrator.IssueStateLister, error) {
+		return trackerClientForWorkflow(cfg)
+	}, orch, runtime, cfg, worker.LogEventEmitter{})
 	if err != nil {
 		return err
 	}
