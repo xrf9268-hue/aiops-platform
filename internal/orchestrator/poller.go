@@ -342,6 +342,11 @@ func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) er
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	intervalTimer := time.NewTimer(interval)
+	if !intervalTimer.Stop() {
+		<-intervalTimer.C
+	}
+	defer intervalTimer.Stop()
 	for {
 		if err := poller.PollOnce(ctx); err != nil {
 			if ctx.Err() != nil {
@@ -349,11 +354,15 @@ func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) er
 			}
 			log.Printf("tracker poll error: %v", err)
 		}
+		intervalTimer.Reset(interval)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-poller.orchestrator.retryWakeCh():
-		case <-time.After(interval):
+			if !intervalTimer.Stop() {
+				<-intervalTimer.C
+			}
+		case <-intervalTimer.C:
 		}
 	}
 }
