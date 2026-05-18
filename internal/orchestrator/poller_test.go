@@ -612,7 +612,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	dispatcher := &recordingDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
