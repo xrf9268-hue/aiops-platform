@@ -419,6 +419,29 @@ func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
 	}
 }
 
+func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		w.Header().Set("Content-Type", "application/json")
+		if opNameFromQuery(payload.Query) == "ListIssues" {
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"AI Ready"},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"relation-cursor"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-relation-cursor"}}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "linear inverse relation pagination exceeded") {
+		t.Fatalf("ListIssuesByStates error = %v, want inverse relation max pages error", err)
+	}
+}
+
 func TestLinearClient_SatisfiesStateIssueLister(t *testing.T) {
 	var _ StateIssueLister = (*LinearClient)(nil)
 }

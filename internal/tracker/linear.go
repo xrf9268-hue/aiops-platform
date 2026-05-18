@@ -129,7 +129,7 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 		}
 	}
 	appendBlockers(nodes)
-	for hasNextPage {
+	for page := 0; hasNextPage && page < maxLinearIssuePages; page++ {
 		if endCursor == "" {
 			return nil, fmt.Errorf("linear inverse relation pagination missing endCursor for issue %s", issueID)
 		}
@@ -161,6 +161,9 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 		appendBlockers(out.Data.Issue.InverseRelations.Nodes)
 		hasNextPage = out.Data.Issue.InverseRelations.PageInfo.HasNextPage
 		endCursor = out.Data.Issue.InverseRelations.PageInfo.EndCursor
+	}
+	if hasNextPage {
+		return nil, fmt.Errorf("linear inverse relation pagination exceeded %d pages for issue %s", maxLinearIssuePages, issueID)
 	}
 	return blockers, nil
 }

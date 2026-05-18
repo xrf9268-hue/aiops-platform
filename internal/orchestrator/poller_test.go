@@ -14,9 +14,10 @@ import (
 )
 
 type fakeIssueTracker struct {
-	issues []tracker.Issue
-	err    error
-	calls  int
+	issues                []tracker.Issue
+	err                   error
+	calls                 int
+	preserveMissingFields bool
 }
 
 func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
@@ -24,7 +25,21 @@ func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue,
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.issues, nil
+	if f.preserveMissingFields {
+		return f.issues, nil
+	}
+	return defaultTrackerIssueTitles(f.issues), nil
+}
+
+func defaultTrackerIssueTitles(issues []tracker.Issue) []tracker.Issue {
+	out := make([]tracker.Issue, len(issues))
+	copy(out, issues)
+	for i := range out {
+		if out[i].Title == "" {
+			out[i].Title = out[i].Identifier
+		}
+	}
+	return out
 }
 
 type recordingDispatcher struct {
@@ -197,7 +212,7 @@ func (f *fakeIssueStateTracker) ListIssuesByStates(_ context.Context, states []s
 			out = append(out, issue)
 		}
 	}
-	return out, nil
+	return defaultTrackerIssueTitles(out), nil
 }
 
 func (f *fakeIssueStateTracker) setIssues(issues []tracker.Issue) {
@@ -221,7 +236,7 @@ func (f *fakeIssueStateTrackerByCall) ListIssuesByStates(_ context.Context, _ []
 		return nil, f.errByCall[call]
 	}
 	if call < len(f.issues) {
-		return f.issues[call], nil
+		return defaultTrackerIssueTitles(f.issues[call]), nil
 	}
 	return nil, nil
 }
@@ -603,6 +618,37 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 	close(dispatcher.releaseCh)
 }
 
+func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{preserveMissingFields: true, issues: []tracker.Issue{
+		{ID: "missing-identifier", Title: "Missing identifier", State: "AI Ready"},
+		{ID: "missing-title", Identifier: "LIN-2", State: "AI Ready"},
+		{ID: "missing-state", Identifier: "LIN-3", Title: "Missing state"},
+		{ID: "valid", Identifier: "LIN-4", Title: "Ready work", State: "AI Ready"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 4), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "valid" {
+		t.Fatalf("dispatched issue ID = %q, want only fully populated tracker candidate", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
 func TestPollOnceIgnoresBlockersForNonTodoStates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -720,7 +766,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1"}}}, orch)
+	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "AI Ready"}}}, orch)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("initial poll once: %v", err)
@@ -754,7 +800,7 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	issue := tracker.Issue{ID: "issue-missing", Identifier: "ISSUE-MISSING", Title: "Issue missing from capped active listing"}
+	issue := tracker.Issue{ID: "issue-missing", Identifier: "ISSUE-MISSING", Title: "Issue missing from capped active listing", State: "AI Ready"}
 	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
 
 	if err := poller.PollOnce(ctx); err != nil {
@@ -793,7 +839,7 @@ func TestRunPollLoopWakesWhenContinuationRetryTimerFires(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	issue := tracker.Issue{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1"}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "AI Ready"}
 	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
 
 	done := make(chan error, 1)

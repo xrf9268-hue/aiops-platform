@@ -186,12 +186,22 @@ func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) [
 	}
 	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
+		if !issueHasRequiredCandidateFields(issue) {
+			continue
+		}
 		if todoIssueBlockedByOpenDependency(issue, terminal) {
 			continue
 		}
 		out = append(out, issue)
 	}
 	return out
+}
+
+func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
+	return strings.TrimSpace(issue.ID) != "" &&
+		strings.TrimSpace(issue.Identifier) != "" &&
+		strings.TrimSpace(issue.Title) != "" &&
+		strings.TrimSpace(issue.State) != ""
 }
 
 func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
