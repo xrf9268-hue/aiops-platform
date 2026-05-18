@@ -236,7 +236,8 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	defer cancel()
 
 	iss := tracker.Issue{ID: "ENG-10", Identifier: "ENG-10", Title: "continuation"}
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+	attempt := 2
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
 		t.Fatalf("initial tracker-rechecked dispatch: %v", err)
 	}
 	if got := disp.count(); got != 1 {
@@ -256,12 +257,18 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	if len(view.Retrying) != 1 {
 		t.Fatalf("retrying view = %+v, want continuation retry retained until tracker recheck", view.Retrying)
 	}
+	if view.Retrying[0].Attempt != attempt+1 {
+		t.Fatalf("continuation retry attempt = %d, want %d", view.Retrying[0].Attempt, attempt+1)
+	}
 
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
 		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
 	}
 	if got := disp.count(); got != 2 {
 		t.Fatalf("dispatch count after tracker recheck = %d, want 2", got)
+	}
+	if got := *disp.attempts[1]; got != attempt+1 {
+		t.Fatalf("tracker-rechecked continuation dispatch attempt = %d, want %d", got, attempt+1)
 	}
 }
 

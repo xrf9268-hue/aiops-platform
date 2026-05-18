@@ -30,12 +30,14 @@ func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue,
 type recordingDispatcher struct {
 	mu        sync.Mutex
 	issues    []tracker.Issue
+	attempts  []*int
 	releaseCh chan struct{}
 }
 
-func (d *recordingDispatcher) Spawn(_ context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *recordingDispatcher) Spawn(_ context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
+	d.attempts = append(d.attempts, attempt)
 	releaseCh := d.releaseCh
 	d.mu.Unlock()
 	ch := make(chan WorkerResult, 1)
@@ -628,6 +630,12 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 		t.Fatalf("rework poll once: %v", err)
 	}
 	waitForDispatcherCount(t, dispatcher, 2)
+	dispatcher.mu.Lock()
+	secondAttempt := dispatcher.attempts[1]
+	dispatcher.mu.Unlock()
+	if secondAttempt == nil || *secondAttempt != 1 {
+		t.Fatalf("continuation dispatch attempt = %v, want 1", secondAttempt)
+	}
 }
 
 func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {

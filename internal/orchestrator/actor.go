@@ -385,8 +385,8 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr)
 }
 
-func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation}, 0, "")
+func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "")
 }
 
 func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string) error {
@@ -491,10 +491,15 @@ type dispatchOp struct {
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
 	st.ReleaseFailedIfIssueChanged(d.issue)
+	attempt := d.attempt
 	if d.trackerRechecked {
 		if entry, ok := st.RetryAttempts[id]; ok && entry.Kind == RetryKindContinuation {
 			if entry.Timer != nil {
 				entry.Timer.Stop()
+			}
+			if attempt == nil {
+				entryAttempt := entry.Attempt
+				attempt = &entryAttempt
 			}
 			delete(st.RetryAttempts, id)
 			delete(st.Claimed, id)
@@ -514,7 +519,6 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	st.Claimed[id] = struct{}{}
 	o := d.o
 	issue := d.issue
-	attempt := d.attempt
 	result := d.result
 	return func() {
 		o.spawn(id, issue, attempt)
@@ -661,11 +665,15 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		}
 		st.Claimed[f.id] = struct{}{}
 		close(f.done)
+		nextAttempt := 1
+		if f.attempt != nil {
+			nextAttempt = *f.attempt + 1
+		}
 		o := f.o
 		issue := f.issue
 		identifier := f.identifier
 		return func() {
-			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier)
+			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt)
 		}
 	}
 	if f.result.NonRetryable {
