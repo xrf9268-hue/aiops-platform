@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -92,11 +93,15 @@ type VerifyResult struct {
 // holding the entire output of a verbose verify command in memory.
 type cappedBuffer struct {
 	Cap     int
+	mu      sync.Mutex
 	buf     bytes.Buffer
 	dropped int64
 }
 
 func (c *cappedBuffer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	remaining := c.Cap - c.buf.Len()
 	if remaining > 0 {
 		take := len(p)
@@ -115,9 +120,26 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (c *cappedBuffer) String() string  { return c.buf.String() }
-func (c *cappedBuffer) Truncated() bool { return c.dropped > 0 }
-func (c *cappedBuffer) Dropped() int64  { return c.dropped }
+func (c *cappedBuffer) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.buf.String()
+}
+
+func (c *cappedBuffer) Truncated() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.dropped > 0
+}
+
+func (c *cappedBuffer) Dropped() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.dropped
+}
 
 // Compile-time check that cappedBuffer satisfies io.Writer.
 var _ io.Writer = (*cappedBuffer)(nil)
