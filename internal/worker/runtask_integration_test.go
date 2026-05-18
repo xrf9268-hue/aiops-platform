@@ -11,6 +11,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // initBareUpstreamWithWorkflow seeds a bare upstream repo containing the
@@ -96,10 +97,24 @@ do the work for {{task.title}}
 // workerCfgForIntegration assembles the Config the integration tests share.
 func workerCfgForIntegration(t *testing.T) worker.Config {
 	t.Helper()
+	wf, err := workflow.Load(writeServiceWorkflowForIntegration(t, linearWorkflowBody))
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
 	return worker.Config{
 		WorkspaceRoot: t.TempDir(),
 		MirrorRoot:    t.TempDir(),
+		Workflow:      wf,
 	}
+}
+
+func writeServiceWorkflowForIntegration(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write service workflow: %v", err)
+	}
+	return path
 }
 
 // TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1
@@ -266,6 +281,11 @@ func TestRun_DoesNotWriteTrackerOnFailure(t *testing.T) {
 	cfg := worker.Config{
 		WorkspaceRoot: t.TempDir(),
 		MirrorRoot:    t.TempDir(),
+		Workflow: &workflow.Workflow{
+			Config:         workflow.DefaultConfig(),
+			PromptTemplate: workflow.DefaultPrompt(),
+			Source:         workflow.SourceDefault,
+		},
 	}
 
 	done := make(chan struct{})

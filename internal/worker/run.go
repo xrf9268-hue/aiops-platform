@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // runStore is the subset of queue.Store that Run actually exercises:
@@ -36,6 +37,7 @@ type Config struct {
 	MirrorRoot      string
 	IdleSleep       time.Duration
 	ClaimErrorSleep time.Duration
+	Workflow        *workflow.Workflow
 }
 
 // LoadConfigFromEnv reads the worker configuration from the environment using

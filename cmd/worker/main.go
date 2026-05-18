@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -29,7 +30,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := normalizeRunError(run(ctx), ctx.Err()); err != nil {
+	if err := normalizeRunError(run(ctx, os.Args[1:]), ctx.Err()); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -42,33 +43,60 @@ func normalizeRunError(err error, runCtxErr error) error {
 }
 
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
-	if path := os.Getenv("AIOPS_WORKFLOW_PATH"); path != "" {
-		wf, err := workflow.Load(path)
-		if err != nil {
-			return nil, err
-		}
-		hasFront, err := workflow.HasFrontMatterAt(path)
-		if err != nil {
-			return nil, err
-		}
-		source := workflow.SourceFile
-		if !hasFront {
-			source = workflow.SourcePromptOnly
-		}
-		logStartupReconcileWorkflow(&workflow.Resolution{Source: source, Path: path}, wf)
-		return wf, nil
-	}
-
-	workdir, err := os.Getwd()
-	if err != nil {
-		return nil, err
-	}
-	wf, resolution, err := workflow.Resolve(workdir)
+	wf, resolution, err := resolveStartupWorkflow(nil)
 	if err != nil {
 		return nil, err
 	}
 	logStartupReconcileWorkflow(resolution, wf)
 	return wf, nil
+}
+
+func resolveStartupWorkflow(args []string) (*workflow.Workflow, *workflow.Resolution, error) {
+	path, err := startupWorkflowPath(args)
+	if err != nil {
+		return nil, nil, err
+	}
+	if path == "" {
+		cfg := workflow.DefaultConfig()
+		return &workflow.Workflow{Config: cfg, PromptTemplate: workflow.DefaultPrompt(), Source: workflow.SourceDefault}, &workflow.Resolution{Source: workflow.SourceDefault}, nil
+	}
+	wf, err := workflow.Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	hasFront, err := workflow.HasFrontMatterAt(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	source := workflow.SourceFile
+	if !hasFront {
+		source = workflow.SourcePromptOnly
+	}
+	return wf, &workflow.Resolution{Source: source, Path: path}, nil
+}
+
+func startupWorkflowPath(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("usage: worker [path-to-WORKFLOW.md]")
+	}
+	if len(args) == 1 {
+		return args[0], nil
+	}
+	if path := os.Getenv("AIOPS_WORKFLOW_PATH"); path != "" {
+		return path, nil
+	}
+	workdir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(workdir, "WORKFLOW.md")
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return path, nil
 }
 
 func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.Workflow) {
@@ -89,15 +117,17 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 	return nil
 }
 
-func run(ctx context.Context) error {
+func run(ctx context.Context, args []string) error {
 	cfg := worker.LoadConfigFromEnv()
-	wf, err := loadWorkflowForStartupReconcile()
+	wf, resolution, err := resolveStartupWorkflow(args)
 	if err != nil {
 		return err
 	}
+	logStartupReconcileWorkflow(resolution, wf)
 	if err := validateWorkflowForRuntime(wf.Path, wf.Source, wf.Config); err != nil {
 		return err
 	}
+	cfg.Workflow = wf
 
 	trackerClient, err := trackerClientForWorkflow(wf.Config)
 	if err != nil {
