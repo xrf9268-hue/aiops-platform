@@ -405,6 +405,40 @@ func TestRunPollLoopWithRuntimeUsesReloadedPollingCadence(t *testing.T) {
 	}
 }
 
+func TestRunPollLoopWithRuntimePollerHonorsInjectedSleep(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	path := writeWorkflowForReloadTest(t, "linear", 60000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	disp := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch, orchCancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Second}})
+	defer orchCancel()
+	poller, err := NewRuntimePoller(&fakeIssueStateTracker{}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	sleeper := &recordingPollSleeper{}
+
+	start := time.Now()
+	err = RunPollLoopWithRuntime(ctx, poller, runtime, PollLoopRuntimeOptions{Sleep: sleeper.sleep, StopAfterPolls: 1})
+	if err != nil {
+		t.Fatalf("run poll loop: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("runtime poll loop ignored injected sleep and waited %v", elapsed)
+	}
+	if got, want := sleeper.durations, []time.Duration{60 * time.Second}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("sleep durations = %v, want %v", got, want)
+	}
+}
+
 type countingPollOnce struct {
 	calls      int
 	afterFirst func()

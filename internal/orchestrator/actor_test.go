@@ -72,6 +72,16 @@ func (f *fakeDispatcher) issueAt(i int) tracker.Issue {
 	return f.issues[i]
 }
 
+func (f *fakeDispatcher) attemptValueAt(i int) *int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.attempts[i] == nil {
+		return nil
+	}
+	attempt := *f.attempts[i]
+	return &attempt
+}
+
 // finishAt completes the i-th spawned worker with the given result.
 // Tests use this to drive the worker-exit path through the actor.
 func (f *fakeDispatcher) finishAt(i int, res WorkerResult) {
@@ -267,8 +277,8 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	if got := disp.count(); got != 2 {
 		t.Fatalf("dispatch count after tracker recheck = %d, want 2", got)
 	}
-	if got := *disp.attempts[1]; got != 1 {
-		t.Fatalf("tracker-rechecked continuation dispatch attempt = %d, want 1", got)
+	if got := disp.attemptValueAt(1); got != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch carried retry attempt = %d, want nil", *got)
 	}
 }
 
@@ -299,6 +309,49 @@ func TestFinalize_NormalExitResetsContinuationAttemptToOne(t *testing.T) {
 	}
 	if got := view.Retrying[0].Attempt; got != 1 {
 		t.Fatalf("continuation retry attempt after clean exit = %d, want 1", got)
+	}
+}
+
+func TestFinalize_FirstFailureAfterCleanContinuationUsesFirstFailureBackoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Hour}},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-CONT-FAIL", Identifier: "ENG-CONT-FAIL", Title: "fail after continuation"}
+	priorFailureAttempt := 7
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &priorFailureAttempt); err != nil {
+		t.Fatalf("initial tracker-rechecked dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if got := disp.attemptValueAt(1); got != nil {
+		t.Fatalf("clean continuation dispatch carried failure attempt = %d, want nil", *got)
+	}
+
+	disp.finishAt(1, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Error == "transient"
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := view.Retrying[0].Attempt; got != 1 {
+		t.Fatalf("failure after clean continuation scheduled retry attempt = %d, want 1", got)
 	}
 }
 

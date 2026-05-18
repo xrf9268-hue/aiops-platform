@@ -123,12 +123,7 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	if p.stateTracker == nil {
 		return errors.New("orchestrator poller reconciliation requires state tracker")
 	}
-	activeByID := make(map[string]struct{}, len(activeIssues))
-	for _, issue := range activeIssues {
-		if issue.ID != "" {
-			activeByID[issue.ID] = struct{}{}
-		}
-	}
+	activeByID := issueIDSet(activeIssues)
 	inactiveByID := make(map[string]tracker.Issue)
 	var fetchErr error
 	for _, states := range p.reconcileInactiveStateGroups() {
@@ -167,6 +162,16 @@ func nonEmptyStateList(states []string) []string {
 	for _, state := range states {
 		if strings.TrimSpace(state) != "" {
 			out = append(out, state)
+		}
+	}
+	return out
+}
+
+func issueIDSet(issues []tracker.Issue) map[string]struct{} {
+	out := make(map[string]struct{}, len(issues))
+	for _, issue := range issues {
+		if issue.ID != "" {
+			out[issue.ID] = struct{}{}
 		}
 	}
 	return out
@@ -347,6 +352,7 @@ func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) er
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-poller.orchestrator.retryWakeCh():
 		case <-time.After(interval):
 		}
 	}

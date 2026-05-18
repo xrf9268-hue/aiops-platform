@@ -201,12 +201,36 @@ func RunPollLoopWithRuntime(ctx context.Context, poller pollOnce, runtime *Workf
 			log.Printf("tracker poll error: %v", err)
 		}
 		polls++
-		if err := sleep(ctx, interval); err != nil {
+		if runtimePoller, ok := poller.(*RuntimePoller); ok {
+			if err := sleepOrRetryWake(ctx, sleep, interval, runtimePoller.orchestrator.retryWakeCh()); err != nil {
+				return err
+			}
+		} else if err := sleep(ctx, interval); err != nil {
 			return err
 		}
 		if opts.StopAfterPolls > 0 && polls >= opts.StopAfterPolls {
 			return nil
 		}
+	}
+}
+
+func sleepOrRetryWake(ctx context.Context, sleep func(context.Context, time.Duration) error, interval time.Duration, wake <-chan struct{}) error {
+	if wake == nil {
+		return sleep(ctx, interval)
+	}
+	sleepCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sleepErr := make(chan error, 1)
+	go func() {
+		sleepErr <- sleep(sleepCtx, interval)
+	}()
+	select {
+	case err := <-sleepErr:
+		return err
+	case <-wake:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

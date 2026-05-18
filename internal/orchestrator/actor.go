@@ -131,6 +131,7 @@ type Orchestrator struct {
 	state      *OrchestratorState
 	dispatcher Dispatcher
 	scheduler  Scheduler
+	retryWake  chan struct{}
 
 	// runCtx is captured by Run so followup goroutines can cancel
 	// their work when the actor stops. Set once at the top of Run
@@ -149,6 +150,7 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 		state:      state,
 		dispatcher: deps.Dispatcher,
 		scheduler:  deps.Scheduler,
+		retryWake:  make(chan struct{}, 1),
 		started:    make(chan struct{}),
 	}
 }
@@ -185,6 +187,23 @@ func (o *Orchestrator) WaitStarted(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (o *Orchestrator) retryWakeCh() <-chan struct{} {
+	if o == nil {
+		return nil
+	}
+	return o.retryWake
+}
+
+func (o *Orchestrator) wakeRetryPollLoop() {
+	if o == nil || o.retryWake == nil {
+		return
+	}
+	select {
+	case o.retryWake <- struct{}{}:
+	default:
 	}
 }
 
@@ -522,7 +541,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 				d.result <- ErrNotDispatched
 				return nil
 			}
-			if attempt == nil {
+			if attempt == nil && entry.Kind != RetryKindContinuation {
 				entryAttempt := entry.Attempt
 				attempt = &entryAttempt
 			}
@@ -631,12 +650,15 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	}
 	if entry.Kind == RetryKindContinuation {
 		// Continuation retries are only a short wake-up signal after a clean
-		// worker exit. They must not spawn from the cached issue snapshot: the
-		// next poll tick has to observe the issue still active and call
-		// RequestDispatchAfterTrackerRecheck, which consumes this entry before
-		// spawning the next turn.
+		// worker exit. They must not spawn from the cached issue snapshot or
+		// carry failure retry accounting: a poll has to observe the issue still
+		// active and call RequestDispatchAfterTrackerRecheck, which consumes
+		// this entry before spawning the next normal turn. Wake the poll loop
+		// now so the one-second continuation delay is honored instead of
+		// waiting for the next regular tracker poll interval.
 		entry.Timer = nil
-		return nil
+		o := r.o
+		return func() { o.wakeRetryPollLoop() }
 	}
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.

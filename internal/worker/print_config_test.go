@@ -169,6 +169,35 @@ func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 	}
 }
 
+// TestPrintConfig_ExposesMaxRetryBackoffMs verifies the effective-config
+// inspection path includes the retry backoff cap that controls orchestrator
+// retry timing. Operators rely on --print-config to confirm workflow reloads
+// and overrides took effect.
+func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_backoff_ms: 45000\ntracker:\n  kind: linear\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Agent struct {
+				MaxRetryBackoffMs int `json:"max_retry_backoff_ms"`
+			} `json:"agent"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if got, want := out.Config.Agent.MaxRetryBackoffMs, 45000; got != want {
+		t.Fatalf("agent.max_retry_backoff_ms = %d, want %d\nstdout:\n%s", got, want, stdout.String())
+	}
+}
+
 // TestPrintConfig_TopLevelSourceAndShadowedBy pins the contract from
 // issue #69: the JSON output surfaces `source` and `shadowed_by` at the
 // top level (not only under `resolution`) so operators answering "which
