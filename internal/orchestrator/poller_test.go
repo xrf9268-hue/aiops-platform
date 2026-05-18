@@ -629,7 +629,6 @@ func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
 		{ID: "missing-identifier", Title: "Missing identifier", State: "AI Ready"},
 		{ID: "missing-title", Identifier: "LIN-2", State: "AI Ready"},
 		{ID: "missing-state", Identifier: "LIN-3", Title: "Missing state"},
-		{ID: "missing-created-at", Identifier: "LIN-5", Title: "Missing created timestamp", State: "AI Ready"},
 		{ID: "valid", Identifier: "LIN-4", Title: "Ready work", State: "AI Ready", CreatedAt: "2026-05-15T00:00:00Z"},
 	}}
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
@@ -648,7 +647,36 @@ func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
 	}
 	waitForDispatcherCount(t, dispatcher, 1)
 	if got := dispatcher.issueAt(0).ID; got != "valid" {
-		t.Fatalf("dispatched issue ID = %q, want only fully populated tracker candidate", got)
+		t.Fatalf("dispatched issue ID = %q, want only candidate with required identity fields", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceDispatchesMissingCreatedAtCandidateAfterDatedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{preserveMissingFields: true, issues: []tracker.Issue{
+		{ID: "missing-created-at", Identifier: "LIN-2", Title: "Missing created timestamp", State: "AI Ready", Priority: 1},
+		{ID: "dated", Identifier: "LIN-1", Title: "Dated", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T00:00:00Z"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	if got, want := dispatcher.issueIDs(), []string{"dated", "missing-created-at"}; got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("dispatch order = %v, want missing created_at sorted last after dated candidates %v", got, want)
 	}
 	close(dispatcher.releaseCh)
 }

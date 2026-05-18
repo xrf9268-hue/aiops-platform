@@ -201,8 +201,7 @@ func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
 	return strings.TrimSpace(issue.ID) != "" &&
 		strings.TrimSpace(issue.Identifier) != "" &&
 		strings.TrimSpace(issue.Title) != "" &&
-		strings.TrimSpace(issue.State) != "" &&
-		strings.TrimSpace(issue.CreatedAt) != ""
+		strings.TrimSpace(issue.State) != ""
 }
 
 func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
@@ -252,6 +251,14 @@ func compareCreatedAt(left, right string) int {
 			return 0
 		}
 	}
+	if leftErr == nil {
+		return -1
+	}
+	if rightErr == nil {
+		return 1
+	}
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
 	if left != right {
 		if left < right {
 			return -1
