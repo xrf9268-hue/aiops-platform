@@ -66,6 +66,12 @@ func (f *fakeDispatcher) count() int {
 	return f.spawnCount
 }
 
+func (f *fakeDispatcher) issueAt(i int) tracker.Issue {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.issues[i]
+}
+
 // finishAt completes the i-th spawned worker with the given result.
 // Tests use this to drive the worker-exit path through the actor.
 func (f *fakeDispatcher) finishAt(i int, res WorkerResult) {

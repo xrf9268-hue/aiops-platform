@@ -2,9 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +42,7 @@ type WorkflowSnapshot struct {
 	Workflow       *workflow.Workflow
 	PollInterval   time.Duration
 	Reconciliation ReconciliationConfig
+	Fingerprint    string
 }
 
 func NewWorkflowRuntime(cfg WorkflowRuntimeConfig) (*WorkflowRuntime, error) {
@@ -91,6 +95,14 @@ func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error {
 	if r.path == "" || r.source == workflow.SourceDefault {
 		return nil
 	}
+	fingerprint, err := workflowFileFingerprint(r.path)
+	if err != nil {
+		r.emit(ctx, task.EventWorkflowReloadFailed, fmt.Sprintf("workflow reload failed: %v", err), map[string]any{"path": r.path, "error": err.Error()})
+		return err
+	}
+	if snap := r.Current(); snap.Fingerprint != "" && snap.Fingerprint == fingerprint {
+		return nil
+	}
 	wf, err := workflow.Load(r.path)
 	if err == nil && r.validate != nil {
 		err = r.validate(wf.Path, wf.Source, wf.Config)
@@ -99,7 +111,7 @@ func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error {
 		r.emit(ctx, task.EventWorkflowReloadFailed, fmt.Sprintf("workflow reload failed: %v", err), map[string]any{"path": r.path, "error": err.Error()})
 		return err
 	}
-	r.current.Store(r.snapshotFromWorkflow(wf))
+	r.current.Store(r.snapshotFromWorkflow(wf, fingerprint))
 	r.emit(ctx, task.EventWorkflowReloaded, "workflow reloaded", map[string]any{"path": r.path, "poll_interval_ms": wf.Config.Tracker.PollIntervalMs})
 	return nil
 }
@@ -117,9 +129,15 @@ func (r *WorkflowRuntime) emit(ctx context.Context, kind, msg string, payload an
 	}
 }
 
-func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow) *WorkflowSnapshot {
+func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprints ...string) *WorkflowSnapshot {
 	if wf == nil {
 		return &WorkflowSnapshot{}
+	}
+	fingerprint := ""
+	if len(fingerprints) > 0 {
+		fingerprint = fingerprints[0]
+	} else if wf.Path != "" && wf.Source != workflow.SourceDefault {
+		fingerprint, _ = workflowFileFingerprint(wf.Path)
 	}
 	reconcile := ReconciliationConfig{
 		ActiveStates:      wf.Config.Tracker.ActiveStates,
@@ -134,7 +152,17 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow) *WorkflowS
 		Workflow:       wf,
 		PollInterval:   time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
 		Reconciliation: reconcile,
+		Fingerprint:    fingerprint,
 	}
+}
+
+func workflowFileFingerprint(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 type PollLoopRuntimeOptions struct {

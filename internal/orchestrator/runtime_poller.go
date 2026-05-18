@@ -17,10 +17,10 @@ type RuntimePoller struct {
 	config       worker.Config
 	emitter      worker.EventEmitter
 
-	mu             sync.Mutex
-	poller         *Poller
-	dispatcher     *RuntimeDispatcher
-	lastSnapshotWF string
+	mu              sync.Mutex
+	poller          *Poller
+	dispatcher      *RuntimeDispatcher
+	lastSnapshotKey string
 }
 
 func NewRuntimePoller(tracker IssueStateLister, orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
@@ -54,14 +54,18 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 }
 
 func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) *Poller {
-	if p.poller != nil && p.lastSnapshotWF == snapshotWorkflowKey(snap) {
+	key := snapshotWorkflowKey(snap)
+	if p.poller != nil && p.lastSnapshotKey == key {
 		return p.poller
 	}
-	p.lastSnapshotWF = snapshotWorkflowKey(snap)
+	p.lastSnapshotKey = key
 	return NewPollerWithReconciliation(p.tracker, p.orchestrator, snap.Reconciliation)
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {
+	if snap.Fingerprint != "" {
+		return snap.Fingerprint
+	}
 	if snap.Workflow == nil {
 		return ""
 	}

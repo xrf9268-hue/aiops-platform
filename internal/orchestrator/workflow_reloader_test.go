@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -83,6 +85,82 @@ func TestWorkflowRuntimeReloadSuccessAtomicallySwapsConfigAndEmitsEvent(t *testi
 	}
 	if got := emitter.count(task.EventWorkflowReloaded); got != 1 {
 		t.Fatalf("workflow_reload event count = %d, want 1", got)
+	}
+}
+
+func TestWorkflowRuntimeReloadUnchangedFileDoesNotEmitRepeatedSuccessEvents(t *testing.T) {
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	emitter := &recordingWorkflowReloadEmitter{}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{
+		Initial:        initial,
+		Path:           path,
+		Source:         workflow.SourceFile,
+		ReloadInterval: time.Millisecond,
+		Emitter:        emitter,
+		EventTaskID:    "workflow-runtime",
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+
+	if err := runtime.ReloadOnce(context.Background()); err != nil {
+		t.Fatalf("first unchanged reload: %v", err)
+	}
+	if err := runtime.ReloadOnce(context.Background()); err != nil {
+		t.Fatalf("second unchanged reload: %v", err)
+	}
+
+	if got := emitter.count(task.EventWorkflowReloaded); got != 0 {
+		t.Fatalf("workflow_reload event count for unchanged reloads = %d, want 0", got)
+	}
+}
+
+func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
+		{ID: "issue-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"},
+		{ID: "issue-rework", Identifier: "ISSUE-2", Title: "rework", State: "Rework"},
+	}}
+	dispatcher := &fakeDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	if got := dispatcher.issueAt(0).ID; got != "issue-ready" {
+		t.Fatalf("first dispatched issue = %q, want issue-ready", got)
+	}
+
+	dispatcher.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Rework")
+	if err := runtime.ReloadOnce(ctx); err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 2 }, time.Second)
+	if got := dispatcher.issueAt(1).ID; got != "issue-rework" {
+		t.Fatalf("second dispatched issue after same-path state reload = %q, want issue-rework", got)
 	}
 }
 
