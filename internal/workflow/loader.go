@@ -31,11 +31,14 @@ func Load(path string) (*Workflow, error) {
 		if err := rejectRemovedFields(frontBytes); err != nil {
 			return nil, err
 		}
-		hasTopLevelHookTimeout := hasNestedKey(frontBytes, "hooks", "timeout_ms")
+		hookFields := hookFieldPresence(frontBytes, "hooks")
+		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
 			return nil, fmt.Errorf("parse workflow front matter: %w", err)
 		}
-		if hasTopLevelHookTimeout {
+		cfg.hookFields = hookFields
+		cfg.Workspace.hookFields = legacyHookFields
+		if hookFields.TimeoutMs {
 			cfg.hooksTimeoutDefaulted = false
 		}
 	}
@@ -199,6 +202,16 @@ func hasNestedKey(front []byte, path ...string) bool {
 		}
 	}
 	return true
+}
+
+func hookFieldPresence(front []byte, path ...string) HookFieldPresence {
+	return HookFieldPresence{
+		AfterCreate:  hasNestedKey(front, append(path, "after_create")...),
+		BeforeRun:    hasNestedKey(front, append(path, "before_run")...),
+		AfterRun:     hasNestedKey(front, append(path, "after_run")...),
+		BeforeRemove: hasNestedKey(front, append(path, "before_remove")...),
+		TimeoutMs:    hasNestedKey(front, append(path, "timeout_ms")...),
+	}
 }
 
 func rejectRemovedFields(front []byte) error {

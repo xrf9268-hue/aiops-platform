@@ -166,15 +166,13 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 
 	mgr := workspace.New(cfg.WorkspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
-	workdir, createdNow, err := mgr.PrepareGitWorkspace(ctx, t)
+	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
-	if createdNow {
-		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
-			_ = os.RemoveAll(workdir)
-			return &RunTaskError{Cfg: wcfg, Err: err}
-		}
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
+		_ = os.RemoveAll(workdir)
+		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
 	if t.Model == "" || t.Model == "mock" {

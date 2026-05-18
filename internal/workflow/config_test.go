@@ -270,6 +270,31 @@ prompt body
 	}
 }
 
+func TestWorkspaceHooksPreservesExplicitEmptyTopLevelOverride(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  before_run: []
+workspace:
+  hooks:
+    before_run:
+      - printf legacy-before-run
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := wf.Config.WorkspaceHooks().BeforeRun.Commands; len(got) != 0 {
+		t.Fatalf("WorkspaceHooks().BeforeRun.Commands = %#v, want explicit empty top-level hook to suppress legacy hook", got)
+	}
+}
+
 func TestDefaultConfigWorkspaceHooksTimeout(t *testing.T) {
 	if got, want := DefaultConfig().Hooks.TimeoutMs, 60000; got != want {
 		t.Fatalf("DefaultConfig().Hooks.TimeoutMs = %d, want SPEC default %d", got, want)

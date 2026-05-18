@@ -180,6 +180,40 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 	}
 }
 
+func TestRunTaskExecutesAfterCreateHookOnRecreatedWorkspace(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		AfterCreate: workflow.WorkspaceHook{Commands: []string{"printf after_create >> hook.log"}},
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("first runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	if err := os.WriteFile(filepath.Join(workdir, "stale.txt"), []byte("stale"), 0o644); err != nil {
+		t.Fatalf("write stale marker: %v", err)
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("second runTask: %v", rterr.Err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
+	if err != nil {
+		t.Fatalf("read recreated hook log: %v", err)
+	}
+	if string(body) != "after_create" {
+		t.Fatalf("recreated hook log = %q, want after_create from the second fresh checkout", body)
+	}
+	if _, err := os.Stat(filepath.Join(workdir, "stale.txt")); !os.IsNotExist(err) {
+		t.Fatalf("second run should recreate a clean workspace without stale marker; stat err=%v", err)
+	}
+}
+
 func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)

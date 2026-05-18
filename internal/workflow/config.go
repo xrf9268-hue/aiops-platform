@@ -8,10 +8,11 @@ import (
 )
 
 type Config struct {
-	Repo      RepoConfig      `yaml:"repo" json:"repo"`
-	Tracker   TrackerConfig   `yaml:"tracker" json:"tracker"`
-	Hooks     WorkspaceHooks  `yaml:"hooks" json:"hooks"`
-	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
+	Repo       RepoConfig      `yaml:"repo" json:"repo"`
+	Tracker    TrackerConfig   `yaml:"tracker" json:"tracker"`
+	Hooks      WorkspaceHooks  `yaml:"hooks" json:"hooks"`
+	Workspace  WorkspaceConfig `yaml:"workspace" json:"workspace"`
+	hookFields HookFieldPresence
 
 	// hooksTimeoutDefaulted is true when Hooks.TimeoutMs came from DefaultConfig
 	// rather than WORKFLOW.md. It lets WorkspaceHooks keep the SPEC default while
@@ -64,8 +65,9 @@ type TrackerStatusConfig struct {
 }
 
 type WorkspaceConfig struct {
-	Root  string         `yaml:"root" json:"root"`
-	Hooks WorkspaceHooks `yaml:"hooks" json:"hooks"`
+	Root       string         `yaml:"root" json:"root"`
+	Hooks      WorkspaceHooks `yaml:"hooks" json:"hooks"`
+	hookFields HookFieldPresence
 }
 
 type WorkspaceHooks struct {
@@ -74,6 +76,14 @@ type WorkspaceHooks struct {
 	AfterRun     WorkspaceHook `yaml:"after_run" json:"after_run"`
 	BeforeRemove WorkspaceHook `yaml:"before_remove" json:"before_remove"`
 	TimeoutMs    int           `yaml:"timeout_ms" json:"timeout_ms"`
+}
+
+type HookFieldPresence struct {
+	AfterCreate  bool
+	BeforeRun    bool
+	AfterRun     bool
+	BeforeRemove bool
+	TimeoutMs    bool
 }
 
 type WorkspaceHook struct {
@@ -122,19 +132,19 @@ func (h WorkspaceHooks) HasCommands() bool {
 func (c Config) WorkspaceHooks() WorkspaceHooks {
 	hooks := c.Hooks
 	legacy := c.Workspace.Hooks
-	if !hooks.AfterCreate.HasCommands() && legacy.AfterCreate.HasCommands() {
+	if !c.hookFields.AfterCreate && legacy.AfterCreate.HasCommands() {
 		hooks.AfterCreate = legacy.AfterCreate
 	}
-	if !hooks.BeforeRun.HasCommands() && legacy.BeforeRun.HasCommands() {
+	if !c.hookFields.BeforeRun && legacy.BeforeRun.HasCommands() {
 		hooks.BeforeRun = legacy.BeforeRun
 	}
-	if !hooks.AfterRun.HasCommands() && legacy.AfterRun.HasCommands() {
+	if !c.hookFields.AfterRun && legacy.AfterRun.HasCommands() {
 		hooks.AfterRun = legacy.AfterRun
 	}
-	if !hooks.BeforeRemove.HasCommands() && legacy.BeforeRemove.HasCommands() {
+	if !c.hookFields.BeforeRemove && legacy.BeforeRemove.HasCommands() {
 		hooks.BeforeRemove = legacy.BeforeRemove
 	}
-	if legacy.TimeoutMs > 0 && (hooks.TimeoutMs <= 0 || c.hooksTimeoutDefaulted) {
+	if legacy.TimeoutMs > 0 && !c.hookFields.TimeoutMs {
 		hooks.TimeoutMs = legacy.TimeoutMs
 	}
 	if hooks.TimeoutMs <= 0 {
