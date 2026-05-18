@@ -52,14 +52,14 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 		if r.URL.Query().Get("labels") == "aiops/todo" {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]Issue{
-				{ID: 101, Number: 1, Title: "first", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/1", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
+				{ID: 101, Number: 1, Title: "first", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/1", CreatedAt: "2026-05-16T23:59:00Z", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
 			})
 			return
 		}
 		if r.URL.Query().Get("labels") == "aiops/rework" {
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]Issue{
-				{ID: 102, Number: 2, Title: "second", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/2", UpdatedAt: "2026-05-17T00:01:00Z", Labels: []Label{{Name: "aiops/rework"}}},
+				{ID: 102, Number: 2, Title: "second", Body: "body", HTMLURL: "https://gitea.local/o/r/issues/2", CreatedAt: "2026-05-17T00:00:30Z", UpdatedAt: "2026-05-17T00:01:00Z", Labels: []Label{{Name: "aiops/rework"}}},
 			})
 			return
 		}
@@ -88,6 +88,9 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	}
 	if issues[1].State != "Rework" {
 		t.Fatalf("second issue state = %q, want Rework", issues[1].State)
+	}
+	if issues[0].CreatedAt != "2026-05-16T23:59:00Z" || issues[1].CreatedAt != "2026-05-17T00:00:30Z" {
+		t.Fatalf("issue created_at = %q, %q; want Gitea created_at metadata mapped", issues[0].CreatedAt, issues[1].CreatedAt)
 	}
 }
 
