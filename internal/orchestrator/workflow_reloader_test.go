@@ -164,6 +164,50 @@ func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T
 	}
 }
 
+func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	initial.Config.Agent.MaxConcurrentAgents = 1
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
+		{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"},
+		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "AI Ready"},
+	}}
+	dispatcher := &blockingDispatcher{}
+	orch := New(NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents), Deps{Dispatcher: dispatcher, Scheduler: FixedDelayScheduler{Delay: time.Minute}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	waitForBlockingDispatcherCount(t, dispatcher, 1)
+
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxConcurrentAgents(2))
+	if err := runtime.ReloadOnce(ctx); err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	waitForBlockingDispatcherCount(t, dispatcher, 2)
+}
+
 func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T) {
 	ctx := context.Background()
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
@@ -353,8 +397,12 @@ func writeWorkflowForReloadTest(t *testing.T, trackerKind string, pollIntervalMs
 	return path
 }
 
-func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIntervalMs int, activeState string) {
+func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIntervalMs int, activeState string, opts ...reloadWorkflowTestOption) {
 	t.Helper()
+	cfg := reloadWorkflowTestConfig{maxConcurrentAgents: 100}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	content := "---\n" +
 		"repo:\n" +
 		"  owner: xrf9268-hue\n" +
@@ -367,10 +415,23 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  poll_interval_ms: " + itoaForReloadTest(pollIntervalMs) + "\n" +
 		"agent:\n" +
 		"  default: mock\n" +
+		"  max_concurrent_agents: " + itoaForReloadTest(cfg.maxConcurrentAgents) + "\n" +
 		"---\n" +
 		"Prompt body\n"
 	if err := osWriteFileForReloadTest(path, []byte(content)); err != nil {
 		t.Fatalf("write workflow: %v", err)
+	}
+}
+
+type reloadWorkflowTestConfig struct {
+	maxConcurrentAgents int
+}
+
+type reloadWorkflowTestOption func(*reloadWorkflowTestConfig)
+
+func withReloadTestMaxConcurrentAgents(n int) reloadWorkflowTestOption {
+	return func(cfg *reloadWorkflowTestConfig) {
+		cfg.maxConcurrentAgents = n
 	}
 }
 

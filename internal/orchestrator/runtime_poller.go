@@ -59,12 +59,16 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 		return errors.New("runtime poller is nil")
 	}
 	p.mu.Lock()
-	poller, err := p.pollerForSnapshot(p.runtime.Current())
+	snap := p.runtime.Current()
+	poller, err := p.pollerForSnapshot(snap)
 	if err == nil {
 		p.poller = poller
 	}
 	p.mu.Unlock()
 	if err != nil {
+		return err
+	}
+	if err := p.orchestrator.UpdateMaxConcurrentAgents(ctx, snap.MaxConcurrentAgents); err != nil {
 		return err
 	}
 	return poller.PollOnce(ctx)
