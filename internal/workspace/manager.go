@@ -228,25 +228,28 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	}
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
+	cmd := exec.Command("sh", "-lc", command)
 	cmd.Dir = workdir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var out cappedBuffer
 	out.Cap = VerifyOutputCap
 	cmd.Stdout = &out
 	cmd.Stderr = &out
-	done := make(chan struct{})
+	if err := cmd.Start(); err != nil {
+		return HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+	}
+	done := make(chan error, 1)
 	go func() {
-		select {
-		case <-runCtx.Done():
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-		case <-done:
-		}
+		done <- cmd.Wait()
 	}()
-	err := cmd.Run()
-	close(done)
+
+	var err error
+	select {
+	case err = <-done:
+	case <-runCtx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		err = <-done
+	}
 	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
 	if runCtx.Err() == context.DeadlineExceeded {
 		res.Err = fmt.Errorf("hook timed out after %dms: %w", timeoutMs, runCtx.Err())
