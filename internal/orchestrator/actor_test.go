@@ -656,6 +656,25 @@ func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
 	}
 }
 
+func TestScheduleRetryUsesReloadedSchedulerWithoutRacing(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour}},
+	})
+	defer cancel()
+
+	if err := o.UpdateRetryScheduler(context.Background(), &sequenceScheduler{delays: []time.Duration{time.Millisecond}}); err != nil {
+		t.Fatalf("UpdateRetryScheduler: %v", err)
+	}
+	iss := tracker.Issue{ID: "ENG-SCHED", Identifier: "ENG-SCHED", Title: "scheduler reload"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "boom"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+}
+
 // TestApply_FollowupRunsOffActorAndCanResubmit pins the design's
 // "apply must not block on the ops channel" invariant: a followup
 // returned by apply runs on a fresh goroutine, so it can submit

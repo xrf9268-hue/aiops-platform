@@ -414,15 +414,14 @@ func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue trac
 }
 
 func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string) error {
-	delay := o.scheduler.NextDelay(req)
 	op := &scheduleRetryOp{
 		o:          o,
 		issue:      issue,
 		identifier: identifier,
 		attempt:    attempt,
-		delay:      delay,
 		runErr:     runErr,
 		kind:       req.Kind,
+		req:        req,
 	}
 	return o.submit(ctx, op)
 }
@@ -569,9 +568,9 @@ type scheduleRetryOp struct {
 	issue      tracker.Issue
 	identifier string
 	attempt    int
-	delay      time.Duration
 	runErr     string
 	kind       RetryKind
+	req        RetryRequest
 }
 
 func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
@@ -579,6 +578,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	o := s.o
 	issue := s.issue
 	attempt := s.attempt
+	delay := o.scheduler.NextDelay(s.req)
 	// time.AfterFunc schedules immediately and is cheap (no goroutine
 	// until fire), so we can safely create the timer on the actor
 	// without blocking. ScheduleRetry needs the Timer set on the entry
@@ -587,11 +587,11 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		IssueID:    id,
 		Identifier: s.identifier,
 		Attempt:    attempt,
-		DueAt:      time.Now().Add(s.delay),
+		DueAt:      time.Now().Add(delay),
 		Error:      s.runErr,
 		Kind:       s.kind,
 	}
-	entry.Timer = time.AfterFunc(s.delay, func() {
+	entry.Timer = time.AfterFunc(delay, func() {
 		_ = o.submit(o.runCtx, &retryFireOp{
 			o:       o,
 			id:      id,
