@@ -591,6 +591,15 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// re-dispatch on its own timer.
 		return nil
 	}
+	if entry.Kind == RetryKindContinuation {
+		// Continuation retries are only a short wake-up signal after a clean
+		// worker exit. They must not spawn from the cached issue snapshot: the
+		// next poll tick has to observe the issue still active and call
+		// RequestDispatchAfterTrackerRecheck, which consumes this entry before
+		// spawning the next turn.
+		entry.Timer = nil
+		return nil
+	}
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Leave the retry queued and arm a short follow-up timer so the issue
