@@ -10,6 +10,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 type fakeReconcileTracker struct {
@@ -304,6 +305,50 @@ func TestReconcileStartupReturnsTrackerError(t *testing.T) {
 	}); err == nil {
 		t.Fatal("ReconcileStartup error = nil, want tracker error")
 	}
+}
+
+func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing.T) {
+	root := t.TempDir()
+	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN-1")
+	if err := os.MkdirAll(terminalPath, 0o755); err != nil {
+		t.Fatalf("mkdir terminal workspace: %v", err)
+	}
+	marker := filepath.Join(root, "hook-ran")
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"AI Ready"},
+		TerminalStates: []string{"Done"},
+		TrackerKind:    "linear",
+		Tracker:        fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}}},
+		Emitter:        emitter,
+		BeforeRemoveHook: workflow.WorkspaceHook{Commands: []string{
+			"printf before_remove > " + shellQuote(marker),
+			"exit 9",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup should ignore before_remove hook failure and remove workspace: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("terminal workspace should be removed despite before_remove failure; stat err=%v", err)
+	}
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "before_remove" {
+		t.Fatalf("before_remove hook marker = %q, %v; want hook to run before removal", body, err)
+	}
+	var hookEnds int
+	for _, e := range emitter.events {
+		if e.Kind == task.EventWorkspaceHookEnd {
+			hookEnds++
+		}
+	}
+	if hookEnds != 2 {
+		t.Fatalf("hook_end events = %d, want 2 for both before_remove commands; events=%#v", hookEnds, emitter.events)
+	}
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func TestReconcileStartupRejectsEmptyActiveStatesBeforeCleanup(t *testing.T) {

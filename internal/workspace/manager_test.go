@@ -415,6 +415,63 @@ func TestWriteAndReadSummaryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		"printf first",
+		"printf boom && exit 7",
+		"printf never > should-not-exist",
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0)
+	if err == nil {
+		t.Fatalf("RunWorkspaceHook should fail on non-zero exit")
+	}
+	var hookErr *HookError
+	if !errors.As(err, &hookErr) {
+		t.Fatalf("error type = %T, want *HookError", err)
+	}
+	if hookErr.Name != HookBeforeRun {
+		t.Fatalf("hook error name = %q, want %q", hookErr.Name, HookBeforeRun)
+	}
+	if got, want := len(results), 2; got != want {
+		t.Fatalf("results len = %d, want %d", got, want)
+	}
+	if results[0].Output != "first" || results[0].ExitCode != 0 || results[0].Err != nil {
+		t.Fatalf("first result = %#v, want successful captured output", results[0])
+	}
+	if results[1].Output != "boom" || results[1].ExitCode != 7 || results[1].Err == nil {
+		t.Fatalf("second result = %#v, want failing captured output with exit 7", results[1])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "should-not-exist")); !os.IsNotExist(err) {
+		t.Fatalf("commands after failed hook should not run; stat err=%v", err)
+	}
+}
+
+func TestRunWorkspaceHookTimeoutStopsCommand(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{"sleep 2"}}
+
+	start := time.Now()
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("RunWorkspaceHook should fail on timeout")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("hook timeout took %v, want under 1s", elapsed)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("results len = %d, want %d", got, want)
+	}
+	if results[0].ExitCode != -1 || results[0].Err == nil {
+		t.Fatalf("timeout result = %#v, want exit -1 with error", results[0])
+	}
+	if !strings.Contains(results[0].Err.Error(), "timed out") {
+		t.Fatalf("timeout error = %v, want timed out", results[0].Err)
+	}
+}
+
 // TestRunVerifyCollectsAllFailures pins the post-#18 contract: RunVerify
 // runs every non-empty command and records a result for each, even after
 // a non-zero exit. The aggregate error is non-nil iff at least one

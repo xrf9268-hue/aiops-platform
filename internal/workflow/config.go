@@ -52,7 +52,20 @@ type TrackerStatusConfig struct {
 }
 
 type WorkspaceConfig struct {
-	Root string `yaml:"root" json:"root"`
+	Root  string         `yaml:"root" json:"root"`
+	Hooks WorkspaceHooks `yaml:"hooks" json:"hooks"`
+}
+
+type WorkspaceHooks struct {
+	AfterCreate  WorkspaceHook `yaml:"after_create" json:"after_create"`
+	BeforeRun    WorkspaceHook `yaml:"before_run" json:"before_run"`
+	AfterRun     WorkspaceHook `yaml:"after_run" json:"after_run"`
+	BeforeRemove WorkspaceHook `yaml:"before_remove" json:"before_remove"`
+	TimeoutMs    int           `yaml:"timeout_ms" json:"timeout_ms"`
+}
+
+type WorkspaceHook struct {
+	Commands []string `yaml:"commands" json:"commands"`
 }
 
 type AgentConfig struct {

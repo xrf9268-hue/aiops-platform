@@ -23,6 +23,8 @@ const (
 	EventEnqueued             = "enqueued"
 	EventClaimed              = "claimed"
 	EventWorkflowResolved     = "workflow_resolved"
+	EventWorkspaceHookStart   = "hook_start"
+	EventWorkspaceHookEnd     = "hook_end"
 	EventRunnerStart          = "runner_start"
 	EventRunnerEnd            = "runner_end"
 	EventRunnerTimeout        = "runner_timeout"

@@ -2,6 +2,7 @@ package worker_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,6 +116,68 @@ func writeServiceWorkflowForIntegration(t *testing.T, body string) string {
 		t.Fatalf("write service workflow: %v", err)
 	}
 	return path
+}
+
+func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
+		AfterCreate:  workflow.WorkspaceHook{Commands: []string{"printf after_create >> hook.log"}},
+		BeforeRun:    workflow.WorkspaceHook{Commands: []string{"printf before_run >> hook.log"}},
+		AfterRun:     workflow.WorkspaceHook{Commands: []string{"printf after_run >> hook.log"}},
+		BeforeRemove: workflow.WorkspaceHook{Commands: []string{"printf before_remove >> ../before_remove.log"}},
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+
+	type step struct {
+		kind string
+		hook string
+	}
+	wantSteps := []step{
+		{kind: task.EventWorkspaceHookStart, hook: "after_create"},
+		{kind: task.EventWorkspaceHookEnd, hook: "after_create"},
+		{kind: task.EventWorkspaceHookStart, hook: "before_run"},
+		{kind: task.EventWorkspaceHookEnd, hook: "before_run"},
+		{kind: task.EventRunnerStart},
+		{kind: task.EventRunnerEnd},
+		{kind: task.EventWorkspaceHookStart, hook: "after_run"},
+		{kind: task.EventWorkspaceHookEnd, hook: "after_run"},
+	}
+	var got []step
+	for _, e := range ev.events {
+		switch e.Kind {
+		case task.EventWorkspaceHookStart, task.EventWorkspaceHookEnd:
+			got = append(got, step{kind: e.Kind, hook: fmt.Sprint(e.Payload.(map[string]any)["hook"])})
+		case task.EventRunnerStart, task.EventRunnerEnd:
+			got = append(got, step{kind: e.Kind})
+		}
+	}
+	if len(got) < len(wantSteps) {
+		t.Fatalf("hook/runner event count = %d, want at least %d; events=%#v", len(got), len(wantSteps), ev.events)
+	}
+	for i, want := range wantSteps {
+		if got[i] != want {
+			t.Fatalf("event[%d] = %#v, want %#v; got sequence=%#v", i, got[i], want, got)
+		}
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
+	if err != nil {
+		t.Fatalf("read hook log: %v", err)
+	}
+	if string(body) != "after_createbefore_runafter_run" {
+		t.Fatalf("hook log = %q, want hooks to run in order around runner", body)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(workdir), "before_remove.log")); !os.IsNotExist(err) {
+		t.Fatalf("before_remove hook should not run during normal RunTask completion; stat err=%v", err)
+	}
 }
 
 // TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1

@@ -133,13 +133,15 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
-		WorkspaceRoot:   cfg.WorkspaceRoot,
-		ActiveStates:    wf.Config.Tracker.ActiveStates,
-		TerminalStates:  wf.Config.Tracker.TerminalStates,
-		TrackerKind:     wf.Config.Tracker.Kind,
-		Tracker:         trackerClient,
-		Emitter:         worker.LogEventEmitter{},
-		ReconcileTaskID: "reconcile-startup",
+		WorkspaceRoot:     cfg.WorkspaceRoot,
+		ActiveStates:      wf.Config.Tracker.ActiveStates,
+		TerminalStates:    wf.Config.Tracker.TerminalStates,
+		TrackerKind:       wf.Config.Tracker.Kind,
+		Tracker:           trackerClient,
+		Emitter:           worker.LogEventEmitter{},
+		ReconcileTaskID:   "reconcile-startup",
+		BeforeRemoveHook:  wf.Config.Workspace.Hooks.BeforeRemove,
+		HookTimeoutMillis: wf.Config.Workspace.Hooks.TimeoutMs,
 	}); err != nil {
 		worker.LogReconcileError(err)
 		return err

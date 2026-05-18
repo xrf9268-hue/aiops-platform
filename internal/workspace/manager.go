@@ -3,6 +3,7 @@ package workspace
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,6 +19,50 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+// HookName identifies one of the SPEC-defined workspace lifecycle hooks.
+type HookName string
+
+const (
+	HookAfterCreate  HookName = "after_create"
+	HookBeforeRun    HookName = "before_run"
+	HookAfterRun     HookName = "after_run"
+	HookBeforeRemove HookName = "before_remove"
+)
+
+// HookResult captures one workspace hook command execution for task events and
+// caller-side failure policy decisions.
+type HookResult struct {
+	Name      HookName
+	Command   string
+	ExitCode  int
+	Output    string
+	Truncated bool
+	Duration  time.Duration
+	Err       error
+}
+
+// HookError reports a failed workspace hook while preserving every command
+// result captured before the failure.
+type HookError struct {
+	Name    HookName
+	Results []HookResult
+	Err     error
+}
+
+func (e *HookError) Error() string {
+	if e == nil || e.Err == nil {
+		return "workspace hook failed"
+	}
+	return fmt.Sprintf("workspace hook %s failed: %v", e.Name, e.Err)
+}
+
+func (e *HookError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 // VerifyOutputCap bounds how many bytes of combined stdout+stderr we keep in
 // memory per verify command. Verbose verify steps (e.g. `go test -v ./...`)
@@ -154,6 +199,60 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// downstream tooling inspects `git remote -v` from within the worktree.
 	_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
 	return workdir, createdNow, nil
+}
+
+// RunWorkspaceHook executes the configured shell commands for a lifecycle hook
+// in workdir, in order, using the shared workspace hook timeout.
+func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int) ([]HookResult, error) {
+	results := make([]HookResult, 0, len(hook.Commands))
+	for _, raw := range hook.Commands {
+		command := strings.TrimSpace(raw)
+		if command == "" {
+			continue
+		}
+		res := runWorkspaceHookCommand(ctx, workdir, name, command, timeoutMs)
+		results = append(results, res)
+		if res.Err != nil {
+			return results, &HookError{Name: name, Results: results, Err: res.Err}
+		}
+	}
+	return results, nil
+}
+
+func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName, command string, timeoutMs int) HookResult {
+	start := time.Now()
+	runCtx := ctx
+	cancel := func() {}
+	if timeoutMs > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+	}
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
+	cmd.Dir = workdir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var out cappedBuffer
+	out.Cap = VerifyOutputCap
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-runCtx.Done():
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+		case <-done:
+		}
+	}()
+	err := cmd.Run()
+	close(done)
+	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+	if runCtx.Err() == context.DeadlineExceeded {
+		res.Err = fmt.Errorf("hook timed out after %dms: %w", timeoutMs, runCtx.Err())
+		res.ExitCode = -1
+	}
+	return res
 }
 
 func WritePrompt(workdir string, prompt string) error {
@@ -633,6 +732,17 @@ func remoteBranchExists(ctx context.Context, workdir, branch string) (bool, erro
 		return false, err
 	}
 	return strings.TrimSpace(stdout.String()) != "", nil
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return exitErr.ExitCode()
+	}
+	return -1
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) error {

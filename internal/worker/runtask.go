@@ -124,22 +124,58 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 // responsibility. The worker's role is: claim, prepare workspace, resolve
 // workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
 // emit events, and clean up.
+
+func emitHookResults(ctx context.Context, ev EventEmitter, taskID string, results []workspace.HookResult) {
+	for _, res := range results {
+		Emit(ctx, ev, taskID, task.EventWorkspaceHookEnd, string(res.Name)+" hook completed", map[string]any{
+			"hook":        string(res.Name),
+			"command":     res.Command,
+			"exit_code":   res.ExitCode,
+			"output":      res.Output,
+			"truncated":   res.Truncated,
+			"duration_ms": res.Duration.Milliseconds(),
+			"error":       ErrSummary(res.Err),
+		})
+	}
+}
+
+func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int) error {
+	if len(hook.Commands) == 0 {
+		return nil
+	}
+	Emit(ctx, ev, taskID, task.EventWorkspaceHookStart, string(name)+" hook started", map[string]any{
+		"hook":       string(name),
+		"commands":   len(hook.Commands),
+		"timeout_ms": timeoutMs,
+	})
+	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs)
+	emitHookResults(ctx, ev, taskID, results)
+	return err
+}
+
 // RunTask executes a single in-memory task. The orchestrator-backed worker path
 // uses this directly after claiming a tracker issue in runtime state; the
 // legacy queue loop also calls it for remaining tests/compatibility.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
-	mgr := workspace.New(cfg.WorkspaceRoot)
-	mgr.MirrorRoot = cfg.MirrorRoot
-	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
-	if err != nil {
-		return &RunTaskError{Err: err}
-	}
-
 	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, cfg.Workflow)
 	if err != nil {
 		return &RunTaskError{Err: err}
 	}
 	wcfg := wf.Config
+
+	mgr := workspace.New(cfg.WorkspaceRoot)
+	mgr.MirrorRoot = cfg.MirrorRoot
+	workdir, createdNow, err := mgr.PrepareGitWorkspace(ctx, t)
+	if err != nil {
+		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
+	if createdNow {
+		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, wcfg.Workspace.Hooks.AfterCreate, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+			_ = os.RemoveAll(workdir)
+			return &RunTaskError{Cfg: wcfg, Err: err}
+		}
+	}
+
 	if t.Model == "" || t.Model == "mock" {
 		t.Model = wcfg.Agent.Default
 		if t.Model == "" {
@@ -176,9 +212,18 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
 	}
 
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, wcfg.Workspace.Hooks.BeforeRun, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+		WriteFailureArtifacts(ctx, workdir, nil, "before_run hook failed: "+ErrSummary(err))
+		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
+
 	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: cfg.WorkspaceRoot, Prompt: prompt}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
+	}
+
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, wcfg.Workspace.Hooks.AfterRun, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+		log.Printf("task %s: after_run hook failed: %v", t.ID, err)
 	}
 
 	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {

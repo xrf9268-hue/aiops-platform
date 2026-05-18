@@ -10,6 +10,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
@@ -27,13 +28,15 @@ type ReconcileTracker interface {
 // pass. The pass is idempotent: active issue workspaces are preserved, while
 // terminal and unknown/deleted issue workspaces are removed before dispatch.
 type ReconcileConfig struct {
-	WorkspaceRoot   string
-	ActiveStates    []string
-	TerminalStates  []string
-	TrackerKind     string
-	Tracker         ReconcileTracker
-	Emitter         EventEmitter
-	ReconcileTaskID string
+	WorkspaceRoot     string
+	ActiveStates      []string
+	TerminalStates    []string
+	TrackerKind       string
+	Tracker           ReconcileTracker
+	Emitter           EventEmitter
+	ReconcileTaskID   string
+	BeforeRemoveHook  workflow.WorkspaceHook
+	HookTimeoutMillis int
 }
 
 // ReconcileStartup reconciles existing per-issue workspaces with tracker state.
@@ -223,6 +226,9 @@ func issueWorkspaceSourceDirs(trackerKind string) []string {
 }
 
 func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path string, issue tracker.Issue, reason string) (bool, error) {
+	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis); err != nil {
+		log.Printf("task %s: before_remove hook failed for %s workspace %s: %v", taskID, reason, path, err)
+	}
 	if err := os.RemoveAll(path); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", reason, path, err)
 	}
