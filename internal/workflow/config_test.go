@@ -167,6 +167,68 @@ prompt body
 	}
 }
 
+func TestLoadParsesSpecWorkspaceHookScriptStrings(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  after_create: |
+    printf after_create
+  before_run: printf before_run
+  after_run: |
+    printf after_run
+  before_remove: printf before_remove
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	hooks := wf.Config.Hooks
+	if !reflect.DeepEqual(hooks.AfterCreate.Commands, []string{"printf after_create\n"}) {
+		t.Fatalf("Hooks.AfterCreate.Commands = %#v", hooks.AfterCreate.Commands)
+	}
+	if !reflect.DeepEqual(hooks.BeforeRun.Commands, []string{"printf before_run"}) {
+		t.Fatalf("Hooks.BeforeRun.Commands = %#v", hooks.BeforeRun.Commands)
+	}
+	if !reflect.DeepEqual(hooks.AfterRun.Commands, []string{"printf after_run\n"}) {
+		t.Fatalf("Hooks.AfterRun.Commands = %#v", hooks.AfterRun.Commands)
+	}
+	if !reflect.DeepEqual(hooks.BeforeRemove.Commands, []string{"printf before_remove"}) {
+		t.Fatalf("Hooks.BeforeRemove.Commands = %#v", hooks.BeforeRemove.Commands)
+	}
+}
+
+func TestWorkspaceHooksMergesTopLevelAndLegacyPerHook(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Hooks = WorkspaceHooks{
+		AfterRun:  WorkspaceHook{Commands: []string{"printf top-after-run"}},
+		TimeoutMs: 0,
+	}
+	cfg.Workspace.Hooks = WorkspaceHooks{
+		AfterCreate:  WorkspaceHook{Commands: []string{"printf legacy-after-create"}},
+		BeforeRemove: WorkspaceHook{Commands: []string{"printf legacy-before-remove"}},
+		TimeoutMs:    4321,
+	}
+
+	hooks := cfg.WorkspaceHooks()
+	if !reflect.DeepEqual(hooks.AfterCreate.Commands, []string{"printf legacy-after-create"}) {
+		t.Fatalf("AfterCreate.Commands = %#v", hooks.AfterCreate.Commands)
+	}
+	if !reflect.DeepEqual(hooks.AfterRun.Commands, []string{"printf top-after-run"}) {
+		t.Fatalf("AfterRun.Commands = %#v", hooks.AfterRun.Commands)
+	}
+	if !reflect.DeepEqual(hooks.BeforeRemove.Commands, []string{"printf legacy-before-remove"}) {
+		t.Fatalf("BeforeRemove.Commands = %#v", hooks.BeforeRemove.Commands)
+	}
+	if hooks.TimeoutMs != 4321 {
+		t.Fatalf("TimeoutMs = %d, want legacy timeout fallback 4321", hooks.TimeoutMs)
+	}
+}
+
 func TestDefaultConfigWorkspaceHooksTimeout(t *testing.T) {
 	if got, want := DefaultConfig().Hooks.TimeoutMs, 60000; got != want {
 		t.Fatalf("DefaultConfig().Hooks.TimeoutMs = %d, want SPEC default %d", got, want)

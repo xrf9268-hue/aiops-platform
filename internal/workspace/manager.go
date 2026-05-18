@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -227,6 +228,20 @@ func EffectiveWorkspaceHookTimeoutMs(timeoutMs int) int {
 	return workflow.DefaultConfig().Hooks.TimeoutMs
 }
 
+func workspaceHookWaitDelay(timeoutMs int) time.Duration {
+	if timeoutMs <= 0 {
+		return 100 * time.Millisecond
+	}
+	grace := time.Duration(math.Ceil(float64(timeoutMs)/10)) * time.Millisecond
+	if grace < 100*time.Millisecond {
+		return 100 * time.Millisecond
+	}
+	if grace > time.Second {
+		return time.Second
+	}
+	return grace
+}
+
 func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName, command string, timeoutMs int) HookResult {
 	start := time.Now()
 	runCtx := ctx
@@ -235,6 +250,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
 	}
 	defer cancel()
+	waitDelay := workspaceHookWaitDelay(timeoutMs)
 
 	cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
 	cmd.Dir = workdir
@@ -245,7 +261,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 		}
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
-	cmd.WaitDelay = 100 * time.Millisecond
+	cmd.WaitDelay = waitDelay
 	var out cappedBuffer
 	out.Cap = VerifyOutputCap
 	cmd.Stdout = &out
@@ -263,7 +279,11 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	case err = <-done:
 	case <-runCtx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		err = <-done
+		select {
+		case err = <-done:
+		case <-time.After(waitDelay):
+			err = fmt.Errorf("hook wait exceeded cleanup grace after timeout: %w", runCtx.Err())
+		}
 	}
 	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
 	if runCtx.Err() == context.DeadlineExceeded {

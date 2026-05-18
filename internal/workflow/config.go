@@ -1,6 +1,11 @@
 package workflow
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
 
 type Config struct {
 	Repo      RepoConfig      `yaml:"repo" json:"repo"`
@@ -69,14 +74,62 @@ type WorkspaceHook struct {
 	Commands []string `yaml:"commands" json:"commands"`
 }
 
+func (h *WorkspaceHook) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var command string
+		if err := value.Decode(&command); err != nil {
+			return err
+		}
+		if command != "" {
+			h.Commands = []string{command}
+		}
+		return nil
+	case yaml.SequenceNode:
+		var commands []string
+		if err := value.Decode(&commands); err != nil {
+			return err
+		}
+		h.Commands = commands
+		return nil
+	case yaml.MappingNode:
+		type workspaceHook WorkspaceHook
+		var decoded workspaceHook
+		if err := value.Decode(&decoded); err != nil {
+			return err
+		}
+		*h = WorkspaceHook(decoded)
+		return nil
+	default:
+		return fmt.Errorf("workspace hook must be a shell script string, command list, or commands object")
+	}
+}
+
+func (h WorkspaceHook) HasCommands() bool {
+	return len(h.Commands) > 0
+}
+
 func (h WorkspaceHooks) HasCommands() bool {
-	return len(h.AfterCreate.Commands) > 0 || len(h.BeforeRun.Commands) > 0 || len(h.AfterRun.Commands) > 0 || len(h.BeforeRemove.Commands) > 0
+	return h.AfterCreate.HasCommands() || h.BeforeRun.HasCommands() || h.AfterRun.HasCommands() || h.BeforeRemove.HasCommands()
 }
 
 func (c Config) WorkspaceHooks() WorkspaceHooks {
 	hooks := c.Hooks
-	if !hooks.HasCommands() && c.Workspace.Hooks.HasCommands() {
-		hooks = c.Workspace.Hooks
+	legacy := c.Workspace.Hooks
+	if !hooks.AfterCreate.HasCommands() && legacy.AfterCreate.HasCommands() {
+		hooks.AfterCreate = legacy.AfterCreate
+	}
+	if !hooks.BeforeRun.HasCommands() && legacy.BeforeRun.HasCommands() {
+		hooks.BeforeRun = legacy.BeforeRun
+	}
+	if !hooks.AfterRun.HasCommands() && legacy.AfterRun.HasCommands() {
+		hooks.AfterRun = legacy.AfterRun
+	}
+	if !hooks.BeforeRemove.HasCommands() && legacy.BeforeRemove.HasCommands() {
+		hooks.BeforeRemove = legacy.BeforeRemove
+	}
+	if hooks.TimeoutMs <= 0 {
+		hooks.TimeoutMs = legacy.TimeoutMs
 	}
 	if hooks.TimeoutMs <= 0 {
 		hooks.TimeoutMs = c.Hooks.TimeoutMs
