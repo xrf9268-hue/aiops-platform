@@ -11,7 +11,10 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-const maxLinearIssuePages = 200
+const (
+	linearIssuePageSize = 50
+	maxLinearIssuePages = 200
+)
 
 type LinearClient struct {
 	APIKey  string
@@ -33,8 +36,12 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	if c.APIKey == "" {
 		return nil, fmt.Errorf("Linear API key is required")
 	}
-	query := `query ListIssues($states: [String!], $after: String) {
-  issues(filter: { state: { name: { in: $states } } }, first: 50, after: $after) {
+	projectSlug := strings.TrimSpace(c.Config.ProjectSlug)
+	if projectSlug == "" {
+		return nil, fmt.Errorf("Linear project slug is required")
+	}
+	query := `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
+  issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
       id
       identifier
@@ -76,7 +83,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			} `json:"data"`
 			Errors []map[string]any `json:"errors"`
 		}
-		if err := c.graphql(ctx, query, map[string]any{"states": states, "after": after}, &out); err != nil {
+		if err := c.graphql(ctx, query, map[string]any{"projectSlug": projectSlug, "states": states, "first": linearIssuePageSize, "after": after}, &out); err != nil {
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
@@ -102,6 +109,54 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
 	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+}
+
+func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	if c.APIKey == "" {
+		return nil, fmt.Errorf("Linear API key is required")
+	}
+	if len(issueIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	query := `query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
+  issues(filter: { id: { in: $ids } }, first: $first) {
+    nodes {
+      id
+      state { name }
+    }
+  }
+}`
+	states := make(map[string]string, len(issueIDs))
+	for start := 0; start < len(issueIDs); start += linearIssuePageSize {
+		end := start + linearIssuePageSize
+		if end > len(issueIDs) {
+			end = len(issueIDs)
+		}
+		chunk := issueIDs[start:end]
+		var out struct {
+			Data struct {
+				Issues struct {
+					Nodes []struct {
+						ID    string `json:"id"`
+						State struct {
+							Name string `json:"name"`
+						} `json:"state"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"data"`
+			Errors []map[string]any `json:"errors"`
+		}
+		if err := c.graphql(ctx, query, map[string]any{"ids": chunk, "first": len(chunk)}, &out); err != nil {
+			return nil, err
+		}
+		if len(out.Errors) > 0 {
+			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+		}
+		for _, n := range out.Data.Issues.Nodes {
+			states[n.ID] = n.State.Name
+		}
+	}
+	return states, nil
 }
 
 type linearRelationNode struct {
