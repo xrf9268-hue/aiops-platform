@@ -494,6 +494,10 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	attempt := d.attempt
 	if d.trackerRechecked {
 		if entry, ok := st.RetryAttempts[id]; ok && entry.Kind == RetryKindContinuation {
+			if !entry.IsDue(time.Now()) {
+				d.result <- ErrNotDispatched
+				return nil
+			}
 			if entry.Timer != nil {
 				entry.Timer.Stop()
 			}

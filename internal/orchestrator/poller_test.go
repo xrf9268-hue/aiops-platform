@@ -626,6 +626,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	waitForDispatcherCount(t, dispatcher, 1)
 	waitForCompleted(t, ctx, orch, "issue-1")
 
+	waitForRetryDue(t, ctx, orch, "issue-1")
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("rework poll once: %v", err)
 	}
@@ -802,6 +803,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	waitForCompleted(t, ctx, orch, "issue-1")
 	dispatcher.releaseCh = nil
 	trackerClient.issues = []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}}
+	waitForRetryDue(t, ctx, orch, "issue-1")
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("second poll once after issue-2 left active states: %v", err)
@@ -885,6 +887,29 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("issue %s was not marked completed", id)
+}
+
+func waitForRetryDue(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		view, err := orch.Snapshot(ctx)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		for _, retry := range view.Retrying {
+			if retry.IssueID == id && !retry.DueAt.After(time.Now()) {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	t.Fatalf("issue %s retry did not become due: retrying=%v", id, view.Retrying)
 }
 
 func waitForNoRunningOrRetrying(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {

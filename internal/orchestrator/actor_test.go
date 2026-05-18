@@ -272,6 +272,48 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	}
 }
 
+func TestContinuationRetryRecheckedDispatchWaitsUntilDue(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{50 * time.Millisecond}},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-11", Identifier: "ENG-11", Title: "continuation not due"}
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("initial tracker-rechecked dispatch: %v", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("initial dispatch count = %d, want 1", got)
+	}
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("early tracker-rechecked dispatch err = %v, want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("early tracker recheck spawned before continuation due time: got %d dispatches, want 1", got)
+	}
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && !view.Retrying[0].DueAt.After(time.Now())
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("due tracker-rechecked continuation dispatch: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("dispatch count after due tracker recheck = %d, want 2", got)
+	}
+}
+
 // TestRequestDispatch_DedupesAgainstRunning verifies that once a
 // dispatch is accepted and Running, a second RequestDispatch for the
 // same issue is denied — even though the Claimed window between
