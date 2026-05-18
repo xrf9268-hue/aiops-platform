@@ -36,16 +36,15 @@ type RunTaskError struct {
 	Err error
 }
 
-// ResolveWorkflow performs WORKFLOW.md discovery for a prepared workdir and
-// emits the workflow_resolved event before any runner work begins. Returning
-// the workflow_source string lets callers stamp it onto the runner_start
-// payload as a quick-look field; the full provenance lives on the
-// workflow_resolved event itself.
-func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, workdir string) (*workflow.Workflow, string, error) {
-	wf, res, err := workflow.Resolve(workdir)
-	if err != nil {
-		return nil, "", err
+// ResolveWorkflow emits the workflow_resolved event for the service-level
+// WORKFLOW.md that was loaded at process startup. Returning the workflow_source
+// string lets callers stamp it onto the runner_start payload as a quick-look
+// field; the full provenance lives on the workflow_resolved event itself.
+func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID string, wf *workflow.Workflow) (*workflow.Workflow, string, error) {
+	if wf == nil {
+		return nil, "", fmt.Errorf("service workflow is required")
 	}
+	res := &workflow.Resolution{Source: wf.Source, Path: wf.Path}
 	payload := map[string]any{
 		"source":        string(res.Source),
 		"agent_default": wf.Config.Agent.Default,
@@ -54,9 +53,6 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, workdir strin
 	}
 	if res.Path != "" {
 		payload["path"] = res.Path
-	}
-	if len(res.ShadowedBy) > 0 {
-		payload["shadowed_by"] = res.ShadowedBy
 	}
 	Emit(ctx, ev, taskID, task.EventWorkflowResolved, "workflow resolved", payload)
 	logWorkflowResolved(taskID, res)
@@ -139,7 +135,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Err: err}
 	}
 
-	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, workdir)
+	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, cfg.Workflow)
 	if err != nil {
 		return &RunTaskError{Err: err}
 	}

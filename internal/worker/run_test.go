@@ -128,6 +128,53 @@ func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
 
 // TestAppendRunSummaryDirectiveAppendsRunSummaryContract verifies the runner
 // contract is appended without overriding workflow-directed publication steps.
+func TestRunTaskUsesConfiguredServiceWorkflowInsteadOfRepoWorkflow(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, `---
+repo:
+  owner: acme
+  name: demo
+  clone_url: $REPO_URL
+tracker:
+  kind: linear
+agent:
+  default: definitely-not-a-runner
+---
+repo prompt should not run
+`)
+	t.Setenv("REPO_URL", cloneURL)
+
+	serviceWorkflow := workflow.Workflow{
+		Config:         workflow.DefaultConfig(),
+		PromptTemplate: "service workflow for {{task.title}}",
+		Source:         workflow.SourceFile,
+		Path:           filepath.Join(t.TempDir(), "WORKFLOW.md"),
+	}
+	serviceWorkflow.Config.Agent.Default = "mock"
+	serviceWorkflow.Config.Repo.CloneURL = cloneURL
+	serviceWorkflow.Config.Repo.Owner = "acme"
+	serviceWorkflow.Config.Repo.Name = "demo"
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow = &serviceWorkflow
+	tk.Model = ""
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+
+	resolved := ev.byKind(task.EventWorkflowResolved)
+	if len(resolved) != 1 {
+		t.Fatalf("workflow_resolved events = %d, want 1; events=%#v", len(resolved), ev.events)
+	}
+	if got := payloadField(t, resolved[0].Payload, "path"); got != serviceWorkflow.Path {
+		t.Fatalf("workflow path payload = %v, want service workflow path %q", got, serviceWorkflow.Path)
+	}
+	if got := payloadField(t, resolved[0].Payload, "agent_default"); got != "mock" {
+		t.Fatalf("agent_default payload = %v, want service workflow default", got)
+	}
+}
+
 func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	plain := "do the work"
 	out := worker.AppendRunSummaryDirective(plain)
@@ -455,11 +502,16 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n---\nprompt\n"
-	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+	loaded, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
 	ev := &fakeEmitter{}
-	wf, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_1", dir)
+	wf, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_1", loaded)
 	if err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
@@ -482,8 +534,8 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	if payload["source"] != "file" {
 		t.Fatalf("payload.source = %v, want \"file\"", payload["source"])
 	}
-	if payload["path"] != "WORKFLOW.md" {
-		t.Fatalf("payload.path = %v, want \"WORKFLOW.md\"", payload["path"])
+	if payload["path"] != workflowPath {
+		t.Fatalf("payload.path = %v, want %q", payload["path"], workflowPath)
 	}
 	if payload["agent_default"] != "codex" {
 		t.Fatalf("payload.agent_default = %v, want \"codex\"", payload["agent_default"])
@@ -503,7 +555,8 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
-	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write root: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
@@ -511,6 +564,10 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".aiops", "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write .aiops: %v", err)
+	}
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
 	}
 
 	var buf strings.Builder
@@ -523,7 +580,7 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 		log.SetFlags(origFlags)
 	})
 
-	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log", dir); err != nil {
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log", wf); err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 
@@ -531,13 +588,15 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 	wantSubstrings := []string{
 		"task tsk_log: workflow resolved",
 		"source=file",
-		"path=WORKFLOW.md",
-		"shadowed=[.aiops/WORKFLOW.md]",
+		"path=" + workflowPath,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {
 			t.Fatalf("log line missing %q; got:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "shadowed=") {
+		t.Fatalf("service workflow resolution must not report per-repo shadow paths:\n%s", got)
 	}
 }
 
@@ -547,8 +606,13 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
-	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
+	}
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
 	}
 
 	var buf strings.Builder
@@ -561,12 +625,12 @@ func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 		log.SetFlags(origFlags)
 	})
 
-	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log2", dir); err != nil {
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log2", wf); err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 
 	got := buf.String()
-	if !strings.Contains(got, "source=file") || !strings.Contains(got, "path=WORKFLOW.md") {
+	if !strings.Contains(got, "source=file") || !strings.Contains(got, "path="+workflowPath) {
 		t.Fatalf("missing source/path in log line:\n%s", got)
 	}
 	if strings.Contains(got, "shadowed=") {
@@ -578,9 +642,9 @@ func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 // WORKFLOW.md exists, the resolved event records source=default and
 // does not emit an empty path key.
 func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
-	dir := t.TempDir()
 	ev := &fakeEmitter{}
-	_, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_2", dir)
+	wf := &workflow.Workflow{Config: workflow.DefaultConfig(), PromptTemplate: workflow.DefaultPrompt(), Source: workflow.SourceDefault}
+	_, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_2", wf)
 	if err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}

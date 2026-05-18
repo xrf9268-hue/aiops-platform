@@ -6,7 +6,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +99,10 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 	cfg.Tracker.APIKey = bed.gitea.botToken
 	cfg.Tracker.ActiveStates = []string{"AI Ready"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+	serviceWorkflow, err := workflow.Load(writeE2EServiceWorkflow(t, string(fixtureContent(t, fixture)), cloneURL))
+	if err != nil {
+		t.Fatalf("load service workflow: %v", err)
+	}
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
 
@@ -115,6 +122,7 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 		Config: worker.Config{
 			WorkspaceRoot: tmpDir(),
 			MirrorRoot:    tmpDir(),
+			Workflow:      serviceWorkflow,
 		},
 		Emitter: store,
 	}
@@ -152,4 +160,15 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 		t.Fatalf("poller worker task did not complete")
 	}
 	return taskID, owner, repo
+}
+
+func writeE2EServiceWorkflow(t *testing.T, body, cloneURL string) string {
+	t.Helper()
+	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-happy.git", cloneURL)
+	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-allow-fail.git", cloneURL)
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write service workflow: %v", err)
+	}
+	return path
 }

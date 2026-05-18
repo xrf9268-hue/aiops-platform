@@ -85,6 +85,57 @@ func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T)
 	}
 }
 
+func TestResolveStartupWorkflowUsesPositionalPath(t *testing.T) {
+	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "service-WORKFLOW.md")
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nservice prompt\n"
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+
+	wf, res, err := resolveStartupWorkflow([]string{workflowPath})
+	if err != nil {
+		t.Fatalf("resolve startup workflow: %v", err)
+	}
+	if wf.Path != workflowPath {
+		t.Fatalf("workflow path = %q, want %q", wf.Path, workflowPath)
+	}
+	if res.Source != workflow.SourceFile || res.Path != workflowPath {
+		t.Fatalf("resolution = %+v, want file at positional path", res)
+	}
+}
+
+func TestResolveStartupWorkflowDefaultsToCwdWorkflowOnly(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(dir, ".aiops", "WORKFLOW.md")
+	if err := os.WriteFile(legacyPath, []byte("legacy prompt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wf, res, err := resolveStartupWorkflow(nil)
+	if err != nil {
+		t.Fatalf("resolveStartupWorkflow without cwd WORKFLOW.md: %v", err)
+	}
+	if res.Source != workflow.SourceDefault || res.Path != "" {
+		t.Fatalf("resolution = %+v, want built-in default without legacy .aiops path", res)
+	}
+	if wf.Path != "" || wf.Source != workflow.SourceDefault {
+		t.Fatalf("workflow = %+v, want built-in default source", wf)
+	}
+}
+
 func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "gitea-workflow.md")
@@ -323,7 +374,7 @@ func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *test
 		t.Fatalf("tracker kind = %q, want linear", wf.Config.Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=file", "path=WORKFLOW.md", "tracker.kind=linear"} {
+	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + filepath.Join(dir, "WORKFLOW.md"), "tracker.kind=linear"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}

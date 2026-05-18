@@ -1,3 +1,8 @@
+# This is the service-level WORKFLOW.md selected when the worker process starts:
+# pass it explicitly as `worker /path/to/WORKFLOW.md`, or run the worker from a
+# directory containing `WORKFLOW.md`. Per Symphony SPEC §5.1, the worker loads
+# this single file for the service and reuses it for every task; per-task
+# repository checkouts do not override it.
 ---
 repo:
   owner: your-gitea-user
