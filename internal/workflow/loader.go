@@ -27,11 +27,16 @@ func Load(path string) (*Workflow, error) {
 	cfg := DefaultConfig()
 	hasFrontMatter := strings.TrimSpace(front) != ""
 	if hasFrontMatter {
-		if err := rejectRemovedFields([]byte(front)); err != nil {
+		frontBytes := []byte(front)
+		if err := rejectRemovedFields(frontBytes); err != nil {
 			return nil, err
 		}
-		if err := yaml.Unmarshal([]byte(front), &cfg); err != nil {
+		hasTopLevelHookTimeout := hasNestedKey(frontBytes, "hooks", "timeout_ms")
+		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
 			return nil, fmt.Errorf("parse workflow front matter: %w", err)
+		}
+		if hasTopLevelHookTimeout {
+			cfg.hooksTimeoutDefaulted = false
 		}
 	}
 	expandConfig(&cfg)
@@ -177,6 +182,25 @@ func validateConfig(path string, cfg Config) error {
 // drops unknown fields, which would let workflow authors keep believing
 // the key still controls behavior. Targeted detection keeps existing
 // benign extras working while flagging known footguns.
+func hasNestedKey(front []byte, path ...string) bool {
+	var raw map[string]any
+	if err := yaml.Unmarshal(front, &raw); err != nil {
+		return false
+	}
+	var current any = raw
+	for _, key := range path {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return false
+		}
+		current, ok = m[key]
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func rejectRemovedFields(front []byte) error {
 	var raw map[string]any
 	if err := yaml.Unmarshal(front, &raw); err != nil {

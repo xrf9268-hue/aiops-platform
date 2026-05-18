@@ -12,14 +12,20 @@ type Config struct {
 	Tracker   TrackerConfig   `yaml:"tracker" json:"tracker"`
 	Hooks     WorkspaceHooks  `yaml:"hooks" json:"hooks"`
 	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
-	Agent     AgentConfig     `yaml:"agent" json:"agent"`
-	Codex     CommandConfig   `yaml:"codex" json:"codex"`
-	Claude    CommandConfig   `yaml:"claude" json:"claude"`
-	Policy    PolicyConfig    `yaml:"policy" json:"policy"`
-	Safety    SafetyConfig    `yaml:"safety" json:"safety"`
-	Sandbox   SandboxConfig   `yaml:"sandbox" json:"sandbox"`
-	Verify    VerifyConfig    `yaml:"verify" json:"verify"`
-	PR        PRConfig        `yaml:"pr" json:"pr"`
+
+	// hooksTimeoutDefaulted is true when Hooks.TimeoutMs came from DefaultConfig
+	// rather than WORKFLOW.md. It lets WorkspaceHooks keep the SPEC default while
+	// still honoring the legacy workspace.hooks.timeout_ms override during the
+	// one-release migration window.
+	hooksTimeoutDefaulted bool
+	Agent                 AgentConfig   `yaml:"agent" json:"agent"`
+	Codex                 CommandConfig `yaml:"codex" json:"codex"`
+	Claude                CommandConfig `yaml:"claude" json:"claude"`
+	Policy                PolicyConfig  `yaml:"policy" json:"policy"`
+	Safety                SafetyConfig  `yaml:"safety" json:"safety"`
+	Sandbox               SandboxConfig `yaml:"sandbox" json:"sandbox"`
+	Verify                VerifyConfig  `yaml:"verify" json:"verify"`
+	PR                    PRConfig      `yaml:"pr" json:"pr"`
 }
 
 type RepoConfig struct {
@@ -128,11 +134,11 @@ func (c Config) WorkspaceHooks() WorkspaceHooks {
 	if !hooks.BeforeRemove.HasCommands() && legacy.BeforeRemove.HasCommands() {
 		hooks.BeforeRemove = legacy.BeforeRemove
 	}
-	if hooks.TimeoutMs <= 0 {
+	if legacy.TimeoutMs > 0 && (hooks.TimeoutMs <= 0 || c.hooksTimeoutDefaulted) {
 		hooks.TimeoutMs = legacy.TimeoutMs
 	}
 	if hooks.TimeoutMs <= 0 {
-		hooks.TimeoutMs = c.Hooks.TimeoutMs
+		hooks.TimeoutMs = 60000
 	}
 	return hooks
 }
@@ -310,8 +316,9 @@ func DefaultConfig() Config {
 				Rework:      "Rework",
 			},
 		},
-		Hooks:     WorkspaceHooks{TimeoutMs: 60000},
-		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
+		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
+		hooksTimeoutDefaulted: true,
+		Workspace:             WorkspaceConfig{Root: "~/aiops-workspaces"},
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this
 		// default. The effective default of 1 retry is supplied by
