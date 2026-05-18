@@ -236,9 +236,16 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	}
 	defer cancel()
 
-	cmd := exec.Command("sh", "-lc", command)
+	cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
 	cmd.Dir = workdir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 100 * time.Millisecond
 	var out cappedBuffer
 	out.Cap = VerifyOutputCap
 	cmd.Stdout = &out

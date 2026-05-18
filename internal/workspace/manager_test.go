@@ -478,6 +478,30 @@ func TestEffectiveWorkspaceHookTimeoutUsesSpecDefaultWhenUnset(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHookTimeoutDoesNotWaitForeverOnEscapedDescendantOutput(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{"setsid sh -c 'while true; do printf x; sleep 1; done' & sleep 2"}}
+
+	start := time.Now()
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("RunWorkspaceHook should fail on timeout")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("hook timeout waited %v for escaped descendant output, want under 1s", elapsed)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("results len = %d, want %d", got, want)
+	}
+	if results[0].ExitCode != -1 || results[0].Err == nil {
+		t.Fatalf("timeout result = %#v, want exit -1 with error", results[0])
+	}
+	if !strings.Contains(results[0].Err.Error(), "timed out") {
+		t.Fatalf("timeout error = %v, want timed out", results[0].Err)
+	}
+}
+
 // TestRunVerifyCollectsAllFailures pins the post-#18 contract: RunVerify
 // runs every non-empty command and records a result for each, even after
 // a non-zero exit. The aggregate error is non-nil iff at least one
