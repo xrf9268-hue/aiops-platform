@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Repo       RepoConfig      `yaml:"repo" json:"repo"`
 	Tracker    TrackerConfig   `yaml:"tracker" json:"tracker"`
+	Services   []ServiceConfig `yaml:"services" json:"services"`
 	Hooks      WorkspaceHooks  `yaml:"hooks" json:"hooks"`
 	Workspace  WorkspaceConfig `yaml:"workspace" json:"workspace"`
 	hookFields HookFieldPresence
@@ -34,6 +35,22 @@ type RepoConfig struct {
 	Name          string `yaml:"name" json:"name"`
 	CloneURL      string `yaml:"clone_url" json:"clone_url"`
 	DefaultBranch string `yaml:"default_branch" json:"default_branch"`
+}
+
+type ServiceConfig struct {
+	Name    string                    `yaml:"name" json:"name"`
+	Repo    RepoConfig                `yaml:"repo" json:"repo"`
+	Tracker ServiceTrackerRouteConfig `yaml:"tracker" json:"tracker"`
+}
+
+// ServiceTrackerRouteConfig describes the tracker-side predicates that route a
+// Linear issue to a configured service. The orchestrator only reads these
+// fields during candidate selection; tracker writes remain agent/tool-side.
+type ServiceTrackerRouteConfig struct {
+	ProjectSlug  string            `yaml:"project_slug" json:"project_slug"`
+	TeamKey      string            `yaml:"team_key" json:"team_key"`
+	Labels       []string          `yaml:"labels" json:"labels"`
+	CustomFields map[string]string `yaml:"custom_fields" json:"custom_fields"`
 }
 
 type TrackerConfig struct {

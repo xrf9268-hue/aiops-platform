@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -185,6 +186,41 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	}
 }
 
+func TestTrackerClientForWorkflowBuildsMultiProjectLinearClientForServiceRoutes(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ProjectSlug = ""
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}},
+	}
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+
+	multi, ok := client.(interface{ Trackers() []trackerRuntimeClient })
+	if !ok {
+		t.Fatalf("client type = %T, want multi-project tracker", client)
+	}
+	got := multi.Trackers()
+	if len(got) != 2 {
+		t.Fatalf("linear tracker count = %d, want 2 service projects", len(got))
+	}
+	projects := make([]string, 0, len(got))
+	for _, client := range got {
+		linearClient, ok := client.(*tracker.LinearClient)
+		if !ok {
+			t.Fatalf("linear tracker type = %T, want *tracker.LinearClient", client)
+		}
+		projects = append(projects, linearClient.Config.ProjectSlug)
+	}
+	if !reflect.DeepEqual(projects, []string{"api-platform", "web-platform"}) {
+		t.Fatalf("linear tracker projects = %#v, want service projects", projects)
+	}
+}
+
 func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
@@ -234,7 +270,7 @@ func TestValidateWorkflowForRuntimeRejectsDefaultWorkflowMissingTaskFields(t *te
 	}
 }
 
-func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testing.T) {
+func TestValidateWorkflowForRuntimeAcceptsConfiguredRepo(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Repo.CloneURL = "git@example.com:o/r.git"
 
@@ -242,6 +278,17 @@ func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testi
 		if err := validateWorkflowForRuntime("WORKFLOW.md", source, cfg); err != nil {
 			t.Fatalf("validateWorkflowForRuntime(source=%s) = %v, want nil", source, err)
 		}
+	}
+}
+
+func TestValidateWorkflowForRuntimeAcceptsServiceOnlyRepos(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{CloneURL: "git@example.com:o/api.git"}},
+	}
+
+	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceFile, cfg); err != nil {
+		t.Fatalf("validateWorkflowForRuntime(service-only repos) = %v, want nil", err)
 	}
 }
 

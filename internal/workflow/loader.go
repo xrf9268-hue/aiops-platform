@@ -111,8 +111,23 @@ var supportedSandboxNetworks = map[string]struct{}{
 // file path and the offending field/value so operators can fix the
 // source rather than chasing runtime symptoms (issue #9).
 func validateConfig(path string, cfg Config) error {
-	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
+	if strings.TrimSpace(cfg.Repo.CloneURL) == "" && len(cfg.Services) == 0 {
 		return fmt.Errorf("%s: repo.clone_url is required", path)
+	}
+	seenServiceNames := make(map[string]int, len(cfg.Services))
+	for i, service := range cfg.Services {
+		name := strings.TrimSpace(service.Name)
+		if name == "" {
+			return fmt.Errorf("%s: services[%d].name is required", path, i)
+		}
+		nameKey := strings.ToLower(name)
+		if first, ok := seenServiceNames[nameKey]; ok {
+			return fmt.Errorf("%s: services[%d].name %q duplicates services[%d].name", path, i, service.Name, first)
+		}
+		seenServiceNames[nameKey] = i
+		if strings.TrimSpace(service.Repo.CloneURL) == "" {
+			return fmt.Errorf("%s: services[%d].repo.clone_url is required", path, i)
+		}
 	}
 	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
 		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, linear)", path, cfg.Tracker.Kind)
@@ -271,15 +286,15 @@ func splitFrontMatter(s string) (string, string) {
 
 func expandConfig(cfg *Config) {
 	cfg.Tracker.APIKey = os.ExpandEnv(cfg.Tracker.APIKey)
-	cfg.Repo.CloneURL = os.ExpandEnv(cfg.Repo.CloneURL)
+	expandRepoConfig(&cfg.Repo)
+	for i := range cfg.Services {
+		expandRepoConfig(&cfg.Services[i].Repo)
+	}
 	cfg.Workspace.Root = expandPath(os.ExpandEnv(cfg.Workspace.Root))
 	cfg.Codex.Command = os.ExpandEnv(cfg.Codex.Command)
 	cfg.Claude.Command = os.ExpandEnv(cfg.Claude.Command)
 	for i := range cfg.Sandbox.CredentialFiles {
 		cfg.Sandbox.CredentialFiles[i] = expandPath(os.ExpandEnv(cfg.Sandbox.CredentialFiles[i]))
-	}
-	if cfg.Repo.DefaultBranch == "" {
-		cfg.Repo.DefaultBranch = "main"
 	}
 	if cfg.Agent.Default == "" {
 		cfg.Agent.Default = "mock"
@@ -325,6 +340,13 @@ func expandConfig(cfg *Config) {
 	}
 	if cfg.Codex.ApprovalPolicy == nil {
 		cfg.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}}
+	}
+}
+
+func expandRepoConfig(repo *RepoConfig) {
+	repo.CloneURL = os.ExpandEnv(repo.CloneURL)
+	if repo.DefaultBranch == "" {
+		repo.DefaultBranch = "main"
 	}
 }
 

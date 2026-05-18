@@ -59,6 +59,166 @@ func TestDefaultConfig_PRDraftDefaultsFalse(t *testing.T) {
 	}
 }
 
+func TestLoadParsesServiceLinearRoutes(t *testing.T) {
+	t.Setenv("TEST_SERVICE_REPO_URL", "git@example.com:acme/api.git")
+	body := `---
+repo:
+  owner: fallback
+  name: fallback
+  clone_url: git@example.com:fallback/fallback.git
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: $TEST_SERVICE_REPO_URL
+    tracker:
+      project_slug: api-platform
+      team_key: ENG
+      labels:
+        - backend
+      custom_fields:
+        Runtime: go
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := len(wf.Config.Services); got != 1 {
+		t.Fatalf("services = %d, want 1", got)
+	}
+	service := wf.Config.Services[0]
+	if service.Name != "api" {
+		t.Fatalf("service name = %q, want api", service.Name)
+	}
+	if service.Repo.CloneURL != "git@example.com:acme/api.git" {
+		t.Fatalf("service repo clone URL = %q", service.Repo.CloneURL)
+	}
+	if service.Repo.DefaultBranch != "main" {
+		t.Fatalf("service repo default branch = %q, want main", service.Repo.DefaultBranch)
+	}
+	if service.Tracker.ProjectSlug != "api-platform" || service.Tracker.TeamKey != "ENG" {
+		t.Fatalf("service tracker route = %+v, want project api-platform team ENG", service.Tracker)
+	}
+	if !reflect.DeepEqual(service.Tracker.Labels, []string{"backend"}) {
+		t.Fatalf("service tracker labels = %#v, want backend", service.Tracker.Labels)
+	}
+	if !reflect.DeepEqual(service.Tracker.CustomFields, map[string]string{"Runtime": "go"}) {
+		t.Fatalf("service tracker custom fields = %#v, want Runtime=go", service.Tracker.CustomFields)
+	}
+}
+
+func TestLoadAllowsServiceOnlyWorkflowWithoutFallbackRepo(t *testing.T) {
+	body := `---
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      project_slug: api-platform
+---
+prompt body
+`
+
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Repo.CloneURL != "" {
+		t.Fatalf("fallback repo clone URL = %q, want empty service-only fallback", wf.Config.Repo.CloneURL)
+	}
+}
+
+func TestLoadRejectsServiceRouteMissingRepoCloneURL(t *testing.T) {
+	body := `---
+repo:
+  owner: fallback
+  name: fallback
+  clone_url: git@example.com:fallback/fallback.git
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+    tracker:
+      project_slug: api-platform
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want missing service repo clone_url error")
+	}
+	if !strings.Contains(err.Error(), "services[0].repo.clone_url") {
+		t.Fatalf("Load error = %q, want services[0].repo.clone_url", err)
+	}
+}
+
+func TestLoadRejectsEmptyServiceName(t *testing.T) {
+	body := `---
+repo:
+  owner: fallback
+  name: fallback
+  clone_url: git@example.com:fallback/fallback.git
+services:
+  - repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      project_slug: api-platform
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want empty service name error")
+	}
+	if !strings.Contains(err.Error(), "services[0].name is required") {
+		t.Fatalf("Load error = %q, want services[0].name guidance", err)
+	}
+}
+
+func TestLoadRejectsDuplicateServiceNames(t *testing.T) {
+	body := `---
+repo:
+  owner: fallback
+  name: fallback
+  clone_url: git@example.com:fallback/fallback.git
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      project_slug: api-platform
+  - name: API
+    repo:
+      owner: acme
+      name: api-v2
+      clone_url: git@example.com:acme/api-v2.git
+    tracker:
+      project_slug: api-v2
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want duplicate service name error")
+	}
+	if !strings.Contains(err.Error(), `services[1].name "API" duplicates services[0].name`) {
+		t.Fatalf("Load error = %q, want duplicate service name guidance", err)
+	}
+}
+
 func TestLoad_PRDraftDefaultsAndExplicitFalse(t *testing.T) {
 	cases := map[string]struct {
 		front string

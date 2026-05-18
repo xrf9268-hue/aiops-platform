@@ -51,6 +51,10 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
       priority
       createdAt
       updatedAt
+      project { slugId }
+      team { key }
+      labels(first: 50) { nodes { name } }
+      customFields { name value }
       state { name }
     }
     pageInfo { hasNextPage endCursor }
@@ -71,7 +75,22 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 						Priority    int    `json:"priority"`
 						CreatedAt   string `json:"createdAt"`
 						UpdatedAt   string `json:"updatedAt"`
-						State       struct {
+						Project     struct {
+							SlugID string `json:"slugId"`
+						} `json:"project"`
+						Team struct {
+							Key string `json:"key"`
+						} `json:"team"`
+						Labels struct {
+							Nodes []struct {
+								Name string `json:"name"`
+							} `json:"nodes"`
+						} `json:"labels"`
+						CustomFields []struct {
+							Name  string          `json:"name"`
+							Value json.RawMessage `json:"value"`
+						} `json:"customFields"`
+						State struct {
 							Name string `json:"name"`
 						} `json:"state"`
 					} `json:"nodes"`
@@ -98,7 +117,20 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 					return nil, err
 				}
 			}
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, State: n.State.Name, BlockedBy: blockers})
+			labels := make([]string, 0, len(n.Labels.Nodes))
+			for _, label := range n.Labels.Nodes {
+				if strings.TrimSpace(label.Name) != "" {
+					labels = append(labels, strings.ToLower(strings.TrimSpace(label.Name)))
+				}
+			}
+			customFields := make(map[string]string, len(n.CustomFields))
+			for _, field := range n.CustomFields {
+				if strings.TrimSpace(field.Name) == "" {
+					continue
+				}
+				customFields[strings.TrimSpace(field.Name)] = stringifyLinearCustomFieldValue(field.Value)
+			}
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, CustomFields: customFields, State: n.State.Name, BlockedBy: blockers})
 		}
 		if !out.Data.Issues.PageInfo.HasNextPage {
 			return issues, nil
@@ -109,6 +141,17 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
 	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+}
+
+func stringifyLinearCustomFieldValue(raw json.RawMessage) string {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {

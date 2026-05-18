@@ -11,6 +11,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 type fakeIssueTracker struct {
@@ -364,6 +365,42 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
 	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Backlog"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("backlog poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceCancelsRunningIssueWhenActiveIssueNoLongerMatchesRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "api-platform"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	poller.routing = &workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "mobile-app"}})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("unrouted poll once: %v", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
@@ -737,6 +774,106 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 		t.Fatalf("dispatched issue IDs = %v, want %v", got, want)
 	}
 	close(dispatcher.releaseCh)
+}
+
+func TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{
+			Name: "api",
+			Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git"},
+			Tracker: workflow.ServiceTrackerRouteConfig{
+				ProjectSlug:  "api-platform",
+				TeamKey:      "ENG",
+				Labels:       []string{"backend"},
+				CustomFields: map[string]string{"Runtime": "go"},
+			},
+		},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG", Labels: []string{"backend", "customer"}, CustomFields: map[string]string{"Runtime": "go"}},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want 1", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed candidate service = %q, want api", got[0].ServiceName)
+	}
+}
+
+func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssue(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("routed candidates = %#v, want unmatched issue skipped", got)
+	}
+}
+
+func TestSelectRoutedCandidatesRejectsAmbiguousLinearRoute(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api-a", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "api-b", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Ambiguous work", State: "AI Ready", ProjectSlug: "api-platform"},
+	}
+
+	_, err := selectRoutedCandidates(issues, cfg)
+	if err == nil {
+		t.Fatal("selectRoutedCandidates returned nil error, want ambiguous route error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "issue-1") || !strings.Contains(err.Error(), "api-a") || !strings.Contains(err.Error(), "api-b") {
+		t.Fatalf("ambiguous route error = %q, want issue and matching services", err)
+	}
+}
+
+func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		},
+	}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "api"}
+
+	got, err := TaskFromIssue(issue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue: %v", err)
+	}
+	if got.RepoOwner != "acme" || got.RepoName != "api" || got.CloneURL != "git@example.com:acme/api.git" {
+		t.Fatalf("task repo = %s/%s %s, want acme/api service repo", got.RepoOwner, got.RepoName, got.CloneURL)
+	}
+	if got.BaseBranch != "main" {
+		t.Fatalf("task base branch = %q, want main", got.BaseBranch)
+	}
+}
+
+func TestTaskFromIssueRejectsUnknownService(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+	}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "missing"}
+
+	_, err := TaskFromIssue(issue, cfg)
+	if err == nil {
+		t.Fatal("TaskFromIssue returned nil error, want unknown service error")
+	}
+	if !strings.Contains(err.Error(), `service "missing" not found`) {
+		t.Fatalf("TaskFromIssue error = %q, want unknown service", err)
+	}
 }
 
 func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {

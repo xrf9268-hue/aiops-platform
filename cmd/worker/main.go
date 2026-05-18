@@ -107,11 +107,16 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 }
 
 func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
-	if cfg.Repo.CloneURL == "" {
+	if cfg.Repo.CloneURL == "" && len(cfg.Services) == 0 {
 		if source == workflow.SourceDefault {
 			path = "built-in workflow defaults"
 		}
 		return fmt.Errorf("%s: repo.clone_url is required for poll-based worker runtime", path)
+	}
+	for i, service := range cfg.Services {
+		if service.Repo.CloneURL == "" {
+			return fmt.Errorf("%s: services[%d].repo.clone_url is required for poll-based worker runtime", path, i)
+		}
 	}
 	return nil
 }
@@ -263,7 +268,15 @@ type trackerRuntimeClient interface {
 func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error) {
 	switch cfg.Tracker.Kind {
 	case "linear":
-		return tracker.NewLinearClient(cfg.Tracker), nil
+		projectConfigs := orchestrator.TrackerProjectConfigs(cfg)
+		if len(projectConfigs) == 1 {
+			return tracker.NewLinearClient(projectConfigs[0].Tracker), nil
+		}
+		clients := make([]trackerRuntimeClient, 0, len(projectConfigs))
+		for _, projectCfg := range projectConfigs {
+			clients = append(clients, tracker.NewLinearClient(projectCfg.Tracker))
+		}
+		return multiTrackerRuntimeClient{trackers: clients}, nil
 	case "gitea":
 		baseURL := cfg.Tracker.ProjectSlug
 		if baseURL == "" {
@@ -273,6 +286,42 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 	default:
 		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
 	}
+}
+
+type multiTrackerRuntimeClient struct {
+	trackers []trackerRuntimeClient
+}
+
+func (c multiTrackerRuntimeClient) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	var issues []tracker.Issue
+	var errOut error
+	for _, stateTracker := range c.trackers {
+		got, err := stateTracker.ListActiveIssues(ctx)
+		if err != nil {
+			errOut = errors.Join(errOut, err)
+			continue
+		}
+		issues = append(issues, got...)
+	}
+	return issues, errOut
+}
+
+func (c multiTrackerRuntimeClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
+	var issues []tracker.Issue
+	var errOut error
+	for _, stateTracker := range c.trackers {
+		got, err := stateTracker.ListIssuesByStates(ctx, states)
+		if err != nil {
+			errOut = errors.Join(errOut, err)
+			continue
+		}
+		issues = append(issues, got...)
+	}
+	return issues, errOut
+}
+
+func (c multiTrackerRuntimeClient) Trackers() []trackerRuntimeClient {
+	return append([]trackerRuntimeClient(nil), c.trackers...)
 }
 
 func env(k, d string) string {
