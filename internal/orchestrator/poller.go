@@ -184,7 +184,7 @@ func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) [
 	if len(terminal) == 0 {
 		terminal = normalizedStates([]string{"Done", "Canceled", "Cancelled"})
 	}
-	out := issues[:0]
+	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
 		if todoIssueBlockedByOpenDependency(issue, terminal) {
 			continue
@@ -213,14 +213,25 @@ func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[st
 func sortCandidates(issues []tracker.Issue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		left, right := issues[i], issues[j]
-		if left.Priority != right.Priority {
-			return left.Priority < right.Priority
+		leftPriority := linearPrioritySortKey(left.Priority)
+		rightPriority := linearPrioritySortKey(right.Priority)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
 		}
+		// Linear timestamps are RFC3339 strings, so lexical order matches
+		// chronological order and keeps malformed/missing values deterministic.
 		if left.CreatedAt != right.CreatedAt {
 			return left.CreatedAt < right.CreatedAt
 		}
 		return left.Identifier < right.Identifier
 	})
+}
+
+func linearPrioritySortKey(priority int) int {
+	if priority == 0 {
+		return 1 << 30
+	}
+	return priority
 }
 
 func normalizedStates(states []string) map[string]struct{} {
