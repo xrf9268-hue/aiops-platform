@@ -472,6 +472,27 @@ func TestRunWorkspaceHookTimeoutStopsCommand(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceHookUsesDefaultTimeoutWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{"sleep 2"}}
+
+	start := time.Now()
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("RunWorkspaceHook succeeded, want default timeout failure")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("default hook timeout took %v, want under 1s", elapsed)
+	}
+	if got, want := len(results), 1; got != want {
+		t.Fatalf("results len = %d, want %d", got, want)
+	}
+	if results[0].Err == nil || !strings.Contains(results[0].Err.Error(), "timed out") {
+		t.Fatalf("timeout error = %v, want timed out", results[0].Err)
+	}
+}
+
 // TestRunVerifyCollectsAllFailures pins the post-#18 contract: RunVerify
 // runs every non-empty command and records a result for each, even after
 // a non-zero exit. The aggregate error is non-nil iff at least one

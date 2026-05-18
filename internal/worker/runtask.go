@@ -162,6 +162,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Err: err}
 	}
 	wcfg := wf.Config
+	hooks := wcfg.WorkspaceHooks()
 
 	mgr := workspace.New(cfg.WorkspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
@@ -170,7 +171,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 	if createdNow {
-		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, wcfg.Workspace.Hooks.AfterCreate, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
 			_ = os.RemoveAll(workdir)
 			return &RunTaskError{Cfg: wcfg, Err: err}
 		}
@@ -199,6 +200,9 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 
 	r, err := runner.New(t.Model)
 	if err != nil {
+		if hookErr := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); hookErr != nil {
+			log.Printf("task %s: after_run hook failed after runner setup error: %v", t.ID, hookErr)
+		}
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -212,17 +216,20 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, wcfg.Workspace.Hooks.BeforeRun, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, "before_run hook failed: "+ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
 	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: cfg.WorkspaceRoot, Prompt: prompt}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
+		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {
+			log.Printf("task %s: after_run hook failed after runner error: %v", t.ID, err)
+		}
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, wcfg.Workspace.Hooks.AfterRun, wcfg.Workspace.Hooks.TimeoutMs); err != nil {
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {
 		log.Printf("task %s: after_run hook failed: %v", t.ID, err)
 	}
 

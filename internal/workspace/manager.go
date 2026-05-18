@@ -204,6 +204,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 // RunWorkspaceHook executes the configured shell commands for a lifecycle hook
 // in workdir, in order, using the shared workspace hook timeout.
 func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int) ([]HookResult, error) {
+	timeoutMs = EffectiveWorkspaceHookTimeoutMs(timeoutMs)
 	results := make([]HookResult, 0, len(hook.Commands))
 	for _, raw := range hook.Commands {
 		command := strings.TrimSpace(raw)
@@ -217,6 +218,13 @@ func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook w
 		}
 	}
 	return results, nil
+}
+
+func EffectiveWorkspaceHookTimeoutMs(timeoutMs int) int {
+	if timeoutMs > 0 {
+		return timeoutMs
+	}
+	return workflow.DefaultConfig().Hooks.TimeoutMs
 }
 
 func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName, command string, timeoutMs int) HookResult {

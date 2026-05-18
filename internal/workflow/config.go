@@ -5,6 +5,7 @@ import "time"
 type Config struct {
 	Repo      RepoConfig      `yaml:"repo" json:"repo"`
 	Tracker   TrackerConfig   `yaml:"tracker" json:"tracker"`
+	Hooks     WorkspaceHooks  `yaml:"hooks" json:"hooks"`
 	Workspace WorkspaceConfig `yaml:"workspace" json:"workspace"`
 	Agent     AgentConfig     `yaml:"agent" json:"agent"`
 	Codex     CommandConfig   `yaml:"codex" json:"codex"`
@@ -66,6 +67,21 @@ type WorkspaceHooks struct {
 
 type WorkspaceHook struct {
 	Commands []string `yaml:"commands" json:"commands"`
+}
+
+func (h WorkspaceHooks) HasCommands() bool {
+	return len(h.AfterCreate.Commands) > 0 || len(h.BeforeRun.Commands) > 0 || len(h.AfterRun.Commands) > 0 || len(h.BeforeRemove.Commands) > 0
+}
+
+func (c Config) WorkspaceHooks() WorkspaceHooks {
+	hooks := c.Hooks
+	if !hooks.HasCommands() && c.Workspace.Hooks.HasCommands() {
+		hooks = c.Workspace.Hooks
+	}
+	if hooks.TimeoutMs <= 0 {
+		hooks.TimeoutMs = c.Hooks.TimeoutMs
+	}
+	return hooks
 }
 
 type AgentConfig struct {
@@ -241,6 +257,7 @@ func DefaultConfig() Config {
 				Rework:      "Rework",
 			},
 		},
+		Hooks:     WorkspaceHooks{TimeoutMs: 500},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this

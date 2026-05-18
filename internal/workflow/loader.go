@@ -150,6 +150,12 @@ func validateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
+	if cfg.Hooks.TimeoutMs < 0 {
+		return fmt.Errorf("%s: hooks.timeout_ms must be non-negative", path)
+	}
+	if cfg.Workspace.Hooks.TimeoutMs < 0 {
+		return fmt.Errorf("%s: workspace.hooks.timeout_ms must be non-negative", path)
+	}
 	var invalid []string
 	if cfg.Codex.TurnTimeoutMs <= 0 {
 		invalid = append(invalid, "codex.turn_timeout_ms")

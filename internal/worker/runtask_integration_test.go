@@ -180,6 +180,32 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 	}
 }
 
+func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	tk.Model = "does-not-exist"
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		AfterRun: workflow.WorkspaceHook{Commands: []string{"printf after_run >> hook.log"}},
+	}
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want runner setup failure")
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
+	if err != nil {
+		t.Fatalf("read hook log: %v", err)
+	}
+	if string(body) != "after_run" {
+		t.Fatalf("hook log = %q, want after_run hook to execute on failed attempt", body)
+	}
+}
+
 // TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1
 // boundary: a successful worker run prepares the workspace, executes the
 // agent, and enforces gates, but it does not push branches, create PRs, or
