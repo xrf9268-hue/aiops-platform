@@ -9,7 +9,19 @@ type Issue struct {
 	Description string
 	URL         string
 	State       string
+	Priority    int
+	CreatedAt   string
 	UpdatedAt   string
+	BlockedBy   []Blocker
+}
+
+// Blocker is the minimal tracker dependency metadata the orchestrator needs to
+// filter blocked Todo candidates. State is the blocker issue's workflow state;
+// callers decide which states are terminal in their workflow.
+type Blocker struct {
+	ID         string
+	Identifier string
+	State      string
 }
 
 type Client interface {

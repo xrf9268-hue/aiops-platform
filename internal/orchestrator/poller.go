@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -89,7 +90,8 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	candidates := mergeOverflowCandidates(p.overflow, issues)
+	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates)
+	sortCandidates(candidates)
 	p.overflow = nil
 	var dispatchErr error
 	for _, issue := range candidates {
@@ -175,6 +177,102 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 		}
 	}
 	return out
+}
+
+func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
+	terminal := normalizedStates(terminalStates)
+	for state := range normalizedStates([]string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"}) {
+		terminal[state] = struct{}{}
+	}
+	out := make([]tracker.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if !issueHasRequiredCandidateFields(issue) {
+			continue
+		}
+		if todoIssueBlockedByOpenDependency(issue, terminal) {
+			continue
+		}
+		out = append(out, issue)
+	}
+	return out
+}
+
+func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
+	return strings.TrimSpace(issue.ID) != "" &&
+		strings.TrimSpace(issue.Identifier) != "" &&
+		strings.TrimSpace(issue.Title) != "" &&
+		strings.TrimSpace(issue.State) != ""
+}
+
+func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
+	if !strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
+		return false
+	}
+	for _, blocker := range issue.BlockedBy {
+		state := strings.ToLower(strings.TrimSpace(blocker.State))
+		if state == "" {
+			return true
+		}
+		if _, terminal := terminalStates[state]; !terminal {
+			return true
+		}
+	}
+	return false
+}
+
+func sortCandidates(issues []tracker.Issue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		left, right := issues[i], issues[j]
+		leftPriority := linearPrioritySortKey(left.Priority)
+		rightPriority := linearPrioritySortKey(right.Priority)
+		if leftPriority != rightPriority {
+			return leftPriority < rightPriority
+		}
+		if compareCreatedAt(left.CreatedAt, right.CreatedAt) < 0 {
+			return true
+		}
+		if compareCreatedAt(left.CreatedAt, right.CreatedAt) > 0 {
+			return false
+		}
+		return left.Identifier < right.Identifier
+	})
+}
+
+func compareCreatedAt(left, right string) int {
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
+	if leftErr == nil && rightErr == nil {
+		switch {
+		case leftTime.Before(rightTime):
+			return -1
+		case leftTime.After(rightTime):
+			return 1
+		default:
+			return 0
+		}
+	}
+	if leftErr == nil {
+		return -1
+	}
+	if rightErr == nil {
+		return 1
+	}
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left != right {
+		if left < right {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func linearPrioritySortKey(priority int) int {
+	if priority == 0 {
+		return 1 << 30
+	}
+	return priority
 }
 
 func normalizedStates(states []string) map[string]struct{} {

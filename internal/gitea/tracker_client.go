@@ -25,6 +25,7 @@ type Issue struct {
 	Title     string  `json:"title"`
 	Body      string  `json:"body"`
 	HTMLURL   string  `json:"html_url"`
+	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 	Labels    []Label `json:"labels"`
 }
@@ -128,6 +129,7 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 				Description: issue.Body,
 				URL:         issue.HTMLURL,
 				State:       state,
+				CreatedAt:   issue.CreatedAt,
 				UpdatedAt:   issue.UpdatedAt,
 			})
 		}

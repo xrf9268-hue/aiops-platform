@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -34,7 +35,17 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	}
 	query := `query ListIssues($states: [String!], $after: String) {
   issues(filter: { state: { name: { in: $states } } }, first: 50, after: $after) {
-    nodes { id identifier title description url updatedAt state { name } }
+    nodes {
+      id
+      identifier
+      title
+      description
+      url
+      priority
+      createdAt
+      updatedAt
+      state { name }
+    }
     pageInfo { hasNextPage endCursor }
   }
 }`
@@ -50,6 +61,8 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 						Title       string `json:"title"`
 						Description string `json:"description"`
 						URL         string `json:"url"`
+						Priority    int    `json:"priority"`
+						CreatedAt   string `json:"createdAt"`
 						UpdatedAt   string `json:"updatedAt"`
 						State       struct {
 							Name string `json:"name"`
@@ -70,7 +83,15 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return nil, fmt.Errorf("linear errors: %v", out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, UpdatedAt: n.UpdatedAt, State: n.State.Name})
+			var blockers []Blocker
+			if isTodoState(n.State.Name) {
+				var err error
+				blockers, err = c.linearBlockersForIssue(ctx, n.ID)
+				if err != nil {
+					return nil, err
+				}
+			}
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, State: n.State.Name, BlockedBy: blockers})
 		}
 		if !out.Data.Issues.PageInfo.HasNextPage {
 			return issues, nil
@@ -81,6 +102,100 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
 	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+}
+
+type linearRelationNode struct {
+	Type  string `json:"type"`
+	Issue struct {
+		ID         string `json:"id"`
+		Identifier string `json:"identifier"`
+		State      struct {
+			Name string `json:"name"`
+		} `json:"state"`
+	} `json:"issue"`
+}
+
+func isTodoState(state string) bool {
+	return strings.EqualFold(strings.TrimSpace(state), "Todo")
+}
+
+func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID string) ([]Blocker, error) {
+	var out struct {
+		Data struct {
+			Issue struct {
+				InverseRelations struct {
+					Nodes    []linearRelationNode `json:"nodes"`
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+				} `json:"inverseRelations"`
+			} `json:"issue"`
+		} `json:"data"`
+		Errors []map[string]any `json:"errors"`
+	}
+	query := `query ListIssueInverseRelations($id: String!, $after: String) {
+  issue(id: $id) {
+    inverseRelations(first: 50, after: $after) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage endCursor } }
+  }
+}`
+	if err := c.graphql(ctx, query, map[string]any{"id": issueID, "after": nil}, &out); err != nil {
+		return nil, err
+	}
+	if len(out.Errors) > 0 {
+		return nil, fmt.Errorf("linear errors: %v", out.Errors)
+	}
+	return c.linearBlockersFromInverseRelations(ctx, issueID, out.Data.Issue.InverseRelations.Nodes, out.Data.Issue.InverseRelations.PageInfo.HasNextPage, out.Data.Issue.InverseRelations.PageInfo.EndCursor)
+}
+
+func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]Blocker, error) {
+	blockers := make([]Blocker, 0, len(nodes))
+	appendBlockers := func(nodes []linearRelationNode) {
+		for _, r := range nodes {
+			if r.Type != "blocks" {
+				continue
+			}
+			blockers = append(blockers, Blocker{ID: r.Issue.ID, Identifier: r.Issue.Identifier, State: r.Issue.State.Name})
+		}
+	}
+	appendBlockers(nodes)
+	for page := 0; hasNextPage && page < maxLinearIssuePages; page++ {
+		if endCursor == "" {
+			return nil, fmt.Errorf("linear inverse relation pagination missing endCursor for issue %s", issueID)
+		}
+		var out struct {
+			Data struct {
+				Issue struct {
+					InverseRelations struct {
+						Nodes    []linearRelationNode `json:"nodes"`
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"inverseRelations"`
+				} `json:"issue"`
+			} `json:"data"`
+			Errors []map[string]any `json:"errors"`
+		}
+		query := `query ListIssueInverseRelations($id: String!, $after: String) {
+  issue(id: $id) {
+    inverseRelations(first: 50, after: $after) { nodes { type issue { id identifier state { name } } } pageInfo { hasNextPage endCursor } }
+  }
+}`
+		if err := c.graphql(ctx, query, map[string]any{"id": issueID, "after": endCursor}, &out); err != nil {
+			return nil, err
+		}
+		if len(out.Errors) > 0 {
+			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+		}
+		appendBlockers(out.Data.Issue.InverseRelations.Nodes)
+		hasNextPage = out.Data.Issue.InverseRelations.PageInfo.HasNextPage
+		endCursor = out.Data.Issue.InverseRelations.PageInfo.EndCursor
+	}
+	if hasNextPage {
+		return nil, fmt.Errorf("linear inverse relation pagination exceeded %d pages for issue %s", maxLinearIssuePages, issueID)
+	}
+	return blockers, nil
 }
 
 // MoveIssueToState updates the named Linear issue so its workflowState

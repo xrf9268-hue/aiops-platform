@@ -14,9 +14,10 @@ import (
 )
 
 type fakeIssueTracker struct {
-	issues []tracker.Issue
-	err    error
-	calls  int
+	issues                []tracker.Issue
+	err                   error
+	calls                 int
+	preserveMissingFields bool
 }
 
 func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
@@ -24,7 +25,24 @@ func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue,
 	if f.err != nil {
 		return nil, f.err
 	}
-	return f.issues, nil
+	if f.preserveMissingFields {
+		return f.issues, nil
+	}
+	return defaultTrackerIssueTitles(f.issues), nil
+}
+
+func defaultTrackerIssueTitles(issues []tracker.Issue) []tracker.Issue {
+	out := make([]tracker.Issue, len(issues))
+	copy(out, issues)
+	for i := range out {
+		if out[i].Title == "" {
+			out[i].Title = out[i].Identifier
+		}
+		if out[i].CreatedAt == "" {
+			out[i].CreatedAt = "2026-05-15T00:00:00Z"
+		}
+	}
+	return out
 }
 
 type recordingDispatcher struct {
@@ -61,6 +79,16 @@ func (d *recordingDispatcher) issueAt(i int) tracker.Issue {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.issues[i]
+}
+
+func (d *recordingDispatcher) issueIDs() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]string, len(d.issues))
+	for i, issue := range d.issues {
+		out[i] = issue.ID
+	}
+	return out
 }
 
 type completingEmitter struct {
@@ -187,7 +215,7 @@ func (f *fakeIssueStateTracker) ListIssuesByStates(_ context.Context, states []s
 			out = append(out, issue)
 		}
 	}
-	return out, nil
+	return defaultTrackerIssueTitles(out), nil
 }
 
 func (f *fakeIssueStateTracker) setIssues(issues []tracker.Issue) {
@@ -211,7 +239,7 @@ func (f *fakeIssueStateTrackerByCall) ListIssuesByStates(_ context.Context, _ []
 		return nil, f.errByCall[call]
 	}
 	if call < len(f.issues) {
-		return f.issues[call], nil
+		return defaultTrackerIssueTitles(f.issues[call]), nil
 	}
 	return nil, nil
 }
@@ -564,6 +592,190 @@ func TestPollOnceDispatchesActiveCandidatesWhenCanceledWorkerDoesNotExitBeforeTi
 	waitForStuckCancellationDispatcherCount(t, dispatcher, 2)
 }
 
+func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "blocked-todo", Identifier: "LIN-1", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "open-blocker", Identifier: "LIN-0", State: "In Progress"}}},
+		{ID: "unblocked-todo", Identifier: "LIN-2", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "done-blocker", Identifier: "LIN-9", State: "Done"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "unblocked-todo" {
+		t.Fatalf("dispatched issue ID = %q, want only Todo issue whose blockers are terminal", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{preserveMissingFields: true, issues: []tracker.Issue{
+		{ID: "missing-identifier", Title: "Missing identifier", State: "AI Ready"},
+		{ID: "missing-title", Identifier: "LIN-2", State: "AI Ready"},
+		{ID: "missing-state", Identifier: "LIN-3", Title: "Missing state"},
+		{ID: "valid", Identifier: "LIN-4", Title: "Ready work", State: "AI Ready", CreatedAt: "2026-05-15T00:00:00Z"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 4), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "valid" {
+		t.Fatalf("dispatched issue ID = %q, want only candidate with required identity fields", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceDispatchesMissingCreatedAtCandidateAfterDatedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{preserveMissingFields: true, issues: []tracker.Issue{
+		{ID: "missing-created-at", Identifier: "LIN-2", Title: "Missing created timestamp", State: "AI Ready", Priority: 1},
+		{ID: "dated", Identifier: "LIN-1", Title: "Dated", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T00:00:00Z"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	if got, want := dispatcher.issueIDs(), []string{"dated", "missing-created-at"}; got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("dispatch order = %v, want missing created_at sorted last after dated candidates %v", got, want)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceIgnoresBlockersForNonTodoStates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "ready-blocked", Identifier: "LIN-1", State: "AI Ready", BlockedBy: []tracker.Blocker{{ID: "open-blocker", Identifier: "LIN-0", State: "In Progress"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "ready-blocked" {
+		t.Fatalf("dispatched issue ID = %q, want non-Todo issue dispatched despite blockers", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "todo-closed", Identifier: "LIN-1", Title: "Closed blocker", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "blocker-1", Identifier: "LIN-0", State: "Closed"}}},
+		{ID: "todo-duplicate", Identifier: "LIN-2", Title: "Duplicate blocker", State: "Todo", BlockedBy: []tracker.Blocker{{ID: "blocker-2", Identifier: "LIN-3", State: "Duplicate"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	poller.reconcile.TerminalStates = []string{"Done", "Canceled"}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	if got, want := dispatcher.issueIDs(), []string{"todo-closed", "todo-duplicate"}; got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("dispatched issue IDs = %v, want %v", got, want)
+	}
+	close(dispatcher.releaseCh)
+}
+
+func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "unprioritized", Identifier: "LIN-0", State: "AI Ready", Priority: 0, CreatedAt: "2026-05-14T00:00:00Z"},
+		{ID: "later-high", Identifier: "LIN-9", State: "AI Ready", Priority: 2, CreatedAt: "2026-05-17T00:00:00Z"},
+		{ID: "middle-tie-b", Identifier: "LIN-B", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-16T00:00:00Z"},
+		{ID: "oldest", Identifier: "LIN-1", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T00:00:00Z"},
+		{ID: "offset-newer", Identifier: "LIN-O", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-15T01:00:00+02:00"},
+		{ID: "middle-tie-a", Identifier: "LIN-A", State: "AI Ready", Priority: 1, CreatedAt: "2026-05-16T00:00:00Z"},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 6), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 6)
+	got := dispatcher.issueIDs()
+	want := []string{"offset-newer", "oldest", "middle-tie-a", "middle-tie-b", "later-high", "unprioritized"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("dispatch order = %v, want %v", got, want)
+		}
+	}
+	close(dispatcher.releaseCh)
+}
+
 func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -617,7 +829,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1"}}}, orch)
+	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "AI Ready"}}}, orch)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("initial poll once: %v", err)
@@ -651,7 +863,7 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	issue := tracker.Issue{ID: "issue-missing", Identifier: "ISSUE-MISSING", Title: "Issue missing from capped active listing"}
+	issue := tracker.Issue{ID: "issue-missing", Identifier: "ISSUE-MISSING", Title: "Issue missing from capped active listing", State: "AI Ready"}
 	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
 
 	if err := poller.PollOnce(ctx); err != nil {
@@ -690,7 +902,7 @@ func TestRunPollLoopWakesWhenContinuationRetryTimerFires(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	issue := tracker.Issue{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1"}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "AI Ready"}
 	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
 
 	done := make(chan error, 1)
