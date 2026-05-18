@@ -168,8 +168,8 @@ prompt body
 }
 
 func TestDefaultConfigWorkspaceHooksTimeout(t *testing.T) {
-	if got := DefaultConfig().Hooks.TimeoutMs; got <= 0 {
-		t.Fatalf("DefaultConfig().Hooks.TimeoutMs = %d, want safe nonzero default", got)
+	if got, want := DefaultConfig().Hooks.TimeoutMs, 60000; got != want {
+		t.Fatalf("DefaultConfig().Hooks.TimeoutMs = %d, want SPEC default %d", got, want)
 	}
 }
 

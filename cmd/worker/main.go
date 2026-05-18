@@ -116,6 +116,21 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 	return nil
 }
 
+func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
+	hooks := cfg.WorkspaceHooks()
+	return worker.ReconcileConfig{
+		WorkspaceRoot:     worker.LoadConfigFromEnv().WorkspaceRoot,
+		ActiveStates:      cfg.Tracker.ActiveStates,
+		TerminalStates:    cfg.Tracker.TerminalStates,
+		TrackerKind:       cfg.Tracker.Kind,
+		Tracker:           trackerClient,
+		Emitter:           worker.LogEventEmitter{},
+		ReconcileTaskID:   "reconcile-startup",
+		BeforeRemoveHook:  hooks.BeforeRemove,
+		HookTimeoutMillis: hooks.TimeoutMs,
+	}
+}
+
 func run(ctx context.Context, args []string) error {
 	cfg := worker.LoadConfigFromEnv()
 	wf, resolution, err := resolveStartupWorkflow(args)
@@ -132,17 +147,9 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := worker.ReconcileStartup(ctx, worker.ReconcileConfig{
-		WorkspaceRoot:     cfg.WorkspaceRoot,
-		ActiveStates:      wf.Config.Tracker.ActiveStates,
-		TerminalStates:    wf.Config.Tracker.TerminalStates,
-		TrackerKind:       wf.Config.Tracker.Kind,
-		Tracker:           trackerClient,
-		Emitter:           worker.LogEventEmitter{},
-		ReconcileTaskID:   "reconcile-startup",
-		BeforeRemoveHook:  wf.Config.Workspace.Hooks.BeforeRemove,
-		HookTimeoutMillis: wf.Config.Workspace.Hooks.TimeoutMs,
-	}); err != nil {
+	reconcileCfg := startupReconcileConfigForWorkflow(wf.Config, trackerClient)
+	reconcileCfg.WorkspaceRoot = cfg.WorkspaceRoot
+	if err := worker.ReconcileStartup(ctx, reconcileCfg); err != nil {
 		worker.LogReconcileError(err)
 		return err
 	}

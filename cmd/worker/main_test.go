@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -165,6 +166,22 @@ func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T
 	}
 	if strings.Contains(gotLog, "reconciliation will be skipped") {
 		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
+	}
+}
+
+func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Hooks = workflow.WorkspaceHooks{
+		BeforeRemove: workflow.WorkspaceHook{Commands: []string{"printf top-level"}},
+		TimeoutMs:    1234,
+	}
+
+	reconcile := startupReconcileConfigForWorkflow(cfg, nil)
+	if !reflect.DeepEqual(reconcile.BeforeRemoveHook.Commands, []string{"printf top-level"}) {
+		t.Fatalf("BeforeRemoveHook.Commands = %#v, want top-level effective hook", reconcile.BeforeRemoveHook.Commands)
+	}
+	if reconcile.HookTimeoutMillis != 1234 {
+		t.Fatalf("HookTimeoutMillis = %d, want top-level effective timeout", reconcile.HookTimeoutMillis)
 	}
 }
 

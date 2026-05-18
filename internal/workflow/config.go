@@ -257,7 +257,7 @@ func DefaultConfig() Config {
 				Rework:      "Rework",
 			},
 		},
-		Hooks:     WorkspaceHooks{TimeoutMs: 500},
+		Hooks:     WorkspaceHooks{TimeoutMs: 60000},
 		Workspace: WorkspaceConfig{Root: "~/aiops-workspaces"},
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this
