@@ -14,7 +14,6 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
-	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -146,14 +145,23 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	pollInterval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
 	state := orchestrator.NewOrchestratorState(int64(wf.Config.Tracker.PollIntervalMs), wf.Config.Agent.MaxConcurrentAgents)
-	dispatcher := orchestrator.WorkerTaskDispatcher{
-		BuildTask: func(issue tracker.Issue) (task.Task, error) {
-			return orchestrator.TaskFromIssue(issue, wf.Config)
-		},
-		Config:  cfg,
-		Emitter: worker.LogEventEmitter{},
+	runtime, err := orchestrator.NewWorkflowRuntime(orchestrator.WorkflowRuntimeConfig{
+		Initial:              wf,
+		Path:                 resolution.Path,
+		Source:               resolution.Source,
+		ReloadInterval:       time.Second,
+		Emitter:              worker.LogEventEmitter{},
+		EventTaskID:          "workflow-runtime",
+		Validate:             validateWorkflowForRuntime,
+		ReconciliationConfig: reconciliationConfigForWorkflow,
+	})
+	if err != nil {
+		return err
+	}
+	dispatcher, err := orchestrator.NewRuntimeDispatcher(runtime, cfg, worker.LogEventEmitter{})
+	if err != nil {
+		return err
 	}
 	orch := orchestrator.New(state, orchestrator.Deps{
 		Dispatcher: dispatcher,
@@ -163,8 +171,16 @@ func run(ctx context.Context, args []string) error {
 	if err := orch.WaitStarted(ctx); err != nil {
 		return err
 	}
-	poller := orchestrator.NewPollerWithReconciliation(trackerClient, orch, reconciliationConfigForWorkflow(wf.Config))
-	return orchestrator.RunPollLoop(ctx, poller, pollInterval)
+	poller, err := orchestrator.NewRuntimePoller(trackerClient, orch, runtime, cfg, worker.LogEventEmitter{})
+	if err != nil {
+		return err
+	}
+	go func() {
+		if err := orchestrator.RunWorkflowReloadLoop(ctx, runtime, orchestrator.WorkflowReloadLoopOptions{}); err != nil && ctx.Err() == nil {
+			log.Printf("workflow reload loop exited: %v", err)
+		}
+	}()
+	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
 }
 
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {
