@@ -257,8 +257,8 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	if len(view.Retrying) != 1 {
 		t.Fatalf("retrying view = %+v, want continuation retry retained until tracker recheck", view.Retrying)
 	}
-	if view.Retrying[0].Attempt != attempt+1 {
-		t.Fatalf("continuation retry attempt = %d, want %d", view.Retrying[0].Attempt, attempt+1)
+	if view.Retrying[0].Attempt != 1 {
+		t.Fatalf("continuation retry attempt = %d, want 1", view.Retrying[0].Attempt)
 	}
 
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
@@ -267,8 +267,38 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	if got := disp.count(); got != 2 {
 		t.Fatalf("dispatch count after tracker recheck = %d, want 2", got)
 	}
-	if got := *disp.attempts[1]; got != attempt+1 {
-		t.Fatalf("tracker-rechecked continuation dispatch attempt = %d, want %d", got, attempt+1)
+	if got := *disp.attempts[1]; got != 1 {
+		t.Fatalf("tracker-rechecked continuation dispatch attempt = %d, want 1", got)
+	}
+}
+
+func TestFinalize_NormalExitResetsContinuationAttemptToOne(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-CONT-RESET", Identifier: "ENG-CONT-RESET", Title: "reset continuation"}
+	attempt := 7
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
+		t.Fatalf("initial tracker-rechecked dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := view.Retrying[0].Attempt; got != 1 {
+		t.Fatalf("continuation retry attempt after clean exit = %d, want 1", got)
 	}
 }
 
@@ -311,6 +341,50 @@ func TestContinuationRetryRecheckedDispatchWaitsUntilDue(t *testing.T) {
 	}
 	if got := disp.count(); got != 2 {
 		t.Fatalf("dispatch count after due tracker recheck = %d, want 2", got)
+	}
+}
+
+func TestContinuationRetryRecheckedDispatchKeepsRetryWhenCapacityFull(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 1)
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	issueA := tracker.Issue{ID: "ENG-CONT-CAP", Identifier: "ENG-CONT-CAP", Title: "continuation waits"}
+	issueB := tracker.Issue{ID: "ENG-RUNNING", Identifier: "ENG-RUNNING", Title: "running"}
+	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
+		t.Fatalf("dispatch B: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.scheduleContinuationRetry(context.Background(), issueA, issueA.Identifier, 1); err != nil {
+		t.Fatalf("schedule continuation retry: %v", err)
+	}
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && !view.Retrying[0].DueAt.After(time.Now())
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), issueA, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("tracker-rechecked continuation at capacity err = %v, want ErrCapacityFull", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Retrying) != 1 || view.Retrying[0].IssueID != IssueID(issueA.ID) {
+		t.Fatalf("retrying after capacity rejection = %+v, want continuation retry preserved", view.Retrying)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatch count after capacity rejection = %d, want only running issue B", got)
 	}
 }
 

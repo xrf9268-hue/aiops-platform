@@ -516,30 +516,36 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
 	st.ReleaseFailedIfIssueChanged(d.issue)
 	attempt := d.attempt
+	var consumedContinuation *RetryEntry
 	if d.trackerRechecked {
 		if entry, ok := st.RetryAttempts[id]; ok && entry.Kind == RetryKindContinuation {
 			if !entry.IsDue(time.Now()) {
 				d.result <- ErrNotDispatched
 				return nil
 			}
-			if entry.Timer != nil {
-				entry.Timer.Stop()
-			}
 			if attempt == nil {
 				entryAttempt := entry.Attempt
 				attempt = &entryAttempt
 			}
-			delete(st.RetryAttempts, id)
-			delete(st.Claimed, id)
+			consumedContinuation = entry
+		} else if st.IsClaimed(id) {
+			d.result <- ErrNotDispatched
+			return nil
 		}
-	}
-	if st.IsClaimed(id) {
+	} else if st.IsClaimed(id) {
 		d.result <- ErrNotDispatched
 		return nil
 	}
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		d.result <- ErrCapacityFull
 		return nil
+	}
+	if consumedContinuation != nil {
+		if consumedContinuation.Timer != nil {
+			consumedContinuation.Timer.Stop()
+		}
+		delete(st.RetryAttempts, id)
+		delete(st.Claimed, id)
 	}
 	// Reserve the slot synchronously so a concurrent dispatchOp aborts
 	// on its IsClaimed check. The followup records Running once the
@@ -693,10 +699,11 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		}
 		st.Claimed[f.id] = struct{}{}
 		close(f.done)
+		// A clean continuation is a new normal turn. Keep its retry entry
+		// 1-based, but do not carry the prior run's attempt into future
+		// failure backoff; otherwise many successful turns inflate the next
+		// transient failure straight to the max backoff.
 		nextAttempt := 1
-		if f.attempt != nil {
-			nextAttempt = *f.attempt + 1
-		}
 		o := f.o
 		issue := f.issue
 		identifier := f.identifier
