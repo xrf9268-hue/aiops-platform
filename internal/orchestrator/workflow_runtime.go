@@ -42,6 +42,7 @@ type WorkflowSnapshot struct {
 	Workflow            *workflow.Workflow
 	PollInterval        time.Duration
 	MaxConcurrentAgents int
+	MaxRetryBackoff     time.Duration
 	Reconciliation      ReconciliationConfig
 	Fingerprint         string
 }
@@ -153,6 +154,7 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		Workflow:            wf,
 		PollInterval:        time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
 		MaxConcurrentAgents: wf.Config.Agent.MaxConcurrentAgents,
+		MaxRetryBackoff:     time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
 		Reconciliation:      reconcile,
 		Fingerprint:         fingerprint,
 	}

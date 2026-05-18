@@ -261,6 +261,30 @@ func (o *Orchestrator) UpdateMaxConcurrentAgents(ctx context.Context, maxConcurr
 	}
 }
 
+// UpdateRetryScheduler applies reloaded retry timing through the actor so
+// subsequently scheduled retries observe workflow changes without a process
+// restart.
+func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Scheduler) error {
+	if scheduler == nil {
+		return nil
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(*OrchestratorState) func() {
+		o.scheduler = scheduler
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ErrNotDispatched is returned by RequestDispatch when the issue was
 // already claimed (running, retry-queued, or otherwise reserved) and
 // dispatch was therefore deduped. It is not an error condition — SPEC
