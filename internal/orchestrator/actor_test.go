@@ -287,6 +287,160 @@ func TestReconcileTrackerIssuesCancelsRunWhenServiceRouteChanges(t *testing.T) {
 	}
 }
 
+func TestReconcileTrackerIssuesRefreshesIssueStateForCapacityCounting(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-MOVE", Identifier: "ENG-MOVE", Title: "moves state", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	moved := iss
+	moved.State = "Rework"
+	active := map[string]tracker.Issue{moved.ID: moved}
+	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	}
+
+	other := tracker.Issue{ID: "ENG-OTHER", Identifier: "ENG-OTHER", Title: "second rework", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), other, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch second rework after reconciliation moved first into Rework err = %v, want ErrCapacityFull", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher count after reconciliation = %d, want 1 (per-state cap must see refreshed state)", got)
+	}
+}
+
+func TestFinalizeRunSchedulesRetryWithRefreshedIssueState(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	moving := tracker.Issue{ID: "ENG-MOVE", Identifier: "ENG-MOVE", Title: "moves and fails", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), moving, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	moved := moving
+	moved.State = "Rework"
+	active := map[string]tracker.Issue{moved.ID: moved}
+	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0 && len(v.Retrying) == 1
+	}, time.Second)
+
+	other := tracker.Issue{ID: "ENG-OTHER", Identifier: "ENG-OTHER", Title: "second rework", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), other, nil); err != nil {
+		t.Fatalf("dispatch other rework while moved retry is queued: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(moving.ID),
+		issue:   moving, // captured dispatch-time issue; entry.Issue should override
+		attempt: 1,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 2; retry must see refreshed Rework state and respect per-state cap", got)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retry queue after fire = %+v, want refreshed retry still queued", v.Retrying)
+	}
+}
+
+func TestRetryFireUsesRefreshedIssueWhenReconciledMidQueue(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	ip := tracker.Issue{ID: "ENG-IP", Identifier: "ENG-IP", Title: "queued ip retry", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), ip, nil); err != nil {
+		t.Fatalf("dispatch ip: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0 && len(v.Retrying) == 1
+	}, time.Second)
+
+	rw := tracker.Issue{ID: "ENG-RW", Identifier: "ENG-RW", Title: "rework filler", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), rw, nil); err != nil {
+		t.Fatalf("dispatch rework filler: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	moved := ip
+	moved.State = "Rework"
+	active := map[string]tracker.Issue{moved.ID: moved, rw.ID: rw}
+	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(ip.ID),
+		issue:   ip, // dispatch-time In Progress; refreshed entry.Issue says Rework
+		attempt: 1,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 2; queued retry must see refreshed Rework state", got)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retry queue after refresh-aware fire = %+v, want still queued behind Rework cap", v.Retrying)
+	}
+}
+
 func TestReconcileTrackerIssuesReleasesRetryWhenServiceRouteChanges(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})

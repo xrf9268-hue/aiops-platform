@@ -137,8 +137,19 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	if p.stateTracker == nil {
 		return errors.New("orchestrator poller reconciliation requires state tracker")
 	}
+	activeIssuesByID := issueMap(activeIssues)
+	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
 	if p.routing != nil {
-		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, issueMap(activeIssues), normalizedStates(p.reconcile.ActiveStates), p.reconcile.WorkerExitTimeout); err != nil {
+		// Routing-aware listings are complete for their scope, so absence from
+		// the active set is real evidence of inactivity and may cancel runs.
+		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, p.reconcile.WorkerExitTimeout); err != nil {
+			return err
+		}
+	} else {
+		// Without routing the active listing may be partial; still refresh
+		// stored issue metadata for runs we DO see so per-state capacity gates
+		// observe the latest tracker state without treating absence as inactive.
+		if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
 			return err
 		}
 	}

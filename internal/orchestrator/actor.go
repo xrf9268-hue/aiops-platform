@@ -364,6 +364,24 @@ func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID ma
 	return o.ReconcileTrackerIssuesAndWait(ctx, issuesByID, activeStates, 0)
 }
 
+// RefreshActiveTrackerIssues updates stored issue metadata for in-process runs
+// and queued retries whose issues are still observed in the active set, without
+// canceling any work. Use this when the active listing may be partial (so
+// absence from issuesByID must not imply inactivity) but per-state capacity
+// gates still need the latest tracker state.
+func (o *Orchestrator) RefreshActiveTrackerIssues(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}) error {
+	done := make(chan struct{}, 1)
+	if err := o.submit(ctx, &refreshActiveTrackerIssuesOp{issuesByID: issuesByID, activeStates: activeStates, done: done}); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ReconcileTrackerIssuesAndWait performs the same reconciliation as
 // ReconcileTrackerIssues, then optionally waits for canceled workers to exit.
 // This lets poll ticks provide prompt cancellation semantics without making the
@@ -484,6 +502,42 @@ func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, i
 	return o.submit(ctx, op)
 }
 
+// refreshActiveTrackerIssuesOp refreshes RunningEntry.Issue and the matching
+// ClaimedIssues snapshot for every in-process issue observed in the active set,
+// without canceling anything. It is safe to call when the active listing may be
+// partial, because absence from issuesByID is treated as "no information," not
+// "now inactive."
+type refreshActiveTrackerIssuesOp struct {
+	issuesByID   map[string]tracker.Issue
+	activeStates map[string]struct{}
+	done         chan<- struct{}
+}
+
+func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
+	for id, run := range st.Running {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(run.Issue, issue) {
+			continue
+		}
+		run.Issue = issue
+		st.ClaimedIssues[id] = issue
+	}
+	for id, retry := range st.RetryAttempts {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(retry.Issue, issue) {
+			continue
+		}
+		retry.Issue = issue
+		st.ClaimedIssues[id] = issue
+	}
+	done := r.done
+	return func() {
+		if done != nil {
+			close(done)
+		}
+	}
+}
+
 type reconcileTrackerIssuesOp struct {
 	issuesByID   map[string]tracker.Issue
 	activeStates map[string]struct{}
@@ -495,6 +549,13 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
+			// Refresh stored issue metadata so per-state capacity gates
+			// (RunningCountByState, StateCapacityFull) see the latest tracker
+			// state. Without this, an issue that moved between active states
+			// keeps counting toward its dispatch-time bucket and a later poll
+			// can exceed max_concurrent_agents_by_state for the new state.
+			run.Issue = issue
+			st.ClaimedIssues[id] = issue
 			continue
 		}
 		st.ReleaseClaim(id)
@@ -504,6 +565,8 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	for id, retry := range st.RetryAttempts {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(retry.Issue, issue) {
+			retry.Issue = issue
+			st.ClaimedIssues[id] = issue
 			continue
 		}
 		st.ReleaseClaim(id)
@@ -719,6 +782,11 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		o := r.o
 		return func() { o.wakeRetryPollLoop() }
 	}
+	// Use entry.Issue rather than the timer-captured r.issue: reconciliation
+	// may have refreshed the tracker state while the retry was queued, and
+	// both the per-state capacity gate and the spawned worker must see the
+	// live state.
+	issue := entry.Issue
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Leave the retry queued and arm a short follow-up timer so the issue
@@ -728,7 +796,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		}
 		o := r.o
 		id := r.id
-		issue := r.issue
 		attempt := r.attempt
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
@@ -741,7 +808,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		})
 		return nil
 	}
-	if st.StateCapacityFull(entry.Issue.State) {
+	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Leave the retry
 		// queued and arm a short follow-up timer so noisy states cannot exceed
 		// max_concurrent_agents_by_state while other states are running.
@@ -750,7 +817,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		}
 		o := r.o
 		id := r.id
-		issue := r.issue
 		attempt := r.attempt
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
@@ -768,7 +834,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	// would let a concurrent tick race in.
 	delete(st.RetryAttempts, r.id)
 	o := r.o
-	issue := r.issue
 	attempt := r.attempt
 	return func() {
 		o.spawn(r.id, issue, &attempt)
@@ -801,8 +866,12 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			return nil
 		}
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
+		// Use f.entry.Issue, not f.issue: reconciliation may have refreshed
+		// the tracker state mid-run, and per-state capacity gates must see
+		// the live state, not the dispatch-time snapshot.
+		issue := f.entry.Issue
 		st.Claimed[f.id] = struct{}{}
-		st.ClaimedIssues[f.id] = f.issue
+		st.ClaimedIssues[f.id] = issue
 		close(f.done)
 		// A clean continuation is a new normal turn. Keep its retry entry
 		// 1-based, but do not carry the prior run's attempt into future
@@ -810,7 +879,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		// transient failure straight to the max backoff.
 		nextAttempt := 1
 		o := f.o
-		issue := f.issue
 		identifier := f.identifier
 		return func() {
 			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt)
@@ -847,8 +915,11 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	// backoff and racing a phantom retry timer against a live worker.
 	// scheduleRetryOp's call to OrchestratorState.ScheduleRetry re-sets
 	// Claimed idempotently, so this is safe.
+	// Use f.entry.Issue, not f.issue: reconciliation may have refreshed
+	// the tracker state mid-run, and the retry must carry the live state.
+	issue := f.entry.Issue
 	st.Claimed[f.id] = struct{}{}
-	st.ClaimedIssues[f.id] = f.issue
+	st.ClaimedIssues[f.id] = issue
 	close(f.done)
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
@@ -858,7 +929,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		nextAttempt = *f.attempt + 1
 	}
 	o := f.o
-	issue := f.issue
 	identifier := f.identifier
 	runErr := f.result.Err.Error()
 	return func() {
