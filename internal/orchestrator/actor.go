@@ -587,6 +587,12 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		delete(st.RetryAttempts, id)
 		delete(st.Claimed, id)
 	}
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventCandidate,
+		IssueID:    id,
+		Identifier: d.issue.Identifier,
+		Message:    "candidate fetched from tracker",
+	})
 	// Reserve the slot synchronously so a concurrent dispatchOp aborts
 	// on its IsClaimed check. The followup records Running once the
 	// worker is spawned.

@@ -37,10 +37,10 @@ type RuntimeStatus struct {
 	Source       string             `json:"source"`
 	Summary      StatusSummary      `json:"summary"`
 	Running      []StatusRun        `json:"running"`
-	Retrying     []RetryView        `json:"retrying"`
+	Retrying     []StatusRetry      `json:"retrying"`
 	Completed    []IssueID          `json:"completed"`
 	RecentEvents []RuntimeEvent     `json:"recent_events"`
-	CodexTotals  CodexTotals        `json:"codex_totals"`
+	CodexTotals  StatusCodexTotals  `json:"codex_totals"`
 	RateLimits   *RateLimitSnapshot `json:"rate_limits,omitempty"`
 }
 
@@ -64,6 +64,21 @@ type StatusRun struct {
 	PRURL         string    `json:"pr_url,omitempty"`
 }
 
+type StatusRetry struct {
+	IssueID    IssueID   `json:"issue_id"`
+	Identifier string    `json:"identifier,omitempty"`
+	Attempt    int       `json:"attempt"`
+	DueAt      time.Time `json:"due_at"`
+	Error      string    `json:"error,omitempty"`
+}
+
+type StatusCodexTotals struct {
+	InputTokens    int64   `json:"input_tokens"`
+	OutputTokens   int64   `json:"output_tokens"`
+	TotalTokens    int64   `json:"total_tokens"`
+	SecondsRunning float64 `json:"seconds_running"`
+}
+
 // RecordEvent appends ev to the bounded in-memory event log.
 func (s *OrchestratorState) RecordEvent(ev RuntimeEvent) {
 	if s == nil {
@@ -83,8 +98,9 @@ func (s *OrchestratorState) RecordEvent(ev RuntimeEvent) {
 // StatusSnapshot returns a queue-independent operator status payload.
 func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 	view := s.Snapshot()
+	allEvents := boundedRuntimeEvents(s.RecentEvents, 0)
 	events := boundedRuntimeEvents(s.RecentEvents, limit)
-	links := linksByIssue(events)
+	links := linksByIssue(allEvents)
 
 	running := make([]StatusRun, 0, len(view.Running))
 	for _, r := range view.Running {
@@ -103,23 +119,51 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 		running = append(running, row)
 	}
 	sort.Slice(running, func(i, j int) bool { return running[i].IssueID < running[j].IssueID })
-	sort.Slice(view.Retrying, func(i, j int) bool { return view.Retrying[i].IssueID < view.Retrying[j].IssueID })
+	retrying := make([]StatusRetry, 0, len(view.Retrying))
+	for _, r := range view.Retrying {
+		retrying = append(retrying, StatusRetry{
+			IssueID:    r.IssueID,
+			Identifier: r.Identifier,
+			Attempt:    r.Attempt,
+			DueAt:      r.DueAt,
+			Error:      r.Error,
+		})
+	}
+	sort.Slice(retrying, func(i, j int) bool { return retrying[i].IssueID < retrying[j].IssueID })
+	sort.Slice(view.Failed, func(i, j int) bool { return view.Failed[i] < view.Failed[j] })
 	sort.Slice(view.Completed, func(i, j int) bool { return view.Completed[i] < view.Completed[j] })
 
-	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Retrying: len(view.Retrying)}
+	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: len(view.Failed), Retrying: len(retrying)}
 	seenEventIssues := map[RuntimeEventKind]map[IssueID]struct{}{}
-	for _, ev := range events {
+	for _, id := range view.Failed {
+		seenFailed := seenEventIssues[RuntimeEventFailed]
+		if seenFailed == nil {
+			seenFailed = map[IssueID]struct{}{}
+			seenEventIssues[RuntimeEventFailed] = seenFailed
+		}
+		seenFailed[id] = struct{}{}
+	}
+	for _, ev := range allEvents {
 		recordEventSummary(&summary, seenEventIssues, ev)
 	}
 	return RuntimeStatus{
 		Source:       "orchestrator_runtime",
 		Summary:      summary,
 		Running:      running,
-		Retrying:     view.Retrying,
+		Retrying:     retrying,
 		Completed:    view.Completed,
 		RecentEvents: events,
-		CodexTotals:  view.CodexTotals,
+		CodexTotals:  statusCodexTotals(view.CodexTotals),
 		RateLimits:   view.CodexRateLimits,
+	}
+}
+
+func statusCodexTotals(t CodexTotals) StatusCodexTotals {
+	return StatusCodexTotals{
+		InputTokens:    t.InputTokens,
+		OutputTokens:   t.OutputTokens,
+		TotalTokens:    t.TotalTokens,
+		SecondsRunning: t.SecondsRunning,
 	}
 }
 

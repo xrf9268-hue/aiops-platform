@@ -27,6 +27,9 @@ func TestActorStatusSnapshotRecordsDispatchAndCompletionEvents(t *testing.T) {
 	if status.Summary.Running != 0 || status.Summary.Completed != 1 {
 		t.Fatalf("summary = %+v, want completed runtime and no running", status.Summary)
 	}
+	if status.Summary.Candidate != 1 {
+		t.Fatalf("candidate summary = %d, want observed candidate before dispatch", status.Summary.Candidate)
+	}
 	kinds := map[RuntimeEventKind]bool{}
 	for _, ev := range status.RecentEvents {
 		kinds[ev.Kind] = true
@@ -34,8 +37,8 @@ func TestActorStatusSnapshotRecordsDispatchAndCompletionEvents(t *testing.T) {
 			t.Fatalf("event identifier = %q, want ENG-42", ev.Identifier)
 		}
 	}
-	if !kinds[RuntimeEventRunning] || !kinds[RuntimeEventCompleted] {
-		t.Fatalf("events = %+v, want running and completed", status.RecentEvents)
+	if !kinds[RuntimeEventCandidate] || !kinds[RuntimeEventRunning] || !kinds[RuntimeEventCompleted] {
+		t.Fatalf("events = %+v, want candidate, running, and completed", status.RecentEvents)
 	}
 }
 

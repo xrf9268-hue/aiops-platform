@@ -93,8 +93,45 @@ func TestStatusSnapshotDeduplicatesEventSummaryByIssueAndKind(t *testing.T) {
 	}
 }
 
+func TestStatusSnapshotSummaryIgnoresRecentEventLimit(t *testing.T) {
+	st := NewOrchestratorState(30000, 2)
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: "issue-1", At: time.Unix(1, 0)})
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidate, IssueID: "issue-2", At: time.Unix(2, 0)})
+
+	status := st.StatusSnapshot(1)
+	if len(status.RecentEvents) != 1 {
+		t.Fatalf("recent events = %d, want display limit 1", len(status.RecentEvents))
+	}
+	if status.Summary.Failed != 1 || status.Summary.Candidate != 1 {
+		t.Fatalf("summary = %+v, want counters from full runtime event log", status.Summary)
+	}
+}
+
+func TestStatusSnapshotCountsCurrentNonRetryableFailuresAfterEventEviction(t *testing.T) {
+	st := NewOrchestratorState(30000, 2)
+	run := &RunningEntry{Issue: tracker.Issue{ID: "issue-1", Identifier: "ENG-1", State: "started", UpdatedAt: "2026-05-19T00:00:00Z"}}
+	st.BeginDispatch("issue-1", run)
+	st.FinishRunNonRetryableFailed("issue-1", run, time.Millisecond)
+	for i := range 201 {
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidate, IssueID: IssueID("issue-later"), At: time.Unix(int64(i), 0)})
+	}
+
+	status := st.StatusSnapshot(10)
+	if status.Summary.Failed != 1 {
+		t.Fatalf("failed summary = %d, want current non-retryable failure counted", status.Summary.Failed)
+	}
+}
+
 func TestWriteStatusJSONDocumentsQueueIndependentSource(t *testing.T) {
 	st := NewOrchestratorState(30000, 2)
+	st.RecordCodexTokens(10, 20)
+	st.ScheduleRetry(&RetryEntry{
+		IssueID:    "issue-2",
+		Identifier: "ENG-2",
+		Attempt:    2,
+		DueAt:      time.Unix(102, 0).UTC(),
+		Error:      "transient failure",
+	})
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventBlocked, IssueID: "issue-1", Identifier: "ENG-1", Message: "blocked by dependency", At: time.Unix(101, 0).UTC()})
 
 	var buf bytes.Buffer
@@ -112,5 +149,15 @@ func TestWriteStatusJSONDocumentsQueueIndependentSource(t *testing.T) {
 	}
 	if decoded.RecentEvents[0].Kind != RuntimeEventBlocked {
 		t.Fatalf("decoded event kind = %q, want %q", decoded.RecentEvents[0].Kind, RuntimeEventBlocked)
+	}
+	for _, internalName := range []string{"IssueID", "DueAt", "InputTokens"} {
+		if strings.Contains(body, internalName) {
+			t.Fatalf("status JSON leaked internal field name %q: %s", internalName, body)
+		}
+	}
+	for _, publicName := range []string{"issue_id", "due_at", "input_tokens"} {
+		if !strings.Contains(body, publicName) {
+			t.Fatalf("status JSON missing public field name %q: %s", publicName, body)
+		}
 	}
 }
