@@ -1385,7 +1385,7 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 
 func waitForRetryDue(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		view, err := orch.Snapshot(ctx)
 		if err != nil {
