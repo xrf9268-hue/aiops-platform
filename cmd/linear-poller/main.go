@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/queue"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -47,19 +49,66 @@ func main() {
 	}
 	defer pool.Close()
 	store := queue.New(pool)
-	client := tracker.NewLinearClient(wf.Config.Tracker)
+	listers := linearIssueListers(wf.Config)
 	interval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
 
 	for {
-		issues, err := client.ListActiveIssues(ctx)
-		if err != nil {
+		if err := pollOnce(ctx, store, &wf.Config, listers); err != nil {
 			log.Printf("linear poll error: %v", err)
-			time.Sleep(interval)
-			continue
 		}
-		processIssues(ctx, store, &wf.Config, issues)
 		time.Sleep(interval)
 	}
+}
+
+type activeIssueLister interface {
+	ListActiveIssues(ctx context.Context) ([]tracker.Issue, error)
+}
+
+type linearIssueSource struct {
+	lister      activeIssueLister
+	projectSlug string
+}
+
+func linearIssueListers(cfg workflow.Config) []linearIssueSource {
+	projectConfigs := orchestrator.TrackerProjectConfigs(cfg)
+	listers := make([]linearIssueSource, 0, len(projectConfigs))
+	for _, projectCfg := range projectConfigs {
+		listers = append(listers, linearIssueSource{
+			lister:      tracker.NewLinearClient(projectCfg.Tracker),
+			projectSlug: strings.TrimSpace(projectCfg.Tracker.ProjectSlug),
+		})
+	}
+	return listers
+}
+
+func pollOnce(ctx context.Context, store enqueuer, cfg *workflow.Config, sources []linearIssueSource) error {
+	var pollErr error
+	for _, source := range sources {
+		issues, err := source.lister.ListActiveIssues(ctx)
+		if err != nil {
+			pollErr = errors.Join(pollErr, err)
+			continue
+		}
+		processIssues(ctx, store, cfg, filterIssuesForPollSource(*cfg, issues, source.projectSlug))
+	}
+	return pollErr
+}
+
+func filterIssuesForPollSource(cfg workflow.Config, issues []tracker.Issue, projectSlug string) []tracker.Issue {
+	rootProject := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+	if rootProject != "" && strings.EqualFold(rootProject, strings.TrimSpace(projectSlug)) {
+		return issues
+	}
+	out := make([]tracker.Issue, 0, len(issues))
+	for _, issue := range issues {
+		for _, service := range cfg.Services {
+			if serviceMatchesIssue(service, cfg.Tracker, issue) {
+				out = append(out, issue)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // processIssues enqueues each polled Linear issue once. It is split out from

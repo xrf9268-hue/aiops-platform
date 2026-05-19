@@ -406,6 +406,48 @@ func TestPollOnceCancelsRunningIssueWhenActiveIssueNoLongerMatchesRoute(t *testi
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 }
 
+func TestPollOnceReconcilesRoutedIssuesWhenAnotherIssueHasAmbiguousRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "api-platform"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	poller.routing = &workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "docs-a", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "docs-platform"}},
+		{Name: "docs-b", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "docs-platform"}},
+	}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "mobile-app"},
+		{ID: "issue-2", Identifier: "LIN-2", Title: "Ambiguous docs", State: "In Progress", ProjectSlug: "docs-platform"},
+	})
+	err := poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous poll error = %v, want ambiguity reported", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
 func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -824,13 +866,14 @@ func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssueWithoutFallbackRepo(t *t
 
 func TestSelectRoutedCandidatesKeepsUnmatchedLinearIssueForFallbackRepo(t *testing.T) {
 	cfg := workflow.Config{
-		Repo: workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
+		Tracker: workflow.TrackerConfig{ProjectSlug: "core-platform"},
+		Repo:    workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
 		Services: []workflow.ServiceConfig{
 			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
 		},
 	}
 	issues := []tracker.Issue{
-		{ID: "issue-1", Identifier: "LIN-1", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app"},
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Core work", State: "AI Ready", ProjectSlug: "core-platform"},
 	}
 
 	got, err := selectRoutedCandidates(issues, cfg)
@@ -842,6 +885,26 @@ func TestSelectRoutedCandidatesKeepsUnmatchedLinearIssueForFallbackRepo(t *testi
 	}
 	if got[0].ServiceName != "" {
 		t.Fatalf("fallback candidate service = %q, want empty service", got[0].ServiceName)
+	}
+}
+
+func TestSelectRoutedCandidatesSkipsUnmatchedServiceProjectIssueWithFallbackRepo(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform", Labels: []string{"api"}}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Unmatched service work", State: "AI Ready", ProjectSlug: "api-platform", Labels: []string{"docs"}},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("routed candidates = %#v, want unmatched service-project issue skipped instead of fallback repo", got)
 	}
 }
 

@@ -90,7 +90,7 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if p.routing != nil {
 		routedIssues, err = selectRoutedCandidates(issues, *p.routing)
 		if err != nil {
-			return err
+			pollErr = errors.Join(pollErr, err)
 		}
 	}
 	if p.reconcileKnown {
@@ -349,7 +349,7 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 		matches := matchingServices(issue, cfg)
 		switch len(matches) {
 		case 0:
-			if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
+			if strings.TrimSpace(cfg.Repo.CloneURL) != "" && issueInRootTrackerProject(issue, cfg) {
 				out = append(out, issue)
 				continue
 			}
@@ -366,6 +366,14 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 		}
 	}
 	return out, routeErr
+}
+
+func issueInRootTrackerProject(issue tracker.Issue, cfg workflow.Config) bool {
+	rootProject := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+	if rootProject == "" {
+		return false
+	}
+	return strings.EqualFold(rootProject, strings.TrimSpace(issue.ProjectSlug))
 }
 
 func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.ServiceConfig {
