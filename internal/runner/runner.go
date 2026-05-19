@@ -37,6 +37,18 @@ func New(name string) (Runner, error) {
 	switch name {
 	case "", "mock":
 		return MockRunner{}, nil
+	case "mock-source-change":
+		return MockRunner{WriteSourceFiles: true}, nil
+	case "mock-commit-source-change":
+		return MockRunner{CommitSourceFiles: true}, nil
+	case "mock-commit-analysis-artifact":
+		return MockRunner{CommitSourceFiles: true, CommitOnlyArtifacts: true}, nil
+	case "mock-commit-source-change-and-reset-base-config":
+		return MockRunner{CommitSourceFiles: true, SetBaseToHead: true}, nil
+	case "mock-no-plan":
+		return MockRunner{SkipAnalysisPlan: true}, nil
+	case "mock-aiops-workflow-change":
+		return MockRunner{WriteAiopsWorkflow: true}, nil
 	case "codex":
 		return CodexRunner{}, nil
 	case "codex-app-server":

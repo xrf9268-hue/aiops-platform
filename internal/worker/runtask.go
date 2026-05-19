@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -170,6 +171,13 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 	if err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
+	workspaceBase := ""
+	if wcfg.Policy.Mode == "analysis_only" {
+		workspaceBase, err = workspace.ResolveBaseBranchRef(ctx, workdir, t.BaseBranch)
+		if err != nil {
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
+		}
+	}
 	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
 		_ = os.RemoveAll(workdir)
 		return &RunTaskError{Cfg: wcfg, Err: err}
@@ -191,6 +199,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		"repo.name":        t.RepoName,
 		"repo.branch":      t.BaseBranch,
 	})
+	prompt = AppendAnalysisOnlyDirective(prompt, wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)
 	if err := writeTaskFiles(workdir, t, prompt); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
@@ -204,14 +213,19 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	// Make sure the post-runner CheckSummary gate cannot pass on a stale
-	// summary. PrepareGitWorkspace already nukes the workdir on a fresh
-	// clone, but we still defend against the case where the base branch
-	// *itself* has a committed .aiops/RUN_SUMMARY.md (left over from a prior
-	// PR or seeded by hand). Deleting it here means CheckSummary can only
-	// succeed when the runner produced a summary during this invocation.
+	// Make sure post-runner artifact gates cannot pass on stale files from
+	// the base branch. PrepareGitWorkspace already nukes the workdir on a
+	// fresh clone, but we still defend against the case where the base branch
+	// itself has committed .aiops artifacts (left over from a prior PR or
+	// seeded by hand). Deleting them here means the gates can only succeed
+	// when the runner produced artifacts during this invocation.
 	if err := workspace.ResetRunSummary(workdir); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
+	}
+	if wcfg.Policy.Mode == "analysis_only" {
+		if err := os.Remove(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
+		}
 	}
 
 	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs); err != nil {
@@ -238,6 +252,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 	}
 
 	if _, err := RunVerifyPhase(ctx, ev, t.ID, workdir, wcfg); err != nil {
+		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
+
+	if err := enforceAnalysisOnlyChanges(ctx, ev, t.ID, workdir, workspaceBase, wcfg); err != nil {
+		WriteFailureArtifacts(ctx, workdir, nil, ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -575,6 +594,67 @@ const runSummaryDirective = "\n\n---\n\n" +
 	"describing what you changed, why, and how it was verified. The task will " +
 	"fail if this file is missing, empty, or contains only a placeholder."
 
+const analysisOnlyDirective = "\n\n---\n\n" +
+	"**Analysis-only mode:** do not edit source files, commit, push, open PRs, " +
+	"or post tracker comments on the worker's behalf. Produce your assessment " +
+	"as `.aiops/PLAN.md`; any optional tracker handoff must happen through " +
+	"agent-side tools advertised to you by the runtime."
+
+func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, workdir, baseRef string, cfg workflow.Config) error {
+	if cfg.Policy.Mode != "analysis_only" {
+		return nil
+	}
+	planPath := filepath.Join(workdir, ".aiops", "PLAN.md")
+	plan, err := os.ReadFile(planPath)
+	if err != nil || strings.TrimSpace(string(plan)) == "" {
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
+			"path": ".aiops/PLAN.md",
+		})
+		if err != nil {
+			return fmt.Errorf("analysis-only run did not produce .aiops/PLAN.md: %w", err)
+		}
+		return fmt.Errorf("analysis-only run did not produce .aiops/PLAN.md")
+	}
+	changed, err := workspace.AllChangedFilesSinceRef(ctx, workdir, baseRef)
+	if err != nil {
+		return fmt.Errorf("inspect analysis-only changes: %w", err)
+	}
+	violations := make([]string, 0)
+	for _, path := range changed {
+		if analysisOnlyArtifactAllowed(path) {
+			continue
+		}
+		violations = append(violations, path)
+	}
+	if len(violations) > 0 {
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run changed source files", map[string]any{
+			"files": violations,
+		})
+		return fmt.Errorf("analysis-only run changed source files: %s", strings.Join(violations, ", "))
+	}
+	committed, err := workspace.HasCommitsSinceRef(ctx, workdir, baseRef)
+	if err != nil {
+		return fmt.Errorf("inspect analysis-only commits: %w", err)
+	}
+	if committed {
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run created commits", nil)
+		return fmt.Errorf("analysis-only run created commits")
+	}
+	return nil
+}
+
+func analysisOnlyArtifactAllowed(path string) bool {
+	switch path {
+	case ".aiops/PLAN.md", ".aiops/PROMPT.md", ".aiops/TASK.md", workspace.SummaryPath, ".aiops/CHANGED_FILES.txt", ".aiops/VERIFICATION.txt":
+		return true
+	}
+	if strings.HasPrefix(path, ".aiops/") && strings.HasSuffix(path, ".md") {
+		base := strings.TrimPrefix(path, ".aiops/")
+		return !strings.Contains(base, "/") && base != "WORKFLOW.md"
+	}
+	return strings.HasPrefix(path, ".aiops/logs/")
+}
+
 // AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
 // prompt unless the full directive is already present.
 func AppendRunSummaryDirective(prompt string) string {
@@ -582,6 +662,19 @@ func AppendRunSummaryDirective(prompt string) string {
 		return prompt
 	}
 	return prompt + runSummaryDirective
+}
+
+// AppendAnalysisOnlyDirective adds the plan-artifact/no-handoff contract for
+// analysis-only workflows. The directive lives in the shared worker prompt path
+// so every runner, not only the mock runner, receives the same behavior request.
+func AppendAnalysisOnlyDirective(prompt, mode string) string {
+	if mode != "analysis_only" {
+		return prompt
+	}
+	if strings.Contains(prompt, strings.TrimSpace(analysisOnlyDirective)) {
+		return prompt
+	}
+	return prompt + analysisOnlyDirective
 }
 
 // addOutputFields merges runner Result output telemetry into a payload map

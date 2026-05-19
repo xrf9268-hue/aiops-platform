@@ -173,18 +173,39 @@ The legacy poller reads issues whose labels map to configured active states and 
 
 ## First safe mode
 
-Start with:
+Start with the mock runner:
 
 ```yaml
 agent:
   default: mock
 ```
 
-After the mock loop produces a branch and PR, change the workflow to:
+For ambiguous or high-risk work, keep the workflow in analysis-only mode until
+operators have reviewed the plan:
+
+```yaml
+agent:
+  default: mock # or codex/claude after the workflow is trusted
+policy:
+  mode: analysis_only
+```
+
+Analysis-only mode asks the agent to produce an assessment artifact such as
+`.aiops/PLAN.md` and the required `.aiops/RUN_SUMMARY.md` without relying on the
+worker to commit, push, open PRs, or post tracker comments. If the plan needs to
+be posted back to Linear or another tracker, that handoff belongs to the
+agent-side tool surface (for example `linear_graphql` when configured), not to
+worker-side tracker writes. Use normal implementation mode such as
+`policy.mode: draft_pr` only when the agent should make code changes and manage
+PR handoff through its workflow/tools.
+
+After the mock loop is trusted, change the workflow to:
 
 ```yaml
 agent:
   default: codex
+policy:
+  mode: draft_pr
 ```
 
 ## Safety notes

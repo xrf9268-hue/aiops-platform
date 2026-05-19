@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -14,7 +16,13 @@ import (
 // it elapses or the context is cancelled — this is how tests drive the
 // timeout path without spawning a real subprocess.
 type MockRunner struct {
-	Sleep time.Duration
+	Sleep               time.Duration
+	WriteSourceFiles    bool
+	SkipAnalysisPlan    bool
+	WriteAiopsWorkflow  bool
+	CommitSourceFiles   bool
+	CommitOnlyArtifacts bool
+	SetBaseToHead       bool
 }
 
 func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
@@ -42,6 +50,58 @@ func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 		return Result{}, err
 	}
 	completedAt := time.Now().Format(time.RFC3339)
+	if in.Workflow.Config.Policy.Mode == "analysis_only" && !m.SkipAnalysisPlan {
+		plan := fmt.Sprintf(`# Analysis plan (mock)
+
+- Task: %s
+- Title: %s
+- Actor: %s
+- Model: %s
+- Completed at: %s
+
+This plan was produced by the mock runner in analysis-only mode. The mock
+runner does not edit source files; it writes only analysis artifacts under
+.aiops/ so the worker can exercise analysis-only gating without committing,
+pushing, opening PRs, or writing tracker comments on the runner's behalf.
+`, in.Task.ID, in.Task.Title, in.Task.Actor, in.Task.Model, completedAt)
+		if err := os.WriteFile(filepath.Join(dir, "PLAN.md"), []byte(plan), 0o644); err != nil {
+			return Result{}, fmt.Errorf("write PLAN.md: %w", err)
+		}
+	}
+	if m.WriteSourceFiles || (m.CommitSourceFiles && !m.CommitOnlyArtifacts) {
+		if err := os.WriteFile(filepath.Join(in.Workdir, "mock-source-change.txt"), []byte("mock source change\n"), 0o644); err != nil {
+			return Result{}, fmt.Errorf("write mock source change: %w", err)
+		}
+	}
+	if m.CommitSourceFiles {
+		commitPath := "mock-source-change.txt"
+		if m.CommitOnlyArtifacts {
+			commitPath = filepath.Join(".aiops", "PLAN.md")
+		}
+		gitCommands := [][]string{
+			{"git", "add", commitPath},
+			{"git", "-c", "user.email=mock@example.com", "-c", "user.name=mock", "commit", "-q", "-m", "mock source commit"},
+		}
+		for _, args := range gitCommands {
+			cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+			cmd.Dir = in.Workdir
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return Result{}, fmt.Errorf("%s: %w\n%s", strings.Join(args, " "), err, out)
+			}
+		}
+	}
+	if m.SetBaseToHead {
+		cmd := exec.CommandContext(ctx, "git", "config", "--local", "aiops.workspaceBase", "HEAD")
+		cmd.Dir = in.Workdir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return Result{}, fmt.Errorf("git config aiops.workspaceBase: %w\n%s", err, out)
+		}
+	}
+	if m.WriteAiopsWorkflow {
+		if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte("tracked workflow edit\n"), 0o644); err != nil {
+			return Result{}, fmt.Errorf("write .aiops/WORKFLOW.md: %w", err)
+		}
+	}
 	content := fmt.Sprintf(`# AI Ops Mock Run
 
 Task: %s

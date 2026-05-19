@@ -220,6 +220,22 @@ func TestAppendRunSummaryDirectiveDoesNotSuppressOnPartialLegacyPhrases(t *testi
 	}
 }
 
+func TestAppendAnalysisOnlyDirectiveOnlyForAnalysisMode(t *testing.T) {
+	plain := "inspect the issue"
+	got := worker.AppendAnalysisOnlyDirective(plain, "analysis_only")
+	for _, want := range []string{"Analysis-only mode", ".aiops/PLAN.md", "do not edit source files"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("analysis-only directive missing %q: %q", want, got)
+		}
+	}
+	if again := worker.AppendAnalysisOnlyDirective(got, "analysis_only"); again != got {
+		t.Fatalf("analysis-only directive should be idempotent; got %q", again)
+	}
+	if draft := worker.AppendAnalysisOnlyDirective(plain, "draft_pr"); draft != plain {
+		t.Fatalf("draft_pr prompt should not receive analysis-only directive: %q", draft)
+	}
+}
+
 // TestMockRunnerWritesRunSummary confirms the mock runner produces a
 // RUN_SUMMARY.md that satisfies workspace.CheckSummary, so the worker gate
 // passes end-to-end without touching codex/claude.

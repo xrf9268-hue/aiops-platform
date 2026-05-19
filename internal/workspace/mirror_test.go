@@ -173,6 +173,45 @@ func TestPrepareGitWorkspace_IsolatedWorktreesShareMirror(t *testing.T) {
 	}
 }
 
+func TestPrepareGitWorkspaceDoesNotExposeBaseRefMarkerInWorktree(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-base-marker", upstream)
+
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".aiops-base")); !os.IsNotExist(err) {
+		t.Fatalf("internal base marker leaked into worktree: %v", err)
+	}
+	out, err := exec.Command("git", "-C", dir, "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "" {
+		t.Fatalf("prepared worktree has visible changes: %q", got)
+	}
+}
+
+func TestPrepareGitWorkspaceDoesNotSetBaseBranchAsWorkBranchUpstream(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-no-base-upstream", upstream)
+
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	cmd := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	out, err := cmd.CombinedOutput()
+	if err == nil && strings.TrimSpace(string(out)) == "origin/main" {
+		t.Fatalf("work branch must not track base branch as upstream")
+	}
+}
+
 func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
