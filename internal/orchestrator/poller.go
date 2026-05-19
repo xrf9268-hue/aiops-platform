@@ -484,7 +484,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			return
 		}
 		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {
-			out <- WorkerResult{Err: rterr.Err, Elapsed: time.Since(start)}
+			out <- WorkerResult{Err: rterr.Err, NonRetryable: rterr.NonRetryable, Elapsed: time.Since(start)}
 			return
 		}
 		if err := completeRecordedTask(ctx, d.Emitter, recordedTaskID, tk.ID); err != nil {

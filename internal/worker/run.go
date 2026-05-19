@@ -80,7 +80,7 @@ func Run(ctx context.Context, store runStore, cfg Config) {
 		if rterr := RunTask(ctx, store, *t, cfg); rterr != nil {
 			log.Printf("task %s failed: %v", t.ID, rterr.Err)
 			cleanupCtx, cancel := terminalUpdateContext(ctx)
-			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err)
+			handleTaskFailure(cleanupCtx, store, *t, rterr.Cfg, rterr.Err, rterr.NonRetryable)
 			cancel()
 			if ctx.Err() != nil {
 				return

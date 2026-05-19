@@ -15,12 +15,14 @@ import (
 // uses. Tests script Fail/FailTimeout return values to drive the
 // terminality decision returned to the worker loop.
 type fakeFailingStore struct {
-	failResult      bool
-	failErr         error
-	failTimeoutReq  bool
-	failTimeoutErr  error
-	failCalls       []failCall
-	failTimoutCalls []failTimeoutCall
+	failResult        bool
+	failErr           error
+	failTerminalErr   error
+	failTimeoutReq    bool
+	failTimeoutErr    error
+	failCalls         []failCall
+	failTerminalCalls []failCall
+	failTimoutCalls   []failTimeoutCall
 }
 
 type failCall struct {
@@ -37,6 +39,11 @@ func (f *fakeFailingStore) Fail(_ context.Context, id, msg string) (bool, error)
 	return f.failResult, f.failErr
 }
 
+func (f *fakeFailingStore) FailTerminal(_ context.Context, id, msg string) error {
+	f.failTerminalCalls = append(f.failTerminalCalls, failCall{ID: id, Msg: msg})
+	return f.failTerminalErr
+}
+
 func (f *fakeFailingStore) FailTimeout(_ context.Context, id, msg string, max int) (bool, error) {
 	f.failTimoutCalls = append(f.failTimoutCalls, failTimeoutCall{ID: id, Msg: msg, MaxTimeoutRetries: max})
 	return f.failTimeoutReq, f.failTimeoutErr
@@ -51,7 +58,7 @@ func sampleTask() task.Task {
 // back to the caller for retry accounting.
 func TestHandleTaskFailure_NonTimeoutTerminalReportsTrue(t *testing.T) {
 	store := &fakeFailingStore{failResult: true}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("policy violation"))
+	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("policy violation"), false)
 	if !got {
 		t.Fatalf("terminal = false, want true when Fail reports terminal")
 	}
@@ -69,9 +76,26 @@ func TestHandleTaskFailure_NonTimeoutTerminalReportsTrue(t *testing.T) {
 // terminal failure to its retry accounting.
 func TestHandleTaskFailure_NonTimeoutRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failResult: false}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("verify failed"))
+	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("verify failed"), false)
 	if got {
 		t.Fatalf("terminal = true, want false when Fail re-queues the task")
+	}
+}
+
+func TestHandleTaskFailure_NonRetryableFailsTerminalWithoutRetry(t *testing.T) {
+	store := &fakeFailingStore{failResult: false}
+	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("template_render_error: missing variable"), true)
+	if !got {
+		t.Fatalf("terminal = false, want true for non-retryable failure")
+	}
+	if len(store.failTerminalCalls) != 1 {
+		t.Fatalf("FailTerminal calls = %d, want 1", len(store.failTerminalCalls))
+	}
+	if len(store.failCalls) != 0 {
+		t.Fatalf("Fail must not requeue non-retryable errors; got %d calls", len(store.failCalls))
+	}
+	if len(store.failTimoutCalls) != 0 {
+		t.Fatalf("FailTimeout must not handle non-retryable errors; got %d calls", len(store.failTimoutCalls))
 	}
 }
 
@@ -81,7 +105,7 @@ func TestHandleTaskFailure_NonTimeoutRequeueReportsFalse(t *testing.T) {
 // final failure based on indeterminate queue state.
 func TestHandleTaskFailure_NonTimeoutErrorIsConservative(t *testing.T) {
 	store := &fakeFailingStore{failErr: errors.New("db down")}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("boom"))
+	got := handleTaskFailure(context.Background(), store, sampleTask(), workflow.Config{}, errors.New("boom"), false)
 	if got {
 		t.Fatalf("terminal = true, want false on Fail error")
 	}
@@ -95,7 +119,7 @@ func TestHandleTaskFailure_TimeoutRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: true}
 	cfg := workflow.Config{}
 	terr := &runner.TimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
 	if got {
 		t.Fatalf("terminal = true, want false when FailTimeout re-queues")
 	}
@@ -111,7 +135,7 @@ func TestHandleTaskFailure_StallRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: true}
 	cfg := workflow.Config{}
 	stall := &runner.StallError{Timeout: time.Second, Elapsed: 2 * time.Second}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, stall)
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, stall, false)
 	if got {
 		t.Fatalf("terminal = true, want false when FailTimeout re-queues stalled run")
 	}
@@ -127,7 +151,7 @@ func TestHandleTaskFailure_TurnTimeoutRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: true}
 	cfg := workflow.Config{}
 	terr := &runner.TurnTimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
 	if got {
 		t.Fatalf("terminal = true, want false when FailTimeout re-queues turn timeout")
 	}
@@ -143,7 +167,7 @@ func TestHandleTaskFailure_ReadTimeoutRequeueReportsFalse(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: true}
 	cfg := workflow.Config{}
 	terr := &runner.ReadTimeoutError{Timeout: time.Second}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
 	if got {
 		t.Fatalf("terminal = true, want false when FailTimeout re-queues read timeout")
 	}
@@ -164,7 +188,7 @@ func TestHandleTaskFailure_TimeoutBudgetExhaustedReportsTrue(t *testing.T) {
 	store := &fakeFailingStore{failTimeoutReq: false} // permanently failed
 	cfg := workflow.Config{}
 	terr := &runner.TimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
-	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
 	if !got {
 		t.Fatalf("terminal = false, want true when FailTimeout exhausts the budget")
 	}
@@ -179,7 +203,7 @@ func TestHandleTaskFailure_TimeoutHonorsConfiguredBudget(t *testing.T) {
 	budget := 7
 	cfg := workflow.Config{Agent: workflow.AgentConfig{MaxTimeoutRetries: &budget}}
 	terr := &runner.TimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
-	_ = handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	_ = handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
 	if len(store.failTimoutCalls) != 1 {
 		t.Fatalf("FailTimeout calls = %d, want 1", len(store.failTimoutCalls))
 	}

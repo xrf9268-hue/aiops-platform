@@ -33,8 +33,9 @@ type secretScanFn func(ctx context.Context, workdir string, cfg workflow.SecretS
 // RunTaskError bundles the resolved workflow Config alongside the error so
 // handleTaskFailure can route retries without re-resolving.
 type RunTaskError struct {
-	Cfg workflow.Config
-	Err error
+	Cfg          workflow.Config
+	Err          error
+	NonRetryable bool
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -84,6 +85,7 @@ func logWorkflowResolved(taskID string, res *workflow.Resolution) {
 // unit-tested with a fake; *queue.Store satisfies it implicitly.
 type failingStore interface {
 	Fail(ctx context.Context, id, msg string) (bool, error)
+	FailTerminal(ctx context.Context, id, msg string) error
 	FailTimeout(ctx context.Context, id, msg string, maxTimeoutRetries int) (bool, error)
 }
 
@@ -97,7 +99,14 @@ type failingStore interface {
 // artifacts (CHANGED_FILES.txt / RUN_SUMMARY.md / VERIFICATION.json) are
 // written by the runTask code path on the way out, so this function is
 // purely concerned with retry routing.
-func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error) bool {
+func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error, nonRetryable bool) bool {
+	if nonRetryable {
+		if ferr := store.FailTerminal(ctx, t.ID, err.Error()); ferr != nil {
+			log.Printf("task %s FailTerminal error: %v", t.ID, ferr)
+			return false
+		}
+		return true
+	}
 	if runner.IsTimeout(err) || runner.IsStall(err) || runner.IsTurnTimeout(err) || runner.IsReadTimeout(err) {
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
 		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
@@ -188,13 +197,15 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		}
 	}
 
-	promptAttempt := t.Attempts
-	if promptAttempt == 0 {
-		promptAttempt = 1
-	}
-	prompt, err := workflow.Render(wf.PromptTemplate, map[string]any{
+	renderVars := map[string]any{
 		"task": map[string]any{
 			"id":          t.ID,
+			"title":       t.Title,
+			"description": t.Description,
+			"actor":       t.Actor,
+		},
+		"issue": map[string]any{
+			"identifier":  t.SourceEventID,
 			"title":       t.Title,
 			"description": t.Description,
 			"actor":       t.Actor,
@@ -204,10 +215,14 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 			"name":   t.RepoName,
 			"branch": t.BaseBranch,
 		},
-		"attempt": promptAttempt,
-	})
+		"attempt": nil,
+	}
+	if t.Attempts > 0 {
+		renderVars["attempt"] = t.Attempts
+	}
+	prompt, err := workflow.Render(wf.PromptTemplate, renderVars)
 	if err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
+		return &RunTaskError{Cfg: wcfg, Err: err, NonRetryable: true}
 	}
 	prompt = AppendAnalysisOnlyDirective(prompt, wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)

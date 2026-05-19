@@ -1037,6 +1037,25 @@ func TestWorkerTaskDispatcherLeavesAttemptWhenRetryAttemptNil(t *testing.T) {
 	}
 }
 
+func TestWorkerTaskDispatcherCopiesRetryAttemptBeforeRun(t *testing.T) {
+	attempt := 1
+	dispatcher := WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return task.Task{ID: "issue-1"}, nil
+		},
+		Config: worker.Config{Workflow: &workflow.Workflow{}},
+	}
+
+	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	if err != nil {
+		t.Fatalf("buildTaskWithAttempt: %v", err)
+	}
+	attempt = 99
+	if tk.Attempts != 2 {
+		t.Fatalf("task attempts changed after caller mutation: got %d, want copied run attempt 2", tk.Attempts)
+	}
+}
+
 func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
 	cfg := workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},

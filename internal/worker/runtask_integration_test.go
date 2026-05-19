@@ -204,13 +204,13 @@ func TestRunTaskRendersAttemptVariable(t *testing.T) {
 	}
 }
 
-func TestRunTaskRendersFirstAttemptAsOne(t *testing.T) {
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", "attempt {{ attempt }} for {{ task.title }}", 1))
+func TestRunTaskRendersFirstAttemptAsEmptyForBareAttempt(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", `attempt={{ attempt }} for {{ task.title }}`, 1))
 	t.Setenv("REPO_URL", cloneURL)
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.PromptTemplate = "attempt {{ attempt }} for {{ task.title }}"
+	cfg.Workflow.PromptTemplate = `attempt={{ attempt }} for {{ task.title }}`
 
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
@@ -220,8 +220,51 @@ func TestRunTaskRendersFirstAttemptAsOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
 	}
-	if !strings.Contains(string(prompt), "attempt 1 for integration") {
-		t.Fatalf("rendered prompt = %q, want first attempt rendered as one", prompt)
+	if strings.Contains(string(prompt), "<nil>") || !strings.Contains(string(prompt), "attempt= for integration") {
+		t.Fatalf("rendered prompt = %q, want bare first attempt to render empty, not <nil>", prompt)
+	}
+}
+
+func TestRunTaskLeavesFirstAttemptAbsentForDefaultFilter(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", `attempt {{ attempt | default: "first run" }} for {{ task.title }}`, 1))
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = `attempt {{ attempt | default: "first run" }} for {{ task.title }}`
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+	if err != nil {
+		t.Fatalf("read rendered prompt: %v", err)
+	}
+	if !strings.Contains(string(prompt), "attempt first run for integration") {
+		t.Fatalf("rendered prompt = %q, want first attempt absent so default filter applies", prompt)
+	}
+}
+
+func TestRunTaskExposesIssueObjectToPromptTemplate(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", `issue {{ issue.identifier }} {{ issue.title }} {{ issue.id | default: "no-id" }}`, 1))
+	t.Setenv("REPO_URL", cloneURL)
+	tk.SourceEventID = "LIN-123"
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = `issue {{ issue.identifier }} {{ issue.title }} {{ issue.id | default: "no-id" }}`
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "lin-123")
+	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+	if err != nil {
+		t.Fatalf("read rendered prompt: %v", err)
+	}
+	if !strings.Contains(string(prompt), "issue LIN-123 integration no-id") {
+		t.Fatalf("rendered prompt = %q, want issue object fields without conflating id and identifier", prompt)
 	}
 }
 
@@ -239,6 +282,9 @@ func TestRunTaskFailsOnUnknownPromptVariable(t *testing.T) {
 	}
 	if !strings.Contains(rterr.Err.Error(), "template_render_error") || !strings.Contains(rterr.Err.Error(), "missing") {
 		t.Fatalf("runTask error = %q, want typed missing variable render error", rterr.Err)
+	}
+	if !rterr.NonRetryable {
+		t.Fatal("runTask render failure was retryable, want deterministic template errors to fail fast")
 	}
 	var renderErr *workflow.TemplateRenderError
 	if !errors.As(rterr.Err, &renderErr) {
@@ -544,6 +590,17 @@ func (s *fakeRunStore) Fail(_ context.Context, _, _ string) (bool, error) {
 		cb()
 	}
 	return s.failResult, s.failErr
+}
+
+func (s *fakeRunStore) FailTerminal(_ context.Context, _, _ string) error {
+	s.mu.Lock()
+	s.failCalls++
+	cb := s.onClaimed
+	s.mu.Unlock()
+	if cb != nil {
+		cb()
+	}
+	return s.failErr
 }
 
 func (s *fakeRunStore) FailTimeout(_ context.Context, _, _ string, _ int) (bool, error) {
