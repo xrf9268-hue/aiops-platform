@@ -201,7 +201,7 @@ services:
       name: api
       clone_url: git@example.com:acme/api.git
     tracker:
-      label: backend
+      labels: [backend]
 ---
 prompt body
 `
@@ -212,6 +212,30 @@ prompt body
 	}
 	if !strings.Contains(err.Error(), "tracker.project_slug") && !strings.Contains(err.Error(), "services[0].tracker.project_slug") {
 		t.Fatalf("Load error = %q, want project slug guidance", err)
+	}
+}
+
+func TestLoadRejectsLinearServiceWithoutExplicitRoute(t *testing.T) {
+	body := `---
+tracker:
+  kind: linear
+  project_slug: platform
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want explicit Linear route predicate requirement")
+	}
+	if !strings.Contains(err.Error(), "services[0].tracker") || !strings.Contains(err.Error(), "route predicate") {
+		t.Fatalf("Load error = %q, want explicit route predicate guidance", err)
 	}
 }
 

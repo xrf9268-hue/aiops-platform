@@ -376,6 +376,9 @@ func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.Servi
 
 func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
 	route := service.Tracker
+	if !hasExplicitServiceRoute(route) {
+		return false
+	}
 	projectSlug := strings.TrimSpace(route.ProjectSlug)
 	if projectSlug == "" {
 		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
@@ -404,6 +407,13 @@ func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.Track
 		}
 	}
 	return true
+}
+
+func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
 }
 
 // TaskBuilder converts a tracker candidate into the task shape consumed by the

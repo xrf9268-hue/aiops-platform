@@ -110,6 +110,13 @@ var supportedSandboxNetworks = map[string]struct{}{
 // are evaluated before non-empty checks. Errors include the workflow
 // file path and the offending field/value so operators can fix the
 // source rather than chasing runtime symptoms (issue #9).
+func hasExplicitServiceRoute(route ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
+}
+
 func validateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
 		if len(cfg.Services) == 0 {
@@ -126,6 +133,9 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if cfg.Tracker.Kind == "linear" {
 		for i, service := range cfg.Services {
+			if !hasExplicitServiceRoute(service.Tracker) {
+				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, labels, or custom_fields)", path, i)
+			}
 			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
 				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
 			}

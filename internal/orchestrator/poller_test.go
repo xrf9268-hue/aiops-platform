@@ -868,6 +868,30 @@ func TestSelectRoutedCandidatesUsesTopLevelLinearProjectAsServiceDefault(t *test
 	}
 }
 
+func TestSelectRoutedCandidatesIgnoresServiceWithoutExplicitRouteBeforeProjectDefault(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{ProjectSlug: "api-platform"},
+		Services: []workflow.ServiceConfig{
+			{Name: "catchall", Tracker: workflow.ServiceTrackerRouteConfig{}},
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{TeamKey: "ENG"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "api-issue", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want only explicitly routed service", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed candidate service = %q, want api", got[0].ServiceName)
+	}
+}
+
 func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
 	cfg := workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
