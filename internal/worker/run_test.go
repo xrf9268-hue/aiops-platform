@@ -357,12 +357,17 @@ func TestEventKindConstantsAreSnakeCase(t *testing.T) {
 // stubRunner lets tests control the runner's outcome (sleep + final
 // error) without invoking a subprocess.
 type stubRunner struct {
-	sleep time.Duration
-	err   error
+	sleep      time.Duration
+	err        error
+	respectCtx bool
 }
 
 func (s stubRunner) Run(ctx context.Context, _ runner.RunInput) (runner.Result, error) {
 	if s.sleep > 0 {
+		if !s.respectCtx {
+			time.Sleep(s.sleep)
+			return runner.Result{Summary: "ok"}, s.err
+		}
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -408,7 +413,7 @@ func TestRunRunnerWithTimeoutEmitsTimeoutEvent(t *testing.T) {
 		Workflow: workflow.Workflow{},
 		Workdir:  t.TempDir(),
 	}
-	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second}, in, 30*time.Millisecond, "file")
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 5 * time.Second, respectCtx: true}, in, 30*time.Millisecond, "file")
 	if !runner.IsTimeout(err) {
 		t.Fatalf("expected TimeoutError from RunRunnerWithTimeout, got %v", err)
 	}
@@ -429,6 +434,31 @@ func TestRunRunnerWithTimeoutEmitsTimeoutEvent(t *testing.T) {
 	}
 	if got := payloadField(t, pe.Payload, "elapsed_ms"); got == nil {
 		t.Fatal("runner_timeout payload missing elapsed_ms")
+	}
+}
+
+// TestRunRunnerWithTimeoutNormalizesDeadlineExceededFromStubbornRunner covers
+// runners that return context.DeadlineExceeded directly after their process
+// context is canceled. DeadlineExceeded from the worker's own runCtx is still
+// a timeout even if the runner does not wrap it in runner.TimeoutError.
+func TestRunRunnerWithTimeoutNormalizesDeadlineExceededFromStubbornRunner(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_deadline", Model: "mock"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{sleep: 60 * time.Millisecond, err: context.DeadlineExceeded}, in, 30*time.Millisecond, "file")
+	if !runner.IsTimeout(err) {
+		t.Fatalf("expected normalized TimeoutError from RunRunnerWithTimeout, got %T %[1]v", err)
+	}
+	if got := len(ev.byKind(task.EventRunnerTimeout)); got != 1 {
+		t.Fatalf("runner_timeout count: got=%d want=1", got)
+	}
+	if got := len(ev.byKind(task.EventRunnerEnd)); got != 0 {
+		t.Fatalf("runner_end must not fire on normalized timeout, got=%d", got)
 	}
 }
 
@@ -485,6 +515,72 @@ func TestRunRunnerWithTimeoutNonTimeoutError(t *testing.T) {
 	}
 	if got := len(ev.byKind(task.EventRunnerEnd)); got != 1 {
 		t.Fatalf("runner_end count: got=%d want=1", got)
+	}
+}
+
+func TestRunRunnerWithTimeoutStallEmitsTimeoutBudgetEvent(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_stall", Model: "codex"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	stall := &runner.StallError{Timeout: 30 * time.Millisecond, Elapsed: 60 * time.Millisecond}
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{err: stall}, in, time.Second, "file")
+	if !runner.IsStall(err) {
+		t.Fatalf("expected StallError from RunRunnerWithTimeout, got %v", err)
+	}
+	if got := len(ev.byKind(task.EventStalled)); got != 1 {
+		t.Fatalf("stalled count: got=%d want=1", got)
+	}
+	if got := len(ev.byKind(task.EventRunnerTimeout)); got != 1 {
+		t.Fatalf("runner_timeout count for stall retry budget: got=%d want=1", got)
+	}
+	if got := len(ev.byKind(task.EventRunnerEnd)); got != 0 {
+		t.Fatalf("runner_end must not fire on stall, got=%d", got)
+	}
+}
+
+func TestRunRunnerWithTimeoutTurnTimeoutEmitsTimeoutBudgetEvent(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_turn_timeout", Model: "codex"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	terr := &runner.TurnTimeoutError{Timeout: 30 * time.Millisecond, Elapsed: 60 * time.Millisecond}
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{err: terr}, in, time.Second, "file")
+	if !runner.IsTurnTimeout(err) {
+		t.Fatalf("expected TurnTimeoutError from RunRunnerWithTimeout, got %v", err)
+	}
+	if got := len(ev.byKind(task.EventRunnerTimeout)); got != 1 {
+		t.Fatalf("runner_timeout count for turn-timeout retry budget: got=%d want=1", got)
+	}
+	if got := len(ev.byKind(task.EventRunnerEnd)); got != 0 {
+		t.Fatalf("runner_end must not fire on turn timeout, got=%d", got)
+	}
+}
+
+func TestRunRunnerWithTimeoutReadTimeoutEmitsTimeoutBudgetEvent(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_read_timeout", Model: "codex"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	terr := &runner.ReadTimeoutError{Timeout: 30 * time.Millisecond}
+	_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{err: terr}, in, time.Second, "file")
+	if !runner.IsReadTimeout(err) {
+		t.Fatalf("expected ReadTimeoutError from RunRunnerWithTimeout, got %v", err)
+	}
+	if got := len(ev.byKind(task.EventRunnerTimeout)); got != 1 {
+		t.Fatalf("runner_timeout count for read-timeout retry budget: got=%d want=1", got)
+	}
+	if got := len(ev.byKind(task.EventRunnerEnd)); got != 0 {
+		t.Fatalf("runner_end must not fire on read timeout, got=%d", got)
 	}
 }
 

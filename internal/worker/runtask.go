@@ -98,7 +98,7 @@ type failingStore interface {
 // written by the runTask code path on the way out, so this function is
 // purely concerned with retry routing.
 func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error) bool {
-	if runner.IsTimeout(err) {
+	if runner.IsTimeout(err) || runner.IsStall(err) || runner.IsTurnTimeout(err) || runner.IsReadTimeout(err) {
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
 		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
 		if ferr != nil {
@@ -344,8 +344,46 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	elapsed := time.Since(start)
 
 	if runErr != nil {
+		var stall *runner.StallError
+		if errors.As(runErr, &stall) {
+			stallPayload := map[string]any{
+				"model":      in.Task.Model,
+				"timeout_ms": stall.Timeout.Milliseconds(),
+				"elapsed_ms": stall.Elapsed.Milliseconds(),
+			}
+			addOutputFields(stallPayload, res)
+			Emit(ctx, ev, in.Task.ID, task.EventStalled, stall.Error(), stallPayload)
+			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, stall.Error(), stallPayload)
+			return res, runErr
+		}
+		var turnTimeout *runner.TurnTimeoutError
+		if errors.As(runErr, &turnTimeout) {
+			timeoutPayload := map[string]any{
+				"model":      in.Task.Model,
+				"timeout_ms": turnTimeout.Timeout.Milliseconds(),
+				"elapsed_ms": turnTimeout.Elapsed.Milliseconds(),
+			}
+			addOutputFields(timeoutPayload, res)
+			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, turnTimeout.Error(), timeoutPayload)
+			return res, runErr
+		}
+		var readTimeout *runner.ReadTimeoutError
+		if errors.As(runErr, &readTimeout) {
+			timeoutPayload := map[string]any{
+				"model":      in.Task.Model,
+				"timeout_ms": readTimeout.Timeout.Milliseconds(),
+				"elapsed_ms": elapsed.Milliseconds(),
+			}
+			addOutputFields(timeoutPayload, res)
+			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, readTimeout.Error(), timeoutPayload)
+			return res, runErr
+		}
 		var te *runner.TimeoutError
-		if errors.As(runErr, &te) {
+		if errors.As(runErr, &te) || (errors.Is(runErr, context.DeadlineExceeded) && errors.Is(runCtx.Err(), context.DeadlineExceeded)) {
+			if te == nil {
+				te = &runner.TimeoutError{Timeout: timeout, Elapsed: elapsed, Cause: runErr}
+				runErr = te
+			}
 			timeoutPayload := map[string]any{
 				"model":      in.Task.Model,
 				"timeout_ms": te.Timeout.Milliseconds(),

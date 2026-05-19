@@ -327,13 +327,46 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 25
-	in.Workflow.Config.Codex.StallTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 0
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
 	if err == nil || !strings.Contains(err.Error(), "read timeout") {
 		t.Fatalf("Run error = %v, want app-server read timeout", err)
+	}
+}
+
+func TestCodexAppServerRunnerReadTimeoutDoesNotPreemptStallBudget(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'item/updated', 'params': {'message': 'started'}}), flush=True)
+        time.sleep(2)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 100
+	in.Workflow.Config.Codex.StallTimeoutMs = 250
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	elapsed := time.Since(start)
+	if !IsStall(err) {
+		t.Fatalf("Run error = %T %[1]v, want stall timeout despite shorter read timeout", err)
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("Run elapsed = %s, want read_timeout_ms not to fire before stall_timeout_ms", elapsed)
 	}
 }
 
@@ -465,7 +498,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerUsesStallTimeoutForNonTerminalTraffic(t *testing.T) {
+func TestCodexAppServerRunnerUsesStallTimeoutWhenEventStreamGoesSilent(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json, time
 for line in sys.stdin:
@@ -476,9 +509,8 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        for i in range(20):
-            print(json.dumps({'method': 'item/updated', 'params': {'message': 'progress %d' % i}}), flush=True)
-            time.sleep(0.02)
+        print(json.dumps({'method': 'item/updated', 'params': {'message': 'initial progress'}}), flush=True)
+        time.sleep(2)
         break
 `)
 	wd := codexWorkdir(t, "x")
@@ -491,6 +523,114 @@ for line in sys.stdin:
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
 	if err == nil || !strings.Contains(err.Error(), "stall timeout") {
 		t.Fatalf("Run error = %v, want app-server stall timeout", err)
+	}
+	if !IsStall(err) {
+		t.Fatalf("Run error = %T %[1]v, want runner.IsStall=true", err)
+	}
+}
+
+func TestCodexAppServerRunnerActivityWithinStallWindowKeepsTurnAlive(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        for i in range(5):
+            print(json.dumps({'method': 'item/updated', 'params': {'message': 'progress %d' % i}}), flush=True)
+            time.sleep(0.02)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after progress'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 50
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("Run: %v, want periodic app-server events to avoid stall timeout", err)
+	}
+	if res.Summary != "completed after progress" {
+		t.Fatalf("Summary = %q, want completion after progress", res.Summary)
+	}
+}
+
+func TestCodexAppServerRunnerDynamicToolCallsRefreshStallClock(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'item/tool/call', 'params': {'call_id': 'call-1', 'name': 'gitea_issue_labels', 'arguments': {'owner': 'o', 'repo': 'r', 'number': 1}}}), flush=True)
+    elif msg.get('method') == 'item/tool/call/output':
+        time.sleep(0.03)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after tool'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 50
+	in.Workflow.Config.Tracker.Kind = "gitea"
+	in.Workflow.Config.Tracker.APIKey = "token"
+	in.Workflow.Config.Tracker.ProjectSlug = "http://127.0.0.1:1"
+	in.Workflow.Config.Repo.Owner = "o"
+	in.Workflow.Config.Repo.Name = "r"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("Run: %v, want dynamic tool call to count as activity after output", err)
+	}
+	if res.Summary != "completed after tool" {
+		t.Fatalf("Summary = %q, want completion after tool", res.Summary)
+	}
+}
+
+func TestCodexAppServerRunnerServerRequestsRefreshStallClock(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        time.sleep(0.03)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 99, 'method': 'server/needs-help', 'params': {}}), flush=True)
+    elif msg.get('id') == 99:
+        time.sleep(0.03)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after server request'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 50
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("Run: %v, want server request to count as activity", err)
+	}
+	if res.Summary != "completed after server request" {
+		t.Fatalf("Summary = %q, want completion after server request", res.Summary)
 	}
 }
 

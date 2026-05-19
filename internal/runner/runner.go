@@ -85,3 +85,74 @@ func IsTimeout(err error) bool {
 	var te *TimeoutError
 	return errors.As(err, &te)
 }
+
+// StallError is returned when a streaming runner remains alive but stops
+// emitting events for longer than the configured inactivity budget.
+type StallError struct {
+	// Timeout is the configured inactivity budget.
+	Timeout time.Duration
+	// Elapsed is how long the runner was silent since the last event.
+	Elapsed time.Duration
+	// Cause is the wrapped underlying error, when available.
+	Cause error
+}
+
+func (e *StallError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("runner stall timeout after %s without events (budget %s): %v", e.Elapsed, e.Timeout, e.Cause)
+	}
+	return fmt.Sprintf("runner stall timeout after %s without events (budget %s)", e.Elapsed, e.Timeout)
+}
+
+func (e *StallError) Unwrap() error { return e.Cause }
+
+// IsStall reports whether err is (or wraps) a *StallError.
+func IsStall(err error) bool {
+	var se *StallError
+	return errors.As(err, &se)
+}
+
+// TurnTimeoutError is returned when a single agent turn exceeds its configured
+// per-turn budget while the outer run context remains alive.
+type TurnTimeoutError struct {
+	Timeout time.Duration
+	Elapsed time.Duration
+	Cause   error
+}
+
+func (e *TurnTimeoutError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("runner turn timeout after %s (budget %s): %v", e.Elapsed, e.Timeout, e.Cause)
+	}
+	return fmt.Sprintf("runner turn timeout after %s (budget %s)", e.Elapsed, e.Timeout)
+}
+
+func (e *TurnTimeoutError) Unwrap() error { return e.Cause }
+
+// IsTurnTimeout reports whether err is (or wraps) a *TurnTimeoutError.
+func IsTurnTimeout(err error) bool {
+	var te *TurnTimeoutError
+	return errors.As(err, &te)
+}
+
+// ReadTimeoutError is returned when a runner's event stream read exceeds the
+// configured per-read transport budget outside a stall-governed turn.
+type ReadTimeoutError struct {
+	Timeout time.Duration
+	Cause   error
+}
+
+func (e *ReadTimeoutError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("runner read timeout after %s: %v", e.Timeout, e.Cause)
+	}
+	return fmt.Sprintf("runner read timeout after %s", e.Timeout)
+}
+
+func (e *ReadTimeoutError) Unwrap() error { return e.Cause }
+
+// IsReadTimeout reports whether err is (or wraps) a *ReadTimeoutError.
+func IsReadTimeout(err error) bool {
+	var te *ReadTimeoutError
+	return errors.As(err, &te)
+}

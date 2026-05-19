@@ -107,6 +107,54 @@ func TestHandleTaskFailure_TimeoutRequeueReportsFalse(t *testing.T) {
 	}
 }
 
+func TestHandleTaskFailure_StallRequeueReportsFalse(t *testing.T) {
+	store := &fakeFailingStore{failTimeoutReq: true}
+	cfg := workflow.Config{}
+	stall := &runner.StallError{Timeout: time.Second, Elapsed: 2 * time.Second}
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, stall)
+	if got {
+		t.Fatalf("terminal = true, want false when FailTimeout re-queues stalled run")
+	}
+	if len(store.failCalls) != 0 {
+		t.Fatalf("Fail must not run on a stalled runner error; got %d calls", len(store.failCalls))
+	}
+	if len(store.failTimoutCalls) != 1 {
+		t.Fatalf("FailTimeout calls = %d, want 1", len(store.failTimoutCalls))
+	}
+}
+
+func TestHandleTaskFailure_TurnTimeoutRequeueReportsFalse(t *testing.T) {
+	store := &fakeFailingStore{failTimeoutReq: true}
+	cfg := workflow.Config{}
+	terr := &runner.TurnTimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	if got {
+		t.Fatalf("terminal = true, want false when FailTimeout re-queues turn timeout")
+	}
+	if len(store.failCalls) != 0 {
+		t.Fatalf("Fail must not run on a turn-timeout runner error; got %d calls", len(store.failCalls))
+	}
+	if len(store.failTimoutCalls) != 1 {
+		t.Fatalf("FailTimeout calls = %d, want 1", len(store.failTimoutCalls))
+	}
+}
+
+func TestHandleTaskFailure_ReadTimeoutRequeueReportsFalse(t *testing.T) {
+	store := &fakeFailingStore{failTimeoutReq: true}
+	cfg := workflow.Config{}
+	terr := &runner.ReadTimeoutError{Timeout: time.Second}
+	got := handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr)
+	if got {
+		t.Fatalf("terminal = true, want false when FailTimeout re-queues read timeout")
+	}
+	if len(store.failCalls) != 0 {
+		t.Fatalf("Fail must not run on a read-timeout runner error; got %d calls", len(store.failCalls))
+	}
+	if len(store.failTimoutCalls) != 1 {
+		t.Fatalf("FailTimeout calls = %d, want 1", len(store.failTimoutCalls))
+	}
+}
+
 // TestHandleTaskFailure_TimeoutBudgetExhaustedReportsTrue confirms
 // timeouts that exhaust the dedicated retry budget are terminal: the
 // operator needs the failure surfaced so they can intervene (raise the

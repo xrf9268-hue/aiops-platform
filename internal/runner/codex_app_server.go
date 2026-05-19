@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,7 +77,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		out:    buf,
 	}
 	runErr := client.run(ctx, in, string(prompt))
-	if runErr != nil && !errors.Is(runErr, context.DeadlineExceeded) && ctx.Err() == nil {
+	if runErr != nil && ctx.Err() == nil {
 		terminateProcess(cmd)
 	}
 	_ = stdin.Close()
@@ -97,6 +98,13 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	res.OutputTail = tail
 
 	if runErr != nil {
+		var stall *StallError
+		if errors.As(runErr, &stall) {
+			return res, runErr
+		}
+		if isAppServerReadTimeout(runErr) {
+			return res, &ReadTimeoutError{Timeout: time.Duration(client.readTimeoutMs) * time.Millisecond, Cause: runErr}
+		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: runErr}
 		}
@@ -215,13 +223,18 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		if c.turnTimeoutMs > 0 {
 			turnCtx, cancel = context.WithTimeout(ctx, time.Duration(c.turnTimeoutMs)*time.Millisecond)
 		}
+		turnStarted := time.Now()
 		err = c.awaitTurnCompletion(turnCtx)
 		if cancel != nil {
 			cancel()
 		}
 		if err != nil {
+			var stall *StallError
+			if errors.As(err, &stall) {
+				return err
+			}
 			if c.turnTimeoutMs > 0 && errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return fmt.Errorf("codex app-server turn timeout after %dms", c.turnTimeoutMs)
+				return &TurnTimeoutError{Timeout: time.Duration(c.turnTimeoutMs) * time.Millisecond, Elapsed: time.Since(turnStarted), Cause: err}
 			}
 			return err
 		}
@@ -289,24 +302,27 @@ func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, erro
 	return msg, nil
 }
 
+type readResult struct {
+	line []byte
+	err  error
+}
+
 func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
-	type readResult struct {
-		line []byte
-		err  error
-	}
 	ch := make(chan readResult, 1)
 	go func() {
 		line, err := c.reader.ReadBytes('\n')
 		ch <- readResult{line: line, err: err}
 	}()
 
-	var timeout <-chan time.Time
-	if c.readTimeoutMs > 0 {
-		timer := time.NewTimer(time.Duration(c.readTimeoutMs) * time.Millisecond)
-		defer timer.Stop()
-		timeout = timer.C
+	readTimeout := time.Duration(c.readTimeoutMs) * time.Millisecond
+	deadlineTimeout, hasDeadline := deadlineDuration(ctx)
+	if c.readTimeoutMs <= 0 || (hasDeadline && deadlineTimeout < readTimeout) {
+		return c.readLineOnce(ctx, ch, nil)
 	}
+	return c.readLineOnce(ctx, ch, time.After(readTimeout))
+}
 
+func (c *appServerClient) readLineOnce(ctx context.Context, ch <-chan readResult, timeout <-chan time.Time) ([]byte, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -323,13 +339,60 @@ func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
 	}
 }
 
+func deadlineDuration(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, true
+	}
+	return time.Duration(math.Ceil(float64(remaining))), true
+}
+
+func isAppServerReadTimeout(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "codex app-server read timeout")
+}
+
 func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 	c.lastTerminal = time.Now()
 	for {
-		msg, err := c.readMessage(ctx)
+		readCtx := ctx
+		var cancel context.CancelFunc
+		var stallBudget time.Duration
+		if c.stallTimeoutMs > 0 {
+			stallBudget = time.Duration(c.stallTimeoutMs) * time.Millisecond
+			remaining := stallBudget - time.Since(c.lastTerminal)
+			if remaining <= 0 {
+				return &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal)}
+			}
+			readCtx, cancel = context.WithTimeout(ctx, remaining)
+		}
+		readTimeoutMs := c.readTimeoutMs
+		if stallBudget > 0 {
+			// During turn streaming, inactivity is governed by stall_timeout_ms.
+			// read_timeout_ms remains the per-read transport budget for request/
+			// response setup and for configurations without stall detection, but it
+			// must not preempt the longer event-inactivity watchdog and bypass the
+			// stalled/runner_timeout retry path.
+			c.readTimeoutMs = 0
+		}
+		msg, err := c.readMessage(readCtx)
+		c.readTimeoutMs = readTimeoutMs
+		if cancel != nil {
+			cancel()
+		}
 		if err != nil {
+			elapsed := time.Since(c.lastTerminal)
+			if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
+				if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
+					return &StallError{Timeout: stallBudget, Elapsed: elapsed, Cause: err}
+				}
+			}
 			return err
 		}
+		c.lastTerminal = time.Now()
 		if method, _ := msg["method"].(string); method != "" {
 			switch method {
 			case "turn/completed":
@@ -341,10 +404,10 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			case "turn/failed", "turn/cancelled":
 				return fmt.Errorf("%s: %v", method, msg["params"])
 			case "item/tool/call":
-				c.lastTerminal = time.Now()
 				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
 					return err
 				}
+				c.lastTerminal = time.Now()
 			default:
 				if _, ok := msg["id"]; ok {
 					if err := c.replyUnsupportedServerRequest(msg); err != nil {
@@ -352,9 +415,13 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					}
 					continue
 				}
-				if c.stallTimeoutMs > 0 && time.Since(c.lastTerminal) > time.Duration(c.stallTimeoutMs)*time.Millisecond {
-					return fmt.Errorf("codex app-server stall timeout after %dms without terminal progress", c.stallTimeoutMs)
+				if c.stallTimeoutMs > 0 {
+					elapsed := time.Since(c.lastTerminal)
+					if elapsed > time.Duration(c.stallTimeoutMs)*time.Millisecond {
+						return &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed}
+					}
 				}
+				c.lastTerminal = time.Now()
 				c.handleNotification(msg)
 			}
 		}
@@ -475,7 +542,10 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		payload = map[string]any{"success": false, "output": result}
 	}
-	return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": payload})
+	if id, ok := msg["id"]; ok {
+		return c.send(map[string]any{"jsonrpc": "2.0", "id": id, "result": payload})
+	}
+	return c.notify("item/tool/call/output", map[string]any{"call_id": params["call_id"], "output": payload})
 }
 
 func appServerToolCallName(params map[string]any) string {

@@ -28,6 +28,7 @@ const (
 	EventRunnerStart           = "runner_start"
 	EventRunnerEnd             = "runner_end"
 	EventRunnerTimeout         = "runner_timeout"
+	EventStalled               = "stalled"
 	EventAnalysisOnlyViolation = "analysis_only_violation"
 	EventVerifyStart           = "verify_start"
 	EventVerifyEnd             = "verify_end"
