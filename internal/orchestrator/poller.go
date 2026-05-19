@@ -81,19 +81,23 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if p.orchestrator == nil {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
-	issues, err := p.tracker.ListActiveIssues(ctx)
-	if err != nil {
-		return err
+	issues, activeErr := p.tracker.ListActiveIssues(ctx)
+	if activeErr != nil && len(issues) == 0 {
+		return activeErr
 	}
 	var pollErr error
+	if activeErr != nil {
+		pollErr = errors.Join(pollErr, activeErr)
+	}
 	routedIssues := issues
 	if p.routing != nil {
-		routedIssues, err = selectRoutedCandidates(issues, *p.routing)
-		if err != nil {
-			pollErr = errors.Join(pollErr, err)
+		var routeErr error
+		routedIssues, routeErr = selectRoutedCandidates(issues, *p.routing)
+		if routeErr != nil {
+			pollErr = errors.Join(pollErr, routeErr)
 		}
 	}
-	if p.reconcileKnown {
+	if p.reconcileKnown && activeErr == nil {
 		if err := p.reconcileTick(ctx, routedIssues); err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
