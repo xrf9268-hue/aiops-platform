@@ -165,6 +165,125 @@ func TestProcessIssuesSkipsWhenCloneURLMissing(t *testing.T) {
 	}
 }
 
+func TestProcessIssuesRoutesServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1 for matched service route", len(store.calls))
+	}
+	got := store.calls[0]
+	if got.RepoOwner != "octo" || got.RepoName != "api" || got.CloneURL != "git@example.com:octo/api.git" {
+		t.Fatalf("task repo = %s/%s %s, want octo/api service repo", got.RepoOwner, got.RepoName, got.CloneURL)
+	}
+}
+
+func TestProcessIssuesSkipsUnmatchedServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "skip me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 0 {
+		t.Fatalf("Enqueue called %d times, want 0 for unmatched service route", len(store.calls))
+	}
+}
+
+func TestProcessIssuesSkipsAmbiguousServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"backend"}}},
+		{Name: "worker", Repo: workflow.RepoConfig{Owner: "octo", Name: "worker", CloneURL: "git@example.com:octo/worker.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"backend"}}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "ambiguous", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"backend"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 0 {
+		t.Fatalf("Enqueue called %d times, want 0 for ambiguous service route", len(store.calls))
+	}
+}
+
+func TestProcessIssuesIgnoresServiceWithoutLinearRoute(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}}},
+		{Name: "unrouted", Repo: workflow.RepoConfig{Owner: "octo", Name: "unrouted", CloneURL: "git@example.com:octo/unrouted.git", DefaultBranch: "main"}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1; unrouted service must not create ambiguity", len(store.calls))
+	}
+	if got := store.calls[0].RepoName; got != "api" {
+		t.Fatalf("enqueued repo name = %q, want api", got)
+	}
+}
+
+func TestProcessIssuesFallsBackToRootRepoWhenNoServiceRouteMatches(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{Labels: []string{"api"}}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "root repo", State: "AI Ready",
+		Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1 for root repo fallback", len(store.calls))
+	}
+	got := store.calls[0]
+	if got.RepoOwner != "octo" || got.RepoName != "demo" || got.CloneURL != "git@example.com:octo/demo.git" {
+		t.Fatalf("task repo = %s/%s %s, want octo/demo root repo", got.RepoOwner, got.RepoName, got.CloneURL)
+	}
+}
+
 func mapKeys(m map[string]task.Task) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {

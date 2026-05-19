@@ -67,19 +67,27 @@ func main() {
 // without standing up Postgres or the Linear API.
 func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, issues []tracker.Issue) {
 	for _, issue := range issues {
-		if cfg.Repo.CloneURL == "" {
+		repo, serviceName, ok := repoForIssue(*cfg, issue)
+		if !ok {
+			continue
+		}
+		if repo.CloneURL == "" {
 			log.Printf("skip %s: repo.clone_url missing in WORKFLOW.md", issue.Identifier)
 			continue
+		}
+		description := issue.Description + "\n\nLinear: " + issue.URL
+		if serviceName != "" {
+			description += "\n\nService: " + serviceName
 		}
 		out, deduped, err := store.Enqueue(ctx, task.Task{
 			SourceType:    "linear_issue",
 			SourceEventID: sourceEventID(issue),
-			RepoOwner:     cfg.Repo.Owner,
-			RepoName:      cfg.Repo.Name,
-			CloneURL:      cfg.Repo.CloneURL,
-			BaseBranch:    cfg.Repo.DefaultBranch,
+			RepoOwner:     repo.Owner,
+			RepoName:      repo.Name,
+			CloneURL:      repo.CloneURL,
+			BaseBranch:    repo.DefaultBranch,
 			Title:         fmt.Sprintf("%s %s", issue.Identifier, issue.Title),
-			Description:   issue.Description + "\n\nLinear: " + issue.URL,
+			Description:   description,
 			Actor:         "linear",
 			Model:         cfg.Agent.Default,
 			Priority:      50,
@@ -90,6 +98,77 @@ func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, is
 		}
 		log.Printf("issue %s -> task %s deduped=%v", issue.Identifier, out.ID, deduped)
 	}
+}
+
+func repoForIssue(cfg workflow.Config, issue tracker.Issue) (workflow.RepoConfig, string, bool) {
+	if len(cfg.Services) == 0 {
+		return cfg.Repo, "", true
+	}
+	matches := make([]workflow.ServiceConfig, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		if serviceMatchesIssue(service, cfg.Tracker, issue) {
+			matches = append(matches, service)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
+			return cfg.Repo, "", true
+		}
+		log.Printf("skip %s: no configured service matched Linear route", issue.Identifier)
+		return workflow.RepoConfig{}, "", false
+	case 1:
+		return matches[0].Repo, matches[0].Name, true
+	default:
+		names := make([]string, 0, len(matches))
+		for _, service := range matches {
+			names = append(names, service.Name)
+		}
+		log.Printf("skip %s: ambiguous Linear route matched services %s", issue.Identifier, strings.Join(names, ", "))
+		return workflow.RepoConfig{}, "", false
+	}
+}
+
+func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+	route := service.Tracker
+	if !hasExplicitServiceRoute(route) {
+		return false
+	}
+	projectSlug := strings.TrimSpace(route.ProjectSlug)
+	if projectSlug == "" {
+		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
+	}
+	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
+		return false
+	}
+	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {
+		return false
+	}
+	issueLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
+			issueLabels[label] = struct{}{}
+		}
+	}
+	for _, label := range route.Labels {
+		if _, ok := issueLabels[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	for key, want := range route.CustomFields {
+		got, ok := issue.CustomFields[key]
+		if !ok || strings.TrimSpace(got) != strings.TrimSpace(want) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
 }
 
 // sourceEventID builds the dedupe key the poller hands to queue.Store.Enqueue.
