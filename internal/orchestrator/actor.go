@@ -718,6 +718,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	o := s.o
 	issue := s.issue
 	attempt := s.attempt
+	kind := s.kind
 	delay := o.scheduler.NextDelay(s.req)
 	// time.AfterFunc schedules immediately and is cheap (no goroutine
 	// until fire), so we can safely create the timer on the actor
@@ -738,6 +739,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 			id:      id,
 			issue:   issue,
 			attempt: attempt,
+			kind:    kind,
 		})
 	})
 	st.ScheduleRetry(entry)
@@ -748,13 +750,14 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 // SPEC §16.6 retry path is "if the entry is still queued, re-dispatch;
 // otherwise drop the fire." Two timers may race here in pathological
 // cases (a ScheduleRetry replace where the prior timer's Stop missed
-// because the callback was already queued); the attempt-equality
+// because the callback was already queued); the attempt/kind equality
 // guard makes the stale fire a no-op.
 type retryFireOp struct {
 	o       *Orchestrator
 	id      IssueID
 	issue   tracker.Issue
 	attempt int
+	kind    RetryKind
 }
 
 func (r *retryFireOp) apply(st *OrchestratorState) func() {
@@ -764,7 +767,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// earlier fire of the same retry. Either is correct.
 		return nil
 	}
-	if entry.Attempt != r.attempt {
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
 		// A newer ScheduleRetry replaced this entry; the older timer
 		// fired late. Drop the stale fire — the newer entry will
 		// re-dispatch on its own timer.
@@ -797,6 +800,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		o := r.o
 		id := r.id
 		attempt := r.attempt
+		kind := r.kind
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
 			_ = o.submit(o.runCtx, &retryFireOp{
@@ -804,6 +808,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 				id:      id,
 				issue:   issue,
 				attempt: attempt,
+				kind:    kind,
 			})
 		})
 		return nil
@@ -818,6 +823,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		o := r.o
 		id := r.id
 		attempt := r.attempt
+		kind := r.kind
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
 			_ = o.submit(o.runCtx, &retryFireOp{
@@ -825,6 +831,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 				id:      id,
 				issue:   issue,
 				attempt: attempt,
+				kind:    kind,
 			})
 		})
 		return nil

@@ -366,6 +366,7 @@ func TestFinalizeRunSchedulesRetryWithRefreshedIssueState(t *testing.T) {
 		id:      IssueID(moving.ID),
 		issue:   moving, // captured dispatch-time issue; entry.Issue should override
 		attempt: 1,
+		kind:    RetryKindFailure,
 	}); err != nil {
 		t.Fatalf("submit retry fire: %v", err)
 	}
@@ -426,6 +427,7 @@ func TestRetryFireUsesRefreshedIssueWhenReconciledMidQueue(t *testing.T) {
 		id:      IssueID(ip.ID),
 		issue:   ip, // dispatch-time In Progress; refreshed entry.Issue says Rework
 		attempt: 1,
+		kind:    RetryKindFailure,
 	}); err != nil {
 		t.Fatalf("submit retry fire: %v", err)
 	}
@@ -944,6 +946,99 @@ func TestUpdateMaxConcurrentAgentsByStateNormalizesStateKeys(t *testing.T) {
 	}
 }
 
+func TestRetryFire_DropsStaleContinuationFireAfterFailureReplacement(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	o := New(st, Deps{Dispatcher: disp})
+
+	issueID := IssueID("ENG-KIND")
+	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "AI Ready", Title: "old continuation"}
+	failureIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Needs Fix", Title: "new failure"}
+	st.ScheduleRetry(&RetryEntry{
+		Issue:      failureIssue,
+		IssueID:    issueID,
+		Identifier: failureIssue.Identifier,
+		Attempt:    1,
+		Kind:       RetryKindFailure,
+	})
+
+	followup := (&retryFireOp{
+		o:       o,
+		id:      issueID,
+		issue:   continuationIssue,
+		attempt: 1,
+		kind:    RetryKindContinuation,
+	}).apply(st)
+	if followup != nil {
+		t.Fatal("stale continuation fire returned a followup, want it dropped before side effects")
+	}
+
+	if got := disp.count(); got != 0 {
+		t.Fatalf("stale continuation fire spawned %d workers, want 0", got)
+	}
+	if len(st.Running) != 0 {
+		t.Fatalf("running after stale continuation fire = %+v, want none", st.Running)
+	}
+	entry, ok := st.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("stale continuation fire consumed the replacement failure retry")
+	}
+	if entry.Kind != RetryKindFailure || entry.Issue.Title != failureIssue.Title {
+		t.Fatalf("replacement retry = kind %q issue %+v, want failure issue preserved", entry.Kind, entry.Issue)
+	}
+	if !st.IsClaimed(issueID) {
+		t.Fatal("stale continuation fire released claim for replacement failure retry")
+	}
+}
+
+func TestRetryFire_DropsStaleFailureFireAfterContinuationReplacement(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	o := New(st, Deps{Dispatcher: disp})
+
+	issueID := IssueID("ENG-KIND")
+	failureIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Needs Fix", Title: "old failure"}
+	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "AI Ready", Title: "new continuation"}
+	timer := time.AfterFunc(time.Hour, func() {})
+	defer timer.Stop()
+	st.ScheduleRetry(&RetryEntry{
+		Issue:      continuationIssue,
+		IssueID:    issueID,
+		Identifier: continuationIssue.Identifier,
+		Attempt:    1,
+		Timer:      timer,
+		Kind:       RetryKindContinuation,
+	})
+
+	followup := (&retryFireOp{
+		o:       o,
+		id:      issueID,
+		issue:   failureIssue,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}).apply(st)
+	if followup != nil {
+		t.Fatal("stale failure fire returned a followup, want it dropped before side effects")
+	}
+
+	if got := disp.count(); got != 0 {
+		t.Fatalf("stale failure fire spawned %d workers, want 0", got)
+	}
+	if len(st.Running) != 0 {
+		t.Fatalf("running after stale failure fire = %+v, want none", st.Running)
+	}
+	entry, ok := st.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("stale failure fire consumed the replacement continuation retry")
+	}
+	if entry.Kind != RetryKindContinuation || entry.Timer == nil {
+		t.Fatalf("replacement retry = kind %q timer %v, want continuation timer preserved", entry.Kind, entry.Timer)
+	}
+	if !st.IsClaimed(issueID) {
+		t.Fatal("stale failure fire released claim for replacement continuation retry")
+	}
+}
+
 func TestRetryFire_RespectsPerStateCapacityBeforeSpawning(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)
@@ -982,6 +1077,7 @@ func TestRetryFire_RespectsPerStateCapacityBeforeSpawning(t *testing.T) {
 		id:      IssueID(issueA.ID),
 		issue:   issueA,
 		attempt: 1,
+		kind:    RetryKindFailure,
 	}); err != nil {
 		t.Fatalf("submit retry fire: %v", err)
 	}
