@@ -53,6 +53,115 @@ prompt body
 // `pr.draft` got ready-for-review PRs. Keeping the default at false
 // preserves that behavior; profiles like `company-cautious-WORKFLOW.md`
 // must opt in explicitly with `pr.draft: true`.
+
+func TestLoadParsesAgentMaxConcurrentAgentsByStateWithNormalizedKeys(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+agent:
+  default: mock
+  max_concurrent_agents: 4
+  max_concurrent_agents_by_state:
+    In Progress: 2
+    rework: 1
+---
+Prompt body
+`)
+
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	got := wf.Config.Agent.MaxConcurrentAgentsByState
+	if got["in_progress"] != 2 {
+		t.Fatalf("normalized In Progress cap = %d, want 2 (map=%v)", got["in_progress"], got)
+	}
+	if got["rework"] != 1 {
+		t.Fatalf("rework cap = %d, want 1 (map=%v)", got["rework"], got)
+	}
+	if _, ok := got["In Progress"]; ok {
+		t.Fatalf("map kept unnormalized state key: %v", got)
+	}
+}
+
+func TestLoadRejectsDuplicateNormalizedAgentMaxConcurrentAgentsByState(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+agent:
+  default: mock
+  max_concurrent_agents_by_state:
+    In Progress: 2
+    in_progress: 5
+---
+Prompt body
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("Load succeeded with duplicate normalized state caps")
+	}
+	if !strings.Contains(err.Error(), "duplicates") || !strings.Contains(err.Error(), "in_progress") {
+		t.Fatalf("Load error = %v, want duplicate normalized key guidance", err)
+	}
+}
+
+func TestLoadRejectsInvalidAgentMaxConcurrentAgentsByState(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "empty state key",
+			body: `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+agent:
+  default: mock
+  max_concurrent_agents_by_state:
+    "": 1
+---
+Prompt body
+`,
+			want: "empty state key",
+		},
+		{
+			name: "non-positive limit",
+			body: `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+agent:
+  default: mock
+  max_concurrent_agents_by_state:
+    rework: 0
+---
+Prompt body
+`,
+			want: "must be positive",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Load(writeTempWorkflow(t, tt.body))
+			if err == nil {
+				t.Fatalf("Load succeeded, want validation error containing %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("Load error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultConfig_PRDraftDefaultsFalse(t *testing.T) {
 	if got := DefaultConfig().PR.Draft; got != false {
 		t.Fatalf("DefaultConfig().PR.Draft: got %v want false (would regress non-draft default)", got)

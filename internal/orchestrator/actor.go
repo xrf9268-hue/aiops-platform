@@ -298,6 +298,27 @@ func (o *Orchestrator) UpdateMaxConcurrentAgents(ctx context.Context, maxConcurr
 	}
 }
 
+// UpdateMaxConcurrentAgentsByState applies reloaded per-state capacity limits
+// through the actor so dispatch and retry capacity checks observe them without
+// restarting the process.
+func (o *Orchestrator) UpdateMaxConcurrentAgentsByState(ctx context.Context, limits map[string]int) error {
+	done := make(chan struct{}, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		st.MaxConcurrentAgentsByState = normalizeStateConcurrencyLimits(limits)
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // UpdateRetryScheduler applies reloaded retry timing through the actor so
 // subsequently scheduled retries observe workflow changes without a process
 // restart.
@@ -580,6 +601,14 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrCapacityFull
 		return nil
 	}
+	capacityExcluded := IssueID("")
+	if consumedContinuation != nil {
+		capacityExcluded = id
+	}
+	if st.StateCapacityFullExcluding(d.issue.State, capacityExcluded) {
+		d.result <- ErrCapacityFull
+		return nil
+	}
 	if consumedContinuation != nil {
 		if consumedContinuation.Timer != nil {
 			consumedContinuation.Timer.Stop()
@@ -597,6 +626,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	// on its IsClaimed check. The followup records Running once the
 	// worker is spawned.
 	st.Claimed[id] = struct{}{}
+	st.ClaimedIssues[id] = d.issue
 	o := d.o
 	issue := d.issue
 	result := d.result
@@ -711,6 +741,28 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		})
 		return nil
 	}
+	if st.StateCapacityFull(entry.Issue.State) {
+		// Retry timers must also obey per-state capacity gates. Leave the retry
+		// queued and arm a short follow-up timer so noisy states cannot exceed
+		// max_concurrent_agents_by_state while other states are running.
+		if entry.Timer != nil {
+			entry.Timer.Stop()
+		}
+		o := r.o
+		id := r.id
+		issue := r.issue
+		attempt := r.attempt
+		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
+		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+			_ = o.submit(o.runCtx, &retryFireOp{
+				o:       o,
+				id:      id,
+				issue:   issue,
+				attempt: attempt,
+			})
+		})
+		return nil
+	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
 	// would let a concurrent tick race in.
@@ -750,6 +802,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		}
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
 		st.Claimed[f.id] = struct{}{}
+		st.ClaimedIssues[f.id] = f.issue
 		close(f.done)
 		// A clean continuation is a new normal turn. Keep its retry entry
 		// 1-based, but do not carry the prior run's attempt into future
@@ -795,6 +848,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	// scheduleRetryOp's call to OrchestratorState.ScheduleRetry re-sets
 	// Claimed idempotently, so this is safe.
 	st.Claimed[f.id] = struct{}{}
+	st.ClaimedIssues[f.id] = f.issue
 	close(f.done)
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,

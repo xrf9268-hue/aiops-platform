@@ -39,12 +39,13 @@ type WorkflowRuntime struct {
 }
 
 type WorkflowSnapshot struct {
-	Workflow            *workflow.Workflow
-	PollInterval        time.Duration
-	MaxConcurrentAgents int
-	MaxRetryBackoff     time.Duration
-	Reconciliation      ReconciliationConfig
-	Fingerprint         string
+	Workflow                   *workflow.Workflow
+	PollInterval               time.Duration
+	MaxConcurrentAgents        int
+	MaxConcurrentAgentsByState map[string]int
+	MaxRetryBackoff            time.Duration
+	Reconciliation             ReconciliationConfig
+	Fingerprint                string
 }
 
 func NewWorkflowRuntime(cfg WorkflowRuntimeConfig) (*WorkflowRuntime, error) {
@@ -151,13 +152,40 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		reconcile = r.reconciliationConfig(wf.Config)
 	}
 	return &WorkflowSnapshot{
-		Workflow:            wf,
-		PollInterval:        time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
-		MaxConcurrentAgents: wf.Config.Agent.MaxConcurrentAgents,
-		MaxRetryBackoff:     time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
-		Reconciliation:      reconcile,
-		Fingerprint:         fingerprint,
+		Workflow:                   wf,
+		PollInterval:               time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
+		MaxConcurrentAgents:        wf.Config.Agent.MaxConcurrentAgents,
+		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(wf.Config.Agent.MaxConcurrentAgentsByState),
+		MaxRetryBackoff:            time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
+		Reconciliation:             reconcile,
+		Fingerprint:                fingerprint,
 	}
+}
+
+func copyStateConcurrencyLimits(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for state, limit := range in {
+		out[state] = limit
+	}
+	return out
+}
+
+func normalizeStateConcurrencyLimits(in map[string]int) map[string]int {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(in))
+	for state, limit := range in {
+		key := normalizeStateConcurrencyKey(state)
+		if key == "" || limit <= 0 {
+			continue
+		}
+		out[key] = limit
+	}
+	return out
 }
 
 func workflowFileFingerprint(path string) (string, error) {
