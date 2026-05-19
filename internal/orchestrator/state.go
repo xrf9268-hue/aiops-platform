@@ -127,6 +127,8 @@ type OrchestratorState struct {
 
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
+
+	RecentEvents []RuntimeEvent
 }
 
 // FailedEntry suppresses a deterministic non-retryable failure only while the

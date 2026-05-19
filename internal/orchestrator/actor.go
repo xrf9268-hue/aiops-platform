@@ -256,6 +256,24 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (StateView, error) {
 	}
 }
 
+// StatusSnapshot returns the queue-independent runtime status surface view.
+func (o *Orchestrator) StatusSnapshot(ctx context.Context, recentEventLimit int) (RuntimeStatus, error) {
+	reply := make(chan RuntimeStatus, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		reply <- st.StatusSnapshot(recentEventLimit)
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return RuntimeStatus{}, err
+	}
+	select {
+	case v := <-reply:
+		return v, nil
+	case <-ctx.Done():
+		return RuntimeStatus{}, ctx.Err()
+	}
+}
+
 // UpdateMaxConcurrentAgents applies a reloaded workflow capacity limit through
 // the actor so dispatch and retry capacity checks observe the new value without
 // restarting the process.
@@ -724,6 +742,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			close(f.done)
 			return nil
 		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
 		st.Claimed[f.id] = struct{}{}
 		close(f.done)
 		// A clean continuation is a new normal turn. Keep its retry entry
@@ -743,6 +762,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			close(f.done)
 			return nil
 		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: f.result.Err.Error()})
 		close(f.done)
 		return nil
 	}
@@ -758,6 +778,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		close(f.done)
 		return nil
 	}
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: f.result.Err.Error()})
 	// Hold the Claimed slot across the gap between this apply (which
 	// returns control to the actor's select loop) and the
 	// scheduleRetryOp that the followup enqueues. Without this re-set,
@@ -808,6 +829,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int) {
 	}
 	_ = o.submit(o.runCtx, opFunc(func(st *OrchestratorState) func() {
 		st.Running[id] = entry
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventRunning, IssueID: id, Identifier: issue.Identifier, Message: "dispatched to agent", At: startedAt})
 		return nil
 	}))
 	go func() {
