@@ -42,7 +42,17 @@ func Load(path string) (*Workflow, error) {
 			cfg.hooksTimeoutDefaulted = false
 		}
 	}
+	var rawStateCaps map[string]int
+	if hasFrontMatter && len(cfg.Agent.MaxConcurrentAgentsByState) > 0 {
+		rawStateCaps = make(map[string]int, len(cfg.Agent.MaxConcurrentAgentsByState))
+		for state, limit := range cfg.Agent.MaxConcurrentAgentsByState {
+			rawStateCaps[state] = limit
+		}
+	}
 	expandConfig(&cfg)
+	if rawStateCaps != nil {
+		cfg.Agent.MaxConcurrentAgentsByState = rawStateCaps
+	}
 	// Only validate when the file actually carries a front-matter block.
 	// Prompt-only WORKFLOW.md files are a supported pattern for repos that
 	// rely on the worker's built-in defaults (same semantic as
@@ -54,6 +64,7 @@ func Load(path string) (*Workflow, error) {
 			return nil, err
 		}
 	}
+	cfg.Agent.MaxConcurrentAgentsByState = normalizeStateConcurrencyLimits(cfg.Agent.MaxConcurrentAgentsByState)
 	source := SourceFile
 	if !hasFrontMatter {
 		source = SourcePromptOnly
@@ -202,6 +213,20 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if cfg.Agent.MaxRetryBackoffMs <= 0 {
 		return fmt.Errorf("%s: agent.max_retry_backoff_ms must be positive", path)
+	}
+	seenStateCaps := make(map[string]string, len(cfg.Agent.MaxConcurrentAgentsByState))
+	for state, limit := range cfg.Agent.MaxConcurrentAgentsByState {
+		if strings.TrimSpace(state) == "" {
+			return fmt.Errorf("%s: agent.max_concurrent_agents_by_state contains an empty state key", path)
+		}
+		if limit <= 0 {
+			return fmt.Errorf("%s: agent.max_concurrent_agents_by_state[%q] must be positive", path, state)
+		}
+		key := normalizeTrackerStateKey(state)
+		if first, ok := seenStateCaps[key]; ok {
+			return fmt.Errorf("%s: agent.max_concurrent_agents_by_state[%q] duplicates %q after normalization to %q", path, state, first, key)
+		}
+		seenStateCaps[key] = state
 	}
 	if cfg.Hooks.TimeoutMs < 0 {
 		return fmt.Errorf("%s: hooks.timeout_ms must be non-negative", path)
@@ -388,4 +413,24 @@ func expandPath(p string) string {
 		}
 	}
 	return p
+}
+
+func normalizeStateConcurrencyLimits(limits map[string]int) map[string]int {
+	if len(limits) == 0 {
+		return nil
+	}
+	normalized := make(map[string]int, len(limits))
+	for state, limit := range limits {
+		key := normalizeTrackerStateKey(state)
+		if key == "" {
+			normalized[state] = limit
+			continue
+		}
+		normalized[key] = limit
+	}
+	return normalized
+}
+
+func normalizeTrackerStateKey(state string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(state)), " ", "_")
 }

@@ -687,6 +687,162 @@ func TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap(t *testing.T) {
 	}
 }
 
+func TestRequestDispatch_RespectsPerStateCapacityAndFallback(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 3)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "rw-1", Identifier: "RW-1", State: "Rework"}, nil); err != nil {
+		t.Fatalf("dispatch first rework: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "rw-2", Identifier: "RW-2", State: "rework"}, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch second rework err = %v, want ErrCapacityFull", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher count after capped rework = %d, want 1", got)
+	}
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ip-1", Identifier: "IP-1", State: "In Progress"}, nil); err != nil {
+		t.Fatalf("dispatch fallback state: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func TestRequestDispatch_PerStateCapacityNormalizesStateKey(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"in_progress": 1}
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ip-1", Identifier: "IP-1", State: "In Progress"}, nil); err != nil {
+		t.Fatalf("dispatch first in-progress: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ip-2", Identifier: "IP-2", State: "in_progress"}, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch normalized in-progress err = %v, want ErrCapacityFull", err)
+	}
+}
+
+func TestContinuationRetryRecheckedDispatchIgnoresOwnPerStateClaim(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-CONT-CAP", Identifier: "ENG-CONT-CAP", State: "Rework", Title: "continue under cap"}
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("initial tracker-rechecked dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch under own per-state cap: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func TestUpdateMaxConcurrentAgentsByStateNormalizesStateKeys(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp})
+	defer cancel()
+
+	if err := o.UpdateMaxConcurrentAgentsByState(context.Background(), map[string]int{"In Progress": 1}); err != nil {
+		t.Fatalf("UpdateMaxConcurrentAgentsByState: %v", err)
+	}
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ip-1", Identifier: "IP-1", State: "in_progress"}, nil); err != nil {
+		t.Fatalf("dispatch first in-progress: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ip-2", Identifier: "IP-2", State: "In Progress"}, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch second normalized in-progress err = %v, want ErrCapacityFull", err)
+	}
+}
+
+func TestRetryFire_RespectsPerStateCapacityBeforeSpawning(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	issueA := tracker.Issue{ID: "ENG-A", Identifier: "ENG-A", State: "Rework", Title: "retry later"}
+	issueB := tracker.Issue{ID: "ENG-B", Identifier: "ENG-B", State: "Rework", Title: "running now"}
+	if err := o.RequestDispatch(context.Background(), issueA, nil); err != nil {
+		t.Fatalf("dispatch A: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0 && len(v.Retrying) == 1
+	}, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
+		t.Fatalf("dispatch B while A is retrying: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(issueA.ID),
+		issue:   issueA,
+		attempt: 1,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 2; retry must not spawn while per-state capacity is full", got)
+	}
+	if len(v.Running) != 1 || len(v.Retrying) != 1 {
+		t.Fatalf("state after retry fire at per-state capacity: running=%+v retrying=%+v, want B running and A still retrying", v.Running, v.Retrying)
+	}
+}
+
 // TestRetryFire_RespectsCapacityBeforeSpawning is a regression for retry
 // timers bypassing the max_concurrent_agents gate. A failed issue may sit in
 // RetryAttempts while another issue starts; when the retry timer fires, it must

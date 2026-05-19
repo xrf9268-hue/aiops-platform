@@ -15,6 +15,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -116,11 +117,13 @@ type RunningEntry struct {
 // next migration step. Tests in this package construct it directly
 // because they exercise the transitions, not the discipline.
 type OrchestratorState struct {
-	PollIntervalMs      int64
-	MaxConcurrentAgents int
+	PollIntervalMs             int64
+	MaxConcurrentAgents        int
+	MaxConcurrentAgentsByState map[string]int
 
 	Running       map[IssueID]*RunningEntry
 	Claimed       map[IssueID]struct{}
+	ClaimedIssues map[IssueID]tracker.Issue
 	RetryAttempts map[IssueID]*RetryEntry
 	Failed        map[IssueID]FailedEntry
 	Completed     map[IssueID]struct{} // bookkeeping only per SPEC §4.1.8
@@ -152,13 +155,15 @@ type FailedEntry struct {
 // on a nil-map write.
 func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *OrchestratorState {
 	return &OrchestratorState{
-		PollIntervalMs:      pollIntervalMs,
-		MaxConcurrentAgents: maxConcurrentAgents,
-		Running:             map[IssueID]*RunningEntry{},
-		Claimed:             map[IssueID]struct{}{},
-		RetryAttempts:       map[IssueID]*RetryEntry{},
-		Failed:              map[IssueID]FailedEntry{},
-		Completed:           map[IssueID]struct{}{},
+		PollIntervalMs:             pollIntervalMs,
+		MaxConcurrentAgents:        maxConcurrentAgents,
+		MaxConcurrentAgentsByState: map[string]int{},
+		Running:                    map[IssueID]*RunningEntry{},
+		Claimed:                    map[IssueID]struct{}{},
+		ClaimedIssues:              map[IssueID]tracker.Issue{},
+		RetryAttempts:              map[IssueID]*RetryEntry{},
+		Failed:                     map[IssueID]FailedEntry{},
+		Completed:                  map[IssueID]struct{}{},
 	}
 }
 
@@ -210,6 +215,54 @@ func (s *OrchestratorState) ReleaseFailedIfIssueChanged(issue tracker.Issue) boo
 // records Running; without counting those reservations, one poll tick can queue
 // more workers than max_concurrent_agents before any Running entry is visible.
 func (s *OrchestratorState) RunningCount() int {
+	counted := s.runningIssueIDs()
+	return len(counted)
+}
+
+func (s *OrchestratorState) RunningCountByState(state string) int {
+	return s.RunningCountByStateExcluding(state, "")
+}
+
+func (s *OrchestratorState) StateCapacityFull(state string) bool {
+	return s.StateCapacityFullExcluding(state, "")
+}
+
+func (s *OrchestratorState) StateCapacityFullExcluding(state string, excluded IssueID) bool {
+	if len(s.MaxConcurrentAgentsByState) == 0 {
+		return false
+	}
+	limit, ok := s.MaxConcurrentAgentsByState[normalizeStateConcurrencyKey(state)]
+	if !ok || limit <= 0 {
+		return false
+	}
+	return s.RunningCountByStateExcluding(state, excluded) >= limit
+}
+
+func (s *OrchestratorState) RunningCountByStateExcluding(state string, excluded IssueID) int {
+	stateKey := normalizeStateConcurrencyKey(state)
+	if stateKey == "" {
+		return 0
+	}
+	counted := s.runningIssueIDs()
+	if excluded != "" {
+		delete(counted, excluded)
+	}
+	count := 0
+	for id := range counted {
+		if run, ok := s.Running[id]; ok {
+			if normalizeStateConcurrencyKey(run.Issue.State) == stateKey {
+				count++
+			}
+			continue
+		}
+		if claimed, ok := s.ClaimedIssues[id]; ok && normalizeStateConcurrencyKey(claimed.State) == stateKey {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *OrchestratorState) runningIssueIDs() map[IssueID]struct{} {
 	counted := make(map[IssueID]struct{}, len(s.Running)+len(s.Claimed))
 	for id := range s.Running {
 		counted[id] = struct{}{}
@@ -220,7 +273,11 @@ func (s *OrchestratorState) RunningCount() int {
 	for id := range s.RetryAttempts {
 		delete(counted, id)
 	}
-	return len(counted)
+	return counted
+}
+
+func normalizeStateConcurrencyKey(state string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(state)), " ", "_")
 }
 
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
@@ -238,6 +295,7 @@ func (s *OrchestratorState) RunningCount() int {
 // state mutation.
 func (s *OrchestratorState) BeginDispatch(id IssueID, entry *RunningEntry) {
 	s.Claimed[id] = struct{}{}
+	s.ClaimedIssues[id] = entry.Issue
 	s.Running[id] = entry
 	delete(s.RetryAttempts, id)
 	delete(s.Failed, id)
@@ -260,6 +318,7 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 	}
 	delete(s.Running, id)
 	delete(s.Claimed, id)
+	delete(s.ClaimedIssues, id)
 	s.Completed[id] = struct{}{}
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
@@ -289,6 +348,7 @@ func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elap
 	}
 	delete(s.Running, id)
 	delete(s.Claimed, id)
+	delete(s.ClaimedIssues, id)
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
@@ -320,6 +380,7 @@ func (s *OrchestratorState) ScheduleRetry(entry *RetryEntry) {
 	}
 	s.RetryAttempts[entry.IssueID] = entry
 	s.Claimed[entry.IssueID] = struct{}{}
+	s.ClaimedIssues[entry.IssueID] = entry.Issue
 }
 
 // ReleaseClaim removes id from Claimed and tears down any pending
@@ -332,6 +393,7 @@ func (s *OrchestratorState) ScheduleRetry(entry *RetryEntry) {
 //     (row 6 in the design's state-transition table).
 func (s *OrchestratorState) ReleaseClaim(id IssueID) {
 	delete(s.Claimed, id)
+	delete(s.ClaimedIssues, id)
 	if entry, ok := s.RetryAttempts[id]; ok {
 		if entry.Timer != nil {
 			entry.Timer.Stop()
@@ -361,8 +423,9 @@ func (s *OrchestratorState) RecordRateLimits(snap *RateLimitSnapshot) {
 // design doc's "HTTP surface" section) but Snapshot() ships now so
 // tests have a stable read API.
 type StateView struct {
-	PollIntervalMs      int64
-	MaxConcurrentAgents int
+	PollIntervalMs             int64
+	MaxConcurrentAgents        int
+	MaxConcurrentAgentsByState map[string]int
 
 	Running         []RunningView
 	Retrying        []RetryView
@@ -400,14 +463,15 @@ type RetryView struct {
 // handler, CLI status) sort by IssueID before display.
 func (s *OrchestratorState) Snapshot() StateView {
 	view := StateView{
-		PollIntervalMs:      s.PollIntervalMs,
-		MaxConcurrentAgents: s.MaxConcurrentAgents,
-		Running:             make([]RunningView, 0, len(s.Running)),
-		Retrying:            make([]RetryView, 0, len(s.RetryAttempts)),
-		Failed:              make([]IssueID, 0, len(s.Failed)),
-		Completed:           make([]IssueID, 0, len(s.Completed)),
-		CodexTotals:         s.CodexTotals,
-		CodexRateLimits:     s.CodexRateLimits,
+		PollIntervalMs:             s.PollIntervalMs,
+		MaxConcurrentAgents:        s.MaxConcurrentAgents,
+		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
+		Running:                    make([]RunningView, 0, len(s.Running)),
+		Retrying:                   make([]RetryView, 0, len(s.RetryAttempts)),
+		Failed:                     make([]IssueID, 0, len(s.Failed)),
+		Completed:                  make([]IssueID, 0, len(s.Completed)),
+		CodexTotals:                s.CodexTotals,
+		CodexRateLimits:            s.CodexRateLimits,
 	}
 	for id, r := range s.Running {
 		// Deep-copy RetryAttempt so a snapshot consumer mutating the

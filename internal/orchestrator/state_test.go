@@ -305,6 +305,71 @@ func TestFinishRunIgnoresStaleRunIdentity(t *testing.T) {
 	}
 }
 
+func TestClaimedIssuesClearedOnTerminalTransitions(t *testing.T) {
+	tests := []struct {
+		name string
+		act  func(st *OrchestratorState, id IssueID, entry *RunningEntry)
+	}{
+		{
+			name: "success",
+			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
+				if !st.FinishRunSucceeded(id, entry, time.Second) {
+					t.Fatalf("FinishRunSucceeded returned false")
+				}
+			},
+		},
+		{
+			name: "failed",
+			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
+				if !st.FinishRunFailed(id, entry, time.Second) {
+					t.Fatalf("FinishRunFailed returned false")
+				}
+			},
+		},
+		{
+			name: "non_retryable_failed",
+			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
+				if !st.FinishRunNonRetryableFailed(id, entry, time.Second) {
+					t.Fatalf("FinishRunNonRetryableFailed returned false")
+				}
+			},
+		},
+		{
+			name: "reconciled_cancelled",
+			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
+				if !st.FinishRunReconciledCancelled(id, entry, time.Second) {
+					t.Fatalf("FinishRunReconciledCancelled returned false")
+				}
+			},
+		},
+		{
+			name: "release_claim",
+			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
+				st.ReleaseClaim(id)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			st := NewOrchestratorState(15000, 4)
+			iss := issue("ENG-CLAIMED-ISSUES")
+			id := IssueID(iss.ID)
+			entry := runningEntry(t, iss)
+			st.BeginDispatch(id, entry)
+
+			tt.act(st, id, entry)
+
+			if _, ok := st.Claimed[id]; ok {
+				t.Fatalf("Claimed[%s] still present", id)
+			}
+			if _, ok := st.ClaimedIssues[id]; ok {
+				t.Fatalf("ClaimedIssues[%s] still present", id)
+			}
+		})
+	}
+}
+
 func TestCodexTotals_AddTokensAndSeconds(t *testing.T) {
 	var c CodexTotals
 	c.AddTokens(100, 250)

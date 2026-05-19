@@ -73,6 +73,9 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 	if err := p.orchestrator.UpdateMaxConcurrentAgents(ctx, snap.MaxConcurrentAgents); err != nil {
 		return err
 	}
+	if err := p.orchestrator.UpdateMaxConcurrentAgentsByState(ctx, snap.MaxConcurrentAgentsByState); err != nil {
+		return err
+	}
 	if err := p.orchestrator.UpdateRetryScheduler(ctx, RetryScheduler{MaxBackoff: snap.MaxRetryBackoff}); err != nil {
 		return err
 	}

@@ -171,10 +171,11 @@ func (c Config) WorkspaceHooks() WorkspaceHooks {
 }
 
 type AgentConfig struct {
-	Default             string `yaml:"default" json:"default"`
-	MaxConcurrentAgents int    `yaml:"max_concurrent_agents" json:"max_concurrent_agents"`
-	MaxTurns            int    `yaml:"max_turns" json:"max_turns"`
-	MaxRetryBackoffMs   int    `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
+	Default                    string         `yaml:"default" json:"default"`
+	MaxConcurrentAgents        int            `yaml:"max_concurrent_agents" json:"max_concurrent_agents"`
+	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state" json:"max_concurrent_agents_by_state"`
+	MaxTurns                   int            `yaml:"max_turns" json:"max_turns"`
+	MaxRetryBackoffMs          int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.
 	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
