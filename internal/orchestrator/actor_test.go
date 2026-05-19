@@ -237,6 +237,88 @@ func TestScheduleRetry_TimerFireProducesExactlyOneReDispatch(t *testing.T) {
 	}
 }
 
+func TestReconcileTrackerIssuesCancelsRunWhenServiceRouteChanges(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "api"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	active := map[string]tracker.Issue{
+		"LIN-16": {ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "web"},
+	}
+	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"AI Ready"})); err != nil {
+		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	}
+	select {
+	case <-disp.contexts[0].Done():
+	case <-time.After(time.Second):
+		t.Fatal("route-changed worker context was not canceled")
+	}
+
+	if err := o.RequestDispatch(context.Background(), active["LIN-16"], nil); err == nil {
+		t.Fatal("RequestDispatch while canceled worker is exiting returned nil error, want duplicate guard to keep old run claimed")
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatch count while canceled worker is exiting = %d, want duplicate guard to suppress new worker", got)
+	}
+
+	disp.finishAt(0, WorkerResult{Err: context.Canceled})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		if err != nil {
+			t.Fatalf("Snapshot: %v", err)
+		}
+		return len(view.Running) == 0
+	}, time.Second)
+
+	if err := o.RequestDispatch(context.Background(), active["LIN-16"], nil); err != nil {
+		t.Fatalf("RequestDispatch after canceled worker exit: %v", err)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("dispatch count after route change = %d, want new routed worker", got)
+	}
+	if got := disp.issueAt(1).ServiceName; got != "web" {
+		t.Fatalf("redispatched service = %q, want web", got)
+	}
+}
+
+func TestReconcileTrackerIssuesReleasesRetryWhenServiceRouteChanges(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "api"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want queued retry", len(view.Retrying))
+	}
+
+	active := map[string]tracker.Issue{
+		"LIN-16": {ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "web"},
+	}
+	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"AI Ready"})); err != nil {
+		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	}
+	view, err = o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Retrying) != 0 {
+		t.Fatalf("retrying entries after route change = %+v, want released retry", view.Retrying)
+	}
+}
+
 func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{

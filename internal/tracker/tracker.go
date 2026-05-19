@@ -3,16 +3,21 @@ package tracker
 import "context"
 
 type Issue struct {
-	ID          string
-	Identifier  string
-	Title       string
-	Description string
-	URL         string
-	State       string
-	Priority    int
-	CreatedAt   string
-	UpdatedAt   string
-	BlockedBy   []Blocker
+	ID           string
+	Identifier   string
+	Title        string
+	Description  string
+	URL          string
+	State        string
+	ProjectSlug  string
+	TeamKey      string
+	Labels       []string
+	CustomFields map[string]string
+	ServiceName  string
+	Priority     int
+	CreatedAt    string
+	UpdatedAt    string
+	BlockedBy    []Blocker
 }
 
 // Blocker is the minimal tracker dependency metadata the orchestrator needs to

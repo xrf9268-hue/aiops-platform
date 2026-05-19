@@ -110,9 +110,51 @@ var supportedSandboxNetworks = map[string]struct{}{
 // are evaluated before non-empty checks. Errors include the workflow
 // file path and the offending field/value so operators can fix the
 // source rather than chasing runtime symptoms (issue #9).
+func hasExplicitServiceRoute(route ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
+}
+
 func validateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
-		return fmt.Errorf("%s: repo.clone_url is required", path)
+		if len(cfg.Services) == 0 {
+			return fmt.Errorf("%s: repo.clone_url is required", path)
+		}
+		if cfg.Tracker.Kind != "linear" {
+			return fmt.Errorf("%s: repo.clone_url is required unless tracker.kind is linear and services provide routed repos", path)
+		}
+		for i, service := range cfg.Services {
+			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
+				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for service-only Linear workflows", path, i)
+			}
+		}
+	}
+	if cfg.Tracker.Kind == "linear" {
+		for i, service := range cfg.Services {
+			if !hasExplicitServiceRoute(service.Tracker) {
+				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, labels, or custom_fields)", path, i)
+			}
+			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
+				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
+			}
+		}
+	}
+	seenServiceNames := make(map[string]int, len(cfg.Services))
+	for i, service := range cfg.Services {
+		name := strings.TrimSpace(service.Name)
+		if name == "" {
+			return fmt.Errorf("%s: services[%d].name is required", path, i)
+		}
+		nameKey := strings.ToLower(name)
+		if first, ok := seenServiceNames[nameKey]; ok {
+			return fmt.Errorf("%s: services[%d].name %q duplicates services[%d].name", path, i, service.Name, first)
+		}
+		seenServiceNames[nameKey] = i
+		if strings.TrimSpace(service.Repo.CloneURL) == "" {
+			return fmt.Errorf("%s: services[%d].repo.clone_url is required", path, i)
+		}
 	}
 	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
 		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, linear)", path, cfg.Tracker.Kind)
@@ -271,15 +313,15 @@ func splitFrontMatter(s string) (string, string) {
 
 func expandConfig(cfg *Config) {
 	cfg.Tracker.APIKey = os.ExpandEnv(cfg.Tracker.APIKey)
-	cfg.Repo.CloneURL = os.ExpandEnv(cfg.Repo.CloneURL)
+	expandRepoConfig(&cfg.Repo)
+	for i := range cfg.Services {
+		expandRepoConfig(&cfg.Services[i].Repo)
+	}
 	cfg.Workspace.Root = expandPath(os.ExpandEnv(cfg.Workspace.Root))
 	cfg.Codex.Command = os.ExpandEnv(cfg.Codex.Command)
 	cfg.Claude.Command = os.ExpandEnv(cfg.Claude.Command)
 	for i := range cfg.Sandbox.CredentialFiles {
 		cfg.Sandbox.CredentialFiles[i] = expandPath(os.ExpandEnv(cfg.Sandbox.CredentialFiles[i]))
-	}
-	if cfg.Repo.DefaultBranch == "" {
-		cfg.Repo.DefaultBranch = "main"
 	}
 	if cfg.Agent.Default == "" {
 		cfg.Agent.Default = "mock"
@@ -325,6 +367,13 @@ func expandConfig(cfg *Config) {
 	}
 	if cfg.Codex.ApprovalPolicy == nil {
 		cfg.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}}
+	}
+}
+
+func expandRepoConfig(repo *RepoConfig) {
+	repo.CloneURL = os.ExpandEnv(repo.CloneURL)
+	if repo.DefaultBranch == "" {
+		repo.DefaultBranch = "main"
 	}
 }
 

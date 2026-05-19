@@ -53,6 +53,7 @@ type Poller struct {
 	overflow       []tracker.Issue
 	reconcile      ReconciliationConfig
 	reconcileKnown bool
+	routing        *workflow.Config
 }
 
 // NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
@@ -80,17 +81,28 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	if p.orchestrator == nil {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
-	issues, err := p.tracker.ListActiveIssues(ctx)
-	if err != nil {
-		return err
+	issues, activeErr := p.tracker.ListActiveIssues(ctx)
+	if activeErr != nil && len(issues) == 0 {
+		return activeErr
 	}
 	var pollErr error
-	if p.reconcileKnown {
-		if err := p.reconcileTick(ctx, issues); err != nil {
+	if activeErr != nil {
+		pollErr = errors.Join(pollErr, activeErr)
+	}
+	routedIssues := issues
+	if p.routing != nil {
+		var routeErr error
+		routedIssues, routeErr = selectRoutedCandidates(issues, *p.routing)
+		if routeErr != nil {
+			pollErr = errors.Join(pollErr, routeErr)
+		}
+	}
+	if p.reconcileKnown && activeErr == nil {
+		if err := p.reconcileTick(ctx, routedIssues); err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates)
+	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, routedIssues), p.reconcile.TerminalStates)
 	sortCandidates(candidates)
 	p.overflow = nil
 	var dispatchErr error
@@ -124,6 +136,11 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) error {
 	if p.stateTracker == nil {
 		return errors.New("orchestrator poller reconciliation requires state tracker")
+	}
+	if p.routing != nil {
+		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, issueMap(activeIssues), normalizedStates(p.reconcile.ActiveStates), p.reconcile.WorkerExitTimeout); err != nil {
+			return err
+		}
 	}
 	activeByID := issueIDSet(activeIssues)
 	inactiveByID := make(map[string]tracker.Issue)
@@ -174,6 +191,16 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 	for _, issue := range issues {
 		if issue.ID != "" {
 			out[issue.ID] = struct{}{}
+		}
+	}
+	return out
+}
+
+func issueMap(issues []tracker.Issue) map[string]tracker.Issue {
+	out := make(map[string]tracker.Issue, len(issues))
+	for _, issue := range issues {
+		if issue.ID != "" {
+			out[issue.ID] = issue
 		}
 	}
 	return out
@@ -316,6 +343,95 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 	return candidates
 }
 
+func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]tracker.Issue, error) {
+	if len(cfg.Services) == 0 {
+		return issues, nil
+	}
+	out := make([]tracker.Issue, 0, len(issues))
+	var routeErr error
+	for _, issue := range issues {
+		matches := matchingServices(issue, cfg)
+		switch len(matches) {
+		case 0:
+			if strings.TrimSpace(cfg.Repo.CloneURL) != "" && issueInRootTrackerProject(issue, cfg) {
+				out = append(out, issue)
+				continue
+			}
+			log.Printf("tracker route skipped issue %s: no configured service matched", issue.ID)
+		case 1:
+			issue.ServiceName = matches[0].Name
+			out = append(out, issue)
+		default:
+			names := make([]string, 0, len(matches))
+			for _, service := range matches {
+				names = append(names, service.Name)
+			}
+			routeErr = errors.Join(routeErr, fmt.Errorf("ambiguous route for issue %s: matched services %s", issue.ID, strings.Join(names, ", ")))
+		}
+	}
+	return out, routeErr
+}
+
+func issueInRootTrackerProject(issue tracker.Issue, cfg workflow.Config) bool {
+	rootProject := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+	if rootProject == "" {
+		return false
+	}
+	return strings.EqualFold(rootProject, strings.TrimSpace(issue.ProjectSlug))
+}
+
+func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.ServiceConfig {
+	matches := make([]workflow.ServiceConfig, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		if serviceMatchesIssue(service, cfg.Tracker, issue) {
+			matches = append(matches, service)
+		}
+	}
+	return matches
+}
+
+func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+	route := service.Tracker
+	if !hasExplicitServiceRoute(route) {
+		return false
+	}
+	projectSlug := strings.TrimSpace(route.ProjectSlug)
+	if projectSlug == "" {
+		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
+	}
+	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
+		return false
+	}
+	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {
+		return false
+	}
+	issueLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
+			issueLabels[label] = struct{}{}
+		}
+	}
+	for _, label := range route.Labels {
+		if _, ok := issueLabels[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	for key, want := range route.CustomFields {
+		got, ok := issue.CustomFields[key]
+		if !ok || strings.TrimSpace(got) != strings.TrimSpace(want) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
+}
+
 // TaskBuilder converts a tracker candidate into the task shape consumed by the
 // existing worker runner. This is an adapter between the SPEC poller/runtime
 // path and the legacy task execution API; it is intentionally in-memory only.
@@ -401,6 +517,13 @@ func completeRecordedTask(ctx context.Context, ev worker.EventEmitter, recordedT
 }
 
 func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) {
+	if issue.ServiceName != "" {
+		serviceCfg, ok := serviceConfigByName(cfg, issue.ServiceName)
+		if !ok {
+			return task.Task{}, fmt.Errorf("service %q not found in WORKFLOW.md", issue.ServiceName)
+		}
+		cfg.Repo = serviceCfg.Repo
+	}
 	if cfg.Repo.CloneURL == "" {
 		return task.Task{}, fmt.Errorf("repo.clone_url missing in WORKFLOW.md")
 	}
@@ -412,7 +535,9 @@ func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) 
 	if sourceEventID == "" {
 		return task.Task{}, fmt.Errorf("tracker issue id is required")
 	}
-	if issue.Identifier != "" {
+	if issue.ServiceName != "" {
+		sourceEventID += "|service|" + issue.ServiceName
+	} else if issue.Identifier != "" {
 		sourceEventID = issue.Identifier
 	}
 	return task.Task{
@@ -430,6 +555,15 @@ func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) 
 		Model:         cfg.Agent.Default,
 		Priority:      50,
 	}, nil
+}
+
+func serviceConfigByName(cfg workflow.Config, name string) (workflow.ServiceConfig, bool) {
+	for _, service := range cfg.Services {
+		if service.Name == name {
+			return service, true
+		}
+	}
+	return workflow.ServiceConfig{}, false
 }
 
 // RunPollLoop repeatedly polls the tracker until ctx is canceled.

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -14,6 +15,7 @@ import (
 type RuntimePoller struct {
 	trackerFactory func(workflow.Config) (IssueStateLister, error)
 	tracker        IssueStateLister
+	trackers       []IssueStateLister
 	orchestrator   *Orchestrator
 	runtime        *WorkflowRuntime
 	config         worker.Config
@@ -82,16 +84,103 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	if p.poller != nil && p.lastSnapshotKey == key {
 		return p.poller, nil
 	}
-	trackerClient, err := p.trackerFactory(snap.Workflow.Config)
+	trackerClients, err := p.trackerClientsForSnapshot(snap)
 	if err != nil {
 		return nil, err
 	}
-	if trackerClient == nil {
-		return nil, errors.New("runtime poller tracker factory returned nil tracker")
+	if len(trackerClients) == 0 {
+		return nil, errors.New("runtime poller tracker factory returned no trackers")
 	}
-	p.tracker = trackerClient
+	p.tracker = trackerClients[0]
+	p.trackers = trackerClients
 	p.lastSnapshotKey = key
-	return NewPollerWithReconciliation(trackerClient, p.orchestrator, snap.Reconciliation), nil
+	poller := NewPollerWithReconciliation(multiIssueStateLister{trackers: trackerClients}, p.orchestrator, snap.Reconciliation)
+	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
+		poller.routing = &snap.Workflow.Config
+	}
+	return poller, nil
+}
+
+func (p *RuntimePoller) trackerClientsForSnapshot(snap WorkflowSnapshot) ([]IssueStateLister, error) {
+	if snap.Workflow == nil {
+		trackerClient, err := p.trackerFactory(workflow.Config{})
+		if err != nil {
+			return nil, err
+		}
+		if trackerClient == nil {
+			return nil, errors.New("runtime poller tracker factory returned nil tracker")
+		}
+		return []IssueStateLister{trackerClient}, nil
+	}
+	cfg := snap.Workflow.Config
+	projectConfigs := trackerProjectConfigs(cfg)
+	clients := make([]IssueStateLister, 0, len(projectConfigs))
+	for _, projectCfg := range projectConfigs {
+		trackerClient, err := p.trackerFactory(projectCfg)
+		if err != nil {
+			return nil, err
+		}
+		if trackerClient == nil {
+			return nil, errors.New("runtime poller tracker factory returned nil tracker")
+		}
+		clients = append(clients, trackerClient)
+	}
+	return clients, nil
+}
+
+// TrackerProjectConfigs returns one workflow config per Linear project that a
+// poll/reconcile pass must query for a service-routed workflow.
+func TrackerProjectConfigs(cfg workflow.Config) []workflow.Config {
+	return trackerProjectConfigs(cfg)
+}
+
+func trackerProjectConfigs(cfg workflow.Config) []workflow.Config {
+	if cfg.Tracker.Kind != "linear" {
+		return []workflow.Config{cfg}
+	}
+	seen := map[string]struct{}{}
+	add := func(project string, out *[]workflow.Config) {
+		project = strings.TrimSpace(project)
+		if project == "" {
+			return
+		}
+		key := strings.ToLower(project)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		projectCfg := cfg
+		projectCfg.Tracker.ProjectSlug = project
+		projectCfg.Services = nil
+		*out = append(*out, projectCfg)
+	}
+	out := make([]workflow.Config, 0, len(cfg.Services)+1)
+	add(cfg.Tracker.ProjectSlug, &out)
+	for _, service := range cfg.Services {
+		add(service.Tracker.ProjectSlug, &out)
+	}
+	if len(out) == 0 {
+		out = append(out, cfg)
+	}
+	return out
+}
+
+type multiIssueStateLister struct {
+	trackers []IssueStateLister
+}
+
+func (l multiIssueStateLister) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
+	var issues []tracker.Issue
+	var errOut error
+	for _, stateTracker := range l.trackers {
+		got, err := stateTracker.ListIssuesByStates(ctx, states)
+		if err != nil {
+			errOut = errors.Join(errOut, err)
+			continue
+		}
+		issues = append(issues, got...)
+	}
+	return issues, errOut
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {

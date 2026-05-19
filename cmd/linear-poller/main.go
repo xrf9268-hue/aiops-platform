@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/queue"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -47,19 +49,66 @@ func main() {
 	}
 	defer pool.Close()
 	store := queue.New(pool)
-	client := tracker.NewLinearClient(wf.Config.Tracker)
+	listers := linearIssueListers(wf.Config)
 	interval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
 
 	for {
-		issues, err := client.ListActiveIssues(ctx)
-		if err != nil {
+		if err := pollOnce(ctx, store, &wf.Config, listers); err != nil {
 			log.Printf("linear poll error: %v", err)
-			time.Sleep(interval)
-			continue
 		}
-		processIssues(ctx, store, &wf.Config, issues)
 		time.Sleep(interval)
 	}
+}
+
+type activeIssueLister interface {
+	ListActiveIssues(ctx context.Context) ([]tracker.Issue, error)
+}
+
+type linearIssueSource struct {
+	lister      activeIssueLister
+	projectSlug string
+}
+
+func linearIssueListers(cfg workflow.Config) []linearIssueSource {
+	projectConfigs := orchestrator.TrackerProjectConfigs(cfg)
+	listers := make([]linearIssueSource, 0, len(projectConfigs))
+	for _, projectCfg := range projectConfigs {
+		listers = append(listers, linearIssueSource{
+			lister:      tracker.NewLinearClient(projectCfg.Tracker),
+			projectSlug: strings.TrimSpace(projectCfg.Tracker.ProjectSlug),
+		})
+	}
+	return listers
+}
+
+func pollOnce(ctx context.Context, store enqueuer, cfg *workflow.Config, sources []linearIssueSource) error {
+	var pollErr error
+	for _, source := range sources {
+		issues, err := source.lister.ListActiveIssues(ctx)
+		if err != nil {
+			pollErr = errors.Join(pollErr, err)
+			continue
+		}
+		processIssues(ctx, store, cfg, filterIssuesForPollSource(*cfg, issues, source.projectSlug))
+	}
+	return pollErr
+}
+
+func filterIssuesForPollSource(cfg workflow.Config, issues []tracker.Issue, projectSlug string) []tracker.Issue {
+	rootProject := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+	if rootProject != "" && strings.EqualFold(rootProject, strings.TrimSpace(projectSlug)) {
+		return issues
+	}
+	out := make([]tracker.Issue, 0, len(issues))
+	for _, issue := range issues {
+		for _, service := range cfg.Services {
+			if serviceMatchesIssue(service, cfg.Tracker, issue) {
+				out = append(out, issue)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // processIssues enqueues each polled Linear issue once. It is split out from
@@ -67,19 +116,27 @@ func main() {
 // without standing up Postgres or the Linear API.
 func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, issues []tracker.Issue) {
 	for _, issue := range issues {
-		if cfg.Repo.CloneURL == "" {
+		repo, serviceName, ok := repoForIssue(*cfg, issue)
+		if !ok {
+			continue
+		}
+		if repo.CloneURL == "" {
 			log.Printf("skip %s: repo.clone_url missing in WORKFLOW.md", issue.Identifier)
 			continue
 		}
+		description := issue.Description + "\n\nLinear: " + issue.URL
+		if serviceName != "" {
+			description += "\n\nService: " + serviceName
+		}
 		out, deduped, err := store.Enqueue(ctx, task.Task{
 			SourceType:    "linear_issue",
-			SourceEventID: sourceEventID(issue),
-			RepoOwner:     cfg.Repo.Owner,
-			RepoName:      cfg.Repo.Name,
-			CloneURL:      cfg.Repo.CloneURL,
-			BaseBranch:    cfg.Repo.DefaultBranch,
+			SourceEventID: sourceEventIDForService(issue, serviceName),
+			RepoOwner:     repo.Owner,
+			RepoName:      repo.Name,
+			CloneURL:      repo.CloneURL,
+			BaseBranch:    repo.DefaultBranch,
 			Title:         fmt.Sprintf("%s %s", issue.Identifier, issue.Title),
-			Description:   issue.Description + "\n\nLinear: " + issue.URL,
+			Description:   description,
 			Actor:         "linear",
 			Model:         cfg.Agent.Default,
 			Priority:      50,
@@ -90,6 +147,77 @@ func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, is
 		}
 		log.Printf("issue %s -> task %s deduped=%v", issue.Identifier, out.ID, deduped)
 	}
+}
+
+func repoForIssue(cfg workflow.Config, issue tracker.Issue) (workflow.RepoConfig, string, bool) {
+	if len(cfg.Services) == 0 {
+		return cfg.Repo, "", true
+	}
+	matches := make([]workflow.ServiceConfig, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		if serviceMatchesIssue(service, cfg.Tracker, issue) {
+			matches = append(matches, service)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
+			return cfg.Repo, "", true
+		}
+		log.Printf("skip %s: no configured service matched Linear route", issue.Identifier)
+		return workflow.RepoConfig{}, "", false
+	case 1:
+		return matches[0].Repo, matches[0].Name, true
+	default:
+		names := make([]string, 0, len(matches))
+		for _, service := range matches {
+			names = append(names, service.Name)
+		}
+		log.Printf("skip %s: ambiguous Linear route matched services %s", issue.Identifier, strings.Join(names, ", "))
+		return workflow.RepoConfig{}, "", false
+	}
+}
+
+func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+	route := service.Tracker
+	if !hasExplicitServiceRoute(route) {
+		return false
+	}
+	projectSlug := strings.TrimSpace(route.ProjectSlug)
+	if projectSlug == "" {
+		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
+	}
+	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
+		return false
+	}
+	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {
+		return false
+	}
+	issueLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
+			issueLabels[label] = struct{}{}
+		}
+	}
+	for _, label := range route.Labels {
+		if _, ok := issueLabels[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	for key, want := range route.CustomFields {
+		got, ok := issue.CustomFields[key]
+		if !ok || strings.TrimSpace(got) != strings.TrimSpace(want) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
 }
 
 // sourceEventID builds the dedupe key the poller hands to queue.Store.Enqueue.
@@ -119,10 +247,18 @@ func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, is
 // and updatedAt is sufficient because state changes are the dominant
 // trigger for re-polling a Rework issue.
 func sourceEventID(issue tracker.Issue) string {
-	if strings.EqualFold(issue.State, reworkStateName) && issue.UpdatedAt != "" {
-		return issue.ID + "|rework|" + issue.UpdatedAt
+	return sourceEventIDForService(issue, "")
+}
+
+func sourceEventIDForService(issue tracker.Issue, serviceName string) string {
+	key := issue.ID
+	if serviceName != "" {
+		key += "|service|" + serviceName
 	}
-	return issue.ID
+	if strings.EqualFold(issue.State, reworkStateName) && issue.UpdatedAt != "" {
+		return key + "|rework|" + issue.UpdatedAt
+	}
+	return key
 }
 
 func env(k, d string) string {

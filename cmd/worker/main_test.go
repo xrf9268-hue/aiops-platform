@@ -12,8 +12,28 @@ import (
 	"testing"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+type fakeReconcileTracker struct {
+	issues []tracker.Issue
+}
+
+func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
+	want := map[string]struct{}{}
+	for _, state := range states {
+		want[state] = struct{}{}
+	}
+	var out []tracker.Issue
+	for _, issue := range f.issues {
+		if _, ok := want[issue.State]; ok {
+			out = append(out, issue)
+		}
+	}
+	return out, nil
+}
 
 func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {
 	if err := normalizeRunError(context.Canceled, context.Canceled); err != nil {
@@ -185,6 +205,116 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	reconcile := startupReconcileConfigForWorkflow(cfg, nil)
+	if reconcile.ActiveWorkspaceKeys == nil {
+		t.Fatal("ActiveWorkspaceKeys is nil; startup reconciliation will not recognize service-routed workspace keys")
+	}
+
+	keys := reconcile.ActiveWorkspaceKeys(tracker.Issue{
+		ID:          "abc-123",
+		Identifier:  "ENG-1",
+		State:       "Rework",
+		ProjectSlug: "platform",
+		Labels:      []string{"api"},
+		UpdatedAt:   "2026-05-19T03:00:00Z",
+	})
+	for _, want := range []string{"abc-123-service-api", "abc-123-service-api-rework-2026-05-19t03-00-00z"} {
+		if !containsString(keys, want) {
+			t.Fatalf("active workspace keys = %#v, want %s", keys, want)
+		}
+	}
+}
+
+func TestStartupReconcileKeepsServiceRoutedReworkWorkspaceAfterUpdatedAtChanges(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "api", "linear_issue", "abc-123-service-api-rework-2026-05-18t03-00-00z")
+	terminalPath := filepath.Join(root, "acme", "api", "linear_issue", "done-1")
+	for _, path := range []string{activePath, terminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ActiveStates = []string{"Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done"}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{{
+		Name:    "api",
+		Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+	}}
+	reconcile := startupReconcileConfigForWorkflow(cfg, fakeReconcileTracker{issues: []tracker.Issue{
+		{ID: "abc-123", Identifier: "ENG-1", State: "Rework", ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-19T03:00:00Z"},
+		{ID: "done-1", Identifier: "DONE-1", State: "Done"},
+	}})
+	reconcile.WorkspaceRoot = root
+
+	if err := worker.ReconcileStartup(context.Background(), reconcile); err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active service Rework workspace should remain after updatedAt changes: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("terminal workspace should be removed, stat err=%v", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTrackerClientForWorkflowBuildsMultiProjectLinearClientForServiceRoutes(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ProjectSlug = ""
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}},
+	}
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+
+	multi, ok := client.(interface{ Trackers() []trackerRuntimeClient })
+	if !ok {
+		t.Fatalf("client type = %T, want multi-project tracker", client)
+	}
+	got := multi.Trackers()
+	if len(got) != 2 {
+		t.Fatalf("linear tracker count = %d, want 2 service projects", len(got))
+	}
+	projects := make([]string, 0, len(got))
+	for _, client := range got {
+		linearClient, ok := client.(*tracker.LinearClient)
+		if !ok {
+			t.Fatalf("linear tracker type = %T, want *tracker.LinearClient", client)
+		}
+		projects = append(projects, linearClient.Config.ProjectSlug)
+	}
+	if !reflect.DeepEqual(projects, []string{"api-platform", "web-platform"}) {
+		t.Fatalf("linear tracker projects = %#v, want service projects", projects)
+	}
+}
+
 func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
@@ -234,7 +364,7 @@ func TestValidateWorkflowForRuntimeRejectsDefaultWorkflowMissingTaskFields(t *te
 	}
 }
 
-func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testing.T) {
+func TestValidateWorkflowForRuntimeAcceptsConfiguredRepo(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Repo.CloneURL = "git@example.com:o/r.git"
 
@@ -242,6 +372,17 @@ func TestValidateWorkflowForRuntimeAcceptsWorkflowWithRuntimeTaskFields(t *testi
 		if err := validateWorkflowForRuntime("WORKFLOW.md", source, cfg); err != nil {
 			t.Fatalf("validateWorkflowForRuntime(source=%s) = %v, want nil", source, err)
 		}
+	}
+}
+
+func TestValidateWorkflowForRuntimeAcceptsServiceOnlyRepos(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{CloneURL: "git@example.com:o/api.git"}},
+	}
+
+	if err := validateWorkflowForRuntime("WORKFLOW.md", workflow.SourceFile, cfg); err != nil {
+		t.Fatalf("validateWorkflowForRuntime(service-only repos) = %v, want nil", err)
 	}
 }
 

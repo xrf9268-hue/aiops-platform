@@ -11,6 +11,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 type fakeIssueTracker struct {
@@ -364,6 +365,84 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
 	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Backlog"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("backlog poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceCancelsRunningIssueWhenActiveIssueNoLongerMatchesRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "api-platform"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	poller.routing = &workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "mobile-app"}})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("unrouted poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceReconcilesRoutedIssuesWhenAnotherIssueHasAmbiguousRoute(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "api-platform"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	poller.routing = &workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "docs-a", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "docs-platform"}},
+		{Name: "docs-b", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "docs-platform"}},
+	}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.setIssues([]tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "mobile-app"},
+		{ID: "issue-2", Identifier: "LIN-2", Title: "Ambiguous docs", State: "In Progress", ProjectSlug: "docs-platform"},
+	})
+	err := poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous poll error = %v, want ambiguity reported", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
@@ -739,6 +818,234 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 	close(dispatcher.releaseCh)
 }
 
+func TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{
+			Name: "api",
+			Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git"},
+			Tracker: workflow.ServiceTrackerRouteConfig{
+				ProjectSlug:  "api-platform",
+				TeamKey:      "ENG",
+				Labels:       []string{"backend"},
+				CustomFields: map[string]string{"Runtime": "go"},
+			},
+		},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG", Labels: []string{"backend", "customer"}, CustomFields: map[string]string{"Runtime": "go"}},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want 1", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed candidate service = %q, want api", got[0].ServiceName)
+	}
+}
+
+func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssueWithoutFallbackRepo(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("routed candidates = %#v, want unmatched issue skipped", got)
+	}
+}
+
+func TestSelectRoutedCandidatesKeepsUnmatchedLinearIssueForFallbackRepo(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{ProjectSlug: "core-platform"},
+		Repo:    workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Core work", State: "AI Ready", ProjectSlug: "core-platform"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want unmatched issue kept for fallback repo", len(got))
+	}
+	if got[0].ServiceName != "" {
+		t.Fatalf("fallback candidate service = %q, want empty service", got[0].ServiceName)
+	}
+}
+
+func TestSelectRoutedCandidatesSkipsUnmatchedServiceProjectIssueWithFallbackRepo(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform", Labels: []string{"api"}}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Unmatched service work", State: "AI Ready", ProjectSlug: "api-platform", Labels: []string{"docs"}},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("routed candidates = %#v, want unmatched service-project issue skipped instead of fallback repo", got)
+	}
+}
+
+func TestSelectRoutedCandidatesRejectsAmbiguousLinearRoute(t *testing.T) {
+	cfg := workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api-a", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		{Name: "api-b", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Ambiguous work", State: "AI Ready", ProjectSlug: "api-platform"},
+	}
+
+	_, err := selectRoutedCandidates(issues, cfg)
+	if err == nil {
+		t.Fatal("selectRoutedCandidates returned nil error, want ambiguous route error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") || !strings.Contains(err.Error(), "issue-1") || !strings.Contains(err.Error(), "api-a") || !strings.Contains(err.Error(), "api-b") {
+		t.Fatalf("ambiguous route error = %q, want issue and matching services", err)
+	}
+}
+
+func TestSelectRoutedCandidatesUsesTopLevelLinearProjectAsServiceDefault(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{ProjectSlug: "api-platform"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{TeamKey: "ENG"}},
+			{Name: "mobile", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "mobile-app", TeamKey: "ENG"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "api-issue", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG"},
+		{ID: "mobile-issue", Identifier: "LIN-2", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app", TeamKey: "ENG"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("routed candidates = %d, want 2", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("api issue service = %q, want api", got[0].ServiceName)
+	}
+	if got[1].ServiceName != "mobile" {
+		t.Fatalf("mobile issue service = %q, want mobile", got[1].ServiceName)
+	}
+}
+
+func TestSelectRoutedCandidatesIgnoresServiceWithoutExplicitRouteBeforeProjectDefault(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{ProjectSlug: "api-platform"},
+		Services: []workflow.ServiceConfig{
+			{Name: "catchall", Tracker: workflow.ServiceTrackerRouteConfig{}},
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{TeamKey: "ENG"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "api-issue", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want only explicitly routed service", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed candidate service = %q, want api", got[0].ServiceName)
+	}
+}
+
+func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		},
+	}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "api"}
+
+	got, err := TaskFromIssue(issue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue: %v", err)
+	}
+	if got.RepoOwner != "acme" || got.RepoName != "api" || got.CloneURL != "git@example.com:acme/api.git" {
+		t.Fatalf("task repo = %s/%s %s, want acme/api service repo", got.RepoOwner, got.RepoName, got.CloneURL)
+	}
+	if got.BaseBranch != "main" {
+		t.Fatalf("task base branch = %q, want main", got.BaseBranch)
+	}
+}
+
+func TestTaskFromIssueNamespacesServiceRoutedSourceEventID(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Repo: workflow.RepoConfig{Owner: "acme", Name: "mono", CloneURL: "git@example.com:acme/mono.git", DefaultBranch: "main"}},
+			{Name: "web", Repo: workflow.RepoConfig{Owner: "acme", Name: "mono", CloneURL: "git@example.com:acme/mono.git", DefaultBranch: "main"}},
+		},
+	}
+	apiIssue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "api"}
+	webIssue := apiIssue
+	webIssue.ServiceName = "web"
+
+	apiTask, err := TaskFromIssue(apiIssue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue(api): %v", err)
+	}
+	webTask, err := TaskFromIssue(webIssue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue(web): %v", err)
+	}
+
+	if apiTask.SourceEventID != "issue-1|service|api" {
+		t.Fatalf("api source event id = %q, want service-scoped issue id", apiTask.SourceEventID)
+	}
+	if webTask.SourceEventID != "issue-1|service|web" {
+		t.Fatalf("web source event id = %q, want service-scoped issue id", webTask.SourceEventID)
+	}
+	if apiTask.SourceEventID == webTask.SourceEventID {
+		t.Fatalf("service-routed tasks share source event id %q", apiTask.SourceEventID)
+	}
+}
+
+func TestTaskFromIssueRejectsUnknownService(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+	}
+	issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "missing"}
+
+	_, err := TaskFromIssue(issue, cfg)
+	if err == nil {
+		t.Fatal("TaskFromIssue returned nil error, want unknown service error")
+	}
+	if !strings.Contains(err.Error(), `service "missing" not found`) {
+		t.Fatalf("TaskFromIssue error = %q, want unknown service", err)
+	}
+}
+
 func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1068,7 +1375,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Millisecond},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -1173,7 +1480,7 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 
 func waitForRetryDue(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		view, err := orch.Snapshot(ctx)
 		if err != nil {

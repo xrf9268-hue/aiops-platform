@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,6 +311,290 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 	}
 }
 
+func TestRuntimePollerFetchesLinearIssuesFromEachServiceProject(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform"}},
+			"web-platform": {{ID: "web-1", Identifier: "WEB-1", Title: "Web work", State: "AI Ready", ProjectSlug: "web-platform"}},
+		},
+	}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	if got := dispatcher.count(); got != 2 {
+		t.Fatalf("dispatched issues = %d, want both service projects", got)
+	}
+	if got := strings.Join(trackerClient.projects(), ","); got != "api-platform,api-platform,web-platform,web-platform" {
+		t.Fatalf("queried projects = %q, want active and terminal reconciliation queries for api-platform,web-platform", got)
+	}
+}
+
+func TestRuntimePollerDispatchesHealthyServiceProjectWhenAnotherProjectPollFails(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform"}},
+		},
+		errsByProject: map[string]error{"web-platform": errors.New("web project unavailable")},
+	}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	err = poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "web project unavailable") {
+		t.Fatalf("poll once error = %v, want failed project reported", err)
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("dispatched issues = %d, want healthy project issue dispatched despite failed project", got)
+	}
+	if got := dispatcher.issueAt(0).ID; got != "api-1" {
+		t.Fatalf("dispatched issue = %q, want api-1", got)
+	}
+}
+
+func TestRuntimePollerKeepsRunningFailedProjectIssueWhenDispatchingHealthyPartialPoll(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"web-platform": {{ID: "web-1", Identifier: "WEB-1", Title: "Web work", State: "AI Ready", ProjectSlug: "web-platform"}},
+		},
+	}
+	dispatcher := &cancellationDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.mu.Lock()
+	trackerClient.issuesByProject = map[string][]tracker.Issue{
+		"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform"}},
+	}
+	trackerClient.errsByProject = map[string]error{"web-platform": errors.New("web project unavailable")}
+	trackerClient.mu.Unlock()
+
+	err = poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "web project unavailable") {
+		t.Fatalf("poll once error = %v, want failed project reported", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 2)
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatal("running issue from failed project was canceled after partial active poll")
+	default:
+	}
+}
+
+func TestRuntimePollerCancelsHealthyProjectIssueDuringPartialPoll(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform"}},
+		},
+	}
+	dispatcher := &cancellationDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.mu.Lock()
+	trackerClient.issuesByProject = map[string][]tracker.Issue{
+		"web-platform": {{ID: "web-1", Identifier: "WEB-1", Title: "Web work", State: "AI Ready", ProjectSlug: "web-platform"}},
+	}
+	trackerClient.mu.Unlock()
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("web-only poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForCancellationDispatcherCount(t, dispatcher, 2)
+
+	trackerClient.mu.Lock()
+	trackerClient.issuesByProject = map[string][]tracker.Issue{
+		"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform"}},
+	}
+	trackerClient.errsByProject = map[string]error{"web-platform": errors.New("web project unavailable")}
+	trackerClient.mu.Unlock()
+
+	err = poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "web project unavailable") {
+		t.Fatalf("poll once error = %v, want failed project reported", err)
+	}
+	select {
+	case <-dispatcher.contextAt(1).Done():
+		t.Fatal("healthy project issue was canceled after partial active poll")
+	default:
+	}
+}
+
+func TestRuntimePollerDoesNotFanOutServiceProjectsForGitea(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ProjectSlug = "https://gitea.example.com"
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
+	}
+
+	got := TrackerProjectConfigs(cfg)
+	if len(got) != 1 {
+		t.Fatalf("tracker configs = %d, want one non-Linear tracker config", len(got))
+	}
+	if got[0].Tracker.ProjectSlug != "https://gitea.example.com" {
+		t.Fatalf("tracker project slug = %q, want original Gitea base URL", got[0].Tracker.ProjectSlug)
+	}
+}
+
+func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Repo = workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git", DefaultBranch: "main"}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
+		{ID: "gitea-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"},
+	}}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if poller.poller.routing != nil {
+		t.Fatal("gitea runtime poller enabled Linear service routing")
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	got := dispatcher.issueAt(0)
+	if got.ID != "gitea-ready" {
+		t.Fatalf("dispatched issue = %q, want gitea-ready", got.ID)
+	}
+	if got.ServiceName != "" {
+		t.Fatalf("gitea issue service = %q, want no Linear service routing", got.ServiceName)
+	}
+
+	linearPath := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	linearWorkflow, err := workflow.Load(linearPath)
+	if err != nil {
+		t.Fatalf("load linear workflow: %v", err)
+	}
+	linearWorkflow.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+	}
+	linearRuntime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: linearWorkflow, Path: linearPath, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new linear runtime: %v", err)
+	}
+	linearPoller, err := NewRuntimePoller(&fakeIssueStateTracker{}, orch, linearRuntime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new linear runtime poller: %v", err)
+	}
+	if linearPoller.poller.routing == nil {
+		t.Fatal("linear service runtime poller did not enable service routing")
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)
@@ -464,6 +749,48 @@ func (s *recordingPollSleeper) sleep(_ context.Context, d time.Duration) error {
 type reloadLoopTestSleeper struct {
 	calls      int
 	afterFirst func()
+}
+
+type fakeProjectScopedIssueTracker struct {
+	mu              sync.Mutex
+	project         string
+	root            *fakeProjectScopedIssueTracker
+	issuesByProject map[string][]tracker.Issue
+	errsByProject   map[string]error
+	queriedProjects []string
+}
+
+func (f *fakeProjectScopedIssueTracker) forProject(project string) IssueStateLister {
+	return &fakeProjectScopedIssueTracker{project: project, root: f}
+}
+
+func (f *fakeProjectScopedIssueTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
+	root := f.root
+	if root == nil {
+		root = f
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	root.queriedProjects = append(root.queriedProjects, f.project)
+	if err := root.errsByProject[f.project]; err != nil {
+		return nil, err
+	}
+	wanted := normalizedStates(states)
+	out := make([]tracker.Issue, 0, len(root.issuesByProject[f.project]))
+	for _, issue := range root.issuesByProject[f.project] {
+		if isActiveTrackerState(issue.State, wanted) {
+			out = append(out, issue)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeProjectScopedIssueTracker) projects() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := append([]string(nil), f.queriedProjects...)
+	sort.Strings(out)
+	return out
 }
 
 func (s *reloadLoopTestSleeper) sleep(_ context.Context, _ time.Duration) error {

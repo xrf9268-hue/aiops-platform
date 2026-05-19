@@ -10,6 +10,20 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+type fakeIssueLister struct {
+	issues []tracker.Issue
+	err    error
+	calls  int
+}
+
+func (l *fakeIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	l.calls++
+	if l.err != nil {
+		return nil, l.err
+	}
+	return l.issues, nil
+}
+
 // fakeStore mimics queue.Store.Enqueue with the same dedupe semantics as the
 // Postgres ON CONFLICT (source_type, source_event_id) DO UPDATE clause: the
 // first call for a given key INSERTs and returns deduped=false, repeats
@@ -162,6 +176,264 @@ func TestProcessIssuesSkipsWhenCloneURLMissing(t *testing.T) {
 
 	if len(store.calls) != 0 {
 		t.Fatalf("Enqueue called %d times, want 0 when clone_url missing", len(store.calls))
+	}
+}
+
+func TestProcessIssuesRoutesServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1 for matched service route", len(store.calls))
+	}
+	got := store.calls[0]
+	if got.RepoOwner != "octo" || got.RepoName != "api" || got.CloneURL != "git@example.com:octo/api.git" {
+		t.Fatalf("task repo = %s/%s %s, want octo/api service repo", got.RepoOwner, got.RepoName, got.CloneURL)
+	}
+}
+
+func TestProcessIssuesEnqueuesFreshTaskWhenIssueRouteChangesService(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+		{
+			Name:    "web",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "web", CloneURL: "git@example.com:octo/web.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"web"}},
+		},
+	}
+
+	issueForAPI := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	issueForWeb := issueForAPI
+	issueForWeb.Labels = []string{"web"}
+
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issueForAPI})
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issueForWeb})
+
+	if store.inserts() != 2 {
+		t.Fatalf("inserts after route change = %d, want one task per matched service", store.inserts())
+	}
+	if got := store.calls[0].SourceEventID; got != "abc-123|service|api" {
+		t.Fatalf("first source_event_id = %q, want api service key", got)
+	}
+	if got := store.calls[1].SourceEventID; got != "abc-123|service|web" {
+		t.Fatalf("second source_event_id = %q, want web service key", got)
+	}
+	if store.calls[0].RepoName != "api" || store.calls[1].RepoName != "web" {
+		t.Fatalf("enqueued repos = %q then %q, want api then web", store.calls[0].RepoName, store.calls[1].RepoName)
+	}
+}
+
+func TestLinearIssueListersFanOutServiceOnlyLinearWorkflowProjects(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = ""
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"},
+		},
+		{
+			Name:    "web",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "web", CloneURL: "git@example.com:octo/web.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"},
+		},
+	}
+
+	listers := linearIssueListers(*cfg)
+	if len(listers) != 2 {
+		t.Fatalf("linear issue listers = %d, want one per service project", len(listers))
+	}
+	projects := make([]string, 0, len(listers))
+	for _, source := range listers {
+		client, ok := source.lister.(*tracker.LinearClient)
+		if !ok {
+			t.Fatalf("lister type = %T, want *tracker.LinearClient", source.lister)
+		}
+		projects = append(projects, client.Config.ProjectSlug)
+	}
+	want := []string{"api-platform", "web-platform"}
+	for i := range want {
+		if projects[i] != want[i] {
+			t.Fatalf("lister projects = %v, want %v", projects, want)
+		}
+	}
+}
+
+func TestPollOnceFansOutProvidedLinearListers(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Tracker.ProjectSlug = "platform"
+	apiLister := &fakeIssueLister{issues: []tracker.Issue{{
+		ID: "api-1", Identifier: "API-1", Title: "api", State: "AI Ready", ProjectSlug: "platform",
+	}}}
+	webLister := &fakeIssueLister{issues: []tracker.Issue{{
+		ID: "web-1", Identifier: "WEB-1", Title: "web", State: "AI Ready", ProjectSlug: "platform",
+	}}}
+
+	err := pollOnce(context.Background(), store, cfg, []linearIssueSource{
+		{lister: apiLister, projectSlug: "platform"},
+		{lister: webLister, projectSlug: "platform"},
+	})
+	if err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+	if apiLister.calls != 1 || webLister.calls != 1 {
+		t.Fatalf("lister calls = api:%d web:%d, want both service project listers called once", apiLister.calls, webLister.calls)
+	}
+	if len(store.calls) != 2 {
+		t.Fatalf("Enqueue calls = %d, want one issue per lister", len(store.calls))
+	}
+}
+
+func TestPollOnceDoesNotFallbackServiceProjectIssuesToRootRepo(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform", Labels: []string{"api"}},
+		},
+	}
+	rootLister := &fakeIssueLister{issues: []tracker.Issue{{
+		ID: "root-1", Identifier: "ROOT-1", Title: "root", State: "AI Ready", ProjectSlug: "platform",
+	}}}
+	serviceLister := &fakeIssueLister{issues: []tracker.Issue{{
+		ID: "api-1", Identifier: "API-1", Title: "unmatched api project issue", State: "AI Ready", ProjectSlug: "api-platform",
+		Labels: []string{"docs"},
+	}}}
+
+	err := pollOnce(context.Background(), store, cfg, []linearIssueSource{
+		{lister: rootLister, projectSlug: "platform"},
+		{lister: serviceLister, projectSlug: "api-platform"},
+	})
+	if err != nil {
+		t.Fatalf("pollOnce: %v", err)
+	}
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want only root project issue enqueued", len(store.calls))
+	}
+	if got := store.calls[0].SourceEventID; got != "root-1" {
+		t.Fatalf("enqueued source event = %q, want only root-1", got)
+	}
+}
+
+func TestProcessIssuesSkipsUnmatchedServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "skip me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 0 {
+		t.Fatalf("Enqueue called %d times, want 0 for unmatched service route", len(store.calls))
+	}
+}
+
+func TestProcessIssuesSkipsAmbiguousServiceOnlyLinearWorkflow(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"backend"}}},
+		{Name: "worker", Repo: workflow.RepoConfig{Owner: "octo", Name: "worker", CloneURL: "git@example.com:octo/worker.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"backend"}}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "ambiguous", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"backend"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 0 {
+		t.Fatalf("Enqueue called %d times, want 0 for ambiguous service route", len(store.calls))
+	}
+}
+
+func TestProcessIssuesIgnoresServiceWithoutLinearRoute(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}}},
+		{Name: "unrouted", Repo: workflow.RepoConfig{Owner: "octo", Name: "unrouted", CloneURL: "git@example.com:octo/unrouted.git", DefaultBranch: "main"}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1; unrouted service must not create ambiguity", len(store.calls))
+	}
+	if got := store.calls[0].RepoName; got != "api" {
+		t.Fatalf("enqueued repo name = %q, want api", got)
+	}
+}
+
+func TestProcessIssuesFallsBackToRootRepoWhenNoServiceRouteMatches(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Services = []workflow.ServiceConfig{
+		{Name: "api", Repo: workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"}, Tracker: workflow.ServiceTrackerRouteConfig{Labels: []string{"api"}}},
+	}
+
+	issue := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "root repo", State: "AI Ready",
+		Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
+
+	if len(store.calls) != 1 {
+		t.Fatalf("Enqueue calls = %d, want 1 for root repo fallback", len(store.calls))
+	}
+	got := store.calls[0]
+	if got.RepoOwner != "octo" || got.RepoName != "demo" || got.CloneURL != "git@example.com:octo/demo.git" {
+		t.Fatalf("task repo = %s/%s %s, want octo/demo root repo", got.RepoOwner, got.RepoName, got.CloneURL)
 	}
 }
 
