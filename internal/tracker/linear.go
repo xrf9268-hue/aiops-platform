@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -49,6 +50,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
       description
       url
       priority
+      branchName
       createdAt
       updatedAt
       project { slugId }
@@ -73,6 +75,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 						Description string `json:"description"`
 						URL         string `json:"url"`
 						Priority    int    `json:"priority"`
+						BranchName  string `json:"branchName"`
 						CreatedAt   string `json:"createdAt"`
 						UpdatedAt   string `json:"updatedAt"`
 						Project     struct {
@@ -113,7 +116,15 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return nil, fmt.Errorf("linear errors: %v", out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
-			var blockers []Blocker
+			createdAt, err := parseLinearIssueTime("createdAt", n.CreatedAt)
+			if err != nil {
+				return nil, err
+			}
+			updatedAt, err := parseLinearIssueTime("updatedAt", n.UpdatedAt)
+			if err != nil {
+				return nil, err
+			}
+			var blockers []BlockerRef
 			if isTodoState(n.State.Name) {
 				var err error
 				blockers, err = c.linearBlockersForIssue(ctx, n.ID)
@@ -134,7 +145,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 				}
 				customFields[strings.TrimSpace(field.CustomField.Name)] = stringifyLinearCustomFieldValue(field.Value)
 			}
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, CustomFields: customFields, State: n.State.Name, BlockedBy: blockers})
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, CustomFields: customFields, State: n.State.Name, BlockedBy: blockers})
 		}
 		if !out.Data.Issues.PageInfo.HasNextPage {
 			return issues, nil
@@ -145,6 +156,18 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
 	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+}
+
+func parseLinearIssueTime(field, value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse Linear issue %s %q: %w", field, value, err)
+	}
+	return parsed, nil
 }
 
 func stringifyLinearCustomFieldValue(raw json.RawMessage) string {
@@ -221,7 +244,7 @@ func isTodoState(state string) bool {
 	return strings.EqualFold(strings.TrimSpace(state), "Todo")
 }
 
-func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID string) ([]Blocker, error) {
+func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID string) ([]BlockerRef, error) {
 	var out struct {
 		Data struct {
 			Issue struct {
@@ -250,14 +273,14 @@ func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID strin
 	return c.linearBlockersFromInverseRelations(ctx, issueID, out.Data.Issue.InverseRelations.Nodes, out.Data.Issue.InverseRelations.PageInfo.HasNextPage, out.Data.Issue.InverseRelations.PageInfo.EndCursor)
 }
 
-func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]Blocker, error) {
-	blockers := make([]Blocker, 0, len(nodes))
+func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]BlockerRef, error) {
+	blockers := make([]BlockerRef, 0, len(nodes))
 	appendBlockers := func(nodes []linearRelationNode) {
 		for _, r := range nodes {
 			if r.Type != "blocks" {
 				continue
 			}
-			blockers = append(blockers, Blocker{ID: r.Issue.ID, Identifier: r.Issue.Identifier, State: r.Issue.State.Name})
+			blockers = append(blockers, BlockerRef{ID: r.Issue.ID, Identifier: r.Issue.Identifier, State: r.Issue.State.Name})
 		}
 	}
 	appendBlockers(nodes)

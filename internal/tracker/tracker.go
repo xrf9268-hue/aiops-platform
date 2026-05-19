@@ -1,6 +1,9 @@
 package tracker
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type Issue struct {
 	ID           string
@@ -14,19 +17,29 @@ type Issue struct {
 	Labels       []string
 	CustomFields map[string]string
 	ServiceName  string
+	BranchName   string
 	Priority     int
-	CreatedAt    string
-	UpdatedAt    string
-	BlockedBy    []Blocker
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	BlockedBy    []BlockerRef
 }
 
-// Blocker is the minimal tracker dependency metadata the orchestrator needs to
-// filter blocked Todo candidates. State is the blocker issue's workflow state;
-// callers decide which states are terminal in their workflow.
-type Blocker struct {
+// BlockerRef is the minimal tracker dependency metadata the orchestrator needs
+// to filter blocked Todo candidates. State is the blocker issue's workflow
+// state; callers decide which states are terminal in their workflow.
+type BlockerRef struct {
 	ID         string
 	Identifier string
 	State      string
+}
+
+// TimeString returns the canonical string form used by legacy queue and
+// workspace keys for a tracker timestamp.
+func TimeString(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 type Client interface {

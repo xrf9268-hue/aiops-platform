@@ -276,34 +276,21 @@ func sortCandidates(issues []tracker.Issue) {
 	})
 }
 
-func compareCreatedAt(left, right string) int {
-	leftTime, leftErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(left))
-	rightTime, rightErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(right))
-	if leftErr == nil && rightErr == nil {
-		switch {
-		case leftTime.Before(rightTime):
-			return -1
-		case leftTime.After(rightTime):
-			return 1
-		default:
-			return 0
-		}
-	}
-	if leftErr == nil {
+func compareCreatedAt(left, right time.Time) int {
+	switch {
+	case left.IsZero() && right.IsZero():
+		return 0
+	case left.IsZero():
+		return 1
+	case right.IsZero():
 		return -1
-	}
-	if rightErr == nil {
+	case left.Before(right):
+		return -1
+	case left.After(right):
 		return 1
+	default:
+		return 0
 	}
-	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
-	if left != right {
-		if left < right {
-			return -1
-		}
-		return 1
-	}
-	return 0
 }
 
 func linearPrioritySortKey(priority int) int {

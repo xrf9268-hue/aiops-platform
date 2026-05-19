@@ -139,7 +139,7 @@ type OrchestratorState struct {
 // or agent may have fixed the configuration/input, so the poller may retry.
 type FailedEntry struct {
 	State     string
-	UpdatedAt string
+	UpdatedAt time.Time
 }
 
 // NewOrchestratorState mirrors the SPEC §16.1 reference initializer:

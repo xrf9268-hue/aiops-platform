@@ -267,10 +267,10 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 	var prefixes []string
 	baseKeys := []string{workspace.SanitizeComponent(issue.ID), sanitizeLegacyWorkspaceKey(issue.ID)}
 	for _, key := range activeKeysForIssue(issue) {
-		if base, ok := strings.CutSuffix(key, "-rework-"+workspace.SanitizeComponent(issue.UpdatedAt)); ok {
+		if base, ok := strings.CutSuffix(key, "-rework-"+workspace.SanitizeComponent(tracker.TimeString(issue.UpdatedAt))); ok {
 			baseKeys = append(baseKeys, base)
 		}
-		if base, ok := strings.CutSuffix(key, "_rework_"+sanitizeLegacyWorkspaceKey(issue.UpdatedAt)); ok {
+		if base, ok := strings.CutSuffix(key, "_rework_"+sanitizeLegacyWorkspaceKey(tracker.TimeString(issue.UpdatedAt))); ok {
 			baseKeys = append(baseKeys, base)
 		}
 	}
@@ -325,11 +325,11 @@ func ActiveWorkspaceKeysForWorkflow(cfg workflow.Config) func(tracker.Issue) []s
 func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []string {
 	seen := map[string]struct{}{}
 	var keys []string
-	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && issue.UpdatedAt != "" {
+	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && !issue.UpdatedAt.IsZero() {
 		baseKeys := append([]string(nil), rawKeys...)
 		for _, raw := range baseKeys {
 			if strings.TrimSpace(raw) != "" {
-				rawKeys = append(rawKeys, raw+"|rework|"+issue.UpdatedAt)
+				rawKeys = append(rawKeys, raw+"|rework|"+tracker.TimeString(issue.UpdatedAt))
 			}
 		}
 	}

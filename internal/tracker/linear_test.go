@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -313,20 +314,20 @@ func TestListIssuesByStatesRequiresProjectSlugAndUsesProjectFilter(t *testing.T)
 	}
 }
 
-func TestListIssuesByStatesMapsRoutingFields(t *testing.T) {
+func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		for _, fragment := range []string{"project { slugId }", "team { key }", "labels(first: 50)", "customFieldValues(first: 50)", "customField { name }"} {
+		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "project { slugId }", "team { key }", "labels(first: 50)", "customFieldValues(first: 50)", "customField { name }"} {
 			if !strings.Contains(payload.Query, fragment) {
 				t.Fatalf("ListIssues query = %s, want fragment %q", payload.Query, fragment)
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"customFieldValues":{"nodes":[{"customField":{"name":"Runtime"},"value":"go"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"customFieldValues":{"nodes":[{"customField":{"name":"Runtime"},"value":"go"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -342,11 +343,29 @@ func TestListIssuesByStatesMapsRoutingFields(t *testing.T) {
 	if issue.ProjectSlug != "api-platform" || issue.TeamKey != "ENG" {
 		t.Fatalf("issue route = project %q team %q, want api-platform/ENG", issue.ProjectSlug, issue.TeamKey)
 	}
+	if issue.Priority != 1 || issue.BranchName != "agent/lin-1" {
+		t.Fatalf("issue priority/branch = %d/%q, want 1/agent/lin-1", issue.Priority, issue.BranchName)
+	}
+	createdAt := time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 5, 16, 0, 0, 0, 0, time.UTC)
+	if !issue.CreatedAt.Equal(createdAt) || !issue.UpdatedAt.Equal(updatedAt) {
+		t.Fatalf("issue timestamps = %s/%s, want %s/%s", issue.CreatedAt, issue.UpdatedAt, createdAt, updatedAt)
+	}
 	if got := strings.Join(issue.Labels, ","); got != "backend,customer" {
 		t.Fatalf("labels = %q, want lower-cased backend,customer", got)
 	}
 	if issue.CustomFields["Runtime"] != "go" {
 		t.Fatalf("custom field Runtime = %q, want go", issue.CustomFields["Runtime"])
+	}
+}
+
+func TestParseLinearIssueTimeErrorsOnMalformedTimestamp(t *testing.T) {
+	_, err := parseLinearIssueTime("updatedAt", "not-a-timestamp")
+	if err == nil {
+		t.Fatal("parseLinearIssueTime malformed timestamp should error")
+	}
+	if !strings.Contains(err.Error(), "updatedAt") || !strings.Contains(err.Error(), "not-a-timestamp") {
+		t.Fatalf("error = %q, want field name and bad value", err.Error())
 	}
 }
 
@@ -582,8 +601,8 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	if issues[0].Identifier != "LIN-1" || issues[1].Identifier != "LIN-2" {
 		t.Fatalf("issue identifiers = %q, %q; want LIN-1, LIN-2", issues[0].Identifier, issues[1].Identifier)
 	}
-	if issues[0].Priority != 1 || issues[0].CreatedAt != "2026-05-15T00:00:00Z" {
-		t.Fatalf("issue metadata = priority %d createdAt %q, want priority 1 createdAt 2026-05-15T00:00:00Z", issues[0].Priority, issues[0].CreatedAt)
+	if issues[0].Priority != 1 || !issues[0].CreatedAt.Equal(time.Date(2026, 5, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("issue metadata = priority %d createdAt %s, want priority 1 createdAt 2026-05-15T00:00:00Z", issues[0].Priority, issues[0].CreatedAt)
 	}
 	if got := len(issues[0].BlockedBy); got != 1 {
 		t.Fatalf("issue blockers = %d, want 1", got)

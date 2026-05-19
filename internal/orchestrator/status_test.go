@@ -109,7 +109,7 @@ func TestStatusSnapshotSummaryIgnoresRecentEventLimit(t *testing.T) {
 
 func TestStatusSnapshotCountsCurrentNonRetryableFailuresAfterEventEviction(t *testing.T) {
 	st := NewOrchestratorState(30000, 2)
-	run := &RunningEntry{Issue: tracker.Issue{ID: "issue-1", Identifier: "ENG-1", State: "started", UpdatedAt: "2026-05-19T00:00:00Z"}}
+	run := &RunningEntry{Issue: tracker.Issue{ID: "issue-1", Identifier: "ENG-1", State: "started", UpdatedAt: mustTime("2026-05-19T00:00:00Z")}}
 	st.BeginDispatch("issue-1", run)
 	st.FinishRunNonRetryableFailed("issue-1", run, time.Millisecond)
 	for i := range 201 {

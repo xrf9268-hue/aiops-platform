@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -89,8 +90,18 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	if issues[1].State != "Rework" {
 		t.Fatalf("second issue state = %q, want Rework", issues[1].State)
 	}
-	if issues[0].CreatedAt != "2026-05-16T23:59:00Z" || issues[1].CreatedAt != "2026-05-17T00:00:30Z" {
-		t.Fatalf("issue created_at = %q, %q; want Gitea created_at metadata mapped", issues[0].CreatedAt, issues[1].CreatedAt)
+	if !issues[0].CreatedAt.Equal(mustTime("2026-05-16T23:59:00Z")) || !issues[1].CreatedAt.Equal(mustTime("2026-05-17T00:00:30Z")) {
+		t.Fatalf("issue created_at = %s, %s; want Gitea created_at metadata mapped", issues[0].CreatedAt, issues[1].CreatedAt)
+	}
+}
+
+func TestParseGiteaIssueTimeErrorsOnMalformedTimestamp(t *testing.T) {
+	_, err := parseGiteaIssueTime("updated_at", "not-a-timestamp")
+	if err == nil {
+		t.Fatal("parseGiteaIssueTime malformed timestamp should error")
+	}
+	if !strings.Contains(err.Error(), "updated_at") || !strings.Contains(err.Error(), "not-a-timestamp") {
+		t.Fatalf("error = %q, want field name and bad value", err.Error())
 	}
 }
 
@@ -327,4 +338,12 @@ func TestTrackerClientListIssuesByStatesContinuesWhenServerCapsPageBelowRequeste
 
 func serverURL(r *http.Request) string {
 	return "http://" + r.Host
+}
+
+func mustTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

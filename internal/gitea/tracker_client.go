@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -121,6 +122,14 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 					continue
 				}
 			}
+			createdAt, err := parseGiteaIssueTime("created_at", issue.CreatedAt)
+			if err != nil {
+				return nil, err
+			}
+			updatedAt, err := parseGiteaIssueTime("updated_at", issue.UpdatedAt)
+			if err != nil {
+				return nil, err
+			}
 			seenIssues[issueKey] = struct{}{}
 			out = append(out, tracker.Issue{
 				ID:          strconv.FormatInt(issue.ID, 10),
@@ -129,8 +138,8 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 				Description: issue.Body,
 				URL:         issue.HTMLURL,
 				State:       state,
-				CreatedAt:   issue.CreatedAt,
-				UpdatedAt:   issue.UpdatedAt,
+				CreatedAt:   createdAt,
+				UpdatedAt:   updatedAt,
 			})
 		}
 		if !hasNext && len(batch) < listIssuesPageSize {
@@ -138,6 +147,18 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 		}
 	}
 	return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
+}
+
+func parseGiteaIssueTime(field, value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse Gitea issue %s %q: %w", field, value, err)
+	}
+	return parsed, nil
 }
 
 func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, issueState string, page int) ([]Issue, bool, error) {

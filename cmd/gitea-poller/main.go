@@ -84,8 +84,8 @@ func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, is
 }
 
 func sourceEventID(issue tracker.Issue) string {
-	if strings.EqualFold(issue.State, "Rework") && issue.UpdatedAt != "" {
-		return issue.ID + "|rework|" + issue.UpdatedAt
+	if strings.EqualFold(issue.State, "Rework") && !issue.UpdatedAt.IsZero() {
+		return issue.ID + "|rework|" + tracker.TimeString(issue.UpdatedAt)
 	}
 	return issue.ID
 }

@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -227,7 +228,7 @@ func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testi
 		State:       "Rework",
 		ProjectSlug: "platform",
 		Labels:      []string{"api"},
-		UpdatedAt:   "2026-05-19T03:00:00Z",
+		UpdatedAt:   mustTime("2026-05-19T03:00:00Z"),
 	})
 	for _, want := range []string{"abc-123-service-api", "abc-123-service-api-rework-2026-05-19t03-00-00z"} {
 		if !containsString(keys, want) {
@@ -255,7 +256,7 @@ func TestStartupReconcileKeepsServiceRoutedReworkWorkspaceAfterUpdatedAtChanges(
 		Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
 	}}
 	reconcile := startupReconcileConfigForWorkflow(cfg, fakeReconcileTracker{issues: []tracker.Issue{
-		{ID: "abc-123", Identifier: "ENG-1", State: "Rework", ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-19T03:00:00Z"},
+		{ID: "abc-123", Identifier: "ENG-1", State: "Rework", ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: mustTime("2026-05-19T03:00:00Z")},
 		{ID: "done-1", Identifier: "DONE-1", State: "Done"},
 	}})
 	reconcile.WorkspaceRoot = root
@@ -575,4 +576,12 @@ func TestLoadWorkflowForStartupReconcileDefaultsWhenNoWorkflowExists(t *testing.
 	if strings.Contains(gotLog, "reconciliation will be skipped") {
 		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
 	}
+}
+
+func mustTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

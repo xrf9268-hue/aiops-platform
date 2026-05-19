@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -184,7 +185,7 @@ func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 		TerminalStates: []string{"Done"},
 		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
 			{ID: "issue-1", Identifier: "LIN 1 Needs/Fix", State: "In Progress"},
-			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: "2026-05-16T10:00:00Z"},
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-16T10:00:00Z")},
 			{ID: "issue-2", Identifier: "LIN 2 Done", State: "Done"},
 		}},
 		Emitter:         &fakeEmitter{},
@@ -279,7 +280,7 @@ func TestReconcileStartupKeepsReworkWorkspaceWhenUpdatedAtChanged(t *testing.T) 
 		ActiveStates:   []string{"Rework"},
 		TerminalStates: []string{"Done"},
 		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
-			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: "2026-05-16T11:30:00Z"},
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
 			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
 		}},
 		Emitter:         &fakeEmitter{},
@@ -290,6 +291,46 @@ func TestReconcileStartupKeepsReworkWorkspaceWhenUpdatedAtChanged(t *testing.T) 
 	}
 	if _, err := os.Stat(reworkPath); err != nil {
 		t.Fatalf("active Rework workspace should remain even when issue updatedAt changed: %v", err)
+	}
+}
+
+func TestReconcileStartupKeepsReworkWorkspaceWithLegacyOffsetTimestampSuffix(t *testing.T) {
+	root := t.TempDir()
+	legacyOffsetPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-08t12-30-00-02-00")
+	if err := os.MkdirAll(legacyOffsetPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"Rework"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")},
+		}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(legacyOffsetPath); err != nil {
+		t.Fatalf("active Rework workspace with legacy offset timestamp suffix should remain: %v", err)
+	}
+}
+
+func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *testing.T) {
+	issue := tracker.Issue{ID: "issue-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")}
+	keys := func(tracker.Issue) []string {
+		return []string{
+			"issue-3-rework-2026-05-08t10-30-00z",
+			"issue-3-rework-2026-05-08t12-30-00-02-00",
+		}
+	}
+
+	got := reworkWorkspaceKeyPrefixes(issue, keys)
+	if len(got) != 1 || got[0] != "issue-3-rework-" {
+		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want single prefix %q", got, "issue-3-rework-")
 	}
 }
 
@@ -494,4 +535,12 @@ func TestReconcileStartupReturnsTerminalFetchError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "fetch terminal issues") {
 		t.Fatalf("ReconcileStartup error = %v, want terminal fetch context", err)
 	}
+}
+
+func mustTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

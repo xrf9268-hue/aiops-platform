@@ -255,8 +255,8 @@ func sourceEventIDForService(issue tracker.Issue, serviceName string) string {
 	if serviceName != "" {
 		key += "|service|" + serviceName
 	}
-	if strings.EqualFold(issue.State, reworkStateName) && issue.UpdatedAt != "" {
-		return key + "|rework|" + issue.UpdatedAt
+	if strings.EqualFold(issue.State, reworkStateName) && !issue.UpdatedAt.IsZero() {
+		return key + "|rework|" + tracker.TimeString(issue.UpdatedAt)
 	}
 	return key
 }

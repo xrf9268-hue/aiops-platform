@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -68,7 +69,7 @@ func baseConfig() *workflow.Config {
 
 func TestSourceEventIDNonReworkUsesIssueID(t *testing.T) {
 	for _, state := range []string{"AI Ready", "In Progress"} {
-		issue := tracker.Issue{ID: "abc-123", State: state, UpdatedAt: "2026-05-08T10:00:00Z"}
+		issue := tracker.Issue{ID: "abc-123", State: state, UpdatedAt: mustTime("2026-05-08T10:00:00Z")}
 		got := sourceEventID(issue)
 		if got != "abc-123" {
 			t.Fatalf("state=%q sourceEventID = %q, want %q", state, got, "abc-123")
@@ -77,9 +78,18 @@ func TestSourceEventIDNonReworkUsesIssueID(t *testing.T) {
 }
 
 func TestSourceEventIDReworkComposesUpdatedAt(t *testing.T) {
-	issue := tracker.Issue{ID: "abc-123", State: "Rework", UpdatedAt: "2026-05-08T10:00:00Z"}
+	issue := tracker.Issue{ID: "abc-123", State: "Rework", UpdatedAt: mustTime("2026-05-08T10:00:00Z")}
 	got := sourceEventID(issue)
 	want := "abc-123|rework|2026-05-08T10:00:00Z"
+	if got != want {
+		t.Fatalf("sourceEventID = %q, want %q", got, want)
+	}
+}
+
+func TestSourceEventIDReworkNormalizesUpdatedAtOffsetToUTC(t *testing.T) {
+	issue := tracker.Issue{ID: "abc-123", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")}
+	got := sourceEventID(issue)
+	want := "abc-123|rework|2026-05-08T10:30:00Z"
 	if got != want {
 		t.Fatalf("sourceEventID = %q, want %q", got, want)
 	}
@@ -90,7 +100,7 @@ func TestProcessIssuesDedupesSameStateRepoll(t *testing.T) {
 	cfg := baseConfig()
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "do thing",
-		State: "AI Ready", UpdatedAt: "2026-05-08T10:00:00Z",
+		State: "AI Ready", UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 
 	// First poll inserts.
@@ -117,11 +127,11 @@ func TestProcessIssuesReEnqueuesOnReworkTransition(t *testing.T) {
 	// a new updatedAt. The Rework transition must produce a fresh task.
 	aiReady := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "do thing",
-		State: "AI Ready", UpdatedAt: "2026-05-08T10:00:00Z",
+		State: "AI Ready", UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	rework := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "do thing",
-		State: "Rework", UpdatedAt: "2026-05-08T11:30:00Z",
+		State: "Rework", UpdatedAt: mustTime("2026-05-08T11:30:00Z"),
 	}
 
 	processIssues(context.Background(), store, cfg, []tracker.Issue{aiReady})
@@ -151,7 +161,7 @@ func TestProcessIssuesDoesNotLoopWhileStuckInRework(t *testing.T) {
 	// a fresh task on every poll.
 	rework := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "do thing",
-		State: "Rework", UpdatedAt: "2026-05-08T11:30:00Z",
+		State: "Rework", UpdatedAt: mustTime("2026-05-08T11:30:00Z"),
 	}
 
 	for i := 0; i < 5; i++ {
@@ -170,7 +180,7 @@ func TestProcessIssuesSkipsWhenCloneURLMissing(t *testing.T) {
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", State: "AI Ready",
-		UpdatedAt: "2026-05-08T10:00:00Z",
+		UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -194,7 +204,7 @@ func TestProcessIssuesRoutesServiceOnlyLinearWorkflow(t *testing.T) {
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
-		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -227,7 +237,7 @@ func TestProcessIssuesEnqueuesFreshTaskWhenIssueRouteChangesService(t *testing.T
 
 	issueForAPI := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
-		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	issueForWeb := issueForAPI
 	issueForWeb.Labels = []string{"web"}
@@ -361,7 +371,7 @@ func TestProcessIssuesSkipsUnmatchedServiceOnlyLinearWorkflow(t *testing.T) {
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "skip me", State: "AI Ready",
-		ProjectSlug: "platform", Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		ProjectSlug: "platform", Labels: []string{"docs"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -382,7 +392,7 @@ func TestProcessIssuesSkipsAmbiguousServiceOnlyLinearWorkflow(t *testing.T) {
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "ambiguous", State: "AI Ready",
-		ProjectSlug: "platform", Labels: []string{"backend"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		ProjectSlug: "platform", Labels: []string{"backend"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -403,7 +413,7 @@ func TestProcessIssuesIgnoresServiceWithoutLinearRoute(t *testing.T) {
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
-		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -424,7 +434,7 @@ func TestProcessIssuesFallsBackToRootRepoWhenNoServiceRouteMatches(t *testing.T)
 
 	issue := tracker.Issue{
 		ID: "abc-123", Identifier: "ENG-1", Title: "root repo", State: "AI Ready",
-		Labels: []string{"docs"}, UpdatedAt: "2026-05-08T10:00:00Z",
+		Labels: []string{"docs"}, UpdatedAt: mustTime("2026-05-08T10:00:00Z"),
 	}
 	processIssues(context.Background(), store, cfg, []tracker.Issue{issue})
 
@@ -443,4 +453,12 @@ func mapKeys(m map[string]task.Task) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+func mustTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -55,8 +56,16 @@ func TestProcessIssuesEnqueuesGiteaIssueTasks(t *testing.T) {
 }
 
 func TestSourceEventIDReworkUsesUpdatedAt(t *testing.T) {
-	got := sourceEventID(tracker.Issue{ID: "101", State: "Rework", UpdatedAt: "2026-05-17T00:00:00Z"})
+	got := sourceEventID(tracker.Issue{ID: "101", State: "Rework", UpdatedAt: mustTime("2026-05-17T00:00:00Z")})
 	if got != "101|rework|2026-05-17T00:00:00Z" {
 		t.Fatalf("sourceEventID = %q", got)
 	}
+}
+
+func mustTime(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
 }
