@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -88,6 +89,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	writeAppServerArtifact(in.Workdir, buf)
 	res := Result{
 		Summary:       client.summary(),
+		RuntimeEvents: client.runtimeEvents,
 		OutputBytes:   int64(len(buf.Bytes())),
 		OutputDropped: buf.Dropped(),
 	}
@@ -138,21 +140,27 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error)
 }
 
 type appServerClient struct {
-	stdin          io.Writer
-	reader         *bufio.Reader
-	out            io.Writer
-	nextID         int
-	threadID       string
-	lastMessage    string
-	continueRun    bool
-	tools          DynamicToolSet
-	turnTimeoutMs  int
-	readTimeoutMs  int
-	stallTimeoutMs int
-	lastTerminal   time.Time
+	stdin               io.Writer
+	reader              *bufio.Reader
+	out                 io.Writer
+	nextID              int
+	threadID            string
+	turnID              string
+	lastMessage         string
+	runtimeEvents       []task.RuntimeEvent
+	runtimeEventSink    func(task.RuntimeEvent)
+	phaseTransitionSink func(from, to task.RunAttemptPhase)
+	continueRun         bool
+	tools               DynamicToolSet
+	turnTimeoutMs       int
+	readTimeoutMs       int
+	stallTimeoutMs      int
+	lastTerminal        time.Time
 }
 
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
+	c.runtimeEventSink = in.RuntimeEventSink
+	c.phaseTransitionSink = in.PhaseTransitionSink
 	c.nextID = 1
 	c.continueRun = false
 	c.tools = DynamicToolsForWorkflow(workflow.Workflow{Config: in.Workflow.Config})
@@ -187,6 +195,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		return fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	c.threadID = threadID
+	c.recordPhaseTransition(task.PhaseLaunchingAgentProcess, task.PhaseInitializingSession)
 
 	maxTurns := in.Workflow.Config.Agent.MaxTurns
 	if maxTurns <= 0 {
@@ -214,8 +223,18 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		if err != nil {
 			return fmt.Errorf("codex app-server turn/start: %w", err)
 		}
-		if _, err := extractString(turnResult, "turn", "id"); err != nil {
+		turnID, err := extractString(turnResult, "turn", "id")
+		if err != nil {
 			return fmt.Errorf("codex app-server turn/start: %w", err)
+		}
+		c.turnID = turnID
+		if turn == 1 {
+			c.recordRuntimeEvent(task.EventSessionStarted, map[string]any{
+				"session_id": threadID + "-" + turnID,
+				"thread_id":  threadID,
+				"turn_id":    turnID,
+			})
+			c.recordPhaseTransition(task.PhaseInitializingSession, task.PhaseStreamingTurn)
 		}
 		c.continueRun = false
 		turnCtx := ctx
@@ -400,8 +419,14 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					return err
 				}
 				c.handleNotification(msg)
+				c.recordRuntimeMessage(task.EventTurnCompleted, msg)
 				return nil
 			case "turn/failed", "turn/cancelled":
+				if method == "turn/failed" {
+					c.recordRuntimeMessage(task.EventTurnFailed, msg)
+				} else {
+					c.recordRuntimeMessage(task.EventTurnCancelled, msg)
+				}
 				return fmt.Errorf("%s: %v", method, msg["params"])
 			case "item/tool/call":
 				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
@@ -423,9 +448,88 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 				}
 				c.lastTerminal = time.Now()
 				c.handleNotification(msg)
+				c.recordRuntimeMessage(task.EventNotification, msg)
 			}
 		}
 	}
+}
+
+func (c *appServerClient) recordRuntimeMessage(event string, msg map[string]any) {
+	params, _ := msg["params"].(map[string]any)
+	payload := normalizeRuntimePayload(params)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if _, ok := payload["thread_id"]; !ok && c.threadID != "" {
+		payload["thread_id"] = c.threadID
+	}
+	if _, ok := payload["turn_id"]; !ok && c.turnID != "" {
+		payload["turn_id"] = c.turnID
+	}
+	c.recordRuntimeEvent(event, payload)
+}
+
+func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]any) {
+	runtimeEvent := task.RuntimeEvent{Event: event, Payload: payload}
+	c.runtimeEvents = append(c.runtimeEvents, runtimeEvent)
+	if c.runtimeEventSink != nil {
+		c.runtimeEventSink(runtimeEvent)
+	}
+}
+
+func (c *appServerClient) recordPhaseTransition(from, to task.RunAttemptPhase) {
+	if c.phaseTransitionSink != nil {
+		c.phaseTransitionSink(from, to)
+	}
+}
+
+func normalizeRuntimePayload(params map[string]any) map[string]any {
+	if params == nil {
+		return nil
+	}
+	out := make(map[string]any, len(params))
+	for k, v := range params {
+		out[toSnakeCase(k)] = normalizeRuntimeValue(v)
+	}
+	return out
+}
+
+func normalizeRuntimeValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		return normalizeRuntimePayload(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = normalizeRuntimeValue(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func toSnakeCase(s string) string {
+	var b strings.Builder
+	var prev rune
+	for i, r := range s {
+		nextIsLower := false
+		if i+1 < len(s) {
+			next := rune(s[i+1])
+			nextIsLower = next >= 'a' && next <= 'z'
+		}
+		if r >= 'A' && r <= 'Z' {
+			prevIsLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
+			prevIsUpper := prev >= 'A' && prev <= 'Z'
+			if i > 0 && (prevIsLowerOrDigit || (prevIsUpper && nextIsLower)) {
+				b.WriteByte('_')
+			}
+			r += 'a' - 'A'
+		}
+		b.WriteRune(r)
+		prev = rune(s[i])
+	}
+	return b.String()
 }
 
 func (c *appServerClient) replyUnsupportedServerRequest(msg map[string]any) error {

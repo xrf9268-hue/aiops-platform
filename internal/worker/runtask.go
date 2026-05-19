@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -164,7 +165,21 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir stri
 // RunTask executes a single in-memory task. The orchestrator-backed worker path
 // uses this directly after claiming a tracker issue in runtime state; the
 // legacy queue loop also calls it for remaining tests/compatibility.
-func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
+func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
+	currentPhase := task.RunAttemptPhase("")
+	phaseTerminal := false
+	emitTaskPhase := func(from, to task.RunAttemptPhase) {
+		EmitPhaseTransition(ctx, ev, t.ID, from, to)
+		currentPhase = to
+		phaseTerminal = isTerminalPhase(to)
+	}
+	defer func() {
+		if ret != nil && currentPhase != "" && !phaseTerminal {
+			emitTaskPhase(currentPhase, task.PhaseFailed)
+		}
+	}()
+
+	emitTaskPhase("", task.PhasePreparingWorkspace)
 	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, cfg.Workflow)
 	if err != nil {
 		return &RunTaskError{Err: err}
@@ -220,6 +235,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 	if t.Attempts > 0 {
 		renderVars["attempt"] = t.Attempts
 	}
+	emitTaskPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
 	prompt, err := workflow.Render(wf.PromptTemplate, renderVars)
 	if err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err, NonRetryable: true}
@@ -258,7 +274,9 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: cfg.WorkspaceRoot, Prompt: prompt}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
+	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: cfg.WorkspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
+		emitTaskPhase(from, to)
+	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
 		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {
 			log.Printf("task %s: after_run hook failed after runner error: %v", t.ID, err)
 		}
@@ -341,7 +359,17 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
 	}
 
+	emitTaskPhase(task.PhaseFinishing, task.PhaseSucceeded)
 	return nil
+}
+
+func isTerminalPhase(phase task.RunAttemptPhase) bool {
+	switch phase {
+	case task.PhaseSucceeded, task.PhaseFailed, task.PhaseTimedOut, task.PhaseStalled, task.PhaseCanceledByReconciliation:
+		return true
+	default:
+		return false
+	}
 }
 
 // RunRunnerWithTimeout invokes the runner under a per-task timeout derived
@@ -362,6 +390,30 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		"timeout_ms":      timeout.Milliseconds(),
 		"workflow_source": workflowSource,
 	})
+	currentPhase := task.PhaseBuildingPrompt
+	upstreamPhaseSink := in.PhaseTransitionSink
+	in.PhaseTransitionSink = func(from, to task.RunAttemptPhase) {
+		if from == "" {
+			from = currentPhase
+		}
+		currentPhase = to
+		if upstreamPhaseSink != nil {
+			upstreamPhaseSink(from, to)
+			return
+		}
+		EmitPhaseTransition(ctx, ev, in.Task.ID, from, to)
+	}
+	in.PhaseTransitionSink(task.PhaseBuildingPrompt, task.PhaseLaunchingAgentProcess)
+	emittedRuntimeEvents := map[string]bool{}
+	upstreamRuntimeSink := in.RuntimeEventSink
+	in.RuntimeEventSink = func(event task.RuntimeEvent) {
+		emittedRuntimeEvents[runtimeEventKey(event)] = true
+		if upstreamRuntimeSink != nil {
+			upstreamRuntimeSink(event)
+			return
+		}
+		EmitRuntimeEvents(ctx, ev, in.Task.ID, []task.RuntimeEvent{event})
+	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -370,9 +422,17 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	res, runErr := r.Run(runCtx, in)
 	elapsed := time.Since(start)
 
+	for _, event := range res.RuntimeEvents {
+		if emittedRuntimeEvents[runtimeEventKey(event)] {
+			continue
+		}
+		EmitRuntimeEvents(ctx, ev, in.Task.ID, []task.RuntimeEvent{event})
+	}
+
 	if runErr != nil {
 		var stall *runner.StallError
 		if errors.As(runErr, &stall) {
+			in.PhaseTransitionSink(currentPhase, task.PhaseStalled)
 			stallPayload := map[string]any{
 				"model":      in.Task.Model,
 				"timeout_ms": stall.Timeout.Milliseconds(),
@@ -385,6 +445,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		}
 		var turnTimeout *runner.TurnTimeoutError
 		if errors.As(runErr, &turnTimeout) {
+			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
 			timeoutPayload := map[string]any{
 				"model":      in.Task.Model,
 				"timeout_ms": turnTimeout.Timeout.Milliseconds(),
@@ -396,6 +457,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		}
 		var readTimeout *runner.ReadTimeoutError
 		if errors.As(runErr, &readTimeout) {
+			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
 			timeoutPayload := map[string]any{
 				"model":      in.Task.Model,
 				"timeout_ms": readTimeout.Timeout.Milliseconds(),
@@ -407,6 +469,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		}
 		var te *runner.TimeoutError
 		if errors.As(runErr, &te) || (errors.Is(runErr, context.DeadlineExceeded) && errors.Is(runCtx.Err(), context.DeadlineExceeded)) {
+			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
 			if te == nil {
 				te = &runner.TimeoutError{Timeout: timeout, Elapsed: elapsed, Cause: runErr}
 				runErr = te
@@ -420,6 +483,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
 			return res, runErr
 		}
+		in.PhaseTransitionSink(currentPhase, task.PhaseFailed)
 		failurePayload := map[string]any{
 			"model":       in.Task.Model,
 			"duration_ms": elapsed.Milliseconds(),
@@ -431,6 +495,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		return res, runErr
 	}
 
+	in.PhaseTransitionSink(currentPhase, task.PhaseFinishing)
 	endPayload := map[string]any{
 		"model":       in.Task.Model,
 		"duration_ms": elapsed.Milliseconds(),
@@ -442,6 +507,37 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	addOutputFields(endPayload, res)
 	Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner completed", endPayload)
 	return res, nil
+}
+
+// EmitPhaseTransition records SPEC §7.2 run-attempt phase transitions with the
+// canonical phase names in a structured payload.
+func EmitPhaseTransition(ctx context.Context, ev EventEmitter, taskID string, from, to task.RunAttemptPhase) {
+	if to == "" {
+		return
+	}
+	payload := task.PhaseTransitionEvent(from, to)
+	Emit(ctx, ev, taskID, task.EventRunPhaseTransition, string(to), payload)
+}
+
+// EmitRuntimeEvents forwards SPEC §10.4 app-server runtime events captured by
+// the runner into the task event stream. The runtime event name is already the
+// task event kind; payload is preserved verbatim so downstream conformance
+// checks can inspect the app-server details without parsing runner output.
+func EmitRuntimeEvents(ctx context.Context, ev EventEmitter, taskID string, events []task.RuntimeEvent) {
+	for _, event := range events {
+		if event.Event == "" {
+			continue
+		}
+		Emit(ctx, ev, taskID, event.Event, event.Event, event.Payload)
+	}
+}
+
+func runtimeEventKey(event task.RuntimeEvent) string {
+	encoded, err := json.Marshal(event.Payload)
+	if err != nil {
+		encoded = []byte(fmt.Sprintf("%#v", event.Payload))
+	}
+	return event.Event + "\x00" + string(encoded)
 }
 
 // RunVerifyPhase runs the configured verify commands, persists the

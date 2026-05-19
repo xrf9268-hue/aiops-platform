@@ -360,13 +360,18 @@ type stubRunner struct {
 	sleep      time.Duration
 	err        error
 	respectCtx bool
+	result     runner.Result
 }
 
 func (s stubRunner) Run(ctx context.Context, _ runner.RunInput) (runner.Result, error) {
+	result := s.result
+	if result.Summary == "" && len(result.RuntimeEvents) == 0 && result.OutputBytes == 0 && result.OutputDropped == 0 && result.OutputHead == "" && result.OutputTail == "" {
+		result = runner.Result{Summary: "ok"}
+	}
 	if s.sleep > 0 {
 		if !s.respectCtx {
 			time.Sleep(s.sleep)
-			return runner.Result{Summary: "ok"}, s.err
+			return result, s.err
 		}
 		select {
 		case <-ctx.Done():
@@ -381,7 +386,15 @@ func (s stubRunner) Run(ctx context.Context, _ runner.RunInput) (runner.Result, 
 		case <-time.After(s.sleep):
 		}
 	}
-	return runner.Result{Summary: "ok"}, s.err
+	return result, s.err
+}
+
+type callbackRunner struct {
+	run func(context.Context, runner.RunInput) (runner.Result, error)
+}
+
+func (c callbackRunner) Run(ctx context.Context, in runner.RunInput) (runner.Result, error) {
+	return c.run(ctx, in)
 }
 
 // payloadField round-trips a recorded event payload through JSON and
@@ -488,6 +501,225 @@ func TestRunRunnerWithTimeoutHappyPath(t *testing.T) {
 	ok, _ := payloadField(t, pe.Payload, "ok").(bool)
 	if !ok {
 		t.Fatalf("runner_end payload ok=true expected, got %v", payloadField(t, pe.Payload, "ok"))
+	}
+}
+
+func TestRunRunnerWithTimeoutEmitsSpecPhaseTransitions(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_phase", Model: "codex-app-server"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	r := callbackRunner{run: func(ctx context.Context, in runner.RunInput) (runner.Result, error) {
+		in.PhaseTransitionSink(task.PhaseLaunchingAgentProcess, task.PhaseInitializingSession)
+		in.PhaseTransitionSink(task.PhaseInitializingSession, task.PhaseStreamingTurn)
+		return runner.Result{Summary: "ok"}, nil
+	}}
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, r, in, time.Second, "file"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	transitions := ev.byKind(task.EventRunPhaseTransition)
+	want := []task.RunAttemptPhase{
+		task.PhaseLaunchingAgentProcess,
+		task.PhaseInitializingSession,
+		task.PhaseStreamingTurn,
+		task.PhaseFinishing,
+	}
+	if len(transitions) != len(want) {
+		t.Fatalf("phase transition count = %d, want %d; events=%#v", len(transitions), len(want), ev.events)
+	}
+	for i, phase := range want {
+		if got := payloadField(t, transitions[i].Payload, "to"); got != string(phase) {
+			t.Fatalf("transition[%d].to = %#v, want %q; transitions=%#v", i, got, phase, transitions)
+		}
+	}
+}
+
+func TestRunRunnerWithTimeoutForwardsSpecRuntimeEvents(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_runtime", Model: "codex-app-server"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	runtimeEvents := []task.RuntimeEvent{
+		{
+			Event: task.EventSessionStarted,
+			Payload: map[string]any{
+				"thread_id": "thread-1",
+				"turn_id":   "turn-1",
+			},
+		},
+		{
+			Event: task.EventTurnCompleted,
+			Payload: map[string]any{
+				"turn_id": "turn-1",
+				"usage":   map[string]any{"total_tokens": 3},
+			},
+		},
+	}
+	r := stubRunner{result: runner.Result{RuntimeEvents: runtimeEvents}}
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, r, in, time.Second, "file"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertForwardedRuntimeEventsOnce(t, ev)
+}
+
+func TestRunRunnerWithTimeoutForwardsRuntimeEventsNotAlreadyEmittedThroughSink(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEmitter{}
+	in := runner.RunInput{
+		Task:     task.Task{ID: "tsk_runtime_sink", Model: "codex-app-server"},
+		Workflow: workflow.Workflow{},
+		Workdir:  t.TempDir(),
+	}
+	sinkEvent := task.RuntimeEvent{
+		Event: task.EventSessionStarted,
+		Payload: map[string]any{
+			"thread_id": "thread-1",
+			"turn_id":   "turn-1",
+		},
+	}
+	resultOnlyEvent := task.RuntimeEvent{
+		Event: task.EventTurnCompleted,
+		Payload: map[string]any{
+			"turn_id": "turn-1",
+			"usage":   map[string]any{"total_tokens": 3},
+		},
+	}
+	r := callbackRunner{run: func(ctx context.Context, in runner.RunInput) (runner.Result, error) {
+		in.RuntimeEventSink(sinkEvent)
+		return runner.Result{RuntimeEvents: []task.RuntimeEvent{sinkEvent, resultOnlyEvent}}, nil
+	}}
+	if _, err := worker.RunRunnerWithTimeout(context.Background(), ev, r, in, time.Second, "file"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertForwardedRuntimeEventsOnce(t, ev)
+}
+
+func TestRunRunnerWithTimeoutEmitsTerminalErrorPhases(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		to   task.RunAttemptPhase
+	}{
+		{
+			name: "stall",
+			err:  &runner.StallError{Timeout: 30 * time.Millisecond, Elapsed: 60 * time.Millisecond},
+			to:   task.PhaseStalled,
+		},
+		{
+			name: "turn_timeout",
+			err:  &runner.TurnTimeoutError{Timeout: 30 * time.Millisecond, Elapsed: 60 * time.Millisecond},
+			to:   task.PhaseTimedOut,
+		},
+		{
+			name: "read_timeout",
+			err:  &runner.ReadTimeoutError{Timeout: 30 * time.Millisecond},
+			to:   task.PhaseTimedOut,
+		},
+		{
+			name: "plain_error",
+			err:  errors.New("agent crashed"),
+			to:   task.PhaseFailed,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ev := &fakeEmitter{}
+			in := runner.RunInput{
+				Task:     task.Task{ID: "tsk_" + tc.name, Model: "codex-app-server"},
+				Workflow: workflow.Workflow{},
+				Workdir:  t.TempDir(),
+			}
+			_, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{err: tc.err}, in, time.Second, "file")
+			if err == nil {
+				t.Fatal("expected runner error")
+			}
+			transitions := ev.byKind(task.EventRunPhaseTransition)
+			if len(transitions) < 2 {
+				t.Fatalf("phase transition count = %d, want launch plus terminal; events=%#v", len(transitions), ev.events)
+			}
+			terminal := transitions[len(transitions)-1]
+			if got := payloadField(t, terminal.Payload, "from"); got != string(task.PhaseLaunchingAgentProcess) {
+				t.Fatalf("terminal from = %#v, want %q; transitions=%#v", got, task.PhaseLaunchingAgentProcess, transitions)
+			}
+			if got := payloadField(t, terminal.Payload, "to"); got != string(tc.to) {
+				t.Fatalf("terminal to = %#v, want %q; transitions=%#v", got, tc.to, transitions)
+			}
+		})
+	}
+}
+
+func TestRunTaskEmitsFailedPhaseWhenWorkflowResolutionFails(t *testing.T) {
+	ev := &fakeEmitter{}
+	rterr := worker.RunTaskForTest(context.Background(), ev, task.Task{ID: "tsk_missing_workflow"}, worker.Config{})
+	if rterr == nil {
+		t.Fatal("RunTaskForTest succeeded, want workflow resolution failure")
+	}
+	assertLastPhaseTransition(t, ev, task.PhasePreparingWorkspace, task.PhaseFailed)
+}
+
+func TestRunTaskEmitsFailedPhaseWhenPromptRenderingFails(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = "bad template {{ missing }}"
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("RunTaskForTest succeeded, want prompt render failure")
+	}
+	assertLastPhaseTransition(t, ev, task.PhaseBuildingPrompt, task.PhaseFailed)
+}
+
+func TestRunTaskEmitsFailedPhaseWhenVerifyFails(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Verify.Commands = []string{"false"}
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("RunTaskForTest succeeded, want verify failure")
+	}
+	assertLastPhaseTransition(t, ev, task.PhaseFinishing, task.PhaseFailed)
+}
+
+func assertLastPhaseTransition(t *testing.T, ev *fakeEmitter, from, to task.RunAttemptPhase) {
+	t.Helper()
+	transitions := ev.byKind(task.EventRunPhaseTransition)
+	if len(transitions) == 0 {
+		t.Fatalf("expected phase transitions; events=%#v", ev.events)
+	}
+	terminal := transitions[len(transitions)-1]
+	if got := payloadField(t, terminal.Payload, "from"); got != string(from) {
+		t.Fatalf("terminal transition from = %#v, want %q; transitions=%#v", got, from, transitions)
+	}
+	if got := payloadField(t, terminal.Payload, "to"); got != string(to) {
+		t.Fatalf("terminal transition to = %#v, want %q; transitions=%#v", got, to, transitions)
+	}
+}
+
+func assertForwardedRuntimeEventsOnce(t *testing.T, ev *fakeEmitter) {
+	t.Helper()
+	if got := len(ev.byKind(task.EventSessionStarted)); got != 1 {
+		t.Fatalf("session_started count: got=%d want=1; events=%#v", got, ev.events)
+	}
+	if got := len(ev.byKind(task.EventTurnCompleted)); got != 1 {
+		t.Fatalf("turn_completed count: got=%d want=1; events=%#v", got, ev.events)
+	}
+	if got := payloadField(t, ev.byKind(task.EventSessionStarted)[0].Payload, "thread_id"); got != "thread-1" {
+		t.Fatalf("session_started thread_id = %#v, want thread-1", got)
 	}
 }
 

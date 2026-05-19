@@ -142,6 +142,201 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerCapturesSpecRuntimeEvents(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'item/updated', 'params': {'message': 'thinking'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1', 'lastAssistantMessage': 'done', 'usage': {'totalTokens': 5}}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "capture runtime events")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.RuntimeEvents) != 3 {
+		t.Fatalf("RuntimeEvents len = %d, want session_started/notification/turn_completed: %#v", len(res.RuntimeEvents), res.RuntimeEvents)
+	}
+	if res.RuntimeEvents[0].Event != task.EventSessionStarted {
+		t.Fatalf("first event = %q, want %q", res.RuntimeEvents[0].Event, task.EventSessionStarted)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "session_id"); got != "thread-1-turn-1" {
+		t.Fatalf("session_started session_id = %#v, want thread-1-turn-1", got)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "thread_id"); got != "thread-1" {
+		t.Fatalf("session_started thread_id = %#v, want thread-1", got)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "turn_id"); got != "turn-1" {
+		t.Fatalf("session_started turn_id = %#v, want turn-1", got)
+	}
+	if res.RuntimeEvents[1].Event != task.EventNotification {
+		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventNotification)
+	}
+	if res.RuntimeEvents[2].Event != task.EventTurnCompleted {
+		t.Fatalf("third event = %q, want %q", res.RuntimeEvents[2].Event, task.EventTurnCompleted)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[2], "turn_id"); got != "turn-1" {
+		t.Fatalf("turn_completed turn_id = %#v, want turn-1", got)
+	}
+}
+
+func TestCodexAppServerRunnerEmitsSpecPhaseTransitions(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1', 'lastAssistantMessage': 'done'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "capture phase transitions")
+	in := appServerInput(wd)
+	var transitions []task.PhaseTransition
+	in.PhaseTransitionSink = func(from, to task.RunAttemptPhase) {
+		transitions = append(transitions, task.PhaseTransitionEvent(from, to))
+	}
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []task.PhaseTransition{
+		task.PhaseTransitionEvent(task.PhaseLaunchingAgentProcess, task.PhaseInitializingSession),
+		task.PhaseTransitionEvent(task.PhaseInitializingSession, task.PhaseStreamingTurn),
+	}
+	if len(transitions) != len(want) {
+		t.Fatalf("phase transitions = %#v, want %#v", transitions, want)
+	}
+	for i := range want {
+		if transitions[i] != want[i] {
+			t.Fatalf("phase transition[%d] = %#v, want %#v", i, transitions[i], want[i])
+		}
+	}
+}
+
+func TestCodexAppServerRunnerNormalizesNestedRuntimePayloadKeys(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnID': 'turn-1', 'URLPath': '/review', 'usage': {'totalTokens': 5}, 'items': [{'itemID': 'i1'}], 'lastAssistantMessage': 'done'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "normalize nested keys")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	completed := res.RuntimeEvents[len(res.RuntimeEvents)-1]
+	if got := runtimeEventField(t, completed, "turn_id"); got != "turn-1" {
+		t.Fatalf("turn_id = %#v, want turn-1; payload=%#v", got, completed.Payload)
+	}
+	if got := runtimeEventField(t, completed, "url_path"); got != "/review" {
+		t.Fatalf("url_path = %#v, want /review; payload=%#v", got, completed.Payload)
+	}
+	usage, ok := runtimeEventField(t, completed, "usage").(map[string]any)
+	if !ok {
+		t.Fatalf("usage payload is %T, want map[string]any; payload=%#v", runtimeEventField(t, completed, "usage"), completed.Payload)
+	}
+	if got := usage["total_tokens"]; got != float64(5) {
+		t.Fatalf("usage.total_tokens = %#v, want 5; usage=%#v", got, usage)
+	}
+	items, ok := runtimeEventField(t, completed, "items").([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("items payload = %#v, want one-item array", runtimeEventField(t, completed, "items"))
+	}
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("items[0] is %T, want map[string]any", items[0])
+	}
+	if got := item["item_id"]; got != "i1" {
+		t.Fatalf("items[0].item_id = %#v, want i1; item=%#v", got, item)
+	}
+}
+
+func TestCodexAppServerRunnerEmitsSessionStartedOnceForMultiTurnRun(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        if turns == 1:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'continue', 'continue': True}}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done'}}), flush=True)
+            break
+`)
+	wd := codexWorkdir(t, "session once")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 2
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var sessions []task.RuntimeEvent
+	for _, event := range res.RuntimeEvents {
+		if event.Event == task.EventSessionStarted {
+			sessions = append(sessions, event)
+		}
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("session_started count = %d, want 1; events=%#v", len(sessions), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, sessions[0], "turn_id"); got != "turn-1" {
+		t.Fatalf("session_started turn_id = %#v, want first turn id", got)
+	}
+}
+
+func runtimeEventField(t *testing.T, event task.RuntimeEvent, key string) any {
+	t.Helper()
+	payload, ok := event.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("runtime event payload is %T, want map[string]any: %#v", event.Payload, event.Payload)
+	}
+	return payload[key]
+}
+
 func TestCodexAppServerRunnerDoesNotPutLinearTokenOnWire(t *testing.T) {
 	secret := "lin_api_secret_should_not_leak"
 	binDir := codexAppServerStubScript(t, `

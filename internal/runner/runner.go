@@ -19,10 +19,14 @@ type RunInput struct {
 	// default so runner sandboxing matches the worker's actual checkout root.
 	WorkspaceRoot string
 	Prompt        string
+
+	RuntimeEventSink    func(task.RuntimeEvent)
+	PhaseTransitionSink func(from, to task.RunAttemptPhase)
 }
 
 type Result struct {
 	Summary       string
+	RuntimeEvents []task.RuntimeEvent
 	OutputBytes   int64  // bytes the runner kept in its capture buffer
 	OutputDropped int64  // bytes dropped because the buffer hit its cap
 	OutputHead    string // up to CodexEventOutputCap bytes from the start of the captured output

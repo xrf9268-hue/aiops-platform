@@ -33,23 +33,34 @@ context (durations in `duration_ms`, command summaries, error excerpts) so a
 failed run can be reconstructed from the event timeline alone:
 
 - `enqueued`, `claimed` — queue lifecycle
-- `runner_start`, `runner_end` — agent runner timing and summary
-- `verify_start`, `verify_end` — workflow verify command results
-- `push` — git push outcome and changed file count. Retries push the work
-  branch with `--force-with-lease` so an earlier attempt's tip is overwritten
-  cleanly instead of failing as non-fast-forward.
-- `pr_created` — pull request creation (number, html_url) or failure
-- `pr_reused` — emitted instead of `pr_created` when the work branch already
-  has an open PR from a previous attempt; the worker reuses it (number,
-  html_url, title) and skips the create call so retries do not duplicate PRs
-- `tracker_transition` — Linear issue successfully moved to the configured
-  target state (in-progress on claim, human-review on PR open, rework on
-  failure); payload carries `issue_id`, `target_state`, and `reason`
-- `tracker_transition_error` — issue move or fallback comment failed at the
-  Linear API; payload includes the error excerpt so the task can still
-  complete without aborting on a tracker hiccup
-- `tracker_comment` — failure comment posted as a fallback after a rework
-  transition failed, so the human still has visibility on the issue
+- `run_phase_transition` — SPEC §7.2 run-attempt phase transitions. Payloads
+  carry `event`, `from`, and `to`; phase names are `PreparingWorkspace`,
+  `BuildingPrompt`, `LaunchingAgentProcess`, `InitializingSession`,
+  `StreamingTurn`, `Finishing`, `Succeeded`, `Failed`, `TimedOut`, `Stalled`,
+  and `CanceledByReconciliation`.
+- `session_started`, `startup_failed`, `turn_completed`, `turn_failed`,
+  `turn_cancelled`, `turn_ended_with_error`, `turn_input_required`,
+  `approval_auto_approved`, `unsupported_tool_call`, `notification`,
+  `other_message`, `malformed` — SPEC §10.4 app-server runtime vocabulary. The
+  `codex-app-server` runner currently captures session start, terminal turn
+  events, and generic protocol notifications, and the worker forwards those
+  captured runtime events into the task event stream with their structured
+  payloads. Event constants for the remaining SPEC runtime vocabulary are
+  exported so those protocol branches can be forwarded as the runner learns
+  them.
+- `runner_start`, `runner_end`, `runner_timeout` — transitional worker runner
+  timing and summary events retained for compatibility while the SPEC phase
+  stream is adopted.
+- `stalled` — emitted when the streaming runner exceeds its inactivity budget.
+- `verify_start`, `verify_end` — transitional workflow verify command results.
+- `push`, `pr_created`, `pr_reused` — legacy worker-side PR handoff events
+  retained as constants for compatibility with older event streams; current
+  SPEC-aligned worker success paths must not emit them because push and PR
+  handoff are agent-side responsibilities per SPEC §1.
+- `tracker_transition`, `tracker_transition_error`, `tracker_comment` —
+  implementation extensions for operator visibility around tracker-side
+  transitions/comments; tracker writes remain tool-driven rather than worker
+  responsibilities.
 - `succeeded`, `failed_attempt` — terminal outcomes
 
 The worker also writes the following artifacts under `.aiops/` in the

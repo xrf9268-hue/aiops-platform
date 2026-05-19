@@ -17,9 +17,58 @@ const (
 	StatusFailed    Status = "failed"
 )
 
+// RunAttemptPhase is the SPEC §7.2 run-attempt lifecycle vocabulary.
+type RunAttemptPhase string
+
+const (
+	PhasePreparingWorkspace       RunAttemptPhase = "PreparingWorkspace"
+	PhaseBuildingPrompt           RunAttemptPhase = "BuildingPrompt"
+	PhaseLaunchingAgentProcess    RunAttemptPhase = "LaunchingAgentProcess"
+	PhaseInitializingSession      RunAttemptPhase = "InitializingSession"
+	PhaseStreamingTurn            RunAttemptPhase = "StreamingTurn"
+	PhaseFinishing                RunAttemptPhase = "Finishing"
+	PhaseSucceeded                RunAttemptPhase = "Succeeded"
+	PhaseFailed                   RunAttemptPhase = "Failed"
+	PhaseTimedOut                 RunAttemptPhase = "TimedOut"
+	PhaseStalled                  RunAttemptPhase = "Stalled"
+	PhaseCanceledByReconciliation RunAttemptPhase = "CanceledByReconciliation"
+)
+
+// RunAttemptPhases returns the SPEC §7.2 phases in normative order.
+func RunAttemptPhases() []RunAttemptPhase {
+	return []RunAttemptPhase{
+		PhasePreparingWorkspace,
+		PhaseBuildingPrompt,
+		PhaseLaunchingAgentProcess,
+		PhaseInitializingSession,
+		PhaseStreamingTurn,
+		PhaseFinishing,
+		PhaseSucceeded,
+		PhaseFailed,
+		PhaseTimedOut,
+		PhaseStalled,
+		PhaseCanceledByReconciliation,
+	}
+}
+
 // Event kinds emitted by the queue store and the worker. Keep these in sync
 // with the docs in docs/runbooks/task-api.md and the cmd/worker stage helpers.
 const (
+	EventRunPhaseTransition = "run_phase_transition"
+
+	EventSessionStarted       = "session_started"
+	EventStartupFailed        = "startup_failed"
+	EventTurnCompleted        = "turn_completed"
+	EventTurnFailed           = "turn_failed"
+	EventTurnCancelled        = "turn_cancelled"
+	EventTurnEndedWithError   = "turn_ended_with_error"
+	EventTurnInputRequired    = "turn_input_required"
+	EventApprovalAutoApproved = "approval_auto_approved"
+	EventUnsupportedToolCall  = "unsupported_tool_call"
+	EventNotification         = "notification"
+	EventOtherMessage         = "other_message"
+	EventMalformed            = "malformed"
+
 	EventEnqueued              = "enqueued"
 	EventClaimed               = "claimed"
 	EventWorkflowResolved      = "workflow_resolved"
@@ -43,10 +92,48 @@ const (
 	EventWorkflowReloaded      = "workflow_reload"
 	EventWorkflowReloadFailed  = "workflow_reload_failed"
 
+	// Tracker transition events are implementation extensions retained for
+	// operator visibility while tracker writes remain tool-driven.
 	EventTrackerTransition      = "tracker_transition"
 	EventTrackerTransitionError = "tracker_transition_error"
 	EventTrackerComment         = "tracker_comment"
 )
+
+// RuntimeEvents returns the SPEC §10.4 app-server event vocabulary this
+// implementation forwards into task events.
+func RuntimeEvents() []string {
+	return []string{
+		EventSessionStarted,
+		EventStartupFailed,
+		EventTurnCompleted,
+		EventTurnFailed,
+		EventTurnCancelled,
+		EventTurnEndedWithError,
+		EventTurnInputRequired,
+		EventApprovalAutoApproved,
+		EventUnsupportedToolCall,
+		EventNotification,
+		EventOtherMessage,
+		EventMalformed,
+	}
+}
+
+type PhaseTransition struct {
+	Event string          `json:"event"`
+	From  RunAttemptPhase `json:"from,omitempty"`
+	To    RunAttemptPhase `json:"to"`
+}
+
+func PhaseTransitionEvent(from, to RunAttemptPhase) PhaseTransition {
+	return PhaseTransition{Event: EventRunPhaseTransition, From: from, To: to}
+}
+
+// RuntimeEvent is a SPEC §10.4 app-server event emitted by an agent runtime
+// and forwarded into the task event stream by the worker.
+type RuntimeEvent struct {
+	Event   string `json:"event"`
+	Payload any    `json:"payload,omitempty"`
+}
 
 type Task struct {
 	ID            string    `json:"id"`
