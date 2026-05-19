@@ -113,77 +113,24 @@ func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.
 		})
 		return "", failure
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label request could not be built", "reason": err.Error()},
-		})
+	_, respBody, failure := p.doGiteaRequest(ctx, client, http.MethodPost, endpoint, body)
+	if failure != "" {
 		return "", failure
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "token "+strings.TrimSpace(p.token))
-	resp, err := client.Do(req)
-	if err != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label request failed during transport", "reason": err.Error()},
-		})
-		return "", failure
-	}
-	defer resp.Body.Close()
-	var respBody bytes.Buffer
-	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
-	if readErr != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label response body could not be read", "reason": readErr.Error()},
-		})
-		return "", failure
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label request failed", "status": resp.Status, "body": respBody.String()},
-		})
-		return "", failure
-	}
-	result, _ := dynamicToolResult(true, respBody.String())
+	result, _ := dynamicToolResult(true, string(respBody))
 	return result, ""
 }
 
 func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *http.Client, endpoint string) ([]giteaIssueLabel, string) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label read request could not be built", "reason": err.Error()},
-		})
-		return nil, failure
-	}
-	req.Header.Set("Authorization", "token "+strings.TrimSpace(p.token))
-	resp, err := client.Do(req)
-	if err != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label read request failed during transport", "reason": err.Error()},
-		})
-		return nil, failure
-	}
-	defer resp.Body.Close()
-	var respBody bytes.Buffer
-	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
-	if readErr != nil {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label read response body could not be read", "reason": readErr.Error()},
-		})
-		return nil, failure
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label read request failed", "status": resp.Status, "body": respBody.String()},
-		})
+	_, respBody, failure := p.doGiteaRequest(ctx, client, http.MethodGet, endpoint, nil)
+	if failure != "" {
 		return nil, failure
 	}
 	var labels []struct {
 		ID   int64  `json:"id"`
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal(respBody.Bytes(), &labels); err != nil {
+	if err := json.Unmarshal(respBody, &labels); err != nil {
 		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label read response body could not be decoded", "reason": err.Error()},
 		})
@@ -199,40 +146,52 @@ func (p giteaIssueLabelsProxy) currentIssueLabels(ctx context.Context, client *h
 }
 
 func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *http.Client, endpoint string, labelID int64) string {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, labelID), nil)
+	status, _, failure := p.doGiteaRequest(ctx, client, http.MethodDelete, fmt.Sprintf("%s/%d", endpoint, labelID), nil)
+	if status == http.StatusNotFound {
+		return ""
+	}
+	return failure
+}
+
+func (p giteaIssueLabelsProxy) doGiteaRequest(ctx context.Context, client *http.Client, method, endpoint string, body []byte) (int, []byte, string) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
 		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label delete request could not be built", "reason": err.Error()},
+			"error": map[string]any{"message": "Gitea label request could not be built", "reason": err.Error()},
 		})
-		return failure
+		return 0, nil, failure
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "token "+strings.TrimSpace(p.token))
 	resp, err := client.Do(req)
 	if err != nil {
 		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label delete request failed during transport", "reason": err.Error()},
+			"error": map[string]any{"message": "Gitea label request failed during transport", "reason": err.Error()},
 		})
-		return failure
+		return 0, nil, failure
 	}
 	defer resp.Body.Close()
 	var respBody bytes.Buffer
 	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
 	if readErr != nil {
 		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label delete response body could not be read", "reason": readErr.Error()},
+			"error": map[string]any{"message": "Gitea label response body could not be read", "reason": readErr.Error()},
 		})
-		return failure
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return ""
+		return resp.StatusCode, respBody.Bytes(), failure
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label delete request failed", "status": resp.Status, "body": respBody.String()},
+			"error": map[string]any{"message": "Gitea label request failed", "status": resp.Status, "body": respBody.String()},
 		})
-		return failure
+		return resp.StatusCode, respBody.Bytes(), failure
 	}
-	return ""
+	return resp.StatusCode, respBody.Bytes(), ""
 }
 
 func (p giteaIssueLabelsProxy) decodeIssueLabelsFromToolResult(result, source string) ([]giteaIssueLabel, string) {

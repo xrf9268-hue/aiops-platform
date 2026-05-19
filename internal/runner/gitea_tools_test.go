@@ -352,6 +352,30 @@ func TestGiteaIssueLabelsAcceptsGiteaAddLabelArrayResponse(t *testing.T) {
 	}
 }
 
+func TestGiteaIssueLabelsRequestHelperReturnsStructuredFailureForHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token trimmed-token" {
+			t.Fatalf("Authorization = %q, want trimmed token auth", got)
+		}
+		http.Error(w, `{"message":"temporary failure"}`, http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	status, body, failure := giteaIssueLabelsProxy{token: "  trimmed-token  "}.
+		doGiteaRequest(context.Background(), server.Client(), http.MethodGet, server.URL, nil)
+
+	if status != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", status, http.StatusBadGateway)
+	}
+	if !strings.Contains(string(body), "temporary failure") {
+		t.Fatalf("body = %q, want upstream failure body", body)
+	}
+	assertStructuredFailure(t, failure, nil, "Gitea label request failed")
+	if !strings.Contains(failure, "502 Bad Gateway") || !strings.Contains(failure, "temporary failure") {
+		t.Fatalf("failure = %s, want status and bounded response body", failure)
+	}
+}
+
 func TestGiteaIssueLabelsTreatsMissingStaleStateAsSuccess(t *testing.T) {
 	var mu sync.Mutex
 	var methods []string
