@@ -138,6 +138,16 @@ go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
 
 The poller exits immediately with `tracker.kind must be gitea` if its workflow is not configured for Gitea. It logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
 
+Gitea issue listing is capped at 20 pages of 50 issues per state label (1000 issues). When the `+1` probe page proves more issues exist, the poller keeps running with the capped result set and increments `aiops_gitea_issue_pagination_cap_hits_total`. Expose that counter by setting `GITEA_POLLER_METRICS_ADDR` before starting the poller:
+
+```bash
+export GITEA_POLLER_METRICS_ADDR=:9091
+go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
+curl http://localhost:9091/metrics | grep aiops_gitea_issue_pagination_cap_hits_total
+```
+
+A non-zero counter means at least one active state label has more than 1000 matching Gitea issues, so operators should reduce the active backlog or split labels before relying on the poller for exhaustive dispatch.
+
 ## 5. Smoke test
 
 The fastest way to verify local configuration without a real Gitea or Linear is

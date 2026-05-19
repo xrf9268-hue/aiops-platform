@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -18,6 +19,10 @@ const (
 	listIssuesPageSize = 50
 	listIssuesMaxPages = 20
 )
+
+func ListIssuesMaxPages() int {
+	return listIssuesMaxPages
+}
 
 // Issue is the subset of Gitea's issue JSON used by the tracker reader.
 type Issue struct {
@@ -42,6 +47,8 @@ type TrackerClient struct {
 	Config  workflow.TrackerConfig
 	HTTP    *http.Client
 	Logf    func(format string, args ...any)
+
+	paginationCapHits atomic.Int64
 }
 
 func NewTrackerClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *TrackerClient {
@@ -57,6 +64,19 @@ func NewTrackerClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *
 
 func (c *TrackerClient) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
 	return c.ListIssuesByStates(ctx, c.Config.ActiveStates)
+}
+
+// PaginationCapHits returns how often this client observed more than
+// listIssuesMaxPages of Gitea issue results for a label-scoped listing.
+func (c *TrackerClient) PaginationCapHits() int64 {
+	return c.paginationCapHits.Load()
+}
+
+// RecordPaginationCapHit records a manually observed pagination cap condition.
+// It exists for callers that expose TrackerClient diagnostics through their own
+// operator surfaces; normal issue listings call it automatically.
+func (c *TrackerClient) RecordPaginationCapHit(labelName string) {
+	c.recordPaginationCapHit(labelName)
 }
 
 func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
@@ -99,9 +119,7 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			if len(batch) == 0 {
 				return out, nil
 			}
-			if c.Logf != nil {
-				c.Logf("gitea issue pagination exceeded %d pages for label %q; returning capped result set", listIssuesMaxPages, labelName)
-			}
+			c.recordPaginationCapHit(labelName)
 			return out, nil
 		}
 		for _, issue := range batch {
@@ -147,6 +165,13 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 		}
 	}
 	return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
+}
+
+func (c *TrackerClient) recordPaginationCapHit(labelName string) {
+	c.paginationCapHits.Add(1)
+	if c.Logf != nil {
+		c.Logf("gitea issue pagination exceeded %d pages for label %q; returning capped result set", listIssuesMaxPages, labelName)
+	}
 }
 
 func parseGiteaIssueTime(field, value string) (time.Time, error) {

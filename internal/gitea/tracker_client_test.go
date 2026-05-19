@@ -289,6 +289,9 @@ func TestTrackerClientListIssuesByStatesReturnsCappedResultsInsteadOfFailingWhen
 	client.Logf = func(format string, args ...any) {
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
+	if got := client.PaginationCapHits(); got != 0 {
+		t.Fatalf("initial PaginationCapHits = %d, want 0", got)
+	}
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates must return capped results instead of failing the poll cycle: %v", err)
@@ -298,6 +301,9 @@ func TestTrackerClientListIssuesByStatesReturnsCappedResultsInsteadOfFailingWhen
 	}
 	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "gitea issue pagination exceeded") {
 		t.Fatalf("logs = %#v, want pagination cap diagnostic", logs)
+	}
+	if got := client.PaginationCapHits(); got != 1 {
+		t.Fatalf("PaginationCapHits = %d, want 1", got)
 	}
 }
 
