@@ -63,11 +63,11 @@ Implemented:
 - basic path policy
 - verification commands
 - Gitea PR client code for the agent-side PR tool
-- `linear_graphql` dynamic tool implementation that proxies Linear GraphQL using orchestrator-held auth without exposing the Linear token to the agent process
+- `linear_graphql` dynamic tool advertisement and invocation for Codex app-server sessions, proxying Linear GraphQL through orchestrator-held auth without exposing the Linear token to the agent process
 
 Not yet implemented:
 
-- remaining app-server protocol gaps around dynamic tool advertisement/invocation, as tracked in `DEVIATIONS.md`
+- remaining app-server protocol gaps not covered by `linear_graphql`, as tracked in `DEVIATIONS.md`
 - pull request labels and reviewers
 - per-tick reconciliation (#78); startup reconciliation is already closed in #68
 - dashboard

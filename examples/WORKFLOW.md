@@ -156,7 +156,7 @@ Process:
 4. Run the verification commands.
 5. Write a concise summary in `.aiops/RUN_SUMMARY.md`.
 6. Commit your changes, push the work branch to the remote, and open a draft pull request from the work branch to the base branch.
-7. If tracker tooling is available, move/comment on the ticket from the agent/tool surface rather than expecting the orchestrator to do it.
+7. If tracker tooling is available, move/comment on the ticket from the agent/tool surface rather than expecting the orchestrator to do it. For Linear workflows, use the advertised `linear_graphql` dynamic tool for ticket comments and workflow-state mutations; the orchestrator proxies the request with its configured Linear auth so the API token never has to appear in the agent process or prompt.
 8. Stop and explain the blocker if the task is ambiguous or unsafe.
 
 Rules:

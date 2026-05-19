@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -377,6 +378,76 @@ for line in sys.stdin:
 	}
 	if strings.Contains(string(stdin), secret) {
 		t.Fatalf("app-server stdin leaked tracker api key: %s", stdin)
+	}
+}
+
+func TestCodexAppServerRunnerInvokesLinearGraphQLThroughOrchestratorProxy(t *testing.T) {
+	linear := &fakeLinearGraphQLServer{}
+	linearServer := httptest.NewServer(linear.handler())
+	defer linearServer.Close()
+	oldEndpoint := defaultLinearGraphQLEndpoint
+	defaultLinearGraphQLEndpoint = linearServer.URL
+	t.Cleanup(func() { defaultLinearGraphQLEndpoint = oldEndpoint })
+
+	secret := "lin_api_secret_should_not_leak_to_agent"
+	t.Setenv("LINEAR_API_KEY", "")
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        tools = msg.get('params', {}).get('dynamicTools', [])
+        if not any(tool.get('name') == 'linear_graphql' for tool in tools):
+            print(json.dumps({'id': msg['id'], 'error': {'message': 'linear_graphql was not advertised', 'tools': tools}}), flush=True)
+            break
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'item/tool/call', 'params': {'call_id': 'call-1', 'name': 'linear_graphql', 'arguments': {'query': 'mutation IssueUpdate($id: String!) { issueUpdate(id: $id, input: {}) { success } }', 'variables': {'id': 'issue-1'}}}}), flush=True)
+    elif msg.get('method') == 'item/tool/call/output':
+        output = msg.get('params', {}).get('output', {})
+        if output.get('success') is not True:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'linear_graphql did not return success', 'output': output}}), flush=True)
+            break
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'linear proxy worked'}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret}
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "linear proxy worked" {
+		t.Fatalf("Summary = %q, want linear dynamic tool completion", res.Summary)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(stdin), secret) {
+		t.Fatalf("app-server stdin leaked tracker api key: %s", stdin)
+	}
+	auth, body, requests := linear.recorded()
+	if requests != 1 {
+		t.Fatalf("Linear GraphQL requests = %d, want 1", requests)
+	}
+	if auth != "Bearer "+secret {
+		t.Fatalf("Authorization = %q, want orchestrator-held Linear token", auth)
+	}
+	if strings.Contains(body, secret) {
+		t.Fatalf("GraphQL request body leaked token to agent-controlled payload: %s", body)
+	}
+	if !strings.Contains(body, `"query"`) || !strings.Contains(body, `"variables"`) {
+		t.Fatalf("GraphQL request body missing query/variables: %s", body)
 	}
 }
 

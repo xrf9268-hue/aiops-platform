@@ -135,10 +135,9 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 	return tools
 }
 
-const (
-	defaultLinearGraphQLEndpoint  = "https://api.linear.app/graphql"
-	maxLinearGraphQLResponseBytes = 1 << 20
-)
+const maxLinearGraphQLResponseBytes = 1 << 20
+
+var defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
 
 type linearGraphQLProxy struct {
 	apiKey  string
