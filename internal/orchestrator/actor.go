@@ -495,6 +495,13 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
+			// Refresh stored issue metadata so per-state capacity gates
+			// (RunningCountByState, StateCapacityFull) see the latest tracker
+			// state. Without this, an issue that moved between active states
+			// keeps counting toward its dispatch-time bucket and a later poll
+			// can exceed max_concurrent_agents_by_state for the new state.
+			run.Issue = issue
+			st.ClaimedIssues[id] = issue
 			continue
 		}
 		st.ReleaseClaim(id)
@@ -504,6 +511,8 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	for id, retry := range st.RetryAttempts {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(retry.Issue, issue) {
+			retry.Issue = issue
+			st.ClaimedIssues[id] = issue
 			continue
 		}
 		st.ReleaseClaim(id)
