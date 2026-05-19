@@ -514,7 +514,7 @@ func (d WorkerTaskDispatcher) buildTaskWithAttempt(issue tracker.Issue, attempt 
 		return task.Task{}, "", err
 	}
 	if attempt != nil {
-		tk.Attempts = *attempt
+		tk.Attempts = *attempt + 1
 	}
 	return tk, recordedTaskID, nil
 }

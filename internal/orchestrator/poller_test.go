@@ -979,7 +979,7 @@ func TestSelectRoutedCandidatesIgnoresServiceWithoutExplicitRouteBeforeProjectDe
 	}
 }
 
-func TestWorkerTaskDispatcherThreadsRetryAttemptIntoTask(t *testing.T) {
+func TestWorkerTaskDispatcherThreadsRunAttemptIntoTask(t *testing.T) {
 	attempt := 3
 	dispatcher := WorkerTaskDispatcher{
 		BuildTask: func(issue tracker.Issue) (task.Task, error) {
@@ -996,8 +996,27 @@ func TestWorkerTaskDispatcherThreadsRetryAttemptIntoTask(t *testing.T) {
 	if recordedTaskID != "issue-1" {
 		t.Fatalf("recordedTaskID = %q, want issue-1", recordedTaskID)
 	}
-	if tk.Attempts != attempt {
-		t.Fatalf("task attempts = %d, want retry attempt %d", tk.Attempts, attempt)
+	want := attempt + 1
+	if tk.Attempts != want {
+		t.Fatalf("task attempts = %d, want run attempt %d from retry counter %d", tk.Attempts, want, attempt)
+	}
+}
+
+func TestWorkerTaskDispatcherThreadsFirstRetryAsSecondRunAttempt(t *testing.T) {
+	attempt := 1
+	dispatcher := WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return task.Task{ID: "issue-1"}, nil
+		},
+		Config: worker.Config{Workflow: &workflow.Workflow{}},
+	}
+
+	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	if err != nil {
+		t.Fatalf("buildTaskWithAttempt: %v", err)
+	}
+	if tk.Attempts != 2 {
+		t.Fatalf("task attempts = %d, want first retry to render as run attempt 2", tk.Attempts)
 	}
 }
 
