@@ -728,6 +728,11 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		o := r.o
 		return func() { o.wakeRetryPollLoop() }
 	}
+	// Use entry.Issue rather than the timer-captured r.issue: reconciliation
+	// may have refreshed the tracker state while the retry was queued, and
+	// both the per-state capacity gate and the spawned worker must see the
+	// live state.
+	issue := entry.Issue
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Leave the retry queued and arm a short follow-up timer so the issue
@@ -737,7 +742,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		}
 		o := r.o
 		id := r.id
-		issue := r.issue
 		attempt := r.attempt
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
@@ -750,7 +754,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		})
 		return nil
 	}
-	if st.StateCapacityFull(entry.Issue.State) {
+	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Leave the retry
 		// queued and arm a short follow-up timer so noisy states cannot exceed
 		// max_concurrent_agents_by_state while other states are running.
@@ -759,7 +763,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		}
 		o := r.o
 		id := r.id
-		issue := r.issue
 		attempt := r.attempt
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
@@ -777,7 +780,6 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	// would let a concurrent tick race in.
 	delete(st.RetryAttempts, r.id)
 	o := r.o
-	issue := r.issue
 	attempt := r.attempt
 	return func() {
 		o.spawn(r.id, issue, &attempt)
@@ -810,8 +812,12 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			return nil
 		}
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
+		// Use f.entry.Issue, not f.issue: reconciliation may have refreshed
+		// the tracker state mid-run, and per-state capacity gates must see
+		// the live state, not the dispatch-time snapshot.
+		issue := f.entry.Issue
 		st.Claimed[f.id] = struct{}{}
-		st.ClaimedIssues[f.id] = f.issue
+		st.ClaimedIssues[f.id] = issue
 		close(f.done)
 		// A clean continuation is a new normal turn. Keep its retry entry
 		// 1-based, but do not carry the prior run's attempt into future
@@ -819,7 +825,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		// transient failure straight to the max backoff.
 		nextAttempt := 1
 		o := f.o
-		issue := f.issue
 		identifier := f.identifier
 		return func() {
 			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt)
@@ -856,8 +861,11 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	// backoff and racing a phantom retry timer against a live worker.
 	// scheduleRetryOp's call to OrchestratorState.ScheduleRetry re-sets
 	// Claimed idempotently, so this is safe.
+	// Use f.entry.Issue, not f.issue: reconciliation may have refreshed
+	// the tracker state mid-run, and the retry must carry the live state.
+	issue := f.entry.Issue
 	st.Claimed[f.id] = struct{}{}
-	st.ClaimedIssues[f.id] = f.issue
+	st.ClaimedIssues[f.id] = issue
 	close(f.done)
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
@@ -867,7 +875,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		nextAttempt = *f.attempt + 1
 	}
 	o := f.o
-	issue := f.issue
 	identifier := f.identifier
 	runErr := f.result.Err.Error()
 	return func() {
