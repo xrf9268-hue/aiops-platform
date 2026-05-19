@@ -54,7 +54,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
       project { slugId }
       team { key }
       labels(first: 50) { nodes { name } }
-      customFields { name value }
+      customFieldValues(first: 50) { nodes { customField { name } value } }
       state { name }
     }
     pageInfo { hasNextPage endCursor }
@@ -86,10 +86,14 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 								Name string `json:"name"`
 							} `json:"nodes"`
 						} `json:"labels"`
-						CustomFields []struct {
-							Name  string          `json:"name"`
-							Value json.RawMessage `json:"value"`
-						} `json:"customFields"`
+						CustomFieldValues struct {
+							Nodes []struct {
+								CustomField struct {
+									Name string `json:"name"`
+								} `json:"customField"`
+								Value json.RawMessage `json:"value"`
+							} `json:"nodes"`
+						} `json:"customFieldValues"`
 						State struct {
 							Name string `json:"name"`
 						} `json:"state"`
@@ -123,12 +127,12 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 					labels = append(labels, strings.ToLower(strings.TrimSpace(label.Name)))
 				}
 			}
-			customFields := make(map[string]string, len(n.CustomFields))
-			for _, field := range n.CustomFields {
-				if strings.TrimSpace(field.Name) == "" {
+			customFields := make(map[string]string, len(n.CustomFieldValues.Nodes))
+			for _, field := range n.CustomFieldValues.Nodes {
+				if strings.TrimSpace(field.CustomField.Name) == "" {
 					continue
 				}
-				customFields[strings.TrimSpace(field.Name)] = stringifyLinearCustomFieldValue(field.Value)
+				customFields[strings.TrimSpace(field.CustomField.Name)] = stringifyLinearCustomFieldValue(field.Value)
 			}
 			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, CustomFields: customFields, State: n.State.Name, BlockedBy: blockers})
 		}

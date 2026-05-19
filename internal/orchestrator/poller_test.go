@@ -840,6 +840,34 @@ func TestSelectRoutedCandidatesRejectsAmbiguousLinearRoute(t *testing.T) {
 	}
 }
 
+func TestSelectRoutedCandidatesUsesTopLevelLinearProjectAsServiceDefault(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{ProjectSlug: "api-platform"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{TeamKey: "ENG"}},
+			{Name: "mobile", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "mobile-app", TeamKey: "ENG"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "api-issue", Identifier: "LIN-1", Title: "API work", State: "AI Ready", ProjectSlug: "api-platform", TeamKey: "ENG"},
+		{ID: "mobile-issue", Identifier: "LIN-2", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app", TeamKey: "ENG"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("routed candidates = %d, want 2", len(got))
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("api issue service = %q, want api", got[0].ServiceName)
+	}
+	if got[1].ServiceName != "mobile" {
+		t.Fatalf("mobile issue service = %q, want mobile", got[1].ServiceName)
+	}
+}
+
 func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
 	cfg := workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
@@ -1205,7 +1233,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		Scheduler:  RetryScheduler{MaxBackoff: time.Millisecond},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {

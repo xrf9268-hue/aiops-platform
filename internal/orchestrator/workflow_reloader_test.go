@@ -371,6 +371,68 @@ func TestRuntimePollerDoesNotFanOutServiceProjectsForGitea(t *testing.T) {
 	}
 }
 
+func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Repo = workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git", DefaultBranch: "main"}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
+		{ID: "gitea-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"},
+	}}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if poller.poller.routing != nil {
+		t.Fatal("gitea runtime poller enabled Linear service routing")
+	}
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	got := dispatcher.issueAt(0)
+	if got.ID != "gitea-ready" {
+		t.Fatalf("dispatched issue = %q, want gitea-ready", got.ID)
+	}
+	if got.ServiceName != "" {
+		t.Fatalf("gitea issue service = %q, want no Linear service routing", got.ServiceName)
+	}
+
+	linearPath := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	linearWorkflow, err := workflow.Load(linearPath)
+	if err != nil {
+		t.Fatalf("load linear workflow: %v", err)
+	}
+	linearWorkflow.Config.Services = []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
+	}
+	linearRuntime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: linearWorkflow, Path: linearPath, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new linear runtime: %v", err)
+	}
+	linearPoller, err := NewRuntimePoller(&fakeIssueStateTracker{}, orch, linearRuntime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new linear runtime poller: %v", err)
+	}
+	if linearPoller.poller.routing == nil {
+		t.Fatal("linear service runtime poller did not enable service routing")
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)

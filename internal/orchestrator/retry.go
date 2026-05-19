@@ -1,6 +1,10 @@
 package orchestrator
 
-import "time"
+import (
+	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+)
 
 // RetryEntry is the SPEC §4.1.7 record stored under
 // OrchestratorState.RetryAttempts while an issue is in the retry-queued
@@ -22,6 +26,7 @@ import "time"
 //     through SPEC §13.3's retrying view so operators can see why an
 //     issue is in backoff.
 type RetryEntry struct {
+	Issue      tracker.Issue
 	IssueID    IssueID
 	Identifier string
 	Attempt    int

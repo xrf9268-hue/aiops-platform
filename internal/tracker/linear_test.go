@@ -320,13 +320,13 @@ func TestListIssuesByStatesMapsRoutingFields(t *testing.T) {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		for _, fragment := range []string{"project { slugId }", "team { key }", "labels(first: 50)", "customFields { name value }"} {
+		for _, fragment := range []string{"project { slugId }", "team { key }", "labels(first: 50)", "customFieldValues(first: 50)", "customField { name }"} {
 			if !strings.Contains(payload.Query, fragment) {
 				t.Fatalf("ListIssues query = %s, want fragment %q", payload.Query, fragment)
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"customFields":[{"name":"Runtime","value":"go"}],"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"customFieldValues":{"nodes":[{"customField":{"name":"Runtime"},"value":"go"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -353,7 +353,7 @@ func TestListIssuesByStatesMapsRoutingFields(t *testing.T) {
 func TestListIssuesByStatesMapsNonStringCustomFieldValues(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[]},"customFields":[{"name":"Risk","value":3},{"name":"CustomerFacing","value":true},{"name":"Option","value":{"name":"gold"}}],"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[]},"customFieldValues":{"nodes":[{"customField":{"name":"Risk"},"value":3},{"customField":{"name":"CustomerFacing"},"value":true},{"customField":{"name":"Option"},"value":{"name":"gold"}}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})

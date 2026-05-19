@@ -110,8 +110,10 @@ prompt body
 	}
 }
 
-func TestLoadAllowsServiceOnlyWorkflowWithoutFallbackRepo(t *testing.T) {
+func TestLoadAllowsLinearServiceOnlyWorkflowWithoutFallbackRepo(t *testing.T) {
 	body := `---
+tracker:
+  kind: linear
 services:
   - name: api
     repo:
@@ -130,6 +132,111 @@ prompt body
 	}
 	if wf.Config.Repo.CloneURL != "" {
 		t.Fatalf("fallback repo clone URL = %q, want empty service-only fallback", wf.Config.Repo.CloneURL)
+	}
+}
+
+func TestLoadAllowsLinearServiceOnlyWorkflowWithTopLevelProjectSlug(t *testing.T) {
+	body := `---
+tracker:
+  kind: linear
+  project_slug: platform
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      team_key: ENG
+---
+prompt body
+`
+
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Tracker.ProjectSlug != "platform" {
+		t.Fatalf("top-level project slug = %q, want platform", wf.Config.Tracker.ProjectSlug)
+	}
+}
+
+func TestLoadRejectsLinearServiceOnlyWorkflowWithoutAnyProjectSlug(t *testing.T) {
+	body := `---
+tracker:
+  kind: linear
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      team_key: ENG
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want project slug requirement for service-only Linear workflow")
+	}
+	if !strings.Contains(err.Error(), "tracker.project_slug") && !strings.Contains(err.Error(), "services[0].tracker.project_slug") {
+		t.Fatalf("Load error = %q, want project slug guidance", err)
+	}
+}
+
+func TestLoadRejectsLinearFallbackRepoWorkflowWithServiceMissingProjectSlug(t *testing.T) {
+	body := `---
+tracker:
+  kind: linear
+repo:
+  owner: acme
+  name: fallback
+  clone_url: git@example.com:acme/fallback.git
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      label: backend
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want project slug requirement for routed Linear polling")
+	}
+	if !strings.Contains(err.Error(), "tracker.project_slug") && !strings.Contains(err.Error(), "services[0].tracker.project_slug") {
+		t.Fatalf("Load error = %q, want project slug guidance", err)
+	}
+}
+
+func TestLoadRejectsGiteaServiceOnlyWorkflowWithoutFallbackRepo(t *testing.T) {
+	body := `---
+tracker:
+  kind: gitea
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      project_slug: api-platform
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want missing fallback repo clone_url error for non-Linear services")
+	}
+	if !strings.Contains(err.Error(), "repo.clone_url") || !strings.Contains(err.Error(), "linear") {
+		t.Fatalf("Load error = %q, want repo.clone_url and linear guidance", err)
 	}
 }
 

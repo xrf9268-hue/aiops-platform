@@ -111,8 +111,25 @@ var supportedSandboxNetworks = map[string]struct{}{
 // file path and the offending field/value so operators can fix the
 // source rather than chasing runtime symptoms (issue #9).
 func validateConfig(path string, cfg Config) error {
-	if strings.TrimSpace(cfg.Repo.CloneURL) == "" && len(cfg.Services) == 0 {
-		return fmt.Errorf("%s: repo.clone_url is required", path)
+	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
+		if len(cfg.Services) == 0 {
+			return fmt.Errorf("%s: repo.clone_url is required", path)
+		}
+		if cfg.Tracker.Kind != "linear" {
+			return fmt.Errorf("%s: repo.clone_url is required unless tracker.kind is linear and services provide routed repos", path)
+		}
+		for i, service := range cfg.Services {
+			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
+				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for service-only Linear workflows", path, i)
+			}
+		}
+	}
+	if cfg.Tracker.Kind == "linear" {
+		for i, service := range cfg.Services {
+			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
+				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
+			}
+		}
 	}
 	seenServiceNames := make(map[string]int, len(cfg.Services))
 	for i, service := range cfg.Services {

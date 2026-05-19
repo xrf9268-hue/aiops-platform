@@ -95,7 +95,9 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	p.trackers = trackerClients
 	p.lastSnapshotKey = key
 	poller := NewPollerWithReconciliation(multiIssueStateLister{trackers: trackerClients}, p.orchestrator, snap.Reconciliation)
-	poller.routing = &snap.Workflow.Config
+	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
+		poller.routing = &snap.Workflow.Config
+	}
 	return poller, nil
 }
 

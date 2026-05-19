@@ -346,7 +346,7 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 	out := make([]tracker.Issue, 0, len(issues))
 	var routeErr error
 	for _, issue := range issues {
-		matches := matchingServices(issue, cfg.Services)
+		matches := matchingServices(issue, cfg)
 		switch len(matches) {
 		case 0:
 			log.Printf("tracker route skipped issue %s: no configured service matched", issue.ID)
@@ -364,19 +364,23 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 	return out, routeErr
 }
 
-func matchingServices(issue tracker.Issue, services []workflow.ServiceConfig) []workflow.ServiceConfig {
-	matches := make([]workflow.ServiceConfig, 0, len(services))
-	for _, service := range services {
-		if serviceMatchesIssue(service, issue) {
+func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.ServiceConfig {
+	matches := make([]workflow.ServiceConfig, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		if serviceMatchesIssue(service, cfg.Tracker, issue) {
 			matches = append(matches, service)
 		}
 	}
 	return matches
 }
 
-func serviceMatchesIssue(service workflow.ServiceConfig, issue tracker.Issue) bool {
+func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
 	route := service.Tracker
-	if route.ProjectSlug != "" && !strings.EqualFold(strings.TrimSpace(route.ProjectSlug), strings.TrimSpace(issue.ProjectSlug)) {
+	projectSlug := strings.TrimSpace(route.ProjectSlug)
+	if projectSlug == "" {
+		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
+	}
+	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
 		return false
 	}
 	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {

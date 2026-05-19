@@ -455,21 +455,25 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
-		if ok && isActiveTrackerState(issue.State, r.activeStates) {
+		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
 			continue
 		}
 		st.ReleaseClaim(id)
 		run.ReconcileCancel = true
 		cancelEntries = append(cancelEntries, run)
 	}
-	for id := range st.RetryAttempts {
+	for id, retry := range st.RetryAttempts {
 		issue, ok := r.issuesByID[string(id)]
-		if ok && isActiveTrackerState(issue.State, r.activeStates) {
+		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(retry.Issue, issue) {
 			continue
 		}
 		st.ReleaseClaim(id)
 	}
 	return reconcileCancelFollowup(cancelEntries, r.result)
+}
+
+func sameServiceRoute(previous, current tracker.Issue) bool {
+	return strings.TrimSpace(previous.ServiceName) == strings.TrimSpace(current.ServiceName)
 }
 
 type reconcileInactiveTrackerIssuesOp struct {
@@ -603,6 +607,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	// without blocking. ScheduleRetry needs the Timer set on the entry
 	// before storing so a stale prior timer is stopped atomically.
 	entry := &RetryEntry{
+		Issue:      s.issue,
 		IssueID:    id,
 		Identifier: s.identifier,
 		Attempt:    attempt,

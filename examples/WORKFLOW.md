@@ -35,10 +35,13 @@ tracker:
   #   human_review: "Human Review"
   #   rework: "Rework"
 
-# Optional multi-service routing. Omit `services` for the default single-service
-# mode above. When present, Linear candidate selection matches project/team,
-# labels, and custom fields, then dispatches the issue with that service's repo.
-# Unmatched issues are skipped locally; ambiguous matches fail the poll tick.
+# Optional multi-service routing (tracked as D25/#143 until the extension schema
+# is fully documented). Omit `services` for the default single-service mode
+# above. When present for Linear workflows, candidate selection matches
+# project/team, labels, and custom fields, then dispatches the issue with that
+# service's repo. Unmatched issues are skipped locally; ambiguous matches fail
+# the poll tick. This is read-only routing: ticket writes remain agent/tool-side
+# per SPEC §1.
 # services:
 #   - name: api
 #     repo:
