@@ -63,13 +63,11 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID string, wf *wo
 // logWorkflowResolved prints a single info-level line summarizing how the
 // workflow was discovered. Format:
 //
-//	task <id>: workflow resolved: source=<source> path=<path> shadowed=[a,b]
+//	task <id>: workflow resolved: source=<source> path=<path>
 //
-// The path and shadowed segments are omitted when empty so the common case
-// (source=default or a clean repo-root WORKFLOW.md with no shadows) stays
-// short. See issue #69 for the deviation rationale: multi-path discovery is
-// a deliberate extension over SPEC, and operators need a fast way to answer
-// "which file is in effect?" without re-parsing events.
+// The path segment is omitted when empty so the common case (source=default)
+// stays short. The retained shadowed segment is only emitted for future
+// non-legacy metadata; ignored .aiops/.github workflow files must not populate it.
 func logWorkflowResolved(taskID string, res *workflow.Resolution) {
 	parts := []string{"source=" + string(res.Source)}
 	if res.Path != "" {

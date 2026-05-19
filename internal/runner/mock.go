@@ -99,7 +99,7 @@ pushing, opening PRs, or writing tracker comments on the runner's behalf.
 	}
 	if m.WriteAiopsWorkflow {
 		if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte("tracked workflow edit\n"), 0o644); err != nil {
-			return Result{}, fmt.Errorf("write .aiops/WORKFLOW.md: %w", err)
+			return Result{}, fmt.Errorf("write WORKFLOW.md: %w", err)
 		}
 	}
 	content := fmt.Sprintf(`# AI Ops Mock Run

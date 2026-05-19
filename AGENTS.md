@@ -216,23 +216,20 @@ Go toolchain: pinned via `go.mod` (Go 1.25). Don't edit `go.mod`'s `go` directiv
 
 ## WORKFLOW.md discovery (worker side)
 
-Per SPEC §workflow file, `WORKFLOW.md` is a single repository-owned source at
-the repo root:
+Per SPEC §workflow file, `WORKFLOW.md` is a single service workflow source at
+the startup-selected path. By default this is the process working directory's
+canonical file:
 
 ```
-<repo>/WORKFLOW.md
+WORKFLOW.md
 ```
 
 Missing front matter is allowed — the body becomes the prompt template, all
 other settings fall back to defaults (see `README.md` table). The
 `workflow_resolved` task event captures the resolved source and path.
 
-> **Note (transitional):** the current implementation still searches three
-> paths (`<repo>/WORKFLOW.md`, `<repo>/.aiops/WORKFLOW.md`,
-> `<repo>/.github/WORKFLOW.md`) — this is deviation D4 (#69) and is being
-> reverted to single-source under #72. Treat single-source as the canonical
-> answer when designing new code; do not add features that depend on the
-> alternate paths.
+Legacy alternate paths (`.aiops/WORKFLOW.md`, `.github/WORKFLOW.md`) are not
+searched or reported as normal shadow sources.
 
 ## Where to read next
 

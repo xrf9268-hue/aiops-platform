@@ -40,15 +40,9 @@ Symphony implementation while D1–D24 are closed systematically.
 
 ## WORKFLOW.md discovery
 
-The worker looks for `WORKFLOW.md` in three locations and uses the first one it finds:
+The worker resolves one canonical workflow source: `WORKFLOW.md` in the service/repository root, or an explicit startup workflow path where supported. Legacy fallback files such as `.aiops/WORKFLOW.md` and `.github/WORKFLOW.md` are not searched and are not reported as shadowed workflow sources.
 
-1. `<repo>/WORKFLOW.md`
-2. `<repo>/.aiops/WORKFLOW.md`
-3. `<repo>/.github/WORKFLOW.md`
-
-When multiple files exist, lower-priority files are recorded as `shadowed_by` on the `workflow_resolved` event but are otherwise ignored. The worker does not warn or fail.
-
-If none of the three exist, the worker proceeds with built-in defaults:
+If the canonical file does not exist, the worker proceeds with built-in defaults:
 
 | Setting | Default |
 |---------|---------|
@@ -88,7 +82,7 @@ worker --print-config /path/to/repo/clone
 
 The output is JSON. `tracker.api_key` is masked as `***`; the prompt template is summarized (length + first line) rather than printed verbatim — `cat <resolution.path>` to see the full body.
 
-For post-hoc inspection, the `workflow_resolved` task event records the source, path, and shadowed list of every run.
+For post-hoc inspection, the `workflow_resolved` task event records the source and path of every run; `shadowed_by` is omitted unless future non-legacy resolution metadata is added.
 
 ## Architecture notes
 
