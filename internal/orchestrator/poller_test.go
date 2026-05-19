@@ -566,6 +566,54 @@ func TestPollOnceDoesNotCancelRunningIssueStillInActiveTrackerListing(t *testing
 	}
 }
 
+func TestPollOnceRefreshesRunningIssueStateWithoutRouting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	first := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{first}}
+	dispatcher := &cancellationDispatcher{}
+	st := NewOrchestratorState(30000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	orch := New(st, Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	moved := first
+	moved.State = "Rework"
+	trackerClient.setIssues([]tracker.Issue{moved})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("refresh poll: %v", err)
+	}
+
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatalf("running issue was canceled by non-routed refresh path")
+	default:
+	}
+
+	other := tracker.Issue{ID: "issue-2", Identifier: "LIN-2", State: "Rework"}
+	if err := orch.RequestDispatch(ctx, other, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch second Rework after refresh err = %v, want ErrCapacityFull", err)
+	}
+}
+
 func TestPollOnceDoesNotCancelRunningIssueMissingFromPartialTrackerListing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

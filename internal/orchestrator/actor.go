@@ -364,6 +364,24 @@ func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID ma
 	return o.ReconcileTrackerIssuesAndWait(ctx, issuesByID, activeStates, 0)
 }
 
+// RefreshActiveTrackerIssues updates stored issue metadata for in-process runs
+// and queued retries whose issues are still observed in the active set, without
+// canceling any work. Use this when the active listing may be partial (so
+// absence from issuesByID must not imply inactivity) but per-state capacity
+// gates still need the latest tracker state.
+func (o *Orchestrator) RefreshActiveTrackerIssues(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}) error {
+	done := make(chan struct{}, 1)
+	if err := o.submit(ctx, &refreshActiveTrackerIssuesOp{issuesByID: issuesByID, activeStates: activeStates, done: done}); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // ReconcileTrackerIssuesAndWait performs the same reconciliation as
 // ReconcileTrackerIssues, then optionally waits for canceled workers to exit.
 // This lets poll ticks provide prompt cancellation semantics without making the
@@ -482,6 +500,42 @@ func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, i
 		req:        req,
 	}
 	return o.submit(ctx, op)
+}
+
+// refreshActiveTrackerIssuesOp refreshes RunningEntry.Issue and the matching
+// ClaimedIssues snapshot for every in-process issue observed in the active set,
+// without canceling anything. It is safe to call when the active listing may be
+// partial, because absence from issuesByID is treated as "no information," not
+// "now inactive."
+type refreshActiveTrackerIssuesOp struct {
+	issuesByID   map[string]tracker.Issue
+	activeStates map[string]struct{}
+	done         chan<- struct{}
+}
+
+func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
+	for id, run := range st.Running {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(run.Issue, issue) {
+			continue
+		}
+		run.Issue = issue
+		st.ClaimedIssues[id] = issue
+	}
+	for id, retry := range st.RetryAttempts {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(retry.Issue, issue) {
+			continue
+		}
+		retry.Issue = issue
+		st.ClaimedIssues[id] = issue
+	}
+	done := r.done
+	return func() {
+		if done != nil {
+			close(done)
+		}
+	}
 }
 
 type reconcileTrackerIssuesOp struct {
