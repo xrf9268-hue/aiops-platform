@@ -72,13 +72,6 @@ func (c *TrackerClient) PaginationCapHits() int64 {
 	return c.paginationCapHits.Load()
 }
 
-// RecordPaginationCapHit records a manually observed pagination cap condition.
-// It exists for callers that expose TrackerClient diagnostics through their own
-// operator surfaces; normal issue listings call it automatically.
-func (c *TrackerClient) RecordPaginationCapHit(labelName string) {
-	c.recordPaginationCapHit(labelName)
-}
-
 func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")

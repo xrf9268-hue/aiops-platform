@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -99,12 +100,23 @@ func startMetricsServer(addr string, client *gitea.TrackerClient) {
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		writeMetrics(w, r, client)
 	})
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Printf("gitea poller metrics listen error on %s: %v", addr, err)
+		return
+	}
 	go func() {
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Printf("gitea poller metrics listening on %s", listener.Addr())
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			log.Printf("gitea poller metrics server stopped: %v", err)
 		}
 	}()
-	log.Printf("gitea poller metrics listening on %s", addr)
 }
 
 func writeMetrics(w http.ResponseWriter, _ *http.Request, client *gitea.TrackerClient) {
