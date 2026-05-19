@@ -207,6 +207,48 @@ func TestProcessIssuesRoutesServiceOnlyLinearWorkflow(t *testing.T) {
 	}
 }
 
+func TestProcessIssuesEnqueuesFreshTaskWhenIssueRouteChangesService(t *testing.T) {
+	store := newFakeStore()
+	cfg := baseConfig()
+	cfg.Repo = workflow.RepoConfig{}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "api", CloneURL: "git@example.com:octo/api.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+		{
+			Name:    "web",
+			Repo:    workflow.RepoConfig{Owner: "octo", Name: "web", CloneURL: "git@example.com:octo/web.git", DefaultBranch: "main"},
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"web"}},
+		},
+	}
+
+	issueForAPI := tracker.Issue{
+		ID: "abc-123", Identifier: "ENG-1", Title: "route me", State: "AI Ready",
+		ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-08T10:00:00Z",
+	}
+	issueForWeb := issueForAPI
+	issueForWeb.Labels = []string{"web"}
+
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issueForAPI})
+	processIssues(context.Background(), store, cfg, []tracker.Issue{issueForWeb})
+
+	if store.inserts() != 2 {
+		t.Fatalf("inserts after route change = %d, want one task per matched service", store.inserts())
+	}
+	if got := store.calls[0].SourceEventID; got != "abc-123|service|api" {
+		t.Fatalf("first source_event_id = %q, want api service key", got)
+	}
+	if got := store.calls[1].SourceEventID; got != "abc-123|service|web" {
+		t.Fatalf("second source_event_id = %q, want web service key", got)
+	}
+	if store.calls[0].RepoName != "api" || store.calls[1].RepoName != "web" {
+		t.Fatalf("enqueued repos = %q then %q, want api then web", store.calls[0].RepoName, store.calls[1].RepoName)
+	}
+}
+
 func TestLinearIssueListersFanOutServiceOnlyLinearWorkflowProjects(t *testing.T) {
 	cfg := baseConfig()
 	cfg.Repo = workflow.RepoConfig{}

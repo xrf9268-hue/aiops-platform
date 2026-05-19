@@ -13,8 +13,27 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+type fakeReconcileTracker struct {
+	issues []tracker.Issue
+}
+
+func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
+	want := map[string]struct{}{}
+	for _, state := range states {
+		want[state] = struct{}{}
+	}
+	var out []tracker.Issue
+	for _, issue := range f.issues {
+		if _, ok := want[issue.State]; ok {
+			out = append(out, issue)
+		}
+	}
+	return out, nil
+}
 
 func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {
 	if err := normalizeRunError(context.Canceled, context.Canceled); err != nil {
@@ -184,6 +203,81 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	if reconcile.HookTimeoutMillis != 1234 {
 		t.Fatalf("HookTimeoutMillis = %d, want top-level effective timeout", reconcile.HookTimeoutMillis)
 	}
+}
+
+func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+		},
+	}
+
+	reconcile := startupReconcileConfigForWorkflow(cfg, nil)
+	if reconcile.ActiveWorkspaceKeys == nil {
+		t.Fatal("ActiveWorkspaceKeys is nil; startup reconciliation will not recognize service-routed workspace keys")
+	}
+
+	keys := reconcile.ActiveWorkspaceKeys(tracker.Issue{
+		ID:          "abc-123",
+		Identifier:  "ENG-1",
+		State:       "Rework",
+		ProjectSlug: "platform",
+		Labels:      []string{"api"},
+		UpdatedAt:   "2026-05-19T03:00:00Z",
+	})
+	for _, want := range []string{"abc-123-service-api", "abc-123-service-api-rework-2026-05-19t03-00-00z"} {
+		if !containsString(keys, want) {
+			t.Fatalf("active workspace keys = %#v, want %s", keys, want)
+		}
+	}
+}
+
+func TestStartupReconcileKeepsServiceRoutedReworkWorkspaceAfterUpdatedAtChanges(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "api", "linear_issue", "abc-123-service-api-rework-2026-05-18t03-00-00z")
+	terminalPath := filepath.Join(root, "acme", "api", "linear_issue", "done-1")
+	for _, path := range []string{activePath, terminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "linear"
+	cfg.Tracker.ActiveStates = []string{"Rework"}
+	cfg.Tracker.TerminalStates = []string{"Done"}
+	cfg.Tracker.ProjectSlug = "platform"
+	cfg.Services = []workflow.ServiceConfig{{
+		Name:    "api",
+		Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "platform", Labels: []string{"api"}},
+	}}
+	reconcile := startupReconcileConfigForWorkflow(cfg, fakeReconcileTracker{issues: []tracker.Issue{
+		{ID: "abc-123", Identifier: "ENG-1", State: "Rework", ProjectSlug: "platform", Labels: []string{"api"}, UpdatedAt: "2026-05-19T03:00:00Z"},
+		{ID: "done-1", Identifier: "DONE-1", State: "Done"},
+	}})
+	reconcile.WorkspaceRoot = root
+
+	if err := worker.ReconcileStartup(context.Background(), reconcile); err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active service Rework workspace should remain after updatedAt changes: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("terminal workspace should be removed, stat err=%v", err)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTrackerClientForWorkflowBuildsMultiProjectLinearClientForServiceRoutes(t *testing.T) {

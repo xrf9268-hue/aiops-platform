@@ -130,7 +130,7 @@ func processIssues(ctx context.Context, store enqueuer, cfg *workflow.Config, is
 		}
 		out, deduped, err := store.Enqueue(ctx, task.Task{
 			SourceType:    "linear_issue",
-			SourceEventID: sourceEventID(issue),
+			SourceEventID: sourceEventIDForService(issue, serviceName),
 			RepoOwner:     repo.Owner,
 			RepoName:      repo.Name,
 			CloneURL:      repo.CloneURL,
@@ -247,10 +247,18 @@ func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
 // and updatedAt is sufficient because state changes are the dominant
 // trigger for re-polling a Rework issue.
 func sourceEventID(issue tracker.Issue) string {
-	if strings.EqualFold(issue.State, reworkStateName) && issue.UpdatedAt != "" {
-		return issue.ID + "|rework|" + issue.UpdatedAt
+	return sourceEventIDForService(issue, "")
+}
+
+func sourceEventIDForService(issue tracker.Issue, serviceName string) string {
+	key := issue.ID
+	if serviceName != "" {
+		key += "|service|" + serviceName
 	}
-	return issue.ID
+	if strings.EqualFold(issue.State, reworkStateName) && issue.UpdatedAt != "" {
+		return key + "|rework|" + issue.UpdatedAt
+	}
+	return key
 }
 
 func env(k, d string) string {

@@ -999,6 +999,38 @@ func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {
 	}
 }
 
+func TestTaskFromIssueNamespacesServiceRoutedSourceEventID(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Repo: workflow.RepoConfig{Owner: "acme", Name: "mono", CloneURL: "git@example.com:acme/mono.git", DefaultBranch: "main"}},
+			{Name: "web", Repo: workflow.RepoConfig{Owner: "acme", Name: "mono", CloneURL: "git@example.com:acme/mono.git", DefaultBranch: "main"}},
+		},
+	}
+	apiIssue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "API work", ServiceName: "api"}
+	webIssue := apiIssue
+	webIssue.ServiceName = "web"
+
+	apiTask, err := TaskFromIssue(apiIssue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue(api): %v", err)
+	}
+	webTask, err := TaskFromIssue(webIssue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue(web): %v", err)
+	}
+
+	if apiTask.SourceEventID != "issue-1|service|api" {
+		t.Fatalf("api source event id = %q, want service-scoped issue id", apiTask.SourceEventID)
+	}
+	if webTask.SourceEventID != "issue-1|service|web" {
+		t.Fatalf("web source event id = %q, want service-scoped issue id", webTask.SourceEventID)
+	}
+	if apiTask.SourceEventID == webTask.SourceEventID {
+		t.Fatalf("service-routed tasks share source event id %q", apiTask.SourceEventID)
+	}
+}
+
 func TestTaskFromIssueRejectsUnknownService(t *testing.T) {
 	cfg := workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "fallback", Name: "fallback", CloneURL: "git@example.com:fallback/fallback.git", DefaultBranch: "main"},

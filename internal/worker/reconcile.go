@@ -28,15 +28,16 @@ type ReconcileTracker interface {
 // pass. The pass is idempotent: active issue workspaces are preserved, while
 // terminal and unknown/deleted issue workspaces are removed before dispatch.
 type ReconcileConfig struct {
-	WorkspaceRoot     string
-	ActiveStates      []string
-	TerminalStates    []string
-	TrackerKind       string
-	Tracker           ReconcileTracker
-	Emitter           EventEmitter
-	ReconcileTaskID   string
-	BeforeRemoveHook  workflow.WorkspaceHook
-	HookTimeoutMillis int
+	WorkspaceRoot       string
+	ActiveStates        []string
+	TerminalStates      []string
+	TrackerKind         string
+	Tracker             ReconcileTracker
+	Emitter             EventEmitter
+	ReconcileTaskID     string
+	BeforeRemoveHook    workflow.WorkspaceHook
+	HookTimeoutMillis   int
+	ActiveWorkspaceKeys func(tracker.Issue) []string
 }
 
 // ReconcileStartup reconciles existing per-issue workspaces with tracker state.
@@ -77,9 +78,13 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if err != nil {
 		return fmt.Errorf("fetch terminal issues: %w", err)
 	}
+	activeKeysForIssue := cfg.ActiveWorkspaceKeys
+	if activeKeysForIssue == nil {
+		activeKeysForIssue = issueWorkspaceKeys
+	}
 	activeKeys := make(map[string]tracker.Issue, len(activeIssues))
 	for _, issue := range activeIssues {
-		for _, key := range issueWorkspaceKeys(issue) {
+		for _, key := range activeKeysForIssue(issue) {
 			activeKeys[key] = issue
 		}
 	}
@@ -113,7 +118,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 			})
 			continue
 		}
-		if activeIssue, ok := activeReworkIssueForWorkspace(workspace.Key, activeIssues); ok {
+		if activeIssue, ok := activeReworkIssueForWorkspace(workspace.Key, activeIssues, activeKeysForIssue); ok {
 			kept++
 			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept active workspace", map[string]any{
 				"path":       workspace.Path,
@@ -243,12 +248,12 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 	return true, nil
 }
 
-func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
+func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue, activeKeysForIssue func(tracker.Issue) []string) (tracker.Issue, bool) {
 	for _, issue := range issues {
 		if !strings.EqualFold(issue.State, "Rework") || strings.TrimSpace(issue.ID) == "" {
 			continue
 		}
-		for _, prefix := range reworkWorkspaceKeyPrefixes(issue.ID) {
+		for _, prefix := range reworkWorkspaceKeyPrefixes(issue, activeKeysForIssue) {
 			if strings.HasPrefix(workspaceKey, prefix) {
 				return issue, true
 			}
@@ -257,10 +262,19 @@ func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) 
 	return tracker.Issue{}, false
 }
 
-func reworkWorkspaceKeyPrefixes(issueID string) []string {
+func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tracker.Issue) []string) []string {
 	seen := map[string]struct{}{}
 	var prefixes []string
-	for _, key := range []string{workspace.SanitizeComponent(issueID), sanitizeLegacyWorkspaceKey(issueID)} {
+	baseKeys := []string{workspace.SanitizeComponent(issue.ID), sanitizeLegacyWorkspaceKey(issue.ID)}
+	for _, key := range activeKeysForIssue(issue) {
+		if base, ok := strings.CutSuffix(key, "-rework-"+workspace.SanitizeComponent(issue.UpdatedAt)); ok {
+			baseKeys = append(baseKeys, base)
+		}
+		if base, ok := strings.CutSuffix(key, "_rework_"+sanitizeLegacyWorkspaceKey(issue.UpdatedAt)); ok {
+			baseKeys = append(baseKeys, base)
+		}
+	}
+	for _, key := range baseKeys {
 		if key == "" {
 			continue
 		}
@@ -286,11 +300,38 @@ func nonEmptyStates(states []string) []string {
 }
 
 func issueWorkspaceKeys(issue tracker.Issue) []string {
+	return workspaceKeysForRawIssueKeys(issue, []string{issue.Identifier, issue.ID})
+}
+
+// ActiveWorkspaceKeysForWorkflow returns the active workspace key matcher used
+// by startup reconciliation. Service-routed Linear workflows enqueue tasks with
+// a service-specific source_event_id, so reconciliation must preserve those
+// active workspaces in addition to the legacy issue ID / identifier keys.
+func ActiveWorkspaceKeysForWorkflow(cfg workflow.Config) func(tracker.Issue) []string {
+	if len(cfg.Services) == 0 {
+		return nil
+	}
+	return func(issue tracker.Issue) []string {
+		rawKeys := []string{issue.Identifier, issue.ID}
+		for _, service := range cfg.Services {
+			if serviceMatchesIssueForReconcile(service, cfg.Tracker, issue) && strings.TrimSpace(service.Name) != "" {
+				rawKeys = append(rawKeys, issue.ID+"|service|"+service.Name)
+			}
+		}
+		return workspaceKeysForRawIssueKeys(issue, rawKeys)
+	}
+}
+
+func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []string {
 	seen := map[string]struct{}{}
 	var keys []string
-	rawKeys := []string{issue.Identifier, issue.ID}
 	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && issue.UpdatedAt != "" {
-		rawKeys = append(rawKeys, issue.ID+"|rework|"+issue.UpdatedAt)
+		baseKeys := append([]string(nil), rawKeys...)
+		for _, raw := range baseKeys {
+			if strings.TrimSpace(raw) != "" {
+				rawKeys = append(rawKeys, raw+"|rework|"+issue.UpdatedAt)
+			}
+		}
 	}
 	for _, raw := range rawKeys {
 		for _, key := range []string{workspace.SanitizeComponent(raw), sanitizeLegacyWorkspaceKey(raw)} {
@@ -305,6 +346,48 @@ func issueWorkspaceKeys(issue tracker.Issue) []string {
 		}
 	}
 	return keys
+}
+
+func serviceMatchesIssueForReconcile(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+	route := service.Tracker
+	if !hasExplicitServiceRouteForReconcile(route) {
+		return false
+	}
+	projectSlug := strings.TrimSpace(route.ProjectSlug)
+	if projectSlug == "" {
+		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
+	}
+	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
+		return false
+	}
+	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {
+		return false
+	}
+	issueLabels := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
+			issueLabels[label] = struct{}{}
+		}
+	}
+	for _, label := range route.Labels {
+		if _, ok := issueLabels[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	for key, want := range route.CustomFields {
+		got, ok := issue.CustomFields[key]
+		if !ok || strings.TrimSpace(got) != strings.TrimSpace(want) {
+			return false
+		}
+	}
+	return true
+}
+
+func hasExplicitServiceRouteForReconcile(route workflow.ServiceTrackerRouteConfig) bool {
+	return strings.TrimSpace(route.ProjectSlug) != "" ||
+		strings.TrimSpace(route.TeamKey) != "" ||
+		len(route.Labels) > 0 ||
+		len(route.CustomFields) > 0
 }
 
 func sanitizeLegacyWorkspaceKey(s string) string {

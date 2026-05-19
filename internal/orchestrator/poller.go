@@ -531,7 +531,9 @@ func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) 
 	if sourceEventID == "" {
 		return task.Task{}, fmt.Errorf("tracker issue id is required")
 	}
-	if issue.Identifier != "" {
+	if issue.ServiceName != "" {
+		sourceEventID += "|service|" + issue.ServiceName
+	} else if issue.Identifier != "" {
 		sourceEventID = issue.Identifier
 	}
 	return task.Task{

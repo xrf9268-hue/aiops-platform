@@ -124,15 +124,16 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
 	hooks := cfg.WorkspaceHooks()
 	return worker.ReconcileConfig{
-		WorkspaceRoot:     worker.LoadConfigFromEnv().WorkspaceRoot,
-		ActiveStates:      cfg.Tracker.ActiveStates,
-		TerminalStates:    cfg.Tracker.TerminalStates,
-		TrackerKind:       cfg.Tracker.Kind,
-		Tracker:           trackerClient,
-		Emitter:           worker.LogEventEmitter{},
-		ReconcileTaskID:   "reconcile-startup",
-		BeforeRemoveHook:  hooks.BeforeRemove,
-		HookTimeoutMillis: hooks.TimeoutMs,
+		WorkspaceRoot:       worker.LoadConfigFromEnv().WorkspaceRoot,
+		ActiveStates:        cfg.Tracker.ActiveStates,
+		TerminalStates:      cfg.Tracker.TerminalStates,
+		TrackerKind:         cfg.Tracker.Kind,
+		Tracker:             trackerClient,
+		Emitter:             worker.LogEventEmitter{},
+		ReconcileTaskID:     "reconcile-startup",
+		BeforeRemoveHook:    hooks.BeforeRemove,
+		HookTimeoutMillis:   hooks.TimeoutMs,
+		ActiveWorkspaceKeys: worker.ActiveWorkspaceKeysForWorkflow(cfg),
 	}
 }
 
