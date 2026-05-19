@@ -7,9 +7,11 @@ import {
   captureUnresolvedReviewThreads,
   extractPriorityLabel,
   loadRecentlyMergedPullNumbers,
+  loadRepositoryIssuesForTracking,
   normalizeDiscussionPermalink,
   parseArgs,
   searchTermsForDiscussionPermalink,
+  buildTrackingIssueIndex,
   verifyTrackingForActionableThreads,
 } from './capture-unresolved-reviews.mjs';
 
@@ -430,4 +432,72 @@ test('capture workflow has scheduled retroactive sweep and failure notification 
   assert.match(workflow, /^  schedule:\n    - cron: /m);
   assert.match(workflow, /--recent-merged-days/);
   assert.match(workflow, /Notify capture workflow failure/);
+});
+
+test('buildTrackingIssueIndex indexes full permalinks and discussion anchors from issue bodies without Search API calls', () => {
+  const index = buildTrackingIssueIndex([
+    {
+      number: 135,
+      state: 'open',
+      html_url: 'https://github.com/xrf9268-hue/aiops-platform/issues/135',
+      body: 'Discussion: https://github.com/xrf9268-hue/aiops-platform/pull/101#discussion_r3251385489',
+    },
+    {
+      number: 136,
+      state: 'closed',
+      html_url: 'https://github.com/xrf9268-hue/aiops-platform/issues/136',
+      body: 'Manual backfill for discussion_r3251492691 only.',
+    },
+    {
+      number: 137,
+      state: 'open',
+      html_url: 'https://github.com/xrf9268-hue/aiops-platform/issues/137',
+      body: 'Unrelated issue body.',
+    },
+  ]);
+
+  assert.deepEqual(index.get('https://github.com/xrf9268-hue/aiops-platform/pull/101#discussion_r3251385489'), [
+    { number: 135, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/135' },
+  ]);
+  assert.deepEqual(index.get('discussion_r3251385489'), [
+    { number: 135, state: 'open', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/135' },
+  ]);
+  assert.deepEqual(index.get('discussion_r3251492691'), [
+    { number: 136, state: 'closed', url: 'https://github.com/xrf9268-hue/aiops-platform/issues/136' },
+  ]);
+  assert.equal(index.has('discussion_rdoesnotexist'), false);
+});
+
+test('loadRepositoryIssuesForTracking paginates issue bodies through the regular issues API', async () => {
+  const requests = [];
+  const page1 = Array.from({ length: 100 }, (_, index) => ({
+    number: index + 1,
+    state: 'open',
+    html_url: `https://github.com/xrf9268-hue/aiops-platform/issues/${index + 1}`,
+    body: index === 0 ? 'Discussion: https://github.com/xrf9268-hue/aiops-platform/pull/101#discussion_r3251385489' : '',
+  }));
+  const page2 = [
+    {
+      number: 101,
+      state: 'closed',
+      html_url: 'https://github.com/xrf9268-hue/aiops-platform/issues/101',
+      body: 'Manual tracking issue for discussion_r3251492691.',
+    },
+  ];
+
+  const issues = await loadRepositoryIssuesForTracking({
+    repository,
+    async request(path) {
+      requests.push(path);
+      return requests.length === 1 ? page1 : page2;
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /\/repos\/xrf9268-hue\/aiops-platform\/issues\?/);
+  assert.match(requests[0], /state=all/);
+  assert.match(requests[0], /page=1/);
+  assert.match(requests[1], /page=2/);
+  assert.equal(issues.length, 101);
+  assert.equal(issues[100].number, 101);
 });

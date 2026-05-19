@@ -380,18 +380,57 @@ function uniqueIssues(issues) {
   return result;
 }
 
-function searchQuery({ repository, term }) {
-  return `${JSON.stringify(term)} repo:${repository.owner}/${repository.name} in:body type:issue`;
+export function buildTrackingIssueIndex(issues) {
+  const index = new Map();
+  for (const issue of issues ?? []) {
+    const body = issue.body ?? '';
+    const trackedIssue = {
+      number: issue.number,
+      state: issue.state,
+      url: issue.html_url ?? issue.url,
+    };
+    const terms = new Set(body.match(/discussion_r\d+/g) ?? []);
+    for (const discussion of [...terms]) {
+      const permalink = body.match(new RegExp(`https://github\\.com/[^\\s)]+#${discussion}`))?.[0];
+      if (permalink) {
+        terms.add(permalink);
+      }
+    }
+    for (const term of terms) {
+      index.set(term, uniqueIssues([...(index.get(term) ?? []), trackedIssue]));
+    }
+  }
+  return index;
+}
+
+export async function loadRepositoryIssuesForTracking({ repository, request = githubRequest }) {
+  const issues = [];
+  for (let page = 1; ; page += 1) {
+    const query = new URLSearchParams({
+      state: 'all',
+      per_page: '100',
+      page: String(page),
+    });
+    const payload = await request(`/repos/${repository.owner}/${repository.name}/issues?${query.toString()}`);
+    const pageIssues = (payload ?? []).filter((issue) => !issue.pull_request);
+    issues.push(...pageIssues);
+    if ((payload ?? []).length < 100) {
+      break;
+    }
+  }
+  return issues;
 }
 
 function createGitHubClient() {
+  let trackingIssueIndex;
   return {
     async searchIssuesByDiscussionPermalink({ repository, permalink }) {
+      if (!trackingIssueIndex) {
+        trackingIssueIndex = buildTrackingIssueIndex(await loadRepositoryIssuesForTracking({ repository }));
+      }
       const issues = [];
       for (const term of searchTermsForDiscussionPermalink(permalink)) {
-        const query = new URLSearchParams({ q: searchQuery({ repository, term }), per_page: '20' });
-        const payload = await githubRequest(`/search/issues?${query.toString()}`);
-        issues.push(...(payload.items ?? []).map((issue) => ({ number: issue.number, state: issue.state, url: issue.html_url })));
+        issues.push(...(trackingIssueIndex.get(term) ?? []));
       }
       return uniqueIssues(issues);
     },
@@ -400,6 +439,7 @@ function createGitHubClient() {
         method: 'POST',
         body: { title, body, labels },
       });
+      trackingIssueIndex = undefined;
       return { number: issue.number, url: issue.html_url };
     },
   };
