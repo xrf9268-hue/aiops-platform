@@ -188,15 +188,27 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *Run
 		}
 	}
 
-	prompt := workflow.Render(wf.PromptTemplate, map[string]string{
-		"task.id":          t.ID,
-		"task.title":       t.Title,
-		"task.description": t.Description,
-		"task.actor":       t.Actor,
-		"repo.owner":       t.RepoOwner,
-		"repo.name":        t.RepoName,
-		"repo.branch":      t.BaseBranch,
+	promptAttempt := t.Attempts
+	if promptAttempt == 0 {
+		promptAttempt = 1
+	}
+	prompt, err := workflow.Render(wf.PromptTemplate, map[string]any{
+		"task": map[string]any{
+			"id":          t.ID,
+			"title":       t.Title,
+			"description": t.Description,
+			"actor":       t.Actor,
+		},
+		"repo": map[string]any{
+			"owner":  t.RepoOwner,
+			"name":   t.RepoName,
+			"branch": t.BaseBranch,
+		},
+		"attempt": promptAttempt,
 	})
+	if err != nil {
+		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
 	prompt = AppendAnalysisOnlyDirective(prompt, wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)
 	if err := writeTaskFiles(workdir, t, prompt); err != nil {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -975,6 +976,45 @@ func TestSelectRoutedCandidatesIgnoresServiceWithoutExplicitRouteBeforeProjectDe
 	}
 	if got[0].ServiceName != "api" {
 		t.Fatalf("routed candidate service = %q, want api", got[0].ServiceName)
+	}
+}
+
+func TestWorkerTaskDispatcherThreadsRetryAttemptIntoTask(t *testing.T) {
+	attempt := 3
+	dispatcher := WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return task.Task{ID: "issue-1", Attempts: 99}, nil
+		},
+		Config:  worker.Config{Workflow: &workflow.Workflow{}},
+		Emitter: nil,
+	}
+
+	tk, recordedTaskID, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	if err != nil {
+		t.Fatalf("buildTaskWithAttempt: %v", err)
+	}
+	if recordedTaskID != "issue-1" {
+		t.Fatalf("recordedTaskID = %q, want issue-1", recordedTaskID)
+	}
+	if tk.Attempts != attempt {
+		t.Fatalf("task attempts = %d, want retry attempt %d", tk.Attempts, attempt)
+	}
+}
+
+func TestWorkerTaskDispatcherLeavesAttemptWhenRetryAttemptNil(t *testing.T) {
+	dispatcher := WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return task.Task{ID: "issue-1", Attempts: 0}, nil
+		},
+		Config: worker.Config{Workflow: &workflow.Workflow{}},
+	}
+
+	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, nil)
+	if err != nil {
+		t.Fatalf("buildTaskWithAttempt: %v", err)
+	}
+	if tk.Attempts != 0 {
+		t.Fatalf("task attempts = %d, want original first-run attempts", tk.Attempts)
 	}
 }
 

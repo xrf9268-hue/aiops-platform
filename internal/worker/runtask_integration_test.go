@@ -2,6 +2,7 @@ package worker_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -178,6 +179,70 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(workdir), "before_remove.log")); !os.IsNotExist(err) {
 		t.Fatalf("before_remove hook should not run during normal RunTask completion; stat err=%v", err)
+	}
+}
+
+func TestRunTaskRendersAttemptVariable(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", "attempt {{ attempt }} for {{ task.title }}", 1))
+	t.Setenv("REPO_URL", cloneURL)
+	tk.Attempts = 2
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = "attempt {{ attempt }} for {{ task.title }}"
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+	if err != nil {
+		t.Fatalf("read rendered prompt: %v", err)
+	}
+	if !strings.Contains(string(prompt), "attempt 2 for integration") {
+		t.Fatalf("rendered prompt = %q, want attempt variable from task", prompt)
+	}
+}
+
+func TestRunTaskRendersFirstAttemptAsOne(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", "attempt {{ attempt }} for {{ task.title }}", 1))
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = "attempt {{ attempt }} for {{ task.title }}"
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+	if err != nil {
+		t.Fatalf("read rendered prompt: %v", err)
+	}
+	if !strings.Contains(string(prompt), "attempt 1 for integration") {
+		t.Fatalf("rendered prompt = %q, want first attempt rendered as one", prompt)
+	}
+}
+
+func TestRunTaskFailsOnUnknownPromptVariable(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", "do the work for {{ missing }}", 1))
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = "do the work for {{ missing }}"
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want template render failure")
+	}
+	if !strings.Contains(rterr.Err.Error(), "template_render_error") || !strings.Contains(rterr.Err.Error(), "missing") {
+		t.Fatalf("runTask error = %q, want typed missing variable render error", rterr.Err)
+	}
+	var renderErr *workflow.TemplateRenderError
+	if !errors.As(rterr.Err, &renderErr) {
+		t.Fatalf("runTask error type = %T, want *workflow.TemplateRenderError", rterr.Err)
 	}
 }
 

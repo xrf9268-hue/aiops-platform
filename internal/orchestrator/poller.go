@@ -468,12 +468,17 @@ type WorkerTaskDispatcher struct {
 }
 
 // Spawn implements Dispatcher.
-func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
+	var copiedAttempt *int
+	if attempt != nil {
+		attemptValue := *attempt
+		copiedAttempt = &attemptValue
+	}
 	out := make(chan WorkerResult, 1)
 	go func() {
 		defer close(out)
 		start := time.Now()
-		tk, recordedTaskID, err := d.buildTask(issue)
+		tk, recordedTaskID, err := d.buildTaskWithAttempt(issue, copiedAttempt)
 		if err != nil {
 			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
 			return
@@ -501,6 +506,17 @@ func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, string,
 	}
 	tk, err := d.BuildTask(issue)
 	return tk, tk.ID, err
+}
+
+func (d WorkerTaskDispatcher) buildTaskWithAttempt(issue tracker.Issue, attempt *int) (task.Task, string, error) {
+	tk, recordedTaskID, err := d.buildTask(issue)
+	if err != nil {
+		return task.Task{}, "", err
+	}
+	if attempt != nil {
+		tk.Attempts = *attempt
+	}
+	return tk, recordedTaskID, nil
 }
 
 // TaskFromIssue builds the in-memory task handed to worker execution for a
