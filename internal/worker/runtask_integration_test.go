@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -244,6 +245,129 @@ func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
 // boundary: a successful worker run prepares the workspace, executes the
 // agent, and enforces gates, but it does not push branches, create PRs, or
 // mutate tracker state. Those writes belong to the agent/tool surface.
+func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
+	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock\npolicy:\n  mode: analysis_only", 1)
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Policy.Mode = "analysis_only"
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear-issue", tk.SourceEventID)
+	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil {
+		t.Fatalf("analysis-only run should write plan artifact: %v", err)
+	}
+	refs, err := exec.Command("git", "--git-dir", cloneURL[len("file://"):], "for-each-ref", "--format=%(refname:short)", "refs/heads").CombinedOutput()
+	if err != nil {
+		t.Fatalf("list upstream refs: %v\n%s", err, refs)
+	}
+	if string(refs) != "main\n" {
+		t.Fatalf("analysis-only run must not push work branches; upstream refs:\n%s", refs)
+	}
+}
+
+func TestAnalysisOnlyRunRejectsSourceChanges(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files", "analysis_only_violation")
+}
+
+func TestAnalysisOnlyRunRejectsCommittedSourceChanges(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files", "analysis_only_violation")
+}
+
+func TestAnalysisOnlyRunRejectsCommittedSourceChangesEvenIfRunnerMutatesBaseConfig(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files", "analysis_only_violation")
+}
+
+func TestAnalysisOnlyRunRejectsCommittedArtifacts(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits", "analysis_only_violation")
+}
+
+func TestAnalysisOnlyRunRequiresPlanArtifact(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md", "analysis_only_violation")
+}
+
+func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
+	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock-no-plan\npolicy:\n  mode: analysis_only", 1)
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
+	t.Setenv("REPO_URL", cloneURL)
+	tk.Model = "mock-no-plan"
+	seed := cloneURL[len("file://"):]
+	work := filepath.Join(t.TempDir(), "seed-plan")
+	for _, args := range [][]string{
+		{"git", "clone", "-q", seed, work},
+		{"git", "-C", work, "config", "user.email", "u@example.com"},
+		{"git", "-C", work, "config", "user.name", "u"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(work, ".aiops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".aiops", "PLAN.md"), []byte("stale committed plan\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "-C", work, "add", ".aiops/PLAN.md"},
+		{"git", "-C", work, "commit", "-q", "-m", "seed stale plan"},
+		{"git", "-C", work, "push", "-q", "origin", "main"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Agent.Default = "mock-no-plan"
+	cfg.Workflow.Config.Policy.Mode = "analysis_only"
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("analysis-only run with only a stale base PLAN.md succeeded, want policy failure")
+	}
+	if !strings.Contains(rterr.Err.Error(), "analysis-only run did not produce .aiops/PLAN.md") {
+		t.Fatalf("error = %v, want stale plan rejection", rterr.Err)
+	}
+	if got := len(ev.byKind("analysis_only_violation")); got != 1 {
+		t.Fatalf("analysis_only_violation events = %d, want 1; events=%#v", got, ev.events)
+	}
+}
+
+func TestAnalysisOnlyRunRejectsRepoOwnedAiopsChanges(t *testing.T) {
+	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files", "analysis_only_violation")
+}
+
+func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr, wantEvent string) {
+	t.Helper()
+	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: "+runnerName+"\npolicy:\n  mode: analysis_only", 1)
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
+	t.Setenv("REPO_URL", cloneURL)
+	tk.Model = runnerName
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Agent.Default = runnerName
+	cfg.Workflow.Config.Policy.Mode = "analysis_only"
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatalf("analysis-only run with %s succeeded, want policy failure", runnerName)
+	}
+	if !strings.Contains(rterr.Err.Error(), wantErr) {
+		t.Fatalf("error = %v, want %q", rterr.Err, wantErr)
+	}
+	if got := len(ev.byKind(wantEvent)); got != 1 {
+		t.Fatalf("%s events = %d, want 1; events=%#v", wantEvent, got, ev.events)
+	}
+}
+
 func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)

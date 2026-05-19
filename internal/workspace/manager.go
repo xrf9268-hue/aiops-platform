@@ -213,7 +213,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	if err := runQuiet(ctx, mirror, "git", "rev-parse", "--verify", startRef); err != nil {
 		startRef = t.BaseBranch
 	}
-	if err := run(ctx, mirror, "git", "worktree", "add", "-B", t.WorkBranch, workdir, startRef); err != nil {
+	if err := run(ctx, mirror, "git", "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
 		return "", false, fmt.Errorf("worktree add: %w", err)
 	}
 	// The mirror's "origin" remote points at the upstream URL, but inside
@@ -689,6 +689,83 @@ func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
 		files = append(files, path)
 	}
 	return files, nil
+}
+
+// AllChangedFilesSinceUpstream returns both uncommitted worktree changes and
+// files changed by commits ahead of the current branch's upstream. Worker policy
+// gates that must constrain the whole agent-produced branch (not only the dirty
+// worktree) should use this instead of AllChangedFiles.
+func ResolveBaseBranchRef(ctx context.Context, workdir, baseBranch string) (string, error) {
+	baseRef := "origin/" + strings.TrimSpace(baseBranch)
+	if strings.TrimSpace(baseBranch) == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+		baseRef = strings.TrimSpace(baseBranch)
+	}
+	if baseRef == "" {
+		baseRef = "@{upstream}"
+	}
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", baseRef+"^{commit}")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func AllChangedFilesSinceRef(ctx context.Context, workdir, baseRef string) ([]string, error) {
+	files, err := AllChangedFiles(ctx, workdir)
+	if err != nil {
+		return nil, err
+	}
+	if baseRef == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+		baseRef = "@{upstream}"
+	}
+	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "-z", baseRef+"...HEAD")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		seen[file] = struct{}{}
+	}
+	for _, file := range strings.Split(string(out), "\x00") {
+		if file == "" {
+			continue
+		}
+		if _, ok := seen[file]; ok {
+			continue
+		}
+		seen[file] = struct{}{}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+func AllChangedFilesSinceUpstream(ctx context.Context, workdir string) ([]string, error) {
+	return AllChangedFilesSinceRef(ctx, workdir, "@{upstream}")
+}
+
+func HasCommitsSinceRef(ctx context.Context, workdir, baseRef string) (bool, error) {
+	if baseRef == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+		baseRef = "@{upstream}"
+	}
+	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", baseRef+"..HEAD")
+	cmd.Dir = workdir
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func HasCommitsSinceWorkspaceBase(ctx context.Context, workdir string) (bool, error) {
+	return HasCommitsSinceRef(ctx, workdir, "@{upstream}")
 }
 
 // PolicyError is returned by EnforcePolicy when one or more policy checks
