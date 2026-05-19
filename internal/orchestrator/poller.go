@@ -349,6 +349,10 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 		matches := matchingServices(issue, cfg)
 		switch len(matches) {
 		case 0:
+			if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
+				out = append(out, issue)
+				continue
+			}
 			log.Printf("tracker route skipped issue %s: no configured service matched", issue.ID)
 		case 1:
 			issue.ServiceName = matches[0].Name

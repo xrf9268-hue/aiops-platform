@@ -805,7 +805,7 @@ func TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField(t *te
 	}
 }
 
-func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssue(t *testing.T) {
+func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssueWithoutFallbackRepo(t *testing.T) {
 	cfg := workflow.Config{Services: []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
 	}}
@@ -819,6 +819,29 @@ func TestSelectRoutedCandidatesSkipsUnmatchedLinearIssue(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Fatalf("routed candidates = %#v, want unmatched issue skipped", got)
+	}
+}
+
+func TestSelectRoutedCandidatesKeepsUnmatchedLinearIssueForFallbackRepo(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git"},
+		Services: []workflow.ServiceConfig{
+			{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+		},
+	}
+	issues := []tracker.Issue{
+		{ID: "issue-1", Identifier: "LIN-1", Title: "Mobile work", State: "AI Ready", ProjectSlug: "mobile-app"},
+	}
+
+	got, err := selectRoutedCandidates(issues, cfg)
+	if err != nil {
+		t.Fatalf("selectRoutedCandidates: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("routed candidates = %d, want unmatched issue kept for fallback repo", len(got))
+	}
+	if got[0].ServiceName != "" {
+		t.Fatalf("fallback candidate service = %q, want empty service", got[0].ServiceName)
 	}
 }
 
