@@ -272,23 +272,23 @@ func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
 }
 
 func TestAnalysisOnlyRunRejectsSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
 }
 
 func TestAnalysisOnlyRunRejectsCommittedSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
 }
 
 func TestAnalysisOnlyRunRejectsCommittedSourceChangesEvenIfRunnerMutatesBaseConfig(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
 }
 
 func TestAnalysisOnlyRunRejectsCommittedArtifacts(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits", task.EventAnalysisOnlyViolation)
 }
 
 func TestAnalysisOnlyRunRequiresPlanArtifact(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md", task.EventAnalysisOnlyViolation)
 }
 
 func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
@@ -335,13 +335,13 @@ func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
 	if !strings.Contains(rterr.Err.Error(), "analysis-only run did not produce .aiops/PLAN.md") {
 		t.Fatalf("error = %v, want stale plan rejection", rterr.Err)
 	}
-	if got := len(ev.byKind("analysis_only_violation")); got != 1 {
+	if got := len(ev.byKind(task.EventAnalysisOnlyViolation)); got != 1 {
 		t.Fatalf("analysis_only_violation events = %d, want 1; events=%#v", got, ev.events)
 	}
 }
 
 func TestAnalysisOnlyRunRejectsRepoOwnedAiopsChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files", "analysis_only_violation")
+	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
 }
 
 func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr, wantEvent string) {

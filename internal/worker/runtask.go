@@ -607,7 +607,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, wo
 	planPath := filepath.Join(workdir, ".aiops", "PLAN.md")
 	plan, err := os.ReadFile(planPath)
 	if err != nil || strings.TrimSpace(string(plan)) == "" {
-		Emit(ctx, ev, taskID, "analysis_only_violation", "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
 			"path": ".aiops/PLAN.md",
 		})
 		if err != nil {
@@ -627,7 +627,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, wo
 		violations = append(violations, path)
 	}
 	if len(violations) > 0 {
-		Emit(ctx, ev, taskID, "analysis_only_violation", "analysis-only run changed source files", map[string]any{
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run changed source files", map[string]any{
 			"files": violations,
 		})
 		return fmt.Errorf("analysis-only run changed source files: %s", strings.Join(violations, ", "))
@@ -637,7 +637,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, wo
 		return fmt.Errorf("inspect analysis-only commits: %w", err)
 	}
 	if committed {
-		Emit(ctx, ev, taskID, "analysis_only_violation", "analysis-only run created commits", nil)
+		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run created commits", nil)
 		return fmt.Errorf("analysis-only run created commits")
 	}
 	return nil
