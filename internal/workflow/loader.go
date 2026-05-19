@@ -2,9 +2,11 @@ package workflow
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +33,7 @@ func Load(path string) (*Workflow, error) {
 		if err := rejectRemovedFields(frontBytes); err != nil {
 			return nil, err
 		}
+		logUnknownTopLevelKeys(frontBytes)
 		hookFields := hookFieldPresence(frontBytes, "hooks")
 		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
@@ -41,6 +44,7 @@ func Load(path string) (*Workflow, error) {
 		if hookFields.TimeoutMs {
 			cfg.hooksTimeoutDefaulted = false
 		}
+		migratePollingInterval(frontBytes, &cfg)
 	}
 	var rawStateCaps map[string]int
 	if hasFrontMatter && len(cfg.Agent.MaxConcurrentAgentsByState) > 0 {
@@ -49,7 +53,7 @@ func Load(path string) (*Workflow, error) {
 			rawStateCaps[state] = limit
 		}
 	}
-	expandConfig(&cfg)
+	expandConfigForWorkflowPath(path, &cfg)
 	if rawStateCaps != nil {
 		cfg.Agent.MaxConcurrentAgentsByState = rawStateCaps
 	}
@@ -70,6 +74,23 @@ func Load(path string) (*Workflow, error) {
 		source = SourcePromptOnly
 	}
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body), Source: source}, nil
+}
+
+func migratePollingInterval(frontBytes []byte, cfg *Config) {
+	pollingPresent := hasNestedKey(frontBytes, "polling", "interval_ms")
+	legacyPresent := hasNestedKey(frontBytes, "tracker", "poll_interval_ms")
+	switch {
+	case pollingPresent:
+		if legacyPresent {
+			log.Printf("workflow: tracker.poll_interval_ms is deprecated and ignored because polling.interval_ms is set")
+		}
+		cfg.Tracker.PollIntervalMs = cfg.Polling.IntervalMs
+	case legacyPresent:
+		log.Printf("workflow: tracker.poll_interval_ms is deprecated; use polling.interval_ms")
+		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
+	default:
+		cfg.Tracker.PollIntervalMs = cfg.Polling.IntervalMs
+	}
 }
 
 // supportedTrackerKinds enumerates the tracker integrations the platform
@@ -299,6 +320,40 @@ func rejectRemovedFields(front []byte) error {
 	return nil
 }
 
+var knownTopLevelWorkflowKeys = map[string]struct{}{
+	"agent":     {},
+	"claude":    {},
+	"codex":     {},
+	"hooks":     {},
+	"policy":    {},
+	"polling":   {},
+	"pr":        {},
+	"repo":      {},
+	"safety":    {},
+	"sandbox":   {},
+	"services":  {},
+	"tracker":   {},
+	"verify":    {},
+	"workspace": {},
+}
+
+func logUnknownTopLevelKeys(front []byte) {
+	var raw map[string]any
+	if err := yaml.Unmarshal(front, &raw); err != nil {
+		return
+	}
+	unknown := make([]string, 0)
+	for key := range raw {
+		if _, ok := knownTopLevelWorkflowKeys[key]; !ok {
+			unknown = append(unknown, key)
+		}
+	}
+	sort.Strings(unknown)
+	for _, key := range unknown {
+		log.Printf("workflow: unknown top-level key %s ignored", key)
+	}
+}
+
 // LoadOptional loads a workflow from an explicit path, returning schema
 // defaults when the file does not exist. New worker code should use
 // Resolve(workdir), which handles repo-relative discovery and returns
@@ -337,12 +392,16 @@ func splitFrontMatter(s string) (string, string) {
 }
 
 func expandConfig(cfg *Config) {
+	expandConfigForWorkflowPath("", cfg)
+}
+
+func expandConfigForWorkflowPath(workflowPath string, cfg *Config) {
 	cfg.Tracker.APIKey = os.ExpandEnv(cfg.Tracker.APIKey)
 	expandRepoConfig(&cfg.Repo)
 	for i := range cfg.Services {
 		expandRepoConfig(&cfg.Services[i].Repo)
 	}
-	cfg.Workspace.Root = expandPath(os.ExpandEnv(cfg.Workspace.Root))
+	cfg.Workspace.Root = normalizeWorkflowPath(workflowPath, cfg.Workspace.Root)
 	cfg.Codex.Command = os.ExpandEnv(cfg.Codex.Command)
 	cfg.Claude.Command = os.ExpandEnv(cfg.Claude.Command)
 	for i := range cfg.Sandbox.CredentialFiles {
@@ -362,9 +421,13 @@ func expandConfig(cfg *Config) {
 	// from "explicitly 0" (zero retries). We deliberately do not coerce
 	// here: forcing 0 → 1 stripped users of the ability to disable the
 	// runner-timeout retry budget entirely.
-	if cfg.Tracker.PollIntervalMs <= 0 {
-		cfg.Tracker.PollIntervalMs = 30000
+	if cfg.Polling.IntervalMs <= 0 {
+		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
 	}
+	if cfg.Polling.IntervalMs <= 0 {
+		cfg.Polling.IntervalMs = 30000
+	}
+	cfg.Tracker.PollIntervalMs = cfg.Polling.IntervalMs
 	// Tracker.Statuses defaults are applied per-field so a YAML override of
 	// a single name (e.g. `statuses.in_progress: "Doing"`) does not require
 	// the operator to also restate the unchanged ones. The defaults match
@@ -400,6 +463,15 @@ func expandRepoConfig(repo *RepoConfig) {
 	if repo.DefaultBranch == "" {
 		repo.DefaultBranch = "main"
 	}
+}
+
+func normalizeWorkflowPath(workflowPath, p string) string {
+	expanded := expandPath(os.ExpandEnv(p))
+	if expanded == "" || filepath.IsAbs(expanded) || workflowPath == "" {
+		return expanded
+	}
+	log.Printf("workflow: relative workspace.root %s resolved relative to workflow file %s", expanded, workflowPath)
+	return filepath.Join(filepath.Dir(workflowPath), expanded)
 }
 
 func expandPath(p string) string {

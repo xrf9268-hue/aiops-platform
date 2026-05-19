@@ -15,7 +15,9 @@ tracker:
   terminal_states:
     - Done
     - Canceled
-  poll_interval_ms: 30000
+
+polling:
+  interval_ms: 30000
 
 workspace:
   root: ~/aiops-workspaces/company

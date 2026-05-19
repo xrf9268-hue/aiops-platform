@@ -16,7 +16,9 @@ tracker:
     - Canceled
   inactive_states:
     - Human Review
-  poll_interval_ms: 30000
+
+polling:
+  interval_ms: 30000
 
 workspace:
   root: ~/aiops-workspaces/personal

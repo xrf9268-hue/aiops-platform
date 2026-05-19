@@ -23,7 +23,6 @@ tracker:
   inactive_states:
     - Backlog
     - Human Review
-  poll_interval_ms: 30000
   # statuses names the Linear workflow states used for handoff updates
   # (for example claim -> in_progress, PR opened -> human_review, failure
   # -> rework). Per SPEC §1, ticket writes belong on the agent/tool side;
@@ -34,6 +33,9 @@ tracker:
   #   in_progress: "In Progress"
   #   human_review: "Human Review"
   #   rework: "Rework"
+
+polling:
+  interval_ms: 30000
 
 # Optional multi-service routing (tracked as D25/#143 until the extension schema
 # is fully documented). Omit `services` for the default single-service mode

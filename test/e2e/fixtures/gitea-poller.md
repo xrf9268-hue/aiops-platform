@@ -18,7 +18,8 @@ tracker:
   terminal_states:
     - Done
     - Canceled
-  poll_interval_ms: 5000
+polling:
+  interval_ms: 5000
 pr:
   draft: true
   labels:

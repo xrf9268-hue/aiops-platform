@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Repo       RepoConfig      `yaml:"repo" json:"repo"`
 	Tracker    TrackerConfig   `yaml:"tracker" json:"tracker"`
+	Polling    PollingConfig   `yaml:"polling" json:"polling"`
 	Services   []ServiceConfig `yaml:"services" json:"services"`
 	Hooks      WorkspaceHooks  `yaml:"hooks" json:"hooks"`
 	Workspace  WorkspaceConfig `yaml:"workspace" json:"workspace"`
@@ -67,6 +68,10 @@ type TrackerConfig struct {
 	InactiveStates []string            `yaml:"inactive_states" json:"inactive_states"`
 	PollIntervalMs int                 `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
+}
+
+type PollingConfig struct {
+	IntervalMs int `yaml:"interval_ms" json:"interval_ms"`
 }
 
 // TrackerStatusConfig names the workflow states used for tracker handoff
@@ -345,6 +350,7 @@ func DefaultConfig() Config {
 				Rework:      "Rework",
 			},
 		},
+		Polling:               PollingConfig{IntervalMs: 30000},
 		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: "~/aiops-workspaces"},
