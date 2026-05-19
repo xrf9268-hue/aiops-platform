@@ -1,6 +1,8 @@
 package workflow
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -22,6 +24,249 @@ func writeTempWorkflow(t *testing.T, body string) string {
 // TestLoad_PRDraftFromFrontMatter verifies the YAML key `pr.draft` is parsed
 // into Config.PR.Draft. This is the schema knob #41 wires through to
 // gitea.CreatePullRequest.
+
+func TestLoadParsesSpecPollingAndLegacyTrackerPollInterval(t *testing.T) {
+	t.Run("spec polling interval wins over default", func(t *testing.T) {
+		path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+polling:
+  interval_ms: 12345
+---
+Prompt body
+`)
+		wf, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := wf.Config.Polling.IntervalMs; got != 12345 {
+			t.Fatalf("polling.interval_ms = %d, want 12345", got)
+		}
+		if got := wf.Config.Tracker.PollIntervalMs; got != 12345 {
+			t.Fatalf("legacy tracker poll interval mirror = %d, want 12345", got)
+		}
+	})
+
+	t.Run("legacy tracker poll interval still migrates with warning", func(t *testing.T) {
+		path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  poll_interval_ms: 45678
+---
+Prompt body
+`)
+		var logs bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&logs)
+		t.Cleanup(func() { log.SetOutput(previous) })
+
+		wf, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := wf.Config.Polling.IntervalMs; got != 45678 {
+			t.Fatalf("polling.interval_ms migrated from tracker.poll_interval_ms = %d, want 45678", got)
+		}
+		if got := wf.Config.Tracker.PollIntervalMs; got != 45678 {
+			t.Fatalf("tracker.poll_interval_ms compatibility mirror = %d, want 45678", got)
+		}
+		if !strings.Contains(logs.String(), "tracker.poll_interval_ms is deprecated; use polling.interval_ms") {
+			t.Fatalf("legacy tracker.poll_interval_ms did not emit deprecation warning; logs: %s", logs.String())
+		}
+	})
+
+	t.Run("both spellings prefer spec key and warn", func(t *testing.T) {
+		path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  poll_interval_ms: 45678
+polling:
+  interval_ms: 12345
+---
+Prompt body
+`)
+		var logs bytes.Buffer
+		previous := log.Writer()
+		log.SetOutput(&logs)
+		t.Cleanup(func() { log.SetOutput(previous) })
+
+		wf, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := wf.Config.Polling.IntervalMs; got != 12345 {
+			t.Fatalf("polling.interval_ms = %d, want spec value 12345", got)
+		}
+		if got := wf.Config.Tracker.PollIntervalMs; got != 12345 {
+			t.Fatalf("tracker.poll_interval_ms mirror = %d, want spec value 12345", got)
+		}
+		if !strings.Contains(logs.String(), "tracker.poll_interval_ms is deprecated and ignored because polling.interval_ms is set") {
+			t.Fatalf("conflicting legacy tracker.poll_interval_ms did not emit warning; logs: %s", logs.String())
+		}
+	})
+
+	t.Run("defaults keep spec and legacy mirrors synchronized", func(t *testing.T) {
+		path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+---
+Prompt body
+`)
+		wf, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := wf.Config.Polling.IntervalMs; got != 30000 {
+			t.Fatalf("polling.interval_ms default = %d, want 30000", got)
+		}
+		if got := wf.Config.Tracker.PollIntervalMs; got != wf.Config.Polling.IntervalMs {
+			t.Fatalf("tracker.poll_interval_ms default mirror = %d, want %d", got, wf.Config.Polling.IntervalMs)
+		}
+	})
+
+	t.Run("non-positive spec interval falls back to schema default", func(t *testing.T) {
+		path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+polling:
+  interval_ms: 0
+---
+Prompt body
+`)
+		wf, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := wf.Config.Polling.IntervalMs; got != 30000 {
+			t.Fatalf("polling.interval_ms with explicit 0 = %d, want default 30000", got)
+		}
+		if got := wf.Config.Tracker.PollIntervalMs; got != wf.Config.Polling.IntervalMs {
+			t.Fatalf("tracker.poll_interval_ms compatibility mirror = %d, want %d", got, wf.Config.Polling.IntervalMs)
+		}
+	})
+}
+
+func TestLoadNormalizesSpecWorkspaceRootRelativeToWorkflowDir(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+workspace:
+  root: .aiops-workspaces
+---
+Prompt body
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := filepath.Join(dir, ".aiops-workspaces")
+	if wf.Config.Workspace.Root != want {
+		t.Fatalf("workspace.root = %q, want %q", wf.Config.Workspace.Root, want)
+	}
+	if !strings.Contains(logs.String(), "workflow: relative workspace.root .aiops-workspaces resolved relative to workflow file") {
+		t.Fatalf("relative workspace.root normalization was not logged; logs: %s", logs.String())
+	}
+}
+
+func TestLoadKeepsAbsoluteWorkspaceRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspaces")
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+workspace:
+  root: `+root+`
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Workspace.Root != root {
+		t.Fatalf("workspace.root = %q, want absolute root %q", wf.Config.Workspace.Root, root)
+	}
+}
+
+func TestExpandConfigLeavesRelativeWorkspaceRootWithoutWorkflowPath(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Workspace.Root = "relative-workspaces"
+	expandConfig(&cfg)
+	if cfg.Workspace.Root != "relative-workspaces" {
+		t.Fatalf("workspace.root = %q, want unchanged relative root without workflow path", cfg.Workspace.Root)
+	}
+}
+
+func TestLoadAllowsUnknownTopLevelKeys(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+future_extension:
+  enabled: true
+---
+Prompt body
+`)
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	if _, err := Load(path); err != nil {
+		t.Fatalf("Load rejected unknown top-level key: %v", err)
+	}
+	if !strings.Contains(logs.String(), "workflow: unknown top-level key future_extension ignored") {
+		t.Fatalf("unknown top-level key was not logged; logs: %s", logs.String())
+	}
+}
+
+func TestKnownTopLevelWorkflowKeysMatchConfigYAMLTags(t *testing.T) {
+	cfgType := reflect.TypeOf(Config{})
+	tags := make(map[string]string, cfgType.NumField())
+	for i := 0; i < cfgType.NumField(); i++ {
+		field := cfgType.Field(i)
+		yamlTag := strings.Split(field.Tag.Get("yaml"), ",")[0]
+		if yamlTag == "" || yamlTag == "-" {
+			continue
+		}
+		tags[yamlTag] = field.Name
+		if _, ok := knownTopLevelWorkflowKeys[yamlTag]; !ok {
+			t.Fatalf("knownTopLevelWorkflowKeys missing Config yaml tag %q from field %s", yamlTag, field.Name)
+		}
+	}
+	for key := range knownTopLevelWorkflowKeys {
+		if _, ok := tags[key]; !ok {
+			t.Fatalf("knownTopLevelWorkflowKeys contains %q without a matching Config yaml tag", key)
+		}
+	}
+}
+
 func TestLoad_PRDraftFromFrontMatter(t *testing.T) {
 	body := `---
 repo:

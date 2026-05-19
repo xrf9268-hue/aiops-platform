@@ -868,7 +868,8 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  kind: " + trackerKind + "\n" +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +
-		"  poll_interval_ms: " + itoaForReloadTest(pollIntervalMs) + "\n" +
+		"polling:\n" +
+		"  interval_ms: " + itoaForReloadTest(pollIntervalMs) + "\n" +
 		"agent:\n" +
 		"  default: mock\n" +
 		"  max_concurrent_agents: " + itoaForReloadTest(cfg.maxConcurrentAgents) + "\n" +
