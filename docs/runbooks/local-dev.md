@@ -146,7 +146,7 @@ go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
 curl http://localhost:9091/metrics | grep aiops_gitea_issue_pagination_cap_hits_total
 ```
 
-A non-zero counter means at least one active state label has more than 1000 matching Gitea issues, so operators should reduce the active backlog or split labels before relying on the poller for exhaustive dispatch.
+The metric is cumulative for the poller process. A non-zero value means at least one poll since startup observed an active state label with more than 1000 matching Gitea issues; alert on recent increases, not just the absolute value. When it increases, operators should reduce the active backlog or split labels before relying on the poller for exhaustive dispatch.
 
 ## 5. Smoke test
 
