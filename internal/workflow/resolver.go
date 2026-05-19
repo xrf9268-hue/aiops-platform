@@ -28,19 +28,17 @@ const (
 type Resolution struct {
 	Source     Source
 	Path       string   // repo-relative; "" when Source == SourceDefault
-	ShadowedBy []string // other repo-relative paths that exist but lost precedence
+	ShadowedBy []string // retained for event compatibility; resolver no longer searches shadow paths
 }
 
-var resolveCandidates = []string{
-	"WORKFLOW.md",
-	".aiops/WORKFLOW.md",
-	".github/WORKFLOW.md",
-}
+const resolveCandidate = "WORKFLOW.md"
 
-// Resolve discovers WORKFLOW.md inside workdir (expected to be an absolute
-// path), applying the documented precedence (root > .aiops/ > .github/),
-// and returns the loaded Workflow alongside a Resolution describing the
-// source. When no file is found, the schema defaults are returned with
+// Resolve discovers the canonical WORKFLOW.md inside workdir (expected
+// to be an absolute path) and returns the loaded Workflow alongside a
+// Resolution describing the source. Legacy fallback locations such as
+// .aiops/WORKFLOW.md and .github/WORKFLOW.md are intentionally ignored:
+// SPEC §5.1 treats the workflow file as a single service-level source.
+// When no canonical file is found, schema defaults are returned with
 // Source=default.
 func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	info, err := os.Stat(workdir)
@@ -51,33 +49,23 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 		return nil, nil, fmt.Errorf("workdir %q is not a directory", workdir)
 	}
 
-	var found string
-	var shadows []string
-	for _, rel := range resolveCandidates {
-		abs := filepath.Join(workdir, rel)
-		info, err := os.Stat(abs)
-		if err == nil && !info.IsDir() {
-			if found == "" {
-				found = rel
-			} else {
-				shadows = append(shadows, rel)
-			}
-		} else if err != nil && !os.IsNotExist(err) {
-			// Hard stat errors (permission denied, I/O) on a lower-priority
-			// candidate must not invalidate a winner already found. Only
-			// propagate when no winner has been picked yet.
-			if found == "" {
-				return nil, nil, err
-			}
+	abs := filepath.Join(workdir, resolveCandidate)
+	info, err = os.Stat(abs)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, nil, err
 		}
-	}
-	if found == "" {
 		cfg := DefaultConfig()
 		expandConfig(&cfg)
 		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt(), Source: SourceDefault}
 		return wf, &Resolution{Source: SourceDefault}, nil
 	}
-	abs := filepath.Join(workdir, found)
+	if info.IsDir() {
+		cfg := DefaultConfig()
+		expandConfig(&cfg)
+		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt(), Source: SourceDefault}
+		return wf, &Resolution{Source: SourceDefault}, nil
+	}
 	wf, err := Load(abs)
 	if err != nil {
 		return nil, nil, err
@@ -90,7 +78,7 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 	if !hasFront {
 		src = SourcePromptOnly
 	}
-	return wf, &Resolution{Source: src, Path: found, ShadowedBy: shadows}, nil
+	return wf, &Resolution{Source: src, Path: resolveCandidate}, nil
 }
 
 // HasFrontMatterAt returns true when path begins with a YAML front

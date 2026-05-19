@@ -198,14 +198,11 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	}
 }
 
-// TestPrintConfig_TopLevelSourceAndShadowedBy pins the contract from
-// issue #69: the JSON output surfaces `source` and `shadowed_by` at the
-// top level (not only under `resolution`) so operators answering "which
-// file is in effect, and what is being shadowed?" do not have to drill
-// into a nested object. Also pins the shadow case end-to-end: when both
-// /WORKFLOW.md and /.aiops/WORKFLOW.md exist, the latter is recorded as
-// a shadowed-by entry rather than silently dropped.
-func TestPrintConfig_TopLevelSourceAndShadowedBy(t *testing.T) {
+// TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy pins the #72
+// SPEC-aligned contract: print-config still reports the effective source
+// at the top level, but legacy alternate paths are ignored rather than
+// reported as normal shadow workflow sources.
+func TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
@@ -222,13 +219,14 @@ func TestPrintConfig_TopLevelSourceAndShadowedBy(t *testing.T) {
 	if code := printConfig(dir, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
+	if strings.Contains(stdout.String(), `"shadowed_by"`) {
+		t.Fatalf("legacy shadowed_by must be omitted:\n%s", stdout.String())
+	}
 	var out struct {
-		Source     string   `json:"source"`
-		ShadowedBy []string `json:"shadowed_by"`
+		Source     string `json:"source"`
 		Resolution struct {
-			Source     string   `json:"source"`
-			Path       string   `json:"path"`
-			ShadowedBy []string `json:"shadowed_by"`
+			Source string `json:"source"`
+			Path   string `json:"path"`
 		} `json:"resolution"`
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
@@ -237,19 +235,11 @@ func TestPrintConfig_TopLevelSourceAndShadowedBy(t *testing.T) {
 	if out.Source != "file" {
 		t.Fatalf("top-level source = %q, want %q", out.Source, "file")
 	}
-	if len(out.ShadowedBy) != 1 || out.ShadowedBy[0] != ".aiops/WORKFLOW.md" {
-		t.Fatalf("top-level shadowed_by = %v, want [\".aiops/WORKFLOW.md\"]", out.ShadowedBy)
-	}
-	// Nested resolution stays as-is for backwards compatibility with
-	// any external tooling that already keys on it.
 	if out.Resolution.Source != "file" {
 		t.Fatalf("resolution.source = %q, want %q", out.Resolution.Source, "file")
 	}
 	if out.Resolution.Path != "WORKFLOW.md" {
 		t.Fatalf("resolution.path = %q, want %q", out.Resolution.Path, "WORKFLOW.md")
-	}
-	if len(out.Resolution.ShadowedBy) != 1 || out.Resolution.ShadowedBy[0] != ".aiops/WORKFLOW.md" {
-		t.Fatalf("resolution.shadowed_by = %v, want [\".aiops/WORKFLOW.md\"]", out.Resolution.ShadowedBy)
 	}
 }
 

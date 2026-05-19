@@ -78,8 +78,8 @@ Not yet implemented:
 
 Tracked centrally in [`DEVIATIONS.md`](../DEVIATIONS.md). There are no current
 accepted deliberate extensions. In particular, multi-path `WORKFLOW.md`
-discovery is not an accepted extension: it remains tracked as D4 and is being
-reverted under #72 as part of the service-level workflow-file work in D10 (#84).
+discovery is not an accepted extension: D4 is closed, and legacy alternate
+workflow paths are not searched or reported as normal shadow sources.
 
 The multi-service `services` workflow key used for Linear tracker-to-service
 routing is tracked as D25 (#143) until its extension schema is fully documented.
