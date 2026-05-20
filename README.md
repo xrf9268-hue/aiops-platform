@@ -48,9 +48,9 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | Setting | Default |
 |---------|---------|
 | `agent.default` | `mock` |
+| `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs |
 | `agent.timeout` | `30m` |
 | `agent.max_concurrent_agents` | `1` |
-| `tracker.project_slug` | required when `tracker.kind: linear`; no default |
 | `pr.draft` | `false` |
 | `pr.labels` | `[ai-generated, needs-review]` |
 | `server.port` | `4000` (`-1` disables the HTTP state server) |
@@ -128,6 +128,10 @@ export WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear
 export LINEAR_API_KEY=your-linear-personal-key
+# Set tracker.project_slug in WORKFLOW.md to the Linear project slugId
+# unless you use services[] routes with per-service tracker.project_slug values.
+# Example: a Linear project URL ending in /project/aiops-platform-abc123
+# uses project_slug: aiops-platform-abc123.
 
 # For tracker.kind: gitea
 export GITEA_BASE_URL=https://gitea.example.com

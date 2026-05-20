@@ -1,23 +1,20 @@
 # Run Summary
 
-## Issue
+Issue: #151, Linear workflows missing `tracker.project_slug` should fail during workflow loading instead of first poll.
 
-Resolved GitHub issue #151: Linear workflows that omit `tracker.project_slug` should fail during workflow loading instead of failing later on the first Linear poll.
+Changes made:
+- Added load-time validation for `tracker.kind: linear` so single-service workflows require `tracker.project_slug`.
+- Kept the multi-service routing extension intact: a top-level slug may be omitted only when each service route provides its own `services[].tracker.project_slug`.
+- Added regression tests for both the single-service missing-slug case and the service-route missing-slug case.
+- Updated Linear workflow fixtures, shipped workflow examples, README, and the local-dev runbook to document the requirement and service-route exception.
 
-## Changes
-
-- Added loader validation for single-service `tracker.kind: linear` workflows without `tracker.project_slug`.
-- Added a focused workflow loader regression test for the missing project slug case.
-- Updated existing Linear workflow test fixtures to include `project_slug` where they are not testing missing-field validation.
-- Documented the Linear `tracker.project_slug` requirement in `README.md`, `docs/runbooks/local-dev.md`, and the shipped Linear workflow examples.
-
-## Verification
-
-- Red check: applying the new loader test to `HEAD^` failed with `Load returned nil error, want tracker.project_slug requirement for Linear workflow`.
-- `go test ./internal/workflow -run TestLoadRejectsLinearWorkflowWithoutProjectSlug -count=1` passed.
-- `gofmt -l $(git ls-files '*.go')` produced no output.
-- `go mod tidy && git diff --exit-code -- go.mod go.sum` passed.
-- `go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller` passed.
-- `go test -race -covermode=atomic ./...` was run and failed in `internal/runner` on this Darwin host: two Codex app-server timing tests timed out and sandbox tests expected Linux-only bubblewrap/firejail behavior. No failures were in the changed workflow loader or documentation surface.
-- Codex local review returned `{"blocking_findings":[]}`.
-- Claude Code local review returned `{"blocking_findings":[]}`.
+Verification:
+- Confirmed the new single-service missing-slug test failed before production code changes.
+- `go test ./internal/workflow -run 'TestLoadRejectsLinear(TrackerWithoutProjectSlug|ServiceRouteWithoutAnyProjectSlug|ServiceWithoutExplicitRoute|ServiceOnlyWorkflow)' -count=1`
+- `go test ./internal/workflow ./internal/orchestrator ./internal/worker -count=1`
+- `gofmt -l $(git ls-files '*.go')`
+- `go mod tidy && git diff --exit-code -- go.mod go.sum`
+- `go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller`
+- `go test -race -covermode=atomic ./...` was run and still fails only in `internal/runner` on this macOS host: Codex app-server timing/read-timeout tests and Linux sandbox backend tests that return `requires linux host OS; current host OS is darwin`.
+- Codex local review: `{"blocking_findings":[]}` after fixes.
+- Claude Code local review: `{"blocking_findings":[]}` after fixes.

@@ -166,15 +166,17 @@ func validateConfig(path string, cfg Config) error {
 		}
 	}
 	if cfg.Tracker.Kind == "linear" {
-		if len(cfg.Services) == 0 && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
+		topLevelProjectSlug := strings.TrimSpace(cfg.Tracker.ProjectSlug)
+		if topLevelProjectSlug == "" && len(cfg.Services) == 0 {
 			return fmt.Errorf("%s: tracker.project_slug is required when tracker.kind is linear", path)
 		}
 		for i, service := range cfg.Services {
+			serviceProjectSlug := strings.TrimSpace(service.Tracker.ProjectSlug)
+			if topLevelProjectSlug == "" && serviceProjectSlug == "" {
+				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
+			}
 			if !hasExplicitServiceRoute(service.Tracker) {
 				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, labels, or custom_fields)", path, i)
-			}
-			if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
-				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
 			}
 		}
 	}

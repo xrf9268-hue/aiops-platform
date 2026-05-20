@@ -98,9 +98,10 @@ The Linear and Gitea pollers read `examples/WORKFLOW.md` for the repo, tracker, 
 ### Linear
 
 The Linear poller enqueues issues in configured active Linear workflow states.
-Set `tracker.project_slug` in `examples/WORKFLOW.md` before starting a Linear
-run; the loader rejects `tracker.kind: linear` without it because SPEC §11.2
-requires candidate queries to filter by Linear `project.slugId`.
+For Linear workflows, `tracker.project_slug` in the selected `WORKFLOW.md` maps
+to Linear's project `slugId` and is required unless `services[]` routes define
+per-service `tracker.project_slug` values. The worker fails workflow loading
+before the first poll when the applicable project slug is missing.
 
 Option A: from source.
 
