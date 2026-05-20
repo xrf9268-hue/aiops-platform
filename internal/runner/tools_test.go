@@ -309,6 +309,54 @@ func TestLinearGraphQLAllowsSingleAnonymousOperation(t *testing.T) {
 	}
 }
 
+func TestLinearGraphQLAllowsSingleOperationWithFragments(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "named query",
+			query: `query Q { ...F } fragment F on Issue { id }`,
+		},
+		{
+			name:  "named mutation",
+			query: `mutation M { issueUpdate(id: "1", input: {}) { issue { ...F } } } fragment F on Issue { id }`,
+		},
+		{
+			name: "anonymous query",
+			query: `{ viewer { id } }
+fragment F on Issue { id }`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &fakeLinearGraphQLServer{}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+				call(context.Background(), ToolCall{Query: tt.query})
+			if err != nil {
+				t.Fatalf("linear_graphql call: %v", err)
+			}
+			var payload struct {
+				Success bool `json:"success"`
+			}
+			if err := json.Unmarshal([]byte(result), &payload); err != nil {
+				t.Fatalf("result is not structured JSON: %v", err)
+			}
+			if !payload.Success {
+				t.Fatalf("success = false, want true; result=%s", result)
+			}
+			_, _, requests := server.recorded()
+			if requests != 1 {
+				t.Fatalf("server received %d requests, want 1", requests)
+			}
+		})
+	}
+}
+
 func TestLinearGraphQLAllowsOperationWordsInsideSingleOperationBody(t *testing.T) {
 	server := &fakeLinearGraphQLServer{}
 	httpServer := httptest.NewServer(server.handler())
