@@ -266,6 +266,11 @@ func TestCountGraphQLOperationsIgnoresFragmentDefinitions(t *testing.T) {
 			want:  1,
 		},
 		{
+			name:  "fragment directive input object",
+			query: `query Q { ...F } fragment F on T @cache(config: { ttl: 60 }) { id }`,
+			want:  1,
+		},
+		{
 			name:  "multiple operations still counted",
 			query: `query A { viewer { id } } query B { issue(id: "1") { id } }`,
 			want:  2,

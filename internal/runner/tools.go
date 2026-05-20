@@ -282,11 +282,13 @@ func countGraphQLOperations(query string) int {
 			}
 			continue
 		case '{':
-			if depth == 0 && !operationHeader {
-				count++
+			if depth == 0 && parenDepth == 0 {
+				if !operationHeader {
+					count++
+				}
+				operationHeader = false
 			}
 			depth++
-			operationHeader = false
 			i++
 			continue
 		case '}':
