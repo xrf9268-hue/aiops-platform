@@ -326,7 +326,7 @@ func TestRunTaskExecutesAfterCreateHookOnRecreatedWorkspace(t *testing.T) {
 	}
 }
 
-func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
+func TestRunTaskDoesNotExecuteAfterRunHookWhenRunnerSetupFails(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
 	tk.Model = "does-not-exist"
@@ -334,7 +334,8 @@ func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
 	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
-		AfterRun: workflow.WorkspaceHook{Commands: []string{"printf after_run >> hook.log"}},
+		BeforeRun: workflow.WorkspaceHook{Commands: []string{"printf before_run >> hook.log"}},
+		AfterRun:  workflow.WorkspaceHook{Commands: []string{"printf after_run >> hook.log"}},
 	}
 
 	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
@@ -343,12 +344,61 @@ func TestRunTaskExecutesAfterRunHookWhenRunnerFails(t *testing.T) {
 	}
 
 	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
-	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
-	if err != nil {
+	if body, err := os.ReadFile(filepath.Join(workdir, "hook.log")); err == nil {
+		t.Fatalf("hook log = %q, want no before_run/after_run hooks when runner setup fails", body)
+	} else if !os.IsNotExist(err) {
 		t.Fatalf("read hook log: %v", err)
 	}
-	if string(body) != "after_run" {
-		t.Fatalf("hook log = %q, want after_run hook to execute on failed attempt", body)
+	for _, e := range ev.byKind(task.EventWorkspaceHookStart) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("hook start payload = %#v, want map", e.Payload)
+		}
+		hook := fmt.Sprint(payload["hook"])
+		if hook == "before_run" || hook == "after_run" {
+			t.Fatalf("unexpected %s hook start after runner setup failure; events=%#v", hook, ev.events)
+		}
+	}
+}
+
+func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	marker := filepath.Join(cfg.WorkspaceRoot, "before-remove.marker")
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		AfterCreate: workflow.WorkspaceHook{Commands: []string{"printf after_create > hook.log", "exit 7"}},
+		BeforeRemove: workflow.WorkspaceHook{Commands: []string{
+			"test -d . && printf before_remove > " + shellQuoteForTest(marker),
+		}},
+	}
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want after_create hook failure")
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("workdir stat err = %v, want removed after after_create failure", err)
+	}
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "before_remove" {
+		t.Fatalf("before_remove marker = %q, %v; want hook to run before removing failed workspace", body, err)
+	}
+	var beforeRemoveStarts int
+	for _, e := range ev.byKind(task.EventWorkspaceHookStart) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("hook start payload = %#v, want map", e.Payload)
+		}
+		if fmt.Sprint(payload["hook"]) == "before_remove" {
+			beforeRemoveStarts++
+		}
+	}
+	if beforeRemoveStarts != 1 {
+		t.Fatalf("before_remove hook starts = %d, want 1; events=%#v", beforeRemoveStarts, ev.events)
 	}
 }
 
@@ -620,6 +670,10 @@ func (s *fakeRunStore) byKind(kind string) []recordedEvent {
 		}
 	}
 	return out
+}
+
+func shellQuoteForTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // TestRun_DoesNotWriteTrackerOnFailure pins the SPEC §1 boundary for the
