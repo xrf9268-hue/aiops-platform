@@ -90,9 +90,15 @@ section as described above. Other top-level workflow defaults (`polling`,
 
 ## Reload and restart behavior
 
-The worker loads a single service-level `WORKFLOW.md` when the worker process or
-runtime poller starts. `services` changes do not currently reload dynamically;
-restart the worker/poller to apply routing changes. Dynamic workflow watch/reload
-is separately tracked by D11 / issue #85. Startup reconciliation uses the loaded
-service routes to preserve active service-specific workspaces for Linear issues
-that are still eligible.
+The worker loads a single service-level `WORKFLOW.md` when the worker process
+starts, then the workflow reload loop watches that file and publishes new
+runtime snapshots when it changes. The runtime poller rebuilds its Linear project
+clients and `services` routing from the current snapshot on subsequent poll
+ticks, so service-route changes are intended to apply dynamically without a
+process restart. If a reload fails validation, the last valid routing snapshot
+continues to drive polling and a `workflow_reload_failed` event is emitted.
+
+Startup reconciliation uses the loaded service routes to preserve active
+service-specific workspaces for Linear issues that are still eligible. D11 /
+issue #85 continues to track remaining dynamic reload coverage gaps outside the
+`services` routing behavior documented here.
