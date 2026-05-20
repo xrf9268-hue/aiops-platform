@@ -76,9 +76,13 @@ Validation happens when `WORKFLOW.md` is loaded:
 At poll time the orchestrator reads Linear candidates for the configured project
 scopes and evaluates the service predicates against issue metadata. An issue
 that matches one service is dispatched with that service's `repo` settings and a
-service-specific workspace key. Unmatched issues are skipped by that poll tick.
-Ambiguous matches are configuration errors and fail the poll tick instead of
-choosing a repository implicitly.
+service-specific workspace key. An unmatched issue is skipped by that poll tick
+unless it belongs to the top-level `tracker.project_slug` and a top-level
+`repo.clone_url` is configured; that fallback-repository shape preserves
+single-service dispatch for issues that intentionally do not match a service
+route. Unmatched issues in service-specific projects are skipped instead of
+falling back to the top-level repository. Ambiguous matches are configuration
+errors and fail the poll tick instead of choosing a repository implicitly.
 
 ## Defaults
 
