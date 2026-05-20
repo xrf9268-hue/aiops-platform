@@ -34,6 +34,11 @@ tracker:
   #   human_review: "Human Review"
   #   rework: "Rework"
 
+server:
+  # Private-loopback SPEC §13.7 state endpoint: GET /api/v1/state
+  # Set to -1 to disable when another deployment layer owns state serving.
+  port: 4000
+
 polling:
   interval_ms: 30000
 

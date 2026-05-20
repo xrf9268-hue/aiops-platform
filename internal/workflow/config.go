@@ -9,6 +9,7 @@ import (
 
 type Config struct {
 	Repo       RepoConfig      `yaml:"repo" json:"repo"`
+	Server     ServerConfig    `yaml:"server" json:"server"`
 	Tracker    TrackerConfig   `yaml:"tracker" json:"tracker"`
 	Polling    PollingConfig   `yaml:"polling" json:"polling"`
 	Services   []ServiceConfig `yaml:"services" json:"services"`
@@ -29,6 +30,10 @@ type Config struct {
 	Sandbox               SandboxConfig `yaml:"sandbox" json:"sandbox"`
 	Verify                VerifyConfig  `yaml:"verify" json:"verify"`
 	PR                    PRConfig      `yaml:"pr" json:"pr"`
+}
+
+type ServerConfig struct {
+	Port int `yaml:"port" json:"port"`
 }
 
 type RepoConfig struct {
@@ -344,6 +349,7 @@ type PRConfig struct {
 
 func DefaultConfig() Config {
 	return Config{
+		Server: ServerConfig{Port: 4000},
 		Tracker: TrackerConfig{
 			Kind:           "gitea",
 			ActiveStates:   []string{"AI Ready", "In Progress", "Rework"},

@@ -25,6 +25,31 @@ func writeTempWorkflow(t *testing.T, body string) string {
 // into Config.PR.Draft. This is the schema knob #41 wires through to
 // gitea.CreatePullRequest.
 
+func TestLoadParsesServerPort(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+server:
+  port: 4567
+repo:
+  clone_url: git@example.com:owner/repo.git
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Server.Port; got != 4567 {
+		t.Fatalf("server.port = %d, want 4567", got)
+	}
+}
+
+func TestDefaultConfigEnablesStateServerOnPrivateLoopbackPort(t *testing.T) {
+	cfg := DefaultConfig()
+	if got := cfg.Server.Port; got != 4000 {
+		t.Fatalf("default server.port = %d, want 4000", got)
+	}
+}
+
 func TestLoadParsesSpecPollingAndLegacyTrackerPollInterval(t *testing.T) {
 	t.Run("spec polling interval wins over default", func(t *testing.T) {
 		path := writeTempWorkflow(t, `---

@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -197,7 +200,170 @@ func run(ctx context.Context, args []string) error {
 			log.Printf("workflow reload loop exited: %v", err)
 		}
 	}()
+	if wf.Config.Server.Port >= 0 {
+		serverErrs := make(chan error, 1)
+		server := newStateHTTPServer(wf.Config.Server.Port, orch)
+		listener, err := net.Listen("tcp", server.Addr)
+		if err != nil {
+			return err
+		}
+		log.Printf("state HTTP server listening on http://%s", listener.Addr().String())
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("state HTTP server shutdown error: %v", err)
+			}
+		}()
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				serverErrs <- err
+				return
+			}
+			serverErrs <- nil
+		}()
+		go func() {
+			if err := <-serverErrs; err != nil && ctx.Err() == nil {
+				log.Printf("state HTTP server exited: %v", err)
+			}
+		}()
+	}
 	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
+}
+
+func newStateHTTPServer(port int, orch *orchestrator.Orchestrator) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/state", stateHTTPHandler(orch.Snapshot))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html><title>aiops-platform state</title><h1>aiops-platform</h1><p>Runtime state: <a href=\"/api/v1/state\">/api/v1/state</a></p>"))
+	})
+	return &http.Server{
+		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+type stateSnapshotFunc func(context.Context) (orchestrator.StateView, error)
+
+type apiStateResponse struct {
+	GeneratedAt                time.Time                       `json:"generated_at"`
+	PollIntervalMs             int64                           `json:"poll_interval_ms"`
+	MaxConcurrentAgents        int                             `json:"max_concurrent_agents"`
+	MaxConcurrentAgentsByState map[string]int                  `json:"max_concurrent_agents_by_state,omitempty"`
+	Counts                     apiStateCounts                  `json:"counts"`
+	Running                    []apiStateRunning               `json:"running"`
+	Retrying                   []apiStateRetry                 `json:"retrying"`
+	Completed                  []orchestrator.IssueID          `json:"completed"`
+	Failed                     []orchestrator.IssueID          `json:"failed"`
+	CodexTotals                orchestrator.CodexTotals        `json:"codex_totals"`
+	RateLimits                 *orchestrator.RateLimitSnapshot `json:"rate_limits,omitempty"`
+}
+
+type apiStateCounts struct {
+	Running   int `json:"running"`
+	Retrying  int `json:"retrying"`
+	Completed int `json:"completed"`
+	Failed    int `json:"failed"`
+}
+
+type apiStateRunning struct {
+	IssueID       orchestrator.IssueID `json:"issue_id"`
+	Identifier    string               `json:"issue_identifier,omitempty"`
+	StartedAt     time.Time            `json:"started_at"`
+	RetryAttempt  *int                 `json:"retry_attempt,omitempty"`
+	WorkspacePath string               `json:"workspace_path,omitempty"`
+	LastCodexAt   time.Time            `json:"last_codex_at,omitempty"`
+}
+
+type apiStateRetry struct {
+	IssueID    orchestrator.IssueID `json:"issue_id"`
+	Identifier string               `json:"issue_identifier,omitempty"`
+	Attempt    int                  `json:"attempt"`
+	DueAt      time.Time            `json:"due_at"`
+	Error      string               `json:"error,omitempty"`
+}
+
+func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		view, err := snapshot(r.Context())
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				http.Error(w, err.Error(), 499)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(apiStateFromView(view)); err != nil {
+			log.Printf("encode /api/v1/state response: %v", err)
+		}
+	})
+}
+
+func apiStateFromView(view orchestrator.StateView) apiStateResponse {
+	running := make([]apiStateRunning, 0, len(view.Running))
+	for _, row := range view.Running {
+		running = append(running, apiStateRunning{
+			IssueID:       row.IssueID,
+			Identifier:    row.Identifier,
+			StartedAt:     row.StartedAt,
+			RetryAttempt:  row.RetryAttempt,
+			WorkspacePath: row.WorkspacePath,
+			LastCodexAt:   row.LastCodexAt,
+		})
+	}
+	retrying := make([]apiStateRetry, 0, len(view.Retrying))
+	for _, row := range view.Retrying {
+		retrying = append(retrying, apiStateRetry{
+			IssueID:    row.IssueID,
+			Identifier: row.Identifier,
+			Attempt:    row.Attempt,
+			DueAt:      row.DueAt,
+			Error:      row.Error,
+		})
+	}
+	return apiStateResponse{
+		GeneratedAt:                time.Now().UTC(),
+		PollIntervalMs:             view.PollIntervalMs,
+		MaxConcurrentAgents:        view.MaxConcurrentAgents,
+		MaxConcurrentAgentsByState: copyConcurrencyLimits(view.MaxConcurrentAgentsByState),
+		Counts: apiStateCounts{
+			Running:   len(view.Running),
+			Retrying:  len(view.Retrying),
+			Completed: len(view.Completed),
+			Failed:    len(view.Failed),
+		},
+		Running:     running,
+		Retrying:    retrying,
+		Completed:   append([]orchestrator.IssueID(nil), view.Completed...),
+		Failed:      append([]orchestrator.IssueID(nil), view.Failed...),
+		CodexTotals: view.CodexTotals,
+		RateLimits:  view.CodexRateLimits,
+	}
+}
+
+func copyConcurrencyLimits(src map[string]int) map[string]int {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {

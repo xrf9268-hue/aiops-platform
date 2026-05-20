@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -35,6 +39,102 @@ func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []str
 		}
 	}
 	return out, nil
+}
+
+func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
+	view := orchestrator.StateView{
+		PollIntervalMs:      30000,
+		MaxConcurrentAgents: 2,
+		Running: []orchestrator.RunningView{{
+			IssueID:    "issue-1",
+			Identifier: "MT-649",
+		}},
+		Retrying: []orchestrator.RetryView{{
+			IssueID:    "issue-2",
+			Identifier: "MT-650",
+			Attempt:    2,
+			Error:      "no available orchestrator slots",
+		}},
+	}
+	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		return view, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	var payload struct {
+		GeneratedAt         string `json:"generated_at"`
+		PollIntervalMs      int64  `json:"poll_interval_ms"`
+		MaxConcurrentAgents int    `json:"max_concurrent_agents"`
+		Counts              struct {
+			Running  int `json:"running"`
+			Retrying int `json:"retrying"`
+		} `json:"counts"`
+		Running []struct {
+			IssueID         string `json:"issue_id"`
+			IssueIdentifier string `json:"issue_identifier"`
+		} `json:"running"`
+		Retrying []struct {
+			IssueID         string `json:"issue_id"`
+			IssueIdentifier string `json:"issue_identifier"`
+			Attempt         int    `json:"attempt"`
+			Error           string `json:"error"`
+		} `json:"retrying"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
+	}
+	if payload.GeneratedAt == "" {
+		t.Fatal("generated_at is empty")
+	}
+	if payload.PollIntervalMs != 30000 || payload.MaxConcurrentAgents != 2 {
+		t.Fatalf("state metadata = poll_interval_ms=%d max_concurrent_agents=%d, want 30000/2", payload.PollIntervalMs, payload.MaxConcurrentAgents)
+	}
+	if payload.Counts.Running != 1 || payload.Counts.Retrying != 1 {
+		t.Fatalf("counts = %+v, want running=1 retrying=1", payload.Counts)
+	}
+	if len(payload.Running) != 1 || payload.Running[0].IssueID != "issue-1" || payload.Running[0].IssueIdentifier != "MT-649" {
+		t.Fatalf("running = %+v, want issue-1/MT-649", payload.Running)
+	}
+	if len(payload.Retrying) != 1 || payload.Retrying[0].IssueID != "issue-2" || payload.Retrying[0].IssueIdentifier != "MT-650" || payload.Retrying[0].Attempt != 2 {
+		t.Fatalf("retrying = %+v, want issue-2/MT-650 attempt=2", payload.Retrying)
+	}
+}
+
+func TestStateHTTPHandlerPropagatesRequestCancellation(t *testing.T) {
+	requestErr := context.Canceled
+	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, requestErr
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != 499 {
+		t.Fatalf("status code = %d, want 499 for request cancellation", w.Code)
+	}
+}
+
+func TestStateHTTPHandlerRejectsNonGET(t *testing.T) {
+	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		t.Fatal("snapshot function should not be called for non-GET requests")
+		return orchestrator.StateView{}, nil
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
 }
 
 func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {

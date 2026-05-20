@@ -333,6 +333,7 @@ var knownTopLevelWorkflowKeys = map[string]struct{}{
 	"repo":      {},
 	"safety":    {},
 	"sandbox":   {},
+	"server":    {},
 	"services":  {},
 	"tracker":   {},
 	"verify":    {},
