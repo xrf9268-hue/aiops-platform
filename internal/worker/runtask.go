@@ -172,8 +172,7 @@ func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID,
 }
 
 // RunTask executes a single in-memory task. The orchestrator-backed worker path
-// uses this directly after claiming a tracker issue in runtime state; the
-// legacy queue loop also calls it for remaining tests/compatibility.
+// uses this directly after claiming a tracker issue in runtime state.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
 	currentPhase := task.RunAttemptPhase("")
 	phaseTerminal := false

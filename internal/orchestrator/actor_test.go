@@ -510,6 +510,40 @@ func TestReconcileTrackerIssuesReleasesRetryWhenServiceRouteChanges(t *testing.T
 	}
 }
 
+func TestTrackerRecheckedDispatchDoesNotConsumeFailureRetry(t *testing.T) {
+	st := NewOrchestratorState(30000, 1)
+	iss := tracker.Issue{ID: "ENG-FAIL-RETRY", Identifier: "ENG-FAIL-RETRY", Title: "failure retry", State: "AI Ready"}
+	id := IssueID(iss.ID)
+	st.ScheduleRetry(&RetryEntry{
+		IssueID:    id,
+		Identifier: iss.Identifier,
+		Issue:      iss,
+		Attempt:    3,
+		Kind:       RetryKindFailure,
+		DueAt:      time.Now().Add(-time.Second),
+		Error:      "transient",
+	})
+
+	result := make(chan error, 1)
+	followup := (&dispatchOp{
+		issue:            iss,
+		result:           result,
+		trackerRechecked: true,
+	}).apply(st)
+	if followup != nil {
+		t.Fatal("tracker-rechecked dispatch returned followup for failure retry; want retry to remain claimed")
+	}
+	if err := <-result; !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("tracker-rechecked dispatch err = %v, want ErrNotDispatched for failure retry", err)
+	}
+	if _, ok := st.RetryAttempts[id]; !ok {
+		t.Fatal("tracker-rechecked dispatch removed failure retry; want retryFireOp to own it")
+	}
+	if !st.IsClaimed(id) {
+		t.Fatal("tracker-rechecked dispatch released failure retry claim; want retryFireOp to own it")
+	}
+}
+
 func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{
