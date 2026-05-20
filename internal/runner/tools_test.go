@@ -244,6 +244,47 @@ func TestLinearGraphQLRejectsMultipleAnonymousOperationsWithoutHTTPRequest(t *te
 	}
 }
 
+func TestCountGraphQLOperationsIgnoresFragmentDefinitions(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  int
+	}{
+		{
+			name:  "named query with fragment",
+			query: `query Q { ...F } fragment F on Issue { id }`,
+			want:  1,
+		},
+		{
+			name:  "mutation with fragment",
+			query: `mutation M { issueUpdate(id: "1", input: {}) { success issue { ...IssueFields } } } fragment IssueFields on Issue { id title }`,
+			want:  1,
+		},
+		{
+			name: "anonymous query with fragment",
+			query: `{ viewer { id } }
+fragment ViewerFields on User { id name }`,
+			want: 1,
+		},
+		{
+			name:  "fragment directive input object",
+			query: `query Q { ...F } fragment F on Issue @cache(config: { ttl: 60 }) { id }`,
+			want:  1,
+		},
+		{
+			name:  "multiple operations",
+			query: `query A { viewer { id } } query B { organization { id } }`,
+			want:  2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := countGraphQLOperations(tc.query); got != tc.want {
+				t.Fatalf("countGraphQLOperations() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLinearGraphQLAllowsSingleAnonymousOperation(t *testing.T) {
 	server := &fakeLinearGraphQLServer{}
 	httpServer := httptest.NewServer(server.handler())
