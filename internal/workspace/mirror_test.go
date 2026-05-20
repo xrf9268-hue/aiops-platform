@@ -254,7 +254,7 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	second.ID = "tsk-second"
 	second.WorkBranch = "ai/tsk-second"
 
-	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear-issue", "issue-abc-123-needs-fix"); got != want {
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", "issue-abc-123-needs-fix"); got != want {
 		t.Fatalf("PathFor() = %q, want %q", got, want)
 	}
 	collidingOwner := first

@@ -100,7 +100,12 @@ do the work for {{task.title}}
 // workerCfgForIntegration assembles the Config the integration tests share.
 func workerCfgForIntegration(t *testing.T) worker.Config {
 	t.Helper()
-	wf, err := workflow.Load(writeServiceWorkflowForIntegration(t, linearWorkflowBody))
+	return workerCfgForIntegrationWithWorkflow(t, linearWorkflowBody)
+}
+
+func workerCfgForIntegrationWithWorkflow(t *testing.T, body string) worker.Config {
+	t.Helper()
+	wf, err := workflow.Load(writeServiceWorkflowForIntegration(t, body))
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
@@ -109,6 +114,67 @@ func workerCfgForIntegration(t *testing.T) worker.Config {
 		MirrorRoot:    t.TempDir(),
 		Workflow:      wf,
 	}
+}
+
+func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	t.Run("env only", func(t *testing.T) {
+		ev := &fakeEmitter{}
+		cfg := workerCfgForIntegration(t)
+		cfg.WorkspaceRoot = filepath.Join(t.TempDir(), "env-workspaces")
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+
+		assertTaskWorkdir(t, cfg.WorkspaceRoot, tk)
+	})
+
+	t.Run("yaml only", func(t *testing.T) {
+		ev := &fakeEmitter{}
+		yamlRoot := filepath.Join(t.TempDir(), "yaml-workspaces")
+		cfg := workerCfgForIntegrationWithWorkspaceRoot(t, yamlRoot)
+		cfg.WorkspaceRoot = ""
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+
+		assertTaskWorkdir(t, yamlRoot, tk)
+	})
+
+	t.Run("yaml wins over env", func(t *testing.T) {
+		ev := &fakeEmitter{}
+		envRoot := filepath.Join(t.TempDir(), "env-workspaces")
+		yamlRoot := filepath.Join(t.TempDir(), "yaml-workspaces")
+		cfg := workerCfgForIntegrationWithWorkspaceRoot(t, yamlRoot)
+		cfg.WorkspaceRoot = envRoot
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+
+		assertTaskWorkdir(t, yamlRoot, tk)
+		if _, err := os.Stat(filepath.Join(envRoot, "acme", "demo", "linear_issue", "issue-uuid")); !os.IsNotExist(err) {
+			t.Fatalf("env workspace root should not be used when workflow workspace.root is set; stat err=%v", err)
+		}
+	})
+}
+
+func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
+	t.Helper()
+	workdir := filepath.Join(root, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
+	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "RUN_SUMMARY.md")); err != nil {
+		t.Fatalf("expected task workspace under %q; stat RUN_SUMMARY.md: %v", workdir, err)
+	}
+}
+
+func workerCfgForIntegrationWithWorkspaceRoot(t *testing.T, root string) worker.Config {
+	t.Helper()
+	body := strings.Replace(linearWorkflowBody, "agent:\n", fmt.Sprintf("workspace:\n  root: %s\nagent:\n", root), 1)
+	return workerCfgForIntegrationWithWorkflow(t, body)
 }
 
 func writeServiceWorkflowForIntegration(t *testing.T, body string) string {
@@ -169,7 +235,7 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 		}
 	}
 
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
 	if err != nil {
 		t.Fatalf("read hook log: %v", err)
@@ -194,7 +260,7 @@ func TestRunTaskRendersAttemptVariable(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -215,7 +281,7 @@ func TestRunTaskRendersFirstAttemptAsEmptyForBareAttempt(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -236,7 +302,7 @@ func TestRunTaskLeavesFirstAttemptAbsentForDefaultFilter(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -258,7 +324,7 @@ func TestRunTaskExposesIssueObjectToPromptTemplate(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "lin-123")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "lin-123")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -305,7 +371,7 @@ func TestRunTaskExecutesAfterCreateHookOnRecreatedWorkspace(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("first runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	if err := os.WriteFile(filepath.Join(workdir, "stale.txt"), []byte("stale"), 0o644); err != nil {
 		t.Fatalf("write stale marker: %v", err)
 	}
@@ -343,7 +409,7 @@ func TestRunTaskDoesNotExecuteAfterRunHookWhenRunnerSetupFails(t *testing.T) {
 		t.Fatal("runTask succeeded, want runner setup failure")
 	}
 
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	if body, err := os.ReadFile(filepath.Join(workdir, "hook.log")); err == nil {
 		t.Fatalf("hook log = %q, want no before_run/after_run hooks when runner setup fails", body)
 	} else if !os.IsNotExist(err) {
@@ -380,7 +446,7 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 		t.Fatal("runTask succeeded, want after_create hook failure")
 	}
 
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear-issue", "issue-uuid")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
 		t.Fatalf("workdir stat err = %v, want removed after after_create failure", err)
 	}
@@ -419,7 +485,7 @@ func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
 
-	workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear-issue", tk.SourceEventID)
+	workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
 	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil {
 		t.Fatalf("analysis-only run should write plan artifact: %v", err)
 	}

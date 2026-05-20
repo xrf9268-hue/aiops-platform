@@ -124,7 +124,7 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
 	hooks := cfg.WorkspaceHooks()
 	return worker.ReconcileConfig{
-		WorkspaceRoot:       worker.LoadConfigFromEnv().WorkspaceRoot,
+		WorkspaceRoot:       effectiveWorkspaceRoot(worker.LoadConfigFromEnv(), cfg),
 		ActiveStates:        cfg.Tracker.ActiveStates,
 		TerminalStates:      cfg.Tracker.TerminalStates,
 		TrackerKind:         cfg.Tracker.Kind,
@@ -154,7 +154,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	reconcileCfg := startupReconcileConfigForWorkflow(wf.Config, trackerClient)
-	reconcileCfg.WorkspaceRoot = cfg.WorkspaceRoot
+	reconcileCfg.WorkspaceRoot = effectiveWorkspaceRoot(cfg, wf.Config)
 	if err := worker.ReconcileStartup(ctx, reconcileCfg); err != nil {
 		worker.LogReconcileError(err)
 		return err
@@ -198,6 +198,22 @@ func run(ctx context.Context, args []string) error {
 		}
 	}()
 	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
+}
+
+func effectiveWorkspaceRoot(cfg worker.Config, wcfg workflow.Config) string {
+	root := strings.TrimSpace(wcfg.Workspace.Root)
+	if root != "" && root != defaultWorkspaceRoot() {
+		return root
+	}
+	return cfg.WorkspaceRoot
+}
+
+func defaultWorkspaceRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "~/aiops-workspaces"
+	}
+	return filepath.Join(home, "aiops-workspaces")
 }
 
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {

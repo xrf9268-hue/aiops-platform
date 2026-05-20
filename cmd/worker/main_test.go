@@ -206,6 +206,17 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	}
 }
 
+func TestStartupReconcileConfigHonorsWorkflowWorkspaceRoot(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Workspace.Root = filepath.Join(t.TempDir(), "yaml-workspaces")
+	t.Setenv("WORKSPACE_ROOT", filepath.Join(t.TempDir(), "env-workspaces"))
+
+	reconcile := startupReconcileConfigForWorkflow(cfg, nil)
+	if reconcile.WorkspaceRoot != cfg.Workspace.Root {
+		t.Fatalf("WorkspaceRoot = %q, want workflow workspace.root %q", reconcile.WorkspaceRoot, cfg.Workspace.Root)
+	}
+}
+
 func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "linear"

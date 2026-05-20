@@ -131,6 +131,8 @@ export GITEA_TOKEN=your-gitea-bot-token
 go run ./cmd/worker
 ```
 
+`WORKFLOW.md` front matter is the source of truth for runtime workspace placement: when `workspace.root` is set in the selected workflow, the worker creates and reconciles task workspaces under that path. `WORKSPACE_ROOT` is only the fallback for workflows that omit `workspace.root`.
+
 No `DATABASE_URL` or Postgres service is required for `cmd/worker`. Restart recovery follows SPEC §14.3: the worker starts with fresh runtime state, cleans terminal workspaces from tracker state, and re-dispatches eligible active issues on the next poll rather than restoring queue rows, retry timers, or running sessions from a database.
 
 The default Compose service now starts only `worker` unless a legacy profile is requested:
