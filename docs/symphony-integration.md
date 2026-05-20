@@ -82,8 +82,9 @@ discovery is not an accepted extension: D4 is closed, and legacy alternate
 workflow paths are not searched or reported as normal shadow sources.
 
 The multi-service `services` workflow key used for Linear tracker-to-service
-routing is tracked as D25 (#143) until its extension schema is fully documented.
-It is a read-only candidate-selection extension: the orchestrator may use Linear
+routing is tracked as D25 (#143) and documented in
+[`docs/workflows/services-routing.md`](workflows/services-routing.md). It is a
+read-only candidate-selection extension: the orchestrator may use Linear
 project/team/label/custom-field metadata to choose a configured service/repo,
 but ticket writes remain agent/tool-side per SPEC §1.
 
