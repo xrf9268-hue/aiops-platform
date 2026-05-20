@@ -243,36 +243,6 @@ func validGiteaStateLabels() map[string]struct{} {
 	}
 }
 
-func replaceAIOpsLabels(currentLabels, desiredStateLabels []string) []string {
-	labels := make([]string, 0, len(currentLabels)+len(desiredStateLabels))
-	seen := make(map[string]struct{}, len(currentLabels)+len(desiredStateLabels))
-	for _, label := range currentLabels {
-		trimmed := strings.TrimSpace(label)
-		if trimmed == "" || strings.HasPrefix(strings.ToLower(trimmed), "aiops/") {
-			continue
-		}
-		key := strings.ToLower(trimmed)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		labels = append(labels, trimmed)
-	}
-	for _, label := range desiredStateLabels {
-		trimmed := strings.TrimSpace(label)
-		key := strings.ToLower(trimmed)
-		if trimmed == "" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		labels = append(labels, trimmed)
-	}
-	return labels
-}
-
 func containsLabelFold(labels []string, label string) bool {
 	want := strings.ToLower(strings.TrimSpace(label))
 	for _, candidate := range labels {
