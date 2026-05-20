@@ -331,6 +331,8 @@ func countGraphQLOperations(query string) int {
 				case "query", "mutation", "subscription":
 					count++
 					operationHeader = true
+				case "fragment":
+					operationHeader = true
 				}
 			}
 			continue
