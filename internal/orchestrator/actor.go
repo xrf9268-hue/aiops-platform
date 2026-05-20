@@ -50,10 +50,6 @@ type WorkerResult struct {
 // WorkerResult and then close (or close without yielding to signal
 // cancellation). The actor watches it to drive normal/abnormal exit
 // transitions.
-//
-// PR 2 only ships the seam — the production binding to internal/worker
-// arrives in PR 4 of the migration plan
-// (docs/design/d21-d6-orchestrator-state.md).
 type Dispatcher interface {
 	Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult
 }
@@ -145,7 +141,7 @@ type Orchestrator struct {
 // must call Run(ctx) in a separate goroutine before the actor processes
 // any submitted op; tests can wait via WaitStarted.
 func New(state *OrchestratorState, deps Deps) *Orchestrator {
-	return &Orchestrator{
+	o := &Orchestrator{
 		ops:        make(chan stateOp),
 		state:      state,
 		dispatcher: deps.Dispatcher,
@@ -153,6 +149,10 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 		retryWake:  make(chan struct{}, 1),
 		started:    make(chan struct{}),
 	}
+	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
+		aware.AttachOrchestrator(o)
+	}
+	return o
 }
 
 // Run is the actor loop. It drains the ops channel until ctx is
@@ -976,7 +976,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 // apply method, so its calls into o.submit are safe.
 func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int) {
 	runCtx, cancel := context.WithCancel(o.runCtx)
-	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
 	entry := &RunningEntry{
@@ -987,11 +986,25 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int) {
 		CancelWorker: cancel,
 		Done:         workerDone,
 	}
-	_ = o.submit(o.runCtx, opFunc(func(st *OrchestratorState) func() {
+	registered := make(chan struct{})
+	if err := o.submit(o.runCtx, opFunc(func(st *OrchestratorState) func() {
 		st.Running[id] = entry
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventRunning, IssueID: id, Identifier: issue.Identifier, Message: "dispatched to agent", At: startedAt})
+		close(registered)
 		return nil
-	}))
+	})); err != nil {
+		cancel()
+		close(workerDone)
+		return
+	}
+	select {
+	case <-registered:
+	case <-o.runCtx.Done():
+		cancel()
+		close(workerDone)
+		return
+	}
+	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt)
 	go func() {
 		var res WorkerResult
 		select {

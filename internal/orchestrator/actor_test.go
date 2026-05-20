@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -27,6 +28,36 @@ type fakeDispatcher struct {
 	// inject scheduling pressure or block until they want the worker
 	// to "start running".
 	onSpawn func(ctx context.Context, issue tracker.Issue, attempt *int)
+}
+
+type recordingWorkerEmitter struct {
+	kinds []string
+}
+
+func (r *recordingWorkerEmitter) AddEvent(ctx context.Context, taskID, typ, msg string) error {
+	return r.AddEventWithPayload(ctx, taskID, typ, msg, nil)
+}
+
+func (r *recordingWorkerEmitter) AddEventWithPayload(_ context.Context, _, typ, _ string, _ any) error {
+	r.kinds = append(r.kinds, typ)
+	return nil
+}
+
+type earlyRuntimeEventDispatcher struct {
+	orchestrator *Orchestrator
+}
+
+func (d *earlyRuntimeEventDispatcher) AttachOrchestrator(o *Orchestrator) {
+	d.orchestrator = o
+}
+
+func (d *earlyRuntimeEventDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+	_ = d.orchestrator.RecordRuntimeEvent(ctx, issue.ID, task.RuntimeEvent{
+		Event:   task.EventTurnCompleted,
+		Payload: map[string]any{"usage": map[string]any{"total_tokens": 5}},
+	})
+	out := make(chan WorkerResult)
+	return out
 }
 
 type sequenceScheduler struct {
@@ -681,6 +712,147 @@ func TestContinuationRetryRecheckedDispatchKeepsRetryWhenCapacityFull(t *testing
 	if got := disp.count(); got != 1 {
 		t.Fatalf("dispatch count after capacity rejection = %d, want only running issue B", got)
 	}
+}
+
+func startRuntimeEventActor(t *testing.T, id string) (*Orchestrator, string, func()) {
+	t.Helper()
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	iss := tracker.Issue{ID: id, Identifier: id, Title: id}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	return o, iss.ID, cancel
+}
+
+func TestRecordRuntimeEventUpdatesCodexTotalsAndRateLimits(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-METRICS")
+	defer cancel()
+	events := []task.RuntimeEvent{
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"usage":       map[string]any{"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+			"rate_limits": map[string]any{"primary": map[string]any{"remaining": 42}},
+		}},
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"usage": map[string]any{"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
+		}},
+		{Event: task.EventNotification, Payload: map[string]any{
+			"msg": map[string]any{"payload": map[string]any{"info": map[string]any{
+				"total_token_usage": map[string]any{"input_tokens": "11", "output_tokens": "13", "total_tokens": "24"},
+				"rate_limits":       map[string]any{"limit_id": "codex-primary", "primary": map[string]any{"remaining": 99}},
+			}}},
+		}},
+	}
+	for _, event := range events {
+		if err := o.RecordRuntimeEvent(context.Background(), issueID, event); err != nil {
+			t.Fatalf("RecordRuntimeEvent(%s): %v", event.Event, err)
+		}
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.CodexTotals.InputTokens != 11 || view.CodexTotals.OutputTokens != 13 || view.CodexTotals.TotalTokens != 24 {
+		t.Fatalf("CodexTotals = %+v, want cumulative absolute telemetry totals", view.CodexTotals)
+	}
+	if len(view.Running) != 1 || view.Running[0].LastCodexAt.IsZero() {
+		t.Fatalf("Running LastCodexAt not updated from runtime event: %+v", view.Running)
+	}
+	if view.CodexRateLimits == nil {
+		t.Fatal("CodexRateLimits = nil, want latest rate_limits payload")
+	}
+	if got := (*view.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 99 {
+		t.Fatalf("rate_limits.primary.remaining = %#v, want 99", got)
+	}
+}
+
+func TestRuntimeEventForwardingEmitterPreservesBaseEmitterAndUpdatesOrchestrator(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-EMITTER")
+	defer cancel()
+
+	base := &recordingWorkerEmitter{}
+	emitter := runtimeEventForwardingEmitter{EventEmitter: base, Orchestrator: o, IssueID: issueID}
+	payload := map[string]any{"usage": map[string]any{"total_tokens": 7}}
+	if err := emitter.AddEventWithPayload(context.Background(), "task-1", task.EventTurnCompleted, task.EventTurnCompleted, payload); err != nil {
+		t.Fatalf("AddEventWithPayload: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(base.kinds) != 1 || base.kinds[0] != task.EventTurnCompleted || view.CodexTotals.TotalTokens != 7 {
+		t.Fatalf("forwarded kinds=%v totals=%+v", base.kinds, view.CodexTotals)
+	}
+}
+
+func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-USAGE")
+	defer cancel()
+
+	for i := 0; i < 2; i++ {
+		if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+			Event:   task.EventTurnCompleted,
+			Payload: map[string]any{"usage": map[string]any{"total_tokens": 5}},
+		}); err != nil {
+			t.Fatalf("RecordRuntimeEvent: %v", err)
+		}
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.CodexTotals.TotalTokens != 10 {
+		t.Fatalf("CodexTotals.TotalTokens = %d, want generic usage counted as per-event delta", view.CodexTotals.TotalTokens)
+	}
+}
+
+func TestRecordRuntimeEventReadsNestedTurnUsagePayloads(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-NESTED-USAGE")
+	defer cancel()
+
+	events := []task.RuntimeEvent{
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"turn": map[string]any{
+				"usage": map[string]any{"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+			},
+		}},
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"turn": map[string]any{
+				"token_usage": map[string]any{
+					"total": map[string]any{"input_tokens": 11, "output_tokens": 13, "total_tokens": 24},
+				},
+			},
+		}},
+	}
+	for _, event := range events {
+		if err := o.RecordRuntimeEvent(context.Background(), issueID, event); err != nil {
+			t.Fatalf("RecordRuntimeEvent: %v", err)
+		}
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.CodexTotals.InputTokens != 11 || view.CodexTotals.OutputTokens != 13 || view.CodexTotals.TotalTokens != 24 {
+		t.Fatalf("CodexTotals = %+v, want nested turn usage folded into totals", view.CodexTotals)
+	}
+}
+
+func TestSpawnRegistersRunningBeforeRuntimeEvents(t *testing.T) {
+	disp := &earlyRuntimeEventDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	if err := o.RequestDispatch(context.Background(), tracker.Issue{ID: "ENG-EARLY", Identifier: "ENG-EARLY"}, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && view.CodexTotals.TotalTokens == 5
+	}, time.Second)
 }
 
 // TestRequestDispatch_DedupesAgainstRunning verifies that once a

@@ -47,6 +47,7 @@ func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (Is
 	if err != nil {
 		return nil, err
 	}
+	dispatcher.AttachOrchestrator(orchestrator)
 	rp := &RuntimePoller{trackerFactory: trackerFactory, orchestrator: orchestrator, runtime: runtime, config: cfg, emitter: emitter, dispatcher: dispatcher}
 	initialPoller, err := rp.pollerForSnapshot(runtime.Current())
 	if err != nil {
@@ -200,9 +201,10 @@ func snapshotWorkflowKey(snap WorkflowSnapshot) string {
 }
 
 type RuntimeDispatcher struct {
-	runtime    *WorkflowRuntime
-	baseConfig worker.Config
-	emitter    worker.EventEmitter
+	runtime      *WorkflowRuntime
+	baseConfig   worker.Config
+	emitter      worker.EventEmitter
+	orchestrator *Orchestrator
 }
 
 func NewRuntimeDispatcher(runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimeDispatcher, error) {
@@ -212,14 +214,24 @@ func NewRuntimeDispatcher(runtime *WorkflowRuntime, cfg worker.Config, emitter w
 	return &RuntimeDispatcher{runtime: runtime, baseConfig: cfg, emitter: emitter}, nil
 }
 
+func (d *RuntimeDispatcher) AttachOrchestrator(orchestrator *Orchestrator) {
+	if d != nil {
+		d.orchestrator = orchestrator
+	}
+}
+
 func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
 	snap := d.runtime.Current()
 	dispatcher := WorkerTaskDispatcher{
 		BuildTask: func(issue tracker.Issue) (task.Task, error) {
 			return TaskFromIssue(issue, snap.Workflow.Config)
 		},
-		Config:  d.configForSnapshot(snap),
-		Emitter: d.emitter,
+		Config: d.configForSnapshot(snap),
+		Emitter: runtimeEventForwardingEmitter{
+			EventEmitter: d.emitter,
+			Orchestrator: d.orchestrator,
+			IssueID:      issue.ID,
+		},
 	}
 	return dispatcher.Spawn(ctx, issue, attempt)
 }

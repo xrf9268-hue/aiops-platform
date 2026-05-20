@@ -390,13 +390,8 @@ func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	if st.CodexRateLimits != nil {
 		t.Fatalf("initial CodexRateLimits should be nil")
 	}
-	// RateLimitSnapshot is currently a zero-sized struct (D1 fills it
-	// in). Go reserves the right to alias pointers to zero-sized
-	// allocations (runtime.zerobase), so pointer-identity comparisons
-	// between two `&RateLimitSnapshot{}` values are a no-op assertion.
-	// Until D1 adds fields, exercise the nil-vs-non-nil transition
-	// instead, which is what callers actually depend on.
-	snap := &RateLimitSnapshot{}
+	snapshot := RateLimitSnapshot{"primary": map[string]any{"remaining": 42}}
+	snap := &snapshot
 	st.RecordRateLimits(snap)
 	if st.CodexRateLimits == nil {
 		t.Errorf("RecordRateLimits did not store snapshot (still nil)")
@@ -404,6 +399,45 @@ func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	st.RecordRateLimits(nil)
 	if st.CodexRateLimits != nil {
 		t.Errorf("RecordRateLimits(nil) should clear the field")
+	}
+}
+
+func TestRecordRateLimits_DeepCopiesCallerPayload(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	source := RateLimitSnapshot{
+		"primary": map[string]any{"remaining": 42},
+		"windows": []any{map[string]any{"reset": "soon"}},
+	}
+
+	st.RecordRateLimits(&source)
+
+	source["primary"].(map[string]any)["remaining"] = 0
+	source["windows"].([]any)[0].(map[string]any)["reset"] = "later"
+	source["new"] = "caller-owned mutation"
+
+	view := st.Snapshot()
+	if got := (*view.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 42 {
+		t.Fatalf("RecordRateLimits aliased nested map: got remaining=%#v want 42", got)
+	}
+	if got := (*view.CodexRateLimits)["windows"].([]any)[0].(map[string]any)["reset"]; got != "soon" {
+		t.Fatalf("RecordRateLimits aliased nested slice map: got reset=%#v want soon", got)
+	}
+	if _, ok := (*view.CodexRateLimits)["new"]; ok {
+		t.Fatalf("RecordRateLimits exposed caller map mutation in snapshot: %#v", *view.CodexRateLimits)
+	}
+}
+
+func TestSnapshot_DeepCopiesRateLimitPayload(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	snapshot := RateLimitSnapshot{"primary": map[string]any{"remaining": 42}}
+	st.RecordRateLimits(&snapshot)
+
+	view := st.Snapshot()
+	(*view.CodexRateLimits)["primary"].(map[string]any)["remaining"] = 0
+
+	again := st.Snapshot()
+	if got := (*again.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 42 {
+		t.Fatalf("snapshot mutation changed live rate limits: got %#v want 42", got)
 	}
 }
 
