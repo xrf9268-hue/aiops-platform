@@ -438,10 +438,10 @@ func TestPollOnceUsesNarrowStateRefreshForRunningIssue(t *testing.T) {
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 }
 
-func TestMultiIssueStateListerFetchesIssueStatesByIDsAcrossTrackers(t *testing.T) {
+func TestMultiIssueStateListerFetchesIssueStatesByIDsOnce(t *testing.T) {
 	ctx := context.Background()
-	linearA := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled"}}
-	linearB := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-2": "Done"}}
+	linearA := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled", "issue-2": "Done"}}
+	linearB := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled", "issue-2": "Done"}}
 	refresher := IssueStateRefresher(multiIssueStateLister{trackers: []IssueStateLister{linearA, linearB}})
 
 	states, err := refresher.FetchIssueStatesByIDs(ctx, []string{"issue-1", "issue-2"})
@@ -454,14 +454,13 @@ func TestMultiIssueStateListerFetchesIssueStatesByIDsAcrossTrackers(t *testing.T
 	if got := states["issue-2"]; got != "Done" {
 		t.Fatalf("issue-2 state = %q, want Done", got)
 	}
-	for name, trackerClient := range map[string]*fakeIssueStateTracker{"linearA": linearA, "linearB": linearB} {
-		calls := trackerClient.fetchIssueStatesByIDsCalls()
-		if len(calls) != 1 {
-			t.Fatalf("%s FetchIssueStatesByIDs calls = %d, want 1", name, len(calls))
-		}
-		if got := calls[0]; len(got) != 2 || got[0] != "issue-1" || got[1] != "issue-2" {
-			t.Fatalf("%s FetchIssueStatesByIDs ids = %#v, want [issue-1 issue-2]", name, got)
-		}
+	if calls := linearA.fetchIssueStatesByIDsCalls(); len(calls) != 1 {
+		t.Fatalf("linearA FetchIssueStatesByIDs calls = %d, want 1", len(calls))
+	} else if got := calls[0]; len(got) != 2 || got[0] != "issue-1" || got[1] != "issue-2" {
+		t.Fatalf("linearA FetchIssueStatesByIDs ids = %#v, want [issue-1 issue-2]", got)
+	}
+	if calls := linearB.fetchIssueStatesByIDsCalls(); len(calls) != 0 {
+		t.Fatalf("linearB FetchIssueStatesByIDs calls = %d, want 0 (single tracker fan-in)", len(calls))
 	}
 }
 

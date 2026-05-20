@@ -191,23 +191,14 @@ func (l multiIssueStateLister) ListIssuesByStates(ctx context.Context, states []
 }
 
 func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
-	states := make(map[string]string)
-	var errOut error
 	for _, stateTracker := range l.trackers {
 		refresher, ok := stateTracker.(IssueStateRefresher)
 		if !ok {
 			continue
 		}
-		got, err := refresher.FetchIssueStatesByIDs(ctx, issueIDs)
-		if err != nil {
-			errOut = errors.Join(errOut, err)
-			continue
-		}
-		for id, state := range got {
-			states[id] = state
-		}
+		return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
 	}
-	return states, errOut
+	return map[string]string{}, nil
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {
