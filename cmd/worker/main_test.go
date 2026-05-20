@@ -980,6 +980,10 @@ func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *test
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
+	resolvedPath, err := filepath.EvalSymlinks(filepath.Join(dir, "WORKFLOW.md"))
+	if err != nil {
+		resolvedPath = filepath.Join(dir, "WORKFLOW.md")
+	}
 	oldwd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -1002,14 +1006,14 @@ func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *test
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
-	if !samePath(wf.Path, workflowPath) {
-		t.Fatalf("workflow path = %q, want %q", wf.Path, workflowPath)
+	if wf.Path != resolvedPath {
+		t.Fatalf("workflow path = %q, want %q", wf.Path, resolvedPath)
 	}
 	if wf.Config.Tracker.Kind != "linear" {
 		t.Fatalf("tracker kind = %q, want linear", wf.Config.Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + wf.Path, "tracker.kind=linear"} {
+	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + resolvedPath, "tracker.kind=linear"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
