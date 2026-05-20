@@ -98,6 +98,9 @@ The Linear and Gitea pollers read `examples/WORKFLOW.md` for the repo, tracker, 
 ### Linear
 
 The Linear poller enqueues issues in configured active Linear workflow states.
+Linear workflows must set `tracker.project_slug` in `examples/WORKFLOW.md`;
+the value maps to Linear's `project.slugId` and scopes candidate issue polling
+to that project.
 
 Option A: from source.
 
@@ -113,7 +116,7 @@ Option B: in Docker.
 docker compose --env-file .env -f deploy/docker-compose.yml --profile linear up -d linear-poller
 ```
 
-The poller exits immediately with `tracker.kind must be linear` if `examples/WORKFLOW.md` is not configured for Linear, and logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
+The poller exits immediately with `tracker.kind must be linear` if `examples/WORKFLOW.md` is not configured for Linear. The workflow loader rejects Linear configs that omit `tracker.project_slug` before polling starts, and the poller logs `skip <issue>: repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
 
 ### Gitea
 
@@ -188,7 +191,7 @@ A transitional poller logs `relation "tasks" does not exist`.
 
 ### Linear poller exits with `tracker.kind must be linear`
 
-`examples/WORKFLOW.md` is not configured for Linear. Set `tracker.kind: linear` and provide an `api_key` (the value can reference `$LINEAR_API_KEY`).
+`examples/WORKFLOW.md` is not configured for Linear. Set `tracker.kind: linear`, provide an `api_key` (the value can reference `$LINEAR_API_KEY`), and set `tracker.project_slug` to the Linear project slug ID you want to poll.
 
 ### Worker fails to push or open PRs
 

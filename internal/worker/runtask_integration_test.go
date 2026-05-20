@@ -91,6 +91,7 @@ repo:
   clone_url: $REPO_URL
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: mock
 ---

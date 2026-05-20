@@ -13,6 +13,9 @@ repo:
 tracker:
   kind: linear
   api_key: $LINEAR_API_KEY
+  # Required for Linear: maps to Linear project.slugId and scopes candidate
+  # issue polling to one project.
+  project_slug: your-linear-project-slug
   active_states:
     - AI Ready
     - In Progress

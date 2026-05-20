@@ -363,6 +363,7 @@ func TestRuntimePollerFetchesLinearIssuesFromEachServiceProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	initial.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
@@ -405,6 +406,7 @@ func TestRuntimePollerDispatchesHealthyServiceProjectWhenAnotherProjectPollFails
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	initial.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
@@ -448,6 +450,7 @@ func TestRuntimePollerKeepsRunningFailedProjectIssueWhenDispatchingHealthyPartia
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	initial.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
@@ -502,6 +505,7 @@ func TestRuntimePollerCancelsHealthyProjectIssueDuringPartialPoll(t *testing.T) 
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	initial.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
@@ -624,6 +628,7 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load linear workflow: %v", err)
 	}
+	linearWorkflow.Config.Tracker.ProjectSlug = ""
 	linearWorkflow.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 	}
@@ -859,6 +864,10 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	projectSlug := ""
+	if trackerKind == "linear" {
+		projectSlug = "  project_slug: platform\n"
+	}
 	content := "---\n" +
 		"repo:\n" +
 		"  owner: xrf9268-hue\n" +
@@ -866,6 +875,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  clone_url: https://github.com/xrf9268-hue/aiops-platform.git\n" +
 		"tracker:\n" +
 		"  kind: " + trackerKind + "\n" +
+		projectSlug +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +
 		"polling:\n" +

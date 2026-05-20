@@ -166,6 +166,9 @@ func validateConfig(path string, cfg Config) error {
 		}
 	}
 	if cfg.Tracker.Kind == "linear" {
+		if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && len(cfg.Services) == 0 {
+			return fmt.Errorf("%s: tracker.project_slug is required when tracker.kind=linear", path)
+		}
 		for i, service := range cfg.Services {
 			if !hasExplicitServiceRoute(service.Tracker) {
 				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, labels, or custom_fields)", path, i)

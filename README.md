@@ -58,6 +58,16 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `policy.max_changed_loc` | `300` |
 | `verify.commands` | none |
 
+Linear workflows must set `tracker.project_slug` in `WORKFLOW.md`; it maps to
+Linear's `project.slugId` and is required for candidate issue polling. Example:
+
+```yaml
+tracker:
+  kind: linear
+  api_key: $LINEAR_API_KEY
+  project_slug: your-linear-project-slug
+```
+
 The worker binds a private-loopback HTTP server at `127.0.0.1:<server.port>` and publishes the SPEC §13.7 state snapshot at `GET /api/v1/state`. Set `server.port: -1` to disable the endpoint in environments that provide their own state bridge. The endpoint accepts only `localhost` and `127.0.0.1` Host headers and assumes local host users and processes are trusted; on shared hosts, disable it or isolate the worker behind host-level access controls. If the configured listener cannot start, the worker logs the failure, continues without the HTTP state endpoint, and retries on later workflow reload checks until the bind succeeds or `server.port` changes.
 
 A `WORKFLOW.md` with no YAML front matter (just a prompt body) is supported: the body becomes the prompt template, all other settings fall through to the defaults above. The `workflow_resolved` event records this as `source: prompt_only` so an operator can tell apart "ran with full Symphony config" from "ran with body-only template".

@@ -1715,6 +1715,7 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
+  project_slug: platform
   statuses:
     in_progress: "Doing"
 ---
@@ -1752,6 +1753,7 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
+  project_slug: platform
   statuses:
     in_progress: "Coding"
     human_review: "Review"
@@ -1818,6 +1820,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1844,6 +1847,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1868,6 +1872,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1891,6 +1896,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: claude
 claude:
@@ -1915,6 +1921,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 safety:
   allowed_networks:
     - git remote for this repository
@@ -1952,6 +1959,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2014,6 +2022,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex-app-server
 codex:

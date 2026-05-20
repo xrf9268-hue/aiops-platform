@@ -485,7 +485,7 @@ func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
 func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "linear-workflow.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  active_states: [\"AI Ready\"]\n  terminal_states: [\"Done\"]\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  active_states: [\"AI Ready\"]\n  terminal_states: [\"Done\"]\n---\nprompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
@@ -520,7 +520,7 @@ func TestLoadWorkflowForStartupReconcileUsesConfiguredWorkflowPath(t *testing.T)
 func TestResolveStartupWorkflowUsesPositionalPath(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "service-WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nservice prompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nservice prompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
@@ -976,7 +976,7 @@ func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t
 func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *testing.T) {
 	dir := t.TempDir()
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
