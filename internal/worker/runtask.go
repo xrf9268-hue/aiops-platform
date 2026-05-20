@@ -162,6 +162,15 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir stri
 	return err
 }
 
+func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, reason string) {
+	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs); err != nil {
+		log.Printf("task %s: before_remove hook failed after %s hook failure: %v", taskID, reason, err)
+	}
+	if err := os.RemoveAll(workdir); err != nil {
+		log.Printf("task %s: remove workspace %s after %s hook failure: %v", taskID, workdir, reason, err)
+	}
+}
+
 // RunTask executes a single in-memory task. The orchestrator-backed worker path
 // uses this directly after claiming a tracker issue in runtime state; the
 // legacy queue loop also calls it for remaining tests/compatibility.
@@ -201,7 +210,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		}
 	}
 	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
-		_ = os.RemoveAll(workdir)
+		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workdir, hooks.BeforeRemove, hooks.TimeoutMs, "after_create")
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -248,9 +257,6 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 
 	r, err := runner.New(t.Model)
 	if err != nil {
-		if hookErr := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); hookErr != nil {
-			log.Printf("task %s: after_run hook failed after runner setup error: %v", t.ID, hookErr)
-		}
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
