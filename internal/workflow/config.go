@@ -90,6 +90,11 @@ type WorkspaceConfig struct {
 	Root       string         `yaml:"root" json:"root"`
 	Hooks      WorkspaceHooks `yaml:"hooks" json:"hooks"`
 	hookFields HookFieldPresence
+	rootSet    bool
+}
+
+func (w WorkspaceConfig) RootSet() bool {
+	return w.rootSet
 }
 
 type WorkspaceHooks struct {

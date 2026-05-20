@@ -196,7 +196,8 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	wcfg := wf.Config
 	hooks := wcfg.WorkspaceHooks()
 
-	mgr := workspace.New(cfg.WorkspaceRoot)
+	workspaceRoot := EffectiveWorkspaceRoot(cfg, wcfg)
+	mgr := workspace.New(workspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
 	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
@@ -280,7 +281,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: cfg.WorkspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
+	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
 		emitTaskPhase(from, to)
 	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
 		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {

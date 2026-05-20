@@ -254,8 +254,14 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	second.ID = "tsk-second"
 	second.WorkBranch = "ai/tsk-second"
 
-	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear-issue", "issue-abc-123-needs-fix"); got != want {
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", "issue-abc-123-needs-fix"); got != want {
 		t.Fatalf("PathFor() = %q, want %q", got, want)
+	}
+
+	unsafeSource := first
+	unsafeSource.SourceType = "../Linear Issue//Needs_Safety"
+	if got, want := mgr.PathFor(unsafeSource), filepath.Join("/workspaces", "acme", "demo", "linear-issue-needs_safety", "issue-abc-123-needs-fix"); got != want {
+		t.Fatalf("PathFor() unsafe source type = %q, want %q", got, want)
 	}
 	collidingOwner := first
 	collidingOwner.RepoOwner = "acme-demo"

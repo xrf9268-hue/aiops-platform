@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -204,6 +205,71 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	if reconcile.HookTimeoutMillis != 1234 {
 		t.Fatalf("HookTimeoutMillis = %d, want top-level effective timeout", reconcile.HookTimeoutMillis)
 	}
+}
+
+func TestStartupReconcileConfigHonorsWorkflowWorkspaceRoot(t *testing.T) {
+	yamlRoot := filepath.Join(t.TempDir(), "yaml-workspaces")
+	workflowPath := writeWorkflowForStartupReconcileTest(t, fmt.Sprintf("workspace:\n  root: %s\n", yamlRoot))
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load workflow: %v", err)
+	}
+	t.Setenv("WORKSPACE_ROOT", filepath.Join(t.TempDir(), "env-workspaces"))
+
+	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
+	if reconcile.WorkspaceRoot != yamlRoot {
+		t.Fatalf("WorkspaceRoot = %q, want workflow workspace.root %q", reconcile.WorkspaceRoot, yamlRoot)
+	}
+}
+
+func TestStartupReconcileConfigFallsBackToEnvWorkspaceRoot(t *testing.T) {
+	workflowPath := writeWorkflowForStartupReconcileTest(t, "")
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load workflow: %v", err)
+	}
+	envRoot := filepath.Join(t.TempDir(), "env-workspaces")
+	t.Setenv("WORKSPACE_ROOT", envRoot)
+
+	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
+	if reconcile.WorkspaceRoot != envRoot {
+		t.Fatalf("WorkspaceRoot = %q, want env workspace root %q", reconcile.WorkspaceRoot, envRoot)
+	}
+}
+
+func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	yamlRoot := filepath.Join(home, "aiops-workspaces")
+	workflowPath := writeWorkflowForStartupReconcileTest(t, fmt.Sprintf("workspace:\n  root: %s\n", yamlRoot))
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load workflow: %v", err)
+	}
+	envRoot := filepath.Join(t.TempDir(), "env-workspaces")
+	t.Setenv("WORKSPACE_ROOT", envRoot)
+
+	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
+	if reconcile.WorkspaceRoot != yamlRoot {
+		t.Fatalf("WorkspaceRoot = %q, want explicit workflow default root %q", reconcile.WorkspaceRoot, yamlRoot)
+	}
+}
+
+func writeWorkflowForStartupReconcileTest(t *testing.T, extraFrontMatter string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
+	body := "---\n" + extraFrontMatter + `repo:
+  owner: acme
+  name: demo
+  clone_url: https://example.invalid/acme/demo.git
+  default_branch: main
+` + "---\nPrompt body\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	return path
 }
 
 func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testing.T) {

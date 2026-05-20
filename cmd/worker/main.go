@@ -124,7 +124,7 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
 	hooks := cfg.WorkspaceHooks()
 	return worker.ReconcileConfig{
-		WorkspaceRoot:       worker.LoadConfigFromEnv().WorkspaceRoot,
+		WorkspaceRoot:       worker.EffectiveWorkspaceRoot(worker.LoadConfigFromEnv(), cfg),
 		ActiveStates:        cfg.Tracker.ActiveStates,
 		TerminalStates:      cfg.Tracker.TerminalStates,
 		TrackerKind:         cfg.Tracker.Kind,
@@ -154,7 +154,7 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	reconcileCfg := startupReconcileConfigForWorkflow(wf.Config, trackerClient)
-	reconcileCfg.WorkspaceRoot = cfg.WorkspaceRoot
+	reconcileCfg.WorkspaceRoot = worker.EffectiveWorkspaceRoot(cfg, wf.Config)
 	if err := worker.ReconcileStartup(ctx, reconcileCfg); err != nil {
 		worker.LogReconcileError(err)
 		return err
