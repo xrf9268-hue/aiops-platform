@@ -37,6 +37,10 @@ type sequenceScheduler struct {
 func (s *sequenceScheduler) NextDelay(RetryRequest) time.Duration {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.nextDelayLocked()
+}
+
+func (s *sequenceScheduler) nextDelayLocked() time.Duration {
 	if len(s.delays) == 0 {
 		return time.Hour
 	}
@@ -920,6 +924,18 @@ func TestContinuationRetryRecheckedDispatchIgnoresOwnPerStateClaim(t *testing.T)
 	waitFor(t, func() bool {
 		v, err := o.Snapshot(context.Background())
 		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		if err != nil {
+			return false
+		}
+		for _, entry := range v.Retrying {
+			if entry.IssueID == IssueID(iss.ID) && !entry.DueAt.After(time.Now()) {
+				return true
+			}
+		}
+		return false
 	}, time.Second)
 
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
