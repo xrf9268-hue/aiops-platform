@@ -402,6 +402,31 @@ func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	}
 }
 
+func TestRecordRateLimits_DeepCopiesCallerPayload(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	source := RateLimitSnapshot{
+		"primary": map[string]any{"remaining": 42},
+		"windows": []any{map[string]any{"reset": "soon"}},
+	}
+
+	st.RecordRateLimits(&source)
+
+	source["primary"].(map[string]any)["remaining"] = 0
+	source["windows"].([]any)[0].(map[string]any)["reset"] = "later"
+	source["new"] = "caller-owned mutation"
+
+	view := st.Snapshot()
+	if got := (*view.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 42 {
+		t.Fatalf("RecordRateLimits aliased nested map: got remaining=%#v want 42", got)
+	}
+	if got := (*view.CodexRateLimits)["windows"].([]any)[0].(map[string]any)["reset"]; got != "soon" {
+		t.Fatalf("RecordRateLimits aliased nested slice map: got reset=%#v want soon", got)
+	}
+	if _, ok := (*view.CodexRateLimits)["new"]; ok {
+		t.Fatalf("RecordRateLimits exposed caller map mutation in snapshot: %#v", *view.CodexRateLimits)
+	}
+}
+
 func TestSnapshot_DeepCopiesRateLimitPayload(t *testing.T) {
 	st := NewOrchestratorState(15000, 4)
 	snapshot := RateLimitSnapshot{"primary": map[string]any{"remaining": 42}}

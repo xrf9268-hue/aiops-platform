@@ -430,7 +430,7 @@ func (s *OrchestratorState) RecordCodexTokens(input, output int64) {
 // §13.3 treats it as last-write-wins because the runner emits the full
 // view, not a delta.
 func (s *OrchestratorState) RecordRateLimits(snap *RateLimitSnapshot) {
-	s.CodexRateLimits = snap
+	s.CodexRateLimits = copyRateLimitSnapshot(snap)
 }
 
 // StateView is the SPEC §13.3 / §13.7 shape the orchestrator publishes
