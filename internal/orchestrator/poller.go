@@ -28,6 +28,13 @@ type IssueStateLister interface {
 	ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error)
 }
 
+// IssueStateRefresher is the optional SPEC §11.2 narrow state-refresh reader.
+// When present, reconciliation refreshes in-flight issue states by explicit ID
+// instead of relying on a wide active-state listing.
+type IssueStateRefresher interface {
+	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
+}
+
 // ReconciliationConfig names the workflow states the poller uses to decide
 // whether in-process work is still eligible to run. A running issue absent from
 // active states is canceled once it is observed in either terminal states or in
@@ -97,12 +104,18 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 			pollErr = errors.Join(pollErr, routeErr)
 		}
 	}
+	var reconciledInactive map[string]tracker.Issue
 	if p.reconcileKnown && activeErr == nil {
-		if err := p.reconcileTick(ctx, routedIssues); err != nil {
+		var err error
+		reconciledInactive, err = p.reconcileTick(ctx, routedIssues)
+		if err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
 	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, routedIssues), p.reconcile.TerminalStates)
+	if len(reconciledInactive) > 0 {
+		candidates = filterIssuesNotInMap(candidates, reconciledInactive)
+	}
 	sortCandidates(candidates)
 	p.overflow = nil
 	var dispatchErr error
@@ -133,29 +146,53 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 	return l.tracker.ListIssuesByStates(ctx, l.states)
 }
 
-func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) error {
+func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
 	if p.stateTracker == nil {
-		return errors.New("orchestrator poller reconciliation requires state tracker")
+		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
+	var fetchErr error
+	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID)
+	if err != nil {
+		fetchErr = errors.Join(fetchErr, err)
+	}
+	for id, issue := range refreshedIssuesByID {
+		if isActiveTrackerState(issue.State, activeStateKeys) {
+			if existing, ok := activeIssuesByID[id]; ok {
+				existing.State = issue.State
+				activeIssuesByID[id] = existing
+			}
+		} else {
+			delete(activeIssuesByID, id)
+		}
+	}
 	if p.routing != nil {
 		// Routing-aware listings are complete for their scope, so absence from
 		// the active set is real evidence of inactivity and may cancel runs.
 		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, p.reconcile.WorkerExitTimeout); err != nil {
-			return err
+			return nil, err
 		}
 	} else {
 		// Without routing the active listing may be partial; still refresh
 		// stored issue metadata for runs we DO see so per-state capacity gates
 		// observe the latest tracker state without treating absence as inactive.
 		if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	activeByID := issueIDSet(activeIssues)
+	activeByID := issueMapIDSet(activeIssuesByID)
 	inactiveByID := make(map[string]tracker.Issue)
-	var fetchErr error
+	for id, issue := range refreshedIssuesByID {
+		if isActiveTrackerState(issue.State, activeStateKeys) {
+			continue
+		}
+		if !p.isConfiguredInactiveState(issue.State) {
+			continue
+		}
+		delete(activeByID, id)
+		inactiveByID[id] = issue
+	}
 	for _, states := range p.reconcileInactiveStateGroups() {
 		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
 		if err != nil {
@@ -173,7 +210,33 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		}
 	}
 	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, p.reconcile.WorkerExitTimeout)
-	return errors.Join(reconcileErr, fetchErr)
+	return inactiveByID, errors.Join(reconcileErr, fetchErr)
+}
+
+func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue) (map[string]tracker.Issue, error) {
+	refresher, ok := p.stateTracker.(IssueStateRefresher)
+	if !ok {
+		return nil, nil
+	}
+	issueIDs := p.orchestrator.RunningAndRetryingIssueIDs(ctx)
+	if len(issueIDs) == 0 {
+		return nil, nil
+	}
+	statesByID, err := refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+	refreshed := make(map[string]tracker.Issue, len(statesByID))
+	for id, state := range statesByID {
+		if strings.TrimSpace(id) == "" || strings.TrimSpace(state) == "" {
+			continue
+		}
+		issue, ok := activeIssuesByID[id]
+		if !ok {
+			issue = tracker.Issue{ID: id}
+		}
+		issue.ID = id
+		issue.State = state
+		refreshed[id] = issue
+	}
+	return refreshed, err
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {
@@ -185,6 +248,12 @@ func (p *Poller) reconcileInactiveStateGroups() [][]string {
 		groups = append(groups, states)
 	}
 	return groups
+}
+
+func (p *Poller) isConfiguredInactiveState(state string) bool {
+	configured := normalizedStates(append(append([]string(nil), p.reconcile.TerminalStates...), p.reconcile.InactiveStates...))
+	_, ok := configured[strings.ToLower(strings.TrimSpace(state))]
+	return ok
 }
 
 func nonEmptyStateList(states []string) []string {
@@ -207,12 +276,36 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 	return out
 }
 
+func issueMapIDSet(issues map[string]tracker.Issue) map[string]struct{} {
+	out := make(map[string]struct{}, len(issues))
+	for id := range issues {
+		if id != "" {
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
 func issueMap(issues []tracker.Issue) map[string]tracker.Issue {
 	out := make(map[string]tracker.Issue, len(issues))
 	for _, issue := range issues {
 		if issue.ID != "" {
 			out[issue.ID] = issue
 		}
+	}
+	return out
+}
+
+func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Issue) []tracker.Issue {
+	if len(excluded) == 0 {
+		return issues
+	}
+	out := make([]tracker.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if _, ok := excluded[issue.ID]; ok {
+			continue
+		}
+		out = append(out, issue)
 	}
 	return out
 }

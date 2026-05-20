@@ -27,6 +27,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -477,6 +478,19 @@ func (o *Orchestrator) RequestDispatchAfterTrackerRecheck(ctx context.Context, i
 	}
 }
 
+func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string {
+	reply := make(chan []string, 1)
+	if err := o.submit(ctx, &runningAndRetryingIssueIDsOp{result: reply}); err != nil {
+		return nil
+	}
+	select {
+	case ids := <-reply:
+		return ids
+	case <-ctx.Done():
+		return nil
+	}
+}
+
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
@@ -557,6 +571,39 @@ func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	return func() {
 		if done != nil {
 			close(done)
+		}
+	}
+}
+
+type runningAndRetryingIssueIDsOp struct {
+	result chan<- []string
+}
+
+func (r *runningAndRetryingIssueIDsOp) apply(st *OrchestratorState) func() {
+	seen := map[string]struct{}{}
+	issueIDs := make([]string, 0, len(st.Running)+len(st.RetryAttempts))
+	add := func(id IssueID) {
+		s := strings.TrimSpace(string(id))
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		issueIDs = append(issueIDs, s)
+	}
+	for id := range st.Running {
+		add(id)
+	}
+	for id := range st.RetryAttempts {
+		add(id)
+	}
+	sort.Strings(issueIDs)
+	result := r.result
+	return func() {
+		if result != nil {
+			result <- issueIDs
 		}
 	}
 }

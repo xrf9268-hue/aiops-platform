@@ -190,6 +190,17 @@ func (l multiIssueStateLister) ListIssuesByStates(ctx context.Context, states []
 	return issues, errOut
 }
 
+func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	for _, stateTracker := range l.trackers {
+		refresher, ok := stateTracker.(IssueStateRefresher)
+		if !ok {
+			continue
+		}
+		return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+	}
+	return map[string]string{}, nil
+}
+
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {
 	if snap.Fingerprint != "" {
 		return snap.Fingerprint
