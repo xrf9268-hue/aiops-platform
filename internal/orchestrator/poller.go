@@ -153,20 +153,18 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
 	var fetchErr error
-	var refreshedIssuesByID map[string]tracker.Issue
-	if refreshed, err := p.refreshRunningIssueStates(ctx, activeIssuesByID); err != nil {
+	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID)
+	if err != nil {
 		fetchErr = errors.Join(fetchErr, err)
-	} else {
-		refreshedIssuesByID = refreshed
-		for id, issue := range refreshed {
-			if isActiveTrackerState(issue.State, activeStateKeys) {
-				if existing, ok := activeIssuesByID[id]; ok {
-					existing.State = issue.State
-					activeIssuesByID[id] = existing
-				}
-			} else {
-				delete(activeIssuesByID, id)
+	}
+	for id, issue := range refreshedIssuesByID {
+		if isActiveTrackerState(issue.State, activeStateKeys) {
+			if existing, ok := activeIssuesByID[id]; ok {
+				existing.State = issue.State
+				activeIssuesByID[id] = existing
 			}
+		} else {
+			delete(activeIssuesByID, id)
 		}
 	}
 	if p.routing != nil {
@@ -225,9 +223,6 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		return nil, nil
 	}
 	statesByID, err := refresher.FetchIssueStatesByIDs(ctx, issueIDs)
-	if err != nil {
-		return nil, err
-	}
 	refreshed := make(map[string]tracker.Issue, len(statesByID))
 	for id, state := range statesByID {
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(state) == "" {
@@ -241,7 +236,7 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		issue.State = state
 		refreshed[id] = issue
 	}
-	return refreshed, nil
+	return refreshed, err
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {

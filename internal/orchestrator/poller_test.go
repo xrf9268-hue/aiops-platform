@@ -191,6 +191,7 @@ type fakeIssueStateTracker struct {
 	mu            sync.Mutex
 	issues        []tracker.Issue
 	err           error
+	fetchIDErr    error
 	fetchIDCalls  [][]string
 	fetchIDStates map[string]string
 }
@@ -240,7 +241,7 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(_ context.Context, issueID
 				out[id] = state
 			}
 		}
-		return out, nil
+		return out, f.fetchIDErr
 	}
 	for _, issue := range f.issues {
 		if _, ok := wanted[issue.ID]; ok {
@@ -264,6 +265,12 @@ func (f *fakeIssueStateTracker) setFetchIDStates(states map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetchIDStates = states
+}
+
+func (f *fakeIssueStateTracker) setFetchIDErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetchIDErr = err
 }
 
 func (f *fakeIssueStateTracker) resetFetchIssueStatesByIDsCalls() {
@@ -774,6 +781,59 @@ func TestPollOnceRefreshesRunningIssueStateWithoutRouting(t *testing.T) {
 	other := tracker.Issue{ID: "issue-2", Identifier: "LIN-2", State: "Rework"}
 	if err := orch.RequestDispatch(ctx, other, nil); !errors.Is(err, ErrCapacityFull) {
 		t.Fatalf("dispatch second Rework after refresh err = %v, want ErrCapacityFull", err)
+	}
+}
+
+func TestPollOnceAppliesPartialRunningIDRefreshWhenRefreshReturnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	st := NewOrchestratorState(30000, 10)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	orch := New(st, Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled"},
+		InactiveStates:    []string{"Backlog"},
+		WorkerExitTimeout: time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Rework"})
+	trackerClient.setFetchIDErr(errors.New("secondary tracker state refresh failed"))
+
+	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "secondary tracker state refresh failed") {
+		t.Fatalf("refresh poll error = %v, want partial refresh error", err)
+	}
+	calls := trackerClient.fetchIssueStatesByIDsCalls()
+	if len(calls) != 1 {
+		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", len(calls))
+	}
+	if got := calls[0]; len(got) != 1 || got[0] != "issue-1" {
+		t.Fatalf("FetchIssueStatesByIDs ids = %#v, want [issue-1]", got)
+	}
+
+	select {
+	case <-dispatcher.contextAt(0).Done():
+		t.Fatalf("running issue was canceled by partial refresh error")
+	default:
+	}
+	other := tracker.Issue{ID: "issue-2", Identifier: "LIN-2", State: "Rework"}
+	if err := orch.RequestDispatch(ctx, other, nil); !errors.Is(err, ErrCapacityFull) {
+		t.Fatalf("dispatch second Rework after partial refresh err = %v, want ErrCapacityFull", err)
 	}
 }
 
