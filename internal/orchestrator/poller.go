@@ -28,6 +28,13 @@ type IssueStateLister interface {
 	ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error)
 }
 
+// IssueStateRefresher is the optional SPEC §11.2 narrow state-refresh reader.
+// When present, reconciliation refreshes in-flight issue states by explicit ID
+// instead of relying on a wide active-state listing.
+type IssueStateRefresher interface {
+	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
+}
+
 // ReconciliationConfig names the workflow states the poller uses to decide
 // whether in-process work is still eligible to run. A running issue absent from
 // active states is canceled once it is observed in either terminal states or in
@@ -139,6 +146,16 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	}
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
+	var fetchErr error
+	var refreshedIssuesByID map[string]tracker.Issue
+	if refreshed, err := p.refreshRunningIssueStates(ctx, activeIssuesByID); err != nil {
+		fetchErr = errors.Join(fetchErr, err)
+	} else {
+		refreshedIssuesByID = refreshed
+		for id, issue := range refreshed {
+			activeIssuesByID[id] = issue
+		}
+	}
 	if p.routing != nil {
 		// Routing-aware listings are complete for their scope, so absence from
 		// the active set is real evidence of inactivity and may cancel runs.
@@ -155,7 +172,14 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	}
 	activeByID := issueIDSet(activeIssues)
 	inactiveByID := make(map[string]tracker.Issue)
-	var fetchErr error
+	for id, issue := range refreshedIssuesByID {
+		if _, active := activeByID[id]; active {
+			continue
+		}
+		if !isActiveTrackerState(issue.State, activeStateKeys) {
+			inactiveByID[id] = issue
+		}
+	}
 	for _, states := range p.reconcileInactiveStateGroups() {
 		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
 		if err != nil {
@@ -174,6 +198,60 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	}
 	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, p.reconcile.WorkerExitTimeout)
 	return errors.Join(reconcileErr, fetchErr)
+}
+
+func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue) (map[string]tracker.Issue, error) {
+	refresher, ok := p.stateTracker.(IssueStateRefresher)
+	if !ok {
+		return nil, nil
+	}
+	view, err := p.orchestrator.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	issueIDs := runningAndRetryingIssueIDs(view)
+	if len(issueIDs) == 0 {
+		return nil, nil
+	}
+	statesByID, err := refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+	if err != nil {
+		return nil, err
+	}
+	refreshed := make(map[string]tracker.Issue, len(statesByID))
+	for id, state := range statesByID {
+		if strings.TrimSpace(id) == "" || strings.TrimSpace(state) == "" {
+			continue
+		}
+		issue := activeIssuesByID[id]
+		issue.ID = id
+		issue.State = state
+		refreshed[id] = issue
+	}
+	return refreshed, nil
+}
+
+func runningAndRetryingIssueIDs(view StateView) []string {
+	seen := map[string]struct{}{}
+	issueIDs := make([]string, 0, len(view.Running)+len(view.Retrying))
+	add := func(id IssueID) {
+		s := strings.TrimSpace(string(id))
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		issueIDs = append(issueIDs, s)
+	}
+	for _, run := range view.Running {
+		add(run.IssueID)
+	}
+	for _, retry := range view.Retrying {
+		add(retry.IssueID)
+	}
+	sort.Strings(issueIDs)
+	return issueIDs
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {
