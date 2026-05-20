@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -27,6 +28,17 @@ type fakeReconcileTracker struct {
 	issues []tracker.Issue
 }
 
+func samePath(a, b string) bool {
+	eval := func(path string) string {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return path
+		}
+		return resolved
+	}
+	return eval(a) == eval(b)
+}
+
 func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
 	want := map[string]struct{}{}
 	for _, state := range states {
@@ -42,10 +54,15 @@ func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []str
 }
 
 func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
+	generatedAt := time.Date(2026, 5, 20, 9, 30, 0, 0, time.UTC)
 	view := orchestrator.StateView{
+		GeneratedAt:         generatedAt,
 		PollIntervalMs:      30000,
 		MaxConcurrentAgents: 2,
 		Running: []orchestrator.RunningView{{
+			IssueID:    "issue-2",
+			Identifier: "MT-650",
+		}, {
 			IssueID:    "issue-1",
 			Identifier: "MT-649",
 		}},
@@ -54,7 +71,20 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Identifier: "MT-650",
 			Attempt:    2,
 			Error:      "no available orchestrator slots",
+		}, {
+			IssueID:    "issue-1",
+			Identifier: "MT-649",
+			Attempt:    1,
+			Error:      "retry soon",
 		}},
+		Completed: []orchestrator.IssueID{"issue-9", "issue-3"},
+		Failed:    []orchestrator.IssueID{"issue-8", "issue-4"},
+		CodexTotals: orchestrator.CodexTotals{
+			InputTokens:    10,
+			OutputTokens:   20,
+			TotalTokens:    30,
+			SecondsRunning: 1.5,
+		},
 	}
 	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
 		return view, nil
@@ -88,6 +118,18 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Attempt         int    `json:"attempt"`
 			Error           string `json:"error"`
 		} `json:"retrying"`
+		Completed   []string `json:"completed"`
+		Failed      []string `json:"failed"`
+		CodexTotals struct {
+			InputTokens    int64   `json:"input_tokens"`
+			OutputTokens   int64   `json:"output_tokens"`
+			TotalTokens    int64   `json:"total_tokens"`
+			SecondsRunning float64 `json:"seconds_running"`
+		} `json:"codex_totals"`
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw response: %v; body=%s", err, w.Body.String())
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v; body=%s", err, w.Body.String())
@@ -95,17 +137,67 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if payload.GeneratedAt == "" {
 		t.Fatal("generated_at is empty")
 	}
+	if payload.GeneratedAt != generatedAt.Format(time.RFC3339) {
+		t.Fatalf("generated_at = %q, want snapshot timestamp %q", payload.GeneratedAt, generatedAt.Format(time.RFC3339))
+	}
 	if payload.PollIntervalMs != 30000 || payload.MaxConcurrentAgents != 2 {
 		t.Fatalf("state metadata = poll_interval_ms=%d max_concurrent_agents=%d, want 30000/2", payload.PollIntervalMs, payload.MaxConcurrentAgents)
 	}
-	if payload.Counts.Running != 1 || payload.Counts.Retrying != 1 {
-		t.Fatalf("counts = %+v, want running=1 retrying=1", payload.Counts)
+	if payload.Counts.Running != 2 || payload.Counts.Retrying != 2 {
+		t.Fatalf("counts = %+v, want running=2 retrying=2", payload.Counts)
 	}
-	if len(payload.Running) != 1 || payload.Running[0].IssueID != "issue-1" || payload.Running[0].IssueIdentifier != "MT-649" {
-		t.Fatalf("running = %+v, want issue-1/MT-649", payload.Running)
+	if len(payload.Running) != 2 || payload.Running[0].IssueID != "issue-1" || payload.Running[1].IssueID != "issue-2" {
+		t.Fatalf("running = %+v, want sorted issue-1 then issue-2", payload.Running)
 	}
-	if len(payload.Retrying) != 1 || payload.Retrying[0].IssueID != "issue-2" || payload.Retrying[0].IssueIdentifier != "MT-650" || payload.Retrying[0].Attempt != 2 {
-		t.Fatalf("retrying = %+v, want issue-2/MT-650 attempt=2", payload.Retrying)
+	if len(payload.Retrying) != 2 || payload.Retrying[0].IssueID != "issue-1" || payload.Retrying[1].IssueID != "issue-2" {
+		t.Fatalf("retrying = %+v, want sorted issue-1 then issue-2", payload.Retrying)
+	}
+	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
+		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
+	}
+	if !reflect.DeepEqual(payload.Failed, []string{"issue-4", "issue-8"}) {
+		t.Fatalf("failed = %+v, want sorted issue-4 issue-8", payload.Failed)
+	}
+	if payload.CodexTotals.InputTokens != 10 || payload.CodexTotals.OutputTokens != 20 || payload.CodexTotals.TotalTokens != 30 || payload.CodexTotals.SecondsRunning != 1.5 {
+		t.Fatalf("codex_totals = %+v, want snake_case token totals", payload.CodexTotals)
+	}
+	rawTotals, ok := raw["codex_totals"].(map[string]any)
+	if !ok {
+		t.Fatalf("raw codex_totals = %#v, want object", raw["codex_totals"])
+	}
+	for _, badKey := range []string{"InputTokens", "OutputTokens", "TotalTokens", "SecondsRunning"} {
+		if _, ok := rawTotals[badKey]; ok {
+			t.Fatalf("codex_totals contains Go field name %q: %#v", badKey, rawTotals)
+		}
+	}
+	rawRunning, ok := raw["running"].([]any)
+	if !ok {
+		t.Fatalf("raw running = %#v, want array", raw["running"])
+	}
+	for _, row := range rawRunning {
+		rowObject, ok := row.(map[string]any)
+		if !ok {
+			t.Fatalf("raw running row = %#v, want object", row)
+		}
+		if _, ok := rowObject["started_at"]; ok {
+			t.Fatalf("zero started_at should be omitted from running row: %#v", rowObject)
+		}
+		if _, ok := rowObject["last_codex_at"]; ok {
+			t.Fatalf("zero last_codex_at should be omitted from running row: %#v", rowObject)
+		}
+	}
+	rawRetrying, ok := raw["retrying"].([]any)
+	if !ok {
+		t.Fatalf("raw retrying = %#v, want array", raw["retrying"])
+	}
+	for _, row := range rawRetrying {
+		rowObject, ok := row.(map[string]any)
+		if !ok {
+			t.Fatalf("raw retrying row = %#v, want object", row)
+		}
+		if _, ok := rowObject["due_at"]; ok {
+			t.Fatalf("zero due_at should be omitted from retry row: %#v", rowObject)
+		}
 	}
 }
 
@@ -119,8 +211,8 @@ func TestStateHTTPHandlerPropagatesRequestCancellation(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != 499 {
-		t.Fatalf("status code = %d, want 499 for request cancellation", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status code = %d, want %d for request cancellation", w.Code, http.StatusServiceUnavailable)
 	}
 }
 
@@ -135,6 +227,223 @@ func TestStateHTTPHandlerRejectsNonGET(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
+}
+
+func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://evil.example/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMisdirectedRequest {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusMisdirectedRequest)
+	}
+	if called {
+		t.Fatal("snapshot function should not be called for non-loopback Host")
+	}
+}
+
+func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !called {
+		t.Fatal("snapshot function was not called for loopback Host")
+	}
+}
+
+func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
+	handle, err := startStateHTTPServer(context.Background(), -1, func(context.Context) (orchestrator.StateView, error) {
+		t.Fatal("disabled state server must not evaluate snapshot")
+		return orchestrator.StateView{}, nil
+	})
+	if err != nil {
+		t.Fatalf("startStateHTTPServer disabled: %v", err)
+	}
+	if handle != nil {
+		t.Fatalf("disabled state server handle = %v, want nil", handle)
+	}
+}
+
+func TestStartStateHTTPServerDoesNotFailWorkerWhenPortInUse(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	handle, err := startStateHTTPServer(context.Background(), port, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if err != nil {
+		t.Fatalf("startStateHTTPServer occupied port: %v", err)
+	}
+	if handle != nil {
+		t.Fatalf("occupied port state server handle = %v, want nil", handle)
+	}
+}
+
+func TestStartStateHTTPServerBindsPrivateLoopback(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	handle, err := startStateHTTPServer(ctx, 0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if err != nil {
+		t.Fatalf("startStateHTTPServer: %v", err)
+	}
+	tcpAddr, ok := handle.Addr.(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("state server addr = %T %v, want TCP address", handle.Addr, handle.Addr)
+	}
+	if !tcpAddr.IP.Equal(net.ParseIP("127.0.0.1")) {
+		t.Fatalf("state server bind IP = %s, want 127.0.0.1", tcpAddr.IP)
+	}
+	cancel()
+	select {
+	case <-handle.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("state server did not stop after context cancellation")
+	}
+}
+
+func TestStateHTTPServerControllerStopsOnDisabledReload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+
+	if err := controller.apply(ctx, 0); err != nil {
+		t.Fatalf("start state HTTP server: %v", err)
+	}
+	if controller.cancel == nil || controller.addr == nil {
+		t.Fatalf("controller after start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
+	}
+	if err := controller.apply(ctx, -1); err != nil {
+		t.Fatalf("disable state HTTP server: %v", err)
+	}
+	if controller.cancel != nil || controller.addr != nil {
+		t.Fatalf("controller after disable = cancel:%v addr:%v, want stopped server", controller.cancel, controller.addr)
+	}
+}
+
+func TestStateHTTPServerControllerRetriesSamePortAfterListenFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if err := controller.apply(ctx, port); err != nil {
+		t.Fatalf("apply occupied port: %v", err)
+	}
+	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
+		t.Fatalf("controller after failed listen = cancel:%v addr:%v desiredSet:%v, want retryable idle state", controller.cancel, controller.addr, controller.desiredSet)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release port: %v", err)
+	}
+	if err := controller.apply(ctx, port); err != nil {
+		t.Fatalf("retry freed port: %v", err)
+	}
+	if controller.cancel == nil || controller.addr == nil {
+		t.Fatalf("controller after retry = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
+	}
+	controller.stop()
+}
+
+func TestStateHTTPServerControllerRestartsPreviousPortAfterFailedReload(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	oldPort := freeTCPPort(t)
+	blockedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve blocked port: %v", err)
+	}
+	defer blockedListener.Close()
+	blockedPort := blockedListener.Addr().(*net.TCPAddr).Port
+
+	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if err := controller.apply(ctx, oldPort); err != nil {
+		t.Fatalf("start old port: %v", err)
+	}
+	if controller.cancel == nil || controller.addr == nil {
+		t.Fatalf("controller after old port start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
+	}
+	if err := controller.apply(ctx, blockedPort); err != nil {
+		t.Fatalf("apply blocked port: %v", err)
+	}
+	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
+		t.Fatalf("controller after blocked reload = cancel:%v addr:%v desiredSet:%v, want retryable idle state", controller.cancel, controller.addr, controller.desiredSet)
+	}
+	if err := controller.apply(ctx, oldPort); err != nil {
+		t.Fatalf("restart old port: %v", err)
+	}
+	if controller.cancel == nil || controller.addr == nil {
+		t.Fatalf("controller after old port restart = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
+	}
+	controller.stop()
+}
+
+func TestStateHTTPServerControllerRestartsAfterServerExit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	close(done)
+	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	controller.desiredSet = true
+	controller.desiredPort = 0
+	controller.cancel = func() {}
+	controller.addr = &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 65535}
+	controller.serverDone = done
+
+	if err := controller.apply(ctx, 0); err != nil {
+		t.Fatalf("restart after server exit: %v", err)
+	}
+	if controller.cancel == nil || controller.addr == nil {
+		t.Fatalf("controller after restart = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
+	}
+	controller.stop()
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release free port: %v", err)
+	}
+	return port
 }
 
 func TestRunTreatsCanceledPollContextAsGracefulShutdown(t *testing.T) {
@@ -666,8 +975,9 @@ func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t
 
 func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *testing.T) {
 	dir := t.TempDir()
+	workflowPath := filepath.Join(dir, "WORKFLOW.md")
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
-	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
 	oldwd, err := os.Getwd()
@@ -692,14 +1002,14 @@ func TestLoadWorkflowForStartupReconcileResolvesCWDWorkflowAndLogsSource(t *test
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
 	}
-	if wf.Path != filepath.Join(dir, "WORKFLOW.md") {
-		t.Fatalf("workflow path = %q, want %q", wf.Path, filepath.Join(dir, "WORKFLOW.md"))
+	if !samePath(wf.Path, workflowPath) {
+		t.Fatalf("workflow path = %q, want %q", wf.Path, workflowPath)
 	}
 	if wf.Config.Tracker.Kind != "linear" {
 		t.Fatalf("tracker kind = %q, want linear", wf.Config.Tracker.Kind)
 	}
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + filepath.Join(dir, "WORKFLOW.md"), "tracker.kind=linear"} {
+	for _, want := range []string{"startup reconciliation: workflow source=file", "path=" + wf.Path, "tracker.kind=linear"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}

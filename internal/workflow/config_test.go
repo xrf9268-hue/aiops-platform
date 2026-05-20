@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -47,6 +48,42 @@ func TestDefaultConfigEnablesStateServerOnPrivateLoopbackPort(t *testing.T) {
 	cfg := DefaultConfig()
 	if got := cfg.Server.Port; got != 4000 {
 		t.Fatalf("default server.port = %d, want 4000", got)
+	}
+}
+
+func TestLoadDefaultsServerPortWhenServerBlockIsOmitted(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: git@example.com:owner/repo.git
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load without server block: %v", err)
+	}
+	if got := wf.Config.Server.Port; got != 4000 {
+		t.Fatalf("server.port default = %d, want 4000", got)
+	}
+}
+
+func TestLoadRejectsInvalidServerPort(t *testing.T) {
+	for _, port := range []int{-2, 0, 65536} {
+		path := writeTempWorkflow(t, `---
+server:
+  port: `+fmt.Sprint(port)+`
+repo:
+  clone_url: git@example.com:owner/repo.git
+---
+Prompt body
+`)
+		_, err := Load(path)
+		if err == nil {
+			t.Fatalf("Load(server.port=%d): expected error, got nil", port)
+		}
+		if !strings.Contains(err.Error(), "server.port") {
+			t.Fatalf("Load(server.port=%d) error = %q, want server.port", port, err)
+		}
 	}
 }
 

@@ -231,6 +231,9 @@ func validateConfig(path string, cfg Config) error {
 			}
 		}
 	}
+	if cfg.Server.Port < -1 || cfg.Server.Port == 0 || cfg.Server.Port > 65535 {
+		return fmt.Errorf("%s: server.port must be -1 to disable the local state server or between 1 and 65535", path)
+	}
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
