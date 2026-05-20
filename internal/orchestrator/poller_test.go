@@ -415,7 +415,6 @@ func TestPollOnceUsesNarrowStateRefreshForRunningIssue(t *testing.T) {
 	waitForCancellationDispatcherCount(t, dispatcher, 1)
 
 	trackerClient.resetFetchIssueStatesByIDsCalls()
-	trackerClient.setIssues(nil)
 	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Cancelled"})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("narrow-refresh poll once: %v", err)
@@ -488,6 +487,46 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
 	trackerClient.setIssues([]tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Backlog"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("backlog poll once: %v", err)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+}
+
+func TestPollOnceRoutingCancelsRunningIssueWhenNarrowRefreshLeavesActiveStates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", Title: "API work", State: "In Progress", ProjectSlug: "api-platform"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress", "Rework"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	poller.routing = &workflow.Config{Services: []workflow.ServiceConfig{
+		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}},
+	}}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher, 1)
+
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Cancelled"})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("refresh poll once: %v", err)
+	}
+	if got := trackerClient.fetchIssueStatesByIDsCalls(); len(got) != 1 {
+		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", len(got))
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
