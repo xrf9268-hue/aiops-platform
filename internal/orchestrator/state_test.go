@@ -390,13 +390,8 @@ func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	if st.CodexRateLimits != nil {
 		t.Fatalf("initial CodexRateLimits should be nil")
 	}
-	// RateLimitSnapshot is currently a zero-sized struct (D1 fills it
-	// in). Go reserves the right to alias pointers to zero-sized
-	// allocations (runtime.zerobase), so pointer-identity comparisons
-	// between two `&RateLimitSnapshot{}` values are a no-op assertion.
-	// Until D1 adds fields, exercise the nil-vs-non-nil transition
-	// instead, which is what callers actually depend on.
-	snap := &RateLimitSnapshot{}
+	snapshot := RateLimitSnapshot{"primary": map[string]any{"remaining": 42}}
+	snap := &snapshot
 	st.RecordRateLimits(snap)
 	if st.CodexRateLimits == nil {
 		t.Errorf("RecordRateLimits did not store snapshot (still nil)")
@@ -404,6 +399,20 @@ func TestRecordRateLimits_NilToValueAndBack(t *testing.T) {
 	st.RecordRateLimits(nil)
 	if st.CodexRateLimits != nil {
 		t.Errorf("RecordRateLimits(nil) should clear the field")
+	}
+}
+
+func TestSnapshot_DeepCopiesRateLimitPayload(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	snapshot := RateLimitSnapshot{"primary": map[string]any{"remaining": 42}}
+	st.RecordRateLimits(&snapshot)
+
+	view := st.Snapshot()
+	(*view.CodexRateLimits)["primary"].(map[string]any)["remaining"] = 0
+
+	again := st.Snapshot()
+	if got := (*again.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 42 {
+		t.Fatalf("snapshot mutation changed live rate limits: got %#v want 42", got)
 	}
 }
 

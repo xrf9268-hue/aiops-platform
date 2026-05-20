@@ -4,10 +4,7 @@
 //
 // This file (state.go) defines the data types and pure state-transition
 // methods. It deliberately contains no goroutines, timers, or I/O: those
-// belong to the actor + scheduler that arrive in a later step of the
-// D21+D6 migration plan (docs/design/d21-d6-orchestrator-state.md).
-// During this step the package has no production callers; the worker
-// still claims tasks through the Postgres queue.
+// belong to the actor + scheduler that drive the worker-owned poll path.
 //
 // Field names mirror SPEC §4.1.8 exactly so future cross-references to
 // the protocol contract are mechanical.
@@ -39,14 +36,19 @@ type Workspace struct {
 }
 
 // LiveSession captures the SPEC §4.1.6 live-session fields populated
-// by the app-server runner once deviation D1 (#64) lands. PR 1 ships
-// it as an empty struct so the field exists on RunningEntry without
-// pulling the app-server protocol forward.
-type LiveSession struct{}
+// from app-server runtime events.
+type LiveSession struct {
+	SessionID string
+	ThreadID  string
+	TurnID    string
+	TurnCount int
+}
 
-// RateLimitSnapshot is the SPEC §13.3 rate-limits view emitted by the
-// runner. Same deferral story as LiveSession: shape lands with D1.
-type RateLimitSnapshot struct{}
+// RateLimitSnapshot is the latest SPEC §13.3 rate-limits payload emitted by
+// the runner. The payload is implementation-defined, so the orchestrator keeps
+// the JSON-like map shape instead of projecting it into provider-specific
+// fields.
+type RateLimitSnapshot map[string]any
 
 // CodexTotals accumulates the SPEC §4.1.8 / §13.3 codex totals across
 // all runs the orchestrator dispatches in this process. Token counts
@@ -64,9 +66,16 @@ type CodexTotals struct {
 // `total_tokens`; we keep all three fields rather than recomputing on
 // read so the snapshot never drifts from what was observed.
 func (c *CodexTotals) AddTokens(input, output int64) {
+	c.AddTokenDelta(input, output, input+output)
+}
+
+// AddTokenDelta folds a token-accounting delta into the running totals.
+// total may be available even when the event did not include separate
+// input/output counts.
+func (c *CodexTotals) AddTokenDelta(input, output, total int64) {
 	c.InputTokens += input
 	c.OutputTokens += output
-	c.TotalTokens += input + output
+	c.TotalTokens += total
 }
 
 // AddSeconds folds elapsed wall-clock time from a single run into the
@@ -96,6 +105,14 @@ type RunningEntry struct {
 
 	Session     LiveSession
 	LastCodexAt time.Time // SPEC §8.5 Part A input (D14)
+
+	CodexInputTokens  int64
+	CodexOutputTokens int64
+	CodexTotalTokens  int64
+
+	LastReportedInputTokens  int64
+	LastReportedOutputTokens int64
+	LastReportedTotalTokens  int64
 
 	CancelWorker context.CancelFunc
 	Done         <-chan struct{}
@@ -473,10 +490,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		Failed:                     make([]IssueID, 0, len(s.Failed)),
 		Completed:                  make([]IssueID, 0, len(s.Completed)),
 		CodexTotals:                s.CodexTotals,
-	}
-	if s.CodexRateLimits != nil {
-		rateLimits := *s.CodexRateLimits
-		view.CodexRateLimits = &rateLimits
+		CodexRateLimits:            copyRateLimitSnapshot(s.CodexRateLimits),
 	}
 	for id, r := range s.Running {
 		// Deep-copy RetryAttempt so a snapshot consumer mutating the
@@ -513,4 +527,12 @@ func (s *OrchestratorState) Snapshot() StateView {
 		view.Completed = append(view.Completed, id)
 	}
 	return view
+}
+
+func copyRateLimitSnapshot(in *RateLimitSnapshot) *RateLimitSnapshot {
+	if in == nil {
+		return nil
+	}
+	copied := RateLimitSnapshot(copyAnyMap(map[string]any(*in)))
+	return &copied
 }
