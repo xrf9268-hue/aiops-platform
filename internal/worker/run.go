@@ -56,8 +56,9 @@ func PrintConfig(workdir string, stdout, stderr io.Writer) int {
 	return printConfig(workdir, stdout, stderr)
 }
 
-// Run is the worker's main loop. It claims tasks from the store and executes
-// them until ctx is canceled.
+// Run is the legacy Postgres-queue worker loop. Deprecated: cmd/worker now
+// drives tracker polling through internal/orchestrator's actor path, which owns
+// scheduling, claim state, retries, and reconciliation.
 func Run(ctx context.Context, store runStore, cfg Config) {
 	for {
 		t, err := store.Claim(ctx)

@@ -712,15 +712,18 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	attempt := d.attempt
 	var consumedContinuation *RetryEntry
 	if d.trackerRechecked {
-		if entry, ok := st.RetryAttempts[id]; ok && entry.Kind == RetryKindContinuation {
+		if entry, ok := st.RetryAttempts[id]; ok {
+			if entry.Kind != RetryKindContinuation {
+				d.result <- ErrNotDispatched
+				return nil
+			}
 			if !entry.IsDue(time.Now()) {
 				d.result <- ErrNotDispatched
 				return nil
 			}
-			if attempt == nil && entry.Kind != RetryKindContinuation {
-				entryAttempt := entry.Attempt
-				attempt = &entryAttempt
-			}
+			// Tracker-rechecked dispatch only consumes continuation retries.
+			// Failure retries stay claimed until retryFireOp carries their
+			// scheduled attempt into a retry dispatch.
 			consumedContinuation = entry
 		} else if st.IsClaimed(id) {
 			d.result <- ErrNotDispatched
