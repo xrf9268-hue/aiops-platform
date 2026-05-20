@@ -36,11 +36,13 @@ func Load(path string) (*Workflow, error) {
 		logUnknownTopLevelKeys(frontBytes)
 		hookFields := hookFieldPresence(frontBytes, "hooks")
 		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
+		workspaceRootSet := hasNestedKey(frontBytes, "workspace", "root")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
 			return nil, fmt.Errorf("parse workflow front matter: %w", err)
 		}
 		cfg.hookFields = hookFields
 		cfg.Workspace.hookFields = legacyHookFields
+		cfg.Workspace.rootSet = workspaceRootSet
 		if hookFields.TimeoutMs {
 			cfg.hooksTimeoutDefaulted = false
 		}

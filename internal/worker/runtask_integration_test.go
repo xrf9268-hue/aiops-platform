@@ -161,6 +161,23 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 			t.Fatalf("env workspace root should not be used when workflow workspace.root is set; stat err=%v", err)
 		}
 	})
+
+	t.Run("explicit yaml default wins over env", func(t *testing.T) {
+		ev := &fakeEmitter{}
+		envRoot := filepath.Join(t.TempDir(), "env-workspaces")
+		yamlRoot := defaultWorkflowWorkspaceRootForTest(t)
+		cfg := workerCfgForIntegrationWithWorkspaceRoot(t, yamlRoot)
+		cfg.WorkspaceRoot = envRoot
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+
+		assertTaskWorkdir(t, yamlRoot, tk)
+		if _, err := os.Stat(filepath.Join(envRoot, "acme", "demo", "linear_issue", "issue-uuid")); !os.IsNotExist(err) {
+			t.Fatalf("env workspace root should not be used when explicit workflow workspace.root equals default; stat err=%v", err)
+		}
+	})
 }
 
 func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
@@ -174,7 +191,19 @@ func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
 func workerCfgForIntegrationWithWorkspaceRoot(t *testing.T, root string) worker.Config {
 	t.Helper()
 	body := strings.Replace(linearWorkflowBody, "agent:\n", fmt.Sprintf("workspace:\n  root: %s\nagent:\n", root), 1)
+	if body == linearWorkflowBody {
+		t.Fatal("test workflow fixture no longer contains agent block insertion point")
+	}
 	return workerCfgForIntegrationWithWorkflow(t, body)
+}
+
+func defaultWorkflowWorkspaceRootForTest(t *testing.T) string {
+	t.Helper()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("user home dir: %v", err)
+	}
+	return filepath.Join(home, "aiops-workspaces")
 }
 
 func writeServiceWorkflowForIntegration(t *testing.T, body string) string {

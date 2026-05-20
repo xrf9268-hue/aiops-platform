@@ -167,9 +167,15 @@ func issueWorkspaceKey(t task.Task) string {
 	sourceType := strings.TrimSpace(t.SourceType)
 	sourceEventID := strings.TrimSpace(t.SourceEventID)
 	if sourceType != "" && sourceEventID != "" {
-		return filepath.Join(sourceType, SanitizeComponent(sourceEventID))
+		return filepath.Join(SanitizeSourceType(sourceType), SanitizeComponent(sourceEventID))
 	}
 	return SanitizeComponent(t.ID)
+}
+
+// SanitizeSourceType returns a filesystem-safe tracker source component while
+// preserving underscores used by SPEC source types such as linear_issue.
+func SanitizeSourceType(s string) string {
+	return sanitizeWithUnderscore(s)
 }
 
 // PrepareGitWorkspace materialises a per-issue workspace by adding a fresh
@@ -908,11 +914,19 @@ func SanitizeComponent(s string) string {
 }
 
 func sanitize(s string) string {
+	return sanitizeComponent(s, false)
+}
+
+func sanitizeWithUnderscore(s string) string {
+	return sanitizeComponent(s, true)
+}
+
+func sanitizeComponent(s string, preserveUnderscore bool) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	inSeparator := false
 	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || (preserveUnderscore && r == '_') {
 			b.WriteRune(r)
 			inSeparator = false
 			continue
