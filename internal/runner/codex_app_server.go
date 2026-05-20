@@ -414,7 +414,6 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			}
 			return err
 		}
-		c.lastTerminal = time.Now()
 		if method, _ := msg["method"].(string); method != "" {
 			switch method {
 			case "turn/completed":
@@ -441,7 +440,6 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					if err := c.replyServerRequest(msg); err != nil {
 						return err
 					}
-					c.lastTerminal = time.Now()
 					continue
 				}
 				if c.stallTimeoutMs > 0 {
@@ -576,7 +574,7 @@ func protocolServerRequestResult(method string, msg map[string]any, approvalPoli
 	case "item/tool/requestUserInput":
 		return protocolUserInputResult(msg), true
 	case "mcpServer/elicitation/request":
-		return map[string]any{"action": "decline"}, true
+		return map[string]any{"action": "decline", "content": nil}, true
 	default:
 		return nil, false
 	}

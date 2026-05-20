@@ -866,7 +866,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerServerRequestsRefreshStallClock(t *testing.T) {
+func TestCodexAppServerRunnerServerRequestsDoNotMaskStallTimeout(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json, time
 for line in sys.stdin:
@@ -887,16 +887,13 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 1000
+	in.Workflow.Config.Codex.StallTimeoutMs = 100
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	res, err := (CodexAppServerRunner{}).Run(ctx, in)
-	if err != nil {
-		t.Fatalf("Run: %v, want server request to count as activity", err)
-	}
-	if res.Summary != "completed after server request" {
-		t.Fatalf("Summary = %q, want completion after server request", res.Summary)
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if !IsStall(err) {
+		t.Fatalf("Run error = %T %[1]v, want server request not to mask stall timeout", err)
 	}
 }
 
@@ -1114,6 +1111,9 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 	elicitationResult, ok := protocolServerRequestResult("mcpServer/elicitation/request", map[string]any{}, "never")
 	if !ok || elicitationResult["action"] != "decline" {
 		t.Fatalf("elicitation result = %#v, %v; want decline action", elicitationResult, ok)
+	}
+	if _, ok := elicitationResult["content"]; !ok || elicitationResult["content"] != nil {
+		t.Fatalf("elicitation content = %#v, present %v; want explicit null content", elicitationResult["content"], ok)
 	}
 }
 
