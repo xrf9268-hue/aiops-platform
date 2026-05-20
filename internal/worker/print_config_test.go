@@ -18,7 +18,7 @@ import (
 func TestPrintConfig_MasksTrackerAPIKey(t *testing.T) {
 	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin_super_secret_value")
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestPrintConfig_DefaultSource(t *testing.T) {
 func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 	dir := t.TempDir()
 	canary := "SHOULD_NOT_LEAK_xyz"
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\ntracker:\n  kind: linear\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\ntracker:\n  kind: linear\n  project_slug: platform\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPrintConfig_RendersAgentTimeoutAsDurationString(t *testing.T) {
 // to the same duration.
 func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  timeout: 10m\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  timeout: 10m\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 // and overrides took effect.
 func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_backoff_ms: 45000\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_backoff_ms: 45000\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 // reported as normal shadow workflow sources.
 func TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write root: %v", err)
 	}

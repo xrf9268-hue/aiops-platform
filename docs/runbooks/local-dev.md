@@ -98,6 +98,9 @@ The Linear and Gitea pollers read `examples/WORKFLOW.md` for the repo, tracker, 
 ### Linear
 
 The Linear poller enqueues issues in configured active Linear workflow states.
+Set `tracker.project_slug` in `examples/WORKFLOW.md` before starting a Linear
+run; the loader rejects `tracker.kind: linear` without it because SPEC §11.2
+requires candidate queries to filter by Linear `project.slugId`.
 
 Option A: from source.
 
@@ -188,7 +191,7 @@ A transitional poller logs `relation "tasks" does not exist`.
 
 ### Linear poller exits with `tracker.kind must be linear`
 
-`examples/WORKFLOW.md` is not configured for Linear. Set `tracker.kind: linear` and provide an `api_key` (the value can reference `$LINEAR_API_KEY`).
+`examples/WORKFLOW.md` is not configured for Linear. Set `tracker.kind: linear`, provide an `api_key` (the value can reference `$LINEAR_API_KEY`), and set `tracker.project_slug` to the Linear project slug used for SPEC §11.2 candidate filtering.
 
 ### Worker fails to push or open PRs
 

@@ -136,6 +136,7 @@ repo:
   clone_url: $REPO_URL
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: definitely-not-a-runner
 ---
@@ -845,7 +846,7 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 // post-hoc inspection contract.
 func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -898,7 +899,7 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 // so the common case stays terse.
 func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write root: %v", err)
@@ -949,7 +950,7 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 // the line carries `source=` and `path=` but no `shadowed=` segment.
 func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)

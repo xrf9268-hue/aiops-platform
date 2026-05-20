@@ -577,6 +577,27 @@ prompt body
 	}
 }
 
+func TestLoadRejectsLinearWorkflowWithoutProjectSlug(t *testing.T) {
+	body := `---
+repo:
+  owner: acme
+  name: api
+  clone_url: git@example.com:acme/api.git
+tracker:
+  kind: linear
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want tracker.project_slug requirement for Linear workflow")
+	}
+	if !strings.Contains(err.Error(), "tracker.project_slug") {
+		t.Fatalf("Load error = %q, want tracker.project_slug guidance", err)
+	}
+}
+
 func TestLoadRejectsLinearServiceOnlyWorkflowWithoutAnyProjectSlug(t *testing.T) {
 	body := `---
 tracker:
@@ -1715,6 +1736,7 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
+  project_slug: platform
   statuses:
     in_progress: "Doing"
 ---
@@ -1752,6 +1774,7 @@ repo:
   clone_url: git@example.com:o/r.git
 tracker:
   kind: linear
+  project_slug: platform
   statuses:
     in_progress: "Coding"
     human_review: "Review"
@@ -1818,6 +1841,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1844,6 +1868,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1868,6 +1893,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex
 codex:
@@ -1891,6 +1917,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: claude
 claude:
@@ -1915,6 +1942,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 safety:
   allowed_networks:
     - git remote for this repository
@@ -1952,6 +1980,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex-app-server
 codex:
@@ -2014,6 +2043,7 @@ repo:
   clone_url: file:///tmp/repo
 tracker:
   kind: linear
+  project_slug: platform
 agent:
   default: codex-app-server
 codex:

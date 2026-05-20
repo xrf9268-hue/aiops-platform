@@ -367,6 +367,7 @@ func TestRuntimePollerFetchesLinearIssuesFromEachServiceProject(t *testing.T) {
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -409,6 +410,7 @@ func TestRuntimePollerDispatchesHealthyServiceProjectWhenAnotherProjectPollFails
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -452,6 +454,7 @@ func TestRuntimePollerKeepsRunningFailedProjectIssueWhenDispatchingHealthyPartia
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -506,6 +509,7 @@ func TestRuntimePollerCancelsHealthyProjectIssueDuringPartialPoll(t *testing.T) 
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
 	}
+	initial.Config.Tracker.ProjectSlug = ""
 	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -627,6 +631,7 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	linearWorkflow.Config.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 	}
+	linearWorkflow.Config.Tracker.ProjectSlug = ""
 	linearRuntime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: linearWorkflow, Path: linearPath, Source: workflow.SourceFile})
 	if err != nil {
 		t.Fatalf("new linear runtime: %v", err)
@@ -866,6 +871,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  clone_url: https://github.com/xrf9268-hue/aiops-platform.git\n" +
 		"tracker:\n" +
 		"  kind: " + trackerKind + "\n" +
+		reloadTestLinearProjectSlugYAML(trackerKind) +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +
 		"polling:\n" +
@@ -880,6 +886,13 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 	if err := osWriteFileForReloadTest(path, []byte(content)); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
+}
+
+func reloadTestLinearProjectSlugYAML(trackerKind string) string {
+	if trackerKind != "linear" {
+		return ""
+	}
+	return "  project_slug: platform\n"
 }
 
 type reloadWorkflowTestConfig struct {

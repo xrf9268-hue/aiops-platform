@@ -50,6 +50,7 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `agent.default` | `mock` |
 | `agent.timeout` | `30m` |
 | `agent.max_concurrent_agents` | `1` |
+| `tracker.project_slug` | required when `tracker.kind: linear`; no default |
 | `pr.draft` | `false` |
 | `pr.labels` | `[ai-generated, needs-review]` |
 | `server.port` | `4000` (`-1` disables the HTTP state server) |
