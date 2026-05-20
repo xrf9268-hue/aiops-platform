@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 launch_agents_dir="$HOME/Library/LaunchAgents"
 logs_dir="$HOME/Library/Logs/aiops-platform"
 uid="$(id -u)"
-follow_auto_merge="${AIOPS_AUTO_MERGE:-0}"
+follow_auto_merge="${AIOPS_AUTO_MERGE:-1}"
 follow_review_timeout="${AIOPS_REVIEW_TIMEOUT:-8m}"
 
 mkdir -p "$launch_agents_dir" "$logs_dir"

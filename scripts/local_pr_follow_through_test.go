@@ -32,6 +32,28 @@ func TestLocalPRFollowThroughClaudeReviewIsDiffOnly(t *testing.T) {
 	}
 }
 
+func TestLocalPRFollowThroughTriggersGitHubCodexReviewBeforeMerge(t *testing.T) {
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`github_codex_review_timeout="${AIOPS_GITHUB_CODEX_REVIEW_TIMEOUT:-20m}"`,
+		`-f body='@codex review'`,
+		`wait_for_github_codex_review "$pr" "$head_oid"`,
+		`PR #$pr head changed during GitHub Codex review`,
+		`chatgpt-codex-connector`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("local-pr-follow-through.sh missing %q", want)
+		}
+	}
+	if strings.Index(script, `wait_for_github_codex_review "$pr" "$head_oid"`) > strings.Index(script, `gh_cmd pr merge`) {
+		t.Fatal("GitHub Codex review must run before merge")
+	}
+}
+
 func TestLocalScriptsIncludeUserLocalBinForLaunchd(t *testing.T) {
 	for _, path := range []string{"local-pr-follow-through.sh", "local-github-worker.sh"} {
 		body, err := os.ReadFile(path)
@@ -44,14 +66,14 @@ func TestLocalScriptsIncludeUserLocalBinForLaunchd(t *testing.T) {
 	}
 }
 
-func TestInstallLaunchAgentsDefaultsPRFollowThroughToNoMerge(t *testing.T) {
+func TestInstallLaunchAgentsDefaultsPRFollowThroughToAutoMerge(t *testing.T) {
 	body, err := os.ReadFile("install-local-launchagents.sh")
 	if err != nil {
 		t.Fatalf("ReadFile(install-local-launchagents.sh): %v", err)
 	}
 	script := string(body)
 	for _, want := range []string{
-		`follow_auto_merge="${AIOPS_AUTO_MERGE:-0}"`,
+		`follow_auto_merge="${AIOPS_AUTO_MERGE:-1}"`,
 		`<key>AIOPS_AUTO_MERGE</key>`,
 		`<string>${follow_auto_merge}</string>`,
 		`<key>AIOPS_REVIEW_TIMEOUT</key>`,

@@ -68,6 +68,10 @@ checkout/reset/clean operations do not touch the automation source worktree.
 On macOS, the Go test/build gate defaults to Docker with cached Go module/build
 volumes so it matches the Linux CI environment. Set `AIOPS_GATE_MODE=local` to
 force host-native gates, or `AIOPS_GATE_MODE=docker` to force Docker everywhere.
+After the local Go gate plus Claude Code and Codex diff reviews pass, the script
+marks draft PRs ready, posts a fresh `@codex review` comment for the current
+head commit, waits for the GitHub Codex trigger to finish, and re-checks review
+threads before watching CI and merging.
 
 ## Install unattended macOS LaunchAgents
 
@@ -80,9 +84,10 @@ This installs:
 - `com.aiops-platform.github-worker`: long-running worker, restarted by
   launchd if it exits.
 - `com.aiops-platform.github-pr-follow-through`: PR gate/auto-merge sweep every
-  10 minutes. It installs with `AIOPS_AUTO_MERGE=0` by default, so it runs the
-  full gate without merging until the operator explicitly installs with
-  `AIOPS_AUTO_MERGE=1`.
+  10 minutes. It installs with `AIOPS_AUTO_MERGE=1` by default, so it merges
+  only after the full local Go gate, Claude Code review, Codex review, GitHub
+  checks, and review-thread gates pass. Install with `AIOPS_AUTO_MERGE=0` for a
+  no-merge dry run.
 
 Logs are written under `~/Library/Logs/aiops-platform/`.
 
@@ -109,9 +114,11 @@ scripts/uninstall-local-launchagents.sh
   repository tools can make unattended runs hit turn limits before returning
   JSON.
 - Treat unresolved non-outdated GitHub review threads as blocking.
+- Trigger a fresh GitHub `@codex review` after any PR branch update and wait for
+  that trigger to finish on the current head before merging.
 - Use `AIOPS_AUTO_MERGE=0` during new workflow changes or after changing local
-  credentials. This is the LaunchAgent install default; set
-  `AIOPS_AUTO_MERGE=1` only after the no-merge sweep logs are clean.
+  credentials. Restore `AIOPS_AUTO_MERGE=1` after the no-merge sweep logs are
+  clean so unattended follow-through can merge PRs that pass all gates.
 - Stale per-issue worktrees live under
   `~/aiops-workspaces/github/xrf9268-hue-aiops-platform`; remove issue
   directories only after confirming the worker is stopped or the issue/PR is no

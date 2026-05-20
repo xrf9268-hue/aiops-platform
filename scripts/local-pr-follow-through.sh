@@ -16,6 +16,8 @@ pr_worktree="${AIOPS_PR_WORKTREE:-"$HOME/aiops-workspaces/github/xrf9268-hue-aio
 gh_timeout="${AIOPS_GH_TIMEOUT:-60s}"
 gate_mode="${AIOPS_GATE_MODE:-auto}"
 review_timeout="${AIOPS_REVIEW_TIMEOUT:-20m}"
+github_codex_review_timeout="${AIOPS_GITHUB_CODEX_REVIEW_TIMEOUT:-20m}"
+github_codex_review_poll_seconds="${AIOPS_GITHUB_CODEX_REVIEW_POLL_SECONDS:-30}"
 
 cd "$repo_root"
 
@@ -343,6 +345,56 @@ assert_review_decision_clean() {
   fi
 }
 
+wait_for_github_codex_review() {
+  local pr="$1"
+  local head_oid="$2"
+  local trigger_json trigger_id started_at
+  trigger_json="$(gh_cmd api \
+    -X POST \
+    "repos/${repo_owner}/${repo_name}/issues/${pr}/comments" \
+    -f body='@codex review')"
+  trigger_id="$(jq -r '.id' <<<"$trigger_json")"
+  started_at="$(jq -r '.created_at' <<<"$trigger_json")"
+  echo "Triggered GitHub Codex review for PR #$pr at $head_oid (comment $trigger_id)"
+
+  run_with_timeout "$github_codex_review_timeout" bash -c '
+    set -euo pipefail
+    repo_owner="$1"
+    repo_name="$2"
+    pr="$3"
+    head_oid="$4"
+    trigger_id="$5"
+    started_at="$6"
+    poll_seconds="$7"
+    while true; do
+      current_head="$(gh api "repos/${repo_owner}/${repo_name}/pulls/${pr}" --jq ".head.sha")"
+      if [[ "$current_head" != "$head_oid" ]]; then
+        echo "PR #$pr head changed during GitHub Codex review: $current_head != $head_oid" >&2
+        exit 1
+      fi
+      comment_json="$(gh api "repos/${repo_owner}/${repo_name}/issues/comments/${trigger_id}")"
+      eyes="$(jq -r ".reactions.eyes // 0" <<<"$comment_json")"
+      plus_one="$(jq -r ".reactions[\"+1\"] // 0" <<<"$comment_json")"
+      comments_json="$(gh api "repos/${repo_owner}/${repo_name}/issues/${pr}/comments?per_page=100")"
+      bot_activity="$(COMMENTS_JSON="$comments_json" python3 - "$started_at" <<'PY'
+import json
+import os
+import sys
+
+started_at = sys.argv[1]
+comments = json.loads(os.environ["COMMENTS_JSON"])
+print(sum(1 for c in comments if c.get("created_at", "") >= started_at and c.get("user", {}).get("login") == "chatgpt-codex-connector"))
+PY
+)"
+      if [[ "$eyes" == "0" ]] && { [[ "$plus_one" != "0" ]] || [[ "$bot_activity" != "0" ]]; }; then
+        exit 0
+      fi
+      sleep "$poll_seconds"
+    done
+  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds"
+  assert_no_actionable_threads "$pr"
+}
+
 for pr in "${prs[@]}"; do
   echo "== PR #$pr =="
   cd "$pr_worktree"
@@ -357,6 +409,8 @@ for pr in "${prs[@]}"; do
   assert_review_decision_clean "$pr"
 
   gh_cmd pr ready -R "$repo_path" "$pr" >/dev/null 2>&1 || true
+  head_oid="$(gh_cmd pr view -R "$repo_path" "$pr" --json headRefOid --jq '.headRefOid')"
+  wait_for_github_codex_review "$pr" "$head_oid"
   gh_cmd pr checks -R "$repo_path" "$pr" --watch
   assert_no_actionable_threads "$pr"
   assert_review_decision_clean "$pr"
