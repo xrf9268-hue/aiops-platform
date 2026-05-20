@@ -2,10 +2,12 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -107,6 +109,105 @@ func TestEnsureMirror_FirstCallClonesSecondCallReuses(t *testing.T) {
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatalf("mirror was recreated; sentinel gone: %v", err)
+	}
+}
+
+func TestEnsureMirror_ConcurrentFirstUseSerializesClone(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	const workers = 8
+	start := make(chan struct{})
+	paths := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			mirror, err := mgr.EnsureMirror(ctx, upstream)
+			if err != nil {
+				errs <- err
+				return
+			}
+			paths <- mirror
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(paths)
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("EnsureMirror returned error under concurrent first use: %v", err)
+	}
+	if t.Failed() {
+		return
+	}
+	var want string
+	for got := range paths {
+		if want == "" {
+			want = got
+		}
+		if got != want {
+			t.Fatalf("mirror path drifted under concurrency: got %s want %s", got, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(want, "HEAD")); err != nil {
+		t.Fatalf("expected bare repo HEAD at %s: %v", want, err)
+	}
+}
+
+func TestPrepareGitWorkspace_ConcurrentFirstUseSharesMirror(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	const workers = 4
+	start := make(chan struct{})
+	dirs := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			dir, _, err := mgr.PrepareGitWorkspace(ctx, makeTask(fmt.Sprintf("task-concurrent-%d", i), upstream))
+			if err != nil {
+				errs <- err
+				return
+			}
+			dirs <- dir
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(dirs)
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("PrepareGitWorkspace returned error under concurrent first use: %v", err)
+	}
+	if t.Failed() {
+		return
+	}
+	seen := map[string]struct{}{}
+	for dir := range dirs {
+		if _, ok := seen[dir]; ok {
+			t.Fatalf("duplicate worktree dir under concurrency: %s", dir)
+		}
+		seen[dir] = struct{}{}
+		if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+			t.Fatalf("expected README.md inside %s: %v", dir, err)
+		}
+	}
+	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), upstream)
+	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err != nil {
+		t.Fatalf("expected shared mirror at %s: %v", mirror, err)
 	}
 }
 

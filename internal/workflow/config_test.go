@@ -1543,6 +1543,45 @@ prompt
 	}
 }
 
+func TestLoad_AllowsGitHubTrackerKind(t *testing.T) {
+	t.Setenv("AIOPS_TEST_GITHUB_TOKEN", "github-token")
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+  default_branch: main
+tracker:
+  kind: github
+  api_key: $AIOPS_TEST_GITHUB_TOKEN
+  base_url: https://api.github.test
+  active_states:
+    - priority:p2
+  terminal_states:
+    - closed
+---
+prompt
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	wf, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Tracker.Kind != "github" {
+		t.Fatalf("tracker.kind = %q, want github", wf.Config.Tracker.Kind)
+	}
+	if wf.Config.Tracker.APIKey != "github-token" {
+		t.Fatalf("tracker.api_key did not expand from env: %q", wf.Config.Tracker.APIKey)
+	}
+	if wf.Config.Tracker.BaseURL != "https://api.github.test" {
+		t.Fatalf("tracker.base_url = %q", wf.Config.Tracker.BaseURL)
+	}
+}
+
 // TestLoad_RejectsUnsupportedAgentDefault matches the runner registry in
 // internal/runner: only mock/codex/claude are wired up. Catching a typo
 // like `agent.default: codexx` at Load time prevents the worker from

@@ -884,6 +884,30 @@ func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
 	}
 }
 
+func TestTrackerClientForWorkflowBuildsGitHubClient(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.Owner = "xrf9268-hue"
+	cfg.Repo.Name = "aiops-platform"
+	cfg.Tracker.Kind = "github"
+	cfg.Tracker.APIKey = "github-token"
+	cfg.Tracker.BaseURL = "https://api.github.test"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("trackerClientForWorkflow: %v", err)
+	}
+	githubClient, ok := client.(*tracker.GitHubClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *tracker.GitHubClient", client)
+	}
+	if githubClient.Owner != "xrf9268-hue" || githubClient.Repo != "aiops-platform" {
+		t.Fatalf("github repo = %s/%s", githubClient.Owner, githubClient.Repo)
+	}
+	if githubClient.BaseURL != "https://api.github.test" {
+		t.Fatalf("github base URL = %q", githubClient.BaseURL)
+	}
+}
+
 func TestWorkerReconciliationConfigDoesNotProbeUnmappedGiteaInactiveStates(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Repo.CloneURL = "git@example.com:o/r.git"

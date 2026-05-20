@@ -11,7 +11,7 @@ A personal-productivity AI coding orchestrator implementing OpenAI Symphony.
 The goal is not to build a heavy enterprise platform first. The goal is to run a practical loop:
 
 ```text
-Linear or Gitea task
+Linear, Gitea, or GitHub issue
   -> aiops-platform
   -> deterministic workspace
   -> WORKFLOW.md policy + prompt
@@ -32,7 +32,7 @@ Symphony implementation while the remaining open/partial D1–D24 items in
 - `cmd/linear-poller`: transitional Linear-to-queue poller retained under the legacy queue profile; the worker now owns the SPEC-aligned poll tick.
 - `cmd/gitea-poller`: transitional Gitea-to-queue poller for `aiops/*` label state; the worker can read Gitea issues directly through `tracker.kind: gitea`.
 - `internal/workflow`: loads repo-owned `WORKFLOW.md` configuration and prompt body.
-- `internal/tracker`: tracker abstraction with a Linear client.
+- `internal/tracker`: tracker abstraction with Linear and GitHub clients.
 - `internal/workspace`: deterministic Git workspace management, verification, and simple policy checks.
 - `internal/runner`: runner abstraction for `mock`, `codex`, and `claude`.
 - `internal/orchestrator`: single in-memory runtime state, serialized dispatch authority, retry bookkeeping, and worker spawn bridge.
@@ -100,6 +100,7 @@ For post-hoc inspection, the `workflow_resolved` task event records the source a
 - [Task debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [Pre-push secret scanning](docs/runbooks/secret-scanning.md)
+- [GitHub local automation](docs/runbooks/github-local-automation.md)
 
 ## Continuous integration
 
@@ -136,6 +137,9 @@ export LINEAR_API_KEY=your-linear-personal-key
 # For tracker.kind: gitea
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
+
+# For tracker.kind: github
+export GITHUB_TOKEN=$(gh auth token -h github.com)
 
 go run ./cmd/worker
 ```

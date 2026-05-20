@@ -101,6 +101,7 @@ func migratePollingInterval(frontBytes []byte, cfg *Config) {
 // claimed by the worker.
 var supportedTrackerKinds = map[string]struct{}{
 	"gitea":  {},
+	"github": {},
 	"linear": {},
 }
 
@@ -196,7 +197,7 @@ func validateConfig(path string, cfg Config) error {
 		}
 	}
 	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
-		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, linear)", path, cfg.Tracker.Kind)
+		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, github, linear)", path, cfg.Tracker.Kind)
 	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
 		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, codex-app-server, claude)", path, cfg.Agent.Default)
@@ -408,6 +409,7 @@ func expandConfig(cfg *Config) {
 
 func expandConfigForWorkflowPath(workflowPath string, cfg *Config) {
 	cfg.Tracker.APIKey = os.ExpandEnv(cfg.Tracker.APIKey)
+	cfg.Tracker.BaseURL = os.ExpandEnv(cfg.Tracker.BaseURL)
 	expandRepoConfig(&cfg.Repo)
 	for i := range cfg.Services {
 		expandRepoConfig(&cfg.Services[i].Repo)

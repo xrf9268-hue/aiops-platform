@@ -635,6 +635,8 @@ func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
 
 func defaultInactiveStateCandidates(kind string) []string {
 	switch normalizeState(kind) {
+	case "github":
+		return nil
 	case "gitea":
 		return []string{"Human Review"}
 	default:
@@ -679,6 +681,12 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 			baseURL = env("GITEA_BASE_URL", "http://localhost:3000")
 		}
 		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
+	case "github":
+		baseURL := cfg.Tracker.BaseURL
+		if baseURL == "" {
+			baseURL = env("GITHUB_API_BASE_URL", "https://api.github.com")
+		}
+		return tracker.NewGitHubClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	default:
 		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
 	}

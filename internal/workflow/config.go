@@ -62,6 +62,7 @@ type ServiceTrackerRouteConfig struct {
 type TrackerConfig struct {
 	Kind           string   `yaml:"kind" json:"kind"`
 	APIKey         string   `yaml:"api_key" json:"api_key"`
+	BaseURL        string   `yaml:"base_url" json:"base_url"`
 	TeamKey        string   `yaml:"team_key" json:"team_key"`
 	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
 	ActiveStates   []string `yaml:"active_states" json:"active_states"`

@@ -238,6 +238,39 @@ func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 	}
 }
 
+func TestReconcileStartupMatchesGitHubWorkspaceLayout(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "github_issue", "issue-1")
+	terminalPath := filepath.Join(root, "acme", "repo", "github_issue", "issue-2")
+	for _, path := range []string{activePath, terminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"open"},
+		TerminalStates: []string{"closed"},
+		TrackerKind:    "github",
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-1", Identifier: "#1", State: "open"},
+			{ID: "issue-2", Identifier: "#2", State: "closed"},
+		}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active GitHub workspace should remain: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("terminal GitHub workspace should be removed, stat err=%v", err)
+	}
+}
+
 func TestReconcileStartupSkipsOtherTrackerWorkspaceLayouts(t *testing.T) {
 	root := t.TempDir()
 	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-2-done")

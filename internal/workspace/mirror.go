@@ -7,8 +7,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	mirrorLocksMu sync.Mutex
+	mirrorLocks   = map[string]*sync.Mutex{}
+)
+
+func acquireMirrorLock(mirror string) func() {
+	mirrorLocksMu.Lock()
+	lock := mirrorLocks[mirror]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		mirrorLocks[mirror] = lock
+	}
+	mirrorLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
 
 // MirrorRoot returns the directory where bare mirror clones are cached.
 //
@@ -108,6 +127,13 @@ func sanitizeMirrorComponent(s string) string {
 func (m *Manager) EnsureMirror(ctx context.Context, cloneURL string) (string, error) {
 	root := MirrorRoot(m.MirrorRoot)
 	mirror := mirrorPathFor(root, cloneURL)
+	unlock := acquireMirrorLock(mirror)
+	defer unlock()
+
+	return m.ensureMirrorLocked(ctx, cloneURL, mirror)
+}
+
+func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
 		return "", fmt.Errorf("mkdir mirror parent: %w", err)
 	}
