@@ -591,7 +591,7 @@ func autoApproveRequest(method string, approvalPolicy any) bool {
 		return false
 	}
 	if granular, ok := policy["granular"].(map[string]any); ok {
-		return !approvalRuleRequiresReview(granular, method)
+		return approvalRuleAllowsRequest(granular, method)
 	}
 	if reject, ok := policy["reject"].(map[string]any); ok {
 		return !approvalRuleRequiresReview(reject, method)
@@ -604,6 +604,13 @@ func approvalRuleRequiresReview(rules map[string]any, method string) bool {
 		return approvalRuleEnabled(rules, "request_permissions") ||
 			approvalRuleEnabled(rules, "sandbox_approval") ||
 			approvalRuleEnabled(rules, "rules")
+	}
+	return approvalRuleEnabled(rules, "sandbox_approval") || approvalRuleEnabled(rules, "rules")
+}
+
+func approvalRuleAllowsRequest(rules map[string]any, method string) bool {
+	if method == "item/permissions/requestApproval" {
+		return approvalRuleEnabled(rules, "request_permissions")
 	}
 	return approvalRuleEnabled(rules, "sandbox_approval") || approvalRuleEnabled(rules, "rules")
 }

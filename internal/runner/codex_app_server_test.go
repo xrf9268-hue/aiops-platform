@@ -975,13 +975,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{
-		"granular": map[string]any{
-			"sandbox_approval":    false,
-			"rules":               false,
-			"request_permissions": false,
-		},
-	}
+	in.Workflow.Config.Codex.ApprovalPolicy = "on-failure"
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
@@ -1089,8 +1083,9 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 		{name: "untrusted", policy: "untrusted", wantModernDecision: "decline"},
 		{name: "on-failure", policy: "on-failure", wantModernDecision: "acceptForSession", wantPermissions: true},
 		{name: "reject legacy map", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
-		{name: "granular review disabled", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": false}}, wantModernDecision: "acceptForSession", wantPermissions: true},
-		{name: "granular permission review", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": true}}, wantModernDecision: "acceptForSession"},
+		{name: "granular denies all disabled allowances", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": false}}, wantModernDecision: "decline"},
+		{name: "granular allows sandbox only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "request_permissions": false}}, wantModernDecision: "acceptForSession"},
+		{name: "granular allows permissions only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": true}}, wantModernDecision: "decline", wantPermissions: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
