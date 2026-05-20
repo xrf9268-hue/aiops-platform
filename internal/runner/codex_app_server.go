@@ -583,7 +583,12 @@ func protocolServerRequestResult(method string, msg map[string]any, approvalPoli
 
 func autoApproveRequest(method string, approvalPolicy any) bool {
 	if policy, ok := approvalPolicy.(string); ok {
-		return strings.EqualFold(strings.TrimSpace(policy), "on-failure")
+		switch strings.ToLower(strings.TrimSpace(policy)) {
+		case "never", "on-failure":
+			return true
+		default:
+			return false
+		}
 	}
 	policy, ok := approvalPolicy.(map[string]any)
 	if !ok {

@@ -1072,9 +1072,9 @@ func TestProtocolServerRequestResultLegacyApprovalMethodsUseProtocolDecisions(t 
 		wantResult map[string]any
 	}{
 		{name: "exec allow", method: "execCommandApproval", policy: "on-failure", wantResult: map[string]any{"decision": "allow"}},
-		{name: "exec deny", method: "execCommandApproval", policy: "never", wantResult: map[string]any{"decision": "deny"}},
+		{name: "exec never auto-approves", method: "execCommandApproval", policy: "never", wantResult: map[string]any{"decision": "allow"}},
 		{name: "apply allow", method: "applyPatchApproval", policy: "on-failure", wantResult: map[string]any{"decision": "allow"}},
-		{name: "apply deny", method: "applyPatchApproval", policy: "never", wantResult: map[string]any{"decision": "deny"}},
+		{name: "apply never auto-approves", method: "applyPatchApproval", policy: "never", wantResult: map[string]any{"decision": "allow"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := protocolServerRequestResult(tc.method, map[string]any{}, tc.policy)
@@ -1100,7 +1100,7 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 		wantModernDecision string
 		wantPermissions    bool
 	}{
-		{name: "never", policy: "never", wantModernDecision: "decline"},
+		{name: "never", policy: "never", wantModernDecision: "acceptForSession", wantPermissions: true},
 		{name: "on-request", policy: "on-request", wantModernDecision: "decline"},
 		{name: "untrusted", policy: "untrusted", wantModernDecision: "decline"},
 		{name: "on-failure", policy: "on-failure", wantModernDecision: "acceptForSession", wantPermissions: true},
