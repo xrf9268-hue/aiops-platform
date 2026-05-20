@@ -440,6 +440,7 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					if err := c.replyServerRequest(msg); err != nil {
 						return err
 					}
+					c.lastTerminal = time.Now()
 					continue
 				}
 				if c.stallTimeoutMs > 0 {
@@ -568,9 +569,9 @@ func protocolServerRequestResult(method string, msg map[string]any, approvalPoli
 		return map[string]any{"permissions": map[string]any{}}, true
 	case "execCommandApproval", "applyPatchApproval":
 		if autoApproveRequest(method, approvalPolicy) {
-			return map[string]any{"decision": "approved_for_session"}, true
+			return map[string]any{"decision": "allow"}, true
 		}
-		return map[string]any{"decision": "denied"}, true
+		return map[string]any{"decision": "deny"}, true
 	case "item/tool/requestUserInput":
 		return protocolUserInputResult(msg), true
 	case "mcpServer/elicitation/request":

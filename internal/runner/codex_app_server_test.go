@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -866,7 +867,7 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerServerRequestsDoNotMaskStallTimeout(t *testing.T) {
+func TestCodexAppServerRunnerServerRequestsRefreshStallClock(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json, time
 for line in sys.stdin:
@@ -891,9 +892,12 @@ for line in sys.stdin:
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	_, err := (CodexAppServerRunner{}).Run(ctx, in)
-	if !IsStall(err) {
-		t.Fatalf("Run error = %T %[1]v, want server request not to mask stall timeout", err)
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("Run: %v, want server request activity to avoid stall timeout", err)
+	}
+	if res.Summary != "completed after server request" {
+		t.Fatalf("Summary = %q, want completion after server request", res.Summary)
 	}
 }
 
@@ -1057,6 +1061,27 @@ for line in sys.stdin:
 		if !strings.Contains(string(stdin), want) {
 			t.Fatalf("stdin missing %s in policy-limited approval responses: %s", want, stdin)
 		}
+	}
+}
+
+func TestProtocolServerRequestResultLegacyApprovalMethodsUseProtocolDecisions(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		method     string
+		policy     any
+		wantResult map[string]any
+	}{
+		{name: "exec allow", method: "execCommandApproval", policy: "on-failure", wantResult: map[string]any{"decision": "allow"}},
+		{name: "exec deny", method: "execCommandApproval", policy: "never", wantResult: map[string]any{"decision": "deny"}},
+		{name: "apply allow", method: "applyPatchApproval", policy: "on-failure", wantResult: map[string]any{"decision": "allow"}},
+		{name: "apply deny", method: "applyPatchApproval", policy: "never", wantResult: map[string]any{"decision": "deny"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := protocolServerRequestResult(tc.method, map[string]any{}, tc.policy)
+			if !ok || !reflect.DeepEqual(got, tc.wantResult) {
+				t.Fatalf("protocolServerRequestResult(%q) = %#v, %v; want %#v, true", tc.method, got, ok, tc.wantResult)
+			}
+		})
 	}
 }
 
