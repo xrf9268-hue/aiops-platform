@@ -319,6 +319,29 @@ func (o *Orchestrator) UpdateMaxConcurrentAgentsByState(ctx context.Context, lim
 	}
 }
 
+// UpdatePollIntervalMs applies reloaded workflow poll cadence metadata through
+// the actor so /api/v1/state reflects the runtime cadence after workflow reload.
+func (o *Orchestrator) UpdatePollIntervalMs(ctx context.Context, pollIntervalMs int64) error {
+	if pollIntervalMs <= 0 {
+		return nil
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		st.PollIntervalMs = pollIntervalMs
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // UpdateRetryScheduler applies reloaded retry timing through the actor so
 // subsequently scheduled retries observe workflow changes without a process
 // restart.

@@ -962,6 +962,23 @@ func TestUpdateMaxConcurrentAgentsByStateNormalizesStateKeys(t *testing.T) {
 	}
 }
 
+func TestUpdatePollIntervalMsRefreshesSnapshotMetadata(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp})
+	defer cancel()
+
+	if err := o.UpdatePollIntervalMs(context.Background(), 42000); err != nil {
+		t.Fatalf("UpdatePollIntervalMs: %v", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.PollIntervalMs != 42000 {
+		t.Fatalf("PollIntervalMs = %d, want 42000", view.PollIntervalMs)
+	}
+}
+
 func TestRetryFire_DropsStaleContinuationFireAfterFailureReplacement(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)

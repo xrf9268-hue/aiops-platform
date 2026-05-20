@@ -423,6 +423,7 @@ func (s *OrchestratorState) RecordRateLimits(snap *RateLimitSnapshot) {
 // design doc's "HTTP surface" section) but Snapshot() ships now so
 // tests have a stable read API.
 type StateView struct {
+	GeneratedAt                time.Time
 	PollIntervalMs             int64
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
@@ -463,6 +464,7 @@ type RetryView struct {
 // handler, CLI status) sort by IssueID before display.
 func (s *OrchestratorState) Snapshot() StateView {
 	view := StateView{
+		GeneratedAt:                time.Now().UTC(),
 		PollIntervalMs:             s.PollIntervalMs,
 		MaxConcurrentAgents:        s.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
@@ -471,7 +473,10 @@ func (s *OrchestratorState) Snapshot() StateView {
 		Failed:                     make([]IssueID, 0, len(s.Failed)),
 		Completed:                  make([]IssueID, 0, len(s.Completed)),
 		CodexTotals:                s.CodexTotals,
-		CodexRateLimits:            s.CodexRateLimits,
+	}
+	if s.CodexRateLimits != nil {
+		rateLimits := *s.CodexRateLimits
+		view.CodexRateLimits = &rateLimits
 	}
 	for id, r := range s.Running {
 		// Deep-copy RetryAttempt so a snapshot consumer mutating the
