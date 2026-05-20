@@ -23,7 +23,8 @@ Linear or Gitea task
 ## Workflow
 
 Use `aiops-platform` as the Go-based, Gitea-friendly, locally customizable
-Symphony implementation while D1–D24 are closed systematically.
+Symphony implementation while the remaining open/partial D1–D24 items in
+[`DEVIATIONS.md`](DEVIATIONS.md) are closed systematically.
 
 ## Components
 

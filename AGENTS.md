@@ -19,21 +19,24 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 > from this SPEC-aligned picture and are being reverted. Do not design new
 > code that depends on the legacy behavior:
 >
-> - **Postgres queue** (`internal/queue`, `migrations/`): not in SPEC; being
->   removed under #73 in favor of in-memory + tracker + filesystem recovery
->   (#68).
+> - **Postgres queue** (`internal/queue`, `migrations/`): the worker no
+>   longer reads from the Postgres queue (#73 first half landed). The
+>   legacy `internal/queue`, `migrations/`, `cmd/linear-poller`, and
+>   `cmd/gitea-poller` queue-ingress path remains in tree until #73
+>   closes the second half; do not build new worker behavior on it.
 > - **Gitea webhook ingress** (`cmd/trigger-api`, `internal/triggerapi`,
 >   `internal/gitea/webhook*.go`): not in SPEC; removed under #74 in favor
 >   of tracker polling.
 > - **Orchestrator-driven PR creation, git push, and Linear status writes**:
 >   closed under #76 after #64/#14; the worker must not reintroduce
 >   `CommitAndPush`, `CreatePR`, `OnClaim`, or `OnPRCreated`-style handoff.
-> - **No per-tick reconciliation; in-flight runs ignore tracker state**:
->   SPEC §2.1 Goal "Stop active runs when issue state changes make them
->   ineligible" is unimplemented. #68 covers startup reconciliation only;
->   the per-tick reconcile + agent-cancel propagation lives under #78.
+> - **Per-tick reconciliation and agent-cancel propagation** landed under
+>   PR #131 (D9 closed). The worker should continue to stop active runs
+>   when tracker state changes make them ineligible.
 > - **Multi-path WORKFLOW.md discovery** (`internal/workflow/resolver.go`):
->   SPEC says single source; being reverted under #72.
+>   closed under #72. The resolver now uses the canonical root
+>   `WORKFLOW.md` only; do not reintroduce `.aiops/WORKFLOW.md` or
+>   `.github/WORKFLOW.md` fallback discovery.
 
 ## SPEC alignment is a hard requirement
 
