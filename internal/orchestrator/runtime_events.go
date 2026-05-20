@@ -106,6 +106,7 @@ func tokenUsageFromEvent(event task.RuntimeEvent) (tokenUsage, bool) {
 	absolutePaths := [][]string{
 		{"total_token_usage"},
 		{"token_usage", "total"},
+		{"turn", "token_usage", "total"},
 		{"msg", "payload", "info", "total_token_usage"},
 		{"msg", "info", "total_token_usage"},
 	}
@@ -115,7 +116,7 @@ func tokenUsageFromEvent(event task.RuntimeEvent) (tokenUsage, bool) {
 			return usage, true
 		}
 	}
-	paths := [][]string{{"usage"}}
+	paths := [][]string{{"usage"}, {"turn", "usage"}}
 	if event.Event == task.EventTurnCompleted {
 		paths = append(paths, nil)
 	}

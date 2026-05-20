@@ -809,6 +809,38 @@ func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
 	}
 }
 
+func TestRecordRuntimeEventReadsNestedTurnUsagePayloads(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-NESTED-USAGE")
+	defer cancel()
+
+	events := []task.RuntimeEvent{
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"turn": map[string]any{
+				"usage": map[string]any{"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
+			},
+		}},
+		{Event: task.EventTurnCompleted, Payload: map[string]any{
+			"turn": map[string]any{
+				"token_usage": map[string]any{
+					"total": map[string]any{"input_tokens": 11, "output_tokens": 13, "total_tokens": 24},
+				},
+			},
+		}},
+	}
+	for _, event := range events {
+		if err := o.RecordRuntimeEvent(context.Background(), issueID, event); err != nil {
+			t.Fatalf("RecordRuntimeEvent: %v", err)
+		}
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if view.CodexTotals.InputTokens != 11 || view.CodexTotals.OutputTokens != 13 || view.CodexTotals.TotalTokens != 24 {
+		t.Fatalf("CodexTotals = %+v, want nested turn usage folded into totals", view.CodexTotals)
+	}
+}
+
 func TestSpawnRegistersRunningBeforeRuntimeEvents(t *testing.T) {
 	disp := &earlyRuntimeEventDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
