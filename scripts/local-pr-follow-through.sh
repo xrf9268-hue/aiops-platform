@@ -183,7 +183,8 @@ run_claude_review() {
   local review_file="$3"
   local prompt_file="${review_file}.prompt"
   local schema_file="${review_file}.schema.json"
-  local max_turns="${AIOPS_CLAUDE_REVIEW_MAX_TURNS:-2}"
+  local raw_file="${review_file}.raw.json"
+  local max_turns="${AIOPS_CLAUDE_REVIEW_MAX_TURNS:-6}"
   if ! command -v claude >/dev/null 2>&1; then
     echo "Claude Code is required for the local independent review gate" >&2
     return 1
@@ -207,17 +208,25 @@ PROMPT
     --permission-mode bypassPermissions \
     --no-session-persistence \
     --tools "" \
+    --output-format json \
     --json-schema "$(cat "$schema_file")" \
     --max-turns "$max_turns" \
-    < "$prompt_file" > "$review_file"; then
+    < "$prompt_file" > "$raw_file"; then
     echo "Claude local independent review failed for PR #$pr" >&2
-    if [[ -s "$review_file" ]]; then
-      cat "$review_file" >&2
+    if [[ -s "$raw_file" ]]; then
+      cat "$raw_file" >&2
     fi
-    rm -f "$schema_file" "$prompt_file"
+    rm -f "$schema_file" "$prompt_file" "$raw_file"
     return 1
   fi
-  rm -f "$schema_file" "$prompt_file"
+  if ! jq -e '.is_error == false and (.structured_output | type == "object")' "$raw_file" >/dev/null; then
+    echo "Claude local independent review did not return structured output for PR #$pr" >&2
+    cat "$raw_file" >&2
+    rm -f "$schema_file" "$prompt_file" "$raw_file"
+    return 1
+  fi
+  jq -c '.structured_output' "$raw_file" > "$review_file"
+  rm -f "$schema_file" "$prompt_file" "$raw_file"
   validate_review_json "Claude Code" "$review_file"
 }
 
@@ -290,7 +299,7 @@ run_local_reviews() {
   codex_status=0
   wait "$claude_pid" || claude_status=$?
   wait "$codex_pid" || codex_status=$?
-  rm -f "$diff_file" "$claude_file" "$codex_file" "${claude_file}.prompt" "${codex_file}.stdout" "${codex_file}.prompt" "${claude_file}.schema.json" "${codex_file}.schema.json"
+  rm -f "$diff_file" "$claude_file" "$codex_file" "${claude_file}.prompt" "${claude_file}.raw.json" "${codex_file}.stdout" "${codex_file}.prompt" "${claude_file}.schema.json" "${codex_file}.schema.json"
   if [[ "$claude_status" -ne 0 || "$codex_status" -ne 0 ]]; then
     return 1
   fi

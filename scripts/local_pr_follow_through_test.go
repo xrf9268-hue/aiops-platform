@@ -14,12 +14,14 @@ func TestLocalPRFollowThroughClaudeReviewIsDiffOnly(t *testing.T) {
 	script := string(body)
 
 	for _, want := range []string{
-		`local max_turns="${AIOPS_CLAUDE_REVIEW_MAX_TURNS:-2}"`,
+		`local max_turns="${AIOPS_CLAUDE_REVIEW_MAX_TURNS:-6}"`,
 		`--tools ""`,
 		`--permission-mode bypassPermissions`,
 		`--no-session-persistence`,
+		`--output-format json`,
 		`--json-schema "$(cat "$schema_file")"`,
-		`< "$prompt_file" > "$review_file"`,
+		`< "$prompt_file" > "$raw_file"`,
+		`jq -c '.structured_output' "$raw_file" > "$review_file"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("local-pr-follow-through.sh missing %q", want)

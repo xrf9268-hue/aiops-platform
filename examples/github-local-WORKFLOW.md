@@ -109,9 +109,13 @@ Hard requirements:
   <branch>` with a custom prompt; that CLI mode treats `--base` and `PROMPT` as
   mutually exclusive.
 - For Claude Code, use `claude -p --permission-mode bypassPermissions
-  --no-session-persistence --tools "" --json-schema '<schema-json>'
-  --max-turns 2` and feed the complete review prompt plus diff on stdin. Claude
-  must review only the supplied diff for this gate.
+  --no-session-persistence --tools "" --output-format json
+  --json-schema '<schema-json>'
+  --max-turns 6` and feed the complete review prompt plus diff on stdin. Claude
+  must review only the supplied diff for this gate. The higher turn budget is
+  still bounded by the outer review timeout and prevents structured-output
+  retries from failing the gate before Claude can emit schema-valid JSON. Read
+  `.structured_output` from Claude's JSON wrapper as the review JSON.
 - Treat non-JSON output, command failure, or any non-empty
   `blocking_findings` list from either local reviewer as blocking. Fix findings
   with tests before push.
