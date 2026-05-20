@@ -160,7 +160,10 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		refreshedIssuesByID = refreshed
 		for id, issue := range refreshed {
 			if isActiveTrackerState(issue.State, activeStateKeys) {
-				activeIssuesByID[id] = issue
+				if existing, ok := activeIssuesByID[id]; ok {
+					existing.State = issue.State
+					activeIssuesByID[id] = existing
+				}
 			} else {
 				delete(activeIssuesByID, id)
 			}
@@ -180,10 +183,13 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 			return nil, err
 		}
 	}
-	activeByID := issueIDSet(activeIssues)
+	activeByID := issueMapIDSet(activeIssuesByID)
 	inactiveByID := make(map[string]tracker.Issue)
 	for id, issue := range refreshedIssuesByID {
 		if isActiveTrackerState(issue.State, activeStateKeys) {
+			continue
+		}
+		if !p.isConfiguredInactiveState(issue.State) {
 			continue
 		}
 		delete(activeByID, id)
@@ -249,6 +255,12 @@ func (p *Poller) reconcileInactiveStateGroups() [][]string {
 	return groups
 }
 
+func (p *Poller) isConfiguredInactiveState(state string) bool {
+	configured := normalizedStates(append(append([]string(nil), p.reconcile.TerminalStates...), p.reconcile.InactiveStates...))
+	_, ok := configured[strings.ToLower(strings.TrimSpace(state))]
+	return ok
+}
+
 func nonEmptyStateList(states []string) []string {
 	out := make([]string, 0, len(states))
 	for _, state := range states {
@@ -264,6 +276,16 @@ func issueIDSet(issues []tracker.Issue) map[string]struct{} {
 	for _, issue := range issues {
 		if issue.ID != "" {
 			out[issue.ID] = struct{}{}
+		}
+	}
+	return out
+}
+
+func issueMapIDSet(issues map[string]tracker.Issue) map[string]struct{} {
+	out := make(map[string]struct{}, len(issues))
+	for id := range issues {
+		if id != "" {
+			out[id] = struct{}{}
 		}
 	}
 	return out

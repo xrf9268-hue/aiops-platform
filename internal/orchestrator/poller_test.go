@@ -520,6 +520,7 @@ func TestPollOnceRoutingCancelsRunningIssueWhenNarrowRefreshLeavesActiveStates(t
 	}
 	waitForCancellationDispatcherCount(t, dispatcher, 1)
 
+	trackerClient.setIssues(nil)
 	trackerClient.resetFetchIssueStatesByIDsCalls()
 	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Cancelled"})
 	if err := poller.PollOnce(ctx); err != nil {
