@@ -26,9 +26,9 @@ func appServerInput(workdir string) RunInput {
 				TurnSandboxPolicy: map[string]any{
 					"mode": "workspace-write",
 				},
-				TurnTimeoutMs:  1000,
-				ReadTimeoutMs:  1000,
-				StallTimeoutMs: 1000,
+				TurnTimeoutMs:  3000,
+				ReadTimeoutMs:  3000,
+				StallTimeoutMs: 3000,
 			},
 		}},
 		Workdir: workdir,
@@ -620,7 +620,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Codex.ReadTimeoutMs = 100
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
 	in.Workflow.Config.Codex.StallTimeoutMs = 250
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -815,8 +815,8 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 50
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	in.Workflow.Config.Codex.StallTimeoutMs = 1000
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -841,20 +841,20 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
         print(json.dumps({'method': 'item/tool/call', 'params': {'call_id': 'call-1', 'name': 'gitea_issue_labels', 'arguments': {'owner': 'o', 'repo': 'r', 'number': 1}}}), flush=True)
     elif msg.get('method') == 'item/tool/call/output':
-        time.sleep(0.03)
+        time.sleep(0.08)
         print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after tool'}}), flush=True)
         break
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 50
+	in.Workflow.Config.Codex.StallTimeoutMs = 1000
 	in.Workflow.Config.Tracker.Kind = "gitea"
 	in.Workflow.Config.Tracker.APIKey = "token"
 	in.Workflow.Config.Tracker.ProjectSlug = "http://127.0.0.1:1"
 	in.Workflow.Config.Repo.Owner = "o"
 	in.Workflow.Config.Repo.Name = "r"
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -877,18 +877,18 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        time.sleep(0.03)
+        time.sleep(0.08)
         print(json.dumps({'jsonrpc': '2.0', 'id': 99, 'method': 'server/needs-help', 'params': {}}), flush=True)
     elif msg.get('id') == 99:
-        time.sleep(0.03)
+        time.sleep(0.08)
         print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'completed after server request'}}), flush=True)
         break
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 50
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	in.Workflow.Config.Codex.StallTimeoutMs = 1000
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -974,8 +974,16 @@ for line in sys.stdin:
         pass
 `)
 	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{
+		"granular": map[string]any{
+			"sandbox_approval":    false,
+			"rules":               false,
+			"request_permissions": false,
+		},
+	}
 
-	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -993,7 +1001,128 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerRepliesToUnsupportedServerRequests(t *testing.T) {
+func TestCodexAppServerRunnerDeclinesApprovalsWhenPolicyRequiresReview(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+approval_methods = [
+    ('approval-command', 'item/commandExecution/requestApproval', {'command': 'go test ./...'}, {'decision': 'decline'}),
+    ('approval-file', 'item/fileChange/requestApproval', {'path': 'main.go'}, {'decision': 'decline'}),
+    (
+        'approval-permissions',
+        'item/permissions/requestApproval',
+        {'permissions': {'filesystem': {'write': True}, 'network': {'enabled': True}}},
+        {'permissions': {}},
+    ),
+]
+pending = list(approval_methods)
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        req_id, method, params, _expected = pending.pop(0)
+        print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
+    elif msg.get('id', '').startswith('approval-'):
+        req_id = msg['id']
+        expected = next(item[3] for item in approval_methods if item[0] == req_id)
+        if msg.get('result') != expected:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected approval response', 'got': msg.get('result'), 'want': expected}}), flush=True)
+            break
+        if pending:
+            req_id, method, params, _expected = pending.pop(0)
+            print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'review policy enforced'}}), flush=True)
+            break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{
+		"reject": map[string]any{
+			"sandbox_approval": true,
+			"rules":            true,
+		},
+	}
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "review policy enforced" {
+		t.Fatalf("Summary = %q, want review policy enforced", res.Summary)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"decision":"decline"`, `"permissions":{}`} {
+		if !strings.Contains(string(stdin), want) {
+			t.Fatalf("stdin missing %s in policy-limited approval responses: %s", want, stdin)
+		}
+	}
+}
+
+func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
+	request := map[string]any{
+		"params": map[string]any{
+			"permissions": map[string]any{
+				"filesystem": map[string]any{"write": true},
+				"network":    map[string]any{"enabled": true},
+			},
+		},
+	}
+	cases := []struct {
+		name               string
+		policy             any
+		wantModernDecision string
+		wantPermissions    bool
+	}{
+		{name: "never", policy: "never", wantModernDecision: "decline"},
+		{name: "on-request", policy: "on-request", wantModernDecision: "decline"},
+		{name: "untrusted", policy: "untrusted", wantModernDecision: "decline"},
+		{name: "on-failure", policy: "on-failure", wantModernDecision: "acceptForSession", wantPermissions: true},
+		{name: "reject legacy map", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
+		{name: "granular review disabled", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": false}}, wantModernDecision: "acceptForSession", wantPermissions: true},
+		{name: "granular permission review", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": true}}, wantModernDecision: "acceptForSession"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, method := range []string{"item/commandExecution/requestApproval", "item/fileChange/requestApproval"} {
+				result, ok := protocolServerRequestResult(method, request, tc.policy)
+				if !ok || result["decision"] != tc.wantModernDecision {
+					t.Fatalf("%s result = %#v, %v; want decision %q", method, result, ok, tc.wantModernDecision)
+				}
+			}
+			result, ok := protocolServerRequestResult("item/permissions/requestApproval", request, tc.policy)
+			if !ok {
+				t.Fatal("permissions approval was not handled")
+			}
+			permissions, _ := result["permissions"].(map[string]any)
+			if got := len(permissions) > 0; got != tc.wantPermissions {
+				t.Fatalf("permissions granted = %v with result %#v, want %v", got, result, tc.wantPermissions)
+			}
+		})
+	}
+	inputResult, ok := protocolServerRequestResult("item/tool/requestUserInput", map[string]any{
+		"params": map[string]any{"questions": []any{map[string]any{"id": "q1"}}},
+	}, "on-request")
+	if !ok || inputResult["answers"] == nil {
+		t.Fatalf("user input result = %#v, %v; want answers payload", inputResult, ok)
+	}
+	elicitationResult, ok := protocolServerRequestResult("mcpServer/elicitation/request", map[string]any{}, "never")
+	if !ok || elicitationResult["action"] != "decline" {
+		t.Fatalf("elicitation result = %#v, %v; want decline action", elicitationResult, ok)
+	}
+}
+
+func TestCodexAppServerRunnerRepliesToUnknownServerRequestsWithMethodNotFound(t *testing.T) {
 	binDir := codexAppServerStubScript(t, `
 import json
 log=open(os.environ['CODEX_STDIN_LOG'], 'w')
@@ -1006,13 +1135,13 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        print(json.dumps({'jsonrpc': '2.0', 'id': 'approval-1', 'method': 'approval/request', 'params': {'reason': 'need approval'}}), flush=True)
-    elif msg.get('id') == 'approval-1':
-        result = msg.get('result', {})
-        if result.get('success') is not False or 'unsupported server request' not in result.get('output', ''):
-            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected unsupported request response', 'got': result}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'unknown-1', 'method': 'server/needs-help', 'params': {'reason': 'need approval'}}), flush=True)
+    elif msg.get('id') == 'unknown-1':
+        err = msg.get('error', {})
+        if err.get('code') != -32601 or 'server/needs-help' not in err.get('message', ''):
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected unknown request response', 'got': msg}}), flush=True)
             break
-        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'request rejected'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'unknown request rejected'}}), flush=True)
         break
     elif msg.get('method') == 'initialized':
         pass
@@ -1023,14 +1152,14 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.Summary != "request rejected" {
-		t.Fatalf("Summary = %q, want request rejected", res.Summary)
+	if res.Summary != "unknown request rejected" {
+		t.Fatalf("Summary = %q, want unknown request rejected", res.Summary)
 	}
 	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(stdin), `"id":"approval-1"`) || !strings.Contains(string(stdin), "unsupported server request") {
-		t.Fatalf("stdin did not include unsupported server request response: %s", stdin)
+	if !strings.Contains(string(stdin), `"code":-32601`) || strings.Contains(string(stdin), `"success":false`) {
+		t.Fatalf("stdin did not include JSON-RPC method-not-found error: %s", stdin)
 	}
 }

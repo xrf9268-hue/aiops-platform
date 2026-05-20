@@ -26,6 +26,7 @@ type CodexAppServerRunner struct{}
 
 const (
 	codexAppServerOutputPath = ".aiops/CODEX_APP_SERVER_OUTPUT.txt"
+	nonInteractiveInputReply = "This is a non-interactive session. Operator input is unavailable."
 )
 
 func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error) {
@@ -155,6 +156,7 @@ type appServerClient struct {
 	turnTimeoutMs       int
 	readTimeoutMs       int
 	stallTimeoutMs      int
+	approvalPolicy      any
 	lastTerminal        time.Time
 }
 
@@ -167,6 +169,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
 	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
+	c.approvalPolicy = in.Workflow.Config.Codex.ApprovalPolicy
 	if _, err := c.request(ctx, "initialize", map[string]any{
 		"capabilities": map[string]any{"experimentalApi": true},
 		"clientInfo": map[string]any{
@@ -435,9 +438,10 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 				c.lastTerminal = time.Now()
 			default:
 				if _, ok := msg["id"]; ok {
-					if err := c.replyUnsupportedServerRequest(msg); err != nil {
+					if err := c.replyServerRequest(msg); err != nil {
 						return err
 					}
+					c.lastTerminal = time.Now()
 					continue
 				}
 				if c.stallTimeoutMs > 0 {
@@ -532,33 +536,97 @@ func toSnakeCase(s string) string {
 	return b.String()
 }
 
-func (c *appServerClient) replyUnsupportedServerRequest(msg map[string]any) error {
+func (c *appServerClient) replyServerRequest(msg map[string]any) error {
 	method, _ := msg["method"].(string)
-	if result, ok := protocolValidApprovalResult(method, msg); ok {
+	if result, ok := protocolServerRequestResult(method, msg, c.approvalPolicy); ok {
 		return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result})
 	}
-
-	result, err := dynamicToolResult(false, "unsupported server request: "+method)
-	if err != nil {
-		return err
-	}
-	var payload any
-	if err := json.Unmarshal([]byte(result), &payload); err != nil {
-		payload = map[string]any{"success": false, "output": result}
-	}
-	return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": payload})
+	return c.sendJSONRPCError(msg["id"], -32601, "Method not found: "+method)
 }
 
-func protocolValidApprovalResult(method string, msg map[string]any) (map[string]any, bool) {
+func (c *appServerClient) sendJSONRPCError(id any, code int, message string) error {
+	return c.send(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]any{
+			"code":    code,
+			"message": message,
+		},
+	})
+}
+
+func protocolServerRequestResult(method string, msg map[string]any, approvalPolicy any) (map[string]any, bool) {
 	switch method {
 	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
-		return map[string]any{"decision": "acceptForSession"}, true
+		if autoApproveRequest(method, approvalPolicy) {
+			return map[string]any{"decision": "acceptForSession"}, true
+		}
+		return map[string]any{"decision": "decline"}, true
 	case "item/permissions/requestApproval":
-		params, _ := msg["params"].(map[string]any)
-		return map[string]any{"permissions": params["permissions"]}, true
+		if autoApproveRequest(method, approvalPolicy) {
+			params, _ := msg["params"].(map[string]any)
+			return map[string]any{"permissions": params["permissions"]}, true
+		}
+		return map[string]any{"permissions": map[string]any{}}, true
+	case "execCommandApproval", "applyPatchApproval":
+		if autoApproveRequest(method, approvalPolicy) {
+			return map[string]any{"decision": "approved_for_session"}, true
+		}
+		return map[string]any{"decision": "denied"}, true
+	case "item/tool/requestUserInput":
+		return protocolUserInputResult(msg), true
+	case "mcpServer/elicitation/request":
+		return map[string]any{"action": "decline"}, true
 	default:
 		return nil, false
 	}
+}
+
+func autoApproveRequest(method string, approvalPolicy any) bool {
+	if policy, ok := approvalPolicy.(string); ok {
+		return strings.EqualFold(strings.TrimSpace(policy), "on-failure")
+	}
+	policy, ok := approvalPolicy.(map[string]any)
+	if !ok {
+		return false
+	}
+	if granular, ok := policy["granular"].(map[string]any); ok {
+		return !approvalRuleRequiresReview(granular, method)
+	}
+	if reject, ok := policy["reject"].(map[string]any); ok {
+		return !approvalRuleRequiresReview(reject, method)
+	}
+	return false
+}
+
+func approvalRuleRequiresReview(rules map[string]any, method string) bool {
+	if method == "item/permissions/requestApproval" {
+		return approvalRuleEnabled(rules, "request_permissions") ||
+			approvalRuleEnabled(rules, "sandbox_approval") ||
+			approvalRuleEnabled(rules, "rules")
+	}
+	return approvalRuleEnabled(rules, "sandbox_approval") || approvalRuleEnabled(rules, "rules")
+}
+
+func approvalRuleEnabled(rules map[string]any, key string) bool {
+	enabled, _ := rules[key].(bool)
+	return enabled
+}
+
+func protocolUserInputResult(msg map[string]any) map[string]any {
+	params, _ := msg["params"].(map[string]any)
+	questions, _ := params["questions"].([]any)
+	answers := make(map[string]any)
+	for _, question := range questions {
+		q, _ := question.(map[string]any)
+		id, _ := q["id"].(string)
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		answers[id] = map[string]any{"answers": []string{nonInteractiveInputReply}}
+	}
+	return map[string]any{"answers": answers}
 }
 
 func (c *appServerClient) handleNotification(msg map[string]any) {
