@@ -195,7 +195,10 @@ func normalizeStateConcurrencyLimits(in map[string]int) map[string]int {
 func workflowFileFingerprint(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
+		if errors.Is(err, os.ErrNotExist) {
+			return "", &workflow.Error{Category: workflow.CategoryMissingWorkflowFile, Path: path, Message: "read workflow file", Err: err}
+		}
+		return "", fmt.Errorf("%s: read workflow file: %w", path, err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil

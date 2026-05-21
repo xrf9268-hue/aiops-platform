@@ -1,6 +1,7 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -20,16 +21,133 @@ type Workflow struct {
 	Source         Source
 }
 
+type Category string
+
+const (
+	CategoryMissingWorkflowFile       Category = "missing_workflow_file"
+	CategoryWorkflowParseError        Category = "workflow_parse_error"
+	CategoryWorkflowFrontMatterNotMap Category = "workflow_front_matter_not_a_map"
+	CategoryTemplateParseError        Category = "template_parse_error"
+	CategoryTemplateRenderError       Category = "template_render_error"
+)
+
+var (
+	ErrMissingWorkflowFile       = &Error{Category: CategoryMissingWorkflowFile}
+	ErrWorkflowParse             = &Error{Category: CategoryWorkflowParseError}
+	ErrWorkflowFrontMatterNotMap = &Error{Category: CategoryWorkflowFrontMatterNotMap}
+	ErrTemplateParse             = &TemplateParseError{}
+	ErrTemplateRender            = &TemplateRenderError{}
+)
+
+type Error struct {
+	Category Category
+	Path     string
+	Message  string
+	Err      error
+}
+
+func NewError(category Category, message string, err error) *Error {
+	return &Error{Category: category, Message: message, Err: err}
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = string(e.Category)
+	}
+	if e.Path != "" {
+		msg = e.Path + ": " + msg
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *Error) Is(target error) bool {
+	return categoryMatches(e.category(), target)
+}
+
+func (e *Error) category() Category {
+	if e == nil {
+		return ""
+	}
+	return e.Category
+}
+
+type TemplateParseError struct {
+	Err error
+}
+
+func (e *TemplateParseError) Error() string {
+	if e == nil || e.Err == nil {
+		return string(CategoryTemplateParseError)
+	}
+	return fmt.Sprintf("%s: %v", CategoryTemplateParseError, e.Err)
+}
+
+func (e *TemplateParseError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *TemplateParseError) Is(target error) bool {
+	return categoryMatches(e.category(), target)
+}
+
+func (e *TemplateParseError) category() Category {
+	return CategoryTemplateParseError
+}
+
+type categorized interface {
+	category() Category
+}
+
+func ErrorCategory(err error) (Category, bool) {
+	var categorizedErr categorized
+	if errors.As(err, &categorizedErr) {
+		category := categorizedErr.category()
+		return category, category != ""
+	}
+	return "", false
+}
+
+func categoryMatches(category Category, target error) bool {
+	if category == "" || target == nil {
+		return false
+	}
+	var targetCategory categorized
+	return errors.As(target, &targetCategory) && targetCategory.category() == category
+}
+
 func Load(path string) (*Workflow, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, &Error{Category: CategoryMissingWorkflowFile, Path: path, Message: "read workflow file", Err: err}
+		}
+		return nil, fmt.Errorf("%s: read workflow file: %w", path, err)
 	}
 	front, body := splitFrontMatter(string(b))
 	cfg := DefaultConfig()
 	hasFrontMatter := strings.TrimSpace(front) != ""
 	if hasFrontMatter {
 		frontBytes := []byte(front)
+		if err := validateFrontMatterRoot(path, frontBytes); err != nil {
+			return nil, err
+		}
 		if err := rejectRemovedFields(frontBytes); err != nil {
 			return nil, err
 		}
@@ -38,7 +156,7 @@ func Load(path string) (*Workflow, error) {
 		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		workspaceRootSet := hasNestedKey(frontBytes, "workspace", "root")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
-			return nil, fmt.Errorf("parse workflow front matter: %w", err)
+			return nil, &Error{Category: CategoryWorkflowParseError, Path: path, Message: "parse workflow front matter", Err: err}
 		}
 		cfg.hookFields = hookFields
 		cfg.Workspace.hookFields = legacyHookFields
@@ -78,6 +196,17 @@ func Load(path string) (*Workflow, error) {
 		source = SourcePromptOnly
 	}
 	return &Workflow{Path: path, Config: cfg, PromptTemplate: strings.TrimSpace(body), Source: source}, nil
+}
+
+func validateFrontMatterRoot(path string, frontBytes []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(frontBytes, &doc); err != nil {
+		return &Error{Category: CategoryWorkflowParseError, Path: path, Message: "parse workflow front matter", Err: err}
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return &Error{Category: CategoryWorkflowFrontMatterNotMap, Path: path, Message: "workflow front matter must decode to a map"}
+	}
+	return nil
 }
 
 func migratePollingInterval(frontBytes []byte, cfg *Config) {
@@ -387,7 +516,7 @@ func LoadOptional(path string) (*Workflow, error) {
 	if err == nil {
 		return wf, nil
 	}
-	if os.IsNotExist(err) {
+	if errors.Is(err, ErrMissingWorkflowFile) || os.IsNotExist(err) {
 		cfg := DefaultConfig()
 		if err := expandConfig(&cfg); err != nil {
 			return nil, err

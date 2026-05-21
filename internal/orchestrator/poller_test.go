@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -18,19 +20,24 @@ import (
 type fakeIssueTracker struct {
 	issues                []tracker.Issue
 	err                   error
+	partialSuccess        bool
 	calls                 int
 	preserveMissingFields bool
 }
 
 func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
 	f.calls++
-	if f.err != nil {
+	if f.err != nil && !f.partialSuccess {
 		return nil, f.err
 	}
-	if f.preserveMissingFields {
-		return f.issues, nil
+	issues := f.issues
+	if !f.preserveMissingFields {
+		issues = defaultTrackerIssueTitles(f.issues)
 	}
-	return defaultTrackerIssueTitles(f.issues), nil
+	if f.err != nil {
+		return issues, f.err
+	}
+	return issues, nil
 }
 
 func defaultTrackerIssueTitles(issues []tracker.Issue) []tracker.Issue {
@@ -1889,4 +1896,52 @@ func mustTime(value string) time.Time {
 		panic(err)
 	}
 	return parsed
+}
+
+// TestPollOnceDispatchesPartialIssuesWhenTrackerReturnsCategorizedError covers
+// the multi-tracker partial-success case: ListActiveIssues may return
+// (issues, errors.Join(...)) where one tracker fails (a typed
+// tracker.ErrorCategory error) while another succeeds. PollOnce must keep
+// dispatching the successful issues; only fail-out early when no issues were
+// fetched at all.
+func TestPollOnceDispatchesPartialIssuesWhenTrackerReturnsCategorizedError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	categorizedErr := errors.Join(
+		errors.New("benign other"),
+		tracker.NewError(tracker.CategoryLinearGraphQLErrors, "linear partial outage", nil),
+	)
+	trackerClient := &fakeIssueTracker{
+		issues: []tracker.Issue{
+			{ID: "issue-1", Identifier: "GH-1", State: "AI Ready"},
+			{ID: "issue-2", Identifier: "GH-2", State: "AI Ready"},
+		},
+		err:            categorizedErr,
+		partialSuccess: true,
+	}
+	dispatcher := &recordingDispatcher{}
+	orch := New(NewOrchestratorState(30000, 4), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+	poller := NewPoller(trackerClient, orch)
+
+	pollErr := poller.PollOnce(ctx)
+	if pollErr == nil {
+		t.Fatal("PollOnce returned nil, want partial-success error reported")
+	}
+	if cat, ok := tracker.ErrorCategory(pollErr); !ok || cat != tracker.CategoryLinearGraphQLErrors {
+		t.Fatalf("PollOnce error category = %q ok=%v, want %q true", cat, ok, tracker.CategoryLinearGraphQLErrors)
+	}
+	waitForDispatcherCount(t, dispatcher, 2)
+	ids := dispatcher.issueIDs()
+	sort.Strings(ids)
+	if !reflect.DeepEqual(ids, []string{"issue-1", "issue-2"}) {
+		t.Fatalf("dispatched issue IDs = %v, want partial issues [issue-1 issue-2]", ids)
+	}
 }
