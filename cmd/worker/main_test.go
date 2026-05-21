@@ -630,6 +630,54 @@ func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestStateHTTPServerAllowsIPv6LoopbackHost(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://[::1]:4000/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !called {
+		t.Fatal("snapshot function was not called for IPv6 loopback Host")
+	}
+}
+
+func TestIsLoopbackHTTPHost(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"127.0.0.1:4000", true},
+		{"127.0.0.1", true},
+		{"127.1.2.3:8080", true},
+		{"localhost:4000", true},
+		{"localhost", true},
+		{"[::1]:4000", true},
+		{"[::1]", true},
+		{"::1", false},
+		{"[::1", false},
+		{"::1]", false},
+		{"1.2.3.4:4000", false},
+		{"evil.example", false},
+		{"evil.example:4000", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			if got := isLoopbackHTTPHost(c.in); got != c.want {
+				t.Fatalf("isLoopbackHTTPHost(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}
+
 func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
 	handle, err := startStateHTTPServer(context.Background(), -1, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("disabled state server must not evaluate snapshot")
