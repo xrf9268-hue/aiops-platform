@@ -262,6 +262,7 @@ func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
 			Path string `json:"path"`
 		} `json:"workspace"`
 		Attempts struct {
+			RestartCount        int  `json:"restart_count"`
 			CurrentRetryAttempt *int `json:"current_retry_attempt"`
 		} `json:"attempts"`
 		Running *struct {
@@ -281,11 +282,98 @@ func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
 	if payload.Attempts.CurrentRetryAttempt == nil || *payload.Attempts.CurrentRetryAttempt != retryAttempt {
 		t.Fatalf("current_retry_attempt = %v, want %d", payload.Attempts.CurrentRetryAttempt, retryAttempt)
 	}
+	// SPEC §13.7.2 example: restart_count=1 corresponds to current_retry_attempt=2
+	// (matches Elixir reference: max(retry_attempt - 1, 0)).
+	if want := retryAttempt - 1; payload.Attempts.RestartCount != want {
+		t.Fatalf("restart_count = %d, want %d for current_retry_attempt %d", payload.Attempts.RestartCount, want, retryAttempt)
+	}
 	if payload.Running == nil || payload.Running.StartedAt != startedAt.Format(time.RFC3339) {
 		t.Fatalf("running row = %+v, want started_at %s", payload.Running, startedAt.Format(time.RFC3339))
 	}
 	if payload.Retry != nil {
 		t.Fatalf("retry = %+v, want null for running issue", payload.Retry)
+	}
+}
+
+func TestIssueHTTPHandlerReturnsRestartCountForRetryingIssue(t *testing.T) {
+	dueAt := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{
+			Retrying: []orchestrator.RetryView{{
+				IssueID:    "issue-2",
+				Identifier: "MT-650",
+				Attempt:    3,
+				DueAt:      dueAt,
+				Error:      "tracker temporarily unavailable",
+			}},
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-650", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	var payload struct {
+		Status   string `json:"status"`
+		Attempts struct {
+			RestartCount        int  `json:"restart_count"`
+			CurrentRetryAttempt *int `json:"current_retry_attempt"`
+		} `json:"attempts"`
+		LastError *string `json:"last_error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode issue response: %v; body=%s", err, w.Body.String())
+	}
+	if payload.Status != "retrying" {
+		t.Fatalf("status = %q, want retrying", payload.Status)
+	}
+	if payload.Attempts.CurrentRetryAttempt == nil || *payload.Attempts.CurrentRetryAttempt != 3 {
+		t.Fatalf("current_retry_attempt = %v, want 3", payload.Attempts.CurrentRetryAttempt)
+	}
+	if payload.Attempts.RestartCount != 2 {
+		t.Fatalf("restart_count = %d, want 2 for current_retry_attempt 3", payload.Attempts.RestartCount)
+	}
+	if payload.LastError == nil || *payload.LastError != "tracker temporarily unavailable" {
+		t.Fatalf("last_error = %v, want retry error", payload.LastError)
+	}
+}
+
+func TestIssueHTTPHandlerOmitsRestartCountForFirstRun(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{
+			Running: []orchestrator.RunningView{{
+				IssueID:    "issue-3",
+				Identifier: "MT-651",
+				StartedAt:  time.Date(2026, 5, 21, 9, 30, 0, 0, time.UTC),
+				// RetryAttempt is nil: the issue has never been retried.
+			}},
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-651", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d; body=%s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Attempts struct {
+			RestartCount        int  `json:"restart_count"`
+			CurrentRetryAttempt *int `json:"current_retry_attempt"`
+		} `json:"attempts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode issue response: %v; body=%s", err, w.Body.String())
+	}
+	if payload.Attempts.CurrentRetryAttempt != nil {
+		t.Fatalf("current_retry_attempt = %v, want nil for first run", payload.Attempts.CurrentRetryAttempt)
+	}
+	if payload.Attempts.RestartCount != 0 {
+		t.Fatalf("restart_count = %d, want 0 for first run", payload.Attempts.RestartCount)
 	}
 }
 

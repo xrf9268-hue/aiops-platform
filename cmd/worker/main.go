@@ -682,6 +682,7 @@ func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueR
 		payload := base(row.IssueID, row.Identifier, "running")
 		payload.Workspace.Path = row.WorkspacePath
 		payload.Attempts.CurrentRetryAttempt = copyIntPointer(row.RetryAttempt)
+		payload.Attempts.RestartCount = restartCountFromRetryAttempt(row.RetryAttempt)
 		payload.Running = &running
 		return payload, true
 	}
@@ -692,11 +693,28 @@ func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueR
 		retry := apiRetryFromView(row)
 		payload := base(row.IssueID, row.Identifier, "retrying")
 		payload.Attempts.CurrentRetryAttempt = &retry.Attempt
+		payload.Attempts.RestartCount = restartCountFromRetryAttempt(&retry.Attempt)
 		payload.Retry = &retry
 		payload.LastError = stringPointerIfNotEmpty(row.Error)
 		return payload, true
 	}
 	return apiIssueResponse{}, false
+}
+
+// restartCountFromRetryAttempt mirrors the Symphony Elixir reference
+// (lib/symphony_elixir_web/presenter.ex: `max(retry_attempt - 1, 0)`), and
+// matches the SPEC §13.7.2 example payload where restart_count=1 corresponds
+// to current_retry_attempt=2 (i.e. one prior restart triggered the second
+// attempt). nil retry attempt means the issue has not been retried, so the
+// restart count is zero.
+func restartCountFromRetryAttempt(retryAttempt *int) int {
+	if retryAttempt == nil {
+		return 0
+	}
+	if *retryAttempt <= 0 {
+		return 0
+	}
+	return *retryAttempt - 1
 }
 
 func matchesIssueLookup(issueID orchestrator.IssueID, identifier, normalizedWant string) bool {
