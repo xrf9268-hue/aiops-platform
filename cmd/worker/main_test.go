@@ -662,6 +662,8 @@ func TestIsLoopbackHTTPHost(t *testing.T) {
 		{"[::1]:4000", true},
 		{"[::1]", true},
 		{"::1", false},
+		{"[::1", false},
+		{"::1]", false},
 		{"1.2.3.4:4000", false},
 		{"evil.example", false},
 		{"evil.example:4000", false},
