@@ -307,21 +307,32 @@ func (c *appServerClient) send(msg map[string]any) error {
 }
 
 func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, error) {
+	msg, raw, err := c.readProtocolMessage(ctx)
+	if err != nil {
+		if raw != nil {
+			return nil, fmt.Errorf("decode codex app-server message: %w", err)
+		}
+		return nil, err
+	}
+	return msg, nil
+}
+
+func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]any, []byte, error) {
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, nil, ctx.Err()
 	default:
 	}
 	line, err := c.readLine(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	_, _ = c.out.Write(line)
 	var msg map[string]any
 	if err := json.Unmarshal(line, &msg); err != nil {
-		return nil, fmt.Errorf("decode codex app-server message: %w", err)
+		return nil, line, err
 	}
-	return msg, nil
+	return msg, line, nil
 }
 
 type readResult struct {
@@ -377,6 +388,14 @@ func isAppServerReadTimeout(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "codex app-server read timeout")
 }
 
+func protocolMessageCandidate(raw []byte) bool {
+	return strings.HasPrefix(strings.TrimLeft(string(raw), " \t\r\n"), "{")
+}
+
+func trimProtocolLine(raw []byte) string {
+	return strings.TrimRight(string(raw), "\r\n")
+}
+
 func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 	c.lastTerminal = time.Now()
 	for {
@@ -400,12 +419,20 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			// stalled/runner_timeout retry path.
 			c.readTimeoutMs = 0
 		}
-		msg, err := c.readMessage(readCtx)
+		msg, raw, err := c.readProtocolMessage(readCtx)
 		c.readTimeoutMs = readTimeoutMs
 		if cancel != nil {
 			cancel()
 		}
 		if err != nil {
+			if raw != nil {
+				if !protocolMessageCandidate(raw) {
+					return fmt.Errorf("decode codex app-server message: %w", err)
+				}
+				c.recordMalformedRuntimeLine(raw, err)
+				c.lastTerminal = time.Now()
+				continue
+			}
 			elapsed := time.Since(c.lastTerminal)
 			if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
 				if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
@@ -418,6 +445,7 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			switch method {
 			case "turn/completed":
 				if err := completedTurnError(msg); err != nil {
+					c.recordRuntimeMessage(task.EventTurnEndedWithError, msg)
 					return err
 				}
 				c.handleNotification(msg)
@@ -453,6 +481,9 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 				c.handleNotification(msg)
 				c.recordRuntimeMessage(task.EventNotification, msg)
 			}
+		} else {
+			c.lastTerminal = time.Now()
+			c.recordOtherRuntimeMessage(msg, raw)
 		}
 	}
 }
@@ -463,13 +494,37 @@ func (c *appServerClient) recordRuntimeMessage(event string, msg map[string]any)
 	if payload == nil {
 		payload = map[string]any{}
 	}
+	c.recordRuntimeEvent(event, c.withRuntimeContext(payload))
+}
+
+func (c *appServerClient) recordOtherRuntimeMessage(msg map[string]any, raw []byte) {
+	payload := normalizeRuntimePayload(msg)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["raw"] = trimProtocolLine(raw)
+	c.recordRuntimeEvent(task.EventOtherMessage, c.withRuntimeContext(payload))
+}
+
+func (c *appServerClient) recordMalformedRuntimeLine(raw []byte, err error) {
+	if !protocolMessageCandidate(raw) {
+		return
+	}
+	payload := map[string]any{
+		"raw":   trimProtocolLine(raw),
+		"error": err.Error(),
+	}
+	c.recordRuntimeEvent(task.EventMalformed, c.withRuntimeContext(payload))
+}
+
+func (c *appServerClient) withRuntimeContext(payload map[string]any) map[string]any {
 	if _, ok := payload["thread_id"]; !ok && c.threadID != "" {
 		payload["thread_id"] = c.threadID
 	}
 	if _, ok := payload["turn_id"]; !ok && c.turnID != "" {
 		payload["turn_id"] = c.turnID
 	}
-	c.recordRuntimeEvent(event, payload)
+	return payload
 }
 
 func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]any) {
@@ -538,9 +593,26 @@ func toSnakeCase(s string) string {
 func (c *appServerClient) replyServerRequest(msg map[string]any) error {
 	method, _ := msg["method"].(string)
 	if result, ok := protocolServerRequestResult(method, msg, c.approvalPolicy); ok {
-		return c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result})
+		if err := c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result}); err != nil {
+			return err
+		}
+		if protocolServerRequestAutoApproved(method, c.approvalPolicy) {
+			c.recordApprovalAutoApproved(method, msg, result)
+		}
+		return nil
 	}
 	return c.sendJSONRPCError(msg["id"], -32601, "Method not found: "+method)
+}
+
+func (c *appServerClient) recordApprovalAutoApproved(method string, msg map[string]any, result map[string]any) {
+	params, _ := msg["params"].(map[string]any)
+	payload := normalizeRuntimePayload(params)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	payload["method"] = method
+	payload["result"] = normalizeRuntimeValue(result)
+	c.recordRuntimeEvent(task.EventApprovalAutoApproved, c.withRuntimeContext(payload))
 }
 
 func (c *appServerClient) sendJSONRPCError(id any, code int, message string) error {
@@ -578,6 +650,15 @@ func protocolServerRequestResult(method string, msg map[string]any, approvalPoli
 		return map[string]any{"action": "decline", "content": nil}, true
 	default:
 		return nil, false
+	}
+}
+
+func protocolServerRequestAutoApproved(method string, approvalPolicy any) bool {
+	switch method {
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "execCommandApproval", "applyPatchApproval":
+		return autoApproveRequest(method, approvalPolicy)
+	default:
+		return false
 	}
 }
 
