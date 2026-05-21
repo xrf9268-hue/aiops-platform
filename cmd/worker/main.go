@@ -427,11 +427,19 @@ func isLoopbackHTTPHost(hostport string) bool {
 	host := hostport
 	if h, _, err := net.SplitHostPort(hostport); err == nil {
 		host = h
-	} else if strings.Contains(hostport, ":") {
+	} else if strings.Contains(hostport, ":") && !strings.HasPrefix(hostport, "[") {
+		// "host:port" without IPv6 brackets that failed to split — malformed.
 		return false
 	}
-	host = strings.Trim(host, "[]")
-	return host == "127.0.0.1" || host == "localhost"
+	// Strip IPv6 brackets when the host arrived bracketed without a port (e.g. "[::1]").
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return true
+	}
+	return false
 }
 
 type stateSnapshotFunc func(context.Context) (orchestrator.StateView, error)
