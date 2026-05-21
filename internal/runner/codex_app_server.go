@@ -18,6 +18,16 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+const (
+	// appServerScannerInitialBuf is the Scanner's starting buffer size; it grows
+	// as needed up to maxAppServerLineBytes.
+	appServerScannerInitialBuf = 64 << 10
+	// maxAppServerLineBytes caps each Codex app-server stdio line per SPEC §10.1
+	// ("Max line size: 10 MB"). Lines exceeding this surface as bufio.ErrTooLong
+	// instead of growing the buffer unbounded and OOMing the worker.
+	maxAppServerLineBytes = 10 * 1024 * 1024
+)
+
 // CodexAppServerRunner talks to `codex app-server` over JSON-RPC 2.0 stdio.
 // It is intentionally separate from CodexRunner so the existing one-shot
 // `codex exec` path remains backwards-compatible while the app-server transport
@@ -79,10 +89,12 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		return Result{}, err
 	}
 
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
 	client := &appServerClient{
-		stdin:  stdin,
-		reader: bufio.NewReader(stdout),
-		out:    buf,
+		stdin:   stdin,
+		scanner: sc,
+		out:     buf,
 	}
 	runErr := client.run(ctx, in, string(prompt))
 	if runErr != nil && ctx.Err() == nil {
@@ -168,7 +180,7 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error)
 
 type appServerClient struct {
 	stdin               io.Writer
-	reader              *bufio.Reader
+	scanner             *bufio.Scanner
 	out                 io.Writer
 	nextID              int
 	threadID            string
@@ -353,7 +365,10 @@ func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]a
 	if err != nil {
 		return nil, nil, err
 	}
+	// Scanner strips the line terminator; restore one in the transcript so
+	// successive JSON-RPC messages remain visually separated.
 	_, _ = c.out.Write(line)
+	_, _ = c.out.Write([]byte{'\n'})
 	var msg map[string]any
 	if err := json.Unmarshal(line, &msg); err != nil {
 		return nil, line, NewError(CategoryResponseError, "decode codex app-server message", err)
@@ -369,8 +384,21 @@ type readResult struct {
 func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
 	ch := make(chan readResult, 1)
 	go func() {
-		line, err := c.reader.ReadBytes('\n')
-		ch <- readResult{line: line, err: err}
+		if c.scanner.Scan() {
+			// scanner.Bytes() is invalidated by the next Scan; copy before
+			// crossing the goroutine boundary.
+			line := append([]byte(nil), c.scanner.Bytes()...)
+			ch <- readResult{line: line, err: nil}
+			return
+		}
+		err := c.scanner.Err()
+		if err == nil {
+			err = io.EOF
+		}
+		if errors.Is(err, bufio.ErrTooLong) {
+			err = fmt.Errorf("codex app-server line exceeded %d bytes: %w", maxAppServerLineBytes, err)
+		}
+		ch <- readResult{err: err}
 	}()
 
 	readTimeout := time.Duration(c.readTimeoutMs) * time.Millisecond

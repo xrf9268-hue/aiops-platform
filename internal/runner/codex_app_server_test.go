@@ -1,12 +1,16 @@
 package runner
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1396,5 +1400,50 @@ for line in sys.stdin:
 	}
 	if !strings.Contains(string(stdin), `"code":-32601`) || strings.Contains(string(stdin), `"success":false`) {
 		t.Fatalf("stdin did not include JSON-RPC method-not-found error: %s", stdin)
+	}
+}
+
+// TestAppServerClient_ReadLineRejectsOversizedLine drives readLine directly
+// with a synthesized stdout stream where a single line exceeds the 10 MiB
+// SPEC §10.1 ceiling. The Scanner-bounded reader must surface the cap as a
+// wrapped bufio.ErrTooLong instead of growing the buffer until OOM.
+func TestAppServerClient_ReadLineRejectsOversizedLine(t *testing.T) {
+	payload := bytes.Repeat([]byte{'x'}, maxAppServerLineBytes+1)
+	payload = append(payload, '\n')
+
+	sc := bufio.NewScanner(bytes.NewReader(payload))
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
+
+	c := &appServerClient{scanner: sc}
+	_, err := c.readLine(context.Background())
+	if err == nil {
+		t.Fatal("readLine err = nil, want over-cap error")
+	}
+	if !errors.Is(err, bufio.ErrTooLong) {
+		t.Fatalf("readLine err = %v, want errors.Is(err, bufio.ErrTooLong)", err)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(maxAppServerLineBytes)) {
+		t.Fatalf("readLine err = %q, want cap value %d to appear in message", err.Error(), maxAppServerLineBytes)
+	}
+}
+
+func TestAppServerClient_ReadLineAcceptsLinesBelowCap(t *testing.T) {
+	// A line below the cap (use cap/2 for headroom; Scanner's max is the
+	// buffer ceiling, so lines at exactly cap are rejected by stdlib semantics)
+	// must come back intact.
+	size := maxAppServerLineBytes / 2
+	payload := bytes.Repeat([]byte{'x'}, size)
+	payload = append(payload, '\n')
+
+	sc := bufio.NewScanner(bytes.NewReader(payload))
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
+
+	c := &appServerClient{scanner: sc}
+	line, err := c.readLine(context.Background())
+	if err != nil {
+		t.Fatalf("readLine under cap err = %v, want nil", err)
+	}
+	if got, want := len(line), size; got != want {
+		t.Fatalf("readLine line len = %d, want %d", got, want)
 	}
 }
