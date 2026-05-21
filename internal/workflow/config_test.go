@@ -278,7 +278,9 @@ Prompt body
 func TestExpandConfigLeavesRelativeWorkspaceRootWithoutWorkflowPath(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Workspace.Root = "relative-workspaces"
-	expandConfig(&cfg)
+	if err := expandConfig(&cfg); err != nil {
+		t.Fatalf("expandConfig: %v", err)
+	}
 	if cfg.Workspace.Root != "relative-workspaces" {
 		t.Fatalf("workspace.root = %q, want unchanged relative root without workflow path", cfg.Workspace.Root)
 	}

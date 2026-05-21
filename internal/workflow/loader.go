@@ -55,7 +55,9 @@ func Load(path string) (*Workflow, error) {
 			rawStateCaps[state] = limit
 		}
 	}
-	expandConfigForWorkflowPath(path, &cfg)
+	if err := expandConfigForWorkflowPath(path, &cfg); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	if rawStateCaps != nil {
 		cfg.Agent.MaxConcurrentAgentsByState = rawStateCaps
 	}
@@ -387,7 +389,9 @@ func LoadOptional(path string) (*Workflow, error) {
 	}
 	if os.IsNotExist(err) {
 		cfg := DefaultConfig()
-		expandConfig(&cfg)
+		if err := expandConfig(&cfg); err != nil {
+			return nil, err
+		}
 		return &Workflow{Path: path, Config: cfg, PromptTemplate: DefaultPrompt()}, nil
 	}
 	return nil, err
@@ -409,22 +413,39 @@ func splitFrontMatter(s string) (string, string) {
 	return front, body
 }
 
-func expandConfig(cfg *Config) {
-	expandConfigForWorkflowPath("", cfg)
+func expandConfig(cfg *Config) error {
+	return expandConfigForWorkflowPath("", cfg)
 }
 
-func expandConfigForWorkflowPath(workflowPath string, cfg *Config) {
-	cfg.Tracker.APIKey = os.ExpandEnv(cfg.Tracker.APIKey)
-	cfg.Tracker.BaseURL = os.ExpandEnv(cfg.Tracker.BaseURL)
-	expandRepoConfig(&cfg.Repo)
-	for i := range cfg.Services {
-		expandRepoConfig(&cfg.Services[i].Repo)
+func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
+	var err error
+	if cfg.Tracker.APIKey, err = resolveExplicitEnv("tracker.api_key", cfg.Tracker.APIKey); err != nil {
+		return err
 	}
-	cfg.Workspace.Root = normalizeWorkflowPath(workflowPath, cfg.Workspace.Root)
-	cfg.Codex.Command = os.ExpandEnv(cfg.Codex.Command)
-	cfg.Claude.Command = os.ExpandEnv(cfg.Claude.Command)
+	if err := expandRepoConfig("repo.clone_url", &cfg.Repo); err != nil {
+		return err
+	}
+	for i := range cfg.Services {
+		if err := expandRepoConfig(fmt.Sprintf("services[%d].repo.clone_url", i), &cfg.Services[i].Repo); err != nil {
+			return err
+		}
+	}
+	if cfg.Workspace.Root, err = normalizeWorkflowPath(workflowPath, cfg.Workspace.Root); err != nil {
+		return err
+	}
+	if cfg.Codex.Command, err = resolveExplicitEnv("codex.command", cfg.Codex.Command); err != nil {
+		return err
+	}
+	if cfg.Claude.Command, err = resolveExplicitEnv("claude.command", cfg.Claude.Command); err != nil {
+		return err
+	}
 	for i := range cfg.Sandbox.CredentialFiles {
-		cfg.Sandbox.CredentialFiles[i] = expandPath(os.ExpandEnv(cfg.Sandbox.CredentialFiles[i]))
+		field := fmt.Sprintf("sandbox.credential_files[%d]", i)
+		resolved, err := resolveExplicitEnv(field, cfg.Sandbox.CredentialFiles[i])
+		if err != nil {
+			return err
+		}
+		cfg.Sandbox.CredentialFiles[i] = expandPath(resolved)
 	}
 	if cfg.Agent.Default == "" {
 		cfg.Agent.Default = "mock"
@@ -475,22 +496,31 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) {
 	if cfg.Codex.ApprovalPolicy == nil {
 		cfg.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}}
 	}
+	return nil
 }
 
-func expandRepoConfig(repo *RepoConfig) {
-	repo.CloneURL = os.ExpandEnv(repo.CloneURL)
+func expandRepoConfig(field string, repo *RepoConfig) error {
+	var err error
+	if repo.CloneURL, err = resolveExplicitEnv(field, repo.CloneURL); err != nil {
+		return err
+	}
 	if repo.DefaultBranch == "" {
 		repo.DefaultBranch = "main"
 	}
+	return nil
 }
 
-func normalizeWorkflowPath(workflowPath, p string) string {
-	expanded := expandPath(os.ExpandEnv(p))
+func normalizeWorkflowPath(workflowPath, p string) (string, error) {
+	resolved, err := resolveExplicitEnv("workspace.root", p)
+	if err != nil {
+		return "", err
+	}
+	expanded := expandPath(resolved)
 	if expanded == "" || filepath.IsAbs(expanded) || workflowPath == "" {
-		return expanded
+		return expanded, nil
 	}
 	log.Printf("workflow: relative workspace.root %s resolved relative to workflow file %s", expanded, workflowPath)
-	return filepath.Join(filepath.Dir(workflowPath), expanded)
+	return filepath.Join(filepath.Dir(workflowPath), expanded), nil
 }
 
 func expandPath(p string) string {
@@ -504,6 +534,60 @@ func expandPath(p string) string {
 		}
 	}
 	return p
+}
+
+type MissingEnvValueError struct {
+	Field  string
+	EnvVar string
+}
+
+func (e *MissingEnvValueError) Error() string {
+	category := "workflow_config_missing_value"
+	if e.Field == "tracker.api_key" {
+		category = "missing_tracker_api_key"
+	}
+	return fmt.Sprintf("%s: %s references $%s but the environment variable is unset or empty", category, e.Field, e.EnvVar)
+}
+
+func resolveExplicitEnv(field, value string) (string, error) {
+	envName, ok := explicitEnvReferenceName(value)
+	if !ok {
+		return value, nil
+	}
+	resolved, ok := os.LookupEnv(envName)
+	if !ok || resolved == "" {
+		return "", &MissingEnvValueError{Field: field, EnvVar: envName}
+	}
+	return resolved, nil
+}
+
+func explicitEnvReferenceName(value string) (string, bool) {
+	if strings.HasPrefix(value, "${") && strings.HasSuffix(value, "}") {
+		name := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+		return name, isExplicitEnvName(name)
+	}
+	if strings.HasPrefix(value, "$") {
+		name := strings.TrimPrefix(value, "$")
+		return name, isExplicitEnvName(name)
+	}
+	return "", false
+}
+
+func isExplicitEnvName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case i == 0 && (r == '_' || (r >= 'A' && r <= 'Z')):
+			continue
+		case i > 0 && (r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeStateConcurrencyLimits(limits map[string]int) map[string]int {

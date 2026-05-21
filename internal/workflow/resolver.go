@@ -56,13 +56,17 @@ func Resolve(workdir string) (*Workflow, *Resolution, error) {
 			return nil, nil, err
 		}
 		cfg := DefaultConfig()
-		expandConfig(&cfg)
+		if err := expandConfig(&cfg); err != nil {
+			return nil, nil, err
+		}
 		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt(), Source: SourceDefault}
 		return wf, &Resolution{Source: SourceDefault}, nil
 	}
 	if info.IsDir() {
 		cfg := DefaultConfig()
-		expandConfig(&cfg)
+		if err := expandConfig(&cfg); err != nil {
+			return nil, nil, err
+		}
 		wf := &Workflow{Config: cfg, PromptTemplate: DefaultPrompt(), Source: SourceDefault}
 		return wf, &Resolution{Source: SourceDefault}, nil
 	}
