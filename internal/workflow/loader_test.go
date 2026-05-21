@@ -143,6 +143,7 @@ func TestLoadResolvesExactEnvironmentReferences(t *testing.T) {
 	credentialPath := filepath.Join(t.TempDir(), "token")
 	t.Setenv("AIOPS_TEST_REPO_URL", "git@example.com:o/r.git")
 	t.Setenv("AIOPS_TEST_TRACKER_KEY", "tracker-secret")
+	t.Setenv("AIOPS_TEST_TRACKER_BASE_URL", "https://tracker.example/api")
 	t.Setenv("AIOPS_TEST_WORKSPACE_ROOT", workspaceRoot)
 	t.Setenv("AIOPS_TEST_CODEX_COMMAND", "codex app-server")
 	t.Setenv("AIOPS_TEST_CLAUDE_COMMAND", "claude --print")
@@ -155,6 +156,7 @@ repo:
   clone_url: $AIOPS_TEST_REPO_URL
 tracker:
   api_key: ${AIOPS_TEST_TRACKER_KEY}
+  base_url: $AIOPS_TEST_TRACKER_BASE_URL
 workspace:
   root: $AIOPS_TEST_WORKSPACE_ROOT
 codex:
@@ -177,6 +179,9 @@ Prompt body
 	}
 	if got := wf.Config.Tracker.APIKey; got != "tracker-secret" {
 		t.Fatalf("tracker.api_key = %q", got)
+	}
+	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/api" {
+		t.Fatalf("tracker.base_url = %q", got)
 	}
 	if got := wf.Config.Workspace.Root; got != workspaceRoot {
 		t.Fatalf("workspace.root = %q, want %q", got, workspaceRoot)
@@ -201,6 +206,8 @@ repo:
   owner: o
   name: r
   clone_url: https://gitea.example/$USER/aiops
+tracker:
+  base_url: https://tracker.example/$USER/api
 workspace:
   root: .aiops-$USER
 codex:
@@ -223,6 +230,9 @@ Prompt body
 	}
 	if got := wf.Config.Repo.CloneURL; got != "https://gitea.example/$USER/aiops" {
 		t.Fatalf("repo.clone_url = %q", got)
+	}
+	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/$USER/api" {
+		t.Fatalf("tracker.base_url = %q", got)
 	}
 	wantRoot := filepath.Join(dir, ".aiops-$USER")
 	if got := wf.Config.Workspace.Root; got != wantRoot {
@@ -257,6 +267,35 @@ Prompt body
 		t.Fatal("Load = nil, want missing env reference error")
 	}
 	for _, want := range []string{path, "missing_tracker_api_key", "tracker.api_key", "$AIOPS_TEST_EMPTY_TRACKER_KEY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load error = %q, want substring %q", err, want)
+		}
+	}
+}
+
+func TestLoadRejectsMissingExplicitEnvironmentReferenceNonTrackerField(t *testing.T) {
+	os.Unsetenv("AIOPS_TEST_UNSET_CODEX_COMMAND")
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  api_key: literal-key
+codex:
+  command: $AIOPS_TEST_UNSET_CODEX_COMMAND
+---
+Prompt body
+`)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load = nil, want missing env reference error for codex.command")
+	}
+	if strings.Contains(err.Error(), "missing_tracker_api_key") {
+		t.Fatalf("Load error = %q, codex.command must not use tracker.api_key category", err)
+	}
+	for _, want := range []string{path, "workflow_config_missing_value", "codex.command", "$AIOPS_TEST_UNSET_CODEX_COMMAND"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("Load error = %q, want substring %q", err, want)
 		}

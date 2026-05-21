@@ -422,6 +422,9 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	if cfg.Tracker.APIKey, err = resolveExplicitEnv("tracker.api_key", cfg.Tracker.APIKey); err != nil {
 		return err
 	}
+	if cfg.Tracker.BaseURL, err = resolveExplicitEnv("tracker.base_url", cfg.Tracker.BaseURL); err != nil {
+		return err
+	}
 	if err := expandRepoConfig("repo.clone_url", &cfg.Repo); err != nil {
 		return err
 	}
