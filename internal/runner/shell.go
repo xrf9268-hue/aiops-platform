@@ -34,6 +34,9 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "sh", "-lc", command+" < .aiops/PROMPT.md")
 	cmd.Dir = in.Workdir
+	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
+		return Result{}, err
+	}
 	wrapped, err := applySandbox(ctx, in, cmd)
 	if err != nil {
 		return Result{}, err

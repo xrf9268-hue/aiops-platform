@@ -77,10 +77,13 @@ func ensurePathWithinRoot(path, root string) error {
 	if err != nil {
 		return fmt.Errorf("check workspace root invariant: %w", err)
 	}
-	if rel == "." || (rel != "" && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)) {
+	if rel == "." {
+		return fmt.Errorf("workspace path %q must be under workspace root %q, not the workspace root itself", path, root)
+	}
+	if rel != "" && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
 		return nil
 	}
-	return fmt.Errorf("sandbox workdir %q is outside workspace root %q", path, root)
+	return fmt.Errorf("workspace path %q is outside workspace root %q", path, root)
 }
 
 func scopedEnv(allow []string) []string {

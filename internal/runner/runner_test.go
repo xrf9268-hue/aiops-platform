@@ -97,8 +97,10 @@ func TestMockRunnerNoTimeoutWhenSleepShort(t *testing.T) {
 // regressed and we waited the full sleep budget.
 func TestShellRunnerKillsRunawayProcess(t *testing.T) {
 	t.Parallel()
+	workdir := shellTestWorkdir(t)
 	wf := workflow.Workflow{Config: workflow.Config{
-		Claude: workflow.CommandConfig{Command: "sleep 30"},
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "sleep 30"},
 	}}
 	r := ShellRunner{Name: "claude"}
 
@@ -109,7 +111,7 @@ func TestShellRunnerKillsRunawayProcess(t *testing.T) {
 	_, err := r.Run(ctx, RunInput{
 		Task:     task.Task{ID: "tsk_shell"},
 		Workflow: wf,
-		Workdir:  shellTestWorkdir(t),
+		Workdir:  workdir,
 	})
 	elapsed := time.Since(start)
 
@@ -131,8 +133,10 @@ func TestShellRunnerKillsRunawayProcess(t *testing.T) {
 // TimeoutError — verify-vs-timeout retry routing depends on this.
 func TestShellRunnerNonTimeoutErrorNotMisclassified(t *testing.T) {
 	t.Parallel()
+	workdir := shellTestWorkdir(t)
 	wf := workflow.Workflow{Config: workflow.Config{
-		Claude: workflow.CommandConfig{Command: "exit 3"},
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "exit 3"},
 	}}
 	r := ShellRunner{Name: "claude"}
 
@@ -142,7 +146,7 @@ func TestShellRunnerNonTimeoutErrorNotMisclassified(t *testing.T) {
 	_, err := r.Run(ctx, RunInput{
 		Task:     task.Task{ID: "tsk_nonzero"},
 		Workflow: wf,
-		Workdir:  shellTestWorkdir(t),
+		Workdir:  workdir,
 	})
 	if err == nil {
 		t.Fatal("expected non-zero exit error")

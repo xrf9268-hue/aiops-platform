@@ -19,7 +19,8 @@ func appServerInput(workdir string) RunInput {
 	return RunInput{
 		Task: task.Task{ID: "AIOPS-64", Title: "Wire Codex app-server", Model: "codex-app-server"},
 		Workflow: workflow.Workflow{Config: workflow.Config{
-			Agent: workflow.AgentConfig{MaxTurns: 8},
+			Agent:     workflow.AgentConfig{MaxTurns: 8},
+			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
 			Codex: workflow.CommandConfig{
 				Command:        "codex app-server",
 				ApprovalPolicy: "never",
@@ -63,6 +64,31 @@ func TestNewSupportsCodexAppServerRunner(t *testing.T) {
 	}
 	if _, ok := r.(CodexAppServerRunner); !ok {
 		t.Fatalf("New(codex-app-server) = %T, want CodexAppServerRunner", r)
+	}
+}
+
+func TestCodexAppServerRunnerRejectsOutsideWorkdirWhenSandboxDisabled(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+with open(os.environ['CODEX_STARTED_LOG'], 'w') as f:
+    f.write('started')
+sys.exit(0)
+`)
+	t.Setenv("CODEX_STARTED_LOG", filepath.Join(binDir, "started.txt"))
+
+	root := t.TempDir()
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Workspace.Root = root
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err == nil {
+		t.Fatal("expected invalid workspace cwd error, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid_workspace_cwd") {
+		t.Fatalf("error = %q, want invalid_workspace_cwd", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(binDir, "started.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("codex app-server was launched before workspace validation; stat err=%v", statErr)
 	}
 }
 
