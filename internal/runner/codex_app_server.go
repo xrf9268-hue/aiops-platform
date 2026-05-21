@@ -90,7 +90,10 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	}
 
 	sc := bufio.NewScanner(stdout)
-	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
+	// Scanner returns ErrTooLong when the buffer fills with no token boundary,
+	// so passing maxAppServerLineBytes+1 as the cap allows tokens up to (and
+	// including) maxAppServerLineBytes and rejects anything strictly larger.
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 	client := &appServerClient{
 		stdin:   stdin,
 		scanner: sc,

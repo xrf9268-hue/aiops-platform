@@ -1412,7 +1412,7 @@ func TestAppServerClient_ReadLineRejectsOversizedLine(t *testing.T) {
 	payload = append(payload, '\n')
 
 	sc := bufio.NewScanner(bytes.NewReader(payload))
-	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 
 	c := &appServerClient{scanner: sc}
 	_, err := c.readLine(context.Background())
@@ -1427,23 +1427,21 @@ func TestAppServerClient_ReadLineRejectsOversizedLine(t *testing.T) {
 	}
 }
 
-func TestAppServerClient_ReadLineAcceptsLinesBelowCap(t *testing.T) {
-	// A line below the cap (use cap/2 for headroom; Scanner's max is the
-	// buffer ceiling, so lines at exactly cap are rejected by stdlib semantics)
-	// must come back intact.
-	size := maxAppServerLineBytes / 2
-	payload := bytes.Repeat([]byte{'x'}, size)
+func TestAppServerClient_ReadLineAcceptsLineAtCap(t *testing.T) {
+	// A line of exactly maxAppServerLineBytes — the documented limit — must
+	// pass; only strictly-larger lines should be rejected.
+	payload := bytes.Repeat([]byte{'x'}, maxAppServerLineBytes)
 	payload = append(payload, '\n')
 
 	sc := bufio.NewScanner(bytes.NewReader(payload))
-	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes)
+	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 
 	c := &appServerClient{scanner: sc}
 	line, err := c.readLine(context.Background())
 	if err != nil {
-		t.Fatalf("readLine under cap err = %v, want nil", err)
+		t.Fatalf("readLine at cap err = %v, want nil (10 MiB is the documented inclusive limit)", err)
 	}
-	if got, want := len(line), size; got != want {
+	if got, want := len(line), maxAppServerLineBytes; got != want {
 		t.Fatalf("readLine line len = %d, want %d", got, want)
 	}
 }
