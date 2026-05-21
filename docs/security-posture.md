@@ -46,7 +46,8 @@ Still not provided:
 
 - Docker-per-run workspace isolation;
 - VM isolation or macOS `sandbox-exec` support;
-- a credential vault that mints per-run credentials.
+- a credential vault that mints per-run credentials;
+- durable persistence for input-blocked state across worker restarts.
 
 Docker-based workspace isolation should be a follow-up rather than part of this
 phase: it changes workspace creation, cache ownership, Git remotes/credentials,
@@ -87,6 +88,9 @@ The current Go implementation provides these safety controls:
 - `$VAR` indirection for secrets in workflow configuration;
 - masking of secret values in configuration inspection output;
 - optional pre-push secret scanning;
+- operator-visible blocked state for Codex input-required and MCP elicitation
+  requests, so non-interactive runs stop and remain claimed instead of burning
+  retries silently;
 - branch protection and review gates when configured on the remote repository.
 
 These controls reduce accidental damage and make changes reviewable. They do not

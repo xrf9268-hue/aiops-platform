@@ -82,7 +82,7 @@ func TestStatusSnapshotDeduplicatesEventSummaryByIssueAndKind(t *testing.T) {
 	st := NewOrchestratorState(30000, 2)
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidate, IssueID: "issue-1", At: time.Unix(1, 0)})
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidate, IssueID: "issue-1", At: time.Unix(2, 0)})
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventBlocked, IssueID: "issue-1", At: time.Unix(3, 0)})
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidateBlocked, IssueID: "issue-1", At: time.Unix(3, 0)})
 
 	status := st.StatusSnapshot(10)
 	if status.Summary.Candidate != 1 {
@@ -132,7 +132,7 @@ func TestWriteStatusJSONDocumentsQueueIndependentSource(t *testing.T) {
 		DueAt:      time.Unix(102, 0).UTC(),
 		Error:      "transient failure",
 	})
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventBlocked, IssueID: "issue-1", Identifier: "ENG-1", Message: "blocked by dependency", At: time.Unix(101, 0).UTC()})
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidateBlocked, IssueID: "issue-1", Identifier: "ENG-1", Message: "blocked by dependency", At: time.Unix(101, 0).UTC()})
 
 	var buf bytes.Buffer
 	if err := WriteStatusJSON(&buf, st.StatusSnapshot(20)); err != nil {
@@ -147,8 +147,8 @@ func TestWriteStatusJSONDocumentsQueueIndependentSource(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &decoded); err != nil {
 		t.Fatalf("status JSON is invalid: %v", err)
 	}
-	if decoded.RecentEvents[0].Kind != RuntimeEventBlocked {
-		t.Fatalf("decoded event kind = %q, want %q", decoded.RecentEvents[0].Kind, RuntimeEventBlocked)
+	if decoded.RecentEvents[0].Kind != RuntimeEventCandidateBlocked {
+		t.Fatalf("decoded event kind = %q, want %q", decoded.RecentEvents[0].Kind, RuntimeEventCandidateBlocked)
 	}
 	for _, internalName := range []string{"IssueID", "DueAt", "InputTokens"} {
 		if strings.Contains(body, internalName) {

@@ -15,6 +15,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 type fakeIssueTracker struct {
@@ -1330,6 +1331,39 @@ func TestWorkerTaskDispatcherCopiesRetryAttemptBeforeRun(t *testing.T) {
 	if tk.Attempts != 2 {
 		t.Fatalf("task attempts changed after caller mutation: got %d, want copied run attempt 2", tk.Attempts)
 	}
+}
+
+func TestWorkerTaskDispatcherReportsWorkspacePathBeforeRun(t *testing.T) {
+	root := t.TempDir()
+	tk := task.Task{
+		ID:            "issue-183",
+		RepoOwner:     "acme",
+		RepoName:      "demo",
+		SourceType:    "github_issue",
+		SourceEventID: "183",
+	}
+	reported := make(chan string, 1)
+	dispatcher := WorkerTaskDispatcher{
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
+			return tk, nil
+		},
+		Config: worker.Config{WorkspaceRoot: root, Workflow: &workflow.Workflow{}},
+		WorkspacePrepared: func(_ context.Context, _ tracker.Issue, _ task.Task, path string) {
+			reported <- path
+		},
+	}
+
+	result := dispatcher.Spawn(context.Background(), tracker.Issue{ID: "issue-183"}, nil)
+
+	select {
+	case got := <-reported:
+		if want := workspace.New(root).PathFor(tk); got != want {
+			t.Fatalf("workspace path = %q, want %q", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("workspace path was not reported before worker run")
+	}
+	<-result
 }
 
 func TestTaskFromIssueUsesServiceRepoDefaultBranch(t *testing.T) {

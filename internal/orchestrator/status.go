@@ -13,11 +13,12 @@ import (
 type RuntimeEventKind string
 
 const (
-	RuntimeEventCandidate RuntimeEventKind = "candidate"
-	RuntimeEventRunning   RuntimeEventKind = "running"
-	RuntimeEventCompleted RuntimeEventKind = "completed"
-	RuntimeEventFailed    RuntimeEventKind = "failed"
-	RuntimeEventBlocked   RuntimeEventKind = "blocked"
+	RuntimeEventCandidate        RuntimeEventKind = "candidate"
+	RuntimeEventRunning          RuntimeEventKind = "running"
+	RuntimeEventCompleted        RuntimeEventKind = "completed"
+	RuntimeEventFailed           RuntimeEventKind = "failed"
+	RuntimeEventCandidateBlocked RuntimeEventKind = "blocked"
+	RuntimeEventInputBlocked     RuntimeEventKind = "input_blocked"
 )
 
 // RuntimeEvent is an operator-facing event observed by the orchestrator runtime.
@@ -37,6 +38,7 @@ type RuntimeStatus struct {
 	Source       string             `json:"source"`
 	Summary      StatusSummary      `json:"summary"`
 	Running      []StatusRun        `json:"running"`
+	Blocked      []StatusBlocked    `json:"blocked"`
 	Retrying     []StatusRetry      `json:"retrying"`
 	Completed    []IssueID          `json:"completed"`
 	RecentEvents []RuntimeEvent     `json:"recent_events"`
@@ -60,6 +62,20 @@ type StatusRun struct {
 	RetryAttempt  *int      `json:"retry_attempt,omitempty"`
 	WorkspacePath string    `json:"workspace_path,omitempty"`
 	LastCodexAt   time.Time `json:"last_codex_at,omitempty"`
+	Branch        string    `json:"branch,omitempty"`
+	PRURL         string    `json:"pr_url,omitempty"`
+}
+
+type StatusBlocked struct {
+	IssueID       IssueID   `json:"issue_id"`
+	Identifier    string    `json:"identifier,omitempty"`
+	State         string    `json:"state,omitempty"`
+	BlockedAt     time.Time `json:"blocked_at"`
+	WorkspacePath string    `json:"workspace_path,omitempty"`
+	SessionID     string    `json:"session_id,omitempty"`
+	LastCodexAt   time.Time `json:"last_codex_at,omitempty"`
+	Method        string    `json:"method,omitempty"`
+	Error         string    `json:"error,omitempty"`
 	Branch        string    `json:"branch,omitempty"`
 	PRURL         string    `json:"pr_url,omitempty"`
 }
@@ -119,6 +135,26 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 		running = append(running, row)
 	}
 	sort.Slice(running, func(i, j int) bool { return running[i].IssueID < running[j].IssueID })
+	blocked := make([]StatusBlocked, 0, len(view.Blocked))
+	for _, b := range view.Blocked {
+		row := StatusBlocked{
+			IssueID:       b.IssueID,
+			Identifier:    b.Identifier,
+			State:         b.State,
+			BlockedAt:     b.BlockedAt,
+			WorkspacePath: b.WorkspacePath,
+			SessionID:     b.SessionID,
+			LastCodexAt:   b.LastCodexAt,
+			Method:        b.Method,
+			Error:         b.Error,
+		}
+		if link, ok := links[b.IssueID]; ok {
+			row.Branch = link.branch
+			row.PRURL = link.prURL
+		}
+		blocked = append(blocked, row)
+	}
+	sort.Slice(blocked, func(i, j int) bool { return blocked[i].IssueID < blocked[j].IssueID })
 	retrying := make([]StatusRetry, 0, len(view.Retrying))
 	for _, r := range view.Retrying {
 		retrying = append(retrying, StatusRetry{
@@ -133,7 +169,7 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 	sort.Slice(view.Failed, func(i, j int) bool { return view.Failed[i] < view.Failed[j] })
 	sort.Slice(view.Completed, func(i, j int) bool { return view.Completed[i] < view.Completed[j] })
 
-	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: len(view.Failed), Retrying: len(retrying)}
+	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: len(view.Failed), Blocked: len(blocked), Retrying: len(retrying)}
 	seenEventIssues := map[RuntimeEventKind]map[IssueID]struct{}{}
 	for _, id := range view.Failed {
 		seenFailed := seenEventIssues[RuntimeEventFailed]
@@ -150,6 +186,7 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 		Source:       "orchestrator_runtime",
 		Summary:      summary,
 		Running:      running,
+		Blocked:      blocked,
 		Retrying:     retrying,
 		Completed:    view.Completed,
 		RecentEvents: events,
@@ -169,7 +206,7 @@ func statusCodexTotals(t CodexTotals) StatusCodexTotals {
 
 func recordEventSummary(summary *StatusSummary, seen map[RuntimeEventKind]map[IssueID]struct{}, ev RuntimeEvent) {
 	switch ev.Kind {
-	case RuntimeEventCandidate, RuntimeEventFailed, RuntimeEventBlocked:
+	case RuntimeEventCandidate, RuntimeEventFailed, RuntimeEventCandidateBlocked:
 	default:
 		return
 	}
@@ -189,7 +226,7 @@ func recordEventSummary(summary *StatusSummary, seen map[RuntimeEventKind]map[Is
 		summary.Candidate++
 	case RuntimeEventFailed:
 		summary.Failed++
-	case RuntimeEventBlocked:
+	case RuntimeEventCandidateBlocked:
 		summary.Blocked++
 	}
 }

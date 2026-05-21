@@ -456,6 +456,7 @@ type apiStateResponse struct {
 	MaxConcurrentAgentsByState map[string]int                  `json:"max_concurrent_agents_by_state,omitempty"`
 	Counts                     apiStateCounts                  `json:"counts"`
 	Running                    []apiStateRunning               `json:"running"`
+	Blocked                    []apiStateBlocked               `json:"blocked"`
 	Retrying                   []apiStateRetry                 `json:"retrying"`
 	Completed                  []orchestrator.IssueID          `json:"completed"`
 	Failed                     []orchestrator.IssueID          `json:"failed"`
@@ -472,6 +473,7 @@ type apiCodexTotals struct {
 
 type apiStateCounts struct {
 	Running   int `json:"running"`
+	Blocked   int `json:"blocked"`
 	Retrying  int `json:"retrying"`
 	Completed int `json:"completed"`
 	Failed    int `json:"failed"`
@@ -484,6 +486,18 @@ type apiStateRunning struct {
 	RetryAttempt  *int                 `json:"retry_attempt,omitempty"`
 	WorkspacePath string               `json:"workspace_path,omitempty"`
 	LastCodexAt   *time.Time           `json:"last_codex_at,omitempty"`
+}
+
+type apiStateBlocked struct {
+	IssueID       orchestrator.IssueID `json:"issue_id"`
+	Identifier    string               `json:"issue_identifier,omitempty"`
+	State         string               `json:"state,omitempty"`
+	BlockedAt     *time.Time           `json:"blocked_at,omitempty"`
+	WorkspacePath string               `json:"workspace_path,omitempty"`
+	SessionID     string               `json:"session_id,omitempty"`
+	LastCodexAt   *time.Time           `json:"last_codex_at,omitempty"`
+	Method        string               `json:"method,omitempty"`
+	Error         string               `json:"error,omitempty"`
 }
 
 type apiStateRetry struct {
@@ -802,6 +816,33 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(running, func(i, j int) bool {
 		return running[i].IssueID < running[j].IssueID
 	})
+	blocked := make([]apiStateBlocked, 0, len(view.Blocked))
+	for _, row := range view.Blocked {
+		var blockedAt *time.Time
+		if !row.BlockedAt.IsZero() {
+			v := row.BlockedAt
+			blockedAt = &v
+		}
+		var lastCodexAt *time.Time
+		if !row.LastCodexAt.IsZero() {
+			v := row.LastCodexAt
+			lastCodexAt = &v
+		}
+		blocked = append(blocked, apiStateBlocked{
+			IssueID:       row.IssueID,
+			Identifier:    row.Identifier,
+			State:         row.State,
+			BlockedAt:     blockedAt,
+			WorkspacePath: row.WorkspacePath,
+			SessionID:     row.SessionID,
+			LastCodexAt:   lastCodexAt,
+			Method:        row.Method,
+			Error:         row.Error,
+		})
+	}
+	sort.Slice(blocked, func(i, j int) bool {
+		return blocked[i].IssueID < blocked[j].IssueID
+	})
 	retrying := make([]apiStateRetry, 0, len(view.Retrying))
 	for _, row := range view.Retrying {
 		retrying = append(retrying, apiRetryFromView(row))
@@ -829,11 +870,13 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		MaxConcurrentAgentsByState: copyConcurrencyLimits(view.MaxConcurrentAgentsByState),
 		Counts: apiStateCounts{
 			Running:   len(view.Running),
+			Blocked:   len(view.Blocked),
 			Retrying:  len(view.Retrying),
 			Completed: len(view.Completed),
 			Failed:    len(view.Failed),
 		},
 		Running:   running,
+		Blocked:   blocked,
 		Retrying:  retrying,
 		Completed: completed,
 		Failed:    failed,

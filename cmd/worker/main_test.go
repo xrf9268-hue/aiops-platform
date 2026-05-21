@@ -77,6 +77,19 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Attempt:    1,
 			Error:      "retry soon",
 		}},
+		Blocked: []orchestrator.BlockedView{{
+			IssueID:    "issue-7",
+			Identifier: "MT-655",
+			State:      "In Progress",
+			Method:     "item/tool/requestUserInput",
+			Error:      "input required",
+		}, {
+			IssueID:    "issue-6",
+			Identifier: "MT-654",
+			State:      "In Progress",
+			Method:     "mcpServer/elicitation/request",
+			Error:      "input required",
+		}},
 		Completed: []orchestrator.IssueID{"issue-9", "issue-3"},
 		Failed:    []orchestrator.IssueID{"issue-8", "issue-4"},
 		CodexTotals: orchestrator.CodexTotals{
@@ -107,11 +120,19 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		Counts              struct {
 			Running  int `json:"running"`
 			Retrying int `json:"retrying"`
+			Blocked  int `json:"blocked"`
 		} `json:"counts"`
 		Running []struct {
 			IssueID         string `json:"issue_id"`
 			IssueIdentifier string `json:"issue_identifier"`
 		} `json:"running"`
+		Blocked []struct {
+			IssueID         string `json:"issue_id"`
+			IssueIdentifier string `json:"issue_identifier"`
+			State           string `json:"state"`
+			Method          string `json:"method"`
+			Error           string `json:"error"`
+		} `json:"blocked"`
 		Retrying []struct {
 			IssueID         string `json:"issue_id"`
 			IssueIdentifier string `json:"issue_identifier"`
@@ -143,11 +164,17 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if payload.PollIntervalMs != 30000 || payload.MaxConcurrentAgents != 2 {
 		t.Fatalf("state metadata = poll_interval_ms=%d max_concurrent_agents=%d, want 30000/2", payload.PollIntervalMs, payload.MaxConcurrentAgents)
 	}
-	if payload.Counts.Running != 2 || payload.Counts.Retrying != 2 {
-		t.Fatalf("counts = %+v, want running=2 retrying=2", payload.Counts)
+	if payload.Counts.Running != 2 || payload.Counts.Retrying != 2 || payload.Counts.Blocked != 2 {
+		t.Fatalf("counts = %+v, want running=2 retrying=2 blocked=2", payload.Counts)
 	}
 	if len(payload.Running) != 2 || payload.Running[0].IssueID != "issue-1" || payload.Running[1].IssueID != "issue-2" {
 		t.Fatalf("running = %+v, want sorted issue-1 then issue-2", payload.Running)
+	}
+	if len(payload.Blocked) != 2 || payload.Blocked[0].IssueID != "issue-6" || payload.Blocked[1].IssueID != "issue-7" {
+		t.Fatalf("blocked = %+v, want sorted issue-6 then issue-7", payload.Blocked)
+	}
+	if payload.Blocked[0].IssueIdentifier != "MT-654" || payload.Blocked[0].State != "In Progress" || payload.Blocked[0].Method != "mcpServer/elicitation/request" || payload.Blocked[0].Error != "input required" {
+		t.Fatalf("blocked row = %+v, want issue metadata plus input-required method/error", payload.Blocked[0])
 	}
 	if len(payload.Retrying) != 2 || payload.Retrying[0].IssueID != "issue-1" || payload.Retrying[1].IssueID != "issue-2" {
 		t.Fatalf("retrying = %+v, want sorted issue-1 then issue-2", payload.Retrying)
@@ -184,6 +211,22 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		}
 		if _, ok := rowObject["last_codex_at"]; ok {
 			t.Fatalf("zero last_codex_at should be omitted from running row: %#v", rowObject)
+		}
+	}
+	rawBlocked, ok := raw["blocked"].([]any)
+	if !ok {
+		t.Fatalf("raw blocked = %#v, want array", raw["blocked"])
+	}
+	for _, row := range rawBlocked {
+		rowObject, ok := row.(map[string]any)
+		if !ok {
+			t.Fatalf("raw blocked row = %#v, want object", row)
+		}
+		if _, ok := rowObject["blocked_at"]; ok {
+			t.Fatalf("zero blocked_at should be omitted from blocked row: %#v", rowObject)
+		}
+		if _, ok := rowObject["last_codex_at"]; ok {
+			t.Fatalf("zero last_codex_at should be omitted from blocked row: %#v", rowObject)
 		}
 	}
 	rawRetrying, ok := raw["retrying"].([]any)
