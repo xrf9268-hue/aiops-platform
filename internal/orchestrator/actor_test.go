@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -137,6 +138,49 @@ func startActor(t *testing.T, deps Deps) (*Orchestrator, context.CancelFunc) {
 		t.Fatalf("WaitStarted: %v", err)
 	}
 	return o, cancel
+}
+
+func TestRequestRefreshQueuesOnePollWakeAndCoalescesRepeatedRequests(t *testing.T) {
+	o, cancel := startActor(t, Deps{Dispatcher: &fakeDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	first, err := o.RequestRefresh(context.Background())
+	if err != nil {
+		t.Fatalf("first RequestRefresh: %v", err)
+	}
+	if !first.Queued || first.Coalesced {
+		t.Fatalf("first refresh = %+v, want queued and not coalesced", first)
+	}
+	if !reflect.DeepEqual(first.Operations, []string{"poll", "reconcile"}) {
+		t.Fatalf("first operations = %#v, want poll+reconcile", first.Operations)
+	}
+
+	second, err := o.RequestRefresh(context.Background())
+	if err != nil {
+		t.Fatalf("second RequestRefresh: %v", err)
+	}
+	if !second.Queued || !second.Coalesced {
+		t.Fatalf("second refresh = %+v, want queued and coalesced", second)
+	}
+
+	select {
+	case <-o.retryWakeCh():
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not queue poll wake")
+	}
+	select {
+	case <-o.retryWakeCh():
+		t.Fatal("coalesced refresh queued a second poll wake")
+	default:
+	}
+
+	third, err := o.RequestRefresh(context.Background())
+	if err != nil {
+		t.Fatalf("third RequestRefresh: %v", err)
+	}
+	if !third.Queued || third.Coalesced {
+		t.Fatalf("third refresh after draining wake = %+v, want new non-coalesced wake", third)
+	}
 }
 
 // TestRequestDispatch_ConcurrentSameIssueProducesOneRunning is the

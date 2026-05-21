@@ -229,6 +229,238 @@ func TestStateHTTPHandlerRejectsNonGET(t *testing.T) {
 	}
 }
 
+func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
+	startedAt := time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC)
+	retryAttempt := 2
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{
+			Running: []orchestrator.RunningView{{
+				IssueID:       "issue-1",
+				Identifier:    "MT-649",
+				StartedAt:     startedAt,
+				RetryAttempt:  &retryAttempt,
+				WorkspacePath: "/tmp/symphony/MT-649",
+			}},
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/mt-649", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
+	var payload struct {
+		IssueID         string `json:"issue_id"`
+		IssueIdentifier string `json:"issue_identifier"`
+		Status          string `json:"status"`
+		Workspace       struct {
+			Path string `json:"path"`
+		} `json:"workspace"`
+		Attempts struct {
+			CurrentRetryAttempt *int `json:"current_retry_attempt"`
+		} `json:"attempts"`
+		Running *struct {
+			StartedAt string `json:"started_at"`
+		} `json:"running"`
+		Retry *struct{} `json:"retry"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode issue response: %v; body=%s", err, w.Body.String())
+	}
+	if payload.IssueID != "issue-1" || payload.IssueIdentifier != "MT-649" || payload.Status != "running" {
+		t.Fatalf("issue payload identity/status = %+v, want running MT-649 issue-1", payload)
+	}
+	if payload.Workspace.Path != "/tmp/symphony/MT-649" {
+		t.Fatalf("workspace path = %q, want running workspace path", payload.Workspace.Path)
+	}
+	if payload.Attempts.CurrentRetryAttempt == nil || *payload.Attempts.CurrentRetryAttempt != retryAttempt {
+		t.Fatalf("current_retry_attempt = %v, want %d", payload.Attempts.CurrentRetryAttempt, retryAttempt)
+	}
+	if payload.Running == nil || payload.Running.StartedAt != startedAt.Format(time.RFC3339) {
+		t.Fatalf("running row = %+v, want started_at %s", payload.Running, startedAt.Format(time.RFC3339))
+	}
+	if payload.Retry != nil {
+		t.Fatalf("retry = %+v, want null for running issue", payload.Retry)
+	}
+}
+
+func TestIssueHTTPHandlerReturns404EnvelopeForUnknownIssue(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/NOPE-1", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusNotFound, w.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode error response: %v; body=%s", err, w.Body.String())
+	}
+	if payload.Error.Code != "issue_not_found" || !strings.Contains(payload.Error.Message, "NOPE-1") {
+		t.Fatalf("error = %+v, want issue_not_found mentioning identifier", payload.Error)
+	}
+}
+
+func TestIssueHTTPHandlerRejectsNonGET(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/MT-649", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusMethodNotAllowed, w.Body.String())
+	}
+	if called {
+		t.Fatal("snapshot function should not be called for non-GET issue request")
+	}
+	if got := w.Header().Get("Allow"); got != http.MethodGet {
+		t.Fatalf("Allow = %q, want GET", got)
+	}
+}
+
+func TestRefreshHTTPHandlerQueuesAndCoalescesImmediatePoll(t *testing.T) {
+	results := []orchestrator.RefreshRequestResult{
+		{Queued: true, Coalesced: false, RequestedAt: time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC), Operations: []string{"poll", "reconcile"}},
+		{Queued: true, Coalesced: true, RequestedAt: time.Date(2026, 5, 21, 9, 10, 1, 0, time.UTC), Operations: []string{"poll", "reconcile"}},
+	}
+	calls := 0
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		t.Fatal("snapshot function should not be called for refresh requests")
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		if calls >= len(results) {
+			t.Fatalf("refresh called %d times, want at most %d", calls+1, len(results))
+		}
+		result := results[calls]
+		calls++
+		return result, nil
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil)
+	firstReq.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+	server.Handler.ServeHTTP(first, firstReq)
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader("{}"))
+	secondReq.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+	server.Handler.ServeHTTP(second, secondReq)
+
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("first status code = %d, want %d; body=%s", first.Code, http.StatusAccepted, first.Body.String())
+	}
+	if second.Code != http.StatusAccepted {
+		t.Fatalf("second status code = %d, want %d; body=%s", second.Code, http.StatusAccepted, second.Body.String())
+	}
+	if calls != 2 {
+		t.Fatalf("refresh calls = %d, want 2", calls)
+	}
+	var firstPayload, secondPayload struct {
+		Queued      bool     `json:"queued"`
+		Coalesced   bool     `json:"coalesced"`
+		RequestedAt string   `json:"requested_at"`
+		Operations  []string `json:"operations"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstPayload); err != nil {
+		t.Fatalf("decode first refresh response: %v; body=%s", err, first.Body.String())
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondPayload); err != nil {
+		t.Fatalf("decode second refresh response: %v; body=%s", err, second.Body.String())
+	}
+	if !firstPayload.Queued || firstPayload.Coalesced {
+		t.Fatalf("first refresh payload = %+v, want queued and not coalesced", firstPayload)
+	}
+	if !secondPayload.Queued || !secondPayload.Coalesced {
+		t.Fatalf("second refresh payload = %+v, want queued and coalesced", secondPayload)
+	}
+	if !reflect.DeepEqual(firstPayload.Operations, []string{"poll", "reconcile"}) || !reflect.DeepEqual(secondPayload.Operations, []string{"poll", "reconcile"}) {
+		t.Fatalf("refresh operations = %+v / %+v, want poll+reconcile", firstPayload.Operations, secondPayload.Operations)
+	}
+}
+
+func TestRefreshHTTPHandlerRequiresRefreshHeader(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		called = true
+		return orchestrator.RefreshRequestResult{}, nil
+	})
+
+	resp := httptest.NewRecorder()
+	server.Handler.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil))
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("status code = %d, want %d; body=%s", resp.Code, http.StatusForbidden, resp.Body.String())
+	}
+	if called {
+		t.Fatal("refresh function should not be called without refresh header")
+	}
+}
+
+func TestRefreshHTTPHandlerRejectsUnsupportedMethods(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		called = true
+		return orchestrator.RefreshRequestResult{}, nil
+	})
+
+	getResp := httptest.NewRecorder()
+	server.Handler.ServeHTTP(getResp, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/refresh", nil))
+	if getResp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET status code = %d, want %d; body=%s", getResp.Code, http.StatusMethodNotAllowed, getResp.Body.String())
+	}
+	if got := getResp.Header().Get("Allow"); got != http.MethodPost {
+		t.Fatalf("Allow = %q, want POST", got)
+	}
+	if called {
+		t.Fatal("refresh function should not be called for unsupported method")
+	}
+}
+
+func TestRefreshHTTPHandlerRejectsUnsupportedBodies(t *testing.T) {
+	called := false
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		called = true
+		return orchestrator.RefreshRequestResult{}, nil
+	})
+
+	for _, body := range []string{`[]`, `null`, `"refresh"`, `{"force":true}`} {
+		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader(body))
+		req.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+		resp := httptest.NewRecorder()
+		server.Handler.ServeHTTP(resp, req)
+		if resp.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status code = %d, want %d; response=%s", body, resp.Code, http.StatusBadRequest, resp.Body.String())
+		}
+	}
+	if called {
+		t.Fatal("refresh function should not be called for unsupported bodies")
+	}
+}
+
 func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
 	called := false
 	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {

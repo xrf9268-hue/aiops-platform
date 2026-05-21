@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -202,7 +204,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}()
 	go func() {
-		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{}); err != nil && ctx.Err() == nil {
+		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh}); err != nil && ctx.Err() == nil {
 			log.Printf("state HTTP server loop exited: %v", err)
 		}
 	}()
@@ -211,6 +213,7 @@ func run(ctx context.Context, args []string) error {
 
 type stateHTTPServerController struct {
 	snapshot stateSnapshotFunc
+	refresh  stateRefreshFunc
 
 	desiredSet  bool
 	desiredPort int
@@ -219,8 +222,8 @@ type stateHTTPServerController struct {
 	serverDone  <-chan struct{}
 }
 
-func newStateHTTPServerController(snapshot stateSnapshotFunc) *stateHTTPServerController {
-	return &stateHTTPServerController{snapshot: snapshot}
+func newStateHTTPServerController(snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *stateHTTPServerController {
+	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh)}
 }
 
 func (c *stateHTTPServerController) apply(ctx context.Context, port int) error {
@@ -236,7 +239,7 @@ func (c *stateHTTPServerController) apply(ctx context.Context, port int) error {
 		return nil
 	}
 	serverCtx, cancel := context.WithCancel(ctx)
-	handle, err := startStateHTTPServer(serverCtx, port, c.snapshot)
+	handle, err := startStateHTTPServer(serverCtx, port, c.snapshot, c.refresh)
 	if err != nil {
 		cancel()
 		return err
@@ -292,13 +295,14 @@ func (c *stateHTTPServerController) clear() {
 type stateHTTPServerLoopOptions struct {
 	Sleep           func(context.Context, time.Duration) error
 	StopAfterChecks int
+	Refresh         stateRefreshFunc
 }
 
 func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error {
 	if runtime == nil {
 		return errors.New("state HTTP server loop requires workflow runtime")
 	}
-	controller := newStateHTTPServerController(snapshot)
+	controller := newStateHTTPServerController(snapshot, opts.Refresh)
 	defer controller.stop()
 	sleep := opts.Sleep
 	if sleep == nil {
@@ -343,12 +347,12 @@ type stateHTTPServerHandle struct {
 	Done <-chan struct{}
 }
 
-func startStateHTTPServer(ctx context.Context, port int, snapshot stateSnapshotFunc) (*stateHTTPServerHandle, error) {
+func startStateHTTPServer(ctx context.Context, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
 	if port < 0 {
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil, nil
 	}
-	server := newStateHTTPServer(port, snapshot)
+	server := newStateHTTPServer(port, snapshot, refresh...)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
@@ -379,9 +383,11 @@ func startStateHTTPServer(ctx context.Context, port int, snapshot stateSnapshotF
 	return &stateHTTPServerHandle{Addr: listener.Addr(), Done: done}, nil
 }
 
-func newStateHTTPServer(port int, snapshot stateSnapshotFunc) *http.Server {
+func newStateHTTPServer(port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
+	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
+	mux.Handle("/api/v1/", issueHTTPHandler(snapshot))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -425,6 +431,19 @@ func isLoopbackHTTPHost(hostport string) bool {
 }
 
 type stateSnapshotFunc func(context.Context) (orchestrator.StateView, error)
+type stateRefreshFunc func(context.Context) (orchestrator.RefreshRequestResult, error)
+
+const (
+	refreshRequestHeader      = "X-AIOPS-Refresh"
+	refreshRequestHeaderValue = "true"
+)
+
+func optionalStateRefreshFunc(refresh []stateRefreshFunc) stateRefreshFunc {
+	if len(refresh) == 0 {
+		return nil
+	}
+	return refresh[0]
+}
 
 type apiStateResponse struct {
 	GeneratedAt                time.Time                       `json:"generated_at"`
@@ -471,20 +490,47 @@ type apiStateRetry struct {
 	Error      string               `json:"error,omitempty"`
 }
 
+type apiIssueResponse struct {
+	IssueIdentifier string               `json:"issue_identifier"`
+	IssueID         orchestrator.IssueID `json:"issue_id"`
+	Status          string               `json:"status"`
+	Workspace       struct {
+		Path string `json:"path,omitempty"`
+	} `json:"workspace"`
+	Attempts struct {
+		RestartCount        int  `json:"restart_count"`
+		CurrentRetryAttempt *int `json:"current_retry_attempt"`
+	} `json:"attempts"`
+	Running      *apiStateRunning `json:"running"`
+	Retry        *apiStateRetry   `json:"retry"`
+	RecentEvents []map[string]any `json:"recent_events"`
+	LastError    *string          `json:"last_error"`
+	Tracked      map[string]any   `json:"tracked"`
+}
+
+type apiErrorResponse struct {
+	Error apiError `json:"error"`
+}
+
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 			return
 		}
 		view, err := snapshot(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+				writeAPIError(w, http.StatusServiceUnavailable, "snapshot_unavailable", err.Error())
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAPIError(w, http.StatusInternalServerError, "snapshot_failed", err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -494,6 +540,224 @@ func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 	})
 }
 
+func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			return
+		}
+		identifier, err := issueIdentifierFromPath(r.URL.Path)
+		if err != nil {
+			writeAPIError(w, http.StatusNotFound, "issue_not_found", err.Error())
+			return
+		}
+		view, err := snapshot(r.Context())
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				writeAPIError(w, http.StatusServiceUnavailable, "snapshot_unavailable", err.Error())
+				return
+			}
+			writeAPIError(w, http.StatusInternalServerError, "snapshot_failed", err.Error())
+			return
+		}
+		payload, ok := apiIssueFromView(view, identifier)
+		if !ok {
+			writeAPIError(w, http.StatusNotFound, "issue_not_found", fmt.Sprintf("issue %q was not found in the current runtime state", identifier))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(payload); err != nil {
+			log.Printf("encode /api/v1/%s response: %v", identifier, err)
+		}
+	})
+}
+
+func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
+			return
+		}
+		if err := validateRefreshBody(r); err != nil {
+			writeAPIError(w, http.StatusBadRequest, "invalid_refresh_body", err.Error())
+			return
+		}
+		if !validRefreshHeader(r) {
+			writeAPIError(w, http.StatusForbidden, "refresh_header_required", fmt.Sprintf("%s: %s header is required", refreshRequestHeader, refreshRequestHeaderValue))
+			return
+		}
+		if refresh == nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", "refresh trigger is not configured")
+			return
+		}
+		result, err := refresh(r.Context())
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", err.Error())
+				return
+			}
+			writeAPIError(w, http.StatusInternalServerError, "refresh_failed", err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		if err := json.NewEncoder(w).Encode(result); err != nil {
+			log.Printf("encode /api/v1/refresh response: %v", err)
+		}
+	})
+}
+
+func validRefreshHeader(r *http.Request) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get(refreshRequestHeader)), refreshRequestHeaderValue)
+}
+
+func issueIdentifierFromPath(path string) (string, error) {
+	raw := strings.TrimPrefix(path, "/api/v1/")
+	raw = strings.Trim(raw, "/")
+	if raw == "" {
+		return "", errors.New("missing issue identifier")
+	}
+	identifier, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid issue identifier %q", raw)
+	}
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return "", errors.New("missing issue identifier")
+	}
+	return identifier, nil
+}
+
+func validateRefreshBody(r *http.Request) error {
+	if r.Body == nil {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText == "" {
+		return nil
+	}
+	if bodyText[0] != '{' {
+		return fmt.Errorf("refresh request body must be empty or {}")
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(bodyText), &object); err != nil {
+		return fmt.Errorf("refresh request body must be empty or {}")
+	}
+	if len(object) != 0 {
+		return fmt.Errorf("refresh request body must be empty or {}")
+	}
+	return nil
+}
+
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(apiErrorResponse{Error: apiError{Code: code, Message: message}}); err != nil {
+		log.Printf("encode API error response: %v", err)
+	}
+}
+
+func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueResponse, bool) {
+	want := normalizeIssueLookup(identifier)
+	base := func(issueID orchestrator.IssueID, identifier, status string) apiIssueResponse {
+		return apiIssueResponse{
+			IssueIdentifier: identifier,
+			IssueID:         issueID,
+			Status:          status,
+			RecentEvents:    []map[string]any{},
+			Tracked:         map[string]any{},
+		}
+	}
+	for _, row := range view.Running {
+		if !matchesIssueLookup(row.IssueID, row.Identifier, want) {
+			continue
+		}
+		running := apiRunningFromView(row)
+		payload := base(row.IssueID, row.Identifier, "running")
+		payload.Workspace.Path = row.WorkspacePath
+		payload.Attempts.CurrentRetryAttempt = copyIntPointer(row.RetryAttempt)
+		payload.Running = &running
+		return payload, true
+	}
+	for _, row := range view.Retrying {
+		if !matchesIssueLookup(row.IssueID, row.Identifier, want) {
+			continue
+		}
+		retry := apiRetryFromView(row)
+		payload := base(row.IssueID, row.Identifier, "retrying")
+		payload.Attempts.CurrentRetryAttempt = &retry.Attempt
+		payload.Retry = &retry
+		payload.LastError = stringPointerIfNotEmpty(row.Error)
+		return payload, true
+	}
+	return apiIssueResponse{}, false
+}
+
+func matchesIssueLookup(issueID orchestrator.IssueID, identifier, normalizedWant string) bool {
+	return normalizeIssueLookup(identifier) == normalizedWant || normalizeIssueLookup(string(issueID)) == normalizedWant
+}
+
+func normalizeIssueLookup(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
+	var startedAt *time.Time
+	if !row.StartedAt.IsZero() {
+		v := row.StartedAt
+		startedAt = &v
+	}
+	var lastCodexAt *time.Time
+	if !row.LastCodexAt.IsZero() {
+		v := row.LastCodexAt
+		lastCodexAt = &v
+	}
+	return apiStateRunning{
+		IssueID:       row.IssueID,
+		Identifier:    row.Identifier,
+		StartedAt:     startedAt,
+		RetryAttempt:  copyIntPointer(row.RetryAttempt),
+		WorkspacePath: row.WorkspacePath,
+		LastCodexAt:   lastCodexAt,
+	}
+}
+
+func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
+	var dueAt *time.Time
+	if !row.DueAt.IsZero() {
+		v := row.DueAt
+		dueAt = &v
+	}
+	return apiStateRetry{
+		IssueID:    row.IssueID,
+		Identifier: row.Identifier,
+		Attempt:    row.Attempt,
+		DueAt:      dueAt,
+		Error:      row.Error,
+	}
+}
+
+func copyIntPointer(in *int) *int {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func stringPointerIfNotEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	generatedAt := view.GeneratedAt
 	if generatedAt.IsZero() {
@@ -501,47 +765,14 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	}
 	running := make([]apiStateRunning, 0, len(view.Running))
 	for _, row := range view.Running {
-		var startedAt *time.Time
-		if !row.StartedAt.IsZero() {
-			v := row.StartedAt
-			startedAt = &v
-		}
-		var lastCodexAt *time.Time
-		if !row.LastCodexAt.IsZero() {
-			v := row.LastCodexAt
-			lastCodexAt = &v
-		}
-		var retryAttempt *int
-		if row.RetryAttempt != nil {
-			attempt := *row.RetryAttempt
-			retryAttempt = &attempt
-		}
-		running = append(running, apiStateRunning{
-			IssueID:       row.IssueID,
-			Identifier:    row.Identifier,
-			StartedAt:     startedAt,
-			RetryAttempt:  retryAttempt,
-			WorkspacePath: row.WorkspacePath,
-			LastCodexAt:   lastCodexAt,
-		})
+		running = append(running, apiRunningFromView(row))
 	}
 	sort.Slice(running, func(i, j int) bool {
 		return running[i].IssueID < running[j].IssueID
 	})
 	retrying := make([]apiStateRetry, 0, len(view.Retrying))
 	for _, row := range view.Retrying {
-		var dueAt *time.Time
-		if !row.DueAt.IsZero() {
-			v := row.DueAt
-			dueAt = &v
-		}
-		retrying = append(retrying, apiStateRetry{
-			IssueID:    row.IssueID,
-			Identifier: row.Identifier,
-			Attempt:    row.Attempt,
-			DueAt:      dueAt,
-			Error:      row.Error,
-		})
+		retrying = append(retrying, apiRetryFromView(row))
 	}
 	sort.Slice(retrying, func(i, j int) bool {
 		return retrying[i].IssueID < retrying[j].IssueID

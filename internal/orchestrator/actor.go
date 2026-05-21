@@ -199,13 +199,42 @@ func (o *Orchestrator) retryWakeCh() <-chan struct{} {
 }
 
 func (o *Orchestrator) wakeRetryPollLoop() {
+	_ = o.queuePollWake()
+}
+
+func (o *Orchestrator) queuePollWake() bool {
 	if o == nil || o.retryWake == nil {
-		return
+		return false
 	}
 	select {
 	case o.retryWake <- struct{}{}:
+		return false
 	default:
+		return true
 	}
+}
+
+// RefreshRequestResult is the SPEC §13.7.2 /api/v1/refresh response shape.
+type RefreshRequestResult struct {
+	Queued      bool      `json:"queued"`
+	Coalesced   bool      `json:"coalesced"`
+	RequestedAt time.Time `json:"requested_at"`
+	Operations  []string  `json:"operations"`
+}
+
+// RequestRefresh asks the poll loop to run one immediate poll/reconcile cycle.
+// The wake channel has one slot, so repeated requests before the loop consumes
+// the signal are coalesced into a single extra cycle.
+func (o *Orchestrator) RequestRefresh(ctx context.Context) (RefreshRequestResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RefreshRequestResult{}, err
+	}
+	return RefreshRequestResult{
+		Queued:      true,
+		Coalesced:   o.queuePollWake(),
+		RequestedAt: time.Now().UTC(),
+		Operations:  []string{"poll", "reconcile"},
+	}, nil
 }
 
 // submit delivers op to the actor. It blocks until the actor reads the

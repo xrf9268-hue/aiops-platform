@@ -35,10 +35,39 @@ when they are discoverable from agent output or runtime events. Their presence
 means only that the runtime observed those links; it does not assume the worker
 created or owns them.
 
+## HTTP endpoints
+
+When `server.port` is enabled, the worker binds the status API on
+`127.0.0.1:<port>` and accepts only `localhost` or `127.0.0.1` Host headers.
+
+- `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
+  retry rows, completed and failed issue IDs, aggregate token/runtime totals,
+  and the current poll/concurrency metadata.
+- `GET /api/v1/<issue_identifier>` returns one issue's current runtime row.
+  Lookup is case-insensitive and matches either the tracker issue identifier or
+  issue ID. Unknown issues return
+  `{"error":{"code":"issue_not_found","message":"..."}}` with HTTP 404.
+- `POST /api/v1/refresh` queues an immediate tracker poll and reconciliation
+  cycle. Send `X-AIOPS-Refresh: true`; the non-simple header prevents ordinary
+  cross-origin browser posts from triggering local refreshes. Empty bodies and
+  `{}` are accepted. The response is HTTP 202:
+
+```json
+{
+  "queued": true,
+  "coalesced": false,
+  "requested_at": "2026-05-21T09:10:00Z",
+  "operations": ["poll", "reconcile"]
+}
+```
+
+Repeated refresh requests before the poll loop consumes the wake signal are
+coalesced into one extra poll cycle. Unsupported methods on defined endpoints
+return HTTP 405 with a JSON error envelope.
+
 ## JSON shape
 
-The initial implementation exposes a reusable JSON writer used by CLI or
-read-only endpoint wrappers:
+The reusable runtime-status JSON writer uses the same queue-independent source:
 
 ```json
 {
@@ -56,10 +85,10 @@ read-only endpoint wrappers:
   "completed": [],
   "recent_events": [],
   "codex_totals": {
-    "InputTokens": 0,
-    "OutputTokens": 0,
-    "TotalTokens": 0,
-    "SecondsRunning": 0
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "total_tokens": 0,
+    "seconds_running": 0
   }
 }
 ```
