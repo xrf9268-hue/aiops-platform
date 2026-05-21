@@ -9,10 +9,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 // ActiveIssueLister is the tracker reader required by the SPEC poll tick.
@@ -220,7 +222,7 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 	if !ok {
 		return nil, nil
 	}
-	issueIDs := p.orchestrator.RunningAndRetryingIssueIDs(ctx)
+	issueIDs := p.orchestrator.RunningRetryingAndBlockedIssueIDs(ctx)
 	if len(issueIDs) == 0 {
 		return nil, nil
 	}
@@ -558,6 +560,7 @@ type WorkerTaskDispatcher struct {
 	BuildRecordedTask RecordedTaskBuilder
 	Config            worker.Config
 	Emitter           worker.EventEmitter
+	WorkspacePrepared func(context.Context, tracker.Issue, task.Task, string)
 }
 
 // Spawn implements Dispatcher.
@@ -576,8 +579,11 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
 			return
 		}
+		if d.WorkspacePrepared != nil {
+			d.WorkspacePrepared(ctx, issue, tk, workspacePathForTask(d.Config, tk))
+		}
 		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {
-			out <- WorkerResult{Err: rterr.Err, NonRetryable: rterr.NonRetryable, Elapsed: time.Since(start)}
+			out <- WorkerResult{Err: rterr.Err, NonRetryable: rterr.NonRetryable, InputRequired: runner.IsInputRequired(rterr.Err), Elapsed: time.Since(start)}
 			return
 		}
 		if err := completeRecordedTask(ctx, d.Emitter, recordedTaskID, tk.ID); err != nil {
@@ -587,6 +593,14 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		out <- WorkerResult{Elapsed: time.Since(start)}
 	}()
 	return out
+}
+
+func workspacePathForTask(cfg worker.Config, tk task.Task) string {
+	root := cfg.WorkspaceRoot
+	if cfg.Workflow != nil {
+		root = worker.EffectiveWorkspaceRoot(cfg, cfg.Workflow.Config)
+	}
+	return workspace.New(root).PathFor(tk)
 }
 
 func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, string, error) {

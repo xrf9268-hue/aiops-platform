@@ -65,6 +65,7 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 	}
 	run.LastCodexAt = now
 	s.recordSessionFields(run, event)
+	s.recordInputRequiredFields(run, event, now)
 	if usage, ok := tokenUsageFromEvent(event); ok {
 		input, output, total := applyTokenUsage(run, usage)
 		s.CodexTotals.AddTokenDelta(input, output, total)
@@ -72,6 +73,18 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 	if limits, ok := rateLimitsFromPayload(event.Payload); ok {
 		snap := RateLimitSnapshot(limits)
 		s.RecordRateLimits(&snap)
+	}
+}
+
+func (s *OrchestratorState) recordInputRequiredFields(run *RunningEntry, event task.RuntimeEvent, now time.Time) {
+	if event.Event != task.EventTurnInputRequired {
+		return
+	}
+	run.InputRequired = true
+	run.InputRequiredAt = now
+	payload, _ := asStringMap(event.Payload)
+	if method, ok := stringField(payload, "method"); ok {
+		run.InputRequiredMethod = method
 	}
 }
 

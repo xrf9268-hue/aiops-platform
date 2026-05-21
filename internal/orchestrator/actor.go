@@ -27,11 +27,14 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -42,9 +45,10 @@ import (
 // configuration/task-build failures do not spin forever. Elapsed is folded
 // into CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
-	Err          error
-	NonRetryable bool
-	Elapsed      time.Duration
+	Err           error
+	NonRetryable  bool
+	InputRequired bool
+	Elapsed       time.Duration
 }
 
 // Dispatcher is the seam through which the actor spawns a per-issue
@@ -309,6 +313,32 @@ func (o *Orchestrator) Snapshot(ctx context.Context) (StateView, error) {
 		return v, nil
 	case <-ctx.Done():
 		return StateView{}, ctx.Err()
+	}
+}
+
+// RecordWorkspace stores the deterministic workspace path for a running issue
+// so blocked-session status and later reconciliation cleanup can refer to the
+// actual on-disk checkout.
+func (o *Orchestrator) RecordWorkspace(ctx context.Context, issueID string, workspace Workspace) error {
+	if o == nil || strings.TrimSpace(issueID) == "" || strings.TrimSpace(workspace.Path) == "" {
+		return nil
+	}
+	done := make(chan struct{})
+	op := opFunc(func(st *OrchestratorState) func() {
+		if run := st.Running[IssueID(issueID)]; run != nil {
+			run.Workspace = workspace
+		}
+		close(done)
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -582,9 +612,9 @@ func (o *Orchestrator) RequestDispatchAfterTrackerRecheck(ctx context.Context, i
 	}
 }
 
-func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string {
+func (o *Orchestrator) RunningRetryingAndBlockedIssueIDs(ctx context.Context) []string {
 	reply := make(chan []string, 1)
-	if err := o.submit(ctx, &runningAndRetryingIssueIDsOp{result: reply}); err != nil {
+	if err := o.submit(ctx, &runningRetryingAndBlockedIssueIDsOp{result: reply}); err != nil {
 		return nil
 	}
 	select {
@@ -593,6 +623,10 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string {
+	return o.RunningRetryingAndBlockedIssueIDs(ctx)
 }
 
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
@@ -671,6 +705,14 @@ func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		retry.Issue = issue
 		st.ClaimedIssues[id] = issue
 	}
+	for id, blocked := range st.Blocked {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(blocked.Issue, issue) {
+			continue
+		}
+		blocked.Issue = issue
+		st.ClaimedIssues[id] = issue
+	}
 	done := r.done
 	return func() {
 		if done != nil {
@@ -679,13 +721,13 @@ func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	}
 }
 
-type runningAndRetryingIssueIDsOp struct {
+type runningRetryingAndBlockedIssueIDsOp struct {
 	result chan<- []string
 }
 
-func (r *runningAndRetryingIssueIDsOp) apply(st *OrchestratorState) func() {
+func (r *runningRetryingAndBlockedIssueIDsOp) apply(st *OrchestratorState) func() {
 	seen := map[string]struct{}{}
-	issueIDs := make([]string, 0, len(st.Running)+len(st.RetryAttempts))
+	issueIDs := make([]string, 0, len(st.Running)+len(st.RetryAttempts)+len(st.Blocked))
 	add := func(id IssueID) {
 		s := strings.TrimSpace(string(id))
 		if s == "" {
@@ -701,6 +743,9 @@ func (r *runningAndRetryingIssueIDsOp) apply(st *OrchestratorState) func() {
 		add(id)
 	}
 	for id := range st.RetryAttempts {
+		add(id)
+	}
+	for id := range st.Blocked {
 		add(id)
 	}
 	sort.Strings(issueIDs)
@@ -720,6 +765,7 @@ type reconcileTrackerIssuesOp struct {
 
 func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
+	var cleanupEntries []workspaceCleanup
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
@@ -745,7 +791,17 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	return reconcileCancelFollowup(cancelEntries, r.result)
+	for id, blocked := range st.Blocked {
+		issue, ok := r.issuesByID[string(id)]
+		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(blocked.Issue, issue) {
+			blocked.Issue = issue
+			st.ClaimedIssues[id] = issue
+			continue
+		}
+		cleanupEntries = appendBlockedWorkspaceCleanup(cleanupEntries, id, blocked)
+		st.ReleaseClaim(id)
+	}
+	return reconcileCancelFollowup(cancelEntries, cleanupEntries, r.result)
 }
 
 func sameServiceRoute(previous, current tracker.Issue) bool {
@@ -759,6 +815,7 @@ type reconcileInactiveTrackerIssuesOp struct {
 
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
+	var cleanupEntries []workspaceCleanup
 	for id, run := range st.Running {
 		if _, ok := r.issuesByID[string(id)]; !ok {
 			continue
@@ -773,14 +830,42 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	return reconcileCancelFollowup(cancelEntries, r.result)
+	for id := range st.Blocked {
+		if _, ok := r.issuesByID[string(id)]; !ok {
+			continue
+		}
+		cleanupEntries = appendBlockedWorkspaceCleanup(cleanupEntries, id, st.Blocked[id])
+		st.ReleaseClaim(id)
+	}
+	return reconcileCancelFollowup(cancelEntries, cleanupEntries, r.result)
 }
 
-func reconcileCancelFollowup(cancelEntries []*RunningEntry, result chan<- []*RunningEntry) func() {
+type workspaceCleanup struct {
+	issueID IssueID
+	path    string
+}
+
+func appendBlockedWorkspaceCleanup(cleanups []workspaceCleanup, id IssueID, blocked *BlockedEntry) []workspaceCleanup {
+	if blocked == nil {
+		return cleanups
+	}
+	path := strings.TrimSpace(blocked.Workspace.Path)
+	if path == "" {
+		return cleanups
+	}
+	return append(cleanups, workspaceCleanup{issueID: id, path: path})
+}
+
+func reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanupEntries []workspaceCleanup, result chan<- []*RunningEntry) func() {
 	return func() {
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
 				entry.CancelWorker()
+			}
+		}
+		for _, cleanup := range cleanupEntries {
+			if err := os.RemoveAll(cleanup.path); err != nil {
+				log.Printf("orchestrator: remove blocked workspace for issue %s at %s: %v", cleanup.issueID, cleanup.path, err)
 			}
 		}
 		if result != nil {
@@ -1045,6 +1130,19 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	elapsed := f.result.Elapsed
 	if elapsed == 0 {
 		elapsed = time.Since(f.started)
+	}
+	if f.entry.InputRequired || f.result.InputRequired || runner.IsInputRequired(f.result.Err) {
+		runErr := "input required"
+		if f.result.Err != nil {
+			runErr = f.result.Err.Error()
+		}
+		if !st.BlockRun(f.id, f.entry, f.entry.InputRequiredAt, runErr, elapsed) {
+			close(f.done)
+			return nil
+		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventInputBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
+		close(f.done)
+		return nil
 	}
 	if f.result.Err == nil {
 		nextContinuationAttempt := f.entry.ContinuationAttempt + 1

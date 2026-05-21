@@ -495,8 +495,16 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 					if err := c.replyServerRequest(msg); err != nil {
 						return err
 					}
+					if inputRequiredServerRequest(method) {
+						c.recordInputRequiredMessage(method, msg)
+						return &InputRequiredError{Method: method}
+					}
 					c.lastTerminal = time.Now()
 					continue
+				}
+				if inputRequiredNotification(method, msg) {
+					c.recordInputRequiredMessage(method, msg)
+					return &InputRequiredError{Method: method}
 				}
 				if c.stallTimeoutMs > 0 {
 					elapsed := time.Since(c.lastTerminal)
@@ -552,6 +560,23 @@ func (c *appServerClient) withRuntimeContext(payload map[string]any) map[string]
 		payload["turn_id"] = c.turnID
 	}
 	return payload
+}
+
+func (c *appServerClient) recordInputRequiredMessage(method string, msg map[string]any) {
+	payload := map[string]any{"method": method}
+	if params, _ := msg["params"].(map[string]any); params != nil {
+		payload["params"] = normalizeRuntimePayload(params)
+	}
+	if c.threadID != "" {
+		payload["thread_id"] = c.threadID
+	}
+	if c.turnID != "" {
+		payload["turn_id"] = c.turnID
+		if c.threadID != "" {
+			payload["session_id"] = c.threadID + "-" + c.turnID
+		}
+	}
+	c.recordRuntimeEvent(task.EventTurnInputRequired, payload)
 }
 
 func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]any) {
@@ -651,6 +676,42 @@ func (c *appServerClient) sendJSONRPCError(id any, code int, message string) err
 			"message": message,
 		},
 	})
+}
+
+func inputRequiredServerRequest(method string) bool {
+	switch method {
+	case "item/tool/requestUserInput", "mcpServer/elicitation/request":
+		return true
+	default:
+		return false
+	}
+}
+
+func inputRequiredNotification(method string, msg map[string]any) bool {
+	if method == "mcpServer/elicitation/request" {
+		return true
+	}
+	if !strings.HasPrefix(method, "turn/") {
+		return false
+	}
+	switch method {
+	case "turn/input_required", "turn/needs_input", "turn/need_input", "turn/request_input", "turn/request_response", "turn/provide_input", "turn/approval_required":
+		return true
+	}
+	params, _ := msg["params"].(map[string]any)
+	return inputRequiredField(msg) || inputRequiredField(params)
+}
+
+func inputRequiredField(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	return payload["requiresInput"] == true ||
+		payload["needsInput"] == true ||
+		payload["input_required"] == true ||
+		payload["inputRequired"] == true ||
+		payload["type"] == "input_required" ||
+		payload["type"] == "needs_input"
 }
 
 func protocolServerRequestResult(method string, msg map[string]any, approvalPolicy any) (map[string]any, bool) {

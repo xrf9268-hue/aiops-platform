@@ -38,6 +38,24 @@ type Runner interface {
 	Run(ctx context.Context, in RunInput) (Result, error)
 }
 
+// InputRequiredError marks a runner exit caused by the coding agent requesting
+// operator input that this non-interactive harness cannot provide.
+type InputRequiredError struct {
+	Method string
+}
+
+func (e *InputRequiredError) Error() string {
+	if e == nil || e.Method == "" {
+		return "input required"
+	}
+	return "input required: " + e.Method
+}
+
+func IsInputRequired(err error) bool {
+	var input *InputRequiredError
+	return errors.As(err, &input)
+}
+
 func New(name string) (Runner, error) {
 	switch name {
 	case "", "mock":

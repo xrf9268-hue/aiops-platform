@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -1094,6 +1095,139 @@ func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) 
 	}
 	if got := disp.count(); got != 1 {
 		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional retry after exhausted budget", got)
+	}
+}
+
+func TestFinalize_InputRequiredExitBlocksIssueWithoutRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-INPUT", Identifier: "ENG-INPUT", State: "AI Ready", Title: "needs input"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
+		Event:   task.EventTurnInputRequired,
+		Payload: map[string]any{"method": "item/tool/requestUserInput", "session_id": "thread-1-turn-1"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("input required"), Elapsed: 50 * time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Blocked) == 1 && len(view.Running) == 0 && len(view.Retrying) == 0
+	}, time.Second)
+	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("blocked issue dispatch err = %v, want ErrNotDispatched", err)
+	}
+	status, err := o.StatusSnapshot(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("StatusSnapshot: %v", err)
+	}
+	if status.Summary.Blocked != 1 || len(status.Blocked) != 1 {
+		t.Fatalf("blocked status = summary %+v rows %+v, want one blocked issue", status.Summary, status.Blocked)
+	}
+	if status.Blocked[0].IssueID != "ENG-INPUT" || status.Blocked[0].SessionID != "thread-1-turn-1" {
+		t.Fatalf("blocked row = %+v, want issue/session details", status.Blocked[0])
+	}
+}
+
+func TestFinalize_NormalExitAfterInputRequiredBlocksInsteadOfContinuationRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-NORMAL-BLOCK", Identifier: "ENG-NORMAL-BLOCK", State: "AI Ready", Title: "needs input"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
+		Event:   task.EventTurnInputRequired,
+		Payload: map[string]any{"method": "mcpServer/elicitation/request", "session_id": "thread-1-turn-1"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Elapsed: 50 * time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Blocked) == 1 && len(view.Completed) == 0 && len(view.Retrying) == 0
+	}, time.Second)
+}
+
+func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	active := tracker.Issue{ID: "ENG-BLOCK-A", Identifier: "ENG-BLOCK-A", State: "AI Ready", Title: "active block"}
+	inactive := tracker.Issue{ID: "ENG-BLOCK-B", Identifier: "ENG-BLOCK-B", State: "AI Ready", Title: "inactive block"}
+	terminalWorkspace := t.TempDir()
+	for _, iss := range []tracker.Issue{active, inactive} {
+		if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+			t.Fatalf("RequestDispatch %s: %v", iss.ID, err)
+		}
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if err := o.RecordWorkspace(context.Background(), active.ID, Workspace{Path: terminalWorkspace}); err != nil {
+		t.Fatalf("RecordWorkspace: %v", err)
+	}
+	for i, iss := range []tracker.Issue{active, inactive} {
+		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
+			Event:   task.EventTurnInputRequired,
+			Payload: map[string]any{"method": "item/tool/requestUserInput"},
+		}); err != nil {
+			t.Fatalf("RecordRuntimeEvent %s: %v", iss.ID, err)
+		}
+		disp.finishAt(i, WorkerResult{Err: errors.New("input required"), Elapsed: time.Millisecond})
+	}
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Blocked) == 2
+	}, time.Second)
+
+	activeStates := map[string]struct{}{"ai ready": {}, "rework": {}}
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		active.ID: {ID: active.ID, Identifier: active.Identifier, State: "Rework", Title: active.Title},
+	}, activeStates, time.Second); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 1 || view.Blocked[0].IssueID != IssueID(active.ID) || view.Blocked[0].State != "Rework" {
+		t.Fatalf("blocked after active reconcile = %+v, want refreshed active block only", view.Blocked)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		active.ID: {ID: active.ID, Identifier: active.Identifier, State: "Done", Title: active.Title},
+	}, time.Second); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	view, err = o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 0 || len(view.Running) != 0 || len(view.Retrying) != 0 {
+		t.Fatalf("state after terminal blocked release = running %+v retrying %+v blocked %+v", view.Running, view.Retrying, view.Blocked)
+	}
+	if _, err := os.Stat(terminalWorkspace); !os.IsNotExist(err) {
+		t.Fatalf("terminal blocked workspace should be removed, stat err=%v", err)
 	}
 }
 

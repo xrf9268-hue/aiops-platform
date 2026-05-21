@@ -118,6 +118,10 @@ type RunningEntry struct {
 	LastReportedOutputTokens int64
 	LastReportedTotalTokens  int64
 
+	InputRequired       bool
+	InputRequiredAt     time.Time
+	InputRequiredMethod string
+
 	CancelWorker context.CancelFunc
 	Done         <-chan struct{}
 
@@ -126,6 +130,19 @@ type RunningEntry struct {
 	// context cancellation, but finalization must release the run without
 	// scheduling a retry because the tracker made the issue ineligible.
 	ReconcileCancel bool
+}
+
+// BlockedEntry is an input-required run that has stopped executing but remains
+// claimed until tracker reconciliation observes the issue leaving active work.
+type BlockedEntry struct {
+	Issue       tracker.Issue
+	Identifier  string
+	BlockedAt   time.Time
+	Workspace   Workspace
+	Session     LiveSession
+	LastCodexAt time.Time
+	Method      string
+	Error       string
 }
 
 // OrchestratorState is the single authoritative in-memory state owned
@@ -143,6 +160,7 @@ type OrchestratorState struct {
 	MaxConcurrentAgentsByState map[string]int
 
 	Running       map[IssueID]*RunningEntry
+	Blocked       map[IssueID]*BlockedEntry
 	Claimed       map[IssueID]struct{}
 	ClaimedIssues map[IssueID]tracker.Issue
 	RetryAttempts map[IssueID]*RetryEntry
@@ -180,6 +198,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		MaxConcurrentAgents:        maxConcurrentAgents,
 		MaxConcurrentAgentsByState: map[string]int{},
 		Running:                    map[IssueID]*RunningEntry{},
+		Blocked:                    map[IssueID]*BlockedEntry{},
 		Claimed:                    map[IssueID]struct{}{},
 		ClaimedIssues:              map[IssueID]tracker.Issue{},
 		RetryAttempts:              map[IssueID]*RetryEntry{},
@@ -205,6 +224,9 @@ func (s *OrchestratorState) IsClaimed(id IssueID) bool {
 		return true
 	}
 	if _, ok := s.Running[id]; ok {
+		return true
+	}
+	if _, ok := s.Blocked[id]; ok {
 		return true
 	}
 	if _, ok := s.RetryAttempts[id]; ok {
@@ -294,6 +316,9 @@ func (s *OrchestratorState) runningIssueIDs() map[IssueID]struct{} {
 	for id := range s.RetryAttempts {
 		delete(counted, id)
 	}
+	for id := range s.Blocked {
+		delete(counted, id)
+	}
 	return counted
 }
 
@@ -318,6 +343,7 @@ func (s *OrchestratorState) BeginDispatch(id IssueID, entry *RunningEntry) {
 	s.Claimed[id] = struct{}{}
 	s.ClaimedIssues[id] = entry.Issue
 	s.Running[id] = entry
+	delete(s.Blocked, id)
 	delete(s.RetryAttempts, id)
 	delete(s.Failed, id)
 }
@@ -361,6 +387,32 @@ func (s *OrchestratorState) FinishRunFailed(id IssueID, run *RunningEntry, elaps
 // failures and cannot consume retry budget.
 func (s *OrchestratorState) FinishRunReconciledCancelled(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
 	return s.finishRunAborted(id, run, elapsed)
+}
+
+func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt time.Time, runErr string, elapsed time.Duration) bool {
+	if current, ok := s.Running[id]; !ok || current != run {
+		return false
+	}
+	if blockedAt.IsZero() {
+		blockedAt = time.Now().UTC()
+	}
+	delete(s.Running, id)
+	delete(s.RetryAttempts, id)
+	delete(s.Failed, id)
+	s.Claimed[id] = struct{}{}
+	s.ClaimedIssues[id] = run.Issue
+	s.Blocked[id] = &BlockedEntry{
+		Issue:       run.Issue,
+		Identifier:  run.Identifier,
+		BlockedAt:   blockedAt,
+		Workspace:   run.Workspace,
+		Session:     run.Session,
+		LastCodexAt: run.LastCodexAt,
+		Method:      run.InputRequiredMethod,
+		Error:       runErr,
+	}
+	s.CodexTotals.AddSeconds(elapsed)
+	return true
 }
 
 func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
@@ -415,6 +467,7 @@ func (s *OrchestratorState) ScheduleRetry(entry *RetryEntry) {
 func (s *OrchestratorState) ReleaseClaim(id IssueID) {
 	delete(s.Claimed, id)
 	delete(s.ClaimedIssues, id)
+	delete(s.Blocked, id)
 	if entry, ok := s.RetryAttempts[id]; ok {
 		if entry.Timer != nil {
 			entry.Timer.Stop()
@@ -450,6 +503,7 @@ type StateView struct {
 	MaxConcurrentAgentsByState map[string]int
 
 	Running         []RunningView
+	Blocked         []BlockedView
 	Retrying        []RetryView
 	Failed          []IssueID
 	Completed       []IssueID
@@ -466,6 +520,19 @@ type RunningView struct {
 	RetryAttempt  *int
 	WorkspacePath string
 	LastCodexAt   time.Time
+}
+
+// BlockedView is the public projection of an input-required blocked run.
+type BlockedView struct {
+	IssueID       IssueID
+	Identifier    string
+	State         string
+	BlockedAt     time.Time
+	WorkspacePath string
+	SessionID     string
+	LastCodexAt   time.Time
+	Method        string
+	Error         string
 }
 
 // RetryView is the per-retry-entry projection in StateView. Omits the
@@ -490,6 +557,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		MaxConcurrentAgents:        s.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
 		Running:                    make([]RunningView, 0, len(s.Running)),
+		Blocked:                    make([]BlockedView, 0, len(s.Blocked)),
 		Retrying:                   make([]RetryView, 0, len(s.RetryAttempts)),
 		Failed:                     make([]IssueID, 0, len(s.Failed)),
 		Completed:                  make([]IssueID, 0, len(s.Completed)),
@@ -513,6 +581,19 @@ func (s *OrchestratorState) Snapshot() StateView {
 			RetryAttempt:  retryAttempt,
 			WorkspacePath: r.Workspace.Path,
 			LastCodexAt:   r.LastCodexAt,
+		})
+	}
+	for id, b := range s.Blocked {
+		view.Blocked = append(view.Blocked, BlockedView{
+			IssueID:       id,
+			Identifier:    b.Identifier,
+			State:         b.Issue.State,
+			BlockedAt:     b.BlockedAt,
+			WorkspacePath: b.Workspace.Path,
+			SessionID:     b.Session.SessionID,
+			LastCodexAt:   b.LastCodexAt,
+			Method:        b.Method,
+			Error:         b.Error,
 		})
 	}
 	for id, r := range s.RetryAttempts {

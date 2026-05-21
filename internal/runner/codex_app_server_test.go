@@ -309,6 +309,68 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerTreatsUserInputRequestAsInputBlocked(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'input-1', 'method': 'item/tool/requestUserInput', 'params': {'questions': [{'id': 'q1', 'label': 'Need operator'}]}}), flush=True)
+    elif msg.get('id') == 'input-1':
+        answers = msg.get('result', {}).get('answers', {})
+        if 'q1' not in answers:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'missing non-interactive answer', 'got': msg}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "input blocked")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "input required") {
+		t.Fatalf("Run error = %v, want input required", err)
+	}
+	assertInputRequiredEvent(t, res.RuntimeEvents, "item/tool/requestUserInput")
+}
+
+func TestCodexAppServerRunnerTreatsMCPElicitationAsInputBlocked(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'elicitation-1', 'method': 'mcpServer/elicitation/request', 'params': {'message': 'Need operator input'}}), flush=True)
+    elif msg.get('id') == 'elicitation-1':
+        result = msg.get('result', {})
+        if result.get('action') != 'decline' or result.get('content') is not None:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected elicitation response', 'got': msg}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "mcp blocked")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "input required") {
+		t.Fatalf("Run error = %v, want input required", err)
+	}
+	assertInputRequiredEvent(t, res.RuntimeEvents, "mcpServer/elicitation/request")
+}
+
 func TestCodexAppServerRunnerEmitsSpecPhaseTransitions(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
@@ -452,6 +514,23 @@ func runtimeEventField(t *testing.T, event task.RuntimeEvent, key string) any {
 		t.Fatalf("runtime event payload is %T, want map[string]any: %#v", event.Payload, event.Payload)
 	}
 	return payload[key]
+}
+
+func assertInputRequiredEvent(t *testing.T, events []task.RuntimeEvent, method string) {
+	t.Helper()
+	for _, event := range events {
+		if event.Event != task.EventTurnInputRequired {
+			continue
+		}
+		if got := runtimeEventField(t, event, "method"); got != method {
+			t.Fatalf("turn_input_required method = %#v, want %q", got, method)
+		}
+		if got := runtimeEventField(t, event, "turn_id"); got != "turn-1" {
+			t.Fatalf("turn_input_required turn_id = %#v, want turn-1", got)
+		}
+		return
+	}
+	t.Fatalf("runtime events missing turn_input_required for %s: %#v", method, events)
 }
 
 func runtimeEventsNamed(events []task.RuntimeEvent, name string) []task.RuntimeEvent {
@@ -1020,7 +1099,7 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	in.Workflow.Config.Codex.StallTimeoutMs = 100
+	in.Workflow.Config.Codex.StallTimeoutMs = 500
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 

@@ -249,6 +249,11 @@ func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, atte
 			Orchestrator: d.orchestrator,
 			IssueID:      issue.ID,
 		},
+		WorkspacePrepared: func(ctx context.Context, issue tracker.Issue, _ task.Task, path string) {
+			if d.orchestrator != nil {
+				_ = d.orchestrator.RecordWorkspace(ctx, issue.ID, Workspace{Path: path})
+			}
+		},
 	}
 	return dispatcher.Spawn(ctx, issue, attempt)
 }

@@ -23,10 +23,20 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `completed` — run exited successfully or reached workflow handoff.
 - `failed` — run failed and may retry or be suppressed by deterministic failure rules.
 - `blocked` — runtime observed an issue that cannot proceed because a dependency or policy gate is blocking it.
+- `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 
 These are observability events. They do not imply the worker changed tracker
 state, pushed a branch, opened a pull request, or posted a comment. Those writes
 belong to the agent/tool workflow boundary from Symphony SPEC section 1.
+
+Input-blocked rows are in-memory runtime state, not durable queue records. A
+process restart clears them; if the tracker issue is still active after restart,
+the next poll can dispatch it again. Operators should resolve the underlying
+request by moving the tracker issue out of active states or by changing the
+workflow/prompt so the agent no longer needs unavailable input. The read-only
+`/api/v1/state` endpoint also includes top-level `blocked` rows and a
+`counts.blocked` value so input-blocked sessions are visible from the HTTP
+state surface.
 
 ## Branches and pull requests
 
@@ -77,10 +87,21 @@ The reusable runtime-status JSON writer uses the same queue-independent source:
     "running": 1,
     "completed": 0,
     "failed": 0,
-    "blocked": 0,
+    "blocked": 1,
     "retrying": 0
   },
   "running": [],
+  "blocked": [
+    {
+      "issue_id": "issue-1",
+      "identifier": "ENG-1",
+      "state": "AI Ready",
+      "blocked_at": "2026-05-20T06:05:38Z",
+      "session_id": "thread-1-turn-1",
+      "method": "mcpServer/elicitation/request",
+      "error": "input required: mcpServer/elicitation/request"
+    }
+  ],
   "retrying": [],
   "completed": [],
   "recent_events": [],
