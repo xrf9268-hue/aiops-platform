@@ -57,7 +57,7 @@ Implemented:
 - Gitea label polling trigger
 - Linear polling trigger
 - Postgres task queue
-- repo-owned `WORKFLOW.md` (discovered at three paths — see Deviations below)
+- repo-owned `WORKFLOW.md` in the service/repository root (single canonical path; see `DEVIATIONS.md` D4 closure)
 - mock, codex, and claude runner abstraction
 - deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout
 - basic path policy
@@ -76,10 +76,12 @@ Not yet implemented:
 
 ## Deviations from SPEC
 
-Tracked centrally in [`DEVIATIONS.md`](../DEVIATIONS.md). There are no current
-accepted deliberate extensions. In particular, multi-path `WORKFLOW.md`
-discovery is not an accepted extension: D4 is closed, and legacy alternate
-workflow paths are not searched or reported as normal shadow sources.
+Tracked centrally in [`DEVIATIONS.md`](../DEVIATIONS.md). Deliberate extensions
+beyond the SPEC are scoped narrowly and listed there per deviation. Closed
+historical deviations — for example multi-path `WORKFLOW.md` discovery (D4,
+#72), Gitea webhook ingress (D7, #74), and orchestrator-side PR / push /
+Linear writes (D8, #76) — are no longer in the codebase; legacy alternate
+workflow paths are not searched or reported as shadow sources.
 
 The multi-service `services` workflow key used for Linear tracker-to-service
 routing is tracked as D25 (#143) and documented in
