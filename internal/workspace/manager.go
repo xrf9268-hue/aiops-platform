@@ -197,7 +197,11 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return "", false, statErr
 	}
-	mirror, err := m.EnsureMirror(ctx, t.CloneURL)
+	mirror := mirrorPathFor(MirrorRoot(m.MirrorRoot), t.CloneURL)
+	unlock := acquireMirrorLock(mirror)
+	defer unlock()
+
+	mirror, err := m.ensureMirrorLocked(ctx, t.CloneURL, mirror)
 	if err != nil {
 		return "", false, err
 	}

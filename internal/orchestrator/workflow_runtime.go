@@ -44,6 +44,8 @@ type WorkflowSnapshot struct {
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
 	MaxRetryBackoff            time.Duration
+	MaxRetryAttempts           int
+	MaxTurns                   int
 	Reconciliation             ReconciliationConfig
 	Fingerprint                string
 }
@@ -157,6 +159,8 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		MaxConcurrentAgents:        wf.Config.Agent.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(wf.Config.Agent.MaxConcurrentAgentsByState),
 		MaxRetryBackoff:            time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
+		MaxRetryAttempts:           wf.Config.Agent.MaxRetryAttemptsValue(),
+		MaxTurns:                   wf.Config.Agent.MaxTurns,
 		Reconciliation:             reconcile,
 		Fingerprint:                fingerprint,
 	}

@@ -182,9 +182,13 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
+	maxTurns := wf.Config.Agent.MaxTurns
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher: dispatcher,
-		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		Dispatcher:        dispatcher,
+		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		MaxFailureRetries: &maxFailureRetries,
+		MaxTurns:          &maxTurns,
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -635,6 +639,8 @@ func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
 
 func defaultInactiveStateCandidates(kind string) []string {
 	switch normalizeState(kind) {
+	case "github":
+		return nil
 	case "gitea":
 		return []string{"Human Review"}
 	default:
@@ -679,6 +685,12 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 			baseURL = env("GITEA_BASE_URL", "http://localhost:3000")
 		}
 		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
+	case "github":
+		baseURL := cfg.Tracker.BaseURL
+		if baseURL == "" {
+			baseURL = env("GITHUB_API_BASE_URL", "https://api.github.com")
+		}
+		return tracker.NewGitHubClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	default:
 		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
 	}

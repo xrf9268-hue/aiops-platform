@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,8 +115,10 @@ func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 // Deps bundles construction-time dependencies so adding a new one
 // later doesn't ripple through every call site.
 type Deps struct {
-	Dispatcher Dispatcher
-	Scheduler  Scheduler
+	Dispatcher        Dispatcher
+	Scheduler         Scheduler
+	MaxFailureRetries *int
+	MaxTurns          *int
 }
 
 // Orchestrator is the SPEC §3.1 / §7.4 "single authority" that owns
@@ -128,7 +131,14 @@ type Orchestrator struct {
 	state      *OrchestratorState
 	dispatcher Dispatcher
 	scheduler  Scheduler
-	retryWake  chan struct{}
+	// maxFailureRetries bounds failure-driven retry entries after retryable
+	// worker failures.
+	maxFailureRetries int
+	// maxTurns bounds clean continuation dispatches for one-shot runners that
+	// cannot enforce agent.max_turns internally. App-server runners still enforce
+	// the same setting before they return.
+	maxTurns  int
+	retryWake chan struct{}
 
 	// runCtx is captured by Run so followup goroutines can cancel
 	// their work when the actor stops. Set once at the top of Run
@@ -142,13 +152,29 @@ type Orchestrator struct {
 // must call Run(ctx) in a separate goroutine before the actor processes
 // any submitted op; tests can wait via WaitStarted.
 func New(state *OrchestratorState, deps Deps) *Orchestrator {
+	maxFailureRetries := 1
+	if deps.MaxFailureRetries != nil {
+		maxFailureRetries = *deps.MaxFailureRetries
+		if maxFailureRetries < 0 {
+			maxFailureRetries = 0
+		}
+	}
+	maxTurns := 20
+	if deps.MaxTurns != nil {
+		maxTurns = *deps.MaxTurns
+		if maxTurns < 1 {
+			maxTurns = 1
+		}
+	}
 	o := &Orchestrator{
-		ops:        make(chan stateOp),
-		state:      state,
-		dispatcher: deps.Dispatcher,
-		scheduler:  deps.Scheduler,
-		retryWake:  make(chan struct{}, 1),
-		started:    make(chan struct{}),
+		ops:               make(chan stateOp),
+		state:             state,
+		dispatcher:        deps.Dispatcher,
+		scheduler:         deps.Scheduler,
+		maxFailureRetries: maxFailureRetries,
+		maxTurns:          maxTurns,
+		retryWake:         make(chan struct{}, 1),
+		started:           make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
 		aware.AttachOrchestrator(o)
@@ -353,6 +379,55 @@ func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Sched
 	done := make(chan struct{}, 1)
 	op := opFunc(func(*OrchestratorState) func() {
 		o.scheduler = scheduler
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UpdateMaxFailureRetries applies the reloaded failure retry budget through the
+// actor. The budget counts scheduled failure retry entries after the first run;
+// zero disables failure retries. Clean continuations are bounded separately by
+// agent.max_turns.
+func (o *Orchestrator) UpdateMaxFailureRetries(ctx context.Context, maxFailureRetries int) error {
+	if maxFailureRetries < 0 {
+		maxFailureRetries = 0
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(*OrchestratorState) func() {
+		o.maxFailureRetries = maxFailureRetries
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UpdateMaxTurns applies the reloaded clean-continuation budget through the
+// actor. Values below one are clamped to one so a normal first run can finish
+// but will not schedule any continuation.
+func (o *Orchestrator) UpdateMaxTurns(ctx context.Context, maxTurns int) error {
+	if maxTurns < 1 {
+		maxTurns = 1
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(*OrchestratorState) func() {
+		o.maxTurns = maxTurns
 		done <- struct{}{}
 		return nil
 	})
@@ -710,6 +785,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
 	st.ReleaseFailedIfIssueChanged(d.issue)
 	attempt := d.attempt
+	continuationAttempt := 0
 	var consumedContinuation *RetryEntry
 	if d.trackerRechecked {
 		if entry, ok := st.RetryAttempts[id]; ok {
@@ -724,6 +800,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 			// Tracker-rechecked dispatch only consumes continuation retries.
 			// Failure retries stay claimed until retryFireOp carries their
 			// scheduled attempt into a retry dispatch.
+			continuationAttempt = entry.Attempt
 			consumedContinuation = entry
 		} else if st.IsClaimed(id) {
 			d.result <- ErrNotDispatched
@@ -767,7 +844,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	issue := d.issue
 	result := d.result
 	return func() {
-		o.spawn(id, issue, attempt)
+		o.spawn(id, issue, attempt, continuationAttempt)
 		result <- nil
 	}
 }
@@ -916,7 +993,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	o := r.o
 	attempt := r.attempt
 	return func() {
-		o.spawn(r.id, issue, &attempt)
+		o.spawn(r.id, issue, &attempt, 0)
 	}
 }
 
@@ -941,6 +1018,17 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		elapsed = time.Since(f.started)
 	}
 	if f.result.Err == nil {
+		nextContinuationAttempt := f.entry.ContinuationAttempt + 1
+		if nextContinuationAttempt >= f.o.maxTurns {
+			if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
+				close(f.done)
+				return nil
+			}
+			msg := "clean continuation budget exhausted after " + strconv.Itoa(f.o.maxTurns) + " turns while tracker issue remained active"
+			st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
+			close(f.done)
+			return nil
+		}
 		if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
@@ -954,10 +1042,10 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		st.ClaimedIssues[f.id] = issue
 		close(f.done)
 		// A clean continuation is a new normal turn. Keep its retry entry
-		// 1-based, but do not carry the prior run's attempt into future
+		// 1-based for the continuation budget, but do not carry it into future
 		// failure backoff; otherwise many successful turns inflate the next
 		// transient failure straight to the max backoff.
-		nextAttempt := 1
+		nextAttempt := nextContinuationAttempt
 		o := f.o
 		identifier := f.identifier
 		return func() {
@@ -981,11 +1069,30 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		close(f.done)
 		return nil
 	}
+	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
+	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
+	// and so on. The local automation contract bounds failure-driven
+	// retries so retryable worker failures cannot spend tokens forever.
+	nextAttempt := 1
+	if f.attempt != nil {
+		nextAttempt = *f.attempt + 1
+	}
+	runErr := f.result.Err.Error()
+	if nextAttempt > f.o.maxFailureRetries {
+		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
+		msg := "failure retry budget exhausted after " + strconv.Itoa(f.o.maxFailureRetries) + " retries: " + runErr
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
+		close(f.done)
+		return nil
+	}
 	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil
 	}
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: f.result.Err.Error()})
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: runErr})
 	// Hold the Claimed slot across the gap between this apply (which
 	// returns control to the actor's select loop) and the
 	// scheduleRetryOp that the followup enqueues. Without this re-set,
@@ -1001,16 +1108,8 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	st.Claimed[f.id] = struct{}{}
 	st.ClaimedIssues[f.id] = issue
 	close(f.done)
-	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
-	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
-	// and so on.
-	nextAttempt := 1
-	if f.attempt != nil {
-		nextAttempt = *f.attempt + 1
-	}
 	o := f.o
 	identifier := f.identifier
-	runErr := f.result.Err.Error()
 	return func() {
 		_ = o.ScheduleRetry(o.runCtx, issue, identifier, nextAttempt, runErr)
 	}
@@ -1024,17 +1123,18 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 //
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
-func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int) {
+func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt int) {
 	runCtx, cancel := context.WithCancel(o.runCtx)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
 	entry := &RunningEntry{
-		Issue:        issue,
-		Identifier:   issue.Identifier,
-		StartedAt:    startedAt,
-		RetryAttempt: attempt,
-		CancelWorker: cancel,
-		Done:         workerDone,
+		Issue:               issue,
+		Identifier:          issue.Identifier,
+		StartedAt:           startedAt,
+		RetryAttempt:        attempt,
+		ContinuationAttempt: continuationAttempt,
+		CancelWorker:        cancel,
+		Done:                workerDone,
 	}
 	registered := make(chan struct{})
 	if err := o.submit(o.runCtx, opFunc(func(st *OrchestratorState) func() {

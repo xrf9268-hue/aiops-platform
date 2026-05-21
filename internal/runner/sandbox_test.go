@@ -27,6 +27,13 @@ func sandboxInput(t *testing.T, workdir string, cfg workflow.SandboxConfig) RunI
 	}
 }
 
+func requireLinuxSandboxHost(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("sandbox wrapper construction is Linux-only; current host OS is %s", runtime.GOOS)
+	}
+}
+
 func TestSandboxDisabledLeavesCommandUnwrappedAndEnvironmentInherited(t *testing.T) {
 	base := exec.CommandContext(context.Background(), "codex", "exec")
 	base.Dir = t.TempDir()
@@ -45,6 +52,7 @@ func TestSandboxDisabledLeavesCommandUnwrappedAndEnvironmentInherited(t *testing
 }
 
 func TestSandboxBubblewrapBuildsWrappedCommandAndScopesEnvironment(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -88,6 +96,7 @@ func TestSandboxBubblewrapBuildsWrappedCommandAndScopesEnvironment(t *testing.T)
 }
 
 func TestSandboxBubblewrapSkipsMissingLib64Bind(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -122,6 +131,7 @@ func TestSandboxBubblewrapSkipsMissingLib64Bind(t *testing.T) {
 }
 
 func TestSandboxEnabledFailsWhenDependencyMissing(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	t.Setenv("PATH", "")
 	workdir := t.TempDir()
 	base := exec.CommandContext(context.Background(), "codex", "exec")
@@ -154,6 +164,7 @@ func TestSandboxEnabledFailsFastOnUnsupportedHostOS(t *testing.T) {
 }
 
 func TestSandboxRejectsWorkdirOutsideWorkspaceRoot(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -183,6 +194,7 @@ func TestSandboxRejectsWorkdirOutsideWorkspaceRoot(t *testing.T) {
 }
 
 func TestSandboxRejectsSymlinkEscapeOutsideWorkspaceRoot(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -216,6 +228,7 @@ func TestSandboxRejectsSymlinkEscapeOutsideWorkspaceRoot(t *testing.T) {
 }
 
 func TestSandboxAllowsWorkdirUnderRuntimeWorkspaceRootWhenWorkflowRootDiffers(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -255,6 +268,7 @@ func TestSandboxAllowsWorkdirUnderRuntimeWorkspaceRootWhenWorkflowRootDiffers(t 
 }
 
 func TestSandboxNetworkAllowlistRequiresFirejail(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -284,6 +298,7 @@ func TestSandboxNetworkAllowlistRequiresFirejail(t *testing.T) {
 }
 
 func TestSandboxFirejailNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
 	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -318,6 +333,7 @@ func TestSandboxFirejailNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
 }
 
 func TestSandboxBubblewrapNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	bwrap := filepath.Join(binDir, "bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -352,6 +368,7 @@ func TestSandboxBubblewrapNetworkNoneIgnoresStaleAllowlistCIDRs(t *testing.T) {
 }
 
 func TestSandboxFirejailAllowlistRequiresExplicitNetworkInterface(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
 	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -382,6 +399,7 @@ func TestSandboxFirejailAllowlistRequiresExplicitNetworkInterface(t *testing.T) 
 }
 
 func TestSandboxFirejailBuildsNetworkAllowlistAndCredentialScope(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
 	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -507,6 +525,7 @@ func TestFirejailNetfilterAcceptsIPv4CIDR(t *testing.T) {
 }
 
 func TestFirejailNetfilterFileIsRemovedWhenCredentialValidationFails(t *testing.T) {
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
 	if err := os.WriteFile(firejail, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
@@ -547,6 +566,7 @@ func TestFirejailNetfilterFileIsRemovedWhenCredentialValidationFails(t *testing.
 
 func firejailAllowlistCommandForCleanupTest(t *testing.T, firejailScript string) (string, *exec.Cmd) {
 	t.Helper()
+	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()
 	firejail := filepath.Join(binDir, "firejail")
 	if err := os.WriteFile(firejail, []byte(firejailScript), 0o755); err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 // initBareUpstreamWithWorkflow seeds a bare upstream repo containing the
@@ -359,6 +360,143 @@ func TestRunTaskExposesIssueObjectToPromptTemplate(t *testing.T) {
 	}
 	if !strings.Contains(string(prompt), "issue LIN-123 integration no-id") {
 		t.Fatalf("rendered prompt = %q, want issue object fields without conflating id and identifier", prompt)
+	}
+}
+
+func TestRunTaskPolicyViolationFeedbackStopsSecondViolation(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	cfg.Workflow.Config.Policy.DenyPaths = []string{"mock-source-change.txt"}
+	tk.Model = "mock-source-change"
+
+	ev := &fakeEmitter{}
+	first := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if first == nil {
+		t.Fatal("first policy-violating run succeeded, want failure")
+	}
+	if first.NonRetryable {
+		t.Fatal("first policy violation should still allow one retry with feedback")
+	}
+	firstViolations := ev.byKind(task.EventPolicyViolation)
+	if len(firstViolations) != 1 {
+		t.Fatalf("first policy_violation events = %d, want 1", len(firstViolations))
+	}
+	if got := payloadField(t, firstViolations[0].Payload, "violation_count"); got != float64(1) {
+		t.Fatalf("first violation_count = %v, want 1", got)
+	}
+
+	secondEvents := &fakeEmitter{}
+	tk.Attempts = 2
+	second := worker.RunTaskForTest(context.Background(), secondEvents, tk, cfg)
+	if second == nil {
+		t.Fatal("second policy-violating run succeeded, want failure")
+	}
+	if !second.NonRetryable {
+		t.Fatal("second repeated policy violation should be non-retryable")
+	}
+	secondViolations := secondEvents.byKind(task.EventPolicyViolation)
+	if len(secondViolations) != 1 {
+		t.Fatalf("second policy_violation events = %d, want 1", len(secondViolations))
+	}
+	if got := payloadField(t, secondViolations[0].Payload, "violation_count"); got != float64(2) {
+		t.Fatalf("second violation_count = %v, want 2", got)
+	}
+	if got := payloadField(t, secondViolations[0].Payload, "will_retry"); got != false {
+		t.Fatalf("second will_retry = %v, want false", got)
+	}
+
+	promptPath := filepath.Join(workspace.New(cfg.WorkspaceRoot).PathFor(tk), ".aiops", "PROMPT.md")
+	prompt, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("read prompt: %v", err)
+	}
+	for _, want := range []string{
+		"Previous worker policy violation",
+		"mock-source-change.txt",
+		"Next repeated policy violation will stop without another retry",
+	} {
+		if !strings.Contains(string(prompt), want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	thirdEvents := &fakeEmitter{}
+	tk.Attempts = 3
+	third := worker.RunTaskForTest(context.Background(), thirdEvents, tk, cfg)
+	if third == nil {
+		t.Fatal("third policy-violating run succeeded, want early non-retryable failure")
+	}
+	if !third.NonRetryable {
+		t.Fatal("third policy violation should be non-retryable before spending another agent run")
+	}
+	if got := thirdEvents.byKind(task.EventRunnerStart); len(got) != 0 {
+		t.Fatalf("third run emitted runner_start %d times, want early bail-out before runner", len(got))
+	}
+}
+
+func TestRunTaskPolicyViolationFeedbackReadErrorIsNonRetryable(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	tk.Model = "mock-source-change"
+
+	feedbackPath := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, ".aiops-policy-feedback", tk.SourceType, tk.SourceEventID+".json")
+	if err := os.MkdirAll(feedbackPath, 0o755); err != nil {
+		t.Fatalf("create unreadable feedback path: %v", err)
+	}
+
+	ev := &fakeEmitter{}
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want feedback read failure")
+	}
+	if !rterr.NonRetryable {
+		t.Fatal("feedback read failure should be non-retryable to avoid launching another full agent run")
+	}
+	if got := ev.byKind(task.EventPolicyFeedbackReadError); len(got) != 1 {
+		t.Fatalf("policy_feedback_read_error events = %d, want 1", len(got))
+	}
+}
+
+func TestRunTaskPolicyViolationFeedbackWriteErrorIsNonRetryable(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	cfg.Workflow.Config.Policy.DenyPaths = []string{"mock-source-change.txt"}
+	tk.Model = "mock-source-change"
+
+	feedbackDir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, ".aiops-policy-feedback", tk.SourceType)
+	if err := os.MkdirAll(feedbackDir, 0o755); err != nil {
+		t.Fatalf("create feedback dir: %v", err)
+	}
+	if err := os.Chmod(feedbackDir, 0o555); err != nil {
+		t.Fatalf("chmod feedback dir readonly: %v", err)
+	}
+	defer func() {
+		_ = os.Chmod(feedbackDir, 0o755)
+	}()
+
+	ev := &fakeEmitter{}
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want policy violation failure")
+	}
+	if !rterr.NonRetryable {
+		t.Fatal("feedback write failure should be non-retryable to avoid unbounded policy retries")
+	}
+	violations := ev.byKind(task.EventPolicyViolation)
+	if len(violations) != 1 {
+		t.Fatalf("policy_violation events = %d, want 1", len(violations))
+	}
+	if got := payloadField(t, violations[0].Payload, "will_retry"); got != false {
+		t.Fatalf("will_retry = %v, want false", got)
+	}
+	if got := payloadField(t, violations[0].Payload, "feedback_error"); got == nil {
+		t.Fatal("feedback_error missing from policy_violation payload")
 	}
 }
 

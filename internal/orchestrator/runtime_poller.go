@@ -83,6 +83,12 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 	if err := p.orchestrator.UpdateRetryScheduler(ctx, RetryScheduler{MaxBackoff: snap.MaxRetryBackoff}); err != nil {
 		return err
 	}
+	if err := p.orchestrator.UpdateMaxFailureRetries(ctx, snap.MaxRetryAttempts); err != nil {
+		return err
+	}
+	if err := p.orchestrator.UpdateMaxTurns(ctx, snap.MaxTurns); err != nil {
+		return err
+	}
 	return poller.PollOnce(ctx)
 }
 

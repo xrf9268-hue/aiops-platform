@@ -221,6 +221,8 @@ func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) {
 
 func issueWorkspaceSourceDirs(trackerKind string) []string {
 	switch strings.ToLower(strings.TrimSpace(trackerKind)) {
+	case "github":
+		return []string{"github_issue", "github-issue"}
 	case "gitea":
 		return []string{"gitea_issue", "gitea-issue"}
 	case "", "linear":

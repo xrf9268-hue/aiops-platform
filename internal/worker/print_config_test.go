@@ -198,6 +198,31 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	}
 }
 
+func TestPrintConfig_ExposesMaxRetryAttempts(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_retry_attempts: 0\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Agent struct {
+				MaxRetryAttempts *int `json:"max_retry_attempts"`
+			} `json:"agent"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if out.Config.Agent.MaxRetryAttempts == nil || *out.Config.Agent.MaxRetryAttempts != 0 {
+		t.Fatalf("agent.max_retry_attempts = %v, want explicit 0\nstdout:\n%s", out.Config.Agent.MaxRetryAttempts, stdout.String())
+	}
+}
+
 // TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy pins the #72
 // SPEC-aligned contract: print-config still reports the effective source
 // at the top level, but legacy alternate paths are ignored rather than

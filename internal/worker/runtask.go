@@ -244,11 +244,31 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if t.Attempts > 0 {
 		renderVars["attempt"] = t.Attempts
 	}
+	policyFeedback, policyFeedbackPath, feedbackErr := readPolicyViolationFeedback(workspaceRoot, t)
+	if feedbackErr != nil {
+		Emit(ctx, ev, t.ID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
+			"path":  policyFeedbackPath,
+			"error": ErrSummary(feedbackErr),
+		})
+		WriteFailureArtifacts(ctx, workdir, nil, "policy feedback read failed: "+ErrSummary(feedbackErr))
+		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
+	} else if policyFeedback != nil {
+		Emit(ctx, ev, t.ID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
+			"path":            policyFeedbackPath,
+			"violation_count": policyFeedback.Count,
+			"summary":         policyFeedback.Summary,
+		})
+		if policyFeedback.Count >= policyViolationStopAfter {
+			WriteFailureArtifacts(ctx, workdir, nil, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
+		}
+	}
 	emitTaskPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
 	prompt, err := workflow.Render(wf.PromptTemplate, renderVars)
 	if err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err, NonRetryable: true}
 	}
+	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, wcfg)
 	prompt = AppendAnalysisOnlyDirective(prompt, wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)
 	if err := writeTaskFiles(workdir, t, prompt); err != nil {
@@ -295,8 +315,22 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	}
 
 	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {
-		recordPolicyViolation(ctx, ev, t.ID, err)
+		feedback, feedbackPath, feedbackErr := writePolicyViolationFeedback(workspaceRoot, t, err)
+		willRetry := true
+		if feedbackErr != nil {
+			willRetry = false
+		}
+		if feedback != nil && feedback.Count >= policyViolationStopAfter {
+			willRetry = false
+		}
+		recordPolicyViolation(ctx, ev, t.ID, err, feedback, feedbackPath, willRetry, feedbackErr)
 		WriteFailureArtifacts(ctx, workdir, nil, "policy check failed: "+ErrSummary(err))
+		if feedbackErr != nil {
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %v", feedbackErr, err), NonRetryable: true}
+		}
+		if !willRetry {
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("repeated policy violation after %d attempts: %w", feedback.Count, err), NonRetryable: true}
+		}
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -364,6 +398,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
 		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
 	}
+	clearPolicyViolationFeedback(workspaceRoot, t)
 
 	emitTaskPhase(task.PhaseFinishing, task.PhaseSucceeded)
 	return nil
@@ -678,17 +713,30 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, work
 
 // recordPolicyViolation writes a structured `policy_violation` task event
 // before the worker fails the task.
-func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error) {
+func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error) {
 	if ev == nil {
 		return
 	}
 	var perr *workspace.PolicyError
 	if errors.As(err, &perr) {
-		if emitErr := ev.AddEventWithPayload(ctx, taskID, "policy_violation", perr.Error(), map[string]any{"violations": perr.Violations}); emitErr == nil {
+		payload := map[string]any{
+			"violations": perr.Violations,
+			"will_retry": willRetry,
+		}
+		if feedback != nil {
+			payload["violation_count"] = feedback.Count
+		}
+		if feedbackPath != "" {
+			payload["feedback_path"] = feedbackPath
+		}
+		if feedbackErr != nil {
+			payload["feedback_error"] = ErrSummary(feedbackErr)
+		}
+		if emitErr := ev.AddEventWithPayload(ctx, taskID, task.EventPolicyViolation, perr.Error(), payload); emitErr == nil {
 			return
 		}
 	}
-	_ = ev.AddEvent(ctx, taskID, "policy_violation", err.Error())
+	_ = ev.AddEvent(ctx, taskID, task.EventPolicyViolation, err.Error())
 }
 
 func writeTaskFiles(workdir string, t task.Task, prompt string) error {
