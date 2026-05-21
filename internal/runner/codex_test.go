@@ -55,7 +55,8 @@ func codexInput(workdir string) RunInput {
 	return RunInput{
 		Task: task.Task{ID: "tsk_codex_test", Model: "codex"},
 		Workflow: workflow.Workflow{Config: workflow.Config{
-			Codex: workflow.CommandConfig{Command: "codex exec", Profile: "safe"},
+			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+			Codex:     workflow.CommandConfig{Command: "codex exec", Profile: "safe"},
 		}},
 		Workdir: workdir,
 		Prompt:  "ignored — runner reads .aiops/PROMPT.md",
@@ -268,7 +269,8 @@ func TestCodexRunner_CustomProfileUsesShellWithStdin(t *testing.T) {
 	in := RunInput{
 		Task: task.Task{ID: "tsk_custom", Model: "codex"},
 		Workflow: workflow.Workflow{Config: workflow.Config{
-			Codex: workflow.CommandConfig{Command: "cat", Profile: "custom"},
+			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(wd)},
+			Codex:     workflow.CommandConfig{Command: "cat", Profile: "custom"},
 		}},
 		Workdir: wd,
 	}
@@ -298,7 +300,8 @@ func TestCodexRunner_CustomProfileEmptyCommandRejected(t *testing.T) {
 	in := RunInput{
 		Task: task.Task{ID: "tsk_custom_empty", Model: "codex"},
 		Workflow: workflow.Workflow{Config: workflow.Config{
-			Codex: workflow.CommandConfig{Profile: "custom"},
+			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(wd)},
+			Codex:     workflow.CommandConfig{Profile: "custom"},
 		}},
 		Workdir: wd,
 	}

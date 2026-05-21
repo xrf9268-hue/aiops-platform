@@ -41,6 +41,9 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 		return Result{}, err
 	}
 	cmd.Dir = in.Workdir
+	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
+		return Result{}, err
+	}
 	cmd, err = applySandbox(ctx, in, cmd)
 	if err != nil {
 		return Result{}, err

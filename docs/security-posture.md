@@ -65,10 +65,12 @@ Treat all of these inputs as potentially hostile unless you control them:
 - tool arguments passed to client-side tools such as tracker or PR APIs.
 
 The worker creates or reuses a per-issue workspace and runs the coding agent with
-that workspace as the current directory. Workspace path validation is a baseline
-control and must keep workspaces under the configured workspace root, but SPEC
-§15.1 is explicit that path validation is not a substitute for approval policy,
-credential scoping, or external sandboxing.
+that workspace as the current directory. Subprocess-backed runners validate that
+the launch cwd is the per-issue workspace path and that the workspace path stays
+under the configured workspace root before starting the coding agent, independent
+of whether the optional sandbox wrapper is enabled. SPEC §15.1 is explicit that
+path validation is not a substitute for approval policy, credential scoping, or
+external sandboxing.
 
 ## What is defended today
 
@@ -77,6 +79,8 @@ The current Go implementation provides these safety controls:
 - per-issue workspaces under a configured workspace root;
 - sanitized workspace identifiers;
 - coding-agent execution from the per-issue workspace directory;
+- runner-side `cwd` and workspace-root validation before agent subprocess
+  launch, even when `sandbox.enabled` is false;
 - workflow-configured policy limits such as `deny_paths`, `max_changed_files`,
   and `max_changed_loc`;
 - draft-PR mode for human review before merge;

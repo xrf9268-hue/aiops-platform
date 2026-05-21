@@ -15,8 +15,9 @@ type RunInput struct {
 	Workflow workflow.Workflow
 	Workdir  string
 	// WorkspaceRoot is the runtime root that created Workdir. When set,
-	// sandbox invariant checks must use this value instead of the workflow
-	// default so runner sandboxing matches the worker's actual checkout root.
+	// runner workspace-cwd invariant checks must use this value instead of
+	// the workflow default so launch validation matches the worker's actual
+	// checkout root.
 	WorkspaceRoot string
 	Prompt        string
 
