@@ -66,6 +66,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          binaries=(worker linear-poller gitea-poller)
           targets=(
             "linux amd64"
             "linux arm64"
@@ -75,9 +76,10 @@ jobs:
           for target in "${targets[@]}"; do
             read -r goos goarch <<< "$target"
             out="dist/aiops-platform_${{ steps.release.outputs.tag }}_${goos}_${goarch}"
-            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/trigger-api" ./cmd/trigger-api
-            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/worker" ./cmd/worker
-            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${out}/linear-poller" ./cmd/linear-poller
+            for binary in "${binaries[@]}"; do
+              GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
+                go build -trimpath -ldflags="-s -w" -o "${out}/${binary}" "./cmd/${binary}"
+            done
             tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
             rm -rf "$out"
           done
