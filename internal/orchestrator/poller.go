@@ -89,9 +89,8 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
 	issues, activeErr := p.tracker.ListActiveIssues(ctx)
-	if _, ok := tracker.ErrorCategory(activeErr); ok {
-		return activeErr
-	}
+	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
+	// keep the successful issues and join activeErr into pollErr below.
 	if activeErr != nil && len(issues) == 0 {
 		return activeErr
 	}
