@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -772,5 +773,41 @@ func TestNewLinearClient_DefaultsRequestTimeoutTo30s(t *testing.T) {
 	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
 	if client.RequestTimeout != 30*time.Second {
 		t.Fatalf("default RequestTimeout = %v, want 30s", client.RequestTimeout)
+	}
+}
+
+func TestListIssuesByStatesEmptyShortCircuitsWithoutAPICall(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	cases := []struct {
+		name   string
+		states []string
+	}{
+		{"nil", nil},
+		{"empty-slice", []string{}},
+		{"single-empty-string", []string{""}},
+		{"whitespace-only", []string{"  ", "\t"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			issues, err := client.ListIssuesByStates(context.Background(), c.states)
+			if err != nil {
+				t.Fatalf("ListIssuesByStates(%v) err = %v, want nil", c.states, err)
+			}
+			if len(issues) != 0 {
+				t.Fatalf("ListIssuesByStates(%v) len = %d, want 0", c.states, len(issues))
+			}
+		})
+	}
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Fatalf("server received %d requests, want 0 (SPEC §17.3: empty fetch_issues_by_states returns empty without API call)", got)
 	}
 }
