@@ -58,3 +58,80 @@ Prompt body
 		}
 	}
 }
+
+func TestLoadRejectsNonPositiveHooksTimeoutMs(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "top-level negative",
+			body: `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  timeout_ms: -1
+---
+Prompt body
+`,
+		},
+		{
+			name: "top-level zero",
+			body: `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  timeout_ms: 0
+---
+Prompt body
+`,
+		},
+		{
+			name: "legacy negative",
+			body: `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+workspace:
+  hooks:
+    timeout_ms: -1
+---
+Prompt body
+`,
+		},
+		{
+			name: "legacy zero",
+			body: `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+workspace:
+  hooks:
+    timeout_ms: 0
+---
+Prompt body
+`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, tt.body)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load succeeded with explicit non-positive hooks timeout, want validation error")
+			}
+			for _, want := range []string{path, "timeout_ms", "positive integer"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load error = %q, want substring %q", err, want)
+				}
+			}
+		})
+	}
+}
