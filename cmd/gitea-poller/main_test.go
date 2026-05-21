@@ -89,8 +89,8 @@ func TestGiteaMetricsHandlerExposesPaginationCapHits(t *testing.T) {
 	client := gitea.NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.Logf = func(string, ...any) {}
-	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); err != nil {
-		t.Fatalf("ListIssuesByStates: %v", err)
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); err == nil || !strings.Contains(err.Error(), "gitea issue pagination exceeded") {
+		t.Fatalf("ListIssuesByStates err = %v, want pagination overflow error", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

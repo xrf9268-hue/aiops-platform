@@ -321,7 +321,7 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 	}
 }
 
-func TestTrackerClientListIssuesByStatesReturnsCappedResultsInsteadOfFailingWhenPageLimitExceeded(t *testing.T) {
+func TestTrackerClientListIssuesByStatesErrorsWhenIssuePaginationOverflows(t *testing.T) {
 	var logs []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page, err := strconv.Atoi(r.URL.Query().Get("page"))
@@ -347,12 +347,9 @@ func TestTrackerClientListIssuesByStatesReturnsCappedResultsInsteadOfFailingWhen
 	if got := client.PaginationCapHits(); got != 0 {
 		t.Fatalf("initial PaginationCapHits = %d, want 0", got)
 	}
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
-	if err != nil {
-		t.Fatalf("ListIssuesByStates must return capped results instead of failing the poll cycle: %v", err)
-	}
-	if len(issues) != listIssuesMaxPages*listIssuesPageSize {
-		t.Fatalf("issues len = %d, want capped %d issues", len(issues), listIssuesMaxPages*listIssuesPageSize)
+	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil || !strings.Contains(err.Error(), "gitea issue pagination exceeded") {
+		t.Fatalf("ListIssuesByStates err = %v, want pagination overflow error", err)
 	}
 	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "gitea issue pagination exceeded") {
 		t.Fatalf("logs = %#v, want pagination cap diagnostic", logs)

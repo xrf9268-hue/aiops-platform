@@ -159,11 +159,11 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			return nil, err
 		}
 		if page > listIssuesMaxPages {
-			if len(batch) == 0 {
+			if !hasNext && len(batch) == 0 {
 				return out, nil
 			}
 			c.recordPaginationCapHit(labelName)
-			return out, nil
+			return nil, fmt.Errorf("gitea issue pagination exceeded %d pages for label %q", listIssuesMaxPages, labelName)
 		}
 		for _, issue := range batch {
 			issueKey := giteaIssueID(issue)
