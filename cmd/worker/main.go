@@ -531,10 +531,10 @@ func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		view, err := snapshot(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				writeAPIError(w, http.StatusServiceUnavailable, "snapshot_unavailable", err.Error())
+				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", err.Error())
 				return
 			}
-			writeAPIError(w, http.StatusInternalServerError, "snapshot_failed", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -559,10 +559,10 @@ func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		view, err := snapshot(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				writeAPIError(w, http.StatusServiceUnavailable, "snapshot_unavailable", err.Error())
+				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", err.Error())
 				return
 			}
-			writeAPIError(w, http.StatusInternalServerError, "snapshot_failed", err.Error())
+			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), err.Error())
 			return
 		}
 		payload, ok := apiIssueFromView(view, identifier)
@@ -780,6 +780,16 @@ func stringPointerIfNotEmpty(value string) *string {
 	return &value
 }
 
+func apiErrorCode(err error) string {
+	if category, ok := workflow.ErrorCategory(err); ok {
+		return string(category)
+	}
+	if category, ok := tracker.ErrorCategory(err); ok {
+		return string(category)
+	}
+	return "internal_error"
+}
+
 func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	generatedAt := view.GeneratedAt
 	if generatedAt.IsZero() {
@@ -941,7 +951,7 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 		}
 		return tracker.NewGitHubClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	default:
-		return nil, fmt.Errorf("unsupported tracker.kind %q", cfg.Tracker.Kind)
+		return nil, tracker.NewError(tracker.CategoryUnsupportedTrackerKind, fmt.Sprintf("unsupported tracker.kind %q", cfg.Tracker.Kind), nil)
 	}
 }
 

@@ -32,18 +32,23 @@ Rules:
 }
 
 type TemplateRenderError struct {
-	Name string
-	Err  error
+	Category Category
+	Name     string
+	Err      error
 }
 
 func (e *TemplateRenderError) Error() string {
-	if e == nil {
-		return "template_render_error"
+	category := CategoryTemplateRenderError
+	if e != nil && e.Category != "" {
+		category = e.Category
+	}
+	if e == nil || e.Err == nil {
+		return string(category)
 	}
 	if e.Name == "" {
-		return "template_render_error: " + e.Err.Error()
+		return string(category) + ": " + e.Err.Error()
 	}
-	return fmt.Sprintf("template_render_error: %s: %v", e.Name, e.Err)
+	return fmt.Sprintf("%s: %s: %v", category, e.Name, e.Err)
 }
 
 func (e *TemplateRenderError) Unwrap() error {
@@ -53,6 +58,17 @@ func (e *TemplateRenderError) Unwrap() error {
 	return e.Err
 }
 
+func (e *TemplateRenderError) Is(target error) bool {
+	return categoryMatches(e.category(), target)
+}
+
+func (e *TemplateRenderError) category() Category {
+	if e != nil && e.Category != "" {
+		return e.Category
+	}
+	return CategoryTemplateRenderError
+}
+
 func Render(template string, vars map[string]any) (string, error) {
 	if strings.TrimSpace(template) == "" {
 		template = DefaultPrompt()
@@ -60,6 +76,10 @@ func Render(template string, vars map[string]any) (string, error) {
 	var err error
 	template, err = renderLiquidIfTags(template, vars)
 	if err != nil {
+		var parseErr *TemplateParseError
+		if errors.As(err, &parseErr) {
+			return "", err
+		}
 		return "", &TemplateRenderError{Err: err}
 	}
 
@@ -100,10 +120,10 @@ func renderLiquidIfTags(template string, vars map[string]any) (string, error) {
 		}
 		tag := strings.TrimSpace(template[match[2]:match[3]])
 		if tag == "endif" {
-			return "", fmt.Errorf("unexpected endif tag")
+			return "", &TemplateParseError{Err: fmt.Errorf("unexpected endif tag")}
 		}
 		if !strings.HasPrefix(tag, "if ") {
-			return "", fmt.Errorf("unsupported tag %q", tag)
+			return "", &TemplateParseError{Err: fmt.Errorf("unsupported tag %q", tag)}
 		}
 		closeStart, closeEnd, err := findLiquidEndif(template[match[1]:])
 		if err != nil {
@@ -183,7 +203,7 @@ func findLiquidEndif(template string) (start int, end int, err error) {
 			}
 		}
 	}
-	return 0, 0, fmt.Errorf("unterminated if tag")
+	return 0, 0, &TemplateParseError{Err: fmt.Errorf("unterminated if tag")}
 }
 
 func evalLiquidCondition(cond string, vars map[string]any) (bool, error) {

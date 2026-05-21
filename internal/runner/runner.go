@@ -65,6 +65,95 @@ func New(name string) (Runner, error) {
 	}
 }
 
+type RunnerErrorCategory string
+
+const (
+	CategoryCodexNotFound       RunnerErrorCategory = "codex_not_found"
+	CategoryInvalidWorkspaceCWD RunnerErrorCategory = "invalid_workspace_cwd"
+	CategoryResponseTimeout     RunnerErrorCategory = "response_timeout"
+	CategoryTurnTimeout         RunnerErrorCategory = "turn_timeout"
+	CategoryPortExit            RunnerErrorCategory = "port_exit"
+	CategoryResponseError       RunnerErrorCategory = "response_error"
+	CategoryTurnFailed          RunnerErrorCategory = "turn_failed"
+	CategoryTurnCancelled       RunnerErrorCategory = "turn_cancelled"
+	CategoryTurnInputRequired   RunnerErrorCategory = "turn_input_required"
+)
+
+var (
+	ErrCodexNotFound       = &Error{Category: CategoryCodexNotFound}
+	ErrInvalidWorkspaceCWD = &Error{Category: CategoryInvalidWorkspaceCWD}
+	ErrResponseTimeout     = &Error{Category: CategoryResponseTimeout}
+	ErrTurnTimeout         = &Error{Category: CategoryTurnTimeout}
+	ErrPortExit            = &Error{Category: CategoryPortExit}
+	ErrResponseError       = &Error{Category: CategoryResponseError}
+	ErrTurnFailed          = &Error{Category: CategoryTurnFailed}
+	ErrTurnCancelled       = &Error{Category: CategoryTurnCancelled}
+	ErrTurnInputRequired   = &Error{Category: CategoryTurnInputRequired}
+)
+
+type Error struct {
+	Category RunnerErrorCategory
+	Message  string
+	Err      error
+}
+
+func NewError(category RunnerErrorCategory, message string, err error) *Error {
+	return &Error{Category: category, Message: message, Err: err}
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = string(e.Category)
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *Error) Is(target error) bool {
+	return runnerCategoryMatches(e.category(), target)
+}
+
+func (e *Error) category() RunnerErrorCategory {
+	if e == nil {
+		return ""
+	}
+	return e.Category
+}
+
+type runnerCategorized interface {
+	category() RunnerErrorCategory
+}
+
+func ErrorCategory(err error) (RunnerErrorCategory, bool) {
+	var categorizedErr runnerCategorized
+	if errors.As(err, &categorizedErr) {
+		category := categorizedErr.category()
+		return category, category != ""
+	}
+	return "", false
+}
+
+func runnerCategoryMatches(category RunnerErrorCategory, target error) bool {
+	if category == "" || target == nil {
+		return false
+	}
+	var targetCategory runnerCategorized
+	return errors.As(target, &targetCategory) && targetCategory.category() == category
+}
+
 // TimeoutError is returned by Runner implementations when the parent
 // context's deadline elapsed before the runner subprocess finished.
 // Callers should treat this distinctly from a generic non-zero exit so
@@ -134,6 +223,14 @@ func (e *TurnTimeoutError) Error() string {
 
 func (e *TurnTimeoutError) Unwrap() error { return e.Cause }
 
+func (e *TurnTimeoutError) Is(target error) bool {
+	return runnerCategoryMatches(e.category(), target)
+}
+
+func (e *TurnTimeoutError) category() RunnerErrorCategory {
+	return CategoryTurnTimeout
+}
+
 // IsTurnTimeout reports whether err is (or wraps) a *TurnTimeoutError.
 func IsTurnTimeout(err error) bool {
 	var te *TurnTimeoutError
@@ -155,6 +252,14 @@ func (e *ReadTimeoutError) Error() string {
 }
 
 func (e *ReadTimeoutError) Unwrap() error { return e.Cause }
+
+func (e *ReadTimeoutError) Is(target error) bool {
+	return runnerCategoryMatches(e.category(), target)
+}
+
+func (e *ReadTimeoutError) category() RunnerErrorCategory {
+	return CategoryResponseTimeout
+}
 
 // IsReadTimeout reports whether err is (or wraps) a *ReadTimeoutError.
 func IsReadTimeout(err error) bool {

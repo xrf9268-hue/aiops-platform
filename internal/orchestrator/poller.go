@@ -89,6 +89,9 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
 	issues, activeErr := p.tracker.ListActiveIssues(ctx)
+	if _, ok := tracker.ErrorCategory(activeErr); ok {
+		return activeErr
+	}
 	if activeErr != nil && len(issues) == 0 {
 		return activeErr
 	}

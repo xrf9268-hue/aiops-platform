@@ -30,6 +30,9 @@ const (
 )
 
 func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error) {
+	if err := validateAppServerWorkdir(in.Workdir); err != nil {
+		return Result{}, err
+	}
 	promptAbs := filepath.Join(in.Workdir, PromptPath)
 	prompt, err := os.ReadFile(promptAbs)
 	if err != nil {
@@ -114,15 +117,35 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: runErr}
 		}
+		if _, ok := ErrorCategory(runErr); ok {
+			return res, runErr
+		}
+		if waitErr != nil {
+			return res, NewError(CategoryPortExit, "codex app-server process exited", errors.Join(runErr, waitErr))
+		}
 		return res, runErr
 	}
 	if waitErr != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: waitErr}
 		}
-		return res, waitErr
+		return res, NewError(CategoryPortExit, "codex app-server process exited", waitErr)
 	}
 	return res, nil
+}
+
+func validateAppServerWorkdir(workdir string) error {
+	if strings.TrimSpace(workdir) == "" {
+		return NewError(CategoryInvalidWorkspaceCWD, "codex app-server workspace cwd is empty", nil)
+	}
+	info, err := os.Stat(workdir)
+	if err != nil {
+		return NewError(CategoryInvalidWorkspaceCWD, "codex app-server workspace cwd is invalid", err)
+	}
+	if !info.IsDir() {
+		return NewError(CategoryInvalidWorkspaceCWD, "codex app-server workspace cwd is not a directory", nil)
+	}
+	return nil
 }
 
 func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
@@ -136,7 +159,7 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error)
 	}
 	if fields[0] == "codex" {
 		if _, err := exec.LookPath("codex"); err != nil {
-			return nil, fmt.Errorf("codex binary not found in PATH; install codex CLI or set agent.default to claude/mock")
+			return nil, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
 		}
 		return exec.CommandContext(ctx, fields[0], fields[1:]...), nil
 	}
@@ -283,7 +306,7 @@ func (c *appServerClient) request(ctx context.Context, method string, params map
 		}
 		if gotID, ok := numberID(msg["id"]); ok && gotID == id {
 			if e, ok := msg["error"]; ok {
-				return nil, fmt.Errorf("rpc error: %v", e)
+				return nil, NewError(CategoryResponseError, fmt.Sprintf("rpc error: %v", e), nil)
 			}
 			result, _ := msg["result"].(map[string]any)
 			if result == nil {
@@ -333,7 +356,7 @@ func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]a
 	_, _ = c.out.Write(line)
 	var msg map[string]any
 	if err := json.Unmarshal(line, &msg); err != nil {
-		return nil, line, err
+		return nil, line, NewError(CategoryResponseError, "decode codex app-server message", err)
 	}
 	return msg, line, nil
 }
@@ -457,10 +480,11 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			case "turn/failed", "turn/cancelled":
 				if method == "turn/failed" {
 					c.recordRuntimeMessage(task.EventTurnFailed, msg)
+					return NewError(CategoryTurnFailed, fmt.Sprintf("%s: %v", method, msg["params"]), nil)
 				} else {
 					c.recordRuntimeMessage(task.EventTurnCancelled, msg)
+					return NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %v", method, msg["params"]), nil)
 				}
-				return fmt.Errorf("%s: %v", method, msg["params"])
 			case "item/tool/call":
 				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
 					return err
@@ -775,7 +799,7 @@ func completedTurnError(msg map[string]any) error {
 	if reason == "" {
 		reason = fmt.Sprint(params)
 	}
-	return fmt.Errorf("turn/completed failed with status %q: %s", status, reason)
+	return NewError(CategoryTurnFailed, fmt.Sprintf("turn/completed failed with status %q: %s", status, reason), nil)
 }
 
 func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[string]any) error {
@@ -880,11 +904,11 @@ func appServerContinuationPrompt(in RunInput, turn int) string {
 func extractString(m map[string]any, outer, inner string) (string, error) {
 	o, _ := m[outer].(map[string]any)
 	if o == nil {
-		return "", fmt.Errorf("missing %s", outer)
+		return "", NewError(CategoryResponseError, "missing "+outer, nil)
 	}
 	v, _ := o[inner].(string)
 	if v == "" {
-		return "", fmt.Errorf("missing %s.%s", outer, inner)
+		return "", NewError(CategoryResponseError, fmt.Sprintf("missing %s.%s", outer, inner), nil)
 	}
 	return v, nil
 }

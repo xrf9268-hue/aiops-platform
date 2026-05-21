@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -16,6 +17,77 @@ const (
 	linearIssuePageSize = 50
 	maxLinearIssuePages = 200
 )
+
+type Category string
+
+const (
+	CategoryUnsupportedTrackerKind    Category = "unsupported_tracker_kind"
+	CategoryMissingTrackerAPIKey      Category = "missing_tracker_api_key"
+	CategoryMissingTrackerProjectSlug Category = "missing_tracker_project_slug"
+	CategoryLinearAPIRequest          Category = "linear_api_request"
+	CategoryLinearAPIStatus           Category = "linear_api_status"
+	CategoryLinearGraphQLErrors       Category = "linear_graphql_errors"
+	CategoryLinearUnknownPayload      Category = "linear_unknown_payload"
+	CategoryLinearMissingEndCursor    Category = "linear_missing_end_cursor"
+)
+
+var (
+	ErrUnsupportedTrackerKind    = &Error{Category: CategoryUnsupportedTrackerKind}
+	ErrMissingTrackerAPIKey      = &Error{Category: CategoryMissingTrackerAPIKey}
+	ErrMissingTrackerProjectSlug = &Error{Category: CategoryMissingTrackerProjectSlug}
+	ErrLinearAPIRequest          = &Error{Category: CategoryLinearAPIRequest}
+	ErrLinearAPIStatus           = &Error{Category: CategoryLinearAPIStatus}
+	ErrLinearGraphQLErrors       = &Error{Category: CategoryLinearGraphQLErrors}
+	ErrLinearUnknownPayload      = &Error{Category: CategoryLinearUnknownPayload}
+	ErrLinearMissingEndCursor    = &Error{Category: CategoryLinearMissingEndCursor}
+)
+
+type Error struct {
+	Category Category
+	Message  string
+	Err      error
+}
+
+func NewError(category Category, message string, err error) *Error {
+	return &Error{Category: category, Message: message, Err: err}
+}
+
+func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = string(e.Category)
+	}
+	if e.Err != nil {
+		msg += ": " + e.Err.Error()
+	}
+	return msg
+}
+
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func (e *Error) Is(target error) bool {
+	if e == nil || e.Category == "" || target == nil {
+		return false
+	}
+	var targetErr *Error
+	return errors.As(target, &targetErr) && targetErr.Category == e.Category
+}
+
+func ErrorCategory(err error) (Category, bool) {
+	var trackerErr *Error
+	if errors.As(err, &trackerErr) {
+		return trackerErr.Category, trackerErr.Category != ""
+	}
+	return "", false
+}
 
 type LinearClient struct {
 	APIKey  string
@@ -35,11 +107,11 @@ func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
 
 func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
 	if c.APIKey == "" {
-		return nil, fmt.Errorf("Linear API key is required")
+		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
 	projectSlug := strings.TrimSpace(c.Config.ProjectSlug)
 	if projectSlug == "" {
-		return nil, fmt.Errorf("Linear project slug is required")
+		return nil, NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
 	}
 	query := `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
@@ -113,7 +185,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
-			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+			return nil, linearGraphQLErrors(out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
 			createdAt, err := parseLinearIssueTime("createdAt", n.CreatedAt)
@@ -151,7 +223,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return issues, nil
 		}
 		if out.Data.Issues.PageInfo.EndCursor == "" {
-			return nil, fmt.Errorf("linear pagination missing endCursor")
+			return nil, NewError(CategoryLinearMissingEndCursor, "linear pagination missing endCursor", nil)
 		}
 		after = out.Data.Issues.PageInfo.EndCursor
 	}
@@ -183,7 +255,7 @@ func stringifyLinearCustomFieldValue(raw json.RawMessage) string {
 
 func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
 	if c.APIKey == "" {
-		return nil, fmt.Errorf("Linear API key is required")
+		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
 	if len(issueIDs) == 0 {
 		return map[string]string{}, nil
@@ -220,7 +292,7 @@ func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
-			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+			return nil, linearGraphQLErrors(out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
 			states[n.ID] = n.State.Name
@@ -268,7 +340,7 @@ func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID strin
 		return nil, err
 	}
 	if len(out.Errors) > 0 {
-		return nil, fmt.Errorf("linear errors: %v", out.Errors)
+		return nil, linearGraphQLErrors(out.Errors)
 	}
 	return c.linearBlockersFromInverseRelations(ctx, issueID, out.Data.Issue.InverseRelations.Nodes, out.Data.Issue.InverseRelations.PageInfo.HasNextPage, out.Data.Issue.InverseRelations.PageInfo.EndCursor)
 }
@@ -286,7 +358,7 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 	appendBlockers(nodes)
 	for page := 0; hasNextPage && page < maxLinearIssuePages; page++ {
 		if endCursor == "" {
-			return nil, fmt.Errorf("linear inverse relation pagination missing endCursor for issue %s", issueID)
+			return nil, NewError(CategoryLinearMissingEndCursor, fmt.Sprintf("linear inverse relation pagination missing endCursor for issue %s", issueID), nil)
 		}
 		var out struct {
 			Data struct {
@@ -311,7 +383,7 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
-			return nil, fmt.Errorf("linear errors: %v", out.Errors)
+			return nil, linearGraphQLErrors(out.Errors)
 		}
 		appendBlockers(out.Data.Issue.InverseRelations.Nodes)
 		hasNextPage = out.Data.Issue.InverseRelations.PageInfo.HasNextPage
@@ -332,7 +404,7 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 // aborts the underlying task.
 func (c *LinearClient) MoveIssueToState(ctx context.Context, issueID, stateName string) error {
 	if c.APIKey == "" {
-		return fmt.Errorf("Linear API key is required")
+		return NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
 	if issueID == "" {
 		return fmt.Errorf("issue id is required")
@@ -359,7 +431,7 @@ func (c *LinearClient) MoveIssueToState(ctx context.Context, issueID, stateName 
 		return err
 	}
 	if len(out.Errors) > 0 {
-		return fmt.Errorf("linear errors: %v", out.Errors)
+		return linearGraphQLErrors(out.Errors)
 	}
 	if !out.Data.IssueUpdate.Success {
 		return fmt.Errorf("linear: issueUpdate did not report success")
@@ -372,7 +444,7 @@ func (c *LinearClient) MoveIssueToState(ctx context.Context, issueID, stateName 
 // visible on the issue even if the workflow state could not be moved.
 func (c *LinearClient) AddComment(ctx context.Context, issueID, body string) error {
 	if c.APIKey == "" {
-		return fmt.Errorf("Linear API key is required")
+		return NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
 	if issueID == "" {
 		return fmt.Errorf("issue id is required")
@@ -392,7 +464,7 @@ func (c *LinearClient) AddComment(ctx context.Context, issueID, body string) err
 		return err
 	}
 	if len(out.Errors) > 0 {
-		return fmt.Errorf("linear errors: %v", out.Errors)
+		return linearGraphQLErrors(out.Errors)
 	}
 	if !out.Data.CommentCreate.Success {
 		return fmt.Errorf("linear: commentCreate did not report success")
@@ -437,7 +509,7 @@ func (c *LinearClient) lookupStateID(ctx context.Context, stateName string) (str
 		return "", err
 	}
 	if len(out.Errors) > 0 {
-		return "", fmt.Errorf("linear errors: %v", out.Errors)
+		return "", linearGraphQLErrors(out.Errors)
 	}
 	if len(out.Data.WorkflowStates.Nodes) == 0 {
 		return "", fmt.Errorf("no workflow state matches %q", stateName)
@@ -453,11 +525,11 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	payload := map[string]any{"query": query, "variables": variables}
 	b, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return NewError(CategoryLinearAPIRequest, "build Linear GraphQL request", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL, bytes.NewReader(b))
 	if err != nil {
-		return err
+		return NewError(CategoryLinearAPIRequest, "build Linear GraphQL request", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", c.APIKey)
@@ -467,14 +539,21 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return err
+		return NewError(CategoryLinearAPIRequest, "send Linear GraphQL request", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("linear request failed: %s", resp.Status)
+		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: %s", resp.Status), nil)
 	}
 	if out == nil {
 		return nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+		return NewError(CategoryLinearUnknownPayload, "decode Linear GraphQL response", err)
+	}
+	return nil
+}
+
+func linearGraphQLErrors(errs []map[string]any) error {
+	return NewError(CategoryLinearGraphQLErrors, fmt.Sprintf("linear errors: %v", errs), nil)
 }

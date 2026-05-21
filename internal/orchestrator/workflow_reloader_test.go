@@ -681,6 +681,19 @@ func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *
 	}
 }
 
+func TestWorkflowFileFingerprintDoesNotMarkNonMissingReadErrorsAsMissing(t *testing.T) {
+	_, err := workflowFileFingerprint(t.TempDir())
+	if err == nil {
+		t.Fatalf("workflowFileFingerprint directory path error = nil, want read error")
+	}
+	if errors.Is(err, workflow.ErrMissingWorkflowFile) {
+		t.Fatalf("workflowFileFingerprint directory path error = %T %[1]v, must not match ErrMissingWorkflowFile", err)
+	}
+	if got, ok := workflow.ErrorCategory(err); ok {
+		t.Fatalf("ErrorCategory(directory fingerprint error) = %q, true; want uncategorized", got)
+	}
+}
+
 func TestRunWorkflowReloadLoopPollFallbackReloadsChangedWorkflow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
