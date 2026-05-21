@@ -55,6 +55,42 @@ and artifact handoff semantics, while the current phase only wraps the already
 selected agent invocation. Track Docker isolation separately so it can preserve
 the workspace-root invariant and SPEC workspace lifecycle behavior deliberately.
 
+## Docker Compose SSH key isolation
+
+`deploy/docker-compose.yml` does **not** bind-mount the operator's full
+`~/.ssh` directory into the worker container. Doing so was the prior
+default and exposed the operator's entire SSH key set, `known_hosts`, and
+`config` to the agent process — a single prompt-injection or malicious
+dependency that read `/root/.ssh/id_*` could exfiltrate every keypair on
+the host.
+
+Today the worker container receives only two file-level binds:
+
+| Host path (default)       | Container path                    |
+| ------------------------- | --------------------------------- |
+| `deploy/ssh/id_ed25519`   | `/root/.ssh/id_ed25519:ro`        |
+| `deploy/ssh/known_hosts`  | `/root/.ssh/known_hosts:ro`       |
+
+Both paths are overridable through environment variables in the operator's
+`.env`:
+
+```dotenv
+AIOPS_SSH_KEY_PATH=...
+AIOPS_SSH_KNOWN_HOSTS_PATH=...
+```
+
+Operators generate the dedicated keypair under `deploy/ssh/` with
+`ssh-keygen` and add the public key as a Gitea / GitHub deploy key on the
+target repository. See `deploy/ssh/README.md` and
+`docs/runbooks/local-dev.md` for the step-by-step setup.
+
+**Threat reduced, not eliminated.** The worker container still runs as
+root (no `USER` directive in `Dockerfile`). A successful container
+breakout or a write-side compromise can still misuse the mounted deploy
+key — but the key's blast radius is bounded to the repos that deploy key
+authorises, not every repo on the operator's host. Dropping root inside
+the container is tracked as a separate hardening step.
+
 ## Trust boundary
 
 Treat all of these inputs as potentially hostile unless you control them:

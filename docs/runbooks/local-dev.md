@@ -202,7 +202,22 @@ A transitional poller logs `relation "tasks" does not exist`.
 ### Worker fails to push or open PRs
 
 - `GITEA_BASE_URL` and `GITEA_TOKEN` must be set and the bot user must have write access to the target repository.
-- The worker bind-mounts `~/.ssh` read-only into the container. SSH clone URLs require a working key on the host, with the Gitea host already in `~/.ssh/known_hosts`.
+- The worker container mounts a **dedicated** SSH keypair at
+  `/root/.ssh/id_ed25519` — not your entire `~/.ssh`. Set it up once:
+
+  ```bash
+  cd deploy
+  ssh-keygen -t ed25519 -f ssh/id_ed25519 -C aiops-worker-deploy-key -N ''
+  ssh-keyscan -H <your-gitea-host> >> ssh/known_hosts
+  ```
+
+  Then register `deploy/ssh/id_ed25519.pub` as a Gitea / GitHub deploy key on
+  the target repository. The keypair lives outside version control thanks to
+  the root `.gitignore`. Override the path with `AIOPS_SSH_KEY_PATH` /
+  `AIOPS_SSH_KNOWN_HOSTS_PATH` in `.env` if you keep the key elsewhere. See
+  `docs/security-posture.md` ("Docker Compose SSH key isolation") for the
+  rationale — this scoping closed the broad credential exposure described
+  in issue #221.
 
 ### Port `5432` already in use
 
