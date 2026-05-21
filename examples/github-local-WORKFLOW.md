@@ -36,6 +36,7 @@ agent:
     open: 1
   max_turns: 12
   timeout: 2h
+  max_retry_attempts: 1
   max_timeout_retries: 1
 
 codex:
@@ -119,6 +120,16 @@ Hard requirements:
 - Treat non-JSON output, command failure, or any non-empty
   `blocking_findings` list from either local reviewer as blocking. Fix findings
   with tests before push.
-- Open a draft PR with a body that names the issue, summarizes tests, and
-  records both local review results.
-- Trigger the configured GitHub bot review when available, then leave the PR for the follow-through automation to merge after CI and review gates are clean.
+- Before opening a PR, check for an existing open PR that closes the assigned
+  issue (`gh pr list --state open --search "#<issue-number>"` plus a direct
+  PR-body/linked-issue check). If one exists, update and reuse that PR and
+  branch; do not open a duplicate PR for the same issue.
+- Open or update a draft PR with a body that names the issue, summarizes tests,
+  and records both local review results.
+- The PR body must include an explicit issue claim line for the assigned GitHub
+  issue, preferably `Closes #<issue-number>`; `Issue #<issue-number>` is also
+  recognized by the local tracker as an active PR claim. Do not use only casual
+  references such as `See also #...` for the assigned issue.
+- Do not post ad hoc `@codex review` comments yourself. Leave the PR for the
+  follow-through automation, which posts or reuses a current-head-bound GitHub
+  Codex review trigger and merges only after CI and review gates are clean.

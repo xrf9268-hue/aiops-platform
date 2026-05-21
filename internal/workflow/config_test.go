@@ -817,8 +817,9 @@ body
 }
 
 // TestDefaultConfigAgentTimeout pins the schema-level defaults the
-// platform contract advertises: a 30-minute per-task timeout and one
-// dedicated retry slot for runner timeouts.
+// platform contract advertises: a 30-minute per-task timeout, one
+// generic failure retry, and one dedicated retry slot for runner
+// timeouts.
 func TestDefaultConfigAgentTimeout(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Agent.Timeout != 30*time.Minute {
@@ -826,6 +827,9 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	}
 	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != 1 {
 		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want 1", got)
+	}
+	if got := cfg.Agent.MaxRetryAttemptsValue(); got != 1 {
+		t.Fatalf("default Agent.MaxRetryAttemptsValue: got %d want 1", got)
 	}
 	if cfg.Agent.MaxRetryBackoffMs != 300000 {
 		t.Fatalf("default Agent.MaxRetryBackoffMs: got %d want 300000", cfg.Agent.MaxRetryBackoffMs)
@@ -869,6 +873,66 @@ prompt body
 	}
 	if !strings.Contains(err.Error(), "agent.max_retry_backoff_ms must be positive") {
 		t.Fatalf("Load error = %v, want agent.max_retry_backoff_ms positivity guidance", err)
+	}
+}
+
+func TestLoadRejectsNonPositiveAgentMaxTurns(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_turns: 0
+---
+prompt body
+`
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded with agent.max_turns=0, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.max_turns must be positive") {
+		t.Fatalf("Load error = %v, want agent.max_turns guidance", err)
+	}
+}
+
+func TestLoadParsesAgentMaxRetryAttempts(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_retry_attempts: 0
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Agent.MaxRetryAttemptsValue(); got != 0 {
+		t.Fatalf("Agent.MaxRetryAttemptsValue = %d, want explicit zero", got)
+	}
+}
+
+func TestLoadRejectsNegativeAgentMaxRetryAttempts(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_retry_attempts: -1
+---
+prompt body
+`
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded with agent.max_retry_attempts=-1, want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.max_retry_attempts must be non-negative") {
+		t.Fatalf("Load error = %v, want agent.max_retry_attempts guidance", err)
 	}
 }
 

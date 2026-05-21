@@ -101,7 +101,11 @@ type RunningEntry struct {
 	Identifier   string
 	StartedAt    time.Time
 	RetryAttempt *int // nil on first run (SPEC §4.1.5)
-	Workspace    Workspace
+	// ContinuationAttempt is the number of clean continuation turns already
+	// consumed for this issue. It is separate from RetryAttempt because
+	// continuation dispatches must not render as failure retries in prompts.
+	ContinuationAttempt int
+	Workspace           Workspace
 
 	Session     LiveSession
 	LastCodexAt time.Time // SPEC §8.5 Part A input (D14)

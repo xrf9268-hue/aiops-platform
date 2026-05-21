@@ -52,6 +52,12 @@ failed run can be reconstructed from the event timeline alone:
   timing and summary events retained for compatibility while the SPEC phase
   stream is adopted.
 - `stalled` — emitted when the streaming runner exceeds its inactivity budget.
+- `policy_violation` — worker policy rejected the run. Payload includes the
+  violations, whether one retry remains, the repeated violation count, and the
+  feedback file path when available.
+- `policy_feedback_loaded`, `policy_feedback_read_error` — prior policy
+  violation feedback was loaded into the next prompt, or the worker could not
+  read that feedback file.
 - `verify_start`, `verify_end` — transitional workflow verify command results.
 - `push`, `pr_created`, `pr_reused` — legacy worker-side PR handoff events
   retained as constants for compatibility with older event streams; current

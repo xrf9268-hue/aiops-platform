@@ -246,6 +246,12 @@ func validateConfig(path string, cfg Config) error {
 	if cfg.Agent.MaxRetryBackoffMs <= 0 {
 		return fmt.Errorf("%s: agent.max_retry_backoff_ms must be positive", path)
 	}
+	if cfg.Agent.MaxTurns <= 0 {
+		return fmt.Errorf("%s: agent.max_turns must be positive", path)
+	}
+	if cfg.Agent.MaxRetryAttempts != nil && *cfg.Agent.MaxRetryAttempts < 0 {
+		return fmt.Errorf("%s: agent.max_retry_attempts must be non-negative", path)
+	}
 	seenStateCaps := make(map[string]string, len(cfg.Agent.MaxConcurrentAgentsByState))
 	for state, limit := range cfg.Agent.MaxConcurrentAgentsByState {
 		if strings.TrimSpace(state) == "" {

@@ -192,6 +192,11 @@ type AgentConfig struct {
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state" json:"max_concurrent_agents_by_state"`
 	MaxTurns                   int            `yaml:"max_turns" json:"max_turns"`
 	MaxRetryBackoffMs          int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
+	// MaxRetryAttempts bounds failure-driven orchestrator retries after
+	// retryable worker exits such as failed verification or missing summaries.
+	// It counts scheduled retry entries, not the first run. A value of 1 means
+	// "first run plus one retry"; an explicit 0 disables failure retries.
+	MaxRetryAttempts *int `yaml:"max_retry_attempts" json:"max_retry_attempts"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.
 	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
@@ -221,6 +226,20 @@ func (a AgentConfig) MaxTimeoutRetriesValue() int {
 		return 0
 	}
 	return *a.MaxTimeoutRetries
+}
+
+// MaxRetryAttemptsValue returns the effective failure retry budget. A nil
+// pointer yields the local automation default of one scheduled retry; explicit
+// zero disables retryable worker failure retries. Negative values are rejected
+// during validation and clamped defensively here.
+func (a AgentConfig) MaxRetryAttemptsValue() int {
+	if a.MaxRetryAttempts == nil {
+		return 1
+	}
+	if *a.MaxRetryAttempts < 0 {
+		return 0
+	}
+	return *a.MaxRetryAttempts
 }
 
 type CommandConfig struct {
@@ -366,6 +385,9 @@ func DefaultConfig() Config {
 		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: "~/aiops-workspaces"},
+		// Agent.MaxRetryAttempts is intentionally left nil here so the
+		// "absent" signal survives YAML overlay. The effective default of
+		// one failure retry is supplied by MaxRetryAttemptsValue().
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this
 		// default. The effective default of 1 retry is supplied by

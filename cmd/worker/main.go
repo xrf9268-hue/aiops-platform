@@ -182,9 +182,13 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
+	maxTurns := wf.Config.Agent.MaxTurns
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher: dispatcher,
-		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		Dispatcher:        dispatcher,
+		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		MaxFailureRetries: &maxFailureRetries,
+		MaxTurns:          &maxTurns,
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {

@@ -941,6 +941,51 @@ func TestFinalize_NormalExitMarksCompletedAndSchedulesContinuationRetry(t *testi
 	}, time.Second)
 }
 
+func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
+	disp := &fakeDispatcher{}
+	maxTurns := 2
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		MaxTurns:   &maxTurns,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-CLEAN-BUDGET", Identifier: "ENG-CLEAN-BUDGET", Title: "clean budget"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == 1
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Running) == 0 && len(v.Retrying) == 0 && len(v.Failed) == 1
+	}, time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Retrying) != 0 {
+		t.Fatalf("retrying entries after clean budget exhausted = %+v, want none", v.Retrying)
+	}
+	if got := disp.count(); got != 2 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional continuation after max turns", got)
+	}
+}
+
 // TestFinalize_AbnormalExitSchedulesRetry covers the §7.3 abnormal exit
 // branch: the dispatcher reports an error, finalize records elapsed
 // without marking Completed, and schedules a retry through the actor.
@@ -972,6 +1017,39 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 	if v.Retrying[0].Error != "kaboom" {
 		t.Errorf("retry Error = %q, want %q", v.Retrying[0].Error, "kaboom")
+	}
+}
+
+func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-BUDGET", Identifier: "ENG-BUDGET", Title: "retry budget"}
+	attempt := 1
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("still failing"), Elapsed: 50 * time.Millisecond})
+
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Running) == 0 && len(v.Retrying) == 0
+	}, time.Second)
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Retrying) != 0 {
+		t.Fatalf("retrying entries after exhausted budget = %+v, want none", v.Retrying)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional retry after exhausted budget", got)
 	}
 }
 

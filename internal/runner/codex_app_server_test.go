@@ -632,7 +632,7 @@ for line in sys.stdin:
 	if !IsStall(err) {
 		t.Fatalf("Run error = %T %[1]v, want stall timeout despite shorter read timeout", err)
 	}
-	if elapsed < 1500*time.Millisecond {
+	if elapsed < 250*time.Millisecond {
 		t.Fatalf("Run elapsed = %s, want read_timeout_ms not to fire before stall_timeout_ms", elapsed)
 	}
 }

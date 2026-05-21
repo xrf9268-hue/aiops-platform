@@ -51,6 +51,9 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs |
 | `agent.timeout` | `30m` |
 | `agent.max_concurrent_agents` | `1` |
+| `agent.max_turns` | `20` clean turns per issue before continuation stops |
+| `agent.max_retry_attempts` | `1` failure retry after the first run (`0` disables) |
+| `agent.max_timeout_retries` | `1` timeout retry after the first timeout (`0` disables) |
 | `pr.draft` | `false` |
 | `pr.labels` | `[ai-generated, needs-review]` |
 | `server.port` | `4000` (`-1` disables the HTTP state server) |
