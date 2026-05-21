@@ -68,6 +68,112 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 	}
 }
 
+func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
+	testStart := time.Now()
+	t.Cleanup(func() { bed.resetState(t, testStart) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	owner, repo := bed.gitea.botUser, "demo-gitea-reconcile"
+	if _, err := bed.gitea.createRepo(ctx, repo); err != nil {
+		t.Fatalf("createRepo: %v", err)
+	}
+	issueNum, err := bed.gitea.createIssue(ctx, owner, repo, "stop me", "move to done while running")
+	if err != nil {
+		t.Fatalf("createIssue: %v", err)
+	}
+	if err := bed.gitea.ensureLabels(ctx, owner, repo, []string{"aiops/todo", "aiops/done"}); err != nil {
+		t.Fatalf("ensure labels: %v", err)
+	}
+	if err := bed.gitea.addIssueLabels(ctx, owner, repo, issueNum, []string{"aiops/todo"}); err != nil {
+		t.Fatalf("add todo label: %v", err)
+	}
+
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.Owner = owner
+	cfg.Repo.Name = repo
+	cfg.Repo.DefaultBranch = "main"
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.APIKey = bed.gitea.botToken
+	cfg.Tracker.ActiveStates = []string{"AI Ready"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
+	client.HTTP = httpClientForE2E()
+
+	dispatcher := &giteaReconcileBlockingDispatcher{
+		started:  make(chan tracker.Issue, 1),
+		canceled: make(chan error, 1),
+	}
+	orch := orchestrator.New(orchestrator.NewOrchestratorState(15000, 1), orchestrator.Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Minute},
+	})
+	orchCtx, orchCancel := context.WithCancel(ctx)
+	t.Cleanup(orchCancel)
+	go orch.Run(orchCtx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("start orchestrator: %v", err)
+	}
+
+	poller := orchestrator.NewPollerWithReconciliation(client, orch, orchestrator.ReconciliationConfig{
+		ActiveStates:      cfg.Tracker.ActiveStates,
+		TerminalStates:    cfg.Tracker.TerminalStates,
+		WorkerExitTimeout: 10 * time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll: %v", err)
+	}
+	select {
+	case issue := <-dispatcher.started:
+		if issue.Identifier != fmt.Sprintf("#%d", issueNum) || issue.State != "AI Ready" {
+			t.Fatalf("started issue = %#v, want Gitea issue #%d in AI Ready", issue, issueNum)
+		}
+	case <-ctx.Done():
+		t.Fatalf("worker did not start: %v", ctx.Err())
+	}
+
+	if err := bed.gitea.replaceIssueLabels(ctx, owner, repo, issueNum, []string{"aiops/done"}); err != nil {
+		t.Fatalf("replace issue labels: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("reconcile poll: %v", err)
+	}
+	select {
+	case <-dispatcher.canceled:
+	case <-ctx.Done():
+		t.Fatalf("worker was not canceled after moving issue to Done: %v", ctx.Err())
+	}
+	pollUntil(t, 10*time.Second, 100*time.Millisecond, func(ctx context.Context) (bool, error) {
+		view, err := orch.Snapshot(ctx)
+		if err != nil {
+			return false, err
+		}
+		return len(view.Running) == 0, nil
+	})
+}
+
+type giteaReconcileBlockingDispatcher struct {
+	started  chan tracker.Issue
+	canceled chan error
+}
+
+func (d *giteaReconcileBlockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan orchestrator.WorkerResult {
+	select {
+	case d.started <- issue:
+	default:
+	}
+	ch := make(chan orchestrator.WorkerResult, 1)
+	go func() {
+		<-ctx.Done()
+		err := ctx.Err()
+		d.canceled <- err
+		ch <- orchestrator.WorkerResult{Err: err, Elapsed: time.Millisecond}
+		close(ch)
+	}()
+	return ch
+}
+
 func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fixture string) (taskID, owner, repoName string) {
 	t.Helper()
 

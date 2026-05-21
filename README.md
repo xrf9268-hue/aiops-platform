@@ -166,6 +166,11 @@ For SPEC-aligned Gitea polling, encode issue state as exactly one `aiops/*` labe
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |
 
+The worker-owned Gitea tracker path uses these labels for both active issue
+polling and per-tick reconciliation. If a running issue is moved to
+`aiops/done` or `aiops/canceled`, the next poll refreshes that issue by ID and
+stops the in-flight run.
+
 Then run the poller from source:
 
 ```bash

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,8 @@ type TrackerClient struct {
 	Config  workflow.TrackerConfig
 	HTTP    *http.Client
 	Logf    func(format string, args ...any)
+
+	issueNumbers sync.Map
 
 	paginationCapHits atomic.Int64
 }
@@ -101,6 +104,53 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	return out, nil
 }
 
+func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	if c.BaseURL == "" || c.Token == "" {
+		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
+	}
+	if c.Owner == "" || c.Repo == "" {
+		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
+	}
+	if len(issueIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	states := make(map[string]string, len(issueIDs))
+	seen := map[string]struct{}{}
+	for _, issueID := range issueIDs {
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			continue
+		}
+		if _, ok := seen[issueID]; ok {
+			continue
+		}
+		seen[issueID] = struct{}{}
+		issueNumber, ok := c.cachedIssueNumber(issueID)
+		if !ok {
+			continue
+		}
+		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		if refreshedID := giteaIssueID(issue); refreshedID != issueID {
+			c.cacheIssueNumber(issue)
+			continue
+		}
+		c.cacheIssueNumber(issue)
+		state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
+		c.logDiagnostics(issue, diagnostics)
+		if state == "" {
+			continue
+		}
+		states[issueID] = state
+	}
+	return states, nil
+}
+
 func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, error) {
 	var out []tracker.Issue
 	for page := 1; page <= listIssuesMaxPages+1; page++ {
@@ -116,13 +166,11 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			return out, nil
 		}
 		for _, issue := range batch {
-			issueKey := strconv.FormatInt(issue.ID, 10)
-			if issueKey == "0" {
-				issueKey = strconv.Itoa(issue.Number)
-			}
+			issueKey := giteaIssueID(issue)
 			if _, ok := seenIssues[issueKey]; ok {
 				continue
 			}
+			c.cacheIssueNumber(issue)
 			state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
 			c.logDiagnostics(issue, diagnostics)
 			if state == "" {
@@ -143,7 +191,7 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			}
 			seenIssues[issueKey] = struct{}{}
 			out = append(out, tracker.Issue{
-				ID:          strconv.FormatInt(issue.ID, 10),
+				ID:          issueKey,
 				Identifier:  fmt.Sprintf("#%d", issue.Number),
 				Title:       issue.Title,
 				Description: issue.Body,
@@ -177,6 +225,52 @@ func parseGiteaIssueTime(field, value string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse Gitea issue %s %q: %w", field, value, err)
 	}
 	return parsed, nil
+}
+
+func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (Issue, bool, error) {
+	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return Issue{}, false, err
+	}
+	req.Header.Set("Authorization", "token "+c.Token)
+	client := c.HTTP
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return Issue{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return Issue{}, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Issue{}, false, fmt.Errorf("get Gitea issue #%d failed: %s", issueNumber, resp.Status)
+	}
+	var issue Issue
+	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+		return Issue{}, false, err
+	}
+	return issue, true, nil
+}
+
+func (c *TrackerClient) cacheIssueNumber(issue Issue) {
+	issueID := giteaIssueID(issue)
+	if issueID == "" || issue.Number <= 0 {
+		return
+	}
+	c.issueNumbers.Store(issueID, issue.Number)
+}
+
+func (c *TrackerClient) cachedIssueNumber(issueID string) (int, bool) {
+	got, ok := c.issueNumbers.Load(issueID)
+	if !ok {
+		return 0, false
+	}
+	issueNumber, ok := got.(int)
+	return issueNumber, ok && issueNumber > 0
 }
 
 func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, issueState string, page int) ([]Issue, bool, error) {
@@ -228,6 +322,16 @@ func hasNextPage(linkHeaders []string) bool {
 		}
 	}
 	return false
+}
+
+func giteaIssueID(issue Issue) string {
+	if issue.ID != 0 {
+		return strconv.FormatInt(issue.ID, 10)
+	}
+	if issue.Number != 0 {
+		return strconv.Itoa(issue.Number)
+	}
+	return ""
 }
 
 func giteaAPIStateForWorkflowStates(states, terminalStateNames []string) string {

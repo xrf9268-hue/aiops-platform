@@ -297,6 +297,22 @@ func (g *giteaEnv) addIssueLabels(ctx context.Context, owner, repo string, issue
 	return nil
 }
 
+func (g *giteaEnv) replaceIssueLabels(ctx context.Context, owner, repo string, issue int, labels []string) error {
+	type req struct {
+		Labels []string `json:"labels"`
+	}
+	resp, respBody, err := g.doJSON(ctx, "PUT",
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", owner, repo, issue),
+		req{Labels: labels}, false)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("replaceIssueLabels: status %d body %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
 type prSummary struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`

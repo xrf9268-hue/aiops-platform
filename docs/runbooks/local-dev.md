@@ -131,6 +131,11 @@ The Gitea poller treats Gitea as a tracker reader: issues are selected by `aiops
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |
 
+The worker-owned `tracker.kind: gitea` path uses the same label mapping for
+per-tick reconciliation. After a run starts, moving the issue to `aiops/done`
+or `aiops/canceled` makes the next poll refresh that issue by ID and cancel the
+active worker.
+
 Option A: from source.
 
 ```bash

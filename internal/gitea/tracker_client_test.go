@@ -12,8 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+func TestTrackerClientSatisfiesIssueStateRefresher(t *testing.T) {
+	var _ tracker.IssueStateRefresher = (*TrackerClient)(nil)
+}
 
 func TestTrackerClientListIssuesByStatesReturnsNoIssuesWhenNoStatesRequested(t *testing.T) {
 	requests := 0
@@ -92,6 +97,56 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	}
 	if !issues[0].CreatedAt.Equal(mustTime("2026-05-16T23:59:00Z")) || !issues[1].CreatedAt.Equal(mustTime("2026-05-17T00:00:30Z")) {
 		t.Fatalf("issue created_at = %s, %s; want Gitea created_at metadata mapped", issues[0].CreatedAt, issues[1].CreatedAt)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		if r.Header.Get("Authorization") != "token secret" {
+			t.Fatalf("Authorization = %q, want token secret", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			if r.URL.Query().Get("labels") != "aiops/todo" {
+				t.Fatalf("labels query = %q, want aiops/todo", r.URL.Query().Get("labels"))
+			}
+			_ = json.NewEncoder(w).Encode([]Issue{
+				{ID: 101, Number: 1, Title: "running", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/todo"}}},
+				{ID: 202, Number: 2, Title: "missing later", HTMLURL: "https://gitea.local/o/r/issues/2", Labels: []Label{{Name: "aiops/todo"}}},
+			})
+		case "/api/v1/repos/owner/repo/issues/1":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 101, Number: 1, Title: "done", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/done"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/2":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{
+		APIKey:       "secret",
+		ActiveStates: []string{"AI Ready"},
+	}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	if _, err := client.ListActiveIssues(context.Background()); err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"101", "202"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+	if got, want := states, map[string]string{"101": "Done"}; len(got) != len(want) || got["101"] != want["101"] {
+		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := strings.Join(requestedPaths, ","), "/api/v1/repos/owner/repo/issues,/api/v1/repos/owner/repo/issues/1,/api/v1/repos/owner/repo/issues/2"; got != want {
+		t.Fatalf("requested paths = %s, want %s", got, want)
 	}
 }
 
