@@ -301,3 +301,35 @@ Prompt body
 		}
 	}
 }
+
+func TestLoadResolvesLowercaseEnvironmentReferences(t *testing.T) {
+	t.Setenv("aiops_test_repo_url", "git@example.com:o/lower.git")
+	t.Setenv("linear_token", "linear-secret")
+	t.Setenv("Mixed_Case_Url", "https://tracker.example/mixed")
+
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: $aiops_test_repo_url
+tracker:
+  api_key: ${linear_token}
+  base_url: $Mixed_Case_Url
+---
+Prompt body
+`)
+
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Repo.CloneURL; got != "git@example.com:o/lower.git" {
+		t.Fatalf("repo.clone_url = %q, lowercase env not resolved", got)
+	}
+	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
+		t.Fatalf("tracker.api_key = %q, lowercase ${} env not resolved", got)
+	}
+	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/mixed" {
+		t.Fatalf("tracker.base_url = %q, mixed-case env not resolved", got)
+	}
+}

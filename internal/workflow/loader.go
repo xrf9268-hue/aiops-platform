@@ -580,11 +580,14 @@ func isExplicitEnvName(name string) bool {
 	if name == "" {
 		return false
 	}
+	isLetter := func(r rune) bool {
+		return (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
+	}
 	for i, r := range name {
 		switch {
-		case i == 0 && (r == '_' || (r >= 'A' && r <= 'Z')):
+		case i == 0 && (r == '_' || isLetter(r)):
 			continue
-		case i > 0 && (r == '_' || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')):
+		case i > 0 && (r == '_' || isLetter(r) || (r >= '0' && r <= '9')):
 			continue
 		default:
 			return false
