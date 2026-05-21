@@ -211,7 +211,7 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 func (c *TrackerClient) recordPaginationCapHit(labelName string) {
 	c.paginationCapHits.Add(1)
 	if c.Logf != nil {
-		c.Logf("gitea issue pagination exceeded %d pages for label %q; returning capped result set", listIssuesMaxPages, labelName)
+		c.Logf("gitea issue pagination exceeded %d pages for label %q; aborting this tracker poll to avoid acting on a truncated result set", listIssuesMaxPages, labelName)
 	}
 }
 
