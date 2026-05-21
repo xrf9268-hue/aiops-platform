@@ -94,11 +94,22 @@ type LinearClient struct {
 	BaseURL string
 	Config  workflow.TrackerConfig
 	HTTP    *http.Client
+	// RequestTimeout caps each Linear GraphQL request per SPEC §11.2.
+	// Defaults to 30s when zero.
+	RequestTimeout time.Duration
 }
+
+const defaultLinearRequestTimeout = 30 * time.Second
 
 func NewLinearClient(cfg workflow.TrackerConfig) *LinearClient {
 	base := "https://api.linear.app/graphql"
-	return &LinearClient{APIKey: cfg.APIKey, BaseURL: base, Config: cfg, HTTP: http.DefaultClient}
+	return &LinearClient{
+		APIKey:         cfg.APIKey,
+		BaseURL:        base,
+		Config:         cfg,
+		HTTP:           http.DefaultClient,
+		RequestTimeout: defaultLinearRequestTimeout,
+	}
 }
 
 func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
@@ -527,7 +538,13 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	if err != nil {
 		return NewError(CategoryLinearAPIRequest, "build Linear GraphQL request", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL, bytes.NewReader(b))
+	timeout := c.RequestTimeout
+	if timeout <= 0 {
+		timeout = defaultLinearRequestTimeout
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, c.BaseURL, bytes.NewReader(b))
 	if err != nil {
 		return NewError(CategoryLinearAPIRequest, "build Linear GraphQL request", err)
 	}

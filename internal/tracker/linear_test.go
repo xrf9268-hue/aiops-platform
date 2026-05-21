@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -740,4 +741,36 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 
 func TestLinearClient_SatisfiesStateIssueLister(t *testing.T) {
 	var _ StateIssueLister = (*LinearClient)(nil)
+}
+
+func TestLinearClient_EnforcesRequestTimeout(t *testing.T) {
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(block)
+		srv.Close()
+	})
+
+	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client.RequestTimeout = 50 * time.Millisecond
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want wrapping context.DeadlineExceeded", err)
+	}
+}
+
+func TestNewLinearClient_DefaultsRequestTimeoutTo30s(t *testing.T) {
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
+	if client.RequestTimeout != 30*time.Second {
+		t.Fatalf("default RequestTimeout = %v, want 30s", client.RequestTimeout)
+	}
 }
