@@ -124,6 +124,16 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	if projectSlug == "" {
 		return nil, NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
 	}
+	// SPEC §17.3: empty fetch_issues_by_states([]) returns empty without API call.
+	nonEmpty := make([]string, 0, len(states))
+	for _, s := range states {
+		if t := strings.TrimSpace(s); t != "" {
+			nonEmpty = append(nonEmpty, t)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		return nil, nil
+	}
 	query := `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
@@ -192,7 +202,7 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 			} `json:"data"`
 			Errors []map[string]any `json:"errors"`
 		}
-		if err := c.graphql(ctx, query, map[string]any{"projectSlug": projectSlug, "states": states, "first": linearIssuePageSize, "after": after}, &out); err != nil {
+		if err := c.graphql(ctx, query, map[string]any{"projectSlug": projectSlug, "states": nonEmpty, "first": linearIssuePageSize, "after": after}, &out); err != nil {
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
