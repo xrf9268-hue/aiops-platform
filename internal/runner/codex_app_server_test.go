@@ -220,6 +220,95 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerEmitsOtherMessageForMethodlessRuntimePayload(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'wrapper': 'unexpected', 'payload': {'message': 'known JSON without method'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "other message")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventOtherMessage)
+	if len(events) != 1 {
+		t.Fatalf("other_message events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "wrapper"); got != "unexpected" {
+		t.Fatalf("other_message wrapper = %#v, want unexpected; payload=%#v", got, events[0].Payload)
+	}
+}
+
+func TestCodexAppServerRunnerEmitsMalformedAndContinuesForProtocolLikeInvalidJSON(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print('{"method": "item/updated", "params": ', flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done after malformed'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "malformed message")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v, want malformed protocol line to be reported then ignored", err)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventMalformed)
+	if len(events) != 1 {
+		t.Fatalf("malformed events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if raw, _ := runtimeEventField(t, events[0], "raw").(string); !strings.Contains(raw, `"item/updated"`) {
+		t.Fatalf("malformed raw = %#v, want original invalid JSON line", raw)
+	}
+}
+
+func TestCodexAppServerRunnerRejectsPlainMalformedStdout(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print('plain diagnostic on stdout', flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'should not complete'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "plain malformed stdout")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "decode codex app-server message") {
+		t.Fatalf("Run error = %v, want plain stdout garbage to remain a protocol decode failure", err)
+	}
+	if events := runtimeEventsNamed(res.RuntimeEvents, task.EventMalformed); len(events) != 0 {
+		t.Fatalf("malformed events = %d, want non-protocol stdout to fail without malformed event; events=%#v", len(events), res.RuntimeEvents)
+	}
+}
+
 func TestCodexAppServerRunnerEmitsSpecPhaseTransitions(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
@@ -363,6 +452,16 @@ func runtimeEventField(t *testing.T, event task.RuntimeEvent, key string) any {
 		t.Fatalf("runtime event payload is %T, want map[string]any: %#v", event.Payload, event.Payload)
 	}
 	return payload[key]
+}
+
+func runtimeEventsNamed(events []task.RuntimeEvent, name string) []task.RuntimeEvent {
+	var matches []task.RuntimeEvent
+	for _, event := range events {
+		if event.Event == name {
+			matches = append(matches, event)
+		}
+	}
+	return matches
 }
 
 func TestCodexAppServerRunnerDoesNotPutLinearTokenOnWire(t *testing.T) {
@@ -572,9 +671,16 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 
-	_, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
 	if err == nil || !strings.Contains(err.Error(), "turn/completed failed") || !strings.Contains(err.Error(), "tool crashed") {
 		t.Fatalf("Run error = %v, want failed turn/completed error with reason", err)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventTurnEndedWithError)
+	if len(events) != 1 {
+		t.Fatalf("turn_ended_with_error events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "reason"); got != "tool crashed" {
+		t.Fatalf("turn_ended_with_error reason = %#v, want tool crashed; payload=%#v", got, events[0].Payload)
 	}
 }
 
@@ -1010,6 +1116,10 @@ for line in sys.stdin:
 	}
 	if res.Summary != "approvals handled" {
 		t.Fatalf("Summary = %q, want approvals handled", res.Summary)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventApprovalAutoApproved)
+	if len(events) != 3 {
+		t.Fatalf("approval_auto_approved events = %d, want 3; events=%#v", len(events), res.RuntimeEvents)
 	}
 	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
 	if err != nil {
