@@ -16,15 +16,15 @@ import (
 // TestRuntimeStatusRunbookExampleMatchesHandler asserts bi-directional schema
 // parity between docs/runbooks/runtime-status.md and apiStateResponse:
 //
-//   1. doc → handler: every ```json fenced block tagged as the /api/v1/state
-//      example (identified by the `counts` key) strict-decodes into
-//      apiStateResponse with json.DisallowUnknownFields. Catches drift where
-//      the doc references a field that does not exist in the wire format.
+//  1. doc → handler: every ```json fenced block tagged as the /api/v1/state
+//     example (identified by the `counts` key) strict-decodes into
+//     apiStateResponse with json.DisallowUnknownFields. Catches drift where
+//     the doc references a field that does not exist in the wire format.
 //
-//   2. handler → doc: marshal a fully-populated apiStateResponse (every
-//      omitempty field set), then walk the resulting key tree and assert each
-//      key path exists in the runbook example. Catches drift where the
-//      handler grows a new JSON field that the runbook forgets to mention.
+//  2. handler → doc: marshal a fully-populated apiStateResponse (every
+//     omitempty field set), then walk the resulting key tree and assert each
+//     key path exists in the runbook example. Catches drift where the
+//     handler grows a new JSON field that the runbook forgets to mention.
 //
 // Together these close the "either direction" parity guarantee for #223.
 // The test does not pin specific values; live handler value semantics live
