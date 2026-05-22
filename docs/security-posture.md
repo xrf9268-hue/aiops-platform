@@ -127,6 +127,14 @@ The current Go implementation provides these safety controls:
 - operator-visible blocked state for Codex input-required and MCP elicitation
   requests, so non-interactive runs stop and remain claimed instead of burning
   retries silently;
+- allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
+  `turn/completed` protocol payloads: returned error strings and
+  `runtime_events` JSON payloads carry only the documented
+  `status`/`reason`/`error`/`message`/`error_code` fields (plus the same keys
+  under nested `turn`), with `"reason unavailable"` as fallback. Arbitrary
+  protocol fields — including any tool-call output, elicitation echoes, or
+  future Codex additions — are never embedded in worker error strings,
+  `RecordEvent.Message`, or `/api/v1/state` payloads;
 - branch protection and review gates when configured on the remote repository.
 
 These controls reduce accidental damage and make changes reviewable. They do not
