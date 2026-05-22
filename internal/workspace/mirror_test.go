@@ -313,7 +313,12 @@ func TestPrepareGitWorkspaceDoesNotSetBaseBranchAsWorkBranchUpstream(t *testing.
 	}
 }
 
-func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
+// TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns covers SPEC §9.1:
+// workspaces are reused across runs for the same issue. Untracked artifacts
+// (cached deps, build outputs, .aiops policy feedback) must survive a
+// re-prepare, while tracked-file modifications get snapped back to the
+// refreshed base ref so the next runner starts from a clean tracked state.
+func TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
 	ctx := context.Background()
@@ -326,23 +331,95 @@ func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
 	if !createdNow {
 		t.Fatal("first prepare reported createdNow=false")
 	}
-	// Simulate a partial run leaving an extra file behind. The next
-	// PrepareGitWorkspace must give us a clean checkout.
+	// Untracked cache that the next run must inherit.
 	if err := os.WriteFile(filepath.Join(dir, "stale.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Local modification to a tracked file that the next run must NOT
+	// inherit — the reuse path resets tracked state to origin/<base>.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("second prepare: %v", err)
 	}
 	if createdNow {
-		t.Fatal("second prepare reported createdNow=true")
+		t.Fatal("second prepare reported createdNow=true; SPEC §9.1 requires reuse")
 	}
 	if dir != dir2 {
 		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
 	}
-	if _, err := os.Stat(filepath.Join(dir2, "stale.txt")); !os.IsNotExist(err) {
-		t.Fatalf("stale file survived re-prepare: %v", err)
+	if body, err := os.ReadFile(filepath.Join(dir2, "stale.txt")); err != nil {
+		t.Fatalf("untracked file should survive reuse per SPEC §9.1: %v", err)
+	} else if string(body) != "x" {
+		t.Fatalf("untracked file body = %q, want %q", body, "x")
+	}
+	if body, err := os.ReadFile(filepath.Join(dir2, "README.md")); err != nil {
+		t.Fatalf("read README.md after reuse: %v", err)
+	} else if string(body) == "dirty\n" {
+		t.Fatalf("tracked-file modification survived reuse; want reset to base")
+	}
+	// The work branch tip must equal origin/main (i.e., the base ref) so
+	// the next run starts from a clean tracked state regardless of what
+	// the previous attempt committed on the work branch.
+	headOut, err := exec.Command("git", "-C", dir2, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	baseOut, err := exec.Command("git", "-C", dir2, "rev-parse", "origin/main").Output()
+	if err != nil {
+		t.Fatalf("rev-parse origin/main: %v", err)
+	}
+	if strings.TrimSpace(string(headOut)) != strings.TrimSpace(string(baseOut)) {
+		t.Fatalf("HEAD = %q, want origin/main = %q after reuse", strings.TrimSpace(string(headOut)), strings.TrimSpace(string(baseOut)))
+	}
+	branchOut, err := exec.Command("git", "-C", dir2, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
+		t.Fatalf("worktree on branch %q after reuse, want %q", got, tk.WorkBranch)
+	}
+}
+
+// TestPrepareGitWorkspace_RecreatesCorruptedWorkdir covers the safety net
+// for the reuse path: if the leftover dir at the workspace path is not a
+// valid git worktree (crashed prepare, partial rm -rf, hostile leftover),
+// PrepareGitWorkspace must fall back to a clean recreate and report
+// createdNow=true so the worker fires `after_create` again.
+func TestPrepareGitWorkspace_RecreatesCorruptedWorkdir(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-corrupt", upstream)
+
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
+	}
+	// Corrupt the worktree linkage so `git rev-parse --git-dir` fails.
+	gitLink := filepath.Join(dir, ".git")
+	if err := os.RemoveAll(gitLink); err != nil {
+		t.Fatalf("remove .git linkage: %v", err)
+	}
+
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare after corruption: %v", err)
+	}
+	if dir != dir2 {
+		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
+	}
+	if !createdNow {
+		t.Fatal("second prepare reported createdNow=false; corrupted leftover must fall back to recreate")
+	}
+	if _, err := os.Stat(filepath.Join(dir2, ".git")); err != nil {
+		t.Fatalf("recreated workdir missing .git linkage: %v", err)
 	}
 }
 
