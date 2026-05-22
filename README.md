@@ -160,6 +160,8 @@ The default Compose service now starts only `worker` unless a legacy profile is 
 docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
+For an operator-side walkthrough — workflow file layout, the `/api/v1/state` and `--print-config` smoke checks, and the legacy queue-driven pollers — see the [local development runbook](docs/runbooks/local-dev.md). If the runbook and this README ever diverge, **this README is canonical**.
+
 ## Legacy Linear queue polling path
 
 `cmd/linear-poller` is retained only as transitional queue-ingress code until D7 cleanup. The SPEC-aligned `worker` no longer drains Postgres queue rows, so do not start `linear-poller worker` as a working legacy stack. For active Linear issue execution, configure `tracker.kind: linear` in `WORKFLOW.md` and run the worker-owned tracker polling path above.
