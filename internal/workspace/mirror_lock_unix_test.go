@@ -83,6 +83,42 @@ func TestMirrorFileLockSerializesAcrossProcesses(t *testing.T) {
 	}
 }
 
+// TestAcquireMirrorLockFailsClosedOnFlockError pins the fail-closed
+// invariant from PR #283's codex P1: when the file lock can't be taken
+// (here: the sidecar path is a directory, so OpenFile returns EISDIR), the
+// helper must release the process-local mutex and return an error rather
+// than silently degrading to in-process-only locking. Silent degradation
+// would re-open the cross-process race the lock exists to close exactly in
+// the failure mode (ENOLCK on NFS, fd exhaustion) where shared
+// deployments need it most.
+func TestAcquireMirrorLockFailsClosedOnFlockError(t *testing.T) {
+	dir := t.TempDir()
+	mirror := filepath.Join(dir, "mirror.git")
+	// Pre-create the sidecar path as a directory so OpenFile(<mirror>.lock,
+	// O_RDWR|O_CREATE) cannot open it as a regular file.
+	if err := os.MkdirAll(mirror+".lock", 0o755); err != nil {
+		t.Fatalf("seed lock dir: %v", err)
+	}
+
+	_, err := acquireMirrorLock(mirror)
+	if err == nil {
+		t.Fatal("acquireMirrorLock returned nil error when flock could not be taken; want fail-closed")
+	}
+
+	// Process-local mutex must have been released — a subsequent call that
+	// also fails should not deadlock waiting on the inner sync.Mutex.
+	done := make(chan struct{})
+	go func() {
+		_, _ = acquireMirrorLock(mirror)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("acquireMirrorLock did not release process-local mutex on flock failure; second call deadlocked")
+	}
+}
+
 // TestAcquireMirrorFileLockReleaseAllowsReacquire pins the release-clears-
 // the-lock invariant: after the returned release fn runs, the next caller
 // can acquire without blocking. Without this the in-process retry path

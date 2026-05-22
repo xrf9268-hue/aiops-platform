@@ -27,14 +27,14 @@ var (
 // Releases in reverse order: file lock first (so the next process can
 // proceed), then process-local mutex.
 //
-// If the file-lock acquisition fails (kernel rejected the syscall, NFS-
-// without-lockd, etc.) the function falls back to in-process-only locking.
-// That preserves correctness for single-process deployments — the most
-// common case — and matches the historical behavior of the process-only
-// implementation; cross-process operators on the same host get a warning-
-// shaped log line via the runtime caller path on the very next mirror op
-// when the kernel keeps returning the same error.
-func acquireMirrorLock(mirror string) func() {
+// Fails closed if the file-lock acquisition errors out: the process-local
+// mutex is released and the error is propagated to the caller, who must
+// surface it as a tracker poll failure rather than proceed without
+// cross-process exclusion. Silently degrading to in-process-only locking
+// would re-open the very race window this lock exists to close (#228
+// codex P1) — exactly in the failure modes where shared deployments most
+// need it (ENOLCK on NFS, fd exhaustion, signal interruption).
+func acquireMirrorLock(mirror string) (func(), error) {
 	mirrorLocksMu.Lock()
 	lock := mirrorLocks[mirror]
 	if lock == nil {
@@ -46,15 +46,13 @@ func acquireMirrorLock(mirror string) func() {
 	lock.Lock()
 	release, err := acquireMirrorFileLock(mirror)
 	if err != nil {
-		// Process-local mutex still held; cross-process callers degrade
-		// gracefully to single-process semantics rather than failing the
-		// mirror op outright.
-		return lock.Unlock
+		lock.Unlock()
+		return nil, fmt.Errorf("acquire mirror lock %s: %w", mirror, err)
 	}
 	return func() {
 		release()
 		lock.Unlock()
-	}
+	}, nil
 }
 
 // MirrorRoot returns the directory where bare mirror clones are cached.
@@ -155,7 +153,10 @@ func sanitizeMirrorComponent(s string) string {
 func (m *Manager) EnsureMirror(ctx context.Context, cloneURL string) (string, error) {
 	root := MirrorRoot(m.MirrorRoot)
 	mirror := mirrorPathFor(root, cloneURL)
-	unlock := acquireMirrorLock(mirror)
+	unlock, err := acquireMirrorLock(mirror)
+	if err != nil {
+		return "", err
+	}
 	defer unlock()
 
 	return m.ensureMirrorLocked(ctx, cloneURL, mirror)
