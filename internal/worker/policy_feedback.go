@@ -140,6 +140,20 @@ func appendPolicyViolationFeedback(prompt string, feedback *policyViolationFeedb
 		b.WriteString("\n")
 	}
 	b.WriteString("- Before continuing, run a cheap diff-size check such as `git diff --shortstat` and `git diff --name-only` against the base branch.\n")
-	b.WriteString("- Next repeated policy violation will stop without another retry.\n")
+	// The terminality hint must match the actual runtime budget: with budget=0
+	// (suppression disabled) there is no "next attempt stops" backstop, and
+	// when the current count is still below budget-1 the next violation
+	// only consumes one more slot. Steering the agent with a false
+	// terminality assumption (the original hardcoded sentence) coaxed it
+	// into unnecessary behavior — see #230 review.
+	budget := cfg.Agent.PolicyViolationBudgetValue()
+	switch {
+	case budget == 0:
+		b.WriteString("- agent.policy_violation_budget = 0: the worker will keep retrying repeated policy violations; aim for the smallest correct diff but do not panic over a single retry.\n")
+	case feedback.Count+1 >= budget:
+		b.WriteString("- Next repeated policy violation will stop without another retry.\n")
+	default:
+		b.WriteString(fmt.Sprintf("- Policy violation budget %d/%d already consumed; the run stops non-retryably once the count reaches %d.\n", feedback.Count, budget, budget))
+	}
 	return b.String()
 }
