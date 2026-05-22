@@ -263,27 +263,33 @@ workflow: AIOPS_WORKFLOW_PATH refers to /…/WORKFLOW.md which does not exist
 
 ### Missing tracker credentials
 
-Confirm the credential env var matches the configured `tracker.kind`:
+All tracker tokens flow through `tracker.api_key` in `WORKFLOW.md`,
+regardless of `tracker.kind`. The worker does **not** read
+`LINEAR_API_KEY` / `GITEA_TOKEN` / `GITHUB_TOKEN` directly at poll
+time — the canonical pattern is to set `tracker.api_key: $VAR` in
+the workflow and let the loader expand `$VAR` at startup. Only the
+tracker's base URL has any direct env fallback (`GITEA_BASE_URL` /
+`GITHUB_API_BASE_URL`, applied at runtime when the corresponding
+config field is empty).
 
-| `tracker.kind` | Required env vars |
-| --- | --- |
-| `linear` | `LINEAR_API_KEY` (or whatever `$VAR` `tracker.api_key` references in `WORKFLOW.md`) |
-| `gitea` | `GITEA_BASE_URL`, `GITEA_TOKEN` |
-| `github` | `GITHUB_TOKEN` |
+| `tracker.kind` | `WORKFLOW.md` token reference | Base-URL env fallback |
+| --- | --- | --- |
+| `linear` | `tracker.api_key: $LINEAR_API_KEY` (or any `$VAR`) | n/a |
+| `gitea`  | `tracker.api_key: $GITEA_TOKEN`  (or any `$VAR`) | `GITEA_BASE_URL` when `tracker.project_slug` is empty |
+| `github` | `tracker.api_key: $GITHUB_TOKEN` (or any `$VAR`) | `GITHUB_API_BASE_URL` when `tracker.base_url` is empty |
 
-When the failure surfaces depends on how the value is encoded:
+When the failure surfaces depends on how `tracker.api_key` is encoded
+in `WORKFLOW.md`:
 
-- If `tracker.api_key` in `WORKFLOW.md` is an explicit env reference
-  (`$VAR` or `${VAR}`) and the env var is unset or empty, workflow
-  loading fails at startup with `missing_tracker_api_key` before the
-  first poll. This is the loud, fail-fast path — fix the env var and
-  retry.
-- If `tracker.api_key` is empty or a non-env literal (and for the
-  gitea/github clients which read `GITEA_TOKEN`/`GITHUB_TOKEN` at poll
-  time rather than at load time), startup succeeds with no warning
-  and the first tracker poll fails (`ListIssuesByStates` returns a
-  401/403 / "credentials missing" style error). Check the worker log
-  for the first poll cycle, not just the startup line.
+- If `tracker.api_key` is an explicit env reference (`$VAR` or
+  `${VAR}`) and the env var is unset or empty, workflow loading fails
+  at startup with `missing_tracker_api_key` before the first poll.
+  This is the loud, fail-fast path — fix the env var and retry.
+- If `tracker.api_key` is empty or a non-env literal, startup succeeds
+  with no warning and the first tracker poll fails (e.g. the Gitea
+  client errors with `GITEA_BASE_URL and Gitea tracker api_key are
+  required`). Check the worker log for the first poll cycle, not just
+  the startup line.
 
 ### `/api/v1/state` returns nothing or refuses to bind
 
