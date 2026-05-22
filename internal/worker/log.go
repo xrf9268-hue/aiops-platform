@@ -27,12 +27,14 @@ func LogIssueEventf(t task.Task, event, format string, args ...any) {
 }
 
 // LogTaskIDEventf is the narrow form used by call sites that only have the
-// task id in scope (e.g. helpers passed taskID by value rather than the
-// full Task struct). `issue_identifier` is omitted since the caller cannot
-// supply it; `issue_id` is set equal to `task_id` because TaskFromIssue
-// keys Task.ID by the tracker issue id.
-func LogTaskIDEventf(taskID, event, format string, args ...any) {
-	log.Printf("%s %s", taskIDLogPrefix(event, taskID), fmt.Sprintf(format, args...))
+// task id (and optionally the issue identifier) in scope rather than the
+// full Task struct. Pass identifier="" when the caller does not know it;
+// the issue_identifier= key is then omitted (rather than emitted empty) so
+// log filters do not misparse it as a real empty identifier. `issue_id` is
+// set equal to `task_id` because TaskFromIssue keys Task.ID by the tracker
+// issue id.
+func LogTaskIDEventf(taskID, identifier, event, format string, args ...any) {
+	log.Printf("%s %s", taskIDLogPrefix(event, taskID, identifier), fmt.Sprintf(format, args...))
 }
 
 // LogReconcileEventf is the helper for reconciliation / orchestrator-wide
@@ -59,6 +61,10 @@ func issueLogPrefix(event string, t task.Task) string {
 	return b.String()
 }
 
-func taskIDLogPrefix(event, taskID string) string {
-	return "event=" + event + " task_id=" + taskID + " issue_id=" + taskID
+func taskIDLogPrefix(event, taskID, identifier string) string {
+	prefix := "event=" + event + " task_id=" + taskID + " issue_id=" + taskID
+	if identifier != "" {
+		prefix += " issue_identifier=" + identifier
+	}
+	return prefix
 }

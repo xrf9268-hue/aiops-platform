@@ -823,8 +823,9 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 }
 
 type workspaceCleanup struct {
-	issueID IssueID
-	path    string
+	issueID    IssueID
+	identifier string
+	path       string
 }
 
 func appendBlockedWorkspaceCleanup(cleanups []workspaceCleanup, id IssueID, blocked *BlockedEntry) []workspaceCleanup {
@@ -835,7 +836,7 @@ func appendBlockedWorkspaceCleanup(cleanups []workspaceCleanup, id IssueID, bloc
 	if path == "" {
 		return cleanups
 	}
-	return append(cleanups, workspaceCleanup{issueID: id, path: path})
+	return append(cleanups, workspaceCleanup{issueID: id, identifier: blocked.Identifier, path: path})
 }
 
 func reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanupEntries []workspaceCleanup, result chan<- []*RunningEntry) func() {
@@ -847,7 +848,11 @@ func reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanupEntries []wor
 		}
 		for _, cleanup := range cleanupEntries {
 			if err := os.RemoveAll(cleanup.path); err != nil {
-				log.Printf("event=blocked_workspace_remove_failed issue_id=%s workspace=%q error=%q", cleanup.issueID, cleanup.path, err)
+				if cleanup.identifier != "" {
+					log.Printf("event=blocked_workspace_remove_failed issue_id=%s issue_identifier=%s workspace=%q error=%q", cleanup.issueID, cleanup.identifier, cleanup.path, err)
+				} else {
+					log.Printf("event=blocked_workspace_remove_failed issue_id=%s workspace=%q error=%q", cleanup.issueID, cleanup.path, err)
+				}
 			}
 		}
 		if result != nil {

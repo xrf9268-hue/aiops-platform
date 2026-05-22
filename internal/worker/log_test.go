@@ -61,17 +61,31 @@ func TestLogIssueEventfOmitsIdentifierWhenAbsent(t *testing.T) {
 
 func TestLogTaskIDEventfMirrorsTaskAndIssueIDs(t *testing.T) {
 	got := captureLog(t, func() {
-		LogTaskIDEventf("tsk-9", "verification_write_failed", "error=%q", "disk full")
+		LogTaskIDEventf("tsk-9", "ENG-9", "verification_write_failed", "error=%q", "disk full")
 	})
 	for _, want := range []string{
 		"event=verification_write_failed",
 		"task_id=tsk-9",
 		"issue_id=tsk-9",
+		"issue_identifier=ENG-9",
 		`error="disk full"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("LogTaskIDEventf output missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+// TestLogTaskIDEventfOmitsEmptyIdentifier covers the reconcile path where
+// the caller has only a synthetic task id and no tracker identifier: the
+// helper must omit the `issue_identifier=` key entirely rather than emit an
+// empty value (which would mis-parse in log aggregators).
+func TestLogTaskIDEventfOmitsEmptyIdentifier(t *testing.T) {
+	got := captureLog(t, func() {
+		LogTaskIDEventf("reconcile-startup", "", "kept_active_workspace", "key=%s", "lin-1")
+	})
+	if strings.Contains(got, "issue_identifier=") {
+		t.Errorf("empty identifier should omit the key, got:\n%s", got)
 	}
 }
 

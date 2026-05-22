@@ -60,7 +60,7 @@ func (f *fakeEmitter) byKind(kind string) []recordedEvent {
 
 func TestEmitRecordsEventOnFakeEmitter(t *testing.T) {
 	ev := &fakeEmitter{}
-	worker.Emit(context.Background(), ev, "tsk_1", task.EventRunnerStart, "runner started", map[string]any{"model": "mock"})
+	worker.Emit(context.Background(), ev, "tsk_1", "", task.EventRunnerStart, "runner started", map[string]any{"model": "mock"})
 	if len(ev.events) != 1 {
 		t.Fatalf("events = %d, want 1", len(ev.events))
 	}
@@ -80,12 +80,12 @@ func TestEmitRecordsEventOnFakeEmitter(t *testing.T) {
 
 func TestEmitNilEmitterIsNoop(t *testing.T) {
 	// Should not panic when worker is started without an emitter (e.g. tests).
-	worker.Emit(context.Background(), nil, "tsk_1", task.EventRunnerStart, "ignored", nil)
+	worker.Emit(context.Background(), nil, "tsk_1", "", task.EventRunnerStart, "ignored", nil)
 }
 
 func TestEmitLogsEmitterError(t *testing.T) {
 	ev := &fakeEmitter{err: errors.New("db down")}
-	worker.Emit(context.Background(), ev, "tsk_1", task.EventPush, "push", nil)
+	worker.Emit(context.Background(), ev, "tsk_1", "", task.EventPush, "push", nil)
 	if len(ev.events) != 1 {
 		t.Fatalf("event should still be recorded by fake even when error returned")
 	}
@@ -856,7 +856,7 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 		t.Fatalf("load workflow: %v", err)
 	}
 	ev := &fakeEmitter{}
-	wf, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_1", loaded)
+	wf, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_1", "", loaded)
 	if err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
@@ -925,7 +925,7 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 		log.SetFlags(origFlags)
 	})
 
-	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log", wf); err != nil {
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log", "", wf); err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 
@@ -972,7 +972,7 @@ func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 		log.SetFlags(origFlags)
 	})
 
-	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log2", wf); err != nil {
+	if _, _, err := worker.ResolveWorkflow(context.Background(), &fakeEmitter{}, "tsk_log2", "", wf); err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
 
@@ -991,7 +991,7 @@ func TestResolveWorkflow_LogsResolutionLineOmitsEmptyShadowed(t *testing.T) {
 func TestResolveWorkflow_DefaultSourceOmitsPath(t *testing.T) {
 	ev := &fakeEmitter{}
 	wf := &workflow.Workflow{Config: workflow.DefaultConfig(), PromptTemplate: workflow.DefaultPrompt(), Source: workflow.SourceDefault}
-	_, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_2", wf)
+	_, src, err := worker.ResolveWorkflow(context.Background(), ev, "tsk_2", "", wf)
 	if err != nil {
 		t.Fatalf("ResolveWorkflow: %v", err)
 	}
@@ -1047,7 +1047,7 @@ func TestVerifyAllowFailure_ReturnsDegradedWithoutError(t *testing.T) {
 		},
 	}
 
-	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_af", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_af", "", dir, cfg)
 	if err != nil {
 		t.Fatalf("RunVerifyPhase with allow_failure=true must not return error, got: %v", err)
 	}
@@ -1080,7 +1080,7 @@ func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
 		},
 	}
 
-	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_naf", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_naf", "", dir, cfg)
 	if err == nil {
 		t.Fatal("RunVerifyPhase must return error when verify fails and allow_failure=false")
 	}
@@ -1195,7 +1195,7 @@ func TestVerifyAllowFailure_DoesNotMaskParentCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	degraded, err := worker.RunVerifyPhase(ctx, ev, "tsk_cancel", dir, cfg)
+	degraded, err := worker.RunVerifyPhase(ctx, ev, "tsk_cancel", "", dir, cfg)
 	elapsed := time.Since(start)
 
 	if elapsed > 2*time.Second {
