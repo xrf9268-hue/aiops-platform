@@ -261,17 +261,29 @@ workflow: AIOPS_WORKFLOW_PATH refers to /…/WORKFLOW.md which does not exist
   `go run ./cmd/worker --print-config $(dirname "$AIOPS_WORKFLOW_PATH")`
   to see how the loader resolves it and which `source` is reported.
 
-### Missing tracker credentials at startup
+### Missing tracker credentials
 
-The worker fails workflow loading before the first poll when the
-applicable tracker credentials are absent. Confirm the credential env
-var matches the configured `tracker.kind`:
+Confirm the credential env var matches the configured `tracker.kind`:
 
 | `tracker.kind` | Required env vars |
 | --- | --- |
 | `linear` | `LINEAR_API_KEY` (or whatever `$VAR` `tracker.api_key` references in `WORKFLOW.md`) |
 | `gitea` | `GITEA_BASE_URL`, `GITEA_TOKEN` |
 | `github` | `GITHUB_TOKEN` |
+
+When the failure surfaces depends on how the value is encoded:
+
+- If `tracker.api_key` in `WORKFLOW.md` is an explicit env reference
+  (`$VAR` or `${VAR}`) and the env var is unset or empty, workflow
+  loading fails at startup with `missing_tracker_api_key` before the
+  first poll. This is the loud, fail-fast path — fix the env var and
+  retry.
+- If `tracker.api_key` is empty or a non-env literal (and for the
+  gitea/github clients which read `GITEA_TOKEN`/`GITHUB_TOKEN` at poll
+  time rather than at load time), startup succeeds with no warning
+  and the first tracker poll fails (`ListIssuesByStates` returns a
+  401/403 / "credentials missing" style error). Check the worker log
+  for the first poll cycle, not just the startup line.
 
 ### `/api/v1/state` returns nothing or refuses to bind
 
