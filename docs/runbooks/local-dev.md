@@ -123,14 +123,26 @@ docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
 The Compose service hardcodes `AIOPS_WORKFLOW_PATH=/app/examples/WORKFLOW.md`
-and mounts `../examples:/app/examples:ro`, so this command always runs
-against the bundled Linear example workflow — edits to your local
-`.aiops/WORKFLOW.md` are **not** picked up by the container. To run
-the container against your own workflow, either bind-mount your file
-over the example path (e.g.
-`-v $PWD/.aiops/WORKFLOW.md:/app/examples/WORKFLOW.md:ro`) or override
-`AIOPS_WORKFLOW_PATH` in `.env` to a path that resolves inside the
-container.
+as a fixed literal (not `${AIOPS_WORKFLOW_PATH}`) and mounts
+`../examples:/app/examples:ro`, so this command always runs against
+the bundled Linear example workflow — edits to your local
+`.aiops/WORKFLOW.md` are **not** picked up by the container, and
+setting `AIOPS_WORKFLOW_PATH` in `.env` has no effect. To run the
+container against your own workflow:
+
+- Bind-mount your file over the example path (simplest):
+
+  ```bash
+  docker compose --env-file .env -f deploy/docker-compose.yml run \
+    -v "$PWD/.aiops/WORKFLOW.md:/app/examples/WORKFLOW.md:ro" worker
+  ```
+
+- Or override `AIOPS_WORKFLOW_PATH` per invocation with
+  `docker compose run -e AIOPS_WORKFLOW_PATH=/app/your/path worker`
+  (combined with whatever mount makes that path readable).
+
+- Or maintain a `deploy/docker-compose.override.yml` that re-declares
+  `environment.AIOPS_WORKFLOW_PATH` for the `worker` service.
 
 The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
