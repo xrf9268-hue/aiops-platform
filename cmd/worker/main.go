@@ -643,14 +643,19 @@ type apiStateCounts struct {
 }
 
 type apiStateRunning struct {
-	IssueID     orchestrator.IssueID `json:"issue_id"`
-	Identifier  string               `json:"issue_identifier,omitempty"`
-	State       string               `json:"state,omitempty"`
-	SessionID   string               `json:"session_id,omitempty"`
-	TurnCount   int                  `json:"turn_count,omitempty"`
-	LastEvent   string               `json:"last_event,omitempty"`
-	LastMessage string               `json:"last_message,omitempty"`
-	StartedAt   *time.Time           `json:"started_at,omitempty"`
+	IssueID    orchestrator.IssueID `json:"issue_id"`
+	Identifier string               `json:"issue_identifier,omitempty"`
+	// State / SessionID / TurnCount / LastEvent / LastMessage are part of
+	// the SPEC §13.7.2 running-row contract — the sample literally shows
+	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
+	// run with zero/empty values must still emit the keys. omitempty would
+	// let consumers confuse "known zero/empty" with "field missing".
+	State       string     `json:"state"`
+	SessionID   string     `json:"session_id"`
+	TurnCount   int        `json:"turn_count"`
+	LastEvent   string     `json:"last_event"`
+	LastMessage string     `json:"last_message"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
 	// LastCodexAt is the SPEC §13.7.2 `last_event_at` value; the wire name
 	// `last_codex_at` is preserved for back-compat with existing dashboards
 	// (no fields removed per §13.7 "SHOULD avoid breaking existing fields").

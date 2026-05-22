@@ -55,6 +55,28 @@ func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []str
 	return out, nil
 }
 
+// TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys pins the contract from
+// SPEC §13.7.2: state / session_id / turn_count / last_event / last_message
+// are required keys on each running row, so consumers can distinguish
+// "known zero/empty" from "field missing". A freshly-dispatched row with
+// zero values must still emit all five keys.
+func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
+	row := apiRunningFromView(orchestrator.RunningView{IssueID: "issue-1", Identifier: "ENG-1"})
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	for _, key := range []string{"state", "session_id", "turn_count", "last_event", "last_message", "tokens"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("apiStateRunning JSON missing %q for a freshly-dispatched run: %s", key, raw)
+		}
+	}
+}
+
 func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	generatedAt := time.Date(2026, 5, 20, 9, 30, 0, 0, time.UTC)
 	view := orchestrator.StateView{
