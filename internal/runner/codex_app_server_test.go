@@ -213,6 +213,13 @@ for line in sys.stdin:
 	if got := runtimeEventField(t, res.RuntimeEvents[0], "turn_id"); got != "turn-1" {
 		t.Fatalf("session_started turn_id = %#v, want turn-1", got)
 	}
+	pid := runtimeEventField(t, res.RuntimeEvents[0], "codex_app_server_pid")
+	if pid == nil {
+		t.Fatalf("session_started missing codex_app_server_pid; payload=%#v", res.RuntimeEvents[0].Payload)
+	}
+	if n, _ := pid.(int); n <= 0 {
+		t.Fatalf("session_started codex_app_server_pid = %#v, want positive int (real codex subprocess PID)", pid)
+	}
 	if res.RuntimeEvents[1].Event != task.EventNotification {
 		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventNotification)
 	}

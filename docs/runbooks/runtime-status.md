@@ -117,7 +117,8 @@ the shape here without updating the handler — or vice versa — fails the buil
       "started_at": "2026-05-21T09:09:55Z",
       "retry_attempt": 1,
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
-      "last_codex_at": "2026-05-21T09:10:00Z"
+      "last_codex_at": "2026-05-21T09:10:00Z",
+      "codex_app_server_pid": 12345
     }
   ],
   "blocked": [
@@ -130,7 +131,8 @@ the shape here without updating the handler — or vice versa — fails the buil
       "session_id": "thread-1-turn-1",
       "last_codex_at": "2026-05-20T06:05:30Z",
       "method": "mcpServer/elicitation/request",
-      "error": "input required: mcpServer/elicitation/request"
+      "error": "input required: mcpServer/elicitation/request",
+      "codex_app_server_pid": 67890
     }
   ],
   "retrying": [

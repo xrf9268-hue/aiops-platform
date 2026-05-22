@@ -36,12 +36,16 @@ type Workspace struct {
 }
 
 // LiveSession captures the SPEC §4.1.6 live-session fields populated
-// from app-server runtime events.
+// from app-server runtime events. CodexAppServerPID is the OS pid of the
+// Codex subprocess driving this session — populated from the runner's
+// `session_started` event payload — and surfaces on `/api/v1/state` so
+// operators can map a running row to a host process.
 type LiveSession struct {
-	SessionID string
-	ThreadID  string
-	TurnID    string
-	TurnCount int
+	SessionID         string
+	ThreadID          string
+	TurnID            string
+	TurnCount         int
+	CodexAppServerPID int
 }
 
 // RateLimitSnapshot is the latest SPEC §13.3 rate-limits payload emitted by
@@ -645,25 +649,27 @@ type StateView struct {
 // RunningView is the per-running-entry projection in StateView. It
 // omits unexported / non-serializable fields like CancelWorker and Done.
 type RunningView struct {
-	IssueID       IssueID
-	Identifier    string
-	StartedAt     time.Time
-	RetryAttempt  *int
-	WorkspacePath string
-	LastCodexAt   time.Time
+	IssueID           IssueID
+	Identifier        string
+	StartedAt         time.Time
+	RetryAttempt      *int
+	WorkspacePath     string
+	LastCodexAt       time.Time
+	CodexAppServerPID int
 }
 
 // BlockedView is the public projection of an input-required blocked run.
 type BlockedView struct {
-	IssueID       IssueID
-	Identifier    string
-	State         string
-	BlockedAt     time.Time
-	WorkspacePath string
-	SessionID     string
-	LastCodexAt   time.Time
-	Method        string
-	Error         string
+	IssueID           IssueID
+	Identifier        string
+	State             string
+	BlockedAt         time.Time
+	WorkspacePath     string
+	SessionID         string
+	LastCodexAt       time.Time
+	Method            string
+	Error             string
+	CodexAppServerPID int
 }
 
 // RetryView is the per-retry-entry projection in StateView. Omits the
@@ -709,25 +715,27 @@ func (s *OrchestratorState) Snapshot() StateView {
 			retryAttempt = &n
 		}
 		view.Running = append(view.Running, RunningView{
-			IssueID:       id,
-			Identifier:    r.Identifier,
-			StartedAt:     r.StartedAt,
-			RetryAttempt:  retryAttempt,
-			WorkspacePath: r.Workspace.Path,
-			LastCodexAt:   r.LastCodexAt,
+			IssueID:           id,
+			Identifier:        r.Identifier,
+			StartedAt:         r.StartedAt,
+			RetryAttempt:      retryAttempt,
+			WorkspacePath:     r.Workspace.Path,
+			LastCodexAt:       r.LastCodexAt,
+			CodexAppServerPID: r.Session.CodexAppServerPID,
 		})
 	}
 	for id, b := range s.Blocked {
 		view.Blocked = append(view.Blocked, BlockedView{
-			IssueID:       id,
-			Identifier:    b.Identifier,
-			State:         b.Issue.State,
-			BlockedAt:     b.BlockedAt,
-			WorkspacePath: b.Workspace.Path,
-			SessionID:     b.Session.SessionID,
-			LastCodexAt:   b.LastCodexAt,
-			Method:        b.Method,
-			Error:         b.Error,
+			IssueID:           id,
+			Identifier:        b.Identifier,
+			State:             b.Issue.State,
+			BlockedAt:         b.BlockedAt,
+			WorkspacePath:     b.Workspace.Path,
+			SessionID:         b.Session.SessionID,
+			LastCodexAt:       b.LastCodexAt,
+			Method:            b.Method,
+			Error:             b.Error,
+			CodexAppServerPID: b.Session.CodexAppServerPID,
 		})
 	}
 	for id, r := range s.RetryAttempts {

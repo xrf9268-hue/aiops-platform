@@ -94,10 +94,15 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	// so passing maxAppServerLineBytes+1 as the cap allows tokens up to (and
 	// including) maxAppServerLineBytes and rejects anything strictly larger.
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
 	client := &appServerClient{
-		stdin:   stdin,
-		scanner: sc,
-		out:     buf,
+		stdin:             stdin,
+		scanner:           sc,
+		out:               buf,
+		codexAppServerPID: pid,
 	}
 	runErr := client.run(ctx, in, string(prompt))
 	if runErr != nil && ctx.Err() == nil {
@@ -186,6 +191,7 @@ type appServerClient struct {
 	scanner             *bufio.Scanner
 	out                 io.Writer
 	nextID              int
+	codexAppServerPID   int
 	threadID            string
 	turnID              string
 	lastMessage         string
@@ -273,11 +279,15 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		}
 		c.turnID = turnID
 		if turn == 1 {
-			c.recordRuntimeEvent(task.EventSessionStarted, map[string]any{
+			payload := map[string]any{
 				"session_id": threadID + "-" + turnID,
 				"thread_id":  threadID,
 				"turn_id":    turnID,
-			})
+			}
+			if c.codexAppServerPID > 0 {
+				payload["codex_app_server_pid"] = c.codexAppServerPID
+			}
+			c.recordRuntimeEvent(task.EventSessionStarted, payload)
 			c.recordPhaseTransition(task.PhaseInitializingSession, task.PhaseStreamingTurn)
 		}
 		c.continueRun = false
