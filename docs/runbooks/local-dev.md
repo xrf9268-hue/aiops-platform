@@ -75,20 +75,40 @@ without calling any external model.
 
 ## 2. Run the worker
 
+The worker does **not** read `LINEAR_API_KEY` / `GITEA_TOKEN` /
+`GITHUB_TOKEN` directly — those env vars only affect the worker when
+`tracker.api_key` in your selected `WORKFLOW.md` references them via
+`$VAR` syntax. Before running the worker, make sure the workflow file
+has the right `tracker.api_key` mapping for your `tracker.kind`:
+
+| `tracker.kind` | `tracker.api_key` line in `WORKFLOW.md` |
+| --- | --- |
+| `linear` | `api_key: $LINEAR_API_KEY` |
+| `gitea`  | `api_key: $GITEA_TOKEN` |
+| `github` | `api_key: $GITHUB_TOKEN` |
+
+The shipped `examples/WORKFLOW.md` and
+`examples/github-local-WORKFLOW.md` already use this pattern;
+`examples/gitea-WORKFLOW.md` omits it and must be edited before the
+worker can poll Gitea.
+
 Option A: from source.
 
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
 export WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
-# For tracker.kind: linear
+# For tracker.kind: linear  (consumed by WORKFLOW.md "api_key: $LINEAR_API_KEY")
 export LINEAR_API_KEY=your-linear-personal-key
 
 # For tracker.kind: gitea
+# GITEA_BASE_URL is consumed at runtime as a base-URL fallback when
+# tracker.project_slug is empty; GITEA_TOKEN must be wired through
+# "api_key: $GITEA_TOKEN" in WORKFLOW.md to actually authenticate.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
-# For tracker.kind: github
+# For tracker.kind: github  (consumed via WORKFLOW.md "api_key: $GITHUB_TOKEN")
 export GITHUB_TOKEN=$(gh auth token -h github.com)
 
 go run ./cmd/worker
