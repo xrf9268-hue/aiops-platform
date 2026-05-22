@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -289,6 +290,194 @@ func TestPrintConfig_TopLevelOmitsEmptyShadowedBy(t *testing.T) {
 	}
 	if out.Source != "default" {
 		t.Fatalf("top-level source = %q, want %q", out.Source, "default")
+	}
+}
+
+// TestPrintConfig_MasksRepoCloneURLUserinfo pins the secret-masking
+// contract for `repo.clone_url`: when the URL embeds basic-auth
+// userinfo (the conventional way GitHub-style tokens are passed via
+// HTTPS clones), the userinfo segment is stripped before serialization
+// so `--print-config` paste-into-chat does not leak the token. Non-auth
+// URL forms (plain HTTPS, SSH-style git URLs) must round-trip
+// unchanged.
+//
+// Boundary-coverage rule: paired edges on the userinfo bracket — both
+// halves (user+password), opening-only (user, no password), neither
+// (plain), and a structurally distinct form (SSH) all in one test so a
+// future regression on any branch is loud.
+func TestPrintConfig_MasksRepoCloneURLUserinfo(t *testing.T) {
+	cases := []struct {
+		name     string
+		clone    string
+		wantOut  string
+		mustHide []string
+	}{
+		{
+			name:     "user_and_token_password",
+			clone:    "https://oauth2:ghp_super_secret_token@github.com/o/r.git",
+			wantOut:  "https://github.com/o/r.git",
+			mustHide: []string{"ghp_super_secret_token", "oauth2:ghp_super_secret_token"},
+		},
+		{
+			name:     "user_only_treated_as_token_alias",
+			clone:    "https://ghp_super_secret_token@github.com/o/r.git",
+			wantOut:  "https://github.com/o/r.git",
+			mustHide: []string{"ghp_super_secret_token"},
+		},
+		{
+			name:    "plain_https_round_trips",
+			clone:   "https://github.com/o/r.git",
+			wantOut: "https://github.com/o/r.git",
+		},
+		{
+			name:    "ssh_git_url_round_trips",
+			clone:   "git@example.com:o/r.git",
+			wantOut: "git@example.com:o/r.git",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: " + tc.clone + "\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+			if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := printConfig(dir, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+			}
+			got := stdout.String()
+			for _, secret := range tc.mustHide {
+				if strings.Contains(got, secret) {
+					t.Fatalf("secret %q leaked into stdout:\n%s", secret, got)
+				}
+			}
+			wantLine := `"clone_url": "` + tc.wantOut + `"`
+			if !strings.Contains(got, wantLine) {
+				t.Fatalf("clone_url not rendered as %q in stdout:\n%s", tc.wantOut, got)
+			}
+		})
+	}
+}
+
+// TestPrintConfig_MasksSandboxCredentialFiles pins the secret-masking
+// contract for `sandbox.credential_files`: the path itself is sensitive
+// (a precise on-disk pointer for any attacker with shell access) and
+// each entry must be replaced with the standard `***` placeholder.
+//
+// Boundary-coverage rule applied to slice length: 0 (must not produce a
+// placeholder — empty means empty), 1 (one entry masked), and 2 (every
+// element masked, not just the first). The masked entries appear in
+// stdout; the original paths must not.
+func TestPrintConfig_MasksSandboxCredentialFiles(t *testing.T) {
+	cases := []struct {
+		name      string
+		yamlList  string
+		wantCount int
+		mustHide  []string
+	}{
+		{
+			name:      "empty_slice_no_placeholder",
+			yamlList:  "",
+			wantCount: 0,
+			mustHide:  nil,
+		},
+		{
+			name:      "single_entry_masked",
+			yamlList:  "    - /etc/aiops/creds/lone-token\n",
+			wantCount: 1,
+			mustHide:  []string{"/etc/aiops/creds/lone-token", "lone-token"},
+		},
+		{
+			name:      "two_entries_each_masked",
+			yamlList:  "    - /etc/aiops/creds/alpha\n    - /etc/aiops/creds/bravo\n",
+			wantCount: 2,
+			mustHide:  []string{"/etc/aiops/creds/alpha", "/etc/aiops/creds/bravo", "alpha", "bravo"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sandbox := "sandbox:\n"
+			if tc.yamlList != "" {
+				sandbox += "  credential_files:\n" + tc.yamlList
+			} else {
+				sandbox = ""
+			}
+			body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n" + sandbox + "---\nprompt\n"
+			if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := printConfig(dir, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+			}
+			got := stdout.String()
+			for _, secret := range tc.mustHide {
+				if strings.Contains(got, secret) {
+					t.Fatalf("secret substring %q leaked into stdout:\n%s", secret, got)
+				}
+			}
+			var out struct {
+				Config struct {
+					Sandbox struct {
+						CredentialFiles []string `json:"credential_files"`
+					} `json:"sandbox"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+			}
+			if got, want := len(out.Config.Sandbox.CredentialFiles), tc.wantCount; got != want {
+				t.Fatalf("credential_files length = %d, want %d\nstdout:\n%s", got, want, stdout.String())
+			}
+			for i, entry := range out.Config.Sandbox.CredentialFiles {
+				if entry != "***" {
+					t.Fatalf("credential_files[%d] = %q, want %q\nstdout:\n%s", i, entry, "***", stdout.String())
+				}
+			}
+		})
+	}
+}
+
+// TestPrintConfig_SandboxVisibleInConfigView covers the observability
+// half of #194: the `sandbox` block must round-trip through
+// --print-config (after masking) so operators can verify the effective
+// sandbox posture, not just stare at silence.
+func TestPrintConfig_SandboxVisibleInConfigView(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\nsandbox:\n  enabled: true\n  backend: bubblewrap\n  network: none\n  env_allowlist:\n    - HOME\n    - PATH\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Sandbox struct {
+				Enabled      bool     `json:"enabled"`
+				Backend      string   `json:"backend"`
+				NetworkMode  string   `json:"network"`
+				EnvAllowlist []string `json:"env_allowlist"`
+			} `json:"sandbox"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if !out.Config.Sandbox.Enabled {
+		t.Fatalf("sandbox.enabled = false, want true\nstdout:\n%s", stdout.String())
+	}
+	if got, want := out.Config.Sandbox.Backend, "bubblewrap"; got != want {
+		t.Fatalf("sandbox.backend = %q, want %q", got, want)
+	}
+	if got, want := out.Config.Sandbox.NetworkMode, "none"; got != want {
+		t.Fatalf("sandbox.network = %q, want %q", got, want)
+	}
+	if got, want := out.Config.Sandbox.EnvAllowlist, []string{"HOME", "PATH"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sandbox.env_allowlist = %#v, want %#v", got, want)
 	}
 }
 

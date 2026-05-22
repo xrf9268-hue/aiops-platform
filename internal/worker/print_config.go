@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -45,6 +46,7 @@ type configView struct {
 	Policy    workflow.PolicyConfig    `json:"policy"`
 	Verify    workflow.VerifyConfig    `json:"verify"`
 	PR        workflow.PRConfig        `json:"pr"`
+	Sandbox   workflow.SandboxConfig   `json:"sandbox"`
 }
 
 // agentConfigView mirrors workflow.AgentConfig but renders Timeout as a
@@ -75,11 +77,12 @@ func newConfigView(cfg workflow.Config) configView {
 			Timeout:             cfg.Agent.Timeout.String(),
 			MaxTimeoutRetries:   cfg.Agent.MaxTimeoutRetries,
 		},
-		Codex:  cfg.Codex,
-		Claude: cfg.Claude,
-		Policy: cfg.Policy,
-		Verify: cfg.Verify,
-		PR:     cfg.PR,
+		Codex:   cfg.Codex,
+		Claude:  cfg.Claude,
+		Policy:  cfg.Policy,
+		Verify:  cfg.Verify,
+		PR:      cfg.PR,
+		Sandbox: cfg.Sandbox,
 	}
 }
 
@@ -123,13 +126,47 @@ const maskedSecret = "***"
 // maskSecrets rewrites secret-bearing fields on a Config to a fixed
 // placeholder before serialization. The function takes its argument by
 // value; the workflow.Config used by the running worker is never
-// touched. Currently only Tracker.APIKey is masked — extend this list
-// when new secret-bearing fields are added to the schema.
+// touched.
+//
+// Policy contract: this function is the single point that enumerates
+// every secret-bearing field on workflow.Config. Adding a new
+// secret-bearing field to the schema without extending this function is
+// a review-blocking gap — tests in print_config_test.go pin each known
+// field against plaintext leaks. Current coverage:
+//   - Tracker.APIKey            (token)
+//   - Repo.CloneURL             (may embed https://user:token@... userinfo)
+//   - Sandbox.CredentialFiles   (each path is itself an attacker pointer)
 func maskSecrets(cfg workflow.Config) workflow.Config {
 	if cfg.Tracker.APIKey != "" {
 		cfg.Tracker.APIKey = maskedSecret
 	}
+	cfg.Repo.CloneURL = maskCloneURL(cfg.Repo.CloneURL)
+	if n := len(cfg.Sandbox.CredentialFiles); n > 0 {
+		masked := make([]string, n)
+		for i := range masked {
+			masked[i] = maskedSecret
+		}
+		cfg.Sandbox.CredentialFiles = masked
+	}
 	return cfg
+}
+
+// maskCloneURL strips embedded basic-auth from a clone URL. URLs that
+// do not parse as net/url (notably the SSH-style git@host:path form)
+// return unchanged, since that form does not carry userinfo. A bare
+// username with no password is also stripped: by convention an embedded
+// user in an HTTPS clone URL is a token alias (e.g. "oauth2",
+// "x-access-token", or the token itself), not a real account name.
+func maskCloneURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 // printConfig writes the effective workflow for workdir as JSON to
