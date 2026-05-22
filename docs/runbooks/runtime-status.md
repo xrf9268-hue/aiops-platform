@@ -114,10 +114,20 @@ the shape here without updating the handler — or vice versa — fails the buil
     {
       "issue_id": "issue-1",
       "issue_identifier": "ENG-1",
+      "state": "In Progress",
+      "session_id": "thread-1-turn-1",
+      "turn_count": 7,
+      "last_event": "turn_completed",
+      "last_message": "Working on it...",
       "started_at": "2026-05-21T09:09:55Z",
+      "last_codex_at": "2026-05-21T09:10:00Z",
       "retry_attempt": 1,
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
-      "last_codex_at": "2026-05-21T09:10:00Z",
+      "tokens": {
+        "input_tokens": 1200,
+        "output_tokens": 800,
+        "total_tokens": 2000
+      },
       "codex_app_server_pid": 12345
     }
   ],
@@ -201,6 +211,32 @@ Two consequences for dashboard authors:
 - `max_concurrent_agents` — global concurrency cap.
 - `max_concurrent_agents_by_state` — optional per-tracker-state cap map; absent when no overrides set.
 - `rate_limits` — optional Codex rate-limit snapshot when one has been observed (omitted otherwise).
+
+### Per-issue running row fields (SPEC §13.7.2)
+
+Each entry in the `running` array follows SPEC §13.7.2:
+
+- `issue_id` / `issue_identifier` — the tracker identity.
+- `state` — the tracker state at dispatch (e.g. `In Progress`).
+- `session_id` — the live Codex session id (SPEC §4.1.6); absent until the
+  runner emits a `session_started` event.
+- `turn_count` — running count of `turn_completed` events observed in the
+  session.
+- `last_event` — the most-recent runtime event kind (SPEC §10.4 vocabulary,
+  e.g. `turn_completed`, `notification`).
+- `last_message` — the most-recent `payload.message` string from a runtime
+  event; sticky across later events that do not include one.
+- `started_at` — RFC3339 timestamp the worker spawned at.
+- `last_codex_at` — RFC3339 timestamp of the last observed runtime event,
+  semantically the SPEC §13.7.2 `last_event_at`. The wire name `last_codex_at`
+  is kept for back-compat with existing dashboards.
+- `retry_attempt` — retry attempt number when the dispatch is a retry; absent
+  on the first run (SPEC §4.1.5 first-run semantic).
+- `workspace_path` — absolute path of the per-issue workspace.
+- `tokens` — `{ input_tokens, output_tokens, total_tokens }` cumulative for
+  the active session.
+- `codex_app_server_pid` — OS pid of the Codex subprocess, populated from
+  `session_started`; absent when the runner did not emit a pid.
 
 ## Tracker pagination overflow
 

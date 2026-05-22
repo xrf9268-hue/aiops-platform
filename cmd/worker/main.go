@@ -643,13 +643,34 @@ type apiStateCounts struct {
 }
 
 type apiStateRunning struct {
-	IssueID           orchestrator.IssueID `json:"issue_id"`
-	Identifier        string               `json:"issue_identifier,omitempty"`
-	StartedAt         *time.Time           `json:"started_at,omitempty"`
-	RetryAttempt      *int                 `json:"retry_attempt,omitempty"`
-	WorkspacePath     string               `json:"workspace_path,omitempty"`
-	LastCodexAt       *time.Time           `json:"last_codex_at,omitempty"`
-	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
+	IssueID    orchestrator.IssueID `json:"issue_id"`
+	Identifier string               `json:"issue_identifier,omitempty"`
+	// State / SessionID / TurnCount / LastEvent / LastMessage are part of
+	// the SPEC §13.7.2 running-row contract — the sample literally shows
+	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
+	// run with zero/empty values must still emit the keys. omitempty would
+	// let consumers confuse "known zero/empty" with "field missing".
+	State       string     `json:"state"`
+	SessionID   string     `json:"session_id"`
+	TurnCount   int        `json:"turn_count"`
+	LastEvent   string     `json:"last_event"`
+	LastMessage string     `json:"last_message"`
+	StartedAt   *time.Time `json:"started_at,omitempty"`
+	// LastCodexAt is the SPEC §13.7.2 `last_event_at` value; the wire name
+	// `last_codex_at` is preserved for back-compat with existing dashboards
+	// (no fields removed per §13.7 "SHOULD avoid breaking existing fields").
+	LastCodexAt       *time.Time       `json:"last_codex_at,omitempty"`
+	RetryAttempt      *int             `json:"retry_attempt,omitempty"`
+	WorkspacePath     string           `json:"workspace_path,omitempty"`
+	Tokens            apiRunningTokens `json:"tokens"`
+	CodexAppServerPID int              `json:"codex_app_server_pid,omitempty"`
+}
+
+// apiRunningTokens mirrors SPEC §13.7.2's per-running-row `tokens` object.
+type apiRunningTokens struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+	TotalTokens  int64 `json:"total_tokens"`
 }
 
 type apiStateBlocked struct {
@@ -926,12 +947,22 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		lastCodexAt = &v
 	}
 	return apiStateRunning{
-		IssueID:           row.IssueID,
-		Identifier:        row.Identifier,
-		StartedAt:         startedAt,
-		RetryAttempt:      copyIntPointer(row.RetryAttempt),
-		WorkspacePath:     row.WorkspacePath,
-		LastCodexAt:       lastCodexAt,
+		IssueID:       row.IssueID,
+		Identifier:    row.Identifier,
+		State:         row.State,
+		SessionID:     row.SessionID,
+		TurnCount:     row.TurnCount,
+		LastEvent:     row.LastEvent,
+		LastMessage:   row.LastMessage,
+		StartedAt:     startedAt,
+		LastCodexAt:   lastCodexAt,
+		RetryAttempt:  copyIntPointer(row.RetryAttempt),
+		WorkspacePath: row.WorkspacePath,
+		Tokens: apiRunningTokens{
+			InputTokens:  row.Tokens.InputTokens,
+			OutputTokens: row.Tokens.OutputTokens,
+			TotalTokens:  row.Tokens.TotalTokens,
+		},
 		CodexAppServerPID: row.CodexAppServerPID,
 	}
 }
