@@ -1142,6 +1142,21 @@ func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T)
 	close(dispatcher.releaseCh)
 }
 
+// TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll confirms
+// that an explicitly empty terminal_states slice from
+// NewPollerWithReconciliation reaches filterEligibleCandidates verbatim — it
+// is NOT silently replaced by the DefaultConfig 5-state set. SPEC §5.3.1
+// default semantics: defaults apply on omission, not on explicit override.
+func TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll(t *testing.T) {
+	issues := []tracker.Issue{
+		{ID: "todo-done", Identifier: "LIN-1", Title: "Done blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Done"}}},
+	}
+	out := filterEligibleCandidates(issues, []string{})
+	if len(out) != 0 {
+		t.Fatalf("filterEligibleCandidates with explicit [] = %d issues, want 0 (no states are terminal → all blockers open → Todo blocked); got=%#v", len(out), out)
+	}
+}
+
 // TestFilterEligibleCandidatesUsesOnlyConfiguredTerminalSet is the direct
 // unit test for filterEligibleCandidates: when operator's terminal_states is
 // ["Released"], a Todo issue blocked by a "Released" blocker passes the
