@@ -194,3 +194,35 @@ func TestStatusSnapshotFailedCountUsesSuppressedMapNotFIFOSlice(t *testing.T) {
 		t.Fatalf("view.Failed display slice = %d, want %d (cap)", got, want)
 	}
 }
+
+// TestStatusSnapshotDeduplicatesFailedEventsAgainstSuppressionMap
+// covers the Codex P2 regression on PR #265: when MaxRecentFailed is
+// smaller than the RecentEvents window, a still-suppressed failure
+// can be FIFO-evicted from view.Failed yet still appear as a
+// RuntimeEventFailed entry. The dedup set must read from the full
+// suppression map so the summary doesn't double-count those entries
+// (once via FailedSuppressedCount, once via recordEventSummary).
+func TestStatusSnapshotDeduplicatesFailedEventsAgainstSuppressionMap(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	state.MaxRecentFailed = 1 // cap small so the second failure evicts the first from view.Failed
+
+	// First failure: lands in both Failed map and view.Failed slice.
+	id1 := IssueID("fail-a")
+	state.BeginDispatch(id1, &RunningEntry{Issue: tracker.Issue{ID: string(id1), State: "Done"}})
+	state.FinishRunNonRetryableFailed(id1, state.Running[id1], time.Second)
+	state.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: id1, At: time.Unix(1, 0)})
+
+	// Second failure: FIFO-evicts fail-a from view.Failed (slice cap
+	// = 1) but fail-a remains in Failed map (suppression preserved).
+	id2 := IssueID("fail-b")
+	state.BeginDispatch(id2, &RunningEntry{Issue: tracker.Issue{ID: string(id2), State: "Done"}})
+	state.FinishRunNonRetryableFailed(id2, state.Running[id2], time.Second)
+	state.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: id2, At: time.Unix(2, 0)})
+
+	status := state.StatusSnapshot(10)
+	// Suppression map carries 2 entries; both are unique. Summary
+	// must read 2, NOT 3 (no double-count via recordEventSummary).
+	if got, want := status.Summary.Failed, 2; got != want {
+		t.Fatalf("status.summary.failed = %d, want %d (regression: FIFO-evicted but still-suppressed fail-a counted twice)", got, want)
+	}
+}

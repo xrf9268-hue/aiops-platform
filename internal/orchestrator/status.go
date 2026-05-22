@@ -178,13 +178,19 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 	// intentionally uncapped.
 	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: view.FailedSuppressedCount, Blocked: len(blocked), Retrying: len(retrying)}
 	seenEventIssues := map[RuntimeEventKind]map[IssueID]struct{}{}
-	for _, id := range view.Failed {
-		seenFailed := seenEventIssues[RuntimeEventFailed]
-		if seenFailed == nil {
-			seenFailed = map[IssueID]struct{}{}
-			seenEventIssues[RuntimeEventFailed] = seenFailed
-		}
+	// Seed the "seen failed" set from the FULL suppression map
+	// (s.Failed) rather than the capped view.Failed slice. Otherwise
+	// a failure that was FIFO-evicted from view.Failed but still has
+	// a RuntimeEventFailed entry in RecentEvents would be counted
+	// once in FailedSuppressedCount and then again by
+	// recordEventSummary — inflating summary.Failed above the true
+	// number of suppressed issues.
+	seenFailed := map[IssueID]struct{}{}
+	for id := range s.Failed {
 		seenFailed[id] = struct{}{}
+	}
+	if len(seenFailed) > 0 {
+		seenEventIssues[RuntimeEventFailed] = seenFailed
 	}
 	for _, ev := range allEvents {
 		recordEventSummary(&summary, seenEventIssues, ev)
