@@ -119,11 +119,12 @@ type WorkspaceHooks struct {
 }
 
 type HookFieldPresence struct {
-	AfterCreate  bool
-	BeforeRun    bool
-	AfterRun     bool
-	BeforeRemove bool
-	TimeoutMs    bool
+	AfterCreate    bool
+	BeforeRun      bool
+	AfterRun       bool
+	BeforeRemove   bool
+	TimeoutMs      bool
+	EnvPassthrough bool
 }
 
 type WorkspaceHook struct {
@@ -186,6 +187,9 @@ func (c Config) WorkspaceHooks() WorkspaceHooks {
 	}
 	if legacy.TimeoutMs > 0 && !c.hookFields.TimeoutMs {
 		hooks.TimeoutMs = legacy.TimeoutMs
+	}
+	if !c.hookFields.EnvPassthrough && len(legacy.EnvPassthrough) > 0 {
+		hooks.EnvPassthrough = legacy.EnvPassthrough
 	}
 	if hooks.TimeoutMs <= 0 {
 		hooks.TimeoutMs = 60000

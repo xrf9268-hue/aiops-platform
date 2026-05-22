@@ -445,11 +445,12 @@ func hasNestedKey(front []byte, path ...string) bool {
 
 func hookFieldPresence(front []byte, path ...string) HookFieldPresence {
 	return HookFieldPresence{
-		AfterCreate:  hasNestedKey(front, append(path, "after_create")...),
-		BeforeRun:    hasNestedKey(front, append(path, "before_run")...),
-		AfterRun:     hasNestedKey(front, append(path, "after_run")...),
-		BeforeRemove: hasNestedKey(front, append(path, "before_remove")...),
-		TimeoutMs:    hasNestedKey(front, append(path, "timeout_ms")...),
+		AfterCreate:    hasNestedKey(front, append(path, "after_create")...),
+		BeforeRun:      hasNestedKey(front, append(path, "before_run")...),
+		AfterRun:       hasNestedKey(front, append(path, "after_run")...),
+		BeforeRemove:   hasNestedKey(front, append(path, "before_remove")...),
+		TimeoutMs:      hasNestedKey(front, append(path, "timeout_ms")...),
+		EnvPassthrough: hasNestedKey(front, append(path, "env_passthrough")...),
 	}
 }
 

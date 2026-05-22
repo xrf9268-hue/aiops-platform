@@ -1111,6 +1111,82 @@ prompt body
 	}
 }
 
+func TestWorkspaceHooksHonorsLegacyEnvPassthrough(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+workspace:
+  hooks:
+    env_passthrough:
+      - LEGACY_VAR
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := wf.Config.WorkspaceHooks().EnvPassthrough
+	if !reflect.DeepEqual(got, []string{"LEGACY_VAR"}) {
+		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want legacy env_passthrough to surface", got)
+	}
+}
+
+func TestWorkspaceHooksPrefersExplicitTopLevelEnvPassthrough(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  env_passthrough:
+    - TOP_VAR
+workspace:
+  hooks:
+    env_passthrough:
+      - LEGACY_VAR
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	got := wf.Config.WorkspaceHooks().EnvPassthrough
+	if !reflect.DeepEqual(got, []string{"TOP_VAR"}) {
+		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want explicit top-level to win over legacy", got)
+	}
+}
+
+func TestWorkspaceHooksPreservesExplicitEmptyTopLevelEnvPassthrough(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+hooks:
+  env_passthrough: []
+workspace:
+  hooks:
+    env_passthrough:
+      - LEGACY_VAR
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got := wf.Config.WorkspaceHooks().EnvPassthrough; len(got) != 0 {
+		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want explicit empty top-level to suppress legacy passthrough", got)
+	}
+}
+
 func TestDefaultConfigWorkspaceHooksTimeout(t *testing.T) {
 	if got, want := DefaultConfig().Hooks.TimeoutMs, 60000; got != want {
 		t.Fatalf("DefaultConfig().Hooks.TimeoutMs = %d, want SPEC default %d", got, want)
