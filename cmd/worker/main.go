@@ -407,6 +407,13 @@ func newStateHTTPServer(port int, snapshot stateSnapshotFunc, refresh ...stateRe
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
+		// Cap header size well below Go's 1 MiB default. The state and
+		// refresh endpoints only exchange ~kilobytes of cookies and
+		// headers; an unbounded header read would let a misbehaving
+		// or hostile client wedge a connection until ReadHeaderTimeout
+		// fires. Go internally adds a 4 KiB bufio slop on top of this
+		// value when computing the actual reject threshold.
+		MaxHeaderBytes: 64 << 10,
 	}
 }
 
@@ -559,10 +566,12 @@ func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		view, err := snapshot(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", err.Error())
+				log.Printf("state snapshot cancelled: %v", err)
+				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", "request cancelled before snapshot completed")
 				return
 			}
-			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), err.Error())
+			log.Printf("state snapshot error: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), "snapshot temporarily unavailable")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -587,10 +596,12 @@ func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		view, err := snapshot(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", err.Error())
+				log.Printf("issue snapshot cancelled: %v", err)
+				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", "request cancelled before snapshot completed")
 				return
 			}
-			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), err.Error())
+			log.Printf("issue snapshot error: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), "snapshot temporarily unavailable")
 			return
 		}
 		payload, ok := apiIssueFromView(view, identifier)
@@ -627,10 +638,12 @@ func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler {
 		result, err := refresh(r.Context())
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", err.Error())
+				log.Printf("refresh cancelled: %v", err)
+				writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", "request cancelled before refresh completed")
 				return
 			}
-			writeAPIError(w, http.StatusInternalServerError, "refresh_failed", err.Error())
+			log.Printf("refresh error: %v", err)
+			writeAPIError(w, http.StatusInternalServerError, "refresh_failed", "refresh trigger temporarily unavailable")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

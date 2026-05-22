@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -1490,6 +1491,163 @@ func TestLoadWorkflowForStartupReconcileDefaultsWhenNoWorkflowExists(t *testing.
 	}
 	if strings.Contains(gotLog, "reconciliation will be skipped") {
 		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
+	}
+}
+
+// TestNewStateHTTPServer_SetsMaxHeaderBytes pins the cap value itself
+// (=N) so a future refactor that drops the line is loud. Go's
+// http.Server adds an internal 4 KiB slop on top of MaxHeaderBytes for
+// the bufio reader, so a precise =N+1 byte-level boundary against the
+// header reader is not testable without depending on Go-internal
+// constants; the structural assertion locks the contract that the
+// field is set, and TestNewStateHTTPServer_RejectsOversizedHeader
+// covers behavior on the over-cap side.
+func TestNewStateHTTPServer_SetsMaxHeaderBytes(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if got, want := server.MaxHeaderBytes, 64<<10; got != want {
+		t.Fatalf("MaxHeaderBytes = %d, want %d", got, want)
+	}
+}
+
+// TestNewStateHTTPServer_RejectsOversizedHeader confirms the cap fires
+// in practice: a request with header bytes well above MaxHeaderBytes +
+// Go's 4 KiB slop must not produce a 200. Using 256 KiB (4x the cap)
+// is decisively over either side of the slop, so the test is stable
+// across Go versions that adjust the slop. (The cap-2 / cap/2 / no-cap
+// matrix is not a viable boundary for this field — see the comment on
+// SetsMaxHeaderBytes.)
+func TestNewStateHTTPServer_RejectsOversizedHeader(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer server.Close()
+
+	addr := listener.Addr().String()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+
+	huge := strings.Repeat("a", 256<<10)
+	req := "GET /api/v1/state HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Bloat: " + huge + "\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		// Server may close the connection during write; either way the
+		// failure path is being exercised. Surface unexpected I/O.
+		if !errors.Is(err, net.ErrClosed) {
+			t.Logf("write request (server likely already closed): %v", err)
+		}
+	}
+	respBytes, _ := io.ReadAll(conn)
+	resp := string(respBytes)
+	if strings.HasPrefix(resp, "HTTP/1.1 200") {
+		t.Fatalf("oversized header produced 200 OK, want failure response or closed connection. Got prefix:\n%s", firstLine(resp))
+	}
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// TestStateHTTPHandler_DoesNotLeakErrorTextInBody asserts the safe-
+// constant contract added by #198: the catch-all snapshot error path
+// must never echo the wrapped err.Error() text into the response body,
+// because that text is operator-internal state (orchestrator paths,
+// timings, traces). Each handler is tested with a canary string in the
+// error message; the handler still serves the typed code + a fixed
+// safe message, and the canary stays server-side.
+func TestStateHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
+	const canary = "CANARY_internal_state_/srv/aiops/orchestrator.go:42"
+	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, errors.New(canary)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(w.Body.String(), canary) {
+		t.Fatalf("canary leaked into response body:\n%s", w.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode envelope: %v; body=%s", err, w.Body.String())
+	}
+	if payload.Error.Code == "" || payload.Error.Message == "" {
+		t.Fatalf("envelope = %+v, want code and message set", payload.Error)
+	}
+}
+
+// TestStateHTTPHandler_DoesNotLeakErrorTextOnCancellation extends the
+// no-leak contract to the request_cancelled branch. Even though Go's
+// context.Canceled message is stable stdlib text, the principle is the
+// same: response body carries safe constants, details land in the log.
+func TestStateHTTPHandler_DoesNotLeakErrorTextOnCancellation(t *testing.T) {
+	const canary = "CANARY_canceled_with_path_/internal/orchestrator"
+	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, fmt.Errorf("%s: %w", canary, context.Canceled)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+	if strings.Contains(w.Body.String(), canary) {
+		t.Fatalf("canary leaked into cancelled response body:\n%s", w.Body.String())
+	}
+}
+
+func TestIssueHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
+	const canary = "CANARY_issue_/srv/aiops/orchestrator.go:99"
+	handler := issueHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, errors.New(canary)
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/issue-x", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+	if strings.Contains(w.Body.String(), canary) {
+		t.Fatalf("canary leaked into response body:\n%s", w.Body.String())
+	}
+}
+
+func TestRefreshHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
+	const canary = "CANARY_refresh_/srv/aiops/runtime.go:11"
+	handler := refreshHTTPHandler(func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		return orchestrator.RefreshRequestResult{}, errors.New(canary)
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/refresh", strings.NewReader("{}"))
+	req.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusInternalServerError, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), canary) {
+		t.Fatalf("canary leaked into response body:\n%s", w.Body.String())
 	}
 }
 
