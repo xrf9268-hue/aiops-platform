@@ -465,7 +465,7 @@ func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]trac
 				out = append(out, issue)
 				continue
 			}
-			log.Printf("tracker route skipped issue %s: no configured service matched", issue.ID)
+			log.Printf("event=tracker_route_skipped issue_id=%s issue_identifier=%s reason=%q", issue.ID, issue.Identifier, "no configured service matched")
 		case 1:
 			issue.ServiceName = matches[0].Name
 			out = append(out, issue)
@@ -759,7 +759,7 @@ func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) er
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			log.Printf("tracker poll error: %v", err)
+			log.Printf("event=tracker_poll_error error=%q", err)
 		}
 		intervalTimer.Reset(interval)
 		select {

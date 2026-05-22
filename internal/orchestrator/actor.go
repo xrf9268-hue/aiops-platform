@@ -847,7 +847,7 @@ func reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanupEntries []wor
 		}
 		for _, cleanup := range cleanupEntries {
 			if err := os.RemoveAll(cleanup.path); err != nil {
-				log.Printf("orchestrator: remove blocked workspace for issue %s at %s: %v", cleanup.issueID, cleanup.path, err)
+				log.Printf("event=blocked_workspace_remove_failed issue_id=%s workspace=%q error=%q", cleanup.issueID, cleanup.path, err)
 			}
 		}
 		if result != nil {

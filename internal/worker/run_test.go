@@ -931,7 +931,9 @@ func TestResolveWorkflow_LogsResolutionLine(t *testing.T) {
 
 	got := buf.String()
 	wantSubstrings := []string{
-		"task tsk_log: workflow resolved",
+		"event=workflow_resolved",
+		"task_id=tsk_log",
+		"issue_id=tsk_log",
 		"source=file",
 		"path=" + workflowPath,
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +100,7 @@ func logWorkflowResolved(taskID string, res *workflow.Resolution) {
 	if len(res.ShadowedBy) > 0 {
 		parts = append(parts, "shadowed=["+strings.Join(res.ShadowedBy, ",")+"]")
 	}
-	log.Printf("task %s: workflow resolved: %s", taskID, strings.Join(parts, " "))
+	LogTaskIDEventf(taskID, "workflow_resolved", "%s", strings.Join(parts, " "))
 }
 
 // failingStore is the subset of queue.Store handleTaskFailure needs.
@@ -126,7 +125,7 @@ type failingStore interface {
 func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error, nonRetryable bool) bool {
 	if nonRetryable {
 		if ferr := store.FailTerminal(ctx, t.ID, err.Error()); ferr != nil {
-			log.Printf("task %s FailTerminal error: %v", t.ID, ferr)
+			LogIssueEventf(t, "fail_terminal_store_error", "error=%q", ferr)
 			return false
 		}
 		return true
@@ -135,14 +134,14 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
 		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
 		if ferr != nil {
-			log.Printf("task %s FailTimeout error: %v", t.ID, ferr)
+			LogIssueEventf(t, "fail_timeout_store_error", "error=%q", ferr)
 			return false
 		}
 		return !requeued
 	}
 	terminal, ferr := store.Fail(ctx, t.ID, err.Error())
 	if ferr != nil {
-		log.Printf("task %s Fail error: %v", t.ID, ferr)
+		LogIssueEventf(t, "fail_store_error", "error=%q", ferr)
 		return false
 	}
 	return terminal
@@ -187,10 +186,10 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir stri
 
 func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
 	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
-		log.Printf("task %s: before_remove hook failed after %s hook failure: %v", taskID, reason, err)
+		LogTaskIDEventf(taskID, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
 	}
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
-		log.Printf("task %s: remove workspace %s after %s hook failure: %v", taskID, workdir, reason, err)
+		LogTaskIDEventf(taskID, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
 	}
 }
 
@@ -324,14 +323,14 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		emitTaskPhase(from, to)
 	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
 		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-			log.Printf("task %s: after_run hook failed after runner error: %v", t.ID, err)
+			LogIssueEventf(t, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 		}
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
 	}
 
 	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		log.Printf("task %s: after_run hook failed: %v", t.ID, err)
+		LogIssueEventf(t, "after_run_hook_failed", "error=%q", err)
 	}
 
 	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {
@@ -413,11 +412,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	// CHANGED_FILES.txt is available as a workspace artifact for post-run
 	// inspection. This does not push anything; that is the agent's job.
 	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
-		log.Printf("task %s: seed changed files artifact: %v", t.ID, err)
+		LogIssueEventf(t, "changed_files_seed_failed", "error=%q", err)
 	}
 	changed, _ := workspace.AllChangedFiles(ctx, workdir)
 	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
-		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
+		LogIssueEventf(t, "changed_files_write_failed", "error=%q", err)
 	}
 	clearPolicyViolationFeedback(workspaceRoot, t)
 
@@ -622,7 +621,7 @@ func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string
 	start := time.Now()
 	results, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
 	if writeErr := workspace.WriteVerification(workdir, results); writeErr != nil {
-		log.Printf("task %s: write verification artifact: %v", taskID, writeErr)
+		LogTaskIDEventf(taskID, "verification_write_failed", "error=%q", writeErr)
 	}
 	payload := map[string]any{
 		"duration_ms":   time.Since(start).Milliseconds(),
@@ -789,7 +788,7 @@ func Emit(ctx context.Context, ev EventEmitter, taskID, kind, msg string, payloa
 		return
 	}
 	if err := ev.AddEventWithPayload(ctx, taskID, kind, msg, payload); err != nil {
-		log.Printf("task %s: emit %s event: %v", taskID, kind, err)
+		LogTaskIDEventf(taskID, "event_emit_failed", "kind=%s error=%q", kind, err)
 	}
 }
 
