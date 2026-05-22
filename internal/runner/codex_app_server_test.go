@@ -922,6 +922,44 @@ for line in sys.stdin:
 			reason:    "user aborted",
 		},
 		{
+			name: "turn_completed_structured_turn_error",
+			stubBody: `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turn': {'status': 'failed', 'error': {'message': 'sandbox denied write', 'code': 'sandbox_violation', 'leak_inside_error': '` + secret + `'}}, 'leak': '` + secret + `'}}), flush=True)
+        break
+`,
+			event:     task.EventTurnEndedWithError,
+			errSubstr: "sandbox denied write",
+			reason:    "sandbox denied write",
+		},
+		{
+			name: "turn_failed_structured_error",
+			stubBody: `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/failed', 'params': {'error': {'message': 'planner crashed', 'leak': '` + secret + `'}}}), flush=True)
+        break
+`,
+			event:     task.EventTurnFailed,
+			errSubstr: "planner crashed",
+			reason:    "planner crashed",
+		},
+		{
 			name: "turn_completed_unknown_status_fallback",
 			stubBody: `
 import json

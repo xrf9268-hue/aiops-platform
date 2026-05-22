@@ -886,13 +886,39 @@ func safeTurnReason(params map[string]any) string {
 		sources = append(sources, turn)
 	}
 	for _, source := range sources {
-		for _, key := range []string{"reason", "error", "message", "error_code"} {
-			if v, _ := source[key].(string); strings.TrimSpace(v) != "" {
-				return strings.TrimSpace(v)
-			}
+		if v := extractReasonFields(source); v != "" {
+			return v
 		}
 	}
 	return fallback
+}
+
+// extractReasonFields walks the allow-listed reason keys in a single map and
+// returns the first non-empty string. `error` is special: Codex may serialize
+// it as a string or as a nested object like
+// `{"message": "...", "code": "...", "error_code": "..."}`. Both shapes are
+// supported; nested object lookup only allows the same allow-listed scalar
+// fields.
+func extractReasonFields(source map[string]any) string {
+	for _, key := range []string{"reason", "error", "message", "error_code"} {
+		raw, ok := source[key]
+		if !ok {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		case map[string]any:
+			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
+				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
+					return strings.TrimSpace(s)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // safeTurnFailurePayload returns a runtime-event payload built from only the
@@ -908,21 +934,13 @@ func safeTurnFailurePayload(params map[string]any) map[string]any {
 	if v, _ := params["status"].(string); strings.TrimSpace(v) != "" {
 		out["status"] = strings.TrimSpace(v)
 	}
-	for _, key := range []string{"reason", "error", "message", "error_code"} {
-		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
-			out[key] = strings.TrimSpace(v)
-		}
-	}
+	copyAllowlistedReasonFields(params, out)
 	if turn, _ := params["turn"].(map[string]any); turn != nil {
 		nested := map[string]any{}
 		if v, _ := turn["status"].(string); strings.TrimSpace(v) != "" {
 			nested["status"] = strings.TrimSpace(v)
 		}
-		for _, key := range []string{"reason", "error", "message", "error_code"} {
-			if v, _ := turn[key].(string); strings.TrimSpace(v) != "" {
-				nested[key] = strings.TrimSpace(v)
-			}
-		}
+		copyAllowlistedReasonFields(turn, nested)
 		if len(nested) > 0 {
 			out["turn"] = nested
 		}
@@ -931,6 +949,34 @@ func safeTurnFailurePayload(params map[string]any) map[string]any {
 		out["reason"] = safeTurnReason(params)
 	}
 	return out
+}
+
+// copyAllowlistedReasonFields copies allow-listed reason fields from src to
+// dst. String values are trimmed; structured `error` objects are flattened to a
+// fresh allow-listed sub-map so non-allow-listed siblings are never persisted.
+func copyAllowlistedReasonFields(src, dst map[string]any) {
+	for _, key := range []string{"reason", "error", "message", "error_code"} {
+		raw, ok := src[key]
+		if !ok {
+			continue
+		}
+		switch v := raw.(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				dst[key] = s
+			}
+		case map[string]any:
+			scrubbed := map[string]any{}
+			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
+				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
+					scrubbed[nestedKey] = strings.TrimSpace(s)
+				}
+			}
+			if len(scrubbed) > 0 {
+				dst[key] = scrubbed
+			}
+		}
+	}
 }
 
 func (c *appServerClient) recordSafeTurnFailure(event string, params map[string]any) {
