@@ -330,15 +330,28 @@ func (s *OrchestratorState) recordCompleted(id IssueID) {
 	}
 }
 
-// recordFailed is the Failed-side mirror of recordCompleted. It
-// inserts a new FailedEntry, tracks order, increments the cumulative
-// counter, and evicts the oldest entry when the cap is exceeded.
+// recordFailed inserts a non-retryable failure into the Failed map
+// and the recent-failed FIFO slice. Critically — unlike
+// recordCompleted — the Failed MAP is NEVER evicted: it's the source
+// of truth for IsClaimed's suppression check
+// (s.Failed[id]) that prevents redispatch of a deterministic failure
+// until ReleaseFailedIfIssueChanged sees a tracker state/updated_at
+// change. Evicting from the map would re-open the door to the spin
+// behavior the suppression contract exists to prevent (regression
+// caught on #234 review).
+//
+// Only the failedOrder SLICE is capped, because that slice is what
+// /api/v1/state publishes — operators see "the N most recently
+// failed" while the orchestrator still suppresses any id present in
+// the map, evicted-from-slice or not. The true currently-suppressed
+// count is reported via counts.failed = len(s.Failed); the bounded
+// per-id array is the FIFO slice.
 func (s *OrchestratorState) recordFailed(id IssueID, entry FailedEntry) {
 	s.CumulativeFailedTotal++
 	if _, ok := s.Failed[id]; ok {
-		// Same id refreshed: update the entry but leave the FIFO
-		// position alone. Refresh is a normal flow when a tracker
-		// state/update changes mid-cycle and a new failure is
+		// Refresh: update the entry but leave the FIFO position
+		// alone. Refresh is a normal flow when a tracker
+		// state/updated_at changes mid-cycle and a new failure is
 		// recorded before reconciliation rotates the entry out.
 		s.Failed[id] = entry
 		return
@@ -346,9 +359,11 @@ func (s *OrchestratorState) recordFailed(id IssueID, entry FailedEntry) {
 	s.Failed[id] = entry
 	s.failedOrder = append(s.failedOrder, id)
 	if s.MaxRecentFailed > 0 && len(s.failedOrder) > s.MaxRecentFailed {
-		oldest := s.failedOrder[0]
+		// Trim the recent-display slice only. The map keeps the entry
+		// so suppression survives the eviction; once
+		// ReleaseFailedIfIssueChanged or BeginDispatch removes the
+		// map entry, removeFailed clears whatever slot remains.
 		s.failedOrder = s.failedOrder[1:]
-		delete(s.Failed, oldest)
 	}
 }
 
@@ -608,8 +623,19 @@ type StateView struct {
 	// MaxRecentCompleted on the source state; the slices here are
 	// FIFO-ordered (oldest first). For lifetime totals that survive
 	// eviction, read CumulativeFailedTotal / CumulativeCompletedTotal.
-	Failed                   []IssueID
-	Completed                []IssueID
+	Failed    []IssueID
+	Completed []IssueID
+	// FailedSuppressedCount is len(state.Failed) — the TRUE size of
+	// the dispatch-suppression set the orchestrator uses to block
+	// redispatch of deterministic failures (IsClaimed reads it). The
+	// `Failed` slice above is capped at MaxRecentFailed for display
+	// purposes; the suppression map is not capped (capping it would
+	// re-open redispatch on still-unfixed deterministic failures —
+	// see the carve-out in recordFailed). For ordinary deployments
+	// where ReleaseFailedIfIssueChanged keeps the set small, the two
+	// match; under sustained failure load, the count exceeds the
+	// slice length.
+	FailedSuppressedCount    int
 	CumulativeCompletedTotal int64
 	CumulativeFailedTotal    int64
 	CodexTotals              CodexTotals
@@ -666,6 +692,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		Retrying:                   make([]RetryView, 0, len(s.RetryAttempts)),
 		Failed:                     make([]IssueID, 0, len(s.failedOrder)),
 		Completed:                  make([]IssueID, 0, len(s.completedOrder)),
+		FailedSuppressedCount:      len(s.Failed),
 		CumulativeCompletedTotal:   s.CumulativeCompletedTotal,
 		CumulativeFailedTotal:      s.CumulativeFailedTotal,
 		CodexTotals:                s.CodexTotals,

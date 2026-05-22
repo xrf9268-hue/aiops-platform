@@ -622,8 +622,15 @@ type apiStateCounts struct {
 	// totals across worker restarts and FIFO evictions, use
 	// completed_total. SPEC §13.7 §4.1.8.
 	Completed int `json:"completed"`
-	// Failed mirrors Completed: bounded recent-set size; see
-	// failed_total for the lifetime monotonic counter.
+	// Failed is the size of the dispatch-suppression set the
+	// orchestrator currently holds — i.e. the count of issues whose
+	// non-retryable failure still blocks redispatch. Unlike
+	// `completed`, this is NOT bounded by the recent-FIFO cap: the
+	// suppression set must keep entries until ReleaseFailedIfIssueChanged
+	// observes a tracker state/updated_at change, or the entry would
+	// spin every poll cycle. For the recent N IDs that /api/v1/state
+	// publishes under `failed`, see that array. For the lifetime
+	// monotonic counter, see `failed_total`.
 	Failed int `json:"failed"`
 	// CompletedTotal / FailedTotal are monotonic counters that count
 	// every observed Succeeded / NonRetryableFailed transition since
@@ -1034,7 +1041,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			Blocked:        len(view.Blocked),
 			Retrying:       len(view.Retrying),
 			Completed:      len(view.Completed),
-			Failed:         len(view.Failed),
+			Failed:         view.FailedSuppressedCount,
 			CompletedTotal: view.CumulativeCompletedTotal,
 			FailedTotal:    view.CumulativeFailedTotal,
 		},
