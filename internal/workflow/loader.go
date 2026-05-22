@@ -526,20 +526,35 @@ func LoadOptional(path string) (*Workflow, error) {
 	return nil, err
 }
 
+// splitFrontMatter peels the SPEC §5.2 YAML front-matter block off
+// the start of a workflow file. The opening fence is `---` followed
+// by a newline; the closing fence is a line that is **exactly**
+// `---` (with an optional CR before the LF) and nothing else. The
+// earlier substring-based scan would mis-match `---` lines that
+// appear inside YAML block scalars or quoted strings — see #231,
+// where `description: |` blocks legitimately contained a `---` line
+// and silently truncated the parsed Config.
+//
+// Returns (front, body). When no opening fence is present or no
+// closing fence can be found, returns ("", s) so the caller treats
+// the whole file as the prompt body.
 func splitFrontMatter(s string) (string, string) {
 	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
 		return "", s
 	}
-	trimmed := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
-	idx := strings.Index(trimmed, "\n---")
-	if idx < 0 {
-		return "", s
+	rest := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
+	lines := strings.SplitAfter(rest, "\n")
+	var front strings.Builder
+	for i, line := range lines {
+		// Strip only the line-ending (CR/LF) for the fence comparison.
+		// Trailing spaces, indentation, or any other content disqualify
+		// the line from being the closing fence.
+		if strings.TrimRight(line, "\r\n") == "---" {
+			return front.String(), strings.Join(lines[i+1:], "")
+		}
+		front.WriteString(line)
 	}
-	front := trimmed[:idx]
-	body := trimmed[idx+len("\n---"):]
-	body = strings.TrimPrefix(body, "\r\n")
-	body = strings.TrimPrefix(body, "\n")
-	return front, body
+	return "", s
 }
 
 func expandConfig(cfg *Config) error {

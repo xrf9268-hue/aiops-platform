@@ -333,3 +333,137 @@ Prompt body
 		t.Fatalf("tracker.base_url = %q, mixed-case env not resolved", got)
 	}
 }
+
+// TestSplitFrontMatter_LineAwareClosingFence pins the #231 contract.
+// The closing fence is a line that is exactly "---" (with optional
+// CR before the LF). A bare substring match is wrong because YAML
+// block scalars and quoted strings can legally contain a "---" line.
+//
+// Boundary-coverage rule for "must be exactly the three-character
+// sequence on a line":
+//   - "---" \n → accept (=N cap, exact)
+//   - "---" \r\n → accept (paired line-ending edge)
+//   - "----" \n → reject (=N+1, one extra char on the line)
+//   - "--- " \n → reject (trailing whitespace is not the fence)
+//   - "  ---" \n → reject (indented; not at column 0)
+//   - missing fence → unchanged "(empty, s)" contract
+func TestSplitFrontMatter_LineAwareClosingFence(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantFront string
+		wantBody  string
+	}{
+		{
+			name:      "lf_exact_fence",
+			input:     "---\nfoo: bar\n---\nbody\n",
+			wantFront: "foo: bar\n",
+			wantBody:  "body\n",
+		},
+		{
+			name:      "crlf_exact_fence",
+			input:     "---\r\nfoo: bar\r\n---\r\nbody\r\n",
+			wantFront: "foo: bar\r\n",
+			wantBody:  "body\r\n",
+		},
+		{
+			name: "block_scalar_with_inner_dashes_does_not_close",
+			input: "---\n" +
+				"description: |\n" +
+				"  Reference: see below.\n" +
+				"  ---\n" +
+				"  More notes.\n" +
+				"agent:\n" +
+				"  default: codex\n" +
+				"---\n" +
+				"prompt body\n",
+			wantFront: "description: |\n" +
+				"  Reference: see below.\n" +
+				"  ---\n" +
+				"  More notes.\n" +
+				"agent:\n" +
+				"  default: codex\n",
+			wantBody: "prompt body\n",
+		},
+		{
+			name:      "four_dashes_is_not_fence",
+			input:     "---\nfoo: bar\n----\nstill front\n---\nbody\n",
+			wantFront: "foo: bar\n----\nstill front\n",
+			wantBody:  "body\n",
+		},
+		{
+			name:      "trailing_space_is_not_fence",
+			input:     "---\nfoo: bar\n--- \nstill front\n---\nbody\n",
+			wantFront: "foo: bar\n--- \nstill front\n",
+			wantBody:  "body\n",
+		},
+		{
+			name:      "indented_dashes_are_not_fence",
+			input:     "---\nfoo: bar\n  ---\nstill front\n---\nbody\n",
+			wantFront: "foo: bar\n  ---\nstill front\n",
+			wantBody:  "body\n",
+		},
+		{
+			name:      "missing_closing_fence_returns_empty_front",
+			input:     "---\nfoo: bar\nno fence here\n",
+			wantFront: "",
+			wantBody:  "---\nfoo: bar\nno fence here\n",
+		},
+		{
+			name:      "no_opening_fence_returns_empty_front",
+			input:     "no fence at all\n",
+			wantFront: "",
+			wantBody:  "no fence at all\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			front, body := splitFrontMatter(tc.input)
+			if front != tc.wantFront {
+				t.Fatalf("front =\n%q\nwant\n%q", front, tc.wantFront)
+			}
+			if body != tc.wantBody {
+				t.Fatalf("body =\n%q\nwant\n%q", body, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestLoadAcceptsBlockScalarContainingDashes is the user-visible
+// regression: a workflow file whose front-matter block scalar
+// contains a "---" line must Load() cleanly and surface the values
+// past that line, not get truncated to a partial Config.
+func TestLoadAcceptsBlockScalarContainingDashes(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+description: |
+  Reference: see SPEC §5.2 for delimiter handling.
+  ---
+  See above for the fence-rule note.
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: linear
+  project_slug: example
+  api_key: $LINEAR_API_KEY_BLOCK_SCALAR_TEST
+agent:
+  default: codex
+---
+Prompt body across the inner --- line.
+`)
+	t.Setenv("LINEAR_API_KEY_BLOCK_SCALAR_TEST", "linear-secret")
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Agent.Default; got != "codex" {
+		t.Fatalf("agent.default = %q, want %q (front matter was truncated by inner --- line)", got, "codex")
+	}
+	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
+		t.Fatalf("tracker.api_key = %q, want %q", got, "linear-secret")
+	}
+	if !strings.Contains(wf.PromptTemplate, "Prompt body across the inner --- line.") {
+		t.Fatalf("prompt template missing expected body: %q", wf.PromptTemplate)
+	}
+}

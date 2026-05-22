@@ -108,6 +108,15 @@ func HasFrontMatterAt(path string) (bool, error) {
 	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
 		return false, nil
 	}
-	trimmed := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
-	return strings.Contains(trimmed, "\n---"), nil
+	rest := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
+	// Same line-aware scan as splitFrontMatter — see #231. A substring
+	// search would falsely match `---` that appears inside a YAML
+	// block scalar or quoted string, classifying a prompt-only file
+	// with such content as front-matter-bearing.
+	for _, line := range strings.SplitAfter(rest, "\n") {
+		if strings.TrimRight(line, "\r\n") == "---" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
