@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,6 +34,7 @@ type GitHubClient struct {
 	Logf    func(format string, args ...any)
 
 	paginationCapHits atomic.Int64
+	issueNumbers      sync.Map // map[string]int — global issue ID → repo issue number, populated by listing
 }
 
 type githubIssue struct {
@@ -147,6 +149,7 @@ func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label
 			if mapped.ID == "" {
 				continue
 			}
+			c.cacheIssueNumber(mapped.ID, issue.Number)
 			if _, ok := seen[mapped.ID]; ok {
 				continue
 			}
@@ -283,7 +286,7 @@ func mapGitHubIssue(issue githubIssue, mappedState string) (Issue, error) {
 	}
 	labels := make([]string, 0, len(issue.Labels))
 	for _, label := range issue.Labels {
-		if name := strings.TrimSpace(label.Name); name != "" {
+		if name := strings.ToLower(strings.TrimSpace(label.Name)); name != "" {
 			labels = append(labels, name)
 		}
 	}
@@ -391,4 +394,147 @@ func (c *GitHubClient) recordPaginationCapHit(label string) {
 	if c.Logf != nil {
 		c.Logf("github pagination exceeded %d pages for label/state %q; aborting this tracker poll to avoid acting on a truncated result set", githubMaxIssuePages, label)
 	}
+}
+
+// FetchIssueStatesByIDs implements SPEC §11.1 for the GitHub adapter. GitHub's
+// REST API has no `[ID!]` bulk endpoint, so this iterates one
+// `GET /repos/{owner}/{repo}/issues/{number}` per ID using the repo issue
+// number cached during prior list calls. Per-ID 404/410 responses are treated
+// as "issue removed" and silently skipped so a single deleted issue does not
+// abort reconciliation for the rest of the running set. Other HTTP errors
+// abort the whole call so a transient outage cannot silently degrade per-tick
+// state refresh.
+//
+// IDs without a cached number (e.g. issues we have never listed in this
+// process) are skipped because there is no way to address them by global
+// numeric ID via the REST API. They will be cached on the next list cycle.
+//
+// State derivation: if any label on the issue matches a state configured in
+// active_states / terminal_states / inactive_states (case-insensitive), the
+// matched label is returned (lowercased, matching mapGitHubIssue's
+// normalization). Otherwise the issue's open/closed state is returned. This
+// matches the GitHub convention where workflow position is encoded as labels.
+func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	if strings.TrimSpace(c.Token) == "" {
+		return nil, fmt.Errorf("GitHub tracker api_key is required")
+	}
+	if len(issueIDs) == 0 {
+		return map[string]string{}, nil
+	}
+	if strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Repo) == "" {
+		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
+	}
+	configuredStates := githubConfiguredStates(c.Config)
+	states := make(map[string]string, len(issueIDs))
+	seen := map[string]struct{}{}
+	for _, issueID := range issueIDs {
+		issueID = strings.TrimSpace(issueID)
+		if issueID == "" {
+			continue
+		}
+		if _, ok := seen[issueID]; ok {
+			continue
+		}
+		seen[issueID] = struct{}{}
+		issueNumber, ok := c.cachedIssueNumber(issueID)
+		if !ok {
+			continue
+		}
+		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		c.cacheIssueNumber(strconv.FormatInt(issue.ID, 10), issue.Number)
+		state := githubResolveState(issue, configuredStates)
+		if state == "" {
+			continue
+		}
+		states[issueID] = state
+	}
+	return states, nil
+}
+
+func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (githubIssue, bool, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return githubIssue{}, false, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	client := c.HTTP
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return githubIssue{}, false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		return githubIssue{}, false, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: %s", issueNumber, resp.Status)
+	}
+	var issue githubIssue
+	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
+		return githubIssue{}, false, err
+	}
+	return issue, true, nil
+}
+
+func (c *GitHubClient) cacheIssueNumber(issueID string, issueNumber int) {
+	if strings.TrimSpace(issueID) == "" || issueNumber <= 0 {
+		return
+	}
+	c.issueNumbers.Store(issueID, issueNumber)
+}
+
+func (c *GitHubClient) cachedIssueNumber(issueID string) (int, bool) {
+	got, ok := c.issueNumbers.Load(issueID)
+	if !ok {
+		return 0, false
+	}
+	issueNumber, ok := got.(int)
+	return issueNumber, ok && issueNumber > 0
+}
+
+func githubConfiguredStates(cfg workflow.TrackerConfig) []string {
+	out := make([]string, 0, len(cfg.ActiveStates)+len(cfg.TerminalStates)+len(cfg.InactiveStates))
+	seen := map[string]struct{}{}
+	for _, group := range [][]string{cfg.ActiveStates, cfg.TerminalStates, cfg.InactiveStates} {
+		for _, state := range group {
+			state = strings.ToLower(strings.TrimSpace(state))
+			if state == "" {
+				continue
+			}
+			if _, ok := seen[state]; ok {
+				continue
+			}
+			seen[state] = struct{}{}
+			out = append(out, state)
+		}
+	}
+	return out
+}
+
+func githubResolveState(issue githubIssue, configured []string) string {
+	labelSet := make(map[string]struct{}, len(issue.Labels))
+	for _, label := range issue.Labels {
+		name := strings.ToLower(strings.TrimSpace(label.Name))
+		if name != "" {
+			labelSet[name] = struct{}{}
+		}
+	}
+	for _, state := range configured {
+		if _, ok := labelSet[state]; ok {
+			return state
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(issue.State))
 }
