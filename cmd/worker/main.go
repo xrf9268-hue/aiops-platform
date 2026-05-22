@@ -643,24 +643,26 @@ type apiStateCounts struct {
 }
 
 type apiStateRunning struct {
-	IssueID       orchestrator.IssueID `json:"issue_id"`
-	Identifier    string               `json:"issue_identifier,omitempty"`
-	StartedAt     *time.Time           `json:"started_at,omitempty"`
-	RetryAttempt  *int                 `json:"retry_attempt,omitempty"`
-	WorkspacePath string               `json:"workspace_path,omitempty"`
-	LastCodexAt   *time.Time           `json:"last_codex_at,omitempty"`
+	IssueID           orchestrator.IssueID `json:"issue_id"`
+	Identifier        string               `json:"issue_identifier,omitempty"`
+	StartedAt         *time.Time           `json:"started_at,omitempty"`
+	RetryAttempt      *int                 `json:"retry_attempt,omitempty"`
+	WorkspacePath     string               `json:"workspace_path,omitempty"`
+	LastCodexAt       *time.Time           `json:"last_codex_at,omitempty"`
+	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
 }
 
 type apiStateBlocked struct {
-	IssueID       orchestrator.IssueID `json:"issue_id"`
-	Identifier    string               `json:"issue_identifier,omitempty"`
-	State         string               `json:"state,omitempty"`
-	BlockedAt     *time.Time           `json:"blocked_at,omitempty"`
-	WorkspacePath string               `json:"workspace_path,omitempty"`
-	SessionID     string               `json:"session_id,omitempty"`
-	LastCodexAt   *time.Time           `json:"last_codex_at,omitempty"`
-	Method        string               `json:"method,omitempty"`
-	Error         string               `json:"error,omitempty"`
+	IssueID           orchestrator.IssueID `json:"issue_id"`
+	Identifier        string               `json:"issue_identifier,omitempty"`
+	State             string               `json:"state,omitempty"`
+	BlockedAt         *time.Time           `json:"blocked_at,omitempty"`
+	WorkspacePath     string               `json:"workspace_path,omitempty"`
+	SessionID         string               `json:"session_id,omitempty"`
+	LastCodexAt       *time.Time           `json:"last_codex_at,omitempty"`
+	Method            string               `json:"method,omitempty"`
+	Error             string               `json:"error,omitempty"`
+	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
 }
 
 type apiStateRetry struct {
@@ -924,12 +926,13 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		lastCodexAt = &v
 	}
 	return apiStateRunning{
-		IssueID:       row.IssueID,
-		Identifier:    row.Identifier,
-		StartedAt:     startedAt,
-		RetryAttempt:  copyIntPointer(row.RetryAttempt),
-		WorkspacePath: row.WorkspacePath,
-		LastCodexAt:   lastCodexAt,
+		IssueID:           row.IssueID,
+		Identifier:        row.Identifier,
+		StartedAt:         startedAt,
+		RetryAttempt:      copyIntPointer(row.RetryAttempt),
+		WorkspacePath:     row.WorkspacePath,
+		LastCodexAt:       lastCodexAt,
+		CodexAppServerPID: row.CodexAppServerPID,
 	}
 }
 
@@ -998,15 +1001,16 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			lastCodexAt = &v
 		}
 		blocked = append(blocked, apiStateBlocked{
-			IssueID:       row.IssueID,
-			Identifier:    row.Identifier,
-			State:         row.State,
-			BlockedAt:     blockedAt,
-			WorkspacePath: row.WorkspacePath,
-			SessionID:     row.SessionID,
-			LastCodexAt:   lastCodexAt,
-			Method:        row.Method,
-			Error:         row.Error,
+			IssueID:           row.IssueID,
+			Identifier:        row.Identifier,
+			State:             row.State,
+			BlockedAt:         blockedAt,
+			WorkspacePath:     row.WorkspacePath,
+			SessionID:         row.SessionID,
+			LastCodexAt:       lastCodexAt,
+			Method:            row.Method,
+			Error:             row.Error,
+			CodexAppServerPID: row.CodexAppServerPID,
 		})
 	}
 	sort.Slice(blocked, func(i, j int) bool {

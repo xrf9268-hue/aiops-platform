@@ -213,6 +213,13 @@ for line in sys.stdin:
 	if got := runtimeEventField(t, res.RuntimeEvents[0], "turn_id"); got != "turn-1" {
 		t.Fatalf("session_started turn_id = %#v, want turn-1", got)
 	}
+	pid := runtimeEventField(t, res.RuntimeEvents[0], "codex_app_server_pid")
+	if pid == nil {
+		t.Fatalf("session_started missing codex_app_server_pid; payload=%#v", res.RuntimeEvents[0].Payload)
+	}
+	if n, _ := pid.(int); n <= 0 {
+		t.Fatalf("session_started codex_app_server_pid = %#v, want positive int (real codex subprocess PID)", pid)
+	}
 	if res.RuntimeEvents[1].Event != task.EventNotification {
 		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventNotification)
 	}
@@ -1085,12 +1092,38 @@ func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchang
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.Command = "codex exec"
 
-	cmd, err := buildCodexAppServerCmd(context.Background(), in)
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
 	if err != nil {
 		t.Fatalf("buildCodexAppServerCmd: %v", err)
 	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false for default codex command, want true")
+	}
 	if len(cmd.Args) < 2 || cmd.Args[0] != "codex" || cmd.Args[1] != "app-server" {
 		t.Fatalf("cmd.Args = %#v, want codex app-server", cmd.Args)
+	}
+}
+
+// TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the
+// directCodexExec flag's negative case: when `codex.command` is anything other
+// than a `codex ...` invocation, the cmd runs through `sh -lc`. The runner
+// uses this signal to suppress codex_app_server_pid emission, since
+// cmd.Process.Pid would be the shell wrapper rather than the actual codex
+// process.
+func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = "/usr/local/bin/my-codex-wrapper --foo"
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if directExec {
+		t.Fatalf("directCodexExec = true for custom command %q, want false (sh -lc wrapper)", in.Workflow.Config.Codex.Command)
+	}
+	if len(cmd.Args) == 0 || cmd.Args[0] != "sh" {
+		t.Fatalf("cmd.Args = %#v, want sh -lc wrapper", cmd.Args)
 	}
 }
 

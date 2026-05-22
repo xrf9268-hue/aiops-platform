@@ -873,6 +873,38 @@ func TestRuntimeEventForwardingEmitterPreservesBaseEmitterAndUpdatesOrchestrator
 	}
 }
 
+// TestRecordRuntimeEventPropagatesCodexAppServerPID pins the SPEC §4.1.6 /
+// §10.4 round-trip: a `session_started` event carrying
+// `codex_app_server_pid` populates RunningView.CodexAppServerPID so
+// `/api/v1/state` can surface it.
+func TestRecordRuntimeEventPropagatesCodexAppServerPID(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-PID")
+	defer cancel()
+
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventSessionStarted,
+		Payload: map[string]any{
+			"session_id":           "thread-1-turn-1",
+			"thread_id":            "thread-1",
+			"turn_id":              "turn-1",
+			"codex_app_server_pid": 42424,
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].CodexAppServerPID; got != 42424 {
+		t.Fatalf("RunningView.CodexAppServerPID = %d, want 42424 (session_started payload)", got)
+	}
+}
+
 func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
 	o, issueID, cancel := startRuntimeEventActor(t, "ENG-USAGE")
 	defer cancel()

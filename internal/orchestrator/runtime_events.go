@@ -99,6 +99,9 @@ func (s *OrchestratorState) recordSessionFields(run *RunningEntry, event task.Ru
 	if turnID, ok := stringField(payload, "turn_id"); ok {
 		run.Session.TurnID = turnID
 	}
+	if pid, ok := intField(payload, "codex_app_server_pid"); ok && pid > 0 {
+		run.Session.CodexAppServerPID = pid
+	}
 	if event.Event == task.EventTurnCompleted {
 		run.Session.TurnCount++
 	}
@@ -244,6 +247,17 @@ func mapAtPath(m map[string]any, path []string) map[string]any {
 func stringField(m map[string]any, key string) (string, bool) {
 	v, ok := m[key].(string)
 	return v, ok && v != ""
+}
+
+// intField returns a positive integer from a payload key, accepting Go int,
+// int64, or JSON-decoded float64. Returns (0, false) when the value is
+// missing, non-numeric, or non-positive.
+func intField(m map[string]any, key string) (int, bool) {
+	n, ok := integerLike(m[key])
+	if !ok || n <= 0 {
+		return 0, false
+	}
+	return int(n), true
 }
 
 func numberField(m map[string]any, keys ...string) (int64, bool) {

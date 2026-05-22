@@ -39,7 +39,7 @@ func TestRunnerSentinelsCoverSpecCategories(t *testing.T) {
 func TestCodexAppServerRunnerSurfacesRunnerErrorCategories(t *testing.T) {
 	t.Run("codex not found", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		_, err := buildCodexAppServerCmd(context.Background(), appServerInput(t.TempDir()))
+		_, _, err := buildCodexAppServerCmd(context.Background(), appServerInput(t.TempDir()))
 		if !errors.Is(err, ErrCodexNotFound) {
 			t.Fatalf("buildCodexAppServerCmd error = %T %[1]v, want ErrCodexNotFound", err)
 		}
