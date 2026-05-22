@@ -78,7 +78,7 @@ without calling any external model.
 Option A: from source.
 
 ```bash
-export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
+export AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
 export WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear
