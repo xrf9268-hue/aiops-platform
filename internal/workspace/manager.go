@@ -237,16 +237,21 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 }
 
 // RunWorkspaceHook executes the configured shell commands for a lifecycle hook
-// in workdir, in order, using the shared workspace hook timeout.
-func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int) ([]HookResult, error) {
+// in workdir, in order, using the shared workspace hook timeout. Hook
+// subprocesses receive an explicit env built from the workspace baseline
+// allowlist plus envPassthrough — secrets in the worker's environment that
+// are not in either list are dropped. See
+// docs/design/hook-verify-env-allowlist.md (#227).
+func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) ([]HookResult, error) {
 	timeoutMs = EffectiveWorkspaceHookTimeoutMs(timeoutMs)
+	env := subprocessEnv(envPassthrough)
 	results := make([]HookResult, 0, len(hook.Commands))
 	for _, raw := range hook.Commands {
 		command := strings.TrimSpace(raw)
 		if command == "" {
 			continue
 		}
-		res := runWorkspaceHookCommand(ctx, workdir, name, command, timeoutMs)
+		res := runWorkspaceHookCommand(ctx, workdir, name, command, timeoutMs, env)
 		results = append(results, res)
 		if res.Err != nil {
 			return results, &HookError{Name: name, Results: results, Err: res.Err}
@@ -276,7 +281,7 @@ func workspaceHookWaitDelay(timeoutMs int) time.Duration {
 	return grace
 }
 
-func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName, command string, timeoutMs int) HookResult {
+func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName, command string, timeoutMs int, env []string) HookResult {
 	start := time.Now()
 	runCtx := ctx
 	cancel := func() {}
@@ -288,6 +293,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 
 	cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
 	cmd.Dir = workdir
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
@@ -356,6 +362,7 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		runCtx, cancel = context.WithTimeout(ctx, wf.Verify.Timeout)
 		defer cancel()
 	}
+	env := subprocessEnv(wf.Verify.EnvPassthrough)
 
 	var (
 		results  []VerifyResult
@@ -376,6 +383,7 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		buf := &cappedBuffer{Cap: VerifyOutputCap}
 		cmd := exec.CommandContext(runCtx, "sh", "-lc", command)
 		cmd.Dir = workdir
+		cmd.Env = env
 		cmd.Stdout = buf
 		cmd.Stderr = buf
 		// Run each verify command in its own process group so a

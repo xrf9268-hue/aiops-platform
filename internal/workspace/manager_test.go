@@ -423,7 +423,7 @@ func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 		"printf never > should-not-exist",
 	}}
 
-	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on non-zero exit")
 	}
@@ -453,7 +453,7 @@ func TestRunWorkspaceHookTimeoutStopsCommand(t *testing.T) {
 	hook := workflow.WorkspaceHook{Commands: []string{"sleep 2"}}
 
 	start := time.Now()
-	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on timeout")
@@ -483,7 +483,7 @@ func TestRunWorkspaceHookTimeoutDoesNotWaitForeverOnEscapedDescendantOutput(t *t
 	hook := workflow.WorkspaceHook{Commands: []string{"setsid sh -c 'while true; do printf x; sleep 1; done' & sleep 2"}}
 
 	start := time.Now()
-	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on timeout")
@@ -744,5 +744,120 @@ func mustGit(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
+func TestRunWorkspaceHookEnvDropsNonAllowlistedSecretsByDefault(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "lin_secret_must_not_leak_xx")
+	t.Setenv("GITHUB_TOKEN", "ghp_secret_must_not_leak_xx")
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		`printf '<%s><%s><%s>' "$LINEAR_API_KEY" "$GITHUB_TOKEN" "$PATH"`,
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	out := results[0].Output
+	if strings.Contains(out, "lin_secret_must_not_leak_xx") {
+		t.Fatalf("LINEAR_API_KEY leaked into hook env: %q", out)
+	}
+	if strings.Contains(out, "ghp_secret_must_not_leak_xx") {
+		t.Fatalf("GITHUB_TOKEN leaked into hook env: %q", out)
+	}
+	if !strings.Contains(out, "<><>") {
+		t.Fatalf("hook output = %q, want empty secret slots <><>", out)
+	}
+	// PATH should still flow through the baseline allowlist so the shell
+	// can resolve `sh`, `printf`, etc.
+	if strings.Contains(out, "<><><>") {
+		t.Fatalf("PATH unexpectedly empty in hook env: %q", out)
+	}
+}
+
+func TestRunWorkspaceHookEnvPassthroughLetsNamedVarThrough(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "lin_secret_must_not_leak_yy")
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		`printf '<%s><%s>' "$LINEAR_API_KEY" "$EXTRA_BUILD_VAR"`,
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, []string{"EXTRA_BUILD_VAR"})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	out := results[0].Output
+	if strings.Contains(out, "lin_secret_must_not_leak_yy") {
+		t.Fatalf("LINEAR_API_KEY leaked despite not being in passthrough: %q", out)
+	}
+	if !strings.Contains(out, "let-me-in") {
+		t.Fatalf("EXTRA_BUILD_VAR did not pass through: %q", out)
+	}
+}
+
+func TestRunVerifyEnvDropsNonAllowlistedSecretsByDefault(t *testing.T) {
+	t.Setenv("LINEAR_API_KEY", "lin_secret_must_not_leak_zz")
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
+		`printf '<%s>' "$LINEAR_API_KEY"`,
+	}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err != nil {
+		t.Fatalf("RunVerify: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if strings.Contains(results[0].Output, "lin_secret_must_not_leak_zz") {
+		t.Fatalf("LINEAR_API_KEY leaked into verify env: %q", results[0].Output)
+	}
+	if results[0].Output != "<>" {
+		t.Fatalf("verify output = %q, want <>", results[0].Output)
+	}
+}
+
+func TestRunVerifyEnvPassthroughLetsNamedVarThrough(t *testing.T) {
+	t.Setenv("CARGO_HOME", "/tmp/cargo-home-227")
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{
+		Commands:       []string{`printf '<%s>' "$CARGO_HOME"`},
+		EnvPassthrough: []string{"CARGO_HOME"},
+	}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err != nil {
+		t.Fatalf("RunVerify: %v", err)
+	}
+	if !strings.Contains(results[0].Output, "/tmp/cargo-home-227") {
+		t.Fatalf("CARGO_HOME did not pass through: %q", results[0].Output)
+	}
+}
+
+func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
+	t.Setenv("DEFINITELY_SET_227", "v1")
+	os.Unsetenv("DEFINITELY_UNSET_227")
+
+	env := subprocessEnv([]string{"DEFINITELY_SET_227", "DEFINITELY_UNSET_227", "DEFINITELY_SET_227"})
+
+	var sawSet, sawUnsetMarker int
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "DEFINITELY_SET_227=") {
+			sawSet++
+		}
+		if strings.HasPrefix(kv, "DEFINITELY_UNSET_227") {
+			sawUnsetMarker++
+		}
+	}
+	if sawSet != 1 {
+		t.Fatalf("DEFINITELY_SET_227 appeared %d times, want 1 (dedup)", sawSet)
+	}
+	if sawUnsetMarker != 0 {
+		t.Fatalf("unset passthrough name leaked into env: %v", env)
 	}
 }

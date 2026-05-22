@@ -148,7 +148,7 @@ func emitHookResults(ctx context.Context, ev EventEmitter, taskID string, result
 	}
 }
 
-func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int) error {
+func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) error {
 	if len(hook.Commands) == 0 {
 		return nil
 	}
@@ -157,13 +157,13 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir stri
 		"commands":   len(hook.Commands),
 		"timeout_ms": timeoutMs,
 	})
-	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs)
+	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs, envPassthrough)
 	emitHookResults(ctx, ev, taskID, results)
 	return err
 }
 
-func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, reason string) {
-	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs); err != nil {
+func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
+	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
 		log.Printf("task %s: before_remove hook failed after %s hook failure: %v", taskID, reason, err)
 	}
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
@@ -209,8 +209,8 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
 		}
 	}
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
-		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, "after_create")
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -295,7 +295,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs); err != nil {
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, "before_run hook failed: "+ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
@@ -303,14 +303,14 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
 		emitTaskPhase(from, to)
 	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
-		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {
+		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
 			log.Printf("task %s: after_run hook failed after runner error: %v", t.ID, err)
 		}
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs); err != nil {
+	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
 		log.Printf("task %s: after_run hook failed: %v", t.ID, err)
 	}
 

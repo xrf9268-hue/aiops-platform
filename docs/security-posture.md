@@ -127,6 +127,17 @@ The current Go implementation provides these safety controls:
 - operator-visible blocked state for Codex input-required and MCP elicitation
   requests, so non-interactive runs stop and remain claimed instead of burning
   retries silently;
+- allow-listed environment for hook and verify subprocesses: by default
+  hook scripts (`after_create`, `before_run`, `after_run`,
+  `before_remove`) and verify commands run with only a small POSIX
+  baseline env (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`,
+  `TZ`, `TERM`). Tracker tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`,
+  `GITEA_TOKEN`), `SSH_AUTH_SOCK`, and any other secret in the worker's
+  `.env` are excluded — a malicious or buggy WORKFLOW.md cannot `env >
+  /tmp/dump` and exfiltrate. Operators opt specific extra vars back in
+  per workflow with `hooks.env_passthrough: [VAR_NAME, ...]` and
+  `verify.env_passthrough: [VAR_NAME, ...]`. See
+  [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
 - allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
   `turn/completed` protocol payloads: returned error strings and
   `runtime_events` JSON payloads carry only the documented

@@ -245,6 +245,7 @@ func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker
 		ReconcileTaskID:     "reconcile-startup",
 		BeforeRemoveHook:    hooks.BeforeRemove,
 		HookTimeoutMillis:   hooks.TimeoutMs,
+		HookEnvPassthrough:  hooks.EnvPassthrough,
 		ActiveWorkspaceKeys: worker.ActiveWorkspaceKeysForWorkflow(cfg),
 	}
 }
