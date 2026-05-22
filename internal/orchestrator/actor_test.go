@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2098,4 +2099,178 @@ func idForIndex(i int) string {
 		i /= 10
 	}
 	return string(append(out, buf...))
+}
+
+// fakeCandidateLister is a stub ActiveIssueLister for SPEC §16.6 retry-fire
+// tests. Tests configure issues and err, then assert the retryFireOp branch.
+type fakeCandidateLister struct {
+	mu     sync.Mutex
+	issues []tracker.Issue
+	err    error
+	calls  int
+}
+
+func (f *fakeCandidateLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	out := make([]tracker.Issue, len(f.issues))
+	copy(out, f.issues)
+	return out, f.err
+}
+
+func (f *fakeCandidateLister) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+// TestRetryFire_ReleasesClaimWhenIssueAbsentFromCandidates is the SPEC §16.6
+// step 3 / step 5 conformance check: when the candidate fetch returns
+// successfully but the issue isn't present (either deleted or no longer in an
+// active state), the retry releases the claim instead of re-dispatching.
+func TestRetryFire_ReleasesClaimWhenIssueAbsentFromCandidates(t *testing.T) {
+	disp := &fakeDispatcher{}
+	lister := &fakeCandidateLister{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-GONE", Identifier: "ENG-GONE", Title: "absent", State: "AI Ready"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 2, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 queued retry", len(view.Retrying))
+	}
+
+	// Lister returns no issues: SPEC §16.6 step 3 — release the claim.
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 2,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 0
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot after fire: %v", err)
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; absent issue must not be re-dispatched", got)
+	}
+	if len(v.Retrying) != 0 {
+		t.Fatalf("retrying view after absent fetch = %+v, want claim released", v.Retrying)
+	}
+	if lister.callCount() == 0 {
+		t.Fatal("candidate lister was not consulted on retry fire")
+	}
+}
+
+// TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError is the SPEC §16.6
+// step 1 alt conformance check: when the candidate fetch fails, the retry is
+// rescheduled with a typed "retry poll failed" error so the next backoff
+// window can try the fetch again — the claim must not be released.
+func TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError(t *testing.T) {
+	disp := &fakeDispatcher{}
+	lister := &fakeCandidateLister{err: errors.New("tracker unreachable")}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-FETCH-FAIL", Identifier: "ENG-FETCH-FAIL", Title: "fetch err", State: "AI Ready"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 && v.Retrying[0].Attempt == 2
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; fetch failure must not dispatch", got)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 rescheduled retry", len(v.Retrying))
+	}
+	got := v.Retrying[0]
+	if got.Attempt != 2 {
+		t.Fatalf("rescheduled attempt = %d, want attempt+1 = 2", got.Attempt)
+	}
+	if !strings.Contains(got.Error, "retry poll failed") {
+		t.Fatalf("rescheduled error = %q, want it to contain \"retry poll failed\"", got.Error)
+	}
+	if !strings.Contains(got.Error, "tracker unreachable") {
+		t.Fatalf("rescheduled error = %q, want the underlying fetch error wrapped in", got.Error)
+	}
+}
+
+// TestRetryFire_DispatchesWhenCandidateFetchReturnsIssue is the SPEC §16.6
+// step 4 conformance check: when the candidate fetch finds the issue, the
+// retry consumes its entry and dispatches a worker — and the dispatched
+// issue carries the fresh tracker state, not the dispatch-time snapshot.
+func TestRetryFire_DispatchesWhenCandidateFetchReturnsIssue(t *testing.T) {
+	disp := &fakeDispatcher{}
+	freshState := tracker.Issue{ID: "ENG-FOUND", Identifier: "ENG-FOUND", Title: "refreshed", State: "Rework"}
+	lister := &fakeCandidateLister{issues: []tracker.Issue{freshState}}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	stale := freshState
+	stale.State = "AI Ready"
+	if err := o.ScheduleRetry(context.Background(), stale, stale.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(stale.ID),
+		issue:   stale,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool { return disp.count() == 1 }, 2*time.Second)
+	if got := disp.issueAt(0).State; got != "Rework" {
+		t.Fatalf("dispatched issue state = %q, want Rework from refreshed candidate fetch", got)
+	}
 }

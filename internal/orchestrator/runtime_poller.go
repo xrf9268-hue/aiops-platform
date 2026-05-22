@@ -107,12 +107,20 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	p.tracker = trackerClients[0]
 	p.trackers = trackerClients
 	p.lastSnapshotKey = key
-	poller := NewPollerWithReconciliation(multiIssueStateLister{trackers: trackerClients}, p.orchestrator, snap.Reconciliation)
+	multiLister := multiIssueStateLister{trackers: trackerClients}
+	poller := NewPollerWithReconciliation(multiLister, p.orchestrator, snap.Reconciliation)
 	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
 		poller.routing = &snap.Workflow.Config
 	}
 	preflightCfg := snap.Workflow.Config
 	poller.preflight = &preflightCfg
+	// Feed the orchestrator the same lister the poll loop uses so a
+	// fired failure-retry timer can run the SPEC §16.6 candidate fetch
+	// against the same active-state vocabulary.
+	p.orchestrator.SetCandidateLister(activeIssueListerFromStates{
+		tracker: multiLister,
+		states:  snap.Reconciliation.ActiveStates,
+	})
 	return poller, nil
 }
 

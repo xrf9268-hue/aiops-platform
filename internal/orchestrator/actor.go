@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -123,6 +124,15 @@ type Deps struct {
 	Scheduler         Scheduler
 	MaxFailureRetries *int
 	MaxTurns          *int
+	// CandidateLister, when set, enables the SPEC §16.6 retry-fire
+	// candidate-fetch step. A fired failure-retry timer fetches the
+	// active candidate list, confirms the issue is still present,
+	// releases the claim when it is not, and surfaces a typed
+	// "retry poll failed" reschedule when the fetch itself fails.
+	// Production wires this from the same multi-tracker lister the
+	// poll loop uses; when nil, retry fires dispatch directly from
+	// the cached entry.Issue (legacy behavior, kept for unit tests).
+	CandidateLister ActiveIssueLister
 }
 
 // Orchestrator is the SPEC §3.1 / §7.4 "single authority" that owns
@@ -143,6 +153,13 @@ type Orchestrator struct {
 	// the same setting before they return.
 	maxTurns  int
 	retryWake chan struct{}
+
+	// candidateLister supplies the SPEC §16.6 candidate fetch that a
+	// fired failure-retry timer consults before re-dispatching. The
+	// field is read on every retry fire and written when the runtime
+	// poller rebuilds its tracker set, so a mutex guards the swap.
+	candidateListerMu sync.Mutex
+	candidateLister   ActiveIssueLister
 
 	// runCtx is captured by Run so followup goroutines can cancel
 	// their work when the actor stops. Set once at the top of Run
@@ -178,6 +195,7 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 		maxFailureRetries: maxFailureRetries,
 		maxTurns:          maxTurns,
 		retryWake:         make(chan struct{}, 1),
+		candidateLister:   deps.CandidateLister,
 		started:           make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
@@ -250,6 +268,26 @@ func (o *Orchestrator) retryWakeCh() <-chan struct{} {
 
 func (o *Orchestrator) wakeRetryPollLoop() {
 	_ = o.queuePollWake()
+}
+
+// SetCandidateLister installs (or swaps) the lister the actor consults on a
+// fired failure-retry timer. Safe to call before or after Run.
+func (o *Orchestrator) SetCandidateLister(l ActiveIssueLister) {
+	if o == nil {
+		return
+	}
+	o.candidateListerMu.Lock()
+	o.candidateLister = l
+	o.candidateListerMu.Unlock()
+}
+
+func (o *Orchestrator) currentCandidateLister() ActiveIssueLister {
+	if o == nil {
+		return nil
+	}
+	o.candidateListerMu.Lock()
+	defer o.candidateListerMu.Unlock()
+	return o.candidateLister
 }
 
 func (o *Orchestrator) queuePollWake() bool {
@@ -1139,68 +1177,189 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		o := r.o
 		return func() { o.wakeRetryPollLoop() }
 	}
-	// Use entry.Issue rather than the timer-captured r.issue: reconciliation
-	// may have refreshed the tracker state while the retry was queued, and
-	// both the per-state capacity gate and the spawned worker must see the
-	// live state.
+	// SPEC §16.6 on_retry_timer: the fired failure-retry timer must (1)
+	// fetch active candidates, (2) re-schedule with "retry poll failed"
+	// on fetch error, (3) release the claim if the issue is absent, and
+	// only then (4/5) dispatch from the refreshed tracker state. When a
+	// CandidateLister is wired (production via RuntimePoller) we defer
+	// the I/O to a followup; without one we fall back to direct dispatch
+	// from the cached entry.Issue so existing unit tests keep working.
+	o := r.o
+	if lister := o.currentCandidateLister(); lister != nil {
+		entry.Timer = nil
+		id := r.id
+		attempt := r.attempt
+		return func() {
+			ctx := o.runCtx
+			issues, fetchErr := lister.ListActiveIssues(ctx)
+			found := findIssueByID(issues, id)
+			if fetchErr != nil && found == nil {
+				// Either the whole fetch failed, or a multi-tracker partial
+				// failure happened on the tracker that owns this issue. We
+				// can't tell "absent" from "tracker down" — treat as fetch
+				// failure per SPEC §16.6 and reschedule with the typed error.
+				_ = o.submit(ctx, &retryPollFailedOp{
+					o:        o,
+					id:       id,
+					attempt:  attempt,
+					fetchErr: fetchErr,
+				})
+				return
+			}
+			_ = o.submit(ctx, &retryFireAfterFetchOp{
+				o:       o,
+				id:      id,
+				attempt: attempt,
+				kind:    RetryKindFailure,
+				found:   found,
+			})
+		}
+	}
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.kind, o)
+}
+
+// retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
+// honor global + per-state capacity gates, then either spawn or re-arm a
+// short capacity-recheck timer. Shared between the legacy direct-dispatch
+// path (no CandidateLister) and the SPEC §16.6 post-fetch path.
+func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, kind RetryKind, o *Orchestrator) func() {
+	// Use entry.Issue rather than any timer-captured snapshot: reconciliation
+	// (and the SPEC §16.6 candidate fetch) may have refreshed the tracker
+	// state, and both the per-state capacity gate and the spawned worker
+	// must see the live state.
 	issue := entry.Issue
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Leave the retry queued and arm a short follow-up timer so the issue
 		// is retried after capacity can free instead of spawning over the cap.
-		if entry.Timer != nil {
-			entry.Timer.Stop()
-		}
-		o := r.o
-		id := r.id
-		attempt := r.attempt
-		kind := r.kind
-		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
-		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
-			defer recoverPanic("orchestrator.retry_capacity_timer")
-			_ = o.submit(o.runCtx, &retryFireOp{
-				o:       o,
-				id:      id,
-				issue:   issue,
-				attempt: attempt,
-				kind:    kind,
-			})
-		})
-		return nil
+		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_capacity_timer")
 	}
 	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Leave the retry
 		// queued and arm a short follow-up timer so noisy states cannot exceed
 		// max_concurrent_agents_by_state while other states are running.
-		if entry.Timer != nil {
-			entry.Timer.Stop()
-		}
-		o := r.o
-		id := r.id
-		attempt := r.attempt
-		kind := r.kind
-		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
-		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
-			defer recoverPanic("orchestrator.retry_state_capacity_timer")
-			_ = o.submit(o.runCtx, &retryFireOp{
-				o:       o,
-				id:      id,
-				issue:   issue,
-				attempt: attempt,
-				kind:    kind,
-			})
-		})
-		return nil
+		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_state_capacity_timer")
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
 	// would let a concurrent tick race in.
-	delete(st.RetryAttempts, r.id)
-	o := r.o
-	attempt := r.attempt
+	delete(st.RetryAttempts, id)
 	return func() {
-		o.spawn(r.id, issue, &attempt, 0)
+		a := attempt
+		o.spawn(id, issue, &a, 0)
 	}
+}
+
+func rearmRetryCapacityRecheck(entry *RetryEntry, id IssueID, issue tracker.Issue, attempt int, kind RetryKind, o *Orchestrator, site string) func() {
+	if entry.Timer != nil {
+		entry.Timer.Stop()
+	}
+	entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
+	entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+		defer recoverPanic(site)
+		_ = o.submit(o.runCtx, &retryFireOp{
+			o:       o,
+			id:      id,
+			issue:   issue,
+			attempt: attempt,
+			kind:    kind,
+		})
+	})
+	return nil
+}
+
+func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {
+	for i := range issues {
+		if IssueID(issues[i].ID) == id {
+			out := issues[i]
+			return &out
+		}
+	}
+	return nil
+}
+
+// retryPollFailedOp implements SPEC §16.6 step 1 alt: when a fired
+// failure-retry timer's candidate fetch fails, reschedule the same
+// retry (attempt+1) with a typed "retry poll failed" error so the
+// next backoff window can try the fetch again.
+type retryPollFailedOp struct {
+	o        *Orchestrator
+	id       IssueID
+	attempt  int
+	fetchErr error
+}
+
+func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.RetryAttempts[r.id]
+	if !ok {
+		// Reconciliation released the claim between fetch and apply.
+		return nil
+	}
+	if entry.Attempt != r.attempt || entry.Kind != RetryKindFailure {
+		// Replaced by a newer ScheduleRetry; the newer entry owns the
+		// re-dispatch.
+		return nil
+	}
+	issue := entry.Issue
+	identifier := entry.Identifier
+	nextAttempt := r.attempt + 1
+	runErr := "retry poll failed"
+	if r.fetchErr != nil {
+		runErr = "retry poll failed: " + r.fetchErr.Error()
+	}
+	o := r.o
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    r.id,
+		Identifier: identifier,
+		Message:    runErr,
+	})
+	return func() {
+		_ = o.ScheduleRetry(o.runCtx, issue, identifier, nextAttempt, runErr)
+	}
+}
+
+// retryFireAfterFetchOp implements SPEC §16.6 steps 3-5 after the
+// candidate fetch completes. found == nil means the issue is absent
+// from the active candidate set (step 3 / step 5: release the claim);
+// otherwise refresh entry.Issue with the live tracker state and proceed
+// to capacity check + dispatch.
+type retryFireAfterFetchOp struct {
+	o       *Orchestrator
+	id      IssueID
+	attempt int
+	kind    RetryKind
+	found   *tracker.Issue
+}
+
+func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.RetryAttempts[r.id]
+	if !ok {
+		return nil
+	}
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
+		return nil
+	}
+	if r.found == nil {
+		// SPEC §16.6 steps 3 + 5: issue no longer in the active candidate
+		// set (either absent or moved to a non-active state). Drop the
+		// retry and release the claim.
+		identifier := entry.Identifier
+		st.ReleaseClaim(r.id)
+		st.RecordEvent(RuntimeEvent{
+			Kind:       RuntimeEventFailed,
+			IssueID:    r.id,
+			Identifier: identifier,
+			Message:    "retry released: issue absent from active candidates",
+		})
+		return nil
+	}
+	// SPEC §16.6 step 4: refresh entry.Issue from the live tracker state
+	// before proceeding to capacity check + dispatch. The per-state cap
+	// must see the latest state, not the dispatch-time snapshot.
+	entry.Issue = *r.found
+	st.ClaimedIssues[r.id] = *r.found
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.kind, r.o)
 }
 
 // finalizeRunOp is the actor-side handler for a worker exit. Result.Err
