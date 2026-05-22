@@ -1651,6 +1651,134 @@ func TestRefreshHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
 	}
 }
 
+// TestParseRunArgs_PortFlagBoundaries covers SPEC §13.7 --port range.
+// The acceptable values are {-1 (disable), 0 (ephemeral), 1..65535}.
+// Boundary rule (=N + =N+1) is applied at each cap edge:
+//   - lower cap: -1 accepted, -2 rejected
+//   - upper cap: 65535 accepted, 65536 rejected
+// The interior values 0, 1, 4000 confirm the band; 0 is the SPEC-
+// blessed "ephemeral" sentinel that the workflow loader rejects (port
+// 0 is not allowed in WORKFLOW.md) — CLI is the legitimate path for
+// ephemeral. The error message must name the flag so test harnesses
+// can distinguish CLI parsing failures from workflow-load failures.
+func TestParseRunArgs_PortFlagBoundaries(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      []string
+		wantPort  *int
+		wantErr   string // substring, "" = no error
+	}{
+		{name: "unset_no_override", args: []string{}, wantPort: nil},
+		{name: "below_lower_cap_minus_two", args: []string{"--port=-2"}, wantErr: "--port"},
+		{name: "lower_cap_minus_one_disables", args: []string{"--port=-1"}, wantPort: intPtr(-1)},
+		{name: "zero_ephemeral", args: []string{"--port=0"}, wantPort: intPtr(0)},
+		{name: "one", args: []string{"--port=1"}, wantPort: intPtr(1)},
+		{name: "interior_4001", args: []string{"--port=4001"}, wantPort: intPtr(4001)},
+		{name: "upper_cap_65535", args: []string{"--port=65535"}, wantPort: intPtr(65535)},
+		{name: "above_upper_cap_65536", args: []string{"--port=65536"}, wantErr: "--port"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, port, err := parseRunArgs(tc.args)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("err = nil, want substring %q", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			switch {
+			case tc.wantPort == nil && port != nil:
+				t.Fatalf("port = %d, want nil", *port)
+			case tc.wantPort != nil && port == nil:
+				t.Fatalf("port = nil, want %d", *tc.wantPort)
+			case tc.wantPort != nil && *port != *tc.wantPort:
+				t.Fatalf("port = %d, want %d", *port, *tc.wantPort)
+			}
+		})
+	}
+}
+
+// TestParseRunArgs_WorkflowPathStillSupported confirms the existing
+// positional contract (worker [path-to-WORKFLOW.md]) is preserved when
+// --port is also present, in either order.
+func TestParseRunArgs_WorkflowPathStillSupported(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "positional_only", args: []string{"/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
+		{name: "flag_then_path", args: []string{"--port=4001", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
+		{name: "no_args", args: []string{}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, _, err := parseRunArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseRunArgs(%v): %v", tc.args, err)
+			}
+			if path != tc.want {
+				t.Fatalf("path = %q, want %q", path, tc.want)
+			}
+		})
+	}
+}
+
+// TestDesiredPortForLoop_OverrideWinsOverWorkflow pins SPEC §13.7's
+// "CLI --port overrides server.port when both are present" against the
+// runStateHTTPServerLoop port-selection step.
+func TestDesiredPortForLoop_OverrideWinsOverWorkflow(t *testing.T) {
+	override := 4001
+	got := desiredPortForLoop(stateHTTPServerLoopOptions{PortOverride: &override}, &workflow.Workflow{
+		Config: workflow.Config{Server: workflow.ServerConfig{Port: 4000}},
+	})
+	if got != 4001 {
+		t.Fatalf("desiredPortForLoop = %d, want 4001 (CLI override wins)", got)
+	}
+}
+
+// TestDesiredPortForLoop_FallsBackToWorkflowWhenNoOverride covers the
+// no-override path: workflow value is used verbatim.
+func TestDesiredPortForLoop_FallsBackToWorkflowWhenNoOverride(t *testing.T) {
+	got := desiredPortForLoop(stateHTTPServerLoopOptions{}, &workflow.Workflow{
+		Config: workflow.Config{Server: workflow.ServerConfig{Port: 4000}},
+	})
+	if got != 4000 {
+		t.Fatalf("desiredPortForLoop = %d, want 4000", got)
+	}
+}
+
+// TestDesiredPortForLoop_OverrideMinusOneDisables — paired edge with
+// OverrideWinsOverWorkflow: --port -1 must shut the server down even
+// when workflow says enable.
+func TestDesiredPortForLoop_OverrideMinusOneDisables(t *testing.T) {
+	override := -1
+	got := desiredPortForLoop(stateHTTPServerLoopOptions{PortOverride: &override}, &workflow.Workflow{
+		Config: workflow.Config{Server: workflow.ServerConfig{Port: 4000}},
+	})
+	if got != -1 {
+		t.Fatalf("desiredPortForLoop = %d, want -1 (CLI disable wins)", got)
+	}
+}
+
+// TestDesiredPortForLoop_NoWorkflowYieldsDisable mirrors the existing
+// runtime-level guard: when runtime.Current() has no workflow snapshot
+// yet, the server should stay disabled.
+func TestDesiredPortForLoop_NoWorkflowYieldsDisable(t *testing.T) {
+	got := desiredPortForLoop(stateHTTPServerLoopOptions{}, nil)
+	if got != -1 {
+		t.Fatalf("desiredPortForLoop(nil workflow) = %d, want -1", got)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
 func mustTime(value string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {

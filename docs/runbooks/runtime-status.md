@@ -50,6 +50,20 @@ created or owns them.
 When `server.port` is enabled, the worker binds the status API on
 `127.0.0.1:<port>` and accepts only `localhost` or `127.0.0.1` Host headers.
 
+The effective port is resolved in this order, per SPEC §13.7:
+
+1. The CLI flag `--port` if provided. `--port -1` disables the server,
+   `--port 0` requests an ephemeral port (useful for tests and scratch
+   sessions; the actual bound port is logged at startup), `--port N`
+   (1..65535) binds explicitly. The CLI override applies for the
+   process lifetime — even across workflow reloads — so an operator
+   can pin the listen address without editing the version-controlled
+   `WORKFLOW.md`.
+2. Otherwise the `server.port` value from the loaded `WORKFLOW.md`.
+   The loader rejects `server.port: 0` in a workflow file; if you
+   need an ephemeral bind, use `--port 0` instead.
+3. Otherwise the schema default of `4000`.
+
 - `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
   retry rows, completed and failed issue IDs, aggregate token/runtime totals,
   and the current poll/concurrency metadata.

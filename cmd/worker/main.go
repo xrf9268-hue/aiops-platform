@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -47,6 +48,65 @@ func normalizeRunError(err error, runCtxErr error) error {
 	return err
 }
 
+// parseRunArgs parses the run-mode CLI args (everything after
+// os.Args[0]; the --print-config subcommand is handled separately
+// before this is called). It returns the positional workflow path and
+// an optional --port override.
+//
+// SPEC §13.7 declares --port as the canonical override for
+// server.port in WORKFLOW.md. The value range is -1 (disable), 0
+// (ephemeral), or 1..65535. Note that the workflow loader itself
+// rejects 0 in WORKFLOW.md (see internal/workflow/loader.go), so CLI
+// is the legitimate path for an ephemeral port — tests and operator
+// scratch sessions are the motivating callers.
+func parseRunArgs(args []string) (string, *int, error) {
+	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // tests assert on the returned error; don't dump usage to stderr
+	portFlag := fs.Int("port", 0, "override server.port from WORKFLOW.md: -1 disables the HTTP server, 0 binds an ephemeral port, 1..65535 binds explicitly. SPEC §13.7.")
+	if err := fs.Parse(args); err != nil {
+		return "", nil, err
+	}
+	if fs.NArg() > 1 {
+		return "", nil, fmt.Errorf("usage: worker [--port=N] [path-to-WORKFLOW.md]")
+	}
+	var path string
+	if fs.NArg() == 1 {
+		path = fs.Arg(0)
+	}
+	// Use fs.Visit to distinguish "flag explicitly provided" from "flag
+	// at its default value". A naked sentinel int has no safe pick: any
+	// reserved value would conflict with a real --port=N for that N.
+	var portSet bool
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portSet = true
+		}
+	})
+	var override *int
+	if portSet {
+		p := *portFlag
+		if p < -1 || p > 65535 {
+			return "", nil, fmt.Errorf("--port %d out of range: pass -1 to disable the HTTP server, 0 for an ephemeral port, or 1..65535", p)
+		}
+		override = &p
+	}
+	return path, override, nil
+}
+
+// desiredPortForLoop selects the effective state-server port for one
+// tick of runStateHTTPServerLoop. CLI override wins per SPEC §13.7;
+// otherwise the workflow snapshot's `server.port` is used; absent a
+// snapshot, the loop stays disabled (-1).
+func desiredPortForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) int {
+	if opts.PortOverride != nil {
+		return *opts.PortOverride
+	}
+	if wf != nil {
+		return wf.Config.Server.Port
+	}
+	return -1
+}
+
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 	wf, resolution, err := resolveStartupWorkflow(nil)
 	if err != nil {
@@ -82,7 +142,7 @@ func resolveStartupWorkflow(args []string) (*workflow.Workflow, *workflow.Resolu
 
 func startupWorkflowPath(args []string) (string, error) {
 	if len(args) > 1 {
-		return "", fmt.Errorf("usage: worker [path-to-WORKFLOW.md]")
+		return "", fmt.Errorf("usage: worker [--port=N] [path-to-WORKFLOW.md]")
 	}
 	if len(args) == 1 {
 		return args[0], nil
@@ -144,8 +204,16 @@ func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker
 }
 
 func run(ctx context.Context, args []string) error {
+	workflowPath, portOverride, err := parseRunArgs(args)
+	if err != nil {
+		return err
+	}
+	var resolveArgs []string
+	if workflowPath != "" {
+		resolveArgs = []string{workflowPath}
+	}
 	cfg := worker.LoadConfigFromEnv()
-	wf, resolution, err := resolveStartupWorkflow(args)
+	wf, resolution, err := resolveStartupWorkflow(resolveArgs)
 	if err != nil {
 		return err
 	}
@@ -208,7 +276,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}()
 	go func() {
-		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh}); err != nil && ctx.Err() == nil {
+		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh, PortOverride: portOverride}); err != nil && ctx.Err() == nil {
 			log.Printf("state HTTP server loop exited: %v", err)
 		}
 	}()
@@ -300,6 +368,11 @@ type stateHTTPServerLoopOptions struct {
 	Sleep           func(context.Context, time.Duration) error
 	StopAfterChecks int
 	Refresh         stateRefreshFunc
+	// PortOverride, when non-nil, replaces the workflow snapshot's
+	// `server.port` for every tick of the loop. SPEC §13.7 defines this
+	// as the CLI `--port` precedence rule. -1 disables the HTTP server,
+	// 0 binds an ephemeral port, 1..65535 binds explicitly.
+	PortOverride *int
 }
 
 func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error {
@@ -318,10 +391,11 @@ func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowR
 	}
 	checks := 0
 	for {
-		port := -1
+		var wf *workflow.Workflow
 		if snap := runtime.Current(); snap.Workflow != nil {
-			port = snap.Workflow.Config.Server.Port
+			wf = snap.Workflow
 		}
+		port := desiredPortForLoop(opts, wf)
 		if err := controller.apply(ctx, port); err != nil {
 			return err
 		}
