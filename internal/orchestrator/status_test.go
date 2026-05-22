@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -159,5 +160,37 @@ func TestWriteStatusJSONDocumentsQueueIndependentSource(t *testing.T) {
 		if !strings.Contains(body, publicName) {
 			t.Fatalf("status JSON missing public field name %q: %s", publicName, body)
 		}
+	}
+}
+
+// TestStatusSnapshotFailedCountUsesSuppressedMapNotFIFOSlice pins the
+// status-side carve-out from #234: when failed throughput crosses
+// MaxRecentFailed, the StatusSummary.Failed counter must keep
+// reflecting the TRUE suppression-map size (so operators don't lose
+// track of how many tickets are still blocked), even though the
+// view.Failed display slice gets trimmed.
+//
+// Boundary form: cap=2, add 3 failures, assert summary.Failed=3 while
+// view.Failed list length is 2 (FIFO display trim).
+func TestStatusSnapshotFailedCountUsesSuppressedMapNotFIFOSlice(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	state.MaxRecentFailed = 2
+
+	for i := 0; i < 3; i++ {
+		id := IssueID(fmt.Sprintf("fail-status-%d", i))
+		run := &RunningEntry{Issue: tracker.Issue{ID: string(id), State: "Done", UpdatedAt: time.Unix(int64(i), 0).UTC()}}
+		state.BeginDispatch(id, run)
+		if !state.FinishRunNonRetryableFailed(id, run, time.Second) {
+			t.Fatalf("FinishRunNonRetryableFailed(%s)", id)
+		}
+	}
+	status := state.StatusSnapshot(10)
+	if got, want := status.Summary.Failed, 3; got != want {
+		t.Fatalf("status.summary.failed = %d, want %d (must read suppression map, not FIFO display slice)", got, want)
+	}
+	// And the displayed list is still the bounded recent-N.
+	view := state.Snapshot()
+	if got, want := len(view.Failed), 2; got != want {
+		t.Fatalf("view.Failed display slice = %d, want %d (cap)", got, want)
 	}
 }

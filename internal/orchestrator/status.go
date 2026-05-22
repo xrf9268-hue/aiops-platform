@@ -169,7 +169,14 @@ func (s *OrchestratorState) StatusSnapshot(limit int) RuntimeStatus {
 	sort.Slice(view.Failed, func(i, j int) bool { return view.Failed[i] < view.Failed[j] })
 	sort.Slice(view.Completed, func(i, j int) bool { return view.Completed[i] < view.Completed[j] })
 
-	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: len(view.Failed), Blocked: len(blocked), Retrying: len(retrying)}
+	// summary.Failed reads from FailedSuppressedCount (the true
+	// suppression-map size), not len(view.Failed): the latter is
+	// the FIFO display slice capped at MaxRecentFailed and would
+	// under-report the number of issues still being blocked by
+	// IsClaimed once failure throughput crossed the cap. See the
+	// carve-out in state.go's recordFailed for why the map is
+	// intentionally uncapped.
+	summary := StatusSummary{Running: len(running), Completed: len(view.Completed), Failed: view.FailedSuppressedCount, Blocked: len(blocked), Retrying: len(retrying)}
 	seenEventIssues := map[RuntimeEventKind]map[IssueID]struct{}{}
 	for _, id := range view.Failed {
 		seenFailed := seenEventIssues[RuntimeEventFailed]
