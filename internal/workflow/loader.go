@@ -165,6 +165,7 @@ func Load(path string) (*Workflow, error) {
 			cfg.hooksTimeoutDefaulted = false
 		}
 		migratePollingInterval(frontBytes, &cfg)
+		migrateTrackerEndpoint(frontBytes, &cfg)
 	}
 	var rawStateCaps map[string]int
 	if hasFrontMatter && len(cfg.Agent.MaxConcurrentAgentsByState) > 0 {
@@ -207,6 +208,25 @@ func validateFrontMatterRoot(path string, frontBytes []byte) error {
 		return &Error{Category: CategoryWorkflowFrontMatterNotMap, Path: path, Message: "workflow front matter must decode to a map"}
 	}
 	return nil
+}
+
+// migrateTrackerEndpoint reconciles the SPEC §5.3.1 `tracker.endpoint`
+// field with the pre-#242 `tracker.base_url` alias: prefer endpoint when
+// set, fall back to base_url with a deprecation log, and finally clear
+// BaseURL on the resolved config so downstream code reads only Endpoint.
+func migrateTrackerEndpoint(frontBytes []byte, cfg *Config) {
+	endpointPresent := hasNestedKey(frontBytes, "tracker", "endpoint")
+	legacyPresent := hasNestedKey(frontBytes, "tracker", "base_url")
+	switch {
+	case endpointPresent:
+		if legacyPresent {
+			log.Printf("workflow: tracker.base_url is deprecated and ignored because tracker.endpoint is set")
+		}
+	case legacyPresent:
+		log.Printf("workflow: tracker.base_url is deprecated; use tracker.endpoint (SPEC §5.3.1)")
+		cfg.Tracker.Endpoint = cfg.Tracker.BaseURL
+	}
+	cfg.Tracker.BaseURL = ""
 }
 
 func migratePollingInterval(frontBytes []byte, cfg *Config) {
@@ -567,7 +587,7 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	if cfg.Tracker.APIKey, err = resolveExplicitEnv("tracker.api_key", cfg.Tracker.APIKey); err != nil {
 		return err
 	}
-	if cfg.Tracker.BaseURL, err = resolveExplicitEnv("tracker.base_url", cfg.Tracker.BaseURL); err != nil {
+	if cfg.Tracker.Endpoint, err = resolveExplicitEnv("tracker.endpoint", cfg.Tracker.Endpoint); err != nil {
 		return err
 	}
 	if err := expandRepoConfig("repo.clone_url", &cfg.Repo); err != nil {

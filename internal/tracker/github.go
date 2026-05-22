@@ -64,7 +64,7 @@ type githubPullRequestSummary struct {
 
 func NewGitHubClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *GitHubClient {
 	if strings.TrimSpace(baseURL) == "" {
-		baseURL = cfg.BaseURL
+		baseURL = cfg.Endpoint
 	}
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "https://api.github.com"

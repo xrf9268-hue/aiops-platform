@@ -1698,7 +1698,7 @@ repo:
 tracker:
   kind: github
   api_key: $AIOPS_TEST_GITHUB_TOKEN
-  base_url: https://api.github.test
+  endpoint: https://api.github.test
   active_states:
     - priority:p2
   terminal_states:
@@ -1719,8 +1719,8 @@ prompt
 	if wf.Config.Tracker.APIKey != "github-token" {
 		t.Fatalf("tracker.api_key did not expand from env: %q", wf.Config.Tracker.APIKey)
 	}
-	if wf.Config.Tracker.BaseURL != "https://api.github.test" {
-		t.Fatalf("tracker.base_url = %q", wf.Config.Tracker.BaseURL)
+	if wf.Config.Tracker.Endpoint != "https://api.github.test" {
+		t.Fatalf("tracker.endpoint = %q", wf.Config.Tracker.Endpoint)
 	}
 }
 

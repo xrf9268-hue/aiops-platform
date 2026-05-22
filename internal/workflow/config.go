@@ -60,9 +60,19 @@ type ServiceTrackerRouteConfig struct {
 }
 
 type TrackerConfig struct {
-	Kind           string   `yaml:"kind" json:"kind"`
-	APIKey         string   `yaml:"api_key" json:"api_key"`
-	BaseURL        string   `yaml:"base_url" json:"base_url"`
+	Kind   string `yaml:"kind" json:"kind"`
+	APIKey string `yaml:"api_key" json:"api_key"`
+	// Endpoint is the tracker base/GraphQL URL (SPEC §5.3.1). For
+	// `kind: linear` the default is `https://api.linear.app/graphql`;
+	// GitHub Enterprise / Gitea installs name their REST root here.
+	// `tracker.base_url` is accepted as a deprecated alias and migrated
+	// by the loader (see migrateTrackerEndpoint in loader.go).
+	Endpoint string `yaml:"endpoint" json:"endpoint"`
+	// BaseURL is the pre-#242 field name kept for one release as a
+	// deprecated alias. Reads/writes outside the loader should use
+	// Endpoint; this field exists so legacy WORKFLOW.md files keep
+	// parsing while the loader emits a deprecation log.
+	BaseURL        string   `yaml:"base_url" json:"base_url,omitempty"`
 	TeamKey        string   `yaml:"team_key" json:"team_key"`
 	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
 	ActiveStates   []string `yaml:"active_states" json:"active_states"`

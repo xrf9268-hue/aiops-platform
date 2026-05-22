@@ -101,11 +101,17 @@ type LinearClient struct {
 
 const defaultLinearRequestTimeout = 30 * time.Second
 
+// DefaultLinearEndpoint is the Linear GraphQL endpoint per SPEC §5.3.1.
+const DefaultLinearEndpoint = "https://api.linear.app/graphql"
+
 func NewLinearClient(cfg workflow.TrackerConfig) *LinearClient {
-	base := "https://api.linear.app/graphql"
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	if endpoint == "" {
+		endpoint = DefaultLinearEndpoint
+	}
 	return &LinearClient{
 		APIKey:         cfg.APIKey,
-		BaseURL:        base,
+		BaseURL:        endpoint,
 		Config:         cfg,
 		HTTP:           http.DefaultClient,
 		RequestTimeout: defaultLinearRequestTimeout,

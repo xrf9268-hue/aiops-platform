@@ -776,6 +776,48 @@ func TestNewLinearClient_DefaultsRequestTimeoutTo30s(t *testing.T) {
 	}
 }
 
+// TestNewLinearClientHonorsEndpointOverride pins SPEC §5.3.1 (#242): an
+// explicit `tracker.endpoint` configures the Linear client's BaseURL.
+// Workflows pointing at a httptest mock, a regional Linear endpoint, or a
+// proxy can express the override in WORKFLOW.md without code changes.
+func TestNewLinearClientHonorsEndpointOverride(t *testing.T) {
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", Endpoint: "https://linear.example/graphql"})
+	if client.BaseURL != "https://linear.example/graphql" {
+		t.Fatalf("BaseURL = %q, want override from tracker.endpoint", client.BaseURL)
+	}
+}
+
+func TestNewLinearClientDefaultsToSpecEndpoint(t *testing.T) {
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k"})
+	if client.BaseURL != DefaultLinearEndpoint {
+		t.Fatalf("BaseURL = %q, want DefaultLinearEndpoint when override absent", client.BaseURL)
+	}
+}
+
+// TestNewLinearClientEndpointActuallyUsedForRequests verifies the override
+// reaches the wire — `cmd.Process.Pid`-style "the field exists" tests caught
+// the pre-#242 bug where BaseURL was set but immediately overwritten, so this
+// test issues a real HTTP request through the override.
+func TestNewLinearClientEndpointActuallyUsedForRequests(t *testing.T) {
+	var observed string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer srv.Close()
+
+	endpoint := srv.URL + "/custom-graphql"
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", ProjectSlug: "aiops", Endpoint: endpoint, ActiveStates: []string{"AI Ready"}})
+	client.HTTP = srv.Client()
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if observed != "/custom-graphql" {
+		t.Fatalf("request path = %q, want /custom-graphql (Endpoint override reached the wire)", observed)
+	}
+}
+
 func TestListIssuesByStatesEmptyShortCircuitsWithoutAPICall(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

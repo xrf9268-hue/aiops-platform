@@ -1303,7 +1303,7 @@ func TestTrackerClientForWorkflowBuildsGitHubClient(t *testing.T) {
 	cfg.Repo.Name = "aiops-platform"
 	cfg.Tracker.Kind = "github"
 	cfg.Tracker.APIKey = "github-token"
-	cfg.Tracker.BaseURL = "https://api.github.test"
+	cfg.Tracker.Endpoint = "https://api.github.test"
 
 	client, err := trackerClientForWorkflow(cfg)
 	if err != nil {

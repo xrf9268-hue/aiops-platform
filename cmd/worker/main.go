@@ -1163,7 +1163,7 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 		}
 		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	case "github":
-		baseURL := cfg.Tracker.BaseURL
+		baseURL := cfg.Tracker.Endpoint
 		if baseURL == "" {
 			baseURL = env("GITHUB_API_BASE_URL", "https://api.github.com")
 		}
