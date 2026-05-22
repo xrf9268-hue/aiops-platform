@@ -1113,6 +1113,7 @@ func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.Reconcili
 		TerminalStates:    cfg.Tracker.TerminalStates,
 		InactiveStates:    inferredInactiveStates(cfg.Tracker),
 		WorkerExitTimeout: 30 * time.Second,
+		StallTimeoutMs:    cfg.Codex.StallTimeoutMs,
 	}
 }
 

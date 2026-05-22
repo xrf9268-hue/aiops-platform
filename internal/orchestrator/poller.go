@@ -50,6 +50,15 @@ type ReconciliationConfig struct {
 	// reconciliation cancel. Zero means the poll tick only requests cancellation;
 	// the worker watcher will clean up asynchronously.
 	WorkerExitTimeout time.Duration
+
+	// StallTimeoutMs is SPEC §8.5 Part A's `codex.stall_timeout_ms`: the
+	// per-issue budget for "no runtime event observed" before the orchestrator
+	// cancels the worker so it can be retried (SPEC §16.3
+	// reconcile_stalled_runs). The runner has its own self-stall detection;
+	// this guards against the case where the runner goroutine itself wedges
+	// and never produces a StallError. Zero (or negative) disables detection
+	// at the orchestrator layer.
+	StallTimeoutMs int
 }
 
 // Poller connects tracker polling to the orchestrator runtime state. It has no
@@ -163,6 +172,12 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
 	if p.stateTracker == nil {
 		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
+	}
+	// SPEC §16.3 reconcile_running_issues order: Part A (stall reconciliation)
+	// first so any wedged worker is cancelled before Part B's tracker-state
+	// refresh would otherwise leave it claimed indefinitely.
+	if err := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout); err != nil {
+		return nil, err
 	}
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)

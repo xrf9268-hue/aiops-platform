@@ -193,6 +193,7 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		TerminalStates:    wf.Config.Tracker.TerminalStates,
 		InactiveStates:    wf.Config.Tracker.InactiveStates,
 		WorkerExitTimeout: 30 * time.Second,
+		StallTimeoutMs:    wf.Config.Codex.StallTimeoutMs,
 	}
 	if r != nil && r.reconciliationConfig != nil {
 		reconcile = r.reconciliationConfig(wf.Config)
