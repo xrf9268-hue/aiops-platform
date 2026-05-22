@@ -41,6 +41,34 @@ On Linux containers `os.UserCacheDir()` resolves to `$XDG_CACHE_HOME` or
 when you want the cache on a dedicated volume — for example the
 `workspace-cache` named volume in `deploy/docker-compose.yml`.
 
+## Cross-process mirror locking
+
+Two workers sharing the same `AIOPS_MIRROR_ROOT` on the same host serialize
+their `git fetch` / `git clone` / `git worktree add` operations through an
+advisory `flock(2)` on a `<mirror>.lock` sidecar file (#228). This closes
+the gap where the per-process `sync.Mutex` alone could not stop one
+worker's `git fetch --prune` from racing another worker's
+`git worktree add` against the same bare repo, which historically
+surfaced as sporadic `fatal: <branch> already exists` errors that "just
+worked" on retry.
+
+Operational notes:
+
+- The lock is **host-scoped**. Two workers must run on the same OS
+  instance for the lock to mediate them; cross-host concurrency is not
+  supported, because `flock(2)` is a per-kernel primitive.
+- **NFS mirror roots are unsupported.** `flock(2)` on NFS is silently
+  best-effort on Linux (depends on `lockd` being healthy) and not
+  honoured on macOS. Use a local filesystem.
+- The lock sidecar file lives next to the mirror as `<mirror>.lock`.
+  Operators removing a mirror by hand should also remove the sidecar,
+  but must not delete it while a worker holds the lock — `lsof
+  <mirror>.lock` attributes the holder to a specific pid.
+- Windows hosts have no `flock(2)`; the cross-process layer is a no-op
+  there and only the in-process mutex serializes. The supported
+  deployment platforms (Linux containers, macOS LaunchAgents) both use
+  the full file-lock path.
+
 ## Cleanup policy
 
 The worker does **not** automatically delete old worktrees. The

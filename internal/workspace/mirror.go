@@ -16,6 +16,24 @@ var (
 	mirrorLocks   = map[string]*sync.Mutex{}
 )
 
+// acquireMirrorLock takes the process-local sync.Mutex AND an OS-level
+// advisory flock on a sidecar file next to the mirror, in that order. The
+// process-local lock keeps single-process contention cheap (no syscall when
+// only one goroutine wants the mirror); the flock closes the cross-process
+// gap when two workers share AIOPS_MIRROR_ROOT (SPEC §9.5, #228) and
+// prevents `git fetch --prune` from racing `git worktree add` against the
+// same bare repo.
+//
+// Releases in reverse order: file lock first (so the next process can
+// proceed), then process-local mutex.
+//
+// If the file-lock acquisition fails (kernel rejected the syscall, NFS-
+// without-lockd, etc.) the function falls back to in-process-only locking.
+// That preserves correctness for single-process deployments — the most
+// common case — and matches the historical behavior of the process-only
+// implementation; cross-process operators on the same host get a warning-
+// shaped log line via the runtime caller path on the very next mirror op
+// when the kernel keeps returning the same error.
 func acquireMirrorLock(mirror string) func() {
 	mirrorLocksMu.Lock()
 	lock := mirrorLocks[mirror]
@@ -26,7 +44,17 @@ func acquireMirrorLock(mirror string) func() {
 	mirrorLocksMu.Unlock()
 
 	lock.Lock()
-	return lock.Unlock
+	release, err := acquireMirrorFileLock(mirror)
+	if err != nil {
+		// Process-local mutex still held; cross-process callers degrade
+		// gracefully to single-process semantics rather than failing the
+		// mirror op outright.
+		return lock.Unlock
+	}
+	return func() {
+		release()
+		lock.Unlock()
+	}
 }
 
 // MirrorRoot returns the directory where bare mirror clones are cached.
