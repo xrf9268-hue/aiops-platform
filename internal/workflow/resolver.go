@@ -104,19 +104,14 @@ func HasFrontMatterAt(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	s := string(b)
-	if !strings.HasPrefix(s, "---\n") && !strings.HasPrefix(s, "---\r\n") {
-		return false, nil
-	}
-	rest := strings.TrimPrefix(strings.TrimPrefix(s, "---\r\n"), "---\n")
-	// Same line-aware scan as splitFrontMatter — see #231. A substring
-	// search would falsely match `---` that appears inside a YAML
-	// block scalar or quoted string, classifying a prompt-only file
-	// with such content as front-matter-bearing.
-	for _, line := range strings.SplitAfter(rest, "\n") {
-		if strings.TrimRight(line, "\r\n") == "---" {
-			return true, nil
-		}
-	}
-	return false, nil
+	// Delegate to splitFrontMatter so the two functions cannot diverge
+	// on edge cases: a file that begins `---\n---\n...` has an opening
+	// and closing fence but no content between them, and the loader
+	// treats that case as prompt-only via
+	// `hasFrontMatter := strings.TrimSpace(front) != ""`. HasFrontMatterAt
+	// must report the same classification or the workflow_resolved
+	// event's `source` field disagrees with the actual Config that
+	// Load() produced.
+	front, _ := splitFrontMatter(string(b))
+	return strings.TrimSpace(front) != "", nil
 }

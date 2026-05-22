@@ -429,6 +429,67 @@ func TestSplitFrontMatter_LineAwareClosingFence(t *testing.T) {
 	}
 }
 
+// TestSplitFrontMatter_EmptyFrontMatterIsPromptOnly covers the
+// Codex-flagged edge case from PR #264: an opening fence followed
+// immediately by a closing fence (`---\n---\n...`) returns an empty
+// front block. The loader treats empty fronts as prompt-only via
+// strings.TrimSpace(front) != "", so HasFrontMatterAt must report
+// the same — otherwise the workflow_resolved event labels the file
+// `source=file` while Load() boots with default Config.
+func TestSplitFrontMatter_EmptyFrontMatterIsPromptOnly(t *testing.T) {
+	cases := []struct {
+		name      string
+		input     string
+		wantFront string
+		wantBody  string
+	}{
+		{
+			name:      "opening_then_immediate_closing",
+			input:     "---\n---\nbody\n",
+			wantFront: "",
+			wantBody:  "body\n",
+		},
+		{
+			name:      "opening_blank_line_closing",
+			input:     "---\n\n---\nbody\n",
+			wantFront: "\n",
+			wantBody:  "body\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			front, body := splitFrontMatter(tc.input)
+			if front != tc.wantFront {
+				t.Fatalf("front = %q, want %q", front, tc.wantFront)
+			}
+			if body != tc.wantBody {
+				t.Fatalf("body = %q, want %q", body, tc.wantBody)
+			}
+		})
+	}
+}
+
+// TestHasFrontMatterAt_EmptyFrontIsPromptOnly pins the
+// resolver-vs-loader agreement: an opening fence immediately followed
+// by a closing fence is reported as NOT having front matter, mirroring
+// the loader's `TrimSpace(front) != ""` check. Without this,
+// `workflow_resolved` would carry `source=file` while Load() produced
+// schema defaults.
+func TestHasFrontMatterAt_EmptyFrontIsPromptOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(path, []byte("---\n---\nprompt body\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := HasFrontMatterAt(path)
+	if err != nil {
+		t.Fatalf("HasFrontMatterAt: %v", err)
+	}
+	if got {
+		t.Fatalf("HasFrontMatterAt = true for empty front matter; loader treats this case as prompt_only, so the resolver must agree")
+	}
+}
+
 // TestLoadAcceptsBlockScalarContainingDashes is the user-visible
 // regression: a workflow file whose front-matter block scalar
 // contains a "---" line must Load() cleanly and surface the values
