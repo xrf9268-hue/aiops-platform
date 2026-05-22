@@ -122,6 +122,16 @@ Option B: in Docker.
 docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
+The Compose service hardcodes `AIOPS_WORKFLOW_PATH=/app/examples/WORKFLOW.md`
+and mounts `../examples:/app/examples:ro`, so this command always runs
+against the bundled Linear example workflow — edits to your local
+`.aiops/WORKFLOW.md` are **not** picked up by the container. To run
+the container against your own workflow, either bind-mount your file
+over the example path (e.g.
+`-v $PWD/.aiops/WORKFLOW.md:/app/examples/WORKFLOW.md:ro`) or override
+`AIOPS_WORKFLOW_PATH` in `.env` to a path that resolves inside the
+container.
+
 The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
@@ -305,11 +315,17 @@ in `WORKFLOW.md`:
   `${VAR}`) and the env var is unset or empty, workflow loading fails
   at startup with `missing_tracker_api_key` before the first poll.
   This is the loud, fail-fast path — fix the env var and retry.
-- If `tracker.api_key` is empty or a non-env literal, startup succeeds
-  with no warning and the first tracker poll fails (e.g. the Gitea
-  client errors with `GITEA_BASE_URL and Gitea tracker api_key are
-  required`). Check the worker log for the first poll cycle, not just
-  the startup line.
+- If `tracker.api_key` is empty (or missing entirely), startup
+  succeeds with no warning and the first tracker poll fails (e.g. the
+  Gitea client errors with `GITEA_BASE_URL and Gitea tracker api_key
+  are required`). Check the worker log for the first poll cycle, not
+  just the startup line.
+- A non-empty literal value (e.g. `tracker.api_key: ghp_…`) is passed
+  through unchanged and used as the token — that is a valid
+  configuration, just not the recommended one because the secret then
+  sits in `WORKFLOW.md` rather than the environment. Operators who
+  paste a raw token here are not hitting a loader bug; they are
+  bypassing the env-expansion path.
 
 ### `/api/v1/state` returns nothing or refuses to bind
 
