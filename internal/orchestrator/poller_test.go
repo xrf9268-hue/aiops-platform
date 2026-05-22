@@ -1514,6 +1514,85 @@ func TestTaskFromIssueRejectsUnknownService(t *testing.T) {
 	}
 }
 
+// TestIssueRenderVarsCoversSpec4_1_1FieldSet pins SPEC §4.1.1 + §12.1: the
+// prebuilt issue snapshot the worker hands to the prompt template must
+// expose every normalized field. Empty labels/blocked_by must materialize as
+// empty slices (not nil) so strict-mode templates iterating over them do
+// not surface a render error.
+func TestIssueRenderVarsCoversSpec4_1_1FieldSet(t *testing.T) {
+	created := mustTime("2026-05-20T10:00:00Z")
+	updated := mustTime("2026-05-21T12:00:00Z")
+	got := IssueRenderVars(tracker.Issue{
+		ID:          "lin-456",
+		Identifier:  "LIN-456",
+		Title:       "integration",
+		Description: "desc",
+		Priority:    2,
+		State:       "In Progress",
+		BranchName:  "feat/auth-cleanup",
+		URL:         "https://linear.app/x/issue/LIN-456",
+		Labels:      []string{"priority:p2", "area:auth"},
+		BlockedBy: []tracker.BlockerRef{
+			{ID: "lin-200", Identifier: "LIN-200", State: "Todo"},
+		},
+		CreatedAt: created,
+		UpdatedAt: updated,
+	})
+	for _, k := range []string{
+		"id", "identifier", "title", "description", "priority", "state",
+		"branch_name", "url", "labels", "blocked_by", "created_at", "updated_at",
+	} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("IssueRenderVars missing key %q in %#v", k, got)
+		}
+	}
+	labels, _ := got["labels"].([]string)
+	if len(labels) != 2 || labels[0] != "priority:p2" {
+		t.Errorf("labels = %#v, want copy preserving order", got["labels"])
+	}
+	blockedBy, _ := got["blocked_by"].([]map[string]any)
+	if len(blockedBy) != 1 || blockedBy[0]["identifier"] != "LIN-200" || blockedBy[0]["state"] != "Todo" {
+		t.Errorf("blocked_by = %#v, want one normalized blocker", got["blocked_by"])
+	}
+}
+
+// TestIssueRenderVarsEmptySlicesMaterializeNonNil pins the empty-collection
+// invariant: a tracker.Issue with no labels / no blockers must render as
+// empty slices, never nil, so strict-mode templates iterating with
+// `{% for ... %}` do not crash. nil interface{} would also be rendered as
+// `<nil>` by fmt.Sprint, which surprises operators.
+func TestIssueRenderVarsEmptySlicesMaterializeNonNil(t *testing.T) {
+	got := IssueRenderVars(tracker.Issue{ID: "x", Identifier: "X-1"})
+	labels, ok := got["labels"].([]string)
+	if !ok || labels == nil || len(labels) != 0 {
+		t.Errorf("labels = %#v, want non-nil empty []string", got["labels"])
+	}
+	blockedBy, ok := got["blocked_by"].([]map[string]any)
+	if !ok || blockedBy == nil || len(blockedBy) != 0 {
+		t.Errorf("blocked_by = %#v, want non-nil empty []map[string]any", got["blocked_by"])
+	}
+}
+
+// TestTaskFromIssuePopulatesIssueRender pins the wiring: TaskFromIssue must
+// stamp the SPEC §4.1.1 snapshot onto Task.IssueRender so the worker's
+// runtask can populate the prompt template's `issue` variable.
+func TestTaskFromIssuePopulatesIssueRender(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "acme", Name: "demo", CloneURL: "git@example.com:acme/demo.git", DefaultBranch: "main"},
+	}
+	issue := tracker.Issue{ID: "lin-1", Identifier: "LIN-1", Title: "x", State: "In Progress", Labels: []string{"a"}}
+	got, err := TaskFromIssue(issue, cfg)
+	if err != nil {
+		t.Fatalf("TaskFromIssue: %v", err)
+	}
+	if got.IssueRender == nil {
+		t.Fatal("TaskFromIssue IssueRender = nil, want SPEC §4.1.1 snapshot")
+	}
+	if got.IssueRender["state"] != "In Progress" {
+		t.Errorf("IssueRender[state] = %#v, want In Progress", got.IssueRender["state"])
+	}
+}
+
 func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -43,6 +43,29 @@ type RunTaskError struct {
 // WORKFLOW.md that was loaded at process startup. Returning the workflow_source
 // string lets callers stamp it onto the runner_start payload as a quick-look
 // field; the full provenance lives on the workflow_resolved event itself.
+// issueRenderVarsForTask returns the SPEC §4.1.1 normalized issue snapshot
+// for the prompt template's `issue` variable. The orchestrator's
+// TaskFromIssue precomputes IssueRender at dispatch; this helper falls back
+// to the minimal Task-derived map for callers that build tasks by hand
+// (e.g. legacy queue.Postgres consumers and worker tests) so they still
+// render, just without the §4.1.1 fields the helper cannot reconstruct.
+func issueRenderVarsForTask(t task.Task) map[string]any {
+	if t.IssueRender != nil {
+		out := make(map[string]any, len(t.IssueRender)+1)
+		for k, v := range t.IssueRender {
+			out[k] = v
+		}
+		out["actor"] = t.Actor
+		return out
+	}
+	return map[string]any{
+		"identifier":  t.SourceEventID,
+		"title":       t.Title,
+		"description": t.Description,
+		"actor":       t.Actor,
+	}
+}
+
 func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID string, wf *workflow.Workflow) (*workflow.Workflow, string, error) {
 	if wf == nil {
 		return nil, "", fmt.Errorf("service workflow is required")
@@ -228,12 +251,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 			"description": t.Description,
 			"actor":       t.Actor,
 		},
-		"issue": map[string]any{
-			"identifier":  t.SourceEventID,
-			"title":       t.Title,
-			"description": t.Description,
-			"actor":       t.Actor,
-		},
+		"issue": issueRenderVarsForTask(t),
 		"repo": map[string]any{
 			"owner":  t.RepoOwner,
 			"name":   t.RepoName,

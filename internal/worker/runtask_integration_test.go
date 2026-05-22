@@ -9,8 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
@@ -338,6 +341,71 @@ func TestRunTaskLeavesFirstAttemptAbsentForDefaultFilter(t *testing.T) {
 	}
 	if !strings.Contains(string(prompt), "attempt first run for integration") {
 		t.Fatalf("rendered prompt = %q, want first attempt absent so default filter applies", prompt)
+	}
+}
+
+// TestRunTaskPromptTemplateSeesAllSpec4_1_1IssueFields pins SPEC §12.1: the
+// `issue` template variable must carry every normalized SPEC §4.1.1 field,
+// not just identifier/title/description. A workflow that references any
+// of {id, priority, state, branch_name, url, labels, blocked_by,
+// created_at, updated_at} must render without a strict-mode
+// template_render_error (SPEC §5.4).
+func TestRunTaskPromptTemplateSeesAllSpec4_1_1IssueFields(t *testing.T) {
+	// The repo's local template engine supports {{ var }} expansion with
+	// snake_case path traversal (no {% for %} loops); SPEC §12.1's acceptance
+	// is that every §4.1.1 field is referenceable without
+	// template_render_error. Slices render via fmt.Sprint default.
+	template := `id={{ issue.id }} pri={{ issue.priority }} state={{ issue.state }} branch={{ issue.branch_name }} ` +
+		`url={{ issue.url }} labels={{ issue.labels }} blocked={{ issue.blocked_by }} ` +
+		`created={{ issue.created_at }} updated={{ issue.updated_at }}`
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", template, 1))
+	t.Setenv("REPO_URL", cloneURL)
+	tk.SourceEventID = "LIN-456"
+	tk.IssueRender = orchestrator.IssueRenderVars(tracker.Issue{
+		ID:          "lin-456",
+		Identifier:  "LIN-456",
+		Title:       "integration",
+		Description: "desc",
+		Priority:    2,
+		State:       "In Progress",
+		BranchName:  "feat/auth-cleanup",
+		URL:         "https://linear.app/x/issue/LIN-456",
+		Labels:      []string{"priority:p2", "area:auth"},
+		BlockedBy: []tracker.BlockerRef{
+			{ID: "lin-200", Identifier: "LIN-200", State: "Todo"},
+		},
+		CreatedAt: time.Date(2026, 5, 20, 10, 0, 0, 0, time.UTC),
+		UpdatedAt: time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC),
+	})
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.PromptTemplate = template
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "lin-456")
+	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+	if err != nil {
+		t.Fatalf("read rendered prompt: %v", err)
+	}
+	got := string(prompt)
+	for _, want := range []string{
+		"id=lin-456",
+		"pri=2",
+		"state=In Progress",
+		"branch=feat/auth-cleanup",
+		"url=https://linear.app/x/issue/LIN-456",
+		"priority:p2",
+		"area:auth",
+		"LIN-200",
+		"2026-05-20",
+		"2026-05-21",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rendered prompt missing %q:\n%s", want, got)
+		}
 	}
 }
 

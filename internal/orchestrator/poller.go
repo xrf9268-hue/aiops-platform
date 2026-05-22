@@ -690,7 +690,46 @@ func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) 
 		Actor:         cfg.Tracker.Kind,
 		Model:         cfg.Agent.Default,
 		Priority:      50,
+		IssueRender:   IssueRenderVars(issue),
 	}, nil
+}
+
+// IssueRenderVars returns the SPEC §4.1.1 normalized issue snapshot the
+// prompt template's `issue` variable expects. Field set matches SPEC §12.1
+// "includes all normalized issue fields, including labels and blockers"; per
+// SPEC §5.4 strict template rendering, every field documented in §4.1.1
+// must be present (or empty) so a workflow that references it does not crash
+// with template_render_error. Labels and blocked_by are always slices (never
+// nil) so `{% for ... %}` over an empty issue does not surface a strict-mode
+// error. The actor field is an aiops-platform extension carried alongside
+// the SPEC fields and read from the tracker kind by the caller.
+func IssueRenderVars(issue tracker.Issue) map[string]any {
+	labels := append([]string(nil), issue.Labels...)
+	if labels == nil {
+		labels = []string{}
+	}
+	blockedBy := make([]map[string]any, 0, len(issue.BlockedBy))
+	for _, b := range issue.BlockedBy {
+		blockedBy = append(blockedBy, map[string]any{
+			"id":         b.ID,
+			"identifier": b.Identifier,
+			"state":      b.State,
+		})
+	}
+	return map[string]any{
+		"id":          issue.ID,
+		"identifier":  issue.Identifier,
+		"title":       issue.Title,
+		"description": issue.Description,
+		"priority":    issue.Priority,
+		"state":       issue.State,
+		"branch_name": issue.BranchName,
+		"url":         issue.URL,
+		"labels":      labels,
+		"blocked_by":  blockedBy,
+		"created_at":  issue.CreatedAt,
+		"updated_at":  issue.UpdatedAt,
+	}
 }
 
 func serviceConfigByName(cfg workflow.Config, name string) (workflow.ServiceConfig, bool) {

@@ -158,6 +158,15 @@ type Task struct {
 	AvailableAt   time.Time `json:"available_at"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	// IssueRender is the SPEC §4.1.1 normalized issue snapshot, pre-built at
+	// dispatch time so the worker's runtask can populate the prompt
+	// template's `issue` variable without re-importing tracker.Issue. SPEC
+	// §12.1 requires the full normalized field set to be visible to the
+	// template; §5.4 fails rendering on unknown variables, so a workflow
+	// referencing `issue.priority` or `{% for label in issue.labels %}`
+	// would crash without this. Excluded from JSON/Postgres persistence
+	// because it is reconstructed per dispatch.
+	IssueRender map[string]any `json:"-"`
 }
 
 type Event struct {
