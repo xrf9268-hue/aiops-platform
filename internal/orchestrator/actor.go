@@ -342,24 +342,6 @@ func (o *Orchestrator) RecordWorkspace(ctx context.Context, issueID string, work
 	}
 }
 
-// StatusSnapshot returns the queue-independent runtime status surface view.
-func (o *Orchestrator) StatusSnapshot(ctx context.Context, recentEventLimit int) (RuntimeStatus, error) {
-	reply := make(chan RuntimeStatus, 1)
-	op := opFunc(func(st *OrchestratorState) func() {
-		reply <- st.StatusSnapshot(recentEventLimit)
-		return nil
-	})
-	if err := o.submit(ctx, op); err != nil {
-		return RuntimeStatus{}, err
-	}
-	select {
-	case v := <-reply:
-		return v, nil
-	case <-ctx.Done():
-		return RuntimeStatus{}, ctx.Err()
-	}
-}
-
 // UpdateMaxConcurrentAgents applies a reloaded workflow capacity limit through
 // the actor so dispatch and retry capacity checks observe the new value without
 // restarting the process.

@@ -11,9 +11,6 @@ single in-memory authority described by Symphony SPEC sections 3.1, 4.1.8, and
 7.4. A process restart resets exact scheduler state; recovery comes from the
 tracker plus filesystem reconciliation, not from this status payload.
 
-The payload reports `source: "orchestrator_runtime"` so operators can tell it
-is not derived from the transitional Postgres queue.
-
 ## Event vocabulary
 
 Recent runtime events use the SPEC-aligned operator vocabulary:
@@ -91,24 +88,40 @@ return HTTP 405 with a JSON error envelope.
 
 ## JSON shape
 
-The reusable runtime-status JSON writer uses the same queue-independent source:
+`GET /api/v1/state` returns the wire shape produced by
+`cmd/worker.apiStateFromView`. Field names use snake_case; null/zero fields
+that have `omitempty` set on the Go struct may be absent. The drift-detection
+test (`cmd/worker.TestRuntimeStatusRunbookExampleMatchesHandler`) parses every
+JSON code block in this section against the live handler output, so updating
+the shape here without updating the handler — or vice versa — fails the build.
 
 ```json
 {
-  "source": "orchestrator_runtime",
-  "summary": {
-    "candidate": 1,
+  "generated_at": "2026-05-21T09:10:00Z",
+  "poll_interval_ms": 15000,
+  "max_concurrent_agents": 4,
+  "max_concurrent_agents_by_state": {"In Progress": 2},
+  "counts": {
     "running": 1,
+    "blocked": 1,
+    "retrying": 0,
     "completed": 0,
     "failed": 0,
-    "blocked": 1,
-    "retrying": 0
+    "completed_total": 12,
+    "failed_total": 3
   },
-  "running": [],
-  "blocked": [
+  "running": [
     {
       "issue_id": "issue-1",
-      "identifier": "ENG-1",
+      "issue_identifier": "ENG-1",
+      "started_at": "2026-05-21T09:09:55Z",
+      "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1"
+    }
+  ],
+  "blocked": [
+    {
+      "issue_id": "issue-2",
+      "issue_identifier": "ENG-2",
       "state": "AI Ready",
       "blocked_at": "2026-05-20T06:05:38Z",
       "session_id": "thread-1-turn-1",
@@ -118,7 +131,7 @@ The reusable runtime-status JSON writer uses the same queue-independent source:
   ],
   "retrying": [],
   "completed": [],
-  "recent_events": [],
+  "failed": [],
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -127,6 +140,30 @@ The reusable runtime-status JSON writer uses the same queue-independent source:
   }
 }
 ```
+
+### Counts semantics
+
+| Field             | Meaning                                                                       |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `running`         | Live count of dispatched workers.                                             |
+| `blocked`         | Live count of input-blocked rows (Codex elicitation / approval pending).      |
+| `retrying`        | Current retry-backoff queue depth.                                            |
+| `completed`       | Size of the FIFO-bounded recent-completed set published as `completed`.       |
+| `failed`          | Size of the dispatch-suppression set (uncapped; not bounded by the FIFO cap). |
+| `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
+| `failed_total`    | Monotonic counter of NonRetryableFailed transitions since process start.      |
+
+`completed` and `failed` arrays at the top level publish the recent N issue
+IDs in those sets; for lifetime totals across FIFO eviction use the `_total`
+counters.
+
+### Top-level metadata fields
+
+- `generated_at` — RFC3339 timestamp the handler stamped when materializing the snapshot.
+- `poll_interval_ms` — current tracker poll interval (SPEC §13.7).
+- `max_concurrent_agents` — global concurrency cap.
+- `max_concurrent_agents_by_state` — optional per-tracker-state cap map; absent when no overrides set.
+- `rate_limits` — optional Codex rate-limit snapshot when one has been observed (omitted otherwise).
 
 ## Tracker pagination overflow
 
