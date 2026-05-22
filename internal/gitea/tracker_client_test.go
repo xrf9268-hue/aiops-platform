@@ -405,11 +405,11 @@ func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.
 		case "/api/v1/repos/owner/repo/issues":
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode([]Issue{{
-				ID:      101,
-				Number:  1,
-				Title:   "first",
-				Body:    "Needs the blocker resolved.\n\nDepends on #42\nAlso Depends on #43 and depends on #42 again.",
-				HTMLURL: "https://gitea.local/o/r/issues/1",
+				ID:        101,
+				Number:    1,
+				Title:     "first",
+				Body:      "Needs the blocker resolved.\n\nDepends on #42\nAlso Depends on #43 and depends on #42 again.",
+				HTMLURL:   "https://gitea.local/o/r/issues/1",
 				CreatedAt: "2026-05-16T23:59:00Z",
 				UpdatedAt: "2026-05-17T00:00:00Z",
 				Labels: []Label{
