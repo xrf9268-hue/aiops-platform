@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -580,5 +581,149 @@ func TestRetryEntry_IsDue(t *testing.T) {
 	var nilEntry *RetryEntry
 	if nilEntry.IsDue(now) {
 		t.Errorf("nil retry entry should not be due")
+	}
+}
+
+// TestFinishRunSucceeded_CapsCompletedAndCountsCumulative pins the
+// #234 contract: the Completed map and completedOrder slice are
+// bounded by MaxRecentCompleted, evicting the oldest entry on
+// overflow, while CumulativeCompletedTotal counts every observed
+// success regardless of eviction.
+//
+// Boundary-coverage rule for the "≤ cap" set:
+//   - exactly N (cap) entries → all retained
+//   - N+1 entries → oldest evicted, newest retained, count == N
+//   - cumulative counter == N+1 (paired-edge to the cap)
+func TestFinishRunSucceeded_CapsCompletedAndCountsCumulative(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	const cap = 3
+	state.MaxRecentCompleted = cap
+
+	// Add exactly cap entries.
+	for i := 0; i < cap; i++ {
+		id := IssueID(fmt.Sprintf("issue-%d", i))
+		run := &RunningEntry{Issue: tracker.Issue{ID: string(id), State: "Done"}}
+		state.BeginDispatch(id, run)
+		if !state.FinishRunSucceeded(id, run, time.Second) {
+			t.Fatalf("FinishRunSucceeded(%s) returned false", id)
+		}
+	}
+	if got := len(state.Completed); got != cap {
+		t.Fatalf("Completed size at =N: got %d, want %d", got, cap)
+	}
+	if got := len(state.completedOrder); got != cap {
+		t.Fatalf("completedOrder size at =N: got %d, want %d", got, cap)
+	}
+	if got := state.CumulativeCompletedTotal; got != int64(cap) {
+		t.Fatalf("CumulativeCompletedTotal at =N: got %d, want %d", got, cap)
+	}
+
+	// Add one more — boundary =N+1 — and assert the oldest is evicted.
+	overflow := IssueID("issue-overflow")
+	overflowRun := &RunningEntry{Issue: tracker.Issue{ID: string(overflow), State: "Done"}}
+	state.BeginDispatch(overflow, overflowRun)
+	if !state.FinishRunSucceeded(overflow, overflowRun, time.Second) {
+		t.Fatalf("FinishRunSucceeded(%s) returned false", overflow)
+	}
+	if got := len(state.Completed); got != cap {
+		t.Fatalf("Completed size at =N+1: got %d, want bounded to %d", got, cap)
+	}
+	if _, ok := state.Completed[IssueID("issue-0")]; ok {
+		t.Fatalf("oldest Completed entry (issue-0) should have been evicted")
+	}
+	if _, ok := state.Completed[overflow]; !ok {
+		t.Fatalf("newest Completed entry (%s) missing", overflow)
+	}
+	if got, want := state.CumulativeCompletedTotal, int64(cap+1); got != want {
+		t.Fatalf("CumulativeCompletedTotal at =N+1: got %d, want %d (cumulative must survive eviction)", got, want)
+	}
+
+	// completedOrder is the FIFO source of truth for Snapshot. Assert
+	// the eviction trimmed the head, not the tail.
+	view := state.Snapshot()
+	if len(view.Completed) != cap {
+		t.Fatalf("view.Completed length: got %d, want %d", len(view.Completed), cap)
+	}
+	if got, want := view.Completed[cap-1], overflow; got != want {
+		t.Fatalf("view.Completed last = %q, want %q", got, want)
+	}
+	if got, want := view.CumulativeCompletedTotal, int64(cap+1); got != want {
+		t.Fatalf("view.CumulativeCompletedTotal = %d, want %d", got, want)
+	}
+}
+
+// TestFinishRunNonRetryableFailed_CapsFailedAndCountsCumulative is
+// the Failed-side mirror of the Completed test, with the additional
+// paired-edge for ReleaseFailedIfIssueChanged: a release removes the
+// entry from both the map and the FIFO slice, but does NOT decrement
+// the cumulative counter.
+func TestFinishRunNonRetryableFailed_CapsFailedAndCountsCumulative(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	const cap = 3
+	state.MaxRecentFailed = cap
+
+	for i := 0; i < cap; i++ {
+		id := IssueID(fmt.Sprintf("fail-%d", i))
+		run := &RunningEntry{Issue: tracker.Issue{ID: string(id), State: "Done", UpdatedAt: time.Unix(int64(i), 0).UTC()}}
+		state.BeginDispatch(id, run)
+		if !state.FinishRunNonRetryableFailed(id, run, time.Second) {
+			t.Fatalf("FinishRunNonRetryableFailed(%s) returned false", id)
+		}
+	}
+	if got := len(state.Failed); got != cap {
+		t.Fatalf("Failed size at =N: got %d, want %d", got, cap)
+	}
+	if got := state.CumulativeFailedTotal; got != int64(cap) {
+		t.Fatalf("CumulativeFailedTotal at =N: got %d, want %d", got, cap)
+	}
+
+	// Boundary =N+1
+	overflow := IssueID("fail-overflow")
+	overflowRun := &RunningEntry{Issue: tracker.Issue{ID: string(overflow), State: "Done", UpdatedAt: time.Unix(99, 0).UTC()}}
+	state.BeginDispatch(overflow, overflowRun)
+	if !state.FinishRunNonRetryableFailed(overflow, overflowRun, time.Second) {
+		t.Fatalf("FinishRunNonRetryableFailed(%s) returned false", overflow)
+	}
+	if got := len(state.Failed); got != cap {
+		t.Fatalf("Failed size at =N+1: got %d, want bounded to %d", got, cap)
+	}
+	if _, ok := state.Failed[IssueID("fail-0")]; ok {
+		t.Fatalf("oldest Failed entry (fail-0) should have been evicted")
+	}
+	if got, want := state.CumulativeFailedTotal, int64(cap+1); got != want {
+		t.Fatalf("CumulativeFailedTotal at =N+1: got %d, want %d", got, want)
+	}
+
+	// Paired-edge: ReleaseFailedIfIssueChanged removes the entry from
+	// map AND order, but cumulative stays at N+1 (monotonic).
+	released := state.ReleaseFailedIfIssueChanged(tracker.Issue{ID: "fail-1", State: "Reworking", UpdatedAt: time.Unix(99999, 0).UTC()})
+	if !released {
+		t.Fatalf("ReleaseFailedIfIssueChanged should have removed fail-1 (state/updated_at changed)")
+	}
+	if _, ok := state.Failed[IssueID("fail-1")]; ok {
+		t.Fatalf("fail-1 still in Failed map after release")
+	}
+	for _, id := range state.failedOrder {
+		if id == IssueID("fail-1") {
+			t.Fatalf("fail-1 still in failedOrder after release")
+		}
+	}
+	if got, want := state.CumulativeFailedTotal, int64(cap+1); got != want {
+		t.Fatalf("CumulativeFailedTotal after release: got %d, want %d (release must not decrement)", got, want)
+	}
+}
+
+// TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction pins
+// the constructor-layer default per the project's drop-fallback
+// pattern: callers don't have to remember to set MaxRecent* —
+// NewOrchestratorState installs the defaults. Callers that need
+// unbounded growth can zero the fields after construction.
+func TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	if state.MaxRecentCompleted != DefaultMaxRecentCompleted {
+		t.Fatalf("MaxRecentCompleted = %d, want %d", state.MaxRecentCompleted, DefaultMaxRecentCompleted)
+	}
+	if state.MaxRecentFailed != DefaultMaxRecentFailed {
+		t.Fatalf("MaxRecentFailed = %d, want %d", state.MaxRecentFailed, DefaultMaxRecentFailed)
 	}
 }

@@ -613,11 +613,25 @@ type apiCodexTotals struct {
 }
 
 type apiStateCounts struct {
-	Running   int `json:"running"`
-	Blocked   int `json:"blocked"`
-	Retrying  int `json:"retrying"`
+	Running int `json:"running"`
+	Blocked int `json:"blocked"`
+	// Retrying is the current retry-backoff queue depth.
+	Retrying int `json:"retrying"`
+	// Completed is the size of the FIFO-bounded recent-completed set
+	// (the same set published as `state.completed`). For lifetime
+	// totals across worker restarts and FIFO evictions, use
+	// completed_total. SPEC §13.7 §4.1.8.
 	Completed int `json:"completed"`
-	Failed    int `json:"failed"`
+	// Failed mirrors Completed: bounded recent-set size; see
+	// failed_total for the lifetime monotonic counter.
+	Failed int `json:"failed"`
+	// CompletedTotal / FailedTotal are monotonic counters that count
+	// every observed Succeeded / NonRetryableFailed transition since
+	// process start, independent of FIFO eviction or release. Added
+	// for #234 so long-running deployments still expose a true
+	// lifetime number when the bounded sets have rotated.
+	CompletedTotal int64 `json:"completed_total"`
+	FailedTotal    int64 `json:"failed_total"`
 }
 
 type apiStateRunning struct {
@@ -1016,11 +1030,13 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		MaxConcurrentAgents:        view.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyConcurrencyLimits(view.MaxConcurrentAgentsByState),
 		Counts: apiStateCounts{
-			Running:   len(view.Running),
-			Blocked:   len(view.Blocked),
-			Retrying:  len(view.Retrying),
-			Completed: len(view.Completed),
-			Failed:    len(view.Failed),
+			Running:        len(view.Running),
+			Blocked:        len(view.Blocked),
+			Retrying:       len(view.Retrying),
+			Completed:      len(view.Completed),
+			Failed:         len(view.Failed),
+			CompletedTotal: view.CumulativeCompletedTotal,
+			FailedTotal:    view.CumulativeFailedTotal,
 		},
 		Running:   running,
 		Blocked:   blocked,
