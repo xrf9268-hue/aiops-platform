@@ -51,9 +51,11 @@ are intentionally running the legacy queue path.
 
 ## 1. Configure the workflow and environment
 
-Copy the example workflow and example env into place:
+Copy the example workflow and example env into place. The `.aiops/`
+directory does not exist in a fresh clone; create it first:
 
 ```bash
+mkdir -p .aiops
 cp examples/WORKFLOW.md .aiops/WORKFLOW.md   # or wherever you point AIOPS_WORKFLOW_PATH
 cp .env.example .env
 ```
@@ -107,11 +109,20 @@ profile is explicitly requested (see
 ## 3. Smoke test
 
 The fastest way to verify local configuration is to print the
-effective worker config:
+effective worker config. `--print-config <workdir>` resolves
+`<workdir>/WORKFLOW.md` directly and does **not** consult
+`AIOPS_WORKFLOW_PATH`, so pass the directory that holds the workflow
+you want to inspect — not just `$PWD`:
 
 ```bash
-go run ./cmd/worker --print-config $PWD
+go run ./cmd/worker --print-config "$(dirname "$AIOPS_WORKFLOW_PATH")"
 ```
+
+If you keep your `WORKFLOW.md` at the repo root, `--print-config $PWD`
+works the same way. Passing the wrong directory silently reports
+default config (with `source: default`) instead of failing, so always
+check the `resolution.source` and `resolution.path` fields against the
+file you expected.
 
 Secret-bearing fields (`tracker.api_key`, `repo.clone_url` userinfo,
 `sandbox.credential_files`) are masked with `***` so the output is
