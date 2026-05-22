@@ -952,3 +952,91 @@ var osWriteFileForReloadTest = func(path string, data []byte) error {
 func itoaForReloadTest(v int) string {
 	return strconv.Itoa(v)
 }
+
+func TestWorkflowRuntimeReloadOnceDedupesIdenticalFailures(t *testing.T) {
+	emitter := &recordingWorkflowReloadEmitter{}
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{
+		Initial:     initial,
+		Path:        path,
+		Source:      workflow.SourceFile,
+		Emitter:     emitter,
+		EventTaskID: "workflow-runtime",
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+
+	// Make the file invalid (unsupported tracker.kind). First ReloadOnce must
+	// emit one EventWorkflowReloadFailed; the next five must dedupe.
+	writeWorkflowForReloadTestAt(t, path, "unsupported", 30000, "Rework")
+	if err := runtime.ReloadOnce(context.Background()); err == nil {
+		t.Fatal("first reload of invalid file must return an error")
+	}
+	if got := emitter.count(task.EventWorkflowReloadFailed); got != 1 {
+		t.Fatalf("after first failure, reload_failed count = %d, want 1", got)
+	}
+	for i := 0; i < 5; i++ {
+		if err := runtime.ReloadOnce(context.Background()); err == nil {
+			t.Fatalf("reload %d of identical invalid file must still return an error", i+2)
+		}
+	}
+	if got := emitter.count(task.EventWorkflowReloadFailed); got != 1 {
+		t.Fatalf("after 6 calls with identical invalid fingerprint, reload_failed count = %d, want 1 (deduped)", got)
+	}
+
+	// Fix the file → exactly one EventWorkflowReloaded; the dedupe state clears.
+	writeWorkflowForReloadTestAt(t, path, "linear", 42000, "Rework")
+	if err := runtime.ReloadOnce(context.Background()); err != nil {
+		t.Fatalf("reload after fix: %v", err)
+	}
+	if got := emitter.count(task.EventWorkflowReloaded); got != 1 {
+		t.Fatalf("after recovery, reloaded count = %d, want 1", got)
+	}
+
+	// Break it again with a *different* invalid fingerprint — must emit a new
+	// reload_failed (fingerprint changed, so the dedupe cache misses).
+	writeWorkflowForReloadTestAt(t, path, "unsupported", 42000, "Rework")
+	if err := runtime.ReloadOnce(context.Background()); err == nil {
+		t.Fatal("reload of newly-invalid file must return an error")
+	}
+	if got := emitter.count(task.EventWorkflowReloadFailed); got != 2 {
+		t.Fatalf("after second distinct failure, reload_failed count = %d, want 2", got)
+	}
+}
+
+func TestWorkflowRuntimeReloadOnceDedupesMissingFile(t *testing.T) {
+	emitter := &recordingWorkflowReloadEmitter{}
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{
+		Initial:     initial,
+		Path:        path,
+		Source:      workflow.SourceFile,
+		Emitter:     emitter,
+		EventTaskID: "workflow-runtime",
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove workflow file: %v", err)
+	}
+
+	for i := 0; i < 6; i++ {
+		if err := runtime.ReloadOnce(context.Background()); err == nil {
+			t.Fatalf("reload %d with missing file must return an error", i+1)
+		}
+	}
+	if got := emitter.count(task.EventWorkflowReloadFailed); got != 1 {
+		t.Fatalf("after 6 missing-file reloads, reload_failed count = %d, want 1 (deduped via read-error sentinel)", got)
+	}
+}

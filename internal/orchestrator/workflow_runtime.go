@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -15,6 +16,19 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+// workflowReloadReadErrorSentinel marks the lastFailedFingerprint when the
+// workflow file cannot be read (missing / EISDIR / permission denied). SHA-256
+// fingerprints are 64 lowercase hex chars, so the angle-bracketed string
+// cannot collide with a real fingerprint.
+const workflowReloadReadErrorSentinel = "<workflow-read-error>"
+
+// errWorkflowReloadDeduped is returned by ReloadOnce when the current workflow
+// file fingerprint matches a previous failed reload — the caller already
+// received an EventWorkflowReloadFailed for this fingerprint, so we skip
+// re-emitting and re-running Load/validate. Diagnostic only; the single
+// production caller (RunWorkflowReloadLoop) does not branch on the type.
+var errWorkflowReloadDeduped = errors.New("workflow reload deduped: identical to last-failed fingerprint")
 
 type WorkflowRuntimeConfig struct {
 	Initial              *workflow.Workflow
@@ -36,6 +50,13 @@ type WorkflowRuntime struct {
 	validate             func(path string, source workflow.Source, cfg workflow.Config) error
 	reconciliationConfig func(workflow.Config) ReconciliationConfig
 	current              atomic.Pointer[WorkflowSnapshot]
+
+	// failureMu guards lastFailedFingerprint. ReloadOnce has one production
+	// caller (RunWorkflowReloadLoop) that runs sequentially, but the mutex
+	// keeps -race tests honest if a future caller (e.g. a refresh endpoint)
+	// races with the loop.
+	failureMu             sync.Mutex
+	lastFailedFingerprint string
 }
 
 type WorkflowSnapshot struct {
@@ -102,23 +123,46 @@ func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error {
 	}
 	fingerprint, err := workflowFileFingerprint(r.path)
 	if err != nil {
-		r.emit(ctx, task.EventWorkflowReloadFailed, fmt.Sprintf("workflow reload failed: %v", err), map[string]any{"path": r.path, "error": err.Error()})
+		r.failureMu.Lock()
+		suppress := r.lastFailedFingerprint == workflowReloadReadErrorSentinel
+		r.lastFailedFingerprint = workflowReloadReadErrorSentinel
+		r.failureMu.Unlock()
+		if !suppress {
+			r.emit(ctx, task.EventWorkflowReloadFailed, fmt.Sprintf("workflow reload failed: %v", err), map[string]any{"path": r.path, "error": err.Error()})
+		}
 		return err
 	}
 	if snap := r.Current(); snap.Fingerprint != "" && snap.Fingerprint == fingerprint {
+		r.clearLastFailedFingerprint()
 		return nil
 	}
+	r.failureMu.Lock()
+	if r.lastFailedFingerprint == fingerprint {
+		r.failureMu.Unlock()
+		return errWorkflowReloadDeduped
+	}
+	r.failureMu.Unlock()
 	wf, err := workflow.Load(r.path)
 	if err == nil && r.validate != nil {
 		err = r.validate(wf.Path, wf.Source, wf.Config)
 	}
 	if err != nil {
+		r.failureMu.Lock()
+		r.lastFailedFingerprint = fingerprint
+		r.failureMu.Unlock()
 		r.emit(ctx, task.EventWorkflowReloadFailed, fmt.Sprintf("workflow reload failed: %v", err), map[string]any{"path": r.path, "error": err.Error()})
 		return err
 	}
+	r.clearLastFailedFingerprint()
 	r.current.Store(r.snapshotFromWorkflow(wf, fingerprint))
 	r.emit(ctx, task.EventWorkflowReloaded, "workflow reloaded", map[string]any{"path": r.path, "poll_interval_ms": wf.Config.Tracker.PollIntervalMs})
 	return nil
+}
+
+func (r *WorkflowRuntime) clearLastFailedFingerprint() {
+	r.failureMu.Lock()
+	r.lastFailedFingerprint = ""
+	r.failureMu.Unlock()
 }
 
 func (r *WorkflowRuntime) emit(ctx context.Context, kind, msg string, payload any) {
