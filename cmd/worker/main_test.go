@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -1702,6 +1703,20 @@ func TestParseRunArgs_PortFlagBoundaries(t *testing.T) {
 				t.Fatalf("port = %d, want %d", *port, *tc.wantPort)
 			}
 		})
+	}
+}
+
+// TestParseRunArgs_HelpReturnsFlagErrHelp confirms `--help` propagates
+// the stdlib sentinel up to main, where normalizeRunError treats it as
+// a clean exit. Without this, `worker --help` would be logged as a
+// fatal error.
+func TestParseRunArgs_HelpReturnsFlagErrHelp(t *testing.T) {
+	_, _, err := parseRunArgs([]string{"--help"})
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("err = %v, want flag.ErrHelp", err)
+	}
+	if normalized := normalizeRunError(err, nil); normalized != nil {
+		t.Fatalf("normalizeRunError(flag.ErrHelp) = %v, want nil", normalized)
 	}
 }
 

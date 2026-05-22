@@ -45,6 +45,11 @@ func normalizeRunError(err error, runCtxErr error) error {
 	if runCtxErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return nil
 	}
+	if errors.Is(err, flag.ErrHelp) {
+		// flag.Parse already wrote usage to stderr when -h/--help was
+		// requested; treat that as a clean exit, not a fatal error.
+		return nil
+	}
 	return err
 }
 
@@ -61,7 +66,9 @@ func normalizeRunError(err error, runCtxErr error) error {
 // scratch sessions are the motivating callers.
 func parseRunArgs(args []string) (string, *int, error) {
 	fs := flag.NewFlagSet("worker", flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // tests assert on the returned error; don't dump usage to stderr
+	// Leave fs.Output() at its default (os.Stderr) so `worker --help`
+	// and parse diagnostics reach the user. flag.ErrHelp is propagated
+	// to the caller, which treats it as a clean exit.
 	portFlag := fs.Int("port", 0, "override server.port from WORKFLOW.md: -1 disables the HTTP server, 0 binds an ephemeral port, 1..65535 binds explicitly. SPEC §13.7.")
 	if err := fs.Parse(args); err != nil {
 		return "", nil, err
