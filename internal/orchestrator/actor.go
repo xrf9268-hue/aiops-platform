@@ -1300,7 +1300,14 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 			close(workerDone)
 			return
 		}
-		_ = o.submit(o.runCtx, &finalizeRunOp{
+		// workerDone is closed in exactly one path: either by
+		// finalizeRunOp.apply once the actor accepts this submit, or by this
+		// goroutine when submit fails because o.runCtx was canceled before
+		// the actor accepted the op (typical SIGTERM shutdown race).
+		// Dropping the submit error here would leak the close and stall every
+		// consumer waiting on entry.Done — including reconcile termination and
+		// the graceful-shutdown drain path.
+		if err := o.submit(o.runCtx, &finalizeRunOp{
 			o:          o,
 			id:         id,
 			issue:      issue,
@@ -1310,6 +1317,8 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 			started:    startedAt,
 			entry:      entry,
 			done:       workerDone,
-		})
+		}); err != nil {
+			close(workerDone)
+		}
 	}()
 }

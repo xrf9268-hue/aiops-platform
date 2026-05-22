@@ -1828,6 +1828,90 @@ func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	t.Fatalf("condition not met within %s", timeout)
 }
 
+// TestSpawn_FinalizeSubmitFailureClosesWorkerDone exercises the SIGTERM
+// shutdown race: the worker goroutine receives a result and tries to submit
+// finalizeRunOp, but the actor's runCtx is canceled before the actor accepts
+// it. Without the fix, the submit error is discarded and workerDone is never
+// closed, so any consumer waiting on entry.Done blocks until the process is
+// killed. With the fix, the spawn goroutine closes workerDone itself when
+// submit fails.
+func TestSpawn_FinalizeSubmitFailureClosesWorkerDone(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-shutdown", Identifier: "ENG-shutdown", Title: "shutdown race"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+
+	entryCh := make(chan *RunningEntry, 1)
+	if err := o.submit(context.Background(), opFunc(func(st *OrchestratorState) func() {
+		entryCh <- st.Running[IssueID(iss.ID)]
+		return nil
+	})); err != nil {
+		t.Fatalf("fetch running entry: %v", err)
+	}
+	entry := <-entryCh
+	if entry == nil {
+		t.Fatalf("Running[%s] = nil after dispatch", iss.ID)
+	}
+
+	// Pause the actor with a sentinel op so we can deterministically observe
+	// the shutdown race: the worker goroutine's submit will be blocked on the
+	// ops channel while we cancel runCtx.
+	sentinelStarted := make(chan struct{})
+	releaseSentinel := make(chan struct{})
+	sentinelDone := make(chan struct{})
+	go func() {
+		defer close(sentinelDone)
+		_ = o.submit(context.Background(), opFunc(func(*OrchestratorState) func() {
+			close(sentinelStarted)
+			<-releaseSentinel
+			return nil
+		}))
+	}()
+	<-sentinelStarted
+
+	// Deliver the worker result while the actor is paused. The spawn goroutine
+	// receives it and attempts to submit finalizeRunOp; that submit blocks on
+	// the unbuffered ops channel.
+	disp.finishAt(0, WorkerResult{Err: nil, Elapsed: 10 * time.Millisecond})
+
+	// Yield long enough for the spawn goroutine to consume the result and
+	// reach the blocked-on-ops `o.submit(o.runCtx, &finalizeRunOp{...})` call.
+	// Without this delay, cancel() can fire before the goroutine moves past
+	// its outer select, which lets the runCtx.Done() branch close workerDone
+	// directly and bypasses the race we are trying to exercise.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(o.ops) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Cancel runCtx. Once the actor finishes the sentinel op and re-enters its
+	// select, it observes ctx.Done() and exits the for-loop without draining
+	// the queued finalize submit. The worker goroutine's submit then returns
+	// ctx.Err.
+	cancel()
+	close(releaseSentinel)
+	<-sentinelDone
+
+	select {
+	case <-entry.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("entry.Done leaked after shutdown race: workerDone was never closed")
+	}
+}
+
 func idForIndex(i int) string {
 	const digits = "0123456789"
 	if i == 0 {
