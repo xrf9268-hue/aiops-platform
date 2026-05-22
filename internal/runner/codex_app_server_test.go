@@ -874,6 +874,110 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerRedactsTurnFailureParams(t *testing.T) {
+	const secret = "sk-secret-must-not-leak-9f7c1e"
+	cases := []struct {
+		name      string
+		stubBody  string
+		event     string
+		errSubstr string
+		reason    string
+	}{
+		{
+			name: "turn_failed",
+			stubBody: `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'planner exploded', 'leak': '` + secret + `', 'got': {'inner': '` + secret + `'}}}), flush=True)
+        break
+`,
+			event:     task.EventTurnFailed,
+			errSubstr: "planner exploded",
+			reason:    "planner exploded",
+		},
+		{
+			name: "turn_cancelled",
+			stubBody: `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/cancelled', 'params': {'message': 'user aborted', 'leak': '` + secret + `'}}), flush=True)
+        break
+`,
+			event:     task.EventTurnCancelled,
+			errSubstr: "user aborted",
+			reason:    "user aborted",
+		},
+		{
+			name: "turn_completed_unknown_status_fallback",
+			stubBody: `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'status': 'broken', 'leak': '` + secret + `'}}), flush=True)
+        break
+`,
+			event:     task.EventTurnEndedWithError,
+			errSubstr: "reason unavailable",
+			reason:    "reason unavailable",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			codexAppServerStubScript(t, tc.stubBody)
+			wd := codexWorkdir(t, "x")
+
+			res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+			if err == nil {
+				t.Fatalf("Run err = nil, want failure")
+			}
+			if strings.Contains(err.Error(), secret) {
+				t.Fatalf("err leaked secret: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.errSubstr) {
+				t.Fatalf("err = %v, want substring %q", err, tc.errSubstr)
+			}
+			events := runtimeEventsNamed(res.RuntimeEvents, tc.event)
+			if len(events) != 1 {
+				t.Fatalf("%s events = %d, want 1; events=%#v", tc.event, len(events), res.RuntimeEvents)
+			}
+			payloadJSON, marshalErr := json.Marshal(events[0].Payload)
+			if marshalErr != nil {
+				t.Fatalf("marshal payload: %v", marshalErr)
+			}
+			if bytes.Contains(payloadJSON, []byte(secret)) {
+				t.Fatalf("payload leaked secret: %s", payloadJSON)
+			}
+			if got := runtimeEventField(t, events[0], "reason"); got != tc.reason {
+				t.Fatalf("reason = %#v, want %q; payload=%s", got, tc.reason, payloadJSON)
+			}
+			if _, ok := events[0].Payload.(map[string]any)["leak"]; ok {
+				t.Fatalf("payload should not retain non-allowlisted field 'leak': %s", payloadJSON)
+			}
+		})
+	}
+}
+
 func TestCodexAppServerRunnerSendsContinuationInputAfterContinueRequest(t *testing.T) {
 	binDir := codexAppServerStubScript(t, `
 import json

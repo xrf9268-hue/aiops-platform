@@ -502,20 +502,22 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 			switch method {
 			case "turn/completed":
 				if err := completedTurnError(msg); err != nil {
-					c.recordRuntimeMessage(task.EventTurnEndedWithError, msg)
+					params, _ := msg["params"].(map[string]any)
+					c.recordSafeTurnFailure(task.EventTurnEndedWithError, params)
 					return err
 				}
 				c.handleNotification(msg)
 				c.recordRuntimeMessage(task.EventTurnCompleted, msg)
 				return nil
 			case "turn/failed", "turn/cancelled":
+				params, _ := msg["params"].(map[string]any)
+				reason := safeTurnReason(params)
 				if method == "turn/failed" {
-					c.recordRuntimeMessage(task.EventTurnFailed, msg)
-					return NewError(CategoryTurnFailed, fmt.Sprintf("%s: %v", method, msg["params"]), nil)
-				} else {
-					c.recordRuntimeMessage(task.EventTurnCancelled, msg)
-					return NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %v", method, msg["params"]), nil)
+					c.recordSafeTurnFailure(task.EventTurnFailed, params)
+					return NewError(CategoryTurnFailed, fmt.Sprintf("%s: %s", method, reason), nil)
 				}
+				c.recordSafeTurnFailure(task.EventTurnCancelled, params)
+				return NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %s", method, reason), nil)
 			case "item/tool/call":
 				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
 					return err
@@ -864,34 +866,75 @@ func completedTurnError(msg map[string]any) error {
 	if status == "" || status == "completed" || status == "succeeded" || status == "success" || status == "interrupted" {
 		return nil
 	}
-	reason := ""
-	reasonSources := []map[string]any{params}
+	return NewError(CategoryTurnFailed, fmt.Sprintf("turn/completed failed with status %q: %s", status, safeTurnReason(params)), nil)
+}
+
+// safeTurnReason extracts a human-readable reason string from a Codex
+// `turn/failed`, `turn/cancelled`, or failed `turn/completed` params payload,
+// pulling only from an explicit allow-list of fields. Returns
+// `"reason unavailable"` when none are populated. This is a defense-in-depth
+// guard so that arbitrary protocol fields (which may carry tool output,
+// elicitation snippets, or secrets) never end up in returned error strings or
+// the structured log/event surface. See docs/security-posture.md.
+func safeTurnReason(params map[string]any) string {
+	const fallback = "reason unavailable"
+	if params == nil {
+		return fallback
+	}
+	sources := []map[string]any{params}
 	if turn, _ := params["turn"].(map[string]any); turn != nil {
-		reasonSources = append(reasonSources, turn)
+		sources = append(sources, turn)
 	}
-	for _, source := range reasonSources {
-		for _, key := range []string{"reason", "error", "message"} {
+	for _, source := range sources {
+		for _, key := range []string{"reason", "error", "message", "error_code"} {
 			if v, _ := source[key].(string); strings.TrimSpace(v) != "" {
-				reason = strings.TrimSpace(v)
-				break
-			}
-		}
-		if reason != "" {
-			break
-		}
-	}
-	if reason == "" {
-		for _, key := range []string{"reason", "error", "message"} {
-			if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
-				reason = strings.TrimSpace(v)
-				break
+				return strings.TrimSpace(v)
 			}
 		}
 	}
-	if reason == "" {
-		reason = fmt.Sprint(params)
+	return fallback
+}
+
+// safeTurnFailurePayload returns a runtime-event payload built from only the
+// allow-listed status/reason fields of a Codex failure params map. Mirrors the
+// redaction discipline of safeTurnReason so the JSON event surface
+// (`/api/v1/state`, runtime event log) never persists the raw protocol payload.
+func safeTurnFailurePayload(params map[string]any) map[string]any {
+	out := map[string]any{}
+	if params == nil {
+		out["reason"] = "reason unavailable"
+		return out
 	}
-	return NewError(CategoryTurnFailed, fmt.Sprintf("turn/completed failed with status %q: %s", status, reason), nil)
+	if v, _ := params["status"].(string); strings.TrimSpace(v) != "" {
+		out["status"] = strings.TrimSpace(v)
+	}
+	for _, key := range []string{"reason", "error", "message", "error_code"} {
+		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
+			out[key] = strings.TrimSpace(v)
+		}
+	}
+	if turn, _ := params["turn"].(map[string]any); turn != nil {
+		nested := map[string]any{}
+		if v, _ := turn["status"].(string); strings.TrimSpace(v) != "" {
+			nested["status"] = strings.TrimSpace(v)
+		}
+		for _, key := range []string{"reason", "error", "message", "error_code"} {
+			if v, _ := turn[key].(string); strings.TrimSpace(v) != "" {
+				nested[key] = strings.TrimSpace(v)
+			}
+		}
+		if len(nested) > 0 {
+			out["turn"] = nested
+		}
+	}
+	if _, ok := out["reason"]; !ok {
+		out["reason"] = safeTurnReason(params)
+	}
+	return out
+}
+
+func (c *appServerClient) recordSafeTurnFailure(event string, params map[string]any) {
+	c.recordRuntimeEvent(event, c.withRuntimeContext(safeTurnFailurePayload(params)))
 }
 
 func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[string]any) error {
