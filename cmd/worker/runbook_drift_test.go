@@ -5,21 +5,30 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 )
 
-// TestRuntimeStatusRunbookExampleMatchesHandler parses every ```json fenced
-// block under docs/runbooks/runtime-status.md "## JSON shape" and asserts each
-// example decodes cleanly into apiStateResponse with
-// `json.DisallowUnknownFields`. A field added to the runbook that is not in
-// the Go struct (or renamed without updating the doc) fails the build —
-// matching the drift-detection requirement from #223.
+// TestRuntimeStatusRunbookExampleMatchesHandler asserts bi-directional schema
+// parity between docs/runbooks/runtime-status.md and apiStateResponse:
 //
-// The test does not pin specific values; the live handler test
-// (`TestStateHTTPHandlerReturnsRuntimeStateSnapshot`) covers value semantics.
-// This test is purely about schema/key parity between runbook prose and the
-// wire format.
+//   1. doc → handler: every ```json fenced block tagged as the /api/v1/state
+//      example (identified by the `counts` key) strict-decodes into
+//      apiStateResponse with json.DisallowUnknownFields. Catches drift where
+//      the doc references a field that does not exist in the wire format.
+//
+//   2. handler → doc: marshal a fully-populated apiStateResponse (every
+//      omitempty field set), then walk the resulting key tree and assert each
+//      key path exists in the runbook example. Catches drift where the
+//      handler grows a new JSON field that the runbook forgets to mention.
+//
+// Together these close the "either direction" parity guarantee for #223.
+// The test does not pin specific values; live handler value semantics live
+// in TestStateHTTPHandlerReturnsRuntimeStateSnapshot.
 func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "runbooks", "runtime-status.md"))
 	if err != nil {
@@ -30,7 +39,7 @@ func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 		t.Fatalf("no ```json blocks found in runbook")
 	}
 
-	var stateExampleBlocks int
+	var stateExample map[string]any
 	for i, block := range blocks {
 		var probe map[string]any
 		if err := json.Unmarshal([]byte(block), &probe); err != nil {
@@ -41,7 +50,6 @@ func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 		if _, ok := probe["counts"]; !ok {
 			continue
 		}
-		stateExampleBlocks++
 
 		dec := json.NewDecoder(bytes.NewReader([]byte(block)))
 		dec.DisallowUnknownFields()
@@ -49,10 +57,132 @@ func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 		if err := dec.Decode(&into); err != nil {
 			t.Fatalf("runbook block %d failed strict decode into apiStateResponse: %v\n%s", i, err, block)
 		}
+		stateExample = probe
+		break
 	}
-	if stateExampleBlocks == 0 {
+	if stateExample == nil {
 		t.Fatalf("runbook has no /api/v1/state example block (no JSON block contains a `counts` key)")
 	}
+
+	handlerKeys := flattenJSONKeys(t, fullyPopulatedAPIStateResponseJSON(t))
+	docKeys := flattenJSONKeys(t, mustMarshal(t, stateExample))
+	var missing []string
+	for key := range handlerKeys {
+		if _, ok := docKeys[key]; !ok {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Fatalf("apiStateResponse fields not documented in docs/runbooks/runtime-status.md /api/v1/state example:\n  %s\nUpdate the runbook to mention these keys, or remove the field from apiStateResponse if intentional.", strings.Join(missing, "\n  "))
+	}
+}
+
+// fullyPopulatedAPIStateResponseJSON returns the JSON encoding of an
+// apiStateResponse with every field — including every `omitempty` field —
+// populated, so json.Marshal cannot omit anything. Used to enumerate the
+// complete handler-side schema for drift detection.
+func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
+	t.Helper()
+	startedAt := time.Date(2026, 5, 21, 9, 9, 55, 0, time.UTC)
+	blockedAt := time.Date(2026, 5, 20, 6, 5, 38, 0, time.UTC)
+	lastCodexAt := time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC)
+	dueAt := time.Date(2026, 5, 21, 9, 11, 0, 0, time.UTC)
+	retryAttempt := 1
+	resp := apiStateResponse{
+		GeneratedAt:                time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC),
+		PollIntervalMs:             15000,
+		MaxConcurrentAgents:        4,
+		MaxConcurrentAgentsByState: map[string]int{"In Progress": 2},
+		Counts: apiStateCounts{
+			Running:        1,
+			Blocked:        1,
+			Retrying:       1,
+			Completed:      0,
+			Failed:         0,
+			CompletedTotal: 12,
+			FailedTotal:    3,
+		},
+		Running: []apiStateRunning{{
+			IssueID:       "issue-1",
+			Identifier:    "ENG-1",
+			StartedAt:     &startedAt,
+			RetryAttempt:  &retryAttempt,
+			WorkspacePath: "/var/aiops/workspaces/acme/repo/issue-1",
+			LastCodexAt:   &lastCodexAt,
+		}},
+		Blocked: []apiStateBlocked{{
+			IssueID:       "issue-2",
+			Identifier:    "ENG-2",
+			State:         "AI Ready",
+			BlockedAt:     &blockedAt,
+			WorkspacePath: "/var/aiops/workspaces/acme/repo/issue-2",
+			SessionID:     "thread-1-turn-1",
+			LastCodexAt:   &lastCodexAt,
+			Method:        "mcpServer/elicitation/request",
+			Error:         "input required: mcpServer/elicitation/request",
+		}},
+		Retrying: []apiStateRetry{{
+			IssueID:    "issue-3",
+			Identifier: "ENG-3",
+			Attempt:    2,
+			DueAt:      &dueAt,
+			Error:      "retry soon",
+		}},
+		Completed: []orchestrator.IssueID{"issue-4"},
+		Failed:    []orchestrator.IssueID{"issue-5"},
+		CodexTotals: apiCodexTotals{
+			InputTokens:    100,
+			OutputTokens:   200,
+			TotalTokens:    300,
+			SecondsRunning: 1.5,
+		},
+		RateLimits: &orchestrator.RateLimitSnapshot{},
+	}
+	return mustMarshal(t, resp)
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return out
+}
+
+// flattenJSONKeys decodes raw JSON and returns the set of dotted key paths
+// present in it. Object keys are joined with `.`; arrays are walked into
+// their first element so per-row keys (e.g. running[].issue_id) appear as
+// running.issue_id without an index. Scalar leaves are not added — only
+// keys.
+func flattenJSONKeys(t *testing.T, raw []byte) map[string]struct{} {
+	t.Helper()
+	var root any
+	if err := json.Unmarshal(raw, &root); err != nil {
+		t.Fatalf("unmarshal for key flatten: %v\n%s", err, raw)
+	}
+	out := map[string]struct{}{}
+	var walk func(prefix string, node any)
+	walk = func(prefix string, node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			for k, child := range v {
+				path := k
+				if prefix != "" {
+					path = prefix + "." + k
+				}
+				out[path] = struct{}{}
+				walk(path, child)
+			}
+		case []any:
+			if len(v) > 0 {
+				walk(prefix, v[0])
+			}
+		}
+	}
+	walk("", root)
+	return out
 }
 
 // extractFencedJSONBlocks returns the contents of each ```json fence in src.

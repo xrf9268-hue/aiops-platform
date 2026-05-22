@@ -115,7 +115,9 @@ the shape here without updating the handler — or vice versa — fails the buil
       "issue_id": "issue-1",
       "issue_identifier": "ENG-1",
       "started_at": "2026-05-21T09:09:55Z",
-      "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1"
+      "retry_attempt": 1,
+      "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
+      "last_codex_at": "2026-05-21T09:10:00Z"
     }
   ],
   "blocked": [
@@ -124,12 +126,22 @@ the shape here without updating the handler — or vice versa — fails the buil
       "issue_identifier": "ENG-2",
       "state": "AI Ready",
       "blocked_at": "2026-05-20T06:05:38Z",
+      "workspace_path": "/var/aiops/workspaces/acme/repo/issue-2",
       "session_id": "thread-1-turn-1",
+      "last_codex_at": "2026-05-20T06:05:30Z",
       "method": "mcpServer/elicitation/request",
       "error": "input required: mcpServer/elicitation/request"
     }
   ],
-  "retrying": [],
+  "retrying": [
+    {
+      "issue_id": "issue-3",
+      "issue_identifier": "ENG-3",
+      "attempt": 2,
+      "due_at": "2026-05-21T09:11:00Z",
+      "error": "retry soon"
+    }
+  ],
   "completed": [],
   "failed": [],
   "codex_totals": {
@@ -137,7 +149,8 @@ the shape here without updating the handler — or vice versa — fails the buil
     "output_tokens": 0,
     "total_tokens": 0,
     "seconds_running": 0
-  }
+  },
+  "rate_limits": {}
 }
 ```
 
