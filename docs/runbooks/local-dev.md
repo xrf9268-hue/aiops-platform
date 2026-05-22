@@ -318,7 +318,7 @@ config field is empty).
 | --- | --- | --- |
 | `linear` | `tracker.api_key: $LINEAR_API_KEY` (or any `$VAR`) | n/a |
 | `gitea`  | `tracker.api_key: $GITEA_TOKEN`  (or any `$VAR`) | `GITEA_BASE_URL` when `tracker.project_slug` is empty |
-| `github` | `tracker.api_key: $GITHUB_TOKEN` (or any `$VAR`) | `GITHUB_API_BASE_URL` when `tracker.base_url` is empty |
+| `github` | `tracker.api_key: $GITHUB_TOKEN` (or any `$VAR`) | `GITHUB_API_BASE_URL` when `tracker.endpoint` is empty |
 
 When the failure surfaces depends on how `tracker.api_key` is encoded
 in `WORKFLOW.md`:

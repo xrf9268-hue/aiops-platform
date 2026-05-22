@@ -138,6 +138,56 @@ Prompt body
 	}
 }
 
+// TestLoadMigratesLegacyTrackerBaseURL pins the #242 deprecation alias:
+// `tracker.base_url` in a legacy WORKFLOW.md still parses, surfaces on the
+// renamed `Tracker.Endpoint` field, and clears the legacy `BaseURL` field
+// so downstream code reads only one place.
+func TestLoadMigratesLegacyTrackerBaseURL(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  base_url: https://tracker.example/legacy-base-url
+---
+prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/legacy-base-url" {
+		t.Fatalf("Tracker.Endpoint = %q, want legacy base_url migrated to endpoint", got)
+	}
+	if wf.Config.Tracker.BaseURL != "" {
+		t.Fatalf("Tracker.BaseURL = %q, want cleared after migration", wf.Config.Tracker.BaseURL)
+	}
+}
+
+// TestLoadPrefersEndpointWhenBothFieldsSet: explicit `tracker.endpoint` wins
+// over the deprecated `tracker.base_url`.
+func TestLoadPrefersEndpointWhenBothFieldsSet(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  endpoint: https://tracker.example/canonical
+  base_url: https://tracker.example/legacy
+---
+prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/canonical" {
+		t.Fatalf("Tracker.Endpoint = %q, want canonical endpoint to win over base_url", got)
+	}
+}
+
 func TestLoadResolvesExactEnvironmentReferences(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspaces")
 	credentialPath := filepath.Join(t.TempDir(), "token")
@@ -156,7 +206,7 @@ repo:
   clone_url: $AIOPS_TEST_REPO_URL
 tracker:
   api_key: ${AIOPS_TEST_TRACKER_KEY}
-  base_url: $AIOPS_TEST_TRACKER_BASE_URL
+  endpoint: $AIOPS_TEST_TRACKER_BASE_URL
 workspace:
   root: $AIOPS_TEST_WORKSPACE_ROOT
 codex:
@@ -180,8 +230,8 @@ Prompt body
 	if got := wf.Config.Tracker.APIKey; got != "tracker-secret" {
 		t.Fatalf("tracker.api_key = %q", got)
 	}
-	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/api" {
-		t.Fatalf("tracker.base_url = %q", got)
+	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/api" {
+		t.Fatalf("tracker.endpoint = %q", got)
 	}
 	if got := wf.Config.Workspace.Root; got != workspaceRoot {
 		t.Fatalf("workspace.root = %q, want %q", got, workspaceRoot)
@@ -207,7 +257,7 @@ repo:
   name: r
   clone_url: https://gitea.example/$USER/aiops
 tracker:
-  base_url: https://tracker.example/$USER/api
+  endpoint: https://tracker.example/$USER/api
 workspace:
   root: .aiops-$USER
 codex:
@@ -231,8 +281,8 @@ Prompt body
 	if got := wf.Config.Repo.CloneURL; got != "https://gitea.example/$USER/aiops" {
 		t.Fatalf("repo.clone_url = %q", got)
 	}
-	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/$USER/api" {
-		t.Fatalf("tracker.base_url = %q", got)
+	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/$USER/api" {
+		t.Fatalf("tracker.endpoint = %q", got)
 	}
 	wantRoot := filepath.Join(dir, ".aiops-$USER")
 	if got := wf.Config.Workspace.Root; got != wantRoot {
@@ -314,7 +364,7 @@ repo:
   clone_url: $aiops_test_repo_url
 tracker:
   api_key: ${linear_token}
-  base_url: $Mixed_Case_Url
+  endpoint: $Mixed_Case_Url
 ---
 Prompt body
 `)
@@ -329,8 +379,8 @@ Prompt body
 	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
 		t.Fatalf("tracker.api_key = %q, lowercase ${} env not resolved", got)
 	}
-	if got := wf.Config.Tracker.BaseURL; got != "https://tracker.example/mixed" {
-		t.Fatalf("tracker.base_url = %q, mixed-case env not resolved", got)
+	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/mixed" {
+		t.Fatalf("tracker.endpoint = %q, mixed-case env not resolved", got)
 	}
 }
 
