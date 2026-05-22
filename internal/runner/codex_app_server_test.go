@@ -382,6 +382,145 @@ for line in sys.stdin:
 	assertInputRequiredEvent(t, res.RuntimeEvents, "mcpServer/elicitation/request")
 }
 
+// TestCodexAppServerRunnerEmitsStartupFailedOnInitializeError pins SPEC §10.4:
+// a JSON-RPC error response to `initialize` is a startup failure and must
+// surface as task.EventStartupFailed so /api/v1/state can distinguish "failed
+// to start" from "ran a turn and failed".
+func TestCodexAppServerRunnerEmitsStartupFailedOnInitializeError(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'error': {'code': -32603, 'message': 'codex bad startup'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "startup fails")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil {
+		t.Fatalf("Run error = nil, want startup failure")
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventStartupFailed)
+	if len(events) != 1 {
+		t.Fatalf("startup_failed events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "phase"); got != "initialize" {
+		t.Fatalf("startup_failed phase = %#v, want initialize", got)
+	}
+	if got := runtimeEventField(t, events[0], "error"); got == nil || got == "" {
+		t.Fatalf("startup_failed error = %#v, want a non-empty error string", got)
+	}
+}
+
+// TestCodexAppServerRunnerEmitsStartupFailedOnThreadStartError pins the
+// equivalent for the `thread/start` failure site.
+func TestCodexAppServerRunnerEmitsStartupFailedOnThreadStartError(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'error': {'code': -32603, 'message': 'thread denied'}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "thread fails")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err == nil {
+		t.Fatalf("Run error = nil, want thread/start failure")
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventStartupFailed)
+	if len(events) != 1 {
+		t.Fatalf("startup_failed events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "phase"); got != "thread/start" {
+		t.Fatalf("startup_failed phase = %#v, want thread/start", got)
+	}
+}
+
+// TestCodexAppServerRunnerEmitsUnsupportedToolCallForUnknownTool pins SPEC
+// §10.4: when the agent invokes a tool the runtime did not advertise, the
+// orchestrator must learn about it via task.EventUnsupportedToolCall (the
+// wire still carries the structured failure result, but observability needs
+// a typed event).
+func TestCodexAppServerRunnerEmitsUnsupportedToolCallForUnknownTool(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'call-1', 'method': 'item/tool/call', 'params': {'name': 'missing_tool', 'arguments': {}}}), flush=True)
+    elif msg.get('id') == 'call-1':
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'done after unsupported tool'}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "unsupported tool")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventUnsupportedToolCall)
+	if len(events) != 1 {
+		t.Fatalf("unsupported_tool_call events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "tool"); got != "missing_tool" {
+		t.Fatalf("unsupported_tool_call tool = %#v, want missing_tool", got)
+	}
+}
+
+// TestCodexAppServerRunnerEmitsTurnInputRequiredOnDeclinedApproval pins SPEC
+// §10.4 turn_input_required: an approval request that is not auto-approved
+// (here `item/commandExecution/requestApproval` with the default `never`
+// approval policy) is operator-required input — the runner must emit the
+// event and bail with InputRequiredError so the orchestrator can mark the
+// issue blocked, just as it does for `item/tool/requestUserInput`.
+func TestCodexAppServerRunnerEmitsTurnInputRequiredOnDeclinedApproval(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'approve-1', 'method': 'item/commandExecution/requestApproval', 'params': {'command': 'rm -rf /'}}), flush=True)
+    elif msg.get('id') == 'approve-1':
+        result = msg.get('result', {})
+        if result.get('decision') != 'decline':
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'expected decline', 'got': msg}}), flush=True)
+        break
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "declined approval")
+	in := appServerInput(wd)
+	// "untrusted" is the non-auto-approving policy: autoApproveRequest only
+	// short-circuits on "never" / "on-failure" string policies, so any other
+	// string drives the decline branch in protocolServerRequestResult.
+	in.Workflow.Config.Codex.ApprovalPolicy = "untrusted"
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err == nil || !strings.Contains(err.Error(), "input required") {
+		t.Fatalf("Run error = %v, want input required for declined approval", err)
+	}
+	assertInputRequiredEvent(t, res.RuntimeEvents, "item/commandExecution/requestApproval")
+}
+
 func TestCodexAppServerRunnerEmitsSpecPhaseTransitions(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
@@ -1390,73 +1529,13 @@ for line in sys.stdin:
 	}
 }
 
-func TestCodexAppServerRunnerDeclinesApprovalsWhenPolicyRequiresReview(t *testing.T) {
-	binDir := codexAppServerStubScript(t, `
-import json
-log=open(os.environ['CODEX_STDIN_LOG'], 'w')
-approval_methods = [
-    ('approval-command', 'item/commandExecution/requestApproval', {'command': 'go test ./...'}, {'decision': 'decline'}),
-    ('approval-file', 'item/fileChange/requestApproval', {'path': 'main.go'}, {'decision': 'decline'}),
-    (
-        'approval-permissions',
-        'item/permissions/requestApproval',
-        {'permissions': {'filesystem': {'write': True}, 'network': {'enabled': True}}},
-        {'permissions': {}},
-    ),
-]
-pending = list(approval_methods)
-for line in sys.stdin:
-    log.write(line); log.flush()
-    msg=json.loads(line)
-    if msg.get('method') == 'initialize':
-        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
-    elif msg.get('method') == 'thread/start':
-        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
-    elif msg.get('method') == 'turn/start':
-        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        req_id, method, params, _expected = pending.pop(0)
-        print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
-    elif msg.get('id', '').startswith('approval-'):
-        req_id = msg['id']
-        expected = next(item[3] for item in approval_methods if item[0] == req_id)
-        if msg.get('result') != expected:
-            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected approval response', 'got': msg.get('result'), 'want': expected}}), flush=True)
-            break
-        if pending:
-            req_id, method, params, _expected = pending.pop(0)
-            print(json.dumps({'jsonrpc': '2.0', 'id': req_id, 'method': method, 'params': params}), flush=True)
-        else:
-            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'review policy enforced'}}), flush=True)
-            break
-    elif msg.get('method') == 'initialized':
-        pass
-`)
-	wd := codexWorkdir(t, "x")
-	in := appServerInput(wd)
-	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{
-		"reject": map[string]any{
-			"sandbox_approval": true,
-			"rules":            true,
-		},
-	}
-
-	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if res.Summary != "review policy enforced" {
-		t.Fatalf("Summary = %q, want review policy enforced", res.Summary)
-	}
-	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{`"decision":"decline"`, `"permissions":{}`} {
-		if !strings.Contains(string(stdin), want) {
-			t.Fatalf("stdin missing %s in policy-limited approval responses: %s", want, stdin)
-		}
-	}
-}
+// Replaced by TestCodexAppServerRunnerEmitsTurnInputRequiredOnDeclinedApproval:
+// the previous TestCodexAppServerRunnerDeclinesApprovalsWhenPolicyRequiresReview
+// pinned the SPEC §10.4-non-compliant silent-decline behavior (decline sent
+// over the wire, no turn_input_required event, agent continues). #214 makes
+// the runner emit turn_input_required and bail with InputRequiredError so the
+// orchestrator can mark the issue blocked when an approval cannot be
+// auto-approved.
 
 func TestProtocolServerRequestResultLegacyApprovalMethodsUseProtocolDecisions(t *testing.T) {
 	for _, tc := range []struct {

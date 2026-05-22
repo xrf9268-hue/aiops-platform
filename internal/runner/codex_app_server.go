@@ -240,9 +240,11 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			"version": "0.1.0",
 		},
 	}); err != nil {
+		c.recordStartupFailed("initialize", err)
 		return fmt.Errorf("codex app-server initialize: %w", err)
 	}
 	if err := c.notify("initialized", map[string]any{}); err != nil {
+		c.recordStartupFailed("initialized", err)
 		return err
 	}
 
@@ -253,10 +255,12 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
 	})
 	if err != nil {
+		c.recordStartupFailed("thread/start", err)
 		return fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	threadID, err := extractString(threadResult, "thread", "id")
 	if err != nil {
+		c.recordStartupFailed("thread/start", err)
 		return fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	c.threadID = threadID
@@ -286,10 +290,16 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			"sandboxPolicy":  in.Workflow.Config.Codex.TurnSandboxPolicy,
 		})
 		if err != nil {
+			if turn == 1 {
+				c.recordStartupFailed("turn/start", err)
+			}
 			return fmt.Errorf("codex app-server turn/start: %w", err)
 		}
 		turnID, err := extractString(turnResult, "turn", "id")
 		if err != nil {
+			if turn == 1 {
+				c.recordStartupFailed("turn/start", err)
+			}
 			return fmt.Errorf("codex app-server turn/start: %w", err)
 		}
 		c.turnID = turnID
@@ -557,6 +567,17 @@ func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 						c.recordInputRequiredMessage(method, msg)
 						return &InputRequiredError{Method: method}
 					}
+					// SPEC §10.4 turn_input_required also fires for an
+					// approval request that is not auto-approved — the
+					// runner's wire response is a decline / empty
+					// permissions / deny per protocolServerRequestResult,
+					// which is itself a signal that the operator must
+					// act. Without the event the orchestrator cannot
+					// distinguish this from a transient turn failure.
+					if approvalDeclinedServerRequest(method, c.approvalPolicy) {
+						c.recordInputRequiredMessage(method, msg)
+						return &InputRequiredError{Method: method}
+					}
 					c.lastTerminal = time.Now()
 					continue
 				}
@@ -643,6 +664,38 @@ func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]an
 	if c.runtimeEventSink != nil {
 		c.runtimeEventSink(runtimeEvent)
 	}
+}
+
+// recordUnsupportedToolCall emits task.EventUnsupportedToolCall (SPEC §10.4)
+// with the tool name and the (already JSON-marshaled) arguments slice the
+// agent supplied. Arguments come from codex over JSON-RPC, so we surface them
+// verbatim — they were never going to be a secret-leak surface since the
+// agent chose them.
+func (c *appServerClient) recordUnsupportedToolCall(name string, arguments json.RawMessage) {
+	payload := map[string]any{"tool": name}
+	if len(arguments) > 0 {
+		var parsed any
+		if err := json.Unmarshal(arguments, &parsed); err == nil {
+			payload["arguments"] = parsed
+		} else {
+			payload["arguments_raw"] = string(arguments)
+		}
+	}
+	c.recordRuntimeEvent(task.EventUnsupportedToolCall, c.withRuntimeContext(payload))
+}
+
+// recordStartupFailed emits task.EventStartupFailed (SPEC §10.4) tagged with
+// the startup phase (initialize / initialized / thread/start / turn/start)
+// that just failed. The payload `error` carries the Go error's Error()
+// string; the upstream errors come from JSON-RPC framing or extractString,
+// neither of which echoes user-controlled params, so it is safe to surface
+// without the safeTurnReason redaction pass.
+func (c *appServerClient) recordStartupFailed(phase string, err error) {
+	payload := map[string]any{"phase": phase}
+	if err != nil {
+		payload["error"] = err.Error()
+	}
+	c.recordRuntimeEvent(task.EventStartupFailed, c.withRuntimeContext(payload))
 }
 
 func (c *appServerClient) recordPhaseTransition(from, to task.RunAttemptPhase) {
@@ -740,6 +793,23 @@ func inputRequiredServerRequest(method string) bool {
 	switch method {
 	case "item/tool/requestUserInput", "mcpServer/elicitation/request":
 		return true
+	default:
+		return false
+	}
+}
+
+// approvalDeclinedServerRequest reports whether a server request method goes
+// through the decline / deny / empty-permissions branch in
+// protocolServerRequestResult under the current approval policy. SPEC §10.4
+// treats a declined approval as operator-required input.
+func approvalDeclinedServerRequest(method string, approvalPolicy any) bool {
+	switch method {
+	case "item/commandExecution/requestApproval",
+		"item/fileChange/requestApproval",
+		"item/permissions/requestApproval",
+		"execCommandApproval",
+		"applyPatchApproval":
+		return !autoApproveRequest(method, approvalPolicy)
 	default:
 		return false
 	}
@@ -1034,6 +1104,14 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 		if err != nil {
 			return err
 		}
+	} else {
+		// SPEC §10.4 unsupported_tool_call: the wire still carries the
+		// structured failure result, but the orchestrator/state surface
+		// needs a typed event to distinguish "agent invoked an
+		// unadvertised tool" from "advertised tool failed". The structured
+		// failure path above already emits its own error; this branch is
+		// reached only when the tool name is not in c.tools.
+		c.recordUnsupportedToolCall(name, arguments)
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
