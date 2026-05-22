@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -199,6 +200,13 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 				State:       state,
 				CreatedAt:   createdAt,
 				UpdatedAt:   updatedAt,
+				Labels:      extractGiteaLabels(issue.Labels),
+				BlockedBy:   c.buildBlockedBy(ctx, issue.Body),
+				// Priority: Gitea has no native priority field — see
+				// dependsOnRegexp comment / SPEC §4.1.1 note. Left at the zero
+				// value; dispatch sort treats every Gitea issue as equal priority
+				// and falls back to created_at. Operators can opt in to
+				// label-driven priority in a follow-up.
 			})
 		}
 		if !hasNext && len(batch) < listIssuesPageSize {
@@ -322,6 +330,70 @@ func hasNextPage(linkHeaders []string) bool {
 		}
 	}
 	return false
+}
+
+// dependsOnRegexp matches the documented Gitea cross-reference syntax
+// `Depends on #N` (case-insensitive, anywhere in body) per SPEC §11.3.
+// Gitea has no native priority field, so `Priority` on the normalized Issue
+// stays zero for this tracker; the dispatch sort falls back to created_at
+// per §8.2. Operators who want label-driven priority can wire it as a
+// follow-up.
+var dependsOnRegexp = regexp.MustCompile(`(?i)depends on #(\d+)`)
+
+// extractGiteaLabels returns lowercased label names per SPEC §11.3
+// normalization. The Gitea label payload (`Label.Name`) is already deserialized
+// by IssueStateFromLabels; we just project it onto the cross-tracker Issue
+// shape.
+func extractGiteaLabels(labels []Label) []string {
+	if len(labels) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(labels))
+	for _, l := range labels {
+		name := strings.TrimSpace(l.Name)
+		if name == "" {
+			continue
+		}
+		out = append(out, strings.ToLower(name))
+	}
+	return out
+}
+
+// buildBlockedBy parses `Depends on #N` references from issue.Body and looks
+// up each blocker's current workflow state via a follow-up Gitea fetch so the
+// §8.2 Todo blocker rule can compare against the blocker's State. Lookup
+// failures are silently skipped (best-effort): a missing or deleted blocker
+// drops out of the list rather than aborting candidate enumeration. Lookups
+// are O(distinct refs) per source issue; this is acceptable for typical
+// workflows (0–3 blockers per issue).
+func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []tracker.BlockerRef {
+	matches := dependsOnRegexp.FindAllStringSubmatch(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := map[int]struct{}{}
+	var out []tracker.BlockerRef
+	for _, m := range matches {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || n <= 0 {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		issue, found, err := c.getIssueByNumber(ctx, n)
+		if err != nil || !found {
+			continue
+		}
+		state, _ := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
+		out = append(out, tracker.BlockerRef{
+			ID:         giteaIssueID(issue),
+			Identifier: fmt.Sprintf("#%d", issue.Number),
+			State:      state,
+		})
+	}
+	return out
 }
 
 func giteaIssueID(issue Issue) string {

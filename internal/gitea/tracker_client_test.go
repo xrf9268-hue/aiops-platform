@@ -394,6 +394,144 @@ func TestTrackerClientListIssuesByStatesContinuesWhenServerCapsPageBelowRequeste
 	}
 }
 
+// TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy pins the
+// SPEC §4.1.1 / §11.3 Issue normalization for the Gitea tracker: labels are
+// lowercased and `Depends on #N` body references become BlockerRef entries
+// populated by a follow-up issue lookup (so the §8.2 Todo blocker rule has the
+// State it needs).
+func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Issue{{
+				ID:        101,
+				Number:    1,
+				Title:     "first",
+				Body:      "Needs the blocker resolved.\n\nDepends on #42\nAlso Depends on #43 and depends on #42 again.",
+				HTMLURL:   "https://gitea.local/o/r/issues/1",
+				CreatedAt: "2026-05-16T23:59:00Z",
+				UpdatedAt: "2026-05-17T00:00:00Z",
+				Labels: []Label{
+					{Name: "Aiops/Todo"},
+					{Name: "Priority/P1"},
+					{Name: "  "},
+					{Name: "Type/Bug"},
+				},
+			}})
+		case "/api/v1/repos/owner/repo/issues/42":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:     142,
+				Number: 42,
+				Title:  "blocker still open",
+				Labels: []Label{{Name: "aiops/in-progress"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/43":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:     143,
+				Number: 43,
+				Title:  "blocker done",
+				Labels: []Label{{Name: "aiops/done"}},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{
+		APIKey:       "secret",
+		ActiveStates: []string{"AI Ready"},
+	}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues len = %d, want 1", len(issues))
+	}
+	got := issues[0]
+	wantLabels := []string{"aiops/todo", "priority/p1", "type/bug"}
+	if !slices.Equal(got.Labels, wantLabels) {
+		t.Fatalf("Labels = %#v, want %#v (lowercased, empty entries dropped)", got.Labels, wantLabels)
+	}
+	if len(got.BlockedBy) != 2 {
+		t.Fatalf("BlockedBy len = %d, want 2 (deduped #42 + #43); got=%#v", len(got.BlockedBy), got.BlockedBy)
+	}
+	wantBlockers := map[string]string{"#42": "In Progress", "#43": "Done"}
+	for _, b := range got.BlockedBy {
+		want, ok := wantBlockers[b.Identifier]
+		if !ok {
+			t.Fatalf("unexpected blocker %#v", b)
+		}
+		if b.State != want {
+			t.Fatalf("blocker %s state = %q, want %q", b.Identifier, b.State, want)
+		}
+		if b.ID == "" {
+			t.Fatalf("blocker %s ID empty; want canonical Gitea ID", b.Identifier)
+		}
+	}
+	if got.Priority != 0 {
+		t.Fatalf("Priority = %d, want 0 (Gitea has no native priority; left at zero per dependsOnRegexp comment)", got.Priority)
+	}
+}
+
+// TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure: a missing
+// blocker (404 or transient failure) silently drops out of BlockedBy rather
+// than aborting candidate enumeration. Best-effort semantics per #210.
+func TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Issue{{
+				ID:        101,
+				Number:    1,
+				Title:     "first",
+				Body:      "Depends on #999 (deleted)\nDepends on #43",
+				HTMLURL:   "https://gitea.local/o/r/issues/1",
+				CreatedAt: "2026-05-16T23:59:00Z",
+				UpdatedAt: "2026-05-17T00:00:00Z",
+				Labels:    []Label{{Name: "aiops/todo"}},
+			}})
+		case "/api/v1/repos/owner/repo/issues/999":
+			http.NotFound(w, r)
+		case "/api/v1/repos/owner/repo/issues/43":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:     143,
+				Number: 43,
+				Title:  "still exists",
+				Labels: []Label{{Name: "aiops/done"}},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{
+		APIKey:       "secret",
+		ActiveStates: []string{"AI Ready"},
+	}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues len = %d, want 1", len(issues))
+	}
+	if len(issues[0].BlockedBy) != 1 || issues[0].BlockedBy[0].Identifier != "#43" {
+		t.Fatalf("BlockedBy = %#v, want only #43 (missing #999 silently dropped)", issues[0].BlockedBy)
+	}
+}
+
 func serverURL(r *http.Request) string {
 	return "http://" + r.Host
 }
