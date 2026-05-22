@@ -173,15 +173,21 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	if p.stateTracker == nil {
 		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
+	var fetchErr error
 	// SPEC §16.3 reconcile_running_issues order: Part A (stall reconciliation)
 	// first so any wedged worker is cancelled before Part B's tracker-state
-	// refresh would otherwise leave it claimed indefinitely.
+	// refresh would otherwise leave it claimed indefinitely. A WorkerExitTimeout
+	// on a worker that ignores cancellation surfaces as context.DeadlineExceeded;
+	// surface that as a non-fatal poll error so one stuck run cannot block Part B
+	// from reconciling unrelated inactive/terminal issues in the same tick.
 	if err := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout); err != nil {
-		return nil, err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		fetchErr = errors.Join(fetchErr, err)
 	}
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
-	var fetchErr error
 	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID)
 	if err != nil {
 		fetchErr = errors.Join(fetchErr, err)

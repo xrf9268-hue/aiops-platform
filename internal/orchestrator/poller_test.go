@@ -949,6 +949,64 @@ func TestPollOnceDispatchesActiveCandidatesWhenCanceledWorkerDoesNotExitBeforeTi
 	waitForStuckCancellationDispatcherCount(t, dispatcher, 2)
 }
 
+// TestPollOnceContinuesReconciliationWhenStalledRunCleanupTimesOut pins the
+// #285 regression: a Part A (SPEC §8.5) stall reconciliation that times out
+// waiting for a wedged worker to exit must not block Part B's tracker-state
+// reconciliation for unrelated running issues in the same poll tick. Without
+// the fix, one stuck worker would freeze global reconciliation until it
+// eventually exited.
+func TestPollOnceContinuesReconciliationWhenStalledRunCleanupTimesOut(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
+		{ID: "wedged", Identifier: "LIN-1", State: "In Progress"},
+		{ID: "movable", Identifier: "LIN-2", State: "In Progress"},
+	}}
+	dispatcher := &stuckCancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 4), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled"},
+		WorkerExitTimeout: time.Millisecond,
+		StallTimeoutMs:    50,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForStuckCancellationDispatcherCount(t, dispatcher, 2)
+
+	// Backdate the wedged run so Part A tries to cancel it; the stuck
+	// dispatcher never closes its done channel, so the cancel-wait times
+	// out with context.DeadlineExceeded.
+	orch.WithStateForTest(func(st *OrchestratorState) {
+		st.Running["wedged"].LastCodexAt = time.Now().Add(-10 * time.Second)
+	})
+
+	// Move the unrelated "movable" run to Cancelled. Part B must still
+	// reconcile it (cancel its worker context) even after Part A's wait
+	// timed out on the wedged run.
+	trackerClient.setIssues([]tracker.Issue{
+		{ID: "wedged", Identifier: "LIN-1", State: "In Progress"},
+		{ID: "movable", Identifier: "LIN-2", State: "Cancelled"},
+	})
+
+	if err := poller.PollOnce(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stall poll once error = %v, want context deadline exceeded surfaced as non-fatal", err)
+	}
+
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForContextCanceled(t, dispatcher.contextAt(1))
+}
+
 func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
