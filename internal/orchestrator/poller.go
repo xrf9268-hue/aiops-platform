@@ -315,10 +315,13 @@ func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Is
 }
 
 func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
+	// Honor exactly what the operator configured per SPEC §5.3.1. The SPEC
+	// 5-state default ("Done", "Canceled", "Cancelled", "Closed", "Duplicate")
+	// is supplied by workflow.DefaultConfig when terminal_states is omitted, so
+	// dropping the previous hardcoded union does not regress omit-config
+	// deployments — and it lets operators with non-English state schemes (e.g.
+	// "Released") subset the terminal set as the SPEC intends.
 	terminal := normalizedStates(terminalStates)
-	for state := range normalizedStates([]string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"}) {
-		terminal[state] = struct{}{}
-	}
 	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
 		if !issueHasRequiredCandidateFields(issue) {
