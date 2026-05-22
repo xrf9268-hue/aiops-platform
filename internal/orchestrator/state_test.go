@@ -476,8 +476,13 @@ func TestSnapshot_ShapeMatches13_3(t *testing.T) {
 	if len(view.Completed) != 1 || view.Completed[0] != id3 {
 		t.Errorf("Completed view wrong: %+v", view.Completed)
 	}
-	if view.CodexTotals.SecondsRunning != 0.5 {
-		t.Errorf("CodexTotals not surfaced: %+v", view.CodexTotals)
+	// SecondsRunning is now a live aggregate per SPEC §13.5 (#253):
+	// 0.5s from the ended iss3 run plus the live elapsed time for the
+	// still-running iss1 entry measured against GeneratedAt. The lower
+	// bound stays 0.5 (ended-session contribution); upper bound is
+	// generous to absorb scheduler jitter on slow CI hosts.
+	if view.CodexTotals.SecondsRunning < 0.5 || view.CodexTotals.SecondsRunning > 5 {
+		t.Errorf("CodexTotals.SecondsRunning = %v, want [0.5, 5] (ended-session 0.5 + live-aggregate for one running entry)", view.CodexTotals.SecondsRunning)
 	}
 
 	// Mutating the returned slice must not affect future snapshots.
@@ -761,5 +766,66 @@ func TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction(t *testing.T)
 	}
 	if state.MaxRecentFailed != DefaultMaxRecentFailed {
 		t.Fatalf("MaxRecentFailed = %d, want %d", state.MaxRecentFailed, DefaultMaxRecentFailed)
+	}
+}
+
+// TestSnapshotFoldsLiveSessionRuntimeIntoCodexTotals pins SPEC §13.5 (#253):
+// a snapshot taken mid-run reports a live aggregate that includes the elapsed
+// time for the still-running entry, not just the ended-session counter.
+func TestSnapshotFoldsLiveSessionRuntimeIntoCodexTotals(t *testing.T) {
+	st := NewOrchestratorState(60_000, 4)
+	iss := issue("ENG-LIVE")
+	entry := runningEntry(t, iss)
+	// Force StartedAt 10s in the past so the live aggregate is unambiguous
+	// (no scheduler-jitter window to reason about).
+	entry.StartedAt = time.Now().UTC().Add(-10 * time.Second)
+	st.BeginDispatch(IssueID(iss.ID), entry)
+
+	view := st.Snapshot()
+	if got := view.CodexTotals.SecondsRunning; got < 9.5 || got > 12 {
+		t.Fatalf("CodexTotals.SecondsRunning = %v, want ~10 (live aggregate for active session)", got)
+	}
+}
+
+// TestSnapshotLiveAggregateDoesNotDoubleCountAfterFinish pins the
+// no-double-count invariant: a run that ends between two snapshots adds its
+// elapsed time exactly once. The ended-session counter (incremented in
+// AddSeconds) and the snapshot's live aggregate cannot stack because a
+// finished run is removed from s.Running before AddSeconds runs for it.
+func TestSnapshotLiveAggregateDoesNotDoubleCountAfterFinish(t *testing.T) {
+	st := NewOrchestratorState(60_000, 4)
+	iss := issue("ENG-FINISH")
+	id := IssueID(iss.ID)
+	entry := runningEntry(t, iss)
+	entry.StartedAt = time.Now().UTC().Add(-5 * time.Second)
+	st.BeginDispatch(id, entry)
+
+	st.FinishRunSucceeded(id, entry, 5*time.Second)
+
+	view := st.Snapshot()
+	// Only the ended-session contribution should remain — the live
+	// aggregate for an iss that no longer appears in s.Running must not
+	// double the 5s.
+	if got := view.CodexTotals.SecondsRunning; got < 4.5 || got > 5.5 {
+		t.Fatalf("CodexTotals.SecondsRunning = %v, want ~5 (ended-session only, no double-count)", got)
+	}
+	if len(view.Running) != 0 {
+		t.Fatalf("view.Running len = %d after FinishRunSucceeded, want 0", len(view.Running))
+	}
+}
+
+// TestSnapshotLiveAggregateIgnoresZeroStartedAt: an entry without a
+// StartedAt (e.g. a freshly-injected test fixture) contributes 0 to the live
+// aggregate, not the entire wall-clock time since the Unix epoch.
+func TestSnapshotLiveAggregateIgnoresZeroStartedAt(t *testing.T) {
+	st := NewOrchestratorState(60_000, 4)
+	iss := issue("ENG-ZERO")
+	entry := runningEntry(t, iss)
+	entry.StartedAt = time.Time{}
+	st.BeginDispatch(IssueID(iss.ID), entry)
+
+	view := st.Snapshot()
+	if got := view.CodexTotals.SecondsRunning; got != 0 {
+		t.Fatalf("CodexTotals.SecondsRunning = %v, want 0 (zero StartedAt is skipped)", got)
 	}
 }

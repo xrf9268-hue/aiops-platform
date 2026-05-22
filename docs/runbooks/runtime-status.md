@@ -172,6 +172,28 @@ the shape here without updating the handler — or vice versa — fails the buil
 IDs in those sets; for lifetime totals across FIFO eviction use the `_total`
 counters.
 
+### `codex_totals.seconds_running` semantics
+
+`seconds_running` is a **live aggregate** per SPEC §13.5 Runtime
+accounting (#253): the snapshot folds the elapsed time of every
+currently-running entry into the cumulative ended-session counter. The
+math uses `generated_at` so all running entries are measured against
+the same instant. Dashboards polling `/api/v1/state` every few seconds
+see a smoothly increasing counter while a long Codex turn works,
+rather than a flat number followed by a sudden jump on session end.
+
+Two consequences for dashboard authors:
+
+- Do **not** treat consecutive snapshots' `seconds_running` as a
+  delta-encoded stream: snapshot N+1 already includes the elapsed
+  time between the two snapshots for any still-running entries.
+  Subtracting snapshot N from snapshot N+1 would double-count.
+- A run that ends between two snapshots adds its elapsed time
+  exactly once. The finished entry is removed from the running set
+  before the ended-session counter increments, so the live aggregate
+  for that entry stops contributing at the same instant the
+  cumulative counter starts including it.
+
 ### Top-level metadata fields
 
 - `generated_at` — RFC3339 timestamp the handler stamped when materializing the snapshot.

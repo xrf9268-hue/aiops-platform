@@ -688,8 +688,27 @@ type RetryView struct {
 // order is unspecified in Go, but downstream consumers (the §13.7 HTTP
 // handler, CLI status) sort by IssueID before display.
 func (s *OrchestratorState) Snapshot() StateView {
+	now := time.Now().UTC()
+	// SPEC §13.5 Runtime accounting: report runtime as a live aggregate at
+	// snapshot/render time. CodexTotals.SecondsRunning increments only on
+	// session end (AddSeconds in the worker-exit finalization path); without
+	// the per-snapshot fold a dashboard polling /api/v1/state would see a
+	// flat counter while a long run is in flight and a sudden jump on exit.
+	// Add elapsed time for each currently-running entry, measured against the
+	// snapshot's GeneratedAt so all rows share one instant. The ended-session
+	// counter and the live aggregate cannot double-count because a finished
+	// run is removed from s.Running before AddSeconds runs for it.
+	totals := s.CodexTotals
+	for _, r := range s.Running {
+		if r.StartedAt.IsZero() {
+			continue
+		}
+		if elapsed := now.Sub(r.StartedAt); elapsed > 0 {
+			totals.SecondsRunning += elapsed.Seconds()
+		}
+	}
 	view := StateView{
-		GeneratedAt:                time.Now().UTC(),
+		GeneratedAt:                now,
 		PollIntervalMs:             s.PollIntervalMs,
 		MaxConcurrentAgents:        s.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
@@ -701,7 +720,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		FailedSuppressedCount:      len(s.Failed),
 		CumulativeCompletedTotal:   s.CumulativeCompletedTotal,
 		CumulativeFailedTotal:      s.CumulativeFailedTotal,
-		CodexTotals:                s.CodexTotals,
+		CodexTotals:                totals,
 		CodexRateLimits:            copyRateLimitSnapshot(s.CodexRateLimits),
 	}
 	for id, r := range s.Running {
