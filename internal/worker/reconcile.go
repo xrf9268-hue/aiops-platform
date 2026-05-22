@@ -37,6 +37,7 @@ type ReconcileConfig struct {
 	ReconcileTaskID     string
 	BeforeRemoveHook    workflow.WorkspaceHook
 	HookTimeoutMillis   int
+	HookEnvPassthrough  []string
 	ActiveWorkspaceKeys func(tracker.Issue) []string
 }
 
@@ -233,7 +234,7 @@ func issueWorkspaceSourceDirs(trackerKind string) []string {
 }
 
 func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path string, issue tracker.Issue, reason string) (bool, error) {
-	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis); err != nil {
+	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis, cfg.HookEnvPassthrough); err != nil {
 		log.Printf("task %s: before_remove hook failed for %s workspace %s: %v", taskID, reason, path, err)
 	}
 	if err := workspace.SafeRemove(cfg.WorkspaceRoot, path); err != nil {

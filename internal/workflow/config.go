@@ -109,14 +109,22 @@ type WorkspaceHooks struct {
 	AfterRun     WorkspaceHook `yaml:"after_run" json:"after_run"`
 	BeforeRemove WorkspaceHook `yaml:"before_remove" json:"before_remove"`
 	TimeoutMs    int           `yaml:"timeout_ms" json:"timeout_ms"`
+	// EnvPassthrough names environment variables that hook subprocesses
+	// inherit from the worker process. By default hooks see only a small
+	// POSIX-shell baseline (PATH/HOME/USER/LANG/LC_*/TZ/TERM) — tracker
+	// tokens, SSH credentials, and any other secret in the worker's env
+	// are excluded. List names here to opt specific vars back in. See
+	// docs/design/hook-verify-env-allowlist.md (#227).
+	EnvPassthrough []string `yaml:"env_passthrough" json:"env_passthrough"`
 }
 
 type HookFieldPresence struct {
-	AfterCreate  bool
-	BeforeRun    bool
-	AfterRun     bool
-	BeforeRemove bool
-	TimeoutMs    bool
+	AfterCreate    bool
+	BeforeRun      bool
+	AfterRun       bool
+	BeforeRemove   bool
+	TimeoutMs      bool
+	EnvPassthrough bool
 }
 
 type WorkspaceHook struct {
@@ -179,6 +187,9 @@ func (c Config) WorkspaceHooks() WorkspaceHooks {
 	}
 	if legacy.TimeoutMs > 0 && !c.hookFields.TimeoutMs {
 		hooks.TimeoutMs = legacy.TimeoutMs
+	}
+	if !c.hookFields.EnvPassthrough && len(legacy.EnvPassthrough) > 0 {
+		hooks.EnvPassthrough = legacy.EnvPassthrough
 	}
 	if hooks.TimeoutMs <= 0 {
 		hooks.TimeoutMs = 60000
@@ -324,6 +335,12 @@ type VerifyConfig struct {
 	// annotated with a "verification failed (investigation mode)"
 	// banner. Default false: failed verification blocks PR creation.
 	AllowFailure bool `yaml:"allow_failure" json:"allow_failure"`
+	// EnvPassthrough names environment variables that verify subprocesses
+	// inherit from the worker process. Same allowlist semantics as
+	// `hooks.env_passthrough` — typically holds build-tool env like
+	// CARGO_HOME or GOMODCACHE. See
+	// docs/design/hook-verify-env-allowlist.md (#227).
+	EnvPassthrough []string `yaml:"env_passthrough" json:"env_passthrough"`
 }
 
 // SecretScanConfig describes an optional pre-push secret scanner that runs
