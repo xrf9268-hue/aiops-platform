@@ -975,14 +975,26 @@ func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 	return specs
 }
 
+// appServerTurnTitle builds the Codex turn title following SPEC §10.2:
+// "<issue.identifier>: <issue.title>". Task.SourceEventID is the
+// tracker identifier (e.g. "AIOPS-64", "MT-649"); Task.ID is an
+// internal queue nonce that means nothing to operators reading a
+// Codex session log. Prefer the identifier; fall back to title alone
+// if the identifier is unset; fall back to the task nonce only as a
+// last resort so prompt-only tests still get something to dispatch.
 func appServerTurnTitle(in RunInput) string {
-	if in.Task.ID != "" && in.Task.Title != "" {
-		return in.Task.ID + ": " + in.Task.Title
+	identifier := strings.TrimSpace(in.Task.SourceEventID)
+	title := strings.TrimSpace(in.Task.Title)
+	switch {
+	case identifier != "" && title != "":
+		return identifier + ": " + title
+	case identifier != "":
+		return identifier
+	case title != "":
+		return title
+	default:
+		return in.Task.ID
 	}
-	if in.Task.Title != "" {
-		return in.Task.Title
-	}
-	return in.Task.ID
 }
 
 func appServerContinuationPrompt(in RunInput, turn int) string {

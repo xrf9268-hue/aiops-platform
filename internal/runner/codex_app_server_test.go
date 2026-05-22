@@ -21,7 +21,7 @@ import (
 
 func appServerInput(workdir string) RunInput {
 	return RunInput{
-		Task: task.Task{ID: "AIOPS-64", Title: "Wire Codex app-server", Model: "codex-app-server"},
+		Task: task.Task{ID: "tsk-001", SourceEventID: "AIOPS-64", Title: "Wire Codex app-server", Model: "codex-app-server"},
 		Workflow: workflow.Workflow{Config: workflow.Config{
 			Agent:     workflow.AgentConfig{MaxTurns: 8},
 			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
@@ -1443,5 +1443,75 @@ func TestAppServerClient_ReadLineAcceptsLineAtCap(t *testing.T) {
 	}
 	if got, want := len(line), maxAppServerLineBytes; got != want {
 		t.Fatalf("readLine line len = %d, want %d", got, want)
+	}
+}
+
+// TestAppServerTurnTitle_PrefersIssueIdentifier pins SPEC §10.2's
+// "<issue.identifier>: <issue.title>" pattern. Task.SourceEventID
+// carries the tracker identifier ("AIOPS-64", "MT-649"); Task.ID is
+// an internal queue nonce. The title must surface the identifier so
+// operators can cross-reference a Codex session log to a Linear /
+// Gitea ticket without translating through queue storage.
+//
+// Paired-edges across (identifier set, title set) × (identifier set,
+// title set):
+//   - both set → "<id>: <title>"
+//   - identifier only → "<id>"
+//   - title only → "<title>"
+//   - neither (only Task.ID) → Task.ID as last-resort
+func TestAppServerTurnTitle_PrefersIssueIdentifier(t *testing.T) {
+	cases := []struct {
+		name string
+		in   RunInput
+		want string
+	}{
+		{
+			name: "identifier_and_title_set",
+			in:   RunInput{Task: task.Task{ID: "tsk-001", SourceEventID: "AIOPS-64", Title: "Wire Codex app-server"}},
+			want: "AIOPS-64: Wire Codex app-server",
+		},
+		{
+			name: "identifier_only_set",
+			in:   RunInput{Task: task.Task{ID: "tsk-002", SourceEventID: "AIOPS-65"}},
+			want: "AIOPS-65",
+		},
+		{
+			name: "title_only_set",
+			in:   RunInput{Task: task.Task{ID: "tsk-003", Title: "Untracked title"}},
+			want: "Untracked title",
+		},
+		{
+			name: "neither_set_falls_back_to_task_id",
+			in:   RunInput{Task: task.Task{ID: "tsk-004"}},
+			want: "tsk-004",
+		},
+		{
+			name: "whitespace_only_identifier_treated_as_unset",
+			in:   RunInput{Task: task.Task{ID: "tsk-005", SourceEventID: "  ", Title: "Fallback title"}},
+			want: "Fallback title",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := appServerTurnTitle(tc.in); got != tc.want {
+				t.Fatalf("appServerTurnTitle = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAppServerContinuationPrompt_InheritsIdentifierSubject confirms
+// the continuation-turn prompt subject also resolves through the
+// identifier-first rule (since appServerContinuationPrompt delegates
+// to appServerTurnTitle). The prompt template stays operator-readable
+// when the identifier is the visible breadcrumb.
+func TestAppServerContinuationPrompt_InheritsIdentifierSubject(t *testing.T) {
+	in := RunInput{Task: task.Task{ID: "tsk-099", SourceEventID: "ENG-42", Title: "Mid-run continuation"}}
+	got := appServerContinuationPrompt(in, 2)
+	if !strings.Contains(got, "ENG-42: Mid-run continuation") {
+		t.Fatalf("continuation prompt should carry identifier subject, got: %q", got)
+	}
+	if strings.Contains(got, "tsk-099") {
+		t.Fatalf("continuation prompt should NOT include the internal task nonce; got: %q", got)
 	}
 }
