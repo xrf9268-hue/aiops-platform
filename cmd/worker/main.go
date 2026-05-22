@@ -117,7 +117,12 @@ func reorderForFlagParse(args []string) []string {
 		a := args[i]
 		switch {
 		case a == "--":
-			positional = append(positional, args[i+1:]...)
+			// POSIX end-of-options: everything after is positional,
+			// even if it begins with "-". Preserve the "--" itself so
+			// the stdlib flag parser still recognizes the boundary
+			// when it scans the reordered slice.
+			tail := append([]string{"--"}, args[i+1:]...)
+			positional = append(positional, tail...)
 			i = len(args)
 		case a == "--port" || a == "-port":
 			flags = append(flags, a)

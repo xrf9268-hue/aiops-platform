@@ -1767,6 +1767,9 @@ func TestParseRunArgs_WorkflowPathStillSupported(t *testing.T) {
 		{name: "path_then_flag_split", args: []string{"/path/to/WORKFLOW.md", "--port", "4001"}, want: "/path/to/WORKFLOW.md"},
 		{name: "flag_split_then_path", args: []string{"--port", "4001", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
 		{name: "dash_dash_terminates_flags", args: []string{"--", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
+		{name: "dash_dash_protects_dash_prefixed_path", args: []string{"--", "-workflow.md"}, want: "-workflow.md"},
+		{name: "dash_dash_protects_help_as_path", args: []string{"--", "--help"}, want: "--help"},
+		{name: "dash_dash_after_flag", args: []string{"--port=4001", "--", "-foo.md"}, want: "-foo.md"},
 		{name: "no_args", args: []string{}, want: ""},
 	}
 	for _, tc := range cases {
