@@ -967,8 +967,10 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
+	// NewPoller without a reconciliation config leaves reconcile.TerminalStates
+	// empty; filterEligibleCandidates falls back to workflow.DefaultConfig's
+	// SPEC §5.3.1 5-state set, so a Done blocker is still treated as terminal.
 	poller := NewPoller(trackerClient, orch)
-	poller.reconcile.TerminalStates = []string{"Done"}
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
