@@ -72,8 +72,8 @@ type TrackerConfig struct {
 	// deprecated alias. Reads/writes outside the loader should use
 	// Endpoint; this field exists so legacy WORKFLOW.md files keep
 	// parsing while the loader emits a deprecation log.
-	BaseURL string `yaml:"base_url" json:"base_url,omitempty"`
-	TeamKey string `yaml:"team_key" json:"team_key"`
+	BaseURL        string   `yaml:"base_url" json:"base_url,omitempty"`
+	TeamKey        string   `yaml:"team_key" json:"team_key"`
 	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
 	ActiveStates   []string `yaml:"active_states" json:"active_states"`
 	TerminalStates []string `yaml:"terminal_states" json:"terminal_states"`
