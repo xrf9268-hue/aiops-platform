@@ -310,12 +310,18 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 		if key == "" {
 			continue
 		}
-		prefix := key + "-rework-"
-		if _, ok := seen[prefix]; ok {
-			continue
+		// The current SPEC §4.2 sanitizer maps `|` to `_`, so a rework
+		// workspace key looks like `<base>_rework_<sanitized-updatedAt>`.
+		// Pre-SPEC layouts produced `<base>-rework-<sanitized-updatedAt>`
+		// when `|` collapsed into a `-` separator. Emit both prefix
+		// forms so reconciliation matches workspaces from either vintage.
+		for _, prefix := range []string{key + "_rework_", key + "-rework-"} {
+			if _, ok := seen[prefix]; ok {
+				continue
+			}
+			seen[prefix] = struct{}{}
+			prefixes = append(prefixes, prefix)
 		}
-		seen[prefix] = struct{}{}
-		prefixes = append(prefixes, prefix)
 	}
 	return prefixes
 }

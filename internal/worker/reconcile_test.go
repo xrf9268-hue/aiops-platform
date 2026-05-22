@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -291,9 +292,13 @@ func TestReconcileStartupTolerantOfBothFetchFailures(t *testing.T) {
 
 func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
-	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-1-needs-fix")
-	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
-	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-2-done")
+	// Workspace dir names follow SPEC §4.2 sanitization: case preserved,
+	// `_` substituted for any character outside [A-Za-z0-9._-]. The rework
+	// key adds a `|rework|<updatedAt>` segment before sanitization, which
+	// turns into `_rework_<sanitized timestamp>`.
+	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN_1_Needs_Fix")
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3_rework_2026-05-16T10_00_00Z")
+	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN_2_Done")
 	for _, path := range []string{activePath, reworkPath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", path, err)
@@ -482,9 +487,14 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 		}
 	}
 
+	// reworkWorkspaceKeyPrefixes emits both the canonical SPEC §4.2
+	// `_rework_` form (produced by the current sanitizer) and the legacy
+	// `-rework-` form, so reconciliation matches workspaces from either
+	// vintage on disk.
 	got := reworkWorkspaceKeyPrefixes(issue, keys)
-	if len(got) != 1 || got[0] != "issue-3-rework-" {
-		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want single prefix %q", got, "issue-3-rework-")
+	want := []string{"issue-3_rework_", "issue-3-rework-"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want %#v", got, want)
 	}
 }
 
@@ -607,7 +617,8 @@ func TestReconcileStartupHandlesSourceEventIDAndTaskIDWorkspaceLayouts(t *testin
 
 func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *testing.T) {
 	root := t.TempDir()
-	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "same-key")
+	// SPEC §4.2 sanitization of "same key" → "same_key" (space → `_`).
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "same_key")
 	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
