@@ -49,7 +49,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		return Result{}, fmt.Errorf("read %s: %w", PromptPath, err)
 	}
 
-	cmd, err := buildCodexAppServerCmd(ctx, in)
+	cmd, directCodexExec, err := buildCodexAppServerCmd(ctx, in)
 	if err != nil {
 		return Result{}, err
 	}
@@ -57,6 +57,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
 		return Result{}, err
 	}
+	sandboxEnabled := in.Workflow.Config.Sandbox.Enabled && in.Workflow.Config.Sandbox.Backend != "" && in.Workflow.Config.Sandbox.Backend != "none"
 	cmd, err = applySandbox(ctx, in, cmd)
 	if err != nil {
 		return Result{}, err
@@ -94,8 +95,15 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	// so passing maxAppServerLineBytes+1 as the cap allows tokens up to (and
 	// including) maxAppServerLineBytes and rejects anything strictly larger.
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
+	// Only emit codex_app_server_pid when we can guarantee cmd.Process.Pid is
+	// the actual codex process: the command must launch the codex binary
+	// directly (no `sh -lc` wrapper from a custom codex.command), and the
+	// sandbox must not have wrapped cmd in firejail/bwrap. In any wrapper
+	// scenario the PID belongs to the wrapper, which would mislead operators
+	// trying to map `/api/v1/state` rows to a host process. omitempty makes
+	// the JSON field absent in those cases.
 	pid := 0
-	if cmd.Process != nil {
+	if directCodexExec && !sandboxEnabled && cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
 	client := &appServerClient{
@@ -168,22 +176,29 @@ func validateAppServerWorkdir(workdir string) error {
 	return nil
 }
 
-func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
+// buildCodexAppServerCmd returns the codex app-server *exec.Cmd plus a
+// directCodexExec flag. The flag is true only when the command launches the
+// `codex` binary directly (so `cmd.Process.Pid` after Start() is the actual
+// app-server pid). Custom `codex.command` configurations route through
+// `sh -lc <command>`, in which case `cmd.Process.Pid` is the shell wrapper,
+// not codex — see codex_app_server.go's session_started emit for the resulting
+// PID-emission guard.
+func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, bool, error) {
 	command := strings.TrimSpace(in.Workflow.Config.Codex.Command)
 	if command == "" || command == "codex exec" {
 		command = "codex app-server"
 	}
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("codex app-server command is empty")
+		return nil, false, fmt.Errorf("codex app-server command is empty")
 	}
 	if fields[0] == "codex" {
 		if _, err := exec.LookPath("codex"); err != nil {
-			return nil, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
+			return nil, false, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
 		}
-		return exec.CommandContext(ctx, fields[0], fields[1:]...), nil
+		return exec.CommandContext(ctx, fields[0], fields[1:]...), true, nil
 	}
-	return exec.CommandContext(ctx, "sh", "-lc", command), nil
+	return exec.CommandContext(ctx, "sh", "-lc", command), false, nil
 }
 
 type appServerClient struct {

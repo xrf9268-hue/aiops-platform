@@ -1092,12 +1092,38 @@ func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchang
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.Command = "codex exec"
 
-	cmd, err := buildCodexAppServerCmd(context.Background(), in)
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
 	if err != nil {
 		t.Fatalf("buildCodexAppServerCmd: %v", err)
 	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false for default codex command, want true")
+	}
 	if len(cmd.Args) < 2 || cmd.Args[0] != "codex" || cmd.Args[1] != "app-server" {
 		t.Fatalf("cmd.Args = %#v, want codex app-server", cmd.Args)
+	}
+}
+
+// TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the
+// directCodexExec flag's negative case: when `codex.command` is anything other
+// than a `codex ...` invocation, the cmd runs through `sh -lc`. The runner
+// uses this signal to suppress codex_app_server_pid emission, since
+// cmd.Process.Pid would be the shell wrapper rather than the actual codex
+// process.
+func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = "/usr/local/bin/my-codex-wrapper --foo"
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if directExec {
+		t.Fatalf("directCodexExec = true for custom command %q, want false (sh -lc wrapper)", in.Workflow.Config.Codex.Command)
+	}
+	if len(cmd.Args) == 0 || cmd.Args[0] != "sh" {
+		t.Fatalf("cmd.Args = %#v, want sh -lc wrapper", cmd.Args)
 	}
 }
 
