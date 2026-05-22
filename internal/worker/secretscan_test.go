@@ -52,7 +52,7 @@ func TestRunSecretScanWith_DisabledIsNoop(t *testing.T) {
 		return workspace.SecretScanResult{}
 	}
 	cfg := workflow.Config{} // SecretScan zero value: disabled
-	if err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", cfg, stub); err != nil {
+	if err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", cfg, stub); err != nil {
 		t.Fatalf("disabled scan must not error, got %v", err)
 	}
 	if called {
@@ -68,7 +68,7 @@ func TestRunSecretScanWith_CleanEmitsStartAndClean(t *testing.T) {
 	stub := func(_ context.Context, _ string, _ workflow.SecretScanConfig) workspace.SecretScanResult {
 		return workspace.SecretScanResult{Status: workspace.SecretScanClean, ExitCode: 0, DurationMs: 12}
 	}
-	if err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", enabledSecretScanCfg(), stub); err != nil {
+	if err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", enabledSecretScanCfg(), stub); err != nil {
 		t.Fatalf("clean scan must not error, got %v", err)
 	}
 	got := secretScanKinds(ev)
@@ -88,7 +88,7 @@ func TestRunSecretScanWith_ViolationBlocksPushAndEmitsViolationEvent(t *testing.
 			Stdout:     "leak found in file foo.go\n",
 		}
 	}
-	err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", enabledSecretScanCfg(), stub)
+	err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", enabledSecretScanCfg(), stub)
 	if err == nil {
 		t.Fatal("violation with default fail_on_finding must abort push")
 	}
@@ -114,7 +114,7 @@ func TestRunSecretScanWith_ViolationWarnOnlyAllowsPush(t *testing.T) {
 	stub := func(_ context.Context, _ string, _ workflow.SecretScanConfig) workspace.SecretScanResult {
 		return workspace.SecretScanResult{Status: workspace.SecretScanViolation, ExitCode: 1}
 	}
-	if err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", cfg, stub); err != nil {
+	if err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", cfg, stub); err != nil {
 		t.Fatalf("warn-only must not block push, got %v", err)
 	}
 	kinds := secretScanKinds(ev)
@@ -131,7 +131,7 @@ func TestRunSecretScanWith_ExecErrorBlocksAndEmitsErrorEvent(t *testing.T) {
 			Err:    errors.New("exec: gitleaks: not found"),
 		}
 	}
-	err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", enabledSecretScanCfg(), stub)
+	err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", enabledSecretScanCfg(), stub)
 	if err == nil {
 		t.Fatal("exec error must block push")
 	}
@@ -150,7 +150,7 @@ func TestRunSecretScanWith_StartPayloadCarriesCommand(t *testing.T) {
 		return workspace.SecretScanResult{Status: workspace.SecretScanClean}
 	}
 	cfg := enabledSecretScanCfg()
-	if err := runSecretScanWith(context.Background(), ev, "tsk", "/tmp", cfg, stub); err != nil {
+	if err := runSecretScanWith(context.Background(), ev, "tsk", "", "/tmp", cfg, stub); err != nil {
 		t.Fatalf("clean scan must not error, got %v", err)
 	}
 	if len(ev.events) < 1 {

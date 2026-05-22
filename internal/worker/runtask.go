@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,7 +65,11 @@ func issueRenderVarsForTask(t task.Task) map[string]any {
 	}
 }
 
-func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID string, wf *workflow.Workflow) (*workflow.Workflow, string, error) {
+// ResolveWorkflow returns the resolved workflow for a task, emitting the
+// canonical workflow_resolved event + log line. identifier is the tracker
+// issue identifier (Task.SourceEventID); pass "" if unknown — the log line
+// then omits issue_identifier= rather than emitting an empty value.
+func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID, identifier string, wf *workflow.Workflow) (*workflow.Workflow, string, error) {
 	if wf == nil {
 		return nil, "", fmt.Errorf("service workflow is required")
 	}
@@ -80,20 +83,16 @@ func ResolveWorkflow(ctx context.Context, ev EventEmitter, taskID string, wf *wo
 	if res.Path != "" {
 		payload["path"] = res.Path
 	}
-	Emit(ctx, ev, taskID, task.EventWorkflowResolved, "workflow resolved", payload)
-	logWorkflowResolved(taskID, res)
+	Emit(ctx, ev, taskID, identifier, task.EventWorkflowResolved, "workflow resolved", payload)
+	logWorkflowResolved(taskID, identifier, res)
 	return wf, string(res.Source), nil
 }
 
-// logWorkflowResolved prints a single info-level line summarizing how the
-// workflow was discovered. Format:
-//
-//	task <id>: workflow resolved: source=<source> path=<path>
-//
-// The path segment is omitted when empty so the common case (source=default)
-// stays short. The retained shadowed segment is only emitted for future
-// non-legacy metadata; ignored .aiops/.github workflow files must not populate it.
-func logWorkflowResolved(taskID string, res *workflow.Resolution) {
+// logWorkflowResolved prints the structured `event=workflow_resolved` line
+// summarizing how the workflow was discovered. The path segment is omitted
+// when empty so the common case (source=default) stays short; identifier is
+// passed through to LogTaskIDEventf and omitted when "".
+func logWorkflowResolved(taskID, identifier string, res *workflow.Resolution) {
 	parts := []string{"source=" + string(res.Source)}
 	if res.Path != "" {
 		parts = append(parts, "path="+res.Path)
@@ -101,7 +100,7 @@ func logWorkflowResolved(taskID string, res *workflow.Resolution) {
 	if len(res.ShadowedBy) > 0 {
 		parts = append(parts, "shadowed=["+strings.Join(res.ShadowedBy, ",")+"]")
 	}
-	log.Printf("task %s: workflow resolved: %s", taskID, strings.Join(parts, " "))
+	LogTaskIDEventf(taskID, identifier, "workflow_resolved", "%s", strings.Join(parts, " "))
 }
 
 // failingStore is the subset of queue.Store handleTaskFailure needs.
@@ -126,7 +125,7 @@ type failingStore interface {
 func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error, nonRetryable bool) bool {
 	if nonRetryable {
 		if ferr := store.FailTerminal(ctx, t.ID, err.Error()); ferr != nil {
-			log.Printf("task %s FailTerminal error: %v", t.ID, ferr)
+			LogIssueEventf(t, "fail_terminal_store_error", "error=%q", ferr)
 			return false
 		}
 		return true
@@ -135,14 +134,14 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 		budget := cfg.Agent.MaxTimeoutRetriesValue()
 		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
 		if ferr != nil {
-			log.Printf("task %s FailTimeout error: %v", t.ID, ferr)
+			LogIssueEventf(t, "fail_timeout_store_error", "error=%q", ferr)
 			return false
 		}
 		return !requeued
 	}
 	terminal, ferr := store.Fail(ctx, t.ID, err.Error())
 	if ferr != nil {
-		log.Printf("task %s Fail error: %v", t.ID, ferr)
+		LogIssueEventf(t, "fail_store_error", "error=%q", ferr)
 		return false
 	}
 	return terminal
@@ -157,9 +156,9 @@ func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg
 // workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
 // emit events, and clean up.
 
-func emitHookResults(ctx context.Context, ev EventEmitter, taskID string, results []workspace.HookResult) {
+func emitHookResults(ctx context.Context, ev EventEmitter, taskID, identifier string, results []workspace.HookResult) {
 	for _, res := range results {
-		Emit(ctx, ev, taskID, task.EventWorkspaceHookEnd, string(res.Name)+" hook completed", map[string]any{
+		Emit(ctx, ev, taskID, identifier, task.EventWorkspaceHookEnd, string(res.Name)+" hook completed", map[string]any{
 			"hook":        string(res.Name),
 			"command":     res.Command,
 			"exit_code":   res.ExitCode,
@@ -171,26 +170,26 @@ func emitHookResults(ctx context.Context, ev EventEmitter, taskID string, result
 	}
 }
 
-func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) error {
+func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) error {
 	if len(hook.Commands) == 0 {
 		return nil
 	}
-	Emit(ctx, ev, taskID, task.EventWorkspaceHookStart, string(name)+" hook started", map[string]any{
+	Emit(ctx, ev, taskID, identifier, task.EventWorkspaceHookStart, string(name)+" hook started", map[string]any{
 		"hook":       string(name),
 		"commands":   len(hook.Commands),
 		"timeout_ms": timeoutMs,
 	})
 	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs, envPassthrough)
-	emitHookResults(ctx, ev, taskID, results)
+	emitHookResults(ctx, ev, taskID, identifier, results)
 	return err
 }
 
-func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
-	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
-		log.Printf("task %s: before_remove hook failed after %s hook failure: %v", taskID, reason, err)
+func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, identifier, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
+	if err := runWorkspaceHook(ctx, ev, taskID, identifier, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
+		LogTaskIDEventf(taskID, identifier, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
 	}
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
-		log.Printf("task %s: remove workspace %s after %s hook failure: %v", taskID, workdir, reason, err)
+		LogTaskIDEventf(taskID, identifier, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
 	}
 }
 
@@ -200,7 +199,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	currentPhase := task.RunAttemptPhase("")
 	phaseTerminal := false
 	emitTaskPhase := func(from, to task.RunAttemptPhase) {
-		EmitPhaseTransition(ctx, ev, t.ID, from, to)
+		EmitPhaseTransition(ctx, ev, t.ID, t.SourceEventID, from, to)
 		currentPhase = to
 		phaseTerminal = isTerminalPhase(to)
 	}
@@ -211,7 +210,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	}()
 
 	emitTaskPhase("", task.PhasePreparingWorkspace)
-	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, cfg.Workflow)
+	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, t.SourceEventID, cfg.Workflow)
 	if err != nil {
 		return &RunTaskError{Err: err}
 	}
@@ -232,8 +231,8 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
 		}
 	}
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
+	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+		removeWorkdirAfterHookFailure(ctx, ev, t.ID, t.SourceEventID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
@@ -264,7 +263,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	}
 	policyFeedback, policyFeedbackPath, feedbackErr := readPolicyViolationFeedback(workspaceRoot, t)
 	if feedbackErr != nil {
-		Emit(ctx, ev, t.ID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
 			"path":  policyFeedbackPath,
 			"error": ErrSummary(feedbackErr),
 		})
@@ -272,7 +271,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
 	} else if policyFeedback != nil {
 		policyBudget := wcfg.Agent.PolicyViolationBudgetValue()
-		Emit(ctx, ev, t.ID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
 			"path":            policyFeedbackPath,
 			"violation_count": policyFeedback.Count,
 			"summary":         policyFeedback.Summary,
@@ -315,7 +314,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, "before_run hook failed: "+ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
@@ -323,15 +322,15 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
 		emitTaskPhase(from, to)
 	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
-		if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-			log.Printf("task %s: after_run hook failed after runner error: %v", t.ID, err)
+		if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+			LogIssueEventf(t, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 		}
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		log.Printf("task %s: after_run hook failed: %v", t.ID, err)
+	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+		LogIssueEventf(t, "after_run_hook_failed", "error=%q", err)
 	}
 
 	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {
@@ -344,7 +343,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		if feedback != nil && policyBudget > 0 && feedback.Count >= policyBudget {
 			willRetry = false
 		}
-		recordPolicyViolation(ctx, ev, t.ID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
+		recordPolicyViolation(ctx, ev, t.ID, t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
 		WriteFailureArtifacts(ctx, workdir, nil, "policy check failed: "+ErrSummary(err))
 		if feedbackErr != nil {
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %v", feedbackErr, err), NonRetryable: true}
@@ -355,11 +354,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	if _, err := RunVerifyPhase(ctx, ev, t.ID, workdir, wcfg); err != nil {
+	if _, err := RunVerifyPhase(ctx, ev, t.ID, t.SourceEventID, workdir, wcfg); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	if err := enforceAnalysisOnlyChanges(ctx, ev, t.ID, workdir, workspaceBase, wcfg); err != nil {
+	if err := enforceAnalysisOnlyChanges(ctx, ev, t.ID, t.SourceEventID, workdir, workspaceBase, wcfg); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
@@ -376,11 +375,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	// the scanner on this path keeps the failure attribution unambiguous.
 	_, status, checkErr := workspace.CheckSummary(workdir)
 	if checkErr != nil {
-		Emit(ctx, ev, t.ID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
 			"path":  workspace.SummaryPath,
 			"error": ErrSummary(checkErr),
 		})
-		Emit(ctx, ev, t.ID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
 			"reason": "summary_unreadable",
 			"path":   workspace.SummaryPath,
 		})
@@ -388,11 +387,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)}
 	}
 	if status != workspace.SummaryOK {
-		Emit(ctx, ev, t.ID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
 			"path":   workspace.SummaryPath,
 			"status": string(status),
 		})
-		Emit(ctx, ev, t.ID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
 			"reason": "summary_" + string(status),
 			"path":   workspace.SummaryPath,
 		})
@@ -404,7 +403,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	// though push is now the agent's responsibility — it acts as a final
 	// gate that fails the task before the orchestrator records success, so
 	// a branch carrying credential leaks is never considered complete.
-	if err := runSecretScan(ctx, ev, t.ID, workdir, wf.Config); err != nil {
+	if err := runSecretScan(ctx, ev, t.ID, t.SourceEventID, workdir, wf.Config); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, "secret scan blocked: "+ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
@@ -413,11 +412,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	// CHANGED_FILES.txt is available as a workspace artifact for post-run
 	// inspection. This does not push anything; that is the agent's job.
 	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
-		log.Printf("task %s: seed changed files artifact: %v", t.ID, err)
+		LogIssueEventf(t, "changed_files_seed_failed", "error=%q", err)
 	}
 	changed, _ := workspace.AllChangedFiles(ctx, workdir)
 	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
-		log.Printf("task %s: write changed files artifact: %v", t.ID, err)
+		LogIssueEventf(t, "changed_files_write_failed", "error=%q", err)
 	}
 	clearPolicyViolationFeedback(workspaceRoot, t)
 
@@ -447,7 +446,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		timeout = 30 * time.Minute
 	}
 
-	Emit(ctx, ev, in.Task.ID, task.EventRunnerStart, "runner started", map[string]any{
+	Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerStart, "runner started", map[string]any{
 		"model":           in.Task.Model,
 		"timeout_ms":      timeout.Milliseconds(),
 		"workflow_source": workflowSource,
@@ -463,7 +462,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			upstreamPhaseSink(from, to)
 			return
 		}
-		EmitPhaseTransition(ctx, ev, in.Task.ID, from, to)
+		EmitPhaseTransition(ctx, ev, in.Task.ID, in.Task.SourceEventID, from, to)
 	}
 	in.PhaseTransitionSink(task.PhaseBuildingPrompt, task.PhaseLaunchingAgentProcess)
 	emittedRuntimeEvents := map[string]bool{}
@@ -474,7 +473,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			upstreamRuntimeSink(event)
 			return
 		}
-		EmitRuntimeEvents(ctx, ev, in.Task.ID, []task.RuntimeEvent{event})
+		EmitRuntimeEvents(ctx, ev, in.Task.ID, in.Task.SourceEventID, []task.RuntimeEvent{event})
 	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -488,7 +487,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		if emittedRuntimeEvents[runtimeEventKey(event)] {
 			continue
 		}
-		EmitRuntimeEvents(ctx, ev, in.Task.ID, []task.RuntimeEvent{event})
+		EmitRuntimeEvents(ctx, ev, in.Task.ID, in.Task.SourceEventID, []task.RuntimeEvent{event})
 	}
 
 	if runErr != nil {
@@ -501,8 +500,8 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 				"elapsed_ms": stall.Elapsed.Milliseconds(),
 			}
 			addOutputFields(stallPayload, res)
-			Emit(ctx, ev, in.Task.ID, task.EventStalled, stall.Error(), stallPayload)
-			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, stall.Error(), stallPayload)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventStalled, stall.Error(), stallPayload)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, stall.Error(), stallPayload)
 			return res, runErr
 		}
 		var turnTimeout *runner.TurnTimeoutError
@@ -514,7 +513,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 				"elapsed_ms": turnTimeout.Elapsed.Milliseconds(),
 			}
 			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, turnTimeout.Error(), timeoutPayload)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, turnTimeout.Error(), timeoutPayload)
 			return res, runErr
 		}
 		var readTimeout *runner.ReadTimeoutError
@@ -526,7 +525,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 				"elapsed_ms": elapsed.Milliseconds(),
 			}
 			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, readTimeout.Error(), timeoutPayload)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, readTimeout.Error(), timeoutPayload)
 			return res, runErr
 		}
 		var te *runner.TimeoutError
@@ -542,7 +541,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 				"elapsed_ms": te.Elapsed.Milliseconds(),
 			}
 			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
 			return res, runErr
 		}
 		in.PhaseTransitionSink(currentPhase, task.PhaseFailed)
@@ -553,7 +552,7 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			"ok":          false,
 		}
 		addOutputFields(failurePayload, res)
-		Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner failed", failurePayload)
+		Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerEnd, "runner failed", failurePayload)
 		return res, runErr
 	}
 
@@ -567,30 +566,30 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		endPayload["summary"] = res.Summary
 	}
 	addOutputFields(endPayload, res)
-	Emit(ctx, ev, in.Task.ID, task.EventRunnerEnd, "runner completed", endPayload)
+	Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerEnd, "runner completed", endPayload)
 	return res, nil
 }
 
 // EmitPhaseTransition records SPEC §7.2 run-attempt phase transitions with the
 // canonical phase names in a structured payload.
-func EmitPhaseTransition(ctx context.Context, ev EventEmitter, taskID string, from, to task.RunAttemptPhase) {
+func EmitPhaseTransition(ctx context.Context, ev EventEmitter, taskID, identifier string, from, to task.RunAttemptPhase) {
 	if to == "" {
 		return
 	}
 	payload := task.PhaseTransitionEvent(from, to)
-	Emit(ctx, ev, taskID, task.EventRunPhaseTransition, string(to), payload)
+	Emit(ctx, ev, taskID, identifier, task.EventRunPhaseTransition, string(to), payload)
 }
 
 // EmitRuntimeEvents forwards SPEC §10.4 app-server runtime events captured by
 // the runner into the task event stream. The runtime event name is already the
 // task event kind; payload is preserved verbatim so downstream conformance
 // checks can inspect the app-server details without parsing runner output.
-func EmitRuntimeEvents(ctx context.Context, ev EventEmitter, taskID string, events []task.RuntimeEvent) {
+func EmitRuntimeEvents(ctx context.Context, ev EventEmitter, taskID, identifier string, events []task.RuntimeEvent) {
 	for _, event := range events {
 		if event.Event == "" {
 			continue
 		}
-		Emit(ctx, ev, taskID, event.Event, event.Event, event.Payload)
+		Emit(ctx, ev, taskID, identifier, event.Event, event.Event, event.Payload)
 	}
 }
 
@@ -613,8 +612,8 @@ func runtimeEventKey(event task.RuntimeEvent) string {
 // Returns (degraded, err). When err is non-nil, verify failed AND
 // allow_failure was off; the caller propagates the error. When
 // degraded=true, err is nil.
-func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string, cfg workflow.Config) (bool, error) {
-	Emit(ctx, ev, taskID, task.EventVerifyStart, "verify started", map[string]any{
+func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, identifier, workdir string, cfg workflow.Config) (bool, error) {
+	Emit(ctx, ev, taskID, identifier, task.EventVerifyStart, "verify started", map[string]any{
 		"commands":      cfg.Verify.Commands,
 		"timeout_ms":    cfg.Verify.Timeout.Milliseconds(),
 		"allow_failure": cfg.Verify.AllowFailure,
@@ -622,7 +621,7 @@ func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string
 	start := time.Now()
 	results, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
 	if writeErr := workspace.WriteVerification(workdir, results); writeErr != nil {
-		log.Printf("task %s: write verification artifact: %v", taskID, writeErr)
+		LogTaskIDEventf(taskID, identifier, "verification_write_failed", "error=%q", writeErr)
 	}
 	payload := map[string]any{
 		"duration_ms":   time.Since(start).Milliseconds(),
@@ -632,7 +631,7 @@ func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string
 	}
 	if verifyErr == nil {
 		payload["status"] = "ok"
-		Emit(ctx, ev, taskID, task.EventVerifyEnd, "verify completed", payload)
+		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify completed", payload)
 		return false, nil
 	}
 	payload["error"] = ErrSummary(verifyErr)
@@ -643,16 +642,16 @@ func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, workdir string
 	// returns ctx.Err() directly on parent-cancel, so errors.Is matches.
 	if errors.Is(verifyErr, context.Canceled) || errors.Is(verifyErr, context.DeadlineExceeded) {
 		payload["status"] = "canceled"
-		Emit(ctx, ev, taskID, task.EventVerifyEnd, "verify canceled", payload)
+		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify canceled", payload)
 		return false, verifyErr
 	}
 	if cfg.Verify.AllowFailure {
 		payload["status"] = "failed_allowed"
-		Emit(ctx, ev, taskID, task.EventVerifyEnd, "verify failed (investigation mode)", payload)
+		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify failed (investigation mode)", payload)
 		return true, nil
 	}
 	payload["status"] = "failed"
-	Emit(ctx, ev, taskID, task.EventVerifyEnd, "verify failed", payload)
+	Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify failed", payload)
 	WriteFailureArtifacts(ctx, workdir, results, "verify failed: "+ErrSummary(verifyErr))
 	return false, verifyErr
 }
@@ -683,11 +682,11 @@ func countVerifyFailures(results []workspace.VerifyResult) int {
 // When the scan is disabled or unconfigured, no events are emitted; this
 // preserves the worker's previous behavior for repos that have not opted
 // in.
-func runSecretScan(ctx context.Context, ev EventEmitter, taskID string, workdir string, cfg workflow.Config) error {
-	return runSecretScanWith(ctx, ev, taskID, workdir, cfg, workspace.RunSecretScan)
+func runSecretScan(ctx context.Context, ev EventEmitter, taskID, identifier string, workdir string, cfg workflow.Config) error {
+	return runSecretScanWith(ctx, ev, taskID, identifier, workdir, cfg, workspace.RunSecretScan)
 }
 
-func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, workdir string, cfg workflow.Config, scan secretScanFn) error {
+func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID, identifier string, workdir string, cfg workflow.Config, scan secretScanFn) error {
 	scfg := cfg.Verify.SecretScan
 	if !scfg.Enabled || len(scfg.Command) == 0 {
 		return nil
@@ -737,7 +736,7 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, work
 // `agent.policy_violation_budget` (resolved via PolicyViolationBudgetValue),
 // emitted alongside the running count so dashboards can render "violation N
 // of M (final attempt)".
-func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
+func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID, identifier string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
 	if ev == nil {
 		return
 	}
@@ -784,12 +783,17 @@ func WriteFailureArtifacts(ctx context.Context, workdir string, verifyResults []
 }
 
 // Emit records a structured task event. It is a no-op when ev is nil.
-func Emit(ctx context.Context, ev EventEmitter, taskID, kind, msg string, payload any) {
+// identifier is the tracker issue identifier (Task.SourceEventID) carried
+// alongside taskID so the fallback `event_emit_failed` log on emitter error
+// satisfies SPEC §13.1's required context fields. Pass "" when the caller
+// does not have the identifier (e.g. reconciliation paths that synthesise a
+// non-task taskID); the log line then omits issue_identifier=.
+func Emit(ctx context.Context, ev EventEmitter, taskID, identifier, kind, msg string, payload any) {
 	if ev == nil {
 		return
 	}
 	if err := ev.AddEventWithPayload(ctx, taskID, kind, msg, payload); err != nil {
-		log.Printf("task %s: emit %s event: %v", taskID, kind, err)
+		LogTaskIDEventf(taskID, identifier, "event_emit_failed", "kind=%s error=%q", kind, err)
 	}
 }
 
@@ -838,14 +842,14 @@ const analysisOnlyDirective = "\n\n---\n\n" +
 	"as `.aiops/PLAN.md`; any optional tracker handoff must happen through " +
 	"agent-side tools advertised to you by the runtime."
 
-func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, workdir, baseRef string, cfg workflow.Config) error {
+func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, identifier, workdir, baseRef string, cfg workflow.Config) error {
 	if cfg.Policy.Mode != "analysis_only" {
 		return nil
 	}
 	planPath := filepath.Join(workdir, ".aiops", "PLAN.md")
 	plan, err := os.ReadFile(planPath)
 	if err != nil || strings.TrimSpace(string(plan)) == "" {
-		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
+		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
 			"path": ".aiops/PLAN.md",
 		})
 		if err != nil {
@@ -865,7 +869,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, wo
 		violations = append(violations, path)
 	}
 	if len(violations) > 0 {
-		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run changed source files", map[string]any{
+		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run changed source files", map[string]any{
 			"files": violations,
 		})
 		return fmt.Errorf("analysis-only run changed source files: %s", strings.Join(violations, ", "))
@@ -875,7 +879,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, wo
 		return fmt.Errorf("inspect analysis-only commits: %w", err)
 	}
 	if committed {
-		Emit(ctx, ev, taskID, task.EventAnalysisOnlyViolation, "analysis-only run created commits", nil)
+		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run created commits", nil)
 		return fmt.Errorf("analysis-only run created commits")
 	}
 	return nil

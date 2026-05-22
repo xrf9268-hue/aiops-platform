@@ -63,7 +63,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if taskID == "" {
 		taskID = defaultReconcileTaskID
 	}
-	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileStart, "startup reconciliation started", map[string]any{
+	Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileStart, "startup reconciliation started", map[string]any{
 		"workspace_root":  cfg.WorkspaceRoot,
 		"active_states":   cfg.ActiveStates,
 		"terminal_states": cfg.TerminalStates,
@@ -81,8 +81,8 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	// false when `terminalIssues` is empty.
 	activeIssues, err := cfg.Tracker.ListIssuesByStates(ctx, activeStates)
 	if err != nil {
-		log.Printf("startup reconcile: fetch active issues failed: %v (SPEC §8.6: log and continue; no cleanup performed)", err)
-		Emit(ctx, cfg.Emitter, taskID, task.EventReconcileEnd, "startup reconciliation skipped", map[string]any{
+		LogReconcileEventf("startup_reconcile_active_fetch_failed", "error=%q note=%q", err, "SPEC §8.6: log and continue; no cleanup performed")
+		Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileEnd, "startup reconciliation skipped", map[string]any{
 			"status": "skipped",
 			"reason": "active_fetch_failed",
 			"error":  err.Error(),
@@ -93,7 +93,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	terminalFetchOK := true
 	var terminalFetchErr error
 	if err != nil {
-		log.Printf("startup reconcile: fetch terminal issues failed: %v (SPEC §8.6: log and continue; terminal cleanup skipped)", err)
+		LogReconcileEventf("startup_reconcile_terminal_fetch_failed", "error=%q note=%q", err, "SPEC §8.6: log and continue; terminal cleanup skipped")
 		terminalFetchOK = false
 		terminalFetchErr = err
 		terminalIssues = nil
@@ -130,7 +130,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		}
 		if _, ok := activeKeys[workspace.Key]; ok {
 			kept++
-			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept active workspace", map[string]any{
+			Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept active workspace", map[string]any{
 				"path":   workspace.Path,
 				"key":    workspace.Key,
 				"action": "keep",
@@ -140,7 +140,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		}
 		if activeIssue, ok := activeReworkIssueForWorkspace(workspace.Key, activeIssues, activeKeysForIssue); ok {
 			kept++
-			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept active workspace", map[string]any{
+			Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept active workspace", map[string]any{
 				"path":       workspace.Path,
 				"key":        workspace.Key,
 				"issue_id":   activeIssue.ID,
@@ -162,7 +162,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		}
 		if !canRemoveUnknown {
 			kept++
-			Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "kept unknown workspace", map[string]any{
+			Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept unknown workspace", map[string]any{
 				"path":   workspace.Path,
 				"key":    workspace.Key,
 				"action": "keep",
@@ -194,7 +194,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	} else {
 		endPayload["status"] = "ok"
 	}
-	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileEnd, "startup reconciliation finished", endPayload)
+	Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileEnd, "startup reconciliation finished", endPayload)
 	return nil
 }
 
@@ -263,13 +263,13 @@ func issueWorkspaceSourceDirs(trackerKind string) []string {
 }
 
 func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path string, issue tracker.Issue, reason string) (bool, error) {
-	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis, cfg.HookEnvPassthrough); err != nil {
-		log.Printf("task %s: before_remove hook failed for %s workspace %s: %v", taskID, reason, path, err)
+	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, issue.Identifier, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis, cfg.HookEnvPassthrough); err != nil {
+		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", taskID, issue.ID, issue.Identifier, reason, path, err)
 	}
 	if err := workspace.SafeRemove(cfg.WorkspaceRoot, path); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", reason, path, err)
 	}
-	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "removed workspace", map[string]any{
+	Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "removed workspace", map[string]any{
 		"path":       path,
 		"issue_id":   issue.ID,
 		"identifier": issue.Identifier,
@@ -448,7 +448,7 @@ func sanitizeLegacyWorkspaceKey(s string) string {
 type LogEventEmitter struct{}
 
 func (LogEventEmitter) AddEvent(_ context.Context, taskID, kind, msg string) error {
-	log.Printf("task %s: %s: %s", taskID, kind, msg)
+	LogTaskIDEventf(taskID, "", kind, "msg=%q", msg)
 	return nil
 }
 
@@ -456,13 +456,13 @@ func (LogEventEmitter) AddEventWithPayload(ctx context.Context, taskID, kind, ms
 	if payload == nil {
 		return LogEventEmitter{}.AddEvent(ctx, taskID, kind, msg)
 	}
-	log.Printf("task %s: %s: %s payload=%v", taskID, kind, msg, payload)
+	LogTaskIDEventf(taskID, "", kind, "msg=%q payload=%v", msg, payload)
 	return nil
 }
 
 // LogReconcileError records reconciliation failure before the worker exits.
 func LogReconcileError(err error) {
 	if err != nil {
-		log.Printf("startup reconciliation failed: %v", err)
+		LogReconcileEventf("startup_reconciliation_failed", "error=%q", err)
 	}
 }

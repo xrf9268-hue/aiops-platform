@@ -174,7 +174,7 @@ func (r *WorkflowRuntime) emit(ctx context.Context, kind, msg string, payload an
 		taskID = "workflow-runtime"
 	}
 	if err := r.emitter.AddEventWithPayload(ctx, taskID, kind, msg, payload); err != nil {
-		log.Printf("workflow runtime: emit %s event: %v", kind, err)
+		log.Printf("event=workflow_runtime_emit_failed task_id=%s issue_id=%s kind=%s error=%q", taskID, taskID, kind, err)
 	}
 }
 
@@ -277,7 +277,7 @@ func RunPollLoopWithRuntime(ctx context.Context, poller pollOnce, runtime *Workf
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			log.Printf("tracker poll error: %v", err)
+			log.Printf("event=tracker_poll_error error=%q", err)
 		}
 		polls++
 		if runtimePoller, ok := poller.(*RuntimePoller); ok {
