@@ -240,10 +240,15 @@ workflow: AIOPS_WORKFLOW_PATH refers to /…/WORKFLOW.md which does not exist
 ```
 
 - `AIOPS_WORKFLOW_PATH` must point at the file, not the directory.
-- The file must contain a YAML front-matter block followed by a prompt
-  body. Run
+- A YAML front-matter block is optional. Files with no `---` fence
+  load as `source: prompt_only` and pick up schema defaults for every
+  config field; files with a front-matter block use those values
+  instead. Either form is valid — front matter is only required when
+  you need to override a default (e.g. a non-default
+  `repo.clone_url`, `tracker.kind`, or `agent.default`).
+- Run
   `go run ./cmd/worker --print-config $(dirname "$AIOPS_WORKFLOW_PATH")`
-  to see how the loader resolves it.
+  to see how the loader resolves it and which `source` is reported.
 
 ### Missing tracker credentials at startup
 
