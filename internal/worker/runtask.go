@@ -186,10 +186,10 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, 
 
 func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, identifier, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
 	if err := runWorkspaceHook(ctx, ev, taskID, identifier, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
-		LogTaskIDEventf(taskID, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
+		LogTaskIDEventf(taskID, identifier, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
 	}
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
-		LogTaskIDEventf(taskID, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
+		LogTaskIDEventf(taskID, identifier, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
 	}
 }
 
