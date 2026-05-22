@@ -71,13 +71,32 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 
 	activeStates := nonEmptyStates(cfg.ActiveStates)
 	terminalStates := nonEmptyStates(cfg.TerminalStates)
+	// SPEC §8.6 / §11.4: transient tracker outages during boot must log a
+	// warning and continue startup, not abort the worker. An active-fetch
+	// failure is the worst case — without the active list we cannot confirm
+	// any workspace is safe to delete — so we emit reconcile_end with
+	// `status: skipped` and return nil, leaving every workspace intact. A
+	// terminal-fetch failure is non-fatal: active workspaces are still kept,
+	// terminal/unknown removal is skipped because `canRemoveUnknown` stays
+	// false when `terminalIssues` is empty.
 	activeIssues, err := cfg.Tracker.ListIssuesByStates(ctx, activeStates)
 	if err != nil {
-		return fmt.Errorf("fetch active issues: %w", err)
+		log.Printf("startup reconcile: fetch active issues failed: %v (SPEC §8.6: log and continue; no cleanup performed)", err)
+		Emit(ctx, cfg.Emitter, taskID, task.EventReconcileEnd, "startup reconciliation skipped", map[string]any{
+			"status": "skipped",
+			"reason": "active_fetch_failed",
+			"error":  err.Error(),
+		})
+		return nil
 	}
 	terminalIssues, err := cfg.Tracker.ListIssuesByStates(ctx, terminalStates)
+	terminalFetchOK := true
+	var terminalFetchErr error
 	if err != nil {
-		return fmt.Errorf("fetch terminal issues: %w", err)
+		log.Printf("startup reconcile: fetch terminal issues failed: %v (SPEC §8.6: log and continue; terminal cleanup skipped)", err)
+		terminalFetchOK = false
+		terminalFetchErr = err
+		terminalIssues = nil
 	}
 	activeKeysForIssue := cfg.ActiveWorkspaceKeys
 	if activeKeysForIssue == nil {
@@ -101,7 +120,7 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if err != nil {
 		return err
 	}
-	if len(workspaces) > 0 && len(activeIssues)+len(terminalIssues) == 0 {
+	if terminalFetchOK && len(workspaces) > 0 && len(activeIssues)+len(terminalIssues) == 0 {
 		return fmt.Errorf("tracker returned no active or terminal issues; refusing to remove %d existing workspaces", len(workspaces))
 	}
 	var removed, kept int
@@ -160,12 +179,22 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 		}
 	}
 
-	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileEnd, "startup reconciliation finished", map[string]any{
+	endPayload := map[string]any{
 		"active_issues":   len(activeIssues),
 		"terminal_issues": len(terminalIssues),
 		"kept":            kept,
 		"removed":         removed,
-	})
+	}
+	if !terminalFetchOK {
+		endPayload["status"] = "partial"
+		endPayload["reason"] = "terminal_fetch_failed"
+		if terminalFetchErr != nil {
+			endPayload["error"] = terminalFetchErr.Error()
+		}
+	} else {
+		endPayload["status"] = "ok"
+	}
+	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileEnd, "startup reconciliation finished", endPayload)
 	return nil
 }
 

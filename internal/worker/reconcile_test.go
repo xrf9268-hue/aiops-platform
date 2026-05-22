@@ -168,6 +168,127 @@ func TestReconcileStartupRefusesToRemoveWhenTrackerReturnsNoIssues(t *testing.T)
 	}
 }
 
+// TestReconcileStartupTolerantOfActiveFetchFailure pins SPEC §8.6 / §11.4:
+// a transient tracker outage during boot must NOT abort worker startup. The
+// active-fetch failure is the worst case — without it we cannot confirm any
+// workspace is safe to delete — so the helper logs, emits reconcile_end with
+// skipped status, and returns nil, leaving every workspace intact.
+func TestReconcileStartupTolerantOfActiveFetchFailure(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	terminalPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
+	for _, path := range []string{activePath, terminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"AI Ready"},
+		TerminalStates:  []string{"Done"},
+		Tracker:         &fakeReconcileTrackerByCall{errByCall: []error{errors.New("tracker outage"), nil}},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup must not fail on tracker outage: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active workspace must remain when active fetch fails: %v", err)
+	}
+	if _, err := os.Stat(terminalPath); err != nil {
+		t.Fatalf("any workspace must remain when active fetch fails (safety): %v", err)
+	}
+	endEvents := emitter.byKind(task.EventReconcileEnd)
+	if len(endEvents) != 1 {
+		t.Fatalf("reconcile_end events = %d, want 1", len(endEvents))
+	}
+	payload, ok := endEvents[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("reconcile_end payload = %T, want map", endEvents[0].Payload)
+	}
+	if status, _ := payload["status"].(string); status != "skipped" {
+		t.Fatalf("reconcile_end status = %q, want \"skipped\"", status)
+	}
+	if reason, _ := payload["reason"].(string); reason != "active_fetch_failed" {
+		t.Fatalf("reconcile_end reason = %q, want \"active_fetch_failed\"", reason)
+	}
+}
+
+// TestReconcileStartupTolerantOfTerminalFetchFailure: terminal-fetch failure
+// is non-fatal. Active workspaces are still kept; terminal/unknown removal is
+// skipped because terminalKeys is empty and canRemoveUnknown stays false.
+func TestReconcileStartupTolerantOfTerminalFetchFailure(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	maybeTerminalPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
+	for _, path := range []string{activePath, maybeTerminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"In Progress"},
+		TerminalStates: []string{"Done"},
+		Tracker: &fakeReconcileTrackerByCall{
+			issuesByCall: [][]tracker.Issue{{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}, nil},
+			errByCall:    []error{nil, errors.New("tracker outage")},
+		},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup must not fail on terminal-fetch outage: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active workspace must remain: %v", err)
+	}
+	if _, err := os.Stat(maybeTerminalPath); err != nil {
+		t.Fatalf("workspace must remain when terminal fetch failed (no confirmation it is safe to delete): %v", err)
+	}
+	endEvents := emitter.byKind(task.EventReconcileEnd)
+	if len(endEvents) != 1 {
+		t.Fatalf("reconcile_end events = %d, want 1", len(endEvents))
+	}
+	payload, _ := endEvents[0].Payload.(map[string]any)
+	if status, _ := payload["status"].(string); status != "partial" {
+		t.Fatalf("reconcile_end status = %q, want \"partial\"", status)
+	}
+	if reason, _ := payload["reason"].(string); reason != "terminal_fetch_failed" {
+		t.Fatalf("reconcile_end reason = %q, want \"terminal_fetch_failed\"", reason)
+	}
+}
+
+// TestReconcileStartupTolerantOfBothFetchFailures: both fail. Treated as the
+// active-fetch failure path (most conservative), nothing deleted.
+func TestReconcileStartupTolerantOfBothFetchFailures(t *testing.T) {
+	root := t.TempDir()
+	wsPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-X")
+	if err := os.MkdirAll(wsPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"In Progress"},
+		TerminalStates:  []string{"Done"},
+		Tracker:         &fakeReconcileTrackerByCall{errByCall: []error{errors.New("active outage"), errors.New("terminal outage")}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup must not fail on dual-fetch outage: %v", err)
+	}
+	if _, err := os.Stat(wsPath); err != nil {
+		t.Fatalf("workspace must remain when both fetches fail: %v", err)
+	}
+}
+
 func TestReconcileStartupMatchesCurrentSanitizedWorkspaceLayout(t *testing.T) {
 	root := t.TempDir()
 	activePath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-1-needs-fix")
@@ -367,20 +488,6 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 	}
 }
 
-func TestReconcileStartupReturnsTrackerError(t *testing.T) {
-	root := t.TempDir()
-	if err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
-		TerminalStates:  []string{"Done"},
-		Tracker:         fakeReconcileTracker{err: errors.New("tracker down")},
-		Emitter:         &fakeEmitter{},
-		ReconcileTaskID: "reconcile-startup",
-	}); err == nil {
-		t.Fatal("ReconcileStartup error = nil, want tracker error")
-	}
-}
-
 func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing.T) {
 	root := t.TempDir()
 	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN-1")
@@ -551,22 +658,6 @@ func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *
 	}
 	if _, err := os.Stat(unknownPath); err != nil {
 		t.Fatalf("unknown workspace should remain when terminal query is empty: %v", err)
-	}
-}
-
-func TestReconcileStartupReturnsTerminalFetchError(t *testing.T) {
-	root := t.TempDir()
-	fake := &fakeReconcileTrackerByCall{errByCall: []error{nil, errors.New("terminal fetch failed")}}
-	err := ReconcileStartup(context.Background(), ReconcileConfig{
-		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
-		TerminalStates:  []string{"Done"},
-		Tracker:         fake,
-		Emitter:         &fakeEmitter{},
-		ReconcileTaskID: "reconcile-startup",
-	})
-	if err == nil || !strings.Contains(err.Error(), "fetch terminal issues") {
-		t.Fatalf("ReconcileStartup error = %v, want terminal fetch context", err)
 	}
 }
 
