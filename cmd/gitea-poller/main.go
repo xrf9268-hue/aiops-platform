@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,7 +28,8 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("usage: gitea-poller /path/to/WORKFLOW.md")
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	wf, err := workflow.Load(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
@@ -49,15 +52,43 @@ func main() {
 	}
 	interval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
 
+	runPollLoop(ctx, interval, func(ctx context.Context) {
+		pollOnce(ctx, store, &wf.Config, client)
+	})
+	log.Printf("gitea-poller: shutdown requested; exiting")
+}
+
+// pollOnce executes one tick of the gitea poll loop. Extracted from
+// main so the SIGTERM-aware runPollLoop can drive it.
+func pollOnce(ctx context.Context, store enqueuer, cfg *workflow.Config, client *gitea.TrackerClient) {
+	issues, err := client.ListActiveIssues(ctx)
+	if err != nil {
+		log.Printf("gitea poll error: %v", err)
+		return
+	}
+	processIssues(ctx, store, cfg, issues)
+}
+
+// runPollLoop runs poll on the given interval until ctx is cancelled
+// (typically by SIGTERM/SIGINT via signal.NotifyContext). The two
+// select statements gate both the start of each tick and the
+// inter-tick sleep: a cancel that arrives before the first poll never
+// invokes poll, and a cancel that arrives during a sleep wakes up
+// immediately instead of waiting for time.Sleep to return. Tests in
+// main_test.go pin both branches.
+func runPollLoop(ctx context.Context, interval time.Duration, poll func(context.Context)) {
 	for {
-		issues, err := client.ListActiveIssues(ctx)
-		if err != nil {
-			log.Printf("gitea poll error: %v", err)
-			time.Sleep(interval)
-			continue
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
-		processIssues(ctx, store, &wf.Config, issues)
-		time.Sleep(interval)
+		poll(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
 	}
 }
 
