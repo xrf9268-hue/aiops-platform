@@ -1133,15 +1133,15 @@ func TestFinalize_InputRequiredExitBlocksIssueWithoutRetry(t *testing.T) {
 	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
 		t.Fatalf("blocked issue dispatch err = %v, want ErrNotDispatched", err)
 	}
-	status, err := o.StatusSnapshot(context.Background(), 10)
+	view, err := o.Snapshot(context.Background())
 	if err != nil {
-		t.Fatalf("StatusSnapshot: %v", err)
+		t.Fatalf("Snapshot: %v", err)
 	}
-	if status.Summary.Blocked != 1 || len(status.Blocked) != 1 {
-		t.Fatalf("blocked status = summary %+v rows %+v, want one blocked issue", status.Summary, status.Blocked)
+	if len(view.Blocked) != 1 {
+		t.Fatalf("blocked rows = %d, want 1; view=%+v", len(view.Blocked), view)
 	}
-	if status.Blocked[0].IssueID != "ENG-INPUT" || status.Blocked[0].SessionID != "thread-1-turn-1" {
-		t.Fatalf("blocked row = %+v, want issue/session details", status.Blocked[0])
+	if view.Blocked[0].IssueID != "ENG-INPUT" || view.Blocked[0].SessionID != "thread-1-turn-1" {
+		t.Fatalf("blocked row = %+v, want issue/session details", view.Blocked[0])
 	}
 }
 
