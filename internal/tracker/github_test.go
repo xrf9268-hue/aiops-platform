@@ -288,4 +288,127 @@ func TestGitHubClientRequiresTokenOwnerAndRepo(t *testing.T) {
 func TestGitHubClientSatisfiesTrackerInterfaces(t *testing.T) {
 	var _ Client = (*GitHubClient)(nil)
 	var _ StateIssueLister = (*GitHubClient)(nil)
+	var _ IssueStateRefresher = (*GitHubClient)(nil)
+}
+
+func TestMapGitHubIssueLowercasesLabels(t *testing.T) {
+	got, err := mapGitHubIssue(githubIssue{
+		ID:        1,
+		Number:    1,
+		Title:     "case test",
+		State:     "open",
+		CreatedAt: "2026-05-20T01:02:03Z",
+		UpdatedAt: "2026-05-20T01:02:03Z",
+		Labels:    []githubLabel{{Name: "Important"}, {Name: " Priority:P1 "}, {Name: ""}},
+	}, "open")
+	if err != nil {
+		t.Fatalf("mapGitHubIssue: %v", err)
+	}
+	want := []string{"important", "priority:p1"}
+	if len(got.Labels) != len(want) {
+		t.Fatalf("labels = %#v, want %#v", got.Labels, want)
+	}
+	for i := range want {
+		if got.Labels[i] != want[i] {
+			t.Fatalf("labels[%d] = %q, want %q", i, got.Labels[i], want[i])
+		}
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
+	var requestedPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{
+				{ID: 101, Number: 1, Title: "running", HTMLURL: "https://github.com/acme/api/issues/1", State: "open", CreatedAt: "2026-05-20T01:02:03Z", UpdatedAt: "2026-05-20T01:02:03Z", Labels: []githubLabel{{Name: "priority:p2"}}},
+				{ID: 202, Number: 2, Title: "second", HTMLURL: "https://github.com/acme/api/issues/2", State: "open", CreatedAt: "2026-05-20T01:02:03Z", UpdatedAt: "2026-05-20T01:02:03Z", Labels: []githubLabel{{Name: "priority:p2"}}},
+				{ID: 303, Number: 3, Title: "third", HTMLURL: "https://github.com/acme/api/issues/3", State: "open", CreatedAt: "2026-05-20T01:02:03Z", UpdatedAt: "2026-05-20T01:02:03Z", Labels: []githubLabel{{Name: "priority:p2"}}},
+			})
+		case "/repos/acme/api/issues/1":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 101, Number: 1, State: "closed", CreatedAt: "2026-05-20T01:02:03Z", UpdatedAt: "2026-05-20T02:03:04Z", Labels: []githubLabel{{Name: "Done"}}})
+		case "/repos/acme/api/issues/2":
+			http.NotFound(w, r)
+		case "/repos/acme/api/issues/3":
+			w.WriteHeader(http.StatusGone)
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		ActiveStates:   []string{"priority:p2"},
+		TerminalStates: []string{"done"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	if _, err := client.ListActiveIssues(context.Background()); err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"101", "202", "303", "999"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+	if got, want := states, map[string]string{"101": "done"}; len(got) != len(want) || got["101"] != want["101"] {
+		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	wantPathPrefix := "/repos/acme/api/issues/1,/repos/acme/api/issues/2,/repos/acme/api/issues/3"
+	gotJoined := strings.Join(requestedPaths[2:], ",")
+	if gotJoined != wantPathPrefix {
+		t.Fatalf("requested paths after listing = %s, want %s", gotJoined, wantPathPrefix)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByIDsRequiresToken(t *testing.T) {
+	client := NewGitHubClient(workflow.TrackerConfig{}, "https://api.github.test", "acme", "api")
+	if _, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1"}); err == nil || !strings.Contains(err.Error(), "GitHub tracker api_key") {
+		t.Fatalf("missing token error = %v", err)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByIDsEmptyInputReturnsEmptyMap(t *testing.T) {
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, "https://api.github.test", "acme", "api")
+	states, err := client.FetchIssueStatesByIDs(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs nil: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states = %#v, want empty map", states)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByIDsSurfacesNon404Errors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{
+				{ID: 500, Number: 1, Title: "fails later", HTMLURL: "https://github.com/acme/api/issues/1", State: "open", CreatedAt: "2026-05-20T01:02:03Z", UpdatedAt: "2026-05-20T01:02:03Z", Labels: []githubLabel{{Name: "priority:p2"}}},
+			})
+		case "/repos/acme/api/issues/1":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"priority:p2"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	if _, err := client.ListActiveIssues(context.Background()); err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	_, err := client.FetchIssueStatesByIDs(context.Background(), []string{"500"})
+	if err == nil || !strings.Contains(err.Error(), "500") {
+		t.Fatalf("FetchIssueStatesByIDs error = %v, want HTTP 500 surfaced", err)
+	}
 }

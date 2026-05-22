@@ -177,6 +177,18 @@ GitHub tracker pagination is fail-closed: if issue or open-PR pagination
 exceeds the configured scan cap, the poll returns an error instead of acting on
 a truncated issue set.
 
+Per-tick state refresh (SPEC §8.5 Part B) for already-running GitHub issues
+issues one `GET /repos/{owner}/{repo}/issues/{number}` per running issue,
+sequentially, in poll order. The repo issue number is taken from the cache
+populated by the active-issue list. Per-ID `404`/`410` responses are treated as
+"issue removed" and silently skipped so a single deleted issue does not abort
+reconciliation for the rest of the running set; other HTTP errors abort the
+refresh so a transient outage cannot silently degrade reconciliation. At the
+default GitHub primary REST rate limit (5,000 req/hour for a personal access
+token) this is comfortably within budget for tens of concurrent running issues
+on the default poll cadence; cut the worker count or extend the poll interval
+if the workload approaches that ceiling.
+
 ## Install unattended macOS LaunchAgents
 
 ```bash
