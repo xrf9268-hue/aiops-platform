@@ -905,6 +905,44 @@ func TestRecordRuntimeEventPropagatesCodexAppServerPID(t *testing.T) {
 	}
 }
 
+// TestRecordRuntimeEventTracksLastEventAndMessage pins SPEC §13.7.2:
+// last_event surfaces the most-recent runtime event kind on the running row,
+// and last_message captures the payload `message` field when present (e.g.
+// notification events) so operators can see what the agent is doing without
+// tailing logs.
+func TestRecordRuntimeEventTracksLastEventAndMessage(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-LAST-EVENT")
+	defer cancel()
+
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventNotification,
+		Payload: map[string]any{"message": "Working on it..."},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent notification: %v", err)
+	}
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventTurnCompleted,
+		Payload: map[string]any{"usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent turn_completed: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	row := view.Running[0]
+	if row.LastEvent != task.EventTurnCompleted {
+		t.Errorf("LastEvent = %q, want most-recent event %q", row.LastEvent, task.EventTurnCompleted)
+	}
+	if row.LastMessage != "Working on it..." {
+		t.Errorf("LastMessage = %q, want notification text preserved across later events that did not set message", row.LastMessage)
+	}
+}
+
 func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
 	o, issueID, cancel := startRuntimeEventActor(t, "ENG-USAGE")
 	defer cancel()

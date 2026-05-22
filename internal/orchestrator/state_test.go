@@ -829,3 +829,46 @@ func TestSnapshotLiveAggregateIgnoresZeroStartedAt(t *testing.T) {
 		t.Fatalf("CodexTotals.SecondsRunning = %v, want 0 (zero StartedAt is skipped)", got)
 	}
 }
+
+// TestSnapshotRunningViewExposesSpec13_7_2Fields pins SPEC §13.7.2: the
+// per-issue running row must expose session_id, turn_count, last_event,
+// last_message, tracker state, and the input/output/total token triple.
+func TestSnapshotRunningViewExposesSpec13_7_2Fields(t *testing.T) {
+	st := NewOrchestratorState(15000, 4)
+	iss := issue("ENG-1")
+	iss.State = "In Progress"
+	id := IssueID(iss.ID)
+	entry := runningEntry(t, iss)
+	entry.Session.SessionID = "thread-1-turn-1"
+	entry.Session.TurnCount = 7
+	entry.LastCodexEvent = "turn_completed"
+	entry.LastCodexMessage = "Working on it..."
+	entry.CodexInputTokens = 1200
+	entry.CodexOutputTokens = 800
+	entry.CodexTotalTokens = 2000
+	st.BeginDispatch(id, entry)
+
+	view := st.Snapshot()
+	if len(view.Running) != 1 {
+		t.Fatalf("view.Running len = %d", len(view.Running))
+	}
+	r := view.Running[0]
+	if r.State != "In Progress" {
+		t.Errorf("State = %q, want In Progress", r.State)
+	}
+	if r.SessionID != "thread-1-turn-1" {
+		t.Errorf("SessionID = %q", r.SessionID)
+	}
+	if r.TurnCount != 7 {
+		t.Errorf("TurnCount = %d, want 7", r.TurnCount)
+	}
+	if r.LastEvent != "turn_completed" {
+		t.Errorf("LastEvent = %q", r.LastEvent)
+	}
+	if r.LastMessage != "Working on it..." {
+		t.Errorf("LastMessage = %q", r.LastMessage)
+	}
+	if r.Tokens.InputTokens != 1200 || r.Tokens.OutputTokens != 800 || r.Tokens.TotalTokens != 2000 {
+		t.Errorf("Tokens = %+v, want {1200, 800, 2000}", r.Tokens)
+	}
+}

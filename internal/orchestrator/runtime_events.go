@@ -64,6 +64,12 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		now = time.Now().UTC()
 	}
 	run.LastCodexAt = now
+	run.LastCodexEvent = event.Event
+	if payload, ok := asStringMap(event.Payload); ok {
+		if msg, ok := stringField(payload, "message"); ok {
+			run.LastCodexMessage = msg
+		}
+	}
 	s.recordSessionFields(run, event)
 	s.recordInputRequiredFields(run, event, now)
 	if usage, ok := tokenUsageFromEvent(event); ok {

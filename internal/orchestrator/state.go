@@ -113,6 +113,15 @@ type RunningEntry struct {
 
 	Session     LiveSession
 	LastCodexAt time.Time // SPEC §8.5 Part A input (D14)
+	// LastCodexEvent is the most-recent runtime event kind (e.g.
+	// "turn_completed", "notification") folded from the worker's runtime
+	// event stream; SPEC §13.7.2 surfaces it as `last_event`.
+	LastCodexEvent string
+	// LastCodexMessage is the most-recent payload `message` string from a
+	// runtime event (typically `notification`). It is sticky: later events
+	// without a message do not clear it, so the operator-visible field keeps
+	// the last human-readable status until a new one supersedes it.
+	LastCodexMessage string
 
 	CodexInputTokens  int64
 	CodexOutputTokens int64
@@ -648,14 +657,33 @@ type StateView struct {
 
 // RunningView is the per-running-entry projection in StateView. It
 // omits unexported / non-serializable fields like CancelWorker and Done.
+// SPEC §13.7.2 dictates the exposed field set; State / SessionID /
+// TurnCount / LastEvent / LastMessage / Tokens were added per #209 so
+// operators inspecting `/api/v1/state` or `/api/v1/<id>` can see live
+// coding-agent activity without tailing logs.
 type RunningView struct {
 	IssueID           IssueID
 	Identifier        string
+	State             string
+	SessionID         string
+	TurnCount         int
+	LastEvent         string
+	LastMessage       string
 	StartedAt         time.Time
+	LastCodexAt       time.Time
 	RetryAttempt      *int
 	WorkspacePath     string
-	LastCodexAt       time.Time
+	Tokens            TokensView
 	CodexAppServerPID int
+}
+
+// TokensView mirrors the SPEC §13.7.2 per-issue `tokens` object: the
+// input/output/total triple of cumulative codex tokens observed for the
+// active session.
+type TokensView struct {
+	InputTokens  int64
+	OutputTokens int64
+	TotalTokens  int64
 }
 
 // BlockedView is the public projection of an input-required blocked run.
@@ -743,12 +771,22 @@ func (s *OrchestratorState) Snapshot() StateView {
 			retryAttempt = &n
 		}
 		view.Running = append(view.Running, RunningView{
-			IssueID:           id,
-			Identifier:        r.Identifier,
-			StartedAt:         r.StartedAt,
-			RetryAttempt:      retryAttempt,
-			WorkspacePath:     r.Workspace.Path,
-			LastCodexAt:       r.LastCodexAt,
+			IssueID:       id,
+			Identifier:    r.Identifier,
+			State:         r.Issue.State,
+			SessionID:     r.Session.SessionID,
+			TurnCount:     r.Session.TurnCount,
+			LastEvent:     r.LastCodexEvent,
+			LastMessage:   r.LastCodexMessage,
+			StartedAt:     r.StartedAt,
+			LastCodexAt:   r.LastCodexAt,
+			RetryAttempt:  retryAttempt,
+			WorkspacePath: r.Workspace.Path,
+			Tokens: TokensView{
+				InputTokens:  r.CodexInputTokens,
+				OutputTokens: r.CodexOutputTokens,
+				TotalTokens:  r.CodexTotalTokens,
+			},
 			CodexAppServerPID: r.Session.CodexAppServerPID,
 		})
 	}
