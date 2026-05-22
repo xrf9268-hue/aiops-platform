@@ -162,11 +162,11 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, workdir stri
 	return err
 }
 
-func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, reason string) {
+func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, reason string) {
 	if err := runWorkspaceHook(ctx, ev, taskID, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs); err != nil {
 		log.Printf("task %s: before_remove hook failed after %s hook failure: %v", taskID, reason, err)
 	}
-	if err := os.RemoveAll(workdir); err != nil {
+	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
 		log.Printf("task %s: remove workspace %s after %s hook failure: %v", taskID, workdir, reason, err)
 	}
 }
@@ -210,7 +210,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		}
 	}
 	if err := runWorkspaceHook(ctx, ev, t.ID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs); err != nil {
-		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workdir, hooks.BeforeRemove, hooks.TimeoutMs, "after_create")
+		removeWorkdirAfterHookFailure(ctx, ev, t.ID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, "after_create")
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 

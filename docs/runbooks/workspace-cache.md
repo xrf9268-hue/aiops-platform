@@ -76,6 +76,26 @@ the worker is deployed:
    worker's main loop (e.g. once per N completed tasks). Until that
    lands, treat cleanup as an out-of-band concern.
 
+## Cleanup containment invariant
+
+All cleanup paths that delete a per-task worktree go through
+`workspace.SafeRemove(root, path)`. The helper refuses to delete a path
+that is not strictly contained under the configured workspace root:
+empty/whitespace input, the root itself, a sibling of the root, a
+`..` traversal, and symlinks whose resolved target points outside the
+root all return `ErrSafeRemoveEscapesRoot` and the on-disk path is left
+untouched. This is a defense-in-depth guard against a future refactor or
+a malformed hook output that could otherwise pass an empty string or
+`/` into `os.RemoveAll` — see SPEC §9.5 Invariants 2 & 3, §15.2.
+
+The two production call sites today are
+`internal/worker/runtask.go::removeWorkdirAfterHookFailure` (rollback
+after `after_create` hook failure) and
+`internal/worker/reconcile.go::removeWorkspace` (reconcile-driven
+cleanup for closed/cancelled issues). Any new cleanup code that touches
+`$WORKSPACE_ROOT` should call `workspace.SafeRemove` rather than
+`os.RemoveAll` directly.
+
 ## Troubleshooting
 
 - `fatal: '<dir>' is not a working tree` printed during task setup is
