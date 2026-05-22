@@ -967,6 +967,9 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
+	// NewPoller without a reconciliation config leaves reconcile.TerminalStates
+	// empty; filterEligibleCandidates falls back to workflow.DefaultConfig's
+	// SPEC §5.3.1 5-state set, so a Done blocker is still treated as terminal.
 	poller := NewPoller(trackerClient, orch)
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
@@ -1085,7 +1088,12 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 	}
 
 	poller := NewPoller(trackerClient, orch)
-	poller.reconcile.TerminalStates = []string{"Done", "Canceled"}
+	// Use workflow.DefaultConfig().Tracker.TerminalStates so the test actually
+	// exercises the SPEC §5.3.1 5-state default ("Done", "Canceled",
+	// "Cancelled", "Closed", "Duplicate"). Previously this was hard-coded to
+	// ["Done", "Canceled"] and relied on filterEligibleCandidates's now-removed
+	// hardcoded overlay (#232) to backfill the remaining three terminal states.
+	poller.reconcile.TerminalStates = workflow.DefaultConfig().Tracker.TerminalStates
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1094,6 +1102,78 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 		t.Fatalf("dispatched issue IDs = %v, want %v", got, want)
 	}
 	close(dispatcher.releaseCh)
+}
+
+// TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates is the
+// regression for #232 — when an operator explicitly subsets terminal_states
+// (e.g. ["Done"] only), the Todo blocker rule MUST observe that subset, not
+// any hardcoded English fallback. Closed and Duplicate blockers are open per
+// the operator config, so both Todo issues stay blocked.
+func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "todo-closed", Identifier: "LIN-1", Title: "Closed blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "LIN-0", State: "Closed"}}},
+		{ID: "todo-duplicate", Identifier: "LIN-2", Title: "Duplicate blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blocker-2", Identifier: "LIN-3", State: "Duplicate"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPoller(trackerClient, orch)
+	// Operator subsets terminal_states to just ["Done"]. Closed and Duplicate
+	// must NOT be treated as terminal — both Todo issues stay blocked.
+	poller.reconcile.TerminalStates = []string{"Done"}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	// Give the orchestrator a beat to evaluate. No dispatches expected.
+	time.Sleep(50 * time.Millisecond)
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatcher count = %d, want 0 (Closed/Duplicate blockers must be treated as open under operator config without them)", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
+// TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll confirms
+// that an explicitly empty terminal_states slice from
+// NewPollerWithReconciliation reaches filterEligibleCandidates verbatim — it
+// is NOT silently replaced by the DefaultConfig 5-state set. SPEC §5.3.1
+// default semantics: defaults apply on omission, not on explicit override.
+func TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll(t *testing.T) {
+	issues := []tracker.Issue{
+		{ID: "todo-done", Identifier: "LIN-1", Title: "Done blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Done"}}},
+	}
+	out := filterEligibleCandidates(issues, []string{})
+	if len(out) != 0 {
+		t.Fatalf("filterEligibleCandidates with explicit [] = %d issues, want 0 (no states are terminal → all blockers open → Todo blocked); got=%#v", len(out), out)
+	}
+}
+
+// TestFilterEligibleCandidatesUsesOnlyConfiguredTerminalSet is the direct
+// unit test for filterEligibleCandidates: when operator's terminal_states is
+// ["Released"], a Todo issue blocked by a "Released" blocker passes the
+// filter (blocker is terminal per config), while a Todo issue blocked by a
+// "Closed" blocker is filtered (Closed is no longer hardcoded as terminal).
+func TestFilterEligibleCandidatesUsesOnlyConfiguredTerminalSet(t *testing.T) {
+	issues := []tracker.Issue{
+		{ID: "todo-closed", Identifier: "LIN-1", Title: "Closed blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Closed"}}},
+		{ID: "todo-released", Identifier: "LIN-2", Title: "Released blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-9", State: "Released"}}},
+	}
+	out := filterEligibleCandidates(issues, []string{"Released"})
+	if len(out) != 1 {
+		t.Fatalf("filterEligibleCandidates = %d issues, want 1; got=%#v", len(out), out)
+	}
+	if out[0].ID != "todo-released" {
+		t.Fatalf("passed issue = %q, want todo-released (its blocker is in operator-configured terminal state)", out[0].ID)
+	}
 }
 
 func TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField(t *testing.T) {

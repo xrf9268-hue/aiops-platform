@@ -373,7 +373,7 @@ func DefaultConfig() Config {
 		Tracker: TrackerConfig{
 			Kind:           "gitea",
 			ActiveStates:   []string{"AI Ready", "In Progress", "Rework"},
-			TerminalStates: []string{"Done", "Canceled"},
+			TerminalStates: []string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"},
 			PollIntervalMs: 30000,
 			Statuses: TrackerStatusConfig{
 				InProgress:  "In Progress",

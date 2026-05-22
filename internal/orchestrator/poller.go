@@ -67,8 +67,18 @@ type Poller struct {
 
 // NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
 // runtime state instead of the legacy Postgres task queue.
+//
+// Callers that do not supply a ReconciliationConfig still get the SPEC §5.3.1
+// default terminal_states so the Todo blocker rule continues to honor
+// "Done"/"Canceled"/etc. without the hardcoded overlay #232 removed.
+// Operators who genuinely want to disable the blocker rule must construct via
+// NewPollerWithReconciliation with an explicit empty terminal_states slice.
 func NewPoller(tracker ActiveIssueLister, orchestrator *Orchestrator) *Poller {
-	return &Poller{tracker: tracker, orchestrator: orchestrator}
+	return &Poller{
+		tracker:      tracker,
+		orchestrator: orchestrator,
+		reconcile:    ReconciliationConfig{TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates},
+	}
 }
 
 // NewPollerWithReconciliation returns a poller that reconciles the
@@ -315,10 +325,13 @@ func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Is
 }
 
 func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
+	// Honor exactly what the caller supplied per SPEC §5.3.1. Callers that
+	// want the SPEC 5-state default get it from workflow.DefaultConfig at
+	// construction time (NewPoller seeds it; workflow.Load supplies it for
+	// omitted YAML). An explicit empty slice from
+	// NewPollerWithReconciliation disables the blocker rule entirely, which
+	// is the operator's call.
 	terminal := normalizedStates(terminalStates)
-	for state := range normalizedStates([]string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"}) {
-		terminal[state] = struct{}{}
-	}
 	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {
 		if !issueHasRequiredCandidateFields(issue) {
