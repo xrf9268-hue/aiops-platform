@@ -1656,6 +1656,7 @@ func TestRefreshHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
 // Boundary rule (=N + =N+1) is applied at each cap edge:
 //   - lower cap: -1 accepted, -2 rejected
 //   - upper cap: 65535 accepted, 65536 rejected
+//
 // The interior values 0, 1, 4000 confirm the band; 0 is the SPEC-
 // blessed "ephemeral" sentinel that the workflow loader rejects (port
 // 0 is not allowed in WORKFLOW.md) — CLI is the legitimate path for
@@ -1663,10 +1664,10 @@ func TestRefreshHTTPHandler_DoesNotLeakErrorTextInBody(t *testing.T) {
 // can distinguish CLI parsing failures from workflow-load failures.
 func TestParseRunArgs_PortFlagBoundaries(t *testing.T) {
 	cases := []struct {
-		name      string
-		args      []string
-		wantPort  *int
-		wantErr   string // substring, "" = no error
+		name     string
+		args     []string
+		wantPort *int
+		wantErr  string // substring, "" = no error
 	}{
 		{name: "unset_no_override", args: []string{}, wantPort: nil},
 		{name: "below_lower_cap_minus_two", args: []string{"--port=-2"}, wantErr: "--port"},
