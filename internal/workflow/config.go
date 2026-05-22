@@ -222,6 +222,16 @@ type AgentConfig struct {
 	// of 1) from "explicitly set to 0" (no retry). Read via
 	// MaxTimeoutRetriesValue() rather than dereferencing directly.
 	MaxTimeoutRetries *int `yaml:"max_timeout_retries" json:"max_timeout_retries"`
+	// PolicyViolationBudget bounds how many policy-violation feedback
+	// entries an issue can accumulate before the worker fails the run
+	// non-retryably. The default of 2 preserves the historical hardcoded
+	// behavior; explicit 0 disables policy-violation-based suppression so
+	// aggressive workflows can iterate until verify converges or another
+	// non-retryable error fires. Read via PolicyViolationBudgetValue()
+	// rather than dereferencing directly. Negative values are clamped to 0
+	// (no policy-violation suppression). See #230 for the operator-visible
+	// budget motivation.
+	PolicyViolationBudget *int `yaml:"policy_violation_budget" json:"policy_violation_budget"`
 }
 
 // MaxTimeoutRetriesValue returns the effective runner-timeout retry
@@ -251,6 +261,24 @@ func (a AgentConfig) MaxRetryAttemptsValue() int {
 		return 0
 	}
 	return *a.MaxRetryAttempts
+}
+
+// DefaultPolicyViolationBudget is the historical hardcoded value preserved
+// when `agent.policy_violation_budget` is absent from WORKFLOW.md.
+const DefaultPolicyViolationBudget = 2
+
+// PolicyViolationBudgetValue returns the effective per-issue policy-violation
+// budget. A nil pointer (field omitted from YAML) yields
+// DefaultPolicyViolationBudget; an explicit value — including 0 — is honored
+// as configured. Negative values clamp to 0 (no suppression).
+func (a AgentConfig) PolicyViolationBudgetValue() int {
+	if a.PolicyViolationBudget == nil {
+		return DefaultPolicyViolationBudget
+	}
+	if *a.PolicyViolationBudget < 0 {
+		return 0
+	}
+	return *a.PolicyViolationBudget
 }
 
 type CommandConfig struct {

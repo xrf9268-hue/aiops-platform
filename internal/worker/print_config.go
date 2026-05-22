@@ -54,13 +54,14 @@ type configView struct {
 // The remaining fields keep their original JSON tags so external
 // consumers see the same shape.
 type agentConfigView struct {
-	Default             string `json:"default"`
-	MaxConcurrentAgents int    `json:"max_concurrent_agents"`
-	MaxTurns            int    `json:"max_turns"`
-	MaxRetryBackoffMs   int    `json:"max_retry_backoff_ms"`
-	MaxRetryAttempts    *int   `json:"max_retry_attempts"`
-	Timeout             string `json:"timeout"`
-	MaxTimeoutRetries   *int   `json:"max_timeout_retries"`
+	Default               string `json:"default"`
+	MaxConcurrentAgents   int    `json:"max_concurrent_agents"`
+	MaxTurns              int    `json:"max_turns"`
+	MaxRetryBackoffMs     int    `json:"max_retry_backoff_ms"`
+	MaxRetryAttempts      *int   `json:"max_retry_attempts"`
+	Timeout               string `json:"timeout"`
+	MaxTimeoutRetries     *int   `json:"max_timeout_retries"`
+	PolicyViolationBudget int    `json:"policy_violation_budget"`
 }
 
 func newConfigView(cfg workflow.Config) configView {
@@ -69,13 +70,14 @@ func newConfigView(cfg workflow.Config) configView {
 		Tracker:   cfg.Tracker,
 		Workspace: cfg.Workspace,
 		Agent: agentConfigView{
-			Default:             cfg.Agent.Default,
-			MaxConcurrentAgents: cfg.Agent.MaxConcurrentAgents,
-			MaxTurns:            cfg.Agent.MaxTurns,
-			MaxRetryBackoffMs:   cfg.Agent.MaxRetryBackoffMs,
-			MaxRetryAttempts:    cfg.Agent.MaxRetryAttempts,
-			Timeout:             cfg.Agent.Timeout.String(),
-			MaxTimeoutRetries:   cfg.Agent.MaxTimeoutRetries,
+			Default:               cfg.Agent.Default,
+			MaxConcurrentAgents:   cfg.Agent.MaxConcurrentAgents,
+			MaxTurns:              cfg.Agent.MaxTurns,
+			MaxRetryBackoffMs:     cfg.Agent.MaxRetryBackoffMs,
+			MaxRetryAttempts:      cfg.Agent.MaxRetryAttempts,
+			Timeout:               cfg.Agent.Timeout.String(),
+			MaxTimeoutRetries:     cfg.Agent.MaxTimeoutRetries,
+			PolicyViolationBudget: cfg.Agent.PolicyViolationBudgetValue(),
 		},
 		Codex:   cfg.Codex,
 		Claude:  cfg.Claude,

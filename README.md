@@ -54,6 +54,7 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `agent.max_turns` | `20` clean turns per issue before continuation stops |
 | `agent.max_retry_attempts` | `1` failure retry after the first run (`0` disables) |
 | `agent.max_timeout_retries` | `1` timeout retry after the first timeout (`0` disables) |
+| `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) |
 | `pr.draft` | `false` |
 | `pr.labels` | `[ai-generated, needs-review]` |
 | `server.port` | `4000` (`-1` disables the HTTP state server) |

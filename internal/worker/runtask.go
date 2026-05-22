@@ -253,12 +253,14 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		WriteFailureArtifacts(ctx, workdir, nil, "policy feedback read failed: "+ErrSummary(feedbackErr))
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
 	} else if policyFeedback != nil {
+		policyBudget := wcfg.Agent.PolicyViolationBudgetValue()
 		Emit(ctx, ev, t.ID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
 			"path":            policyFeedbackPath,
 			"violation_count": policyFeedback.Count,
 			"summary":         policyFeedback.Summary,
+			"budget":          policyBudget,
 		})
-		if policyFeedback.Count >= policyViolationStopAfter {
+		if policyBudget > 0 && policyFeedback.Count >= policyBudget {
 			WriteFailureArtifacts(ctx, workdir, nil, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
 		}
@@ -320,10 +322,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		if feedbackErr != nil {
 			willRetry = false
 		}
-		if feedback != nil && feedback.Count >= policyViolationStopAfter {
+		policyBudget := wcfg.Agent.PolicyViolationBudgetValue()
+		if feedback != nil && policyBudget > 0 && feedback.Count >= policyBudget {
 			willRetry = false
 		}
-		recordPolicyViolation(ctx, ev, t.ID, err, feedback, feedbackPath, willRetry, feedbackErr)
+		recordPolicyViolation(ctx, ev, t.ID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
 		WriteFailureArtifacts(ctx, workdir, nil, "policy check failed: "+ErrSummary(err))
 		if feedbackErr != nil {
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %v", feedbackErr, err), NonRetryable: true}
@@ -712,8 +715,11 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, work
 }
 
 // recordPolicyViolation writes a structured `policy_violation` task event
-// before the worker fails the task.
-func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error) {
+// before the worker fails the task. budget is the configured
+// `agent.policy_violation_budget` (resolved via PolicyViolationBudgetValue),
+// emitted alongside the running count so dashboards can render "violation N
+// of M (final attempt)".
+func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
 	if ev == nil {
 		return
 	}
@@ -722,6 +728,7 @@ func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID string, 
 		payload := map[string]any{
 			"violations": perr.Violations,
 			"will_retry": willRetry,
+			"budget":     budget,
 		}
 		if feedback != nil {
 			payload["violation_count"] = feedback.Count

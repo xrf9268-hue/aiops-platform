@@ -15,8 +15,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
-const policyViolationStopAfter = 2
-
 type policyViolationFeedback struct {
 	IssueID    string             `json:"issue_id"`
 	Identifier string             `json:"identifier,omitempty"`

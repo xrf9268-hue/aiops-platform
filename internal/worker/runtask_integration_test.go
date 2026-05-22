@@ -436,6 +436,100 @@ func TestRunTaskPolicyViolationFeedbackStopsSecondViolation(t *testing.T) {
 	}
 }
 
+// TestRunTaskPolicyViolationBudgetRaiseDefersEarlyBailOut pins the new
+// `agent.policy_violation_budget` knob from #230: raising the budget from
+// the default of 2 to 3 must let the third policy-violating attempt run
+// (rather than short-circuit before runner) and only short-circuit on the
+// fourth. The runner-start emit on attempt 3 is the operator-visible
+// difference vs. the default.
+func TestRunTaskPolicyViolationBudgetRaiseDefersEarlyBailOut(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	cfg := workerCfgForIntegration(t)
+	budget := 3
+	cfg.Workflow.Config.Agent.PolicyViolationBudget = &budget
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	cfg.Workflow.Config.Policy.DenyPaths = []string{"mock-source-change.txt"}
+	tk.Model = "mock-source-change"
+
+	// Drive two retryable violations to seed the feedback file.
+	for attempt := 1; attempt <= 2; attempt++ {
+		tk.Attempts = attempt
+		ev := &fakeEmitter{}
+		out := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+		if out == nil {
+			t.Fatalf("attempt %d succeeded, want policy-violation failure", attempt)
+		}
+		if out.NonRetryable {
+			t.Fatalf("attempt %d non-retryable with budget=3, want still retryable", attempt)
+		}
+	}
+
+	// Attempt 3 with default budget=2 would early-bail before runner_start.
+	// With budget=3 the runner must execute, the third violation lands, and
+	// the budget is then exhausted (non-retryable, count==budget).
+	tk.Attempts = 3
+	ev := &fakeEmitter{}
+	third := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if third == nil {
+		t.Fatal("third attempt succeeded, want policy-violation failure")
+	}
+	if !third.NonRetryable {
+		t.Fatalf("third attempt with budget=3 should exhaust budget non-retryably; got %+v", third)
+	}
+	if got := ev.byKind(task.EventRunnerStart); len(got) == 0 {
+		t.Fatal("third attempt did not emit runner_start; raised budget did not defer the early bail-out")
+	}
+	violations := ev.byKind(task.EventPolicyViolation)
+	if len(violations) != 1 {
+		t.Fatalf("policy_violation events = %d, want 1", len(violations))
+	}
+	if got := payloadField(t, violations[0].Payload, "budget"); got != float64(3) {
+		t.Fatalf("policy_violation budget = %v, want 3", got)
+	}
+	if got := payloadField(t, violations[0].Payload, "violation_count"); got != float64(3) {
+		t.Fatalf("policy_violation violation_count = %v, want 3", got)
+	}
+}
+
+// TestRunTaskPolicyViolationBudgetZeroDisablesSuppression: explicit budget=0
+// disables policy-violation-based suppression entirely; even the 10th attempt
+// is retryable.
+func TestRunTaskPolicyViolationBudgetZeroDisablesSuppression(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	cfg := workerCfgForIntegration(t)
+	budget := 0
+	cfg.Workflow.Config.Agent.PolicyViolationBudget = &budget
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	cfg.Workflow.Config.Policy.DenyPaths = []string{"mock-source-change.txt"}
+	tk.Model = "mock-source-change"
+
+	tk.Attempts = 1
+	ev := &fakeEmitter{}
+	first := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if first == nil || first.NonRetryable {
+		t.Fatalf("first attempt: out=%v NonRetryable=%v, want retryable failure", first, first != nil && first.NonRetryable)
+	}
+
+	tk.Attempts = 2
+	ev = &fakeEmitter{}
+	second := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if second == nil || second.NonRetryable {
+		t.Fatalf("second attempt with budget=0 should still be retryable; got %+v", second)
+	}
+	violations := ev.byKind(task.EventPolicyViolation)
+	if len(violations) != 1 {
+		t.Fatalf("policy_violation events = %d, want 1", len(violations))
+	}
+	if got := payloadField(t, violations[0].Payload, "budget"); got != float64(0) {
+		t.Fatalf("policy_violation budget = %v, want 0", got)
+	}
+	if got := payloadField(t, violations[0].Payload, "will_retry"); got != true {
+		t.Fatalf("policy_violation will_retry = %v, want true (budget=0 disables suppression)", got)
+	}
+}
+
 func TestRunTaskPolicyViolationFeedbackReadErrorIsNonRetryable(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
