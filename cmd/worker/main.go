@@ -70,7 +70,7 @@ func parseRunArgs(args []string) (string, *int, error) {
 	// and parse diagnostics reach the user. flag.ErrHelp is propagated
 	// to the caller, which treats it as a clean exit.
 	portFlag := fs.Int("port", 0, "override server.port from WORKFLOW.md: -1 disables the HTTP server, 0 binds an ephemeral port, 1..65535 binds explicitly. SPEC §13.7.")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderForFlagParse(args)); err != nil {
 		return "", nil, err
 	}
 	if fs.NArg() > 1 {
@@ -98,6 +98,40 @@ func parseRunArgs(args []string) (string, *int, error) {
 		override = &p
 	}
 	return path, override, nil
+}
+
+// reorderForFlagParse pulls flag tokens to the front of args so the
+// stdlib flag parser (which stops at the first non-flag argument)
+// accepts `worker /path/WORKFLOW.md --port=4001` and `worker
+// --port=4001 /path/WORKFLOW.md` interchangeably. Operators are not
+// expected to remember Go's flag-vs-positional ordering rule, and
+// SPEC §13.7 does not impose one.
+//
+// The reorder is flag-aware (knows --port takes a value) rather than
+// a naive "starts with -" split — that's only because --port can be
+// passed as two tokens (`--port 4001`). A `--` token preserves
+// everything that follows as positional, matching POSIX convention.
+func reorderForFlagParse(args []string) []string {
+	flags, positional := make([]string, 0, len(args)), make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
+		case a == "--port" || a == "-port":
+			flags = append(flags, a)
+			if i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+		case strings.HasPrefix(a, "-"):
+			flags = append(flags, a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+	return append(flags, positional...)
 }
 
 // desiredPortForLoop selects the effective state-server port for one

@@ -1706,6 +1706,38 @@ func TestParseRunArgs_PortFlagBoundaries(t *testing.T) {
 	}
 }
 
+// TestParseRunArgs_PortAfterPositionalPathStillParses pins the
+// Codex-flagged regression: `worker /path/WORKFLOW.md --port=4001`
+// used to fail because stdlib flag.Parse stops at the first non-flag
+// arg. The reorder helper now pulls flag tokens to the front.
+// Boundary form: paired-edges on token ordering with the same value
+// (=4001) shows up in both positions.
+func TestParseRunArgs_PortAfterPositionalPathStillParses(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "path_then_port_equals", args: []string{"/wf.md", "--port=4001"}},
+		{name: "path_then_port_split", args: []string{"/wf.md", "--port", "4001"}},
+		{name: "port_equals_then_path", args: []string{"--port=4001", "/wf.md"}},
+		{name: "port_split_then_path", args: []string{"--port", "4001", "/wf.md"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, port, err := parseRunArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseRunArgs(%v): %v", tc.args, err)
+			}
+			if path != "/wf.md" {
+				t.Fatalf("path = %q, want /wf.md", path)
+			}
+			if port == nil || *port != 4001 {
+				t.Fatalf("port = %v, want &4001", port)
+			}
+		})
+	}
+}
+
 // TestParseRunArgs_HelpReturnsFlagErrHelp confirms `--help` propagates
 // the stdlib sentinel up to main, where normalizeRunError treats it as
 // a clean exit. Without this, `worker --help` would be logged as a
@@ -1731,6 +1763,10 @@ func TestParseRunArgs_WorkflowPathStillSupported(t *testing.T) {
 	}{
 		{name: "positional_only", args: []string{"/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
 		{name: "flag_then_path", args: []string{"--port=4001", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
+		{name: "path_then_flag_equals", args: []string{"/path/to/WORKFLOW.md", "--port=4001"}, want: "/path/to/WORKFLOW.md"},
+		{name: "path_then_flag_split", args: []string{"/path/to/WORKFLOW.md", "--port", "4001"}, want: "/path/to/WORKFLOW.md"},
+		{name: "flag_split_then_path", args: []string{"--port", "4001", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
+		{name: "dash_dash_terminates_flags", args: []string{"--", "/path/to/WORKFLOW.md"}, want: "/path/to/WORKFLOW.md"},
 		{name: "no_args", args: []string{}, want: ""},
 	}
 	for _, tc := range cases {
