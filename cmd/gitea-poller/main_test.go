@@ -113,6 +113,51 @@ func serverURL(r *http.Request) string {
 	return "http://" + r.Host
 }
 
+// TestRunPollLoop_CancelBeforeFirstTick — =0 boundary. ctx cancelled
+// before entry; poll must not be invoked (pre-poll select guard).
+func TestRunPollLoop_CancelBeforeFirstTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var calls int
+	runPollLoop(ctx, time.Millisecond, func(context.Context) { calls++ })
+	if calls != 0 {
+		t.Fatalf("poll calls = %d, want 0 when ctx is cancelled before entry", calls)
+	}
+}
+
+// TestRunPollLoop_CancelAfterFirstTick — =N+1 paired edge. First poll
+// runs; ctx is cancelled inside the closure so the sleep-select picks
+// up Done and returns. Exactly one invocation.
+func TestRunPollLoop_CancelAfterFirstTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls int
+	runPollLoop(ctx, time.Hour, func(context.Context) {
+		calls++
+		cancel()
+	})
+	if calls != 1 {
+		t.Fatalf("poll calls = %d, want exactly 1 after cancel-during-sleep", calls)
+	}
+}
+
+// TestRunPollLoop_PollFunctionReceivesLoopCtx pins the contract that
+// the poll closure sees the loop's ctx (not a detached background
+// ctx), so in-flight HTTP/DB calls can themselves react to SIGTERM.
+func TestRunPollLoop_PollFunctionReceivesLoopCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var observed context.Context
+	runPollLoop(ctx, time.Hour, func(c context.Context) {
+		observed = c
+		cancel()
+	})
+	if observed == nil {
+		t.Fatalf("poll function did not receive a context")
+	}
+	if observed.Err() == nil {
+		t.Fatalf("inner ctx should be cancelled after outer cancel; err=%v", observed.Err())
+	}
+}
+
 func mustTime(value string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {

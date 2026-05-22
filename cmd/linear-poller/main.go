@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,7 +36,8 @@ func main() {
 	if len(os.Args) < 2 {
 		log.Fatal("usage: linear-poller /path/to/WORKFLOW.md")
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	wf, err := workflow.Load(os.Args[1])
 	if err != nil {
 		log.Fatal(err)
@@ -52,11 +55,34 @@ func main() {
 	listers := linearIssueListers(wf.Config)
 	interval := time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond
 
-	for {
+	runPollLoop(ctx, interval, func(ctx context.Context) {
 		if err := pollOnce(ctx, store, &wf.Config, listers); err != nil {
 			log.Printf("linear poll error: %v", err)
 		}
-		time.Sleep(interval)
+	})
+	log.Printf("linear-poller: shutdown requested; exiting")
+}
+
+// runPollLoop runs poll on the given interval until ctx is cancelled
+// (typically by SIGTERM/SIGINT via signal.NotifyContext). The two
+// select statements gate both the start of each tick and the
+// inter-tick sleep: a cancel that arrives before the first poll never
+// invokes poll, and a cancel that arrives during a sleep wakes up
+// immediately instead of waiting for time.Sleep to return. Tests in
+// main_test.go pin both branches.
+func runPollLoop(ctx context.Context, interval time.Duration, poll func(context.Context)) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		poll(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
 	}
 }
 

@@ -447,6 +447,55 @@ func TestProcessIssuesFallsBackToRootRepoWhenNoServiceRouteMatches(t *testing.T)
 	}
 }
 
+// TestRunPollLoop_CancelBeforeFirstTick covers the =0 boundary on the
+// poll-count cap: ctx is cancelled before runPollLoop is entered, so
+// the inner poll function must not run at all (the pre-poll select
+// guard catches it). Today's main loop would have invoked poll once
+// regardless — this pins the new contract.
+func TestRunPollLoop_CancelBeforeFirstTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var calls int
+	runPollLoop(ctx, time.Millisecond, func(context.Context) { calls++ })
+	if calls != 0 {
+		t.Fatalf("poll calls = %d, want 0 when ctx is cancelled before entry", calls)
+	}
+}
+
+// TestRunPollLoop_CancelAfterFirstTick covers the =N+1 boundary on the
+// same cap: the first poll runs, then ctx is cancelled during the
+// sleep select, so exactly one invocation happens. This is the paired
+// edge of CancelBeforeFirstTick — together they pin both select
+// statements in runPollLoop.
+func TestRunPollLoop_CancelAfterFirstTick(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls int
+	runPollLoop(ctx, time.Hour, func(context.Context) {
+		calls++
+		cancel()
+	})
+	if calls != 1 {
+		t.Fatalf("poll calls = %d, want exactly 1 after cancel-during-sleep", calls)
+	}
+}
+
+// TestRunPollLoop_PollFunctionReceivesLoopCtx ensures the inner poll
+// function sees the same cancellable ctx, not a detached one.
+func TestRunPollLoop_PollFunctionReceivesLoopCtx(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var observed context.Context
+	runPollLoop(ctx, time.Hour, func(c context.Context) {
+		observed = c
+		cancel()
+	})
+	if observed == nil {
+		t.Fatalf("poll function did not receive a context")
+	}
+	if observed.Err() == nil {
+		t.Fatalf("inner ctx should be cancelled after outer cancel; err=%v", observed.Err())
+	}
+}
+
 func mapKeys(m map[string]task.Task) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
