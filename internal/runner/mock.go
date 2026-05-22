@@ -80,7 +80,7 @@ pushing, opening PRs, or writing tracker comments on the runner's behalf.
 		}
 		gitCommands := [][]string{
 			{"git", "add", commitPath},
-			{"git", "-c", "user.email=mock@example.com", "-c", "user.name=mock", "commit", "-q", "-m", "mock source commit"},
+			{"git", "-c", "user.email=mock@example.com", "-c", "user.name=mock", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "commit", "-q", "-m", "mock source commit"},
 		}
 		for _, args := range gitCommands {
 			cmd := exec.CommandContext(ctx, args[0], args[1:]...)

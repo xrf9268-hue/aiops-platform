@@ -28,6 +28,8 @@ func initRepo(t *testing.T) string {
 		{"git", "init", "-q", "-b", "main"},
 		{"git", "config", "user.email", "test@example.com"},
 		{"git", "config", "user.name", "test"},
+		{"git", "config", "commit.gpgsign", "false"},
+		{"git", "config", "tag.gpgsign", "false"},
 	} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
@@ -647,6 +649,8 @@ func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
 	mustGit(t, dir, "init", "-q")
 	mustGit(t, dir, "config", "user.email", "test@example.com")
 	mustGit(t, dir, "config", "user.name", "test")
+	mustGit(t, dir, "config", "commit.gpgsign", "false")
+	mustGit(t, dir, "config", "tag.gpgsign", "false")
 	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
 
 	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package main\n"), 0o644); err != nil {
