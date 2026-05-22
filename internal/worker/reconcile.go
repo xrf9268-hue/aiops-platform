@@ -236,7 +236,7 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis); err != nil {
 		log.Printf("task %s: before_remove hook failed for %s workspace %s: %v", taskID, reason, path, err)
 	}
-	if err := os.RemoveAll(path); err != nil {
+	if err := workspace.SafeRemove(cfg.WorkspaceRoot, path); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", reason, path, err)
 	}
 	Emit(ctx, cfg.Emitter, taskID, task.EventReconcileWorkspace, "removed workspace", map[string]any{
