@@ -119,6 +119,12 @@ func (f *fakeDispatcher) attemptValueAt(i int) *int {
 	return &attempt
 }
 
+func (f *fakeDispatcher) contextAt(i int) context.Context {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contexts[i]
+}
+
 // finishAt completes the i-th spawned worker with the given result.
 // Tests use this to drive the worker-exit path through the actor.
 func (f *fakeDispatcher) finishAt(i int, res WorkerResult) {
@@ -1879,22 +1885,29 @@ func TestSpawn_FinalizeSubmitFailureClosesWorkerDone(t *testing.T) {
 	}()
 	<-sentinelStarted
 
+	// Capture the per-worker context the dispatcher received. Spawn's watcher
+	// goroutine calls `cancel()` on this context at actor.go:1289 the instant
+	// it consumes a result from `resultCh`, before falling through to the
+	// `o.submit(o.runCtx, &finalizeRunOp{...})` call. We use its Done channel
+	// below as a deterministic signal that the watcher has moved past its
+	// outer select and committed to the finalize-submit path — replacing the
+	// earlier (broken) `len(o.ops)` check, since `o.ops` is unbuffered and its
+	// length is always 0.
+	workerCtx := disp.contextAt(0)
+
 	// Deliver the worker result while the actor is paused. The spawn goroutine
 	// receives it and attempts to submit finalizeRunOp; that submit blocks on
 	// the unbuffered ops channel.
 	disp.finishAt(0, WorkerResult{Err: nil, Elapsed: 10 * time.Millisecond})
 
-	// Yield long enough for the spawn goroutine to consume the result and
-	// reach the blocked-on-ops `o.submit(o.runCtx, &finalizeRunOp{...})` call.
-	// Without this delay, cancel() can fire before the goroutine moves past
-	// its outer select, which lets the runCtx.Done() branch close workerDone
-	// directly and bypasses the race we are trying to exercise.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if len(o.ops) > 0 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	// Wait for the watcher goroutine to consume the result. Once workerCtx is
+	// canceled, the watcher has left its outer select and the only forward
+	// path is `o.submit(o.runCtx, &finalizeRunOp{...})`, which we want to
+	// observe failing.
+	select {
+	case <-workerCtx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher never consumed dispatch result")
 	}
 
 	// Cancel runCtx. Once the actor finishes the sentinel op and re-enters its
