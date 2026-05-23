@@ -1096,7 +1096,22 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 		if err := json.Unmarshal(arguments, &call); err != nil {
 			result, err = dynamicToolFailure(err.Error())
 		} else {
-			result, err = tool.Call(ctx, call)
+			// Install the audit sink for any tool that may route
+			// through the Linear GraphQL proxy. linear_ai_workpad
+			// composes deterministic commentCreate/commentUpdate
+			// mutations through the same token-isolated transport
+			// (via callRaw); operators need the runtime event for
+			// those harness-attributable writes too. Only the
+			// proxy itself fires the sink, so installing it on
+			// unrelated tools is a no-op.
+			toolCtx := WithLinearGraphQLMutationSink(ctx, func(operationField string) {
+				payload := map[string]any{"tool": name}
+				if operationField != "" {
+					payload["operation_field"] = operationField
+				}
+				c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+			})
+			result, err = tool.Call(toolCtx, call)
 			if err != nil {
 				result, err = dynamicToolFailure(err.Error())
 			}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,9 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 			Kind:   "linear",
 			APIKey: token,
 		},
+		Codex: workflow.CommandConfig{
+			LinearGraphQL: workflow.LinearGraphQLConfig{AllowMutations: true},
+		},
 	}})
 
 	tool, ok := tools.Lookup("linear_graphql")
@@ -69,7 +73,7 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 		t.Fatalf("tool input schema = %s, want query field and no token leak", schemaBytes)
 	}
 
-	proxy := linearGraphQLProxy{apiKey: token, baseURL: httpServer.URL, http: httpServer.Client()}
+	proxy := linearGraphQLProxy{apiKey: token, baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
 	result, err := proxy.call(context.Background(), ToolCall{
 		Query:     "mutation IssueUpdate($id: String!) { issueUpdate(id: $id, input: {}) { success } }",
 		Variables: map[string]any{"id": "issue-1"},
@@ -154,9 +158,10 @@ func TestLinearGraphQLReturnsFailurePayloadForGraphQLErrors(t *testing.T) {
 	tool := DynamicTool{
 		Name: "linear_graphql",
 		Call: linearGraphQLProxy{
-			apiKey:  "token",
-			baseURL: httpServer.URL,
-			http:    httpServer.Client(),
+			apiKey:         "token",
+			baseURL:        httpServer.URL,
+			http:           httpServer.Client(),
+			allowMutations: true,
 		}.call,
 	}
 
@@ -311,16 +316,18 @@ func TestLinearGraphQLAllowsSingleAnonymousOperation(t *testing.T) {
 
 func TestLinearGraphQLAllowsSingleOperationWithFragments(t *testing.T) {
 	tests := []struct {
-		name  string
-		query string
+		name           string
+		query          string
+		allowMutations bool
 	}{
 		{
 			name:  "named query",
 			query: `query Q { ...F } fragment F on Issue { id }`,
 		},
 		{
-			name:  "named mutation",
-			query: `mutation M { issueUpdate(id: "1", input: {}) { issue { ...F } } } fragment F on Issue { id }`,
+			name:           "named mutation",
+			query:          `mutation M { issueUpdate(id: "1", input: {}) { issue { ...F } } } fragment F on Issue { id }`,
+			allowMutations: true,
 		},
 		{
 			name: "anonymous query",
@@ -335,7 +342,7 @@ fragment F on Issue { id }`,
 			httpServer := httptest.NewServer(server.handler())
 			defer httpServer.Close()
 
-			result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}.
+			result, err := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: tt.allowMutations}.
 				call(context.Background(), ToolCall{Query: tt.query})
 			if err != nil {
 				t.Fatalf("linear_graphql call: %v", err)
@@ -463,6 +470,450 @@ type errReadCloser struct{}
 
 func (errReadCloser) Read([]byte) (int, error) { return 0, errors.New("read boom") }
 func (errReadCloser) Close() error             { return nil }
+
+// TestLinearGraphQLDefaultRejectsMutationsBeforeHTTPRequest exercises the
+// SPEC §15.5 default-deny path (#298): with the zero value of the
+// LinearGraphQL config, the proxy refuses every mutation with a typed
+// error and never dispatches an HTTP request, so prompt-injected
+// `issueDelete` / `commentDelete` mutations cannot reach Linear.
+func TestLinearGraphQLDefaultRejectsMutationsBeforeHTTPRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		query string
+	}{
+		{name: "issue_delete", query: `mutation { issueDelete(id: "1") { success } }`},
+		{name: "comment_delete", query: `mutation Delete { commentDelete(id: "c1") { success } }`},
+		{name: "team_update", query: `mutation { teamUpdate(id: "t1", input: {}) { success } }`},
+		{name: "anonymous_mutation_with_directive", query: `mutation @auth(token: "x") { issueArchive(id: "1") { success } }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &fakeLinearGraphQLServer{}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+			result, err := proxy.call(context.Background(), ToolCall{Query: tc.query})
+			assertStructuredFailure(t, result, err, "mutations are disabled by this workflow", "codex.linear_graphql.allow_mutations")
+			if _, _, requests := server.recorded(); requests != 0 {
+				t.Fatalf("server received %d requests, want 0 for blocked mutation", requests)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLAllowsMutationsWhenOpted verifies the workflow opt-in
+// turns the gate off: with AllowMutations=true the proxy dispatches the
+// mutation to Linear exactly once.
+func TestLinearGraphQLAllowsMutationsWhenOpted(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
+	result, err := proxy.call(context.Background(), ToolCall{Query: `mutation IssueUpdate { issueUpdate(id: "1", input: {}) { success } }`})
+	if err != nil {
+		t.Fatalf("linear_graphql call: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("success = false, want true; result=%s", result)
+	}
+	if _, _, requests := server.recorded(); requests != 1 {
+		t.Fatalf("server received %d requests, want 1", requests)
+	}
+}
+
+// TestLinearGraphQLAllowListRestrictsMutationFieldNames covers the
+// per-operation allow-list (#298 Layer 2). issueUpdate is allowed;
+// issueDelete is not, even though AllowMutations is true.
+func TestLinearGraphQLAllowListRestrictsMutationFieldNames(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{
+		apiKey:           "token",
+		baseURL:          httpServer.URL,
+		http:             httpServer.Client(),
+		allowMutations:   true,
+		allowedMutations: linearGraphQLAllowSet([]string{"issueUpdate", "commentCreate"}),
+	}
+
+	allowed, err := proxy.call(context.Background(), ToolCall{Query: `mutation { issueUpdate(id: "1", input: {}) { success } }`})
+	if err != nil {
+		t.Fatalf("allowed mutation: %v", err)
+	}
+	if !toolResultSucceeded(allowed) {
+		t.Fatalf("allowed mutation did not succeed: %s", allowed)
+	}
+
+	blocked, err := proxy.call(context.Background(), ToolCall{Query: `mutation { issueDelete(id: "1") { success } }`})
+	assertStructuredFailure(t, blocked, err, "not in the workflow's allowed_mutations list", "issueDelete")
+	if _, _, requests := server.recorded(); requests != 1 {
+		t.Fatalf("server received %d requests, want 1 (only the allowed mutation should have been dispatched)", requests)
+	}
+}
+
+// TestLinearGraphQLRejectsSubscriptions ensures subscription operations
+// never reach Linear regardless of mutation gate state — the runner has
+// no streaming surface for them.
+func TestLinearGraphQLRejectsSubscriptions(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
+	result, err := proxy.call(context.Background(), ToolCall{Query: `subscription { issues { id } }`})
+	assertStructuredFailure(t, result, err, "subscription")
+	if _, _, requests := server.recorded(); requests != 0 {
+		t.Fatalf("server received %d requests, want 0 for subscription", requests)
+	}
+}
+
+// TestLinearGraphQLEmitsAuditEventForSuccessfulMutation covers the
+// audit-trail layer (#298 Layer 3): when the context carries a mutation
+// sink, the proxy fires it exactly once per successful mutation, with
+// the top-level mutation field name and never with the query body.
+func TestLinearGraphQLEmitsAuditEventForSuccessfulMutation(t *testing.T) {
+	server := &fakeLinearGraphQLServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
+
+	var sinkCalls []string
+	sink := func(operationField string) {
+		sinkCalls = append(sinkCalls, operationField)
+	}
+	ctx := WithLinearGraphQLMutationSink(context.Background(), sink)
+
+	if _, err := proxy.call(ctx, ToolCall{Query: `mutation { issueUpdate(id: "1", input: {}) { success } }`}); err != nil {
+		t.Fatalf("mutation: %v", err)
+	}
+	// Query operations must NOT fire the audit sink.
+	if _, err := proxy.call(ctx, ToolCall{Query: `query { viewer { id } }`}); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(sinkCalls) != 1 {
+		t.Fatalf("sink fired %d times, want 1; calls=%v", len(sinkCalls), sinkCalls)
+	}
+	if sinkCalls[0] != "issueUpdate" {
+		t.Fatalf("sink received %q, want issueUpdate", sinkCalls[0])
+	}
+}
+
+// TestLinearGraphQLDoesNotEmitAuditOnGraphQLErrors makes sure the sink
+// fires only when Linear actually accepted the mutation. A 200 OK with a
+// `errors` envelope (Linear's typical GraphQL error shape) must not
+// produce a tool_call_mutation event because the mutation did not run.
+func TestLinearGraphQLDoesNotEmitAuditOnGraphQLErrors(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"errors":[{"message":"forbidden"}]}`)
+	}))
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
+	var sinkCalls []string
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
+		sinkCalls = append(sinkCalls, name)
+	})
+
+	if _, err := proxy.call(ctx, ToolCall{Query: `mutation { issueUpdate(id: "1", input: {}) { success } }`}); err != nil {
+		t.Fatalf("mutation: %v", err)
+	}
+	if len(sinkCalls) != 0 {
+		t.Fatalf("audit fired on Linear-reported error: %v", sinkCalls)
+	}
+}
+
+// TestParseLinearGraphQLOperationIdentifiesFieldNames is the parser-only
+// unit test the gate relies on: it must surface the first top-level
+// Mutation root field across normal whitespace, named/anonymous
+// operations, header arguments, and leading fragment definitions.
+func TestParseLinearGraphQLOperationIdentifiesFieldNames(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     string
+		kind      linearGraphQLOperationKind
+		fieldName string
+	}{
+		{
+			name:      "named mutation",
+			query:     `mutation Update { issueUpdate(id: "1", input: {}) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "anonymous mutation",
+			query:     `mutation { issueDelete(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueDelete",
+		},
+		{
+			name:      "named mutation with variables",
+			query:     `mutation M($id: String!) { commentCreate(input: { issueId: $id, body: "" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "commentCreate",
+		},
+		{
+			name:      "shorthand query",
+			query:     `{ viewer { id } }`,
+			kind:      linearGraphQLOperationQuery,
+			fieldName: "viewer",
+		},
+		{
+			name:      "subscription",
+			query:     `subscription { issues { id } }`,
+			kind:      linearGraphQLOperationSubscription,
+			fieldName: "issues",
+		},
+		{
+			name:      "mutation after fragment",
+			query:     `fragment F on Issue { id } mutation { issueArchive(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueArchive",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLinearGraphQLOperation(tc.query)
+			if got.Kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", got.Kind, tc.kind)
+			}
+			if got.FieldName != tc.fieldName {
+				t.Fatalf("fieldName = %q, want %q", got.FieldName, tc.fieldName)
+			}
+		})
+	}
+}
+
+// TestParseLinearGraphQLOperationRejectsAdversarialFraming exercises the
+// shapes a prompt-injection attempt would use to confuse the gate into
+// mis-classifying a mutation as a query or hiding the mutation field
+// name. The parser must see through GraphQL comments, single/triple
+// string literals containing GraphQL-shaped text, operation-header
+// directives, and leading fragment definitions.
+func TestParseLinearGraphQLOperationRejectsAdversarialFraming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     string
+		kind      linearGraphQLOperationKind
+		fieldName string
+	}{
+		{
+			name:      "leading comment then mutation",
+			query:     "# this comment mentions mutation { issueDelete } but is just text\nmutation { issueUpdate(id: \"1\", input: {}) { success } }",
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "leading comment then shorthand query",
+			query:     "# mutation { issueDelete }\n{ viewer { id } }",
+			kind:      linearGraphQLOperationQuery,
+			fieldName: "viewer",
+		},
+		{
+			name:      "default-value string contains mutation keyword",
+			query:     `mutation M($x: String = "mutation { issueDelete }") { issueUpdate(id: "1", input: {}) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "default-value string contains query shorthand",
+			query:     `mutation M($x: String = "{ viewer { id } }") { commentCreate(input: { issueId: "1", body: "" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "commentCreate",
+		},
+		{
+			name:      "triple-quoted block-string with braces",
+			query:     `mutation { commentCreate(input: { issueId: "1", body: """{ inner } mutation { fake }""" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "commentCreate",
+		},
+		{
+			name:      "operation-header directive",
+			query:     `mutation M @auth(token: "x") { issueArchive(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueArchive",
+		},
+		{
+			name:      "leading fragment then mutation",
+			query:     `fragment F on Issue { id title } mutation { issueDelete(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueDelete",
+		},
+		{
+			name:      "fragment with directive then mutation",
+			query:     `fragment F on Issue @cache(ttl: 60) { id } mutation { issueUpdate(id: "1", input: {}) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "mutation keyword inside escaped string",
+			query:     `mutation { issueUpdate(id: "1", input: { description: "a \"mutation\" inside" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "interior block does not shadow first field",
+			query:     `mutation { issueDelete(id: "1") { success deletedIssue { id } } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueDelete",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLinearGraphQLOperation(tc.query)
+			if got.Kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", got.Kind, tc.kind)
+			}
+			if got.FieldName != tc.fieldName {
+				t.Fatalf("fieldName = %q, want %q", got.FieldName, tc.fieldName)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLAdversarialMutationsAreRejected end-to-ends the
+// adversarial-framing cases through the gate: every mutation shape in
+// the table must produce a structured failure and zero HTTP requests
+// under default-deny.
+func TestLinearGraphQLAdversarialMutationsAreRejected(t *testing.T) {
+	queries := []string{
+		"# innocuous comment\nmutation { issueDelete(id: \"1\") { success } }",
+		`mutation M($x: String = "{ viewer { id } }") { issueDelete(id: "1") { success } }`,
+		`fragment F on Issue { id } mutation { issueDelete(id: "1") { success } }`,
+		`mutation M @auth(token: "x") { issueDelete(id: "1") { success } }`,
+		`mutation { issueDelete(id: "1") { success deletedIssue { id } } }`,
+	}
+	for i, q := range queries {
+		t.Run(fmt.Sprintf("query_%d", i), func(t *testing.T) {
+			server := &fakeLinearGraphQLServer{}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+			result, err := proxy.call(context.Background(), ToolCall{Query: q})
+			assertStructuredFailure(t, result, err, "mutations are disabled by this workflow")
+			if _, _, requests := server.recorded(); requests != 0 {
+				t.Fatalf("server received %d requests for adversarial query %q, want 0", requests, q)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLWorkpadEmitsAuditEvent verifies the should-fix from
+// the review: harness-driven mutations dispatched via the workpad must
+// also surface as tool_call_mutation events so operators see
+// harness-attributable Linear writes alongside agent-driven ones. Both
+// branches of the workpad's create/update fork are exercised so a
+// future refactor that breaks field-name detection on either path is
+// caught.
+func TestLinearGraphQLWorkpadEmitsAuditEvent(t *testing.T) {
+	tests := []struct {
+		name      string
+		findReply string
+		wantField string
+	}{
+		{
+			name:      "create_branch_when_no_existing_workpad",
+			findReply: `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}`,
+			wantField: "commentCreate",
+		},
+		{
+			name:      "update_branch_when_workpad_exists",
+			findReply: `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"comment-existing","body":"<!-- aiops:ai-workpad -->\n# AI Workpad\nold"}]}}}}`,
+			wantField: "commentUpdate",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(string(body), "AIWorkpadFind"):
+					_, _ = io.WriteString(w, tt.findReply)
+				case strings.Contains(string(body), "commentUpdate"):
+					_, _ = io.WriteString(w, `{"data":{"commentUpdate":{"success":true,"comment":{"id":"comment-existing"}}}}`)
+				default:
+					_, _ = io.WriteString(w, `{"data":{"commentCreate":{"success":true,"comment":{"id":"c-1"}}}}`)
+				}
+			}))
+			defer httpServer.Close()
+
+			proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+			harnessTool := DynamicTool{Name: "linear_graphql", Call: proxy.callRaw}
+			workpad := NewLinearWorkpadTool(harnessTool)
+
+			var sinkCalls []string
+			ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
+				sinkCalls = append(sinkCalls, name)
+			})
+
+			result, err := workpad.Call(ctx, ToolCall{Variables: map[string]any{
+				"issueId": "LIN-123",
+				"summary": "test",
+			}})
+			if err != nil {
+				t.Fatalf("workpad call: %v", err)
+			}
+			if !toolResultSucceeded(result) {
+				t.Fatalf("workpad mutation failed: %s", result)
+			}
+			if len(sinkCalls) != 1 || sinkCalls[0] != tt.wantField {
+				t.Fatalf("workpad audit sink calls = %v, want [%s]", sinkCalls, tt.wantField)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLWorkpadCallsBypassMutationGate confirms the
+// harness-owned linear_ai_workpad helper is not blocked by the gate,
+// because the workpad composes deterministic comment mutations rather
+// than executing agent-supplied GraphQL.
+func TestLinearGraphQLWorkpadCallsBypassMutationGate(t *testing.T) {
+	calls := 0
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(string(body), "AIWorkpadFind"):
+			_, _ = io.WriteString(w, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}`)
+		default:
+			_, _ = io.WriteString(w, `{"data":{"commentCreate":{"success":true,"comment":{"id":"c-1"}}}}`)
+		}
+	}))
+	defer httpServer.Close()
+
+	oldEndpoint := defaultLinearGraphQLEndpoint
+	defaultLinearGraphQLEndpoint = httpServer.URL
+	t.Cleanup(func() { defaultLinearGraphQLEndpoint = oldEndpoint })
+
+	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "token"},
+		// Deliberately leave LinearGraphQL at its zero value: mutations
+		// stay blocked for the agent-visible tool but the workpad must
+		// still post comments through the harness-internal path.
+	}})
+	workpad, ok := tools.Lookup("linear_ai_workpad")
+	if !ok {
+		t.Fatalf("linear_ai_workpad not advertised")
+	}
+
+	result, err := workpad.Call(context.Background(), ToolCall{Variables: map[string]any{
+		"issueId": "LIN-123",
+		"summary": "test",
+	}})
+	if err != nil {
+		t.Fatalf("workpad call: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("workpad mutation blocked by gate (regressed harness-internal bypass): %s", result)
+	}
+	if calls != 2 {
+		t.Fatalf("HTTP calls = %d, want 2 (find + create)", calls)
+	}
+}
 
 func assertStructuredFailure(t *testing.T, result string, err error, substrings ...string) {
 	t.Helper()
