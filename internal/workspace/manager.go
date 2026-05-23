@@ -15,7 +15,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -167,15 +166,9 @@ func issueWorkspaceKey(t task.Task) string {
 	sourceType := strings.TrimSpace(t.SourceType)
 	sourceEventID := strings.TrimSpace(t.SourceEventID)
 	if sourceType != "" && sourceEventID != "" {
-		return filepath.Join(SanitizeSourceType(sourceType), SanitizeComponent(sourceEventID))
+		return filepath.Join(SanitizeComponent(sourceType), SanitizeComponent(sourceEventID))
 	}
 	return SanitizeComponent(t.ID)
-}
-
-// SanitizeSourceType returns a filesystem-safe tracker source component while
-// preserving underscores used by SPEC source types such as linear_issue.
-func SanitizeSourceType(s string) string {
-	return sanitizeWithUnderscore(s)
 }
 
 // PrepareGitWorkspace materialises a per-issue workspace as a worktree off
@@ -1023,41 +1016,36 @@ func runQuiet(ctx context.Context, dir string, name string, args ...string) erro
 	return cmd.Run()
 }
 
-// SanitizeComponent returns the stable filesystem-safe representation used for
-// workspace path components.
+// SanitizeComponent returns the SPEC §4.2 workspace path component for s:
+// any character outside [A-Za-z0-9._-] is replaced with `_`, and case is
+// preserved verbatim. The harness adds two filesystem-safety rules on top
+// of the pure SPEC rule: cap the result at maxSanitizedLength runes so it
+// fits common filesystem name limits, and reject the two single-component
+// path-traversal strings ("." and "..") by mapping them — along with the
+// empty string — to "unknown" so PathFor never emits a traversal segment.
 func SanitizeComponent(s string) string {
-	return sanitize(s)
+	return sanitizeComponent(s)
 }
 
-func sanitize(s string) string {
-	return sanitizeComponent(s, false)
-}
-
-func sanitizeWithUnderscore(s string) string {
-	return sanitizeComponent(s, true)
-}
-
-func sanitizeComponent(s string, preserveUnderscore bool) string {
+func sanitizeComponent(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
-	inSeparator := false
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || (preserveUnderscore && r == '_') {
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z',
+			r >= 'a' && r <= 'z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-', r == '_':
 			b.WriteRune(r)
-			inSeparator = false
-			continue
-		}
-		if !inSeparator && b.Len() > 0 {
-			b.WriteByte('-')
-			inSeparator = true
+		default:
+			b.WriteByte('_')
 		}
 	}
-	out := strings.Trim(b.String(), "-")
-	runes := []rune(out)
-	if len(runes) > maxSanitizedLength {
-		out = strings.TrimRight(string(runes[:maxSanitizedLength]), "-")
+	out := b.String()
+	if runes := []rune(out); len(runes) > maxSanitizedLength {
+		out = string(runes[:maxSanitizedLength])
 	}
-	if out == "" {
+	if out == "" || out == "." || out == ".." {
 		return "unknown"
 	}
 	return out

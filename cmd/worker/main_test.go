@@ -1140,7 +1140,11 @@ func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testi
 		Labels:      []string{"api"},
 		UpdatedAt:   mustTime("2026-05-19T03:00:00Z"),
 	})
-	for _, want := range []string{"abc-123-service-api", "abc-123-service-api-rework-2026-05-19t03-00-00z"} {
+	// SPEC §4.2 sanitization preserves case and substitutes `_` for any
+	// character outside [A-Za-z0-9._-]; the raw `|service|` / `|rework|`
+	// separators land as `_` and the RFC3339 timestamp's `:` characters do
+	// the same.
+	for _, want := range []string{"abc-123_service_api", "abc-123_service_api_rework_2026-05-19T03_00_00Z"} {
 		if !containsString(keys, want) {
 			t.Fatalf("active workspace keys = %#v, want %s", keys, want)
 		}
@@ -1149,7 +1153,10 @@ func TestStartupReconcileConfigPreservesServiceRoutedActiveWorkspaceKey(t *testi
 
 func TestStartupReconcileKeepsServiceRoutedReworkWorkspaceAfterUpdatedAtChanges(t *testing.T) {
 	root := t.TempDir()
-	activePath := filepath.Join(root, "acme", "api", "linear_issue", "abc-123-service-api-rework-2026-05-18t03-00-00z")
+	// Workspace dir names follow SPEC §4.2 sanitization (case preserved,
+	// `_` substituted for `|` / `:` and any character outside
+	// [A-Za-z0-9._-]). The previous-attempt updatedAt is `2026-05-18T03:00:00Z`.
+	activePath := filepath.Join(root, "acme", "api", "linear_issue", "abc-123_service_api_rework_2026-05-18T03_00_00Z")
 	terminalPath := filepath.Join(root, "acme", "api", "linear_issue", "done-1")
 	for _, path := range []string{activePath, terminalPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {

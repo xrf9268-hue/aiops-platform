@@ -645,6 +645,173 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	}
 }
 
+// TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting
+// pins the no-routing branch of the retry-fire lister chain: when the
+// workflow has no Services (gitea, service-less Linear), the orchestrator
+// must still receive an eligibleActiveIssueLister wrap so Todo issues with
+// non-terminal blockers are filtered the same way the poll loop filters
+// them. Without this test a future refactor that conditionally dropped
+// the eligibility wrap in the no-routing branch would silently regress —
+// the routing-branch test below would still pass.
+func TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Repo = workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git", DefaultBranch: "main"}
+	// No Services configured — no routing wrap, eligibility wrap only.
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+
+	lister := orch.currentCandidateLister()
+	if lister == nil {
+		t.Fatal("orchestrator candidate lister not installed by RuntimePoller for no-routing path")
+	}
+
+	// Behavioral assertion: feed in a Todo issue blocked by a non-terminal
+	// blocker and confirm the eligibility wrap drops it. Without the wrap
+	// the issue would surface and the retry would dispatch.
+	trackerClient.issues = []tracker.Issue{{
+		ID: "gitea-blocked", Identifier: "BLOCKED-1", Title: "blocked todo", State: "Todo",
+		BlockedBy: []tracker.BlockerRef{{ID: "gitea-blocker", Identifier: "BLOCKER-1", State: "In Progress"}},
+	}}
+	got, err := lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("no-routing lister surfaced Todo+non-terminal-blocker = %+v, want filterEligibleCandidates to drop it (eligibility wrap missing?)", got)
+	}
+
+	// Positive control: a clean issue passes the wrap.
+	trackerClient.issues = []tracker.Issue{{ID: "gitea-ready", Identifier: "READY-1", Title: "ready", State: "AI Ready"}}
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues (positive control): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "gitea-ready" {
+		t.Fatalf("no-routing lister surfaced issues = %+v, want exactly gitea-ready", got)
+	}
+}
+
+// TestRuntimePollerRetryListerMirrorsPollLoopFilters asserts the SPEC §16.6
+// retry-fire lister installed on the orchestrator mirrors every filter the
+// poll loop applies between ListActiveIssues and dispatch (poller.go:152):
+// active-state → selectRoutedCandidates → filterEligibleCandidates. The
+// chain shape is exercised both by type assertion (so a future refactor
+// that drops a wrap fails here) and behaviorally (so a future filter
+// added to the poll loop but not mirrored to the retry path also fails).
+// Cross-cutting consistency is the new AGENTS.md "Audit adjacent paths"
+// rule earned by #287; this test pins it.
+func TestRuntimePollerRetryListerMirrorsPollLoopFilters(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"},
+			Repo:    workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"},
+		},
+	}
+	initial.Config.Tracker.ProjectSlug = ""
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "matches route", State: "AI Ready", ProjectSlug: "api-platform"}},
+		},
+	}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+
+	lister := orch.currentCandidateLister()
+	if lister == nil {
+		t.Fatal("orchestrator candidate lister not installed by RuntimePoller")
+	}
+	// Outer wrap must be eligibility filter (matches poll loop's
+	// filterEligibleCandidates step). Without this wrap a Todo issue
+	// with a non-terminal blocker would be dispatched on retry.
+	eligible, ok := lister.(eligibleActiveIssueLister)
+	if !ok {
+		t.Fatalf("orchestrator candidate lister type = %T, want eligibleActiveIssueLister as outer wrap", lister)
+	}
+	// Inner wrap (with Services configured) must be routing filter.
+	if _, ok := eligible.inner.(routedActiveIssueLister); !ok {
+		t.Fatalf("eligibleActiveIssueLister.inner type = %T, want routedActiveIssueLister when Services are configured", eligible.inner)
+	}
+
+	// In-route + eligible issue passes the full chain.
+	got, err := lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "api-1" {
+		t.Fatalf("lister surfaced issues = %+v, want exactly api-1 (in-route + eligible)", got)
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed issue service = %q, want \"api\" stamped by selectRoutedCandidates", got[0].ServiceName)
+	}
+
+	// Off-route issue gets dropped by the routing layer.
+	trackerClient.replace(map[string][]tracker.Issue{
+		"api-platform": {{ID: "ops-9", Identifier: "OPS-9", Title: "now routed to ops", State: "AI Ready", ProjectSlug: "ops-platform"}},
+	})
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues after route flip: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("lister surfaced off-route issues = %+v, want SPEC §16.6 retry fetch to drop them so the claim is released", got)
+	}
+
+	// Todo issue with a non-terminal blocker gets dropped by the
+	// eligibility layer — the gap the post-merge audit found.
+	trackerClient.replace(map[string][]tracker.Issue{
+		"api-platform": {{
+			ID: "api-2", Identifier: "API-2", Title: "blocked todo", State: "Todo", ProjectSlug: "api-platform",
+			BlockedBy: []tracker.BlockerRef{{ID: "api-blocker", Identifier: "API-BLOCKER", State: "In Progress"}},
+		}},
+	})
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues after blocker flip: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("lister surfaced Todo issue with non-terminal blocker = %+v, want filterEligibleCandidates to drop it", got)
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)
@@ -848,6 +1015,16 @@ func (f *fakeProjectScopedIssueTracker) ListIssuesByStates(_ context.Context, st
 	return out, nil
 }
 
+func (f *fakeProjectScopedIssueTracker) replace(issues map[string][]tracker.Issue) {
+	root := f.root
+	if root == nil {
+		root = f
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	root.issuesByProject = issues
+}
+
 func (f *fakeProjectScopedIssueTracker) projects() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -884,6 +1061,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  clone_url: https://github.com/xrf9268-hue/aiops-platform.git\n" +
 		"tracker:\n" +
 		"  kind: " + trackerKind + "\n" +
+		"  api_key: lin_dummy_for_test\n" +
 		reloadTestLinearProjectSlugYAML(trackerKind) +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +

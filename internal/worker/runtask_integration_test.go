@@ -39,6 +39,8 @@ func initBareUpstreamWithWorkflow(t *testing.T, workflowBody string) (cloneURL s
 		{"git", "init", "-q", "-b", "main", work},
 		{"git", "-C", work, "config", "user.email", "u@example.com"},
 		{"git", "-C", work, "config", "user.name", "u"},
+		{"git", "-C", work, "config", "commit.gpgsign", "false"},
+		{"git", "-C", work, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
@@ -385,7 +387,7 @@ func TestRunTaskPromptTemplateSeesAllSpec4_1_1IssueFields(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "lin-456")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "LIN-456")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -421,7 +423,7 @@ func TestRunTaskExposesIssueObjectToPromptTemplate(t *testing.T) {
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "lin-123")
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "LIN-123")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -885,6 +887,8 @@ func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
 		{"git", "clone", "-q", seed, work},
 		{"git", "-C", work, "config", "user.email", "u@example.com"},
 		{"git", "-C", work, "config", "user.name", "u"},
+		{"git", "-C", work, "config", "commit.gpgsign", "false"},
+		{"git", "-C", work, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)

@@ -127,6 +127,59 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    the temptation to wrap every Gitea / Linear endpoint as a separate
    tool.
 
+## Cross-cutting checklist when porting from the Elixir reference
+
+The SPEC-alignment rules above govern *protocol contract*. Three
+classes of failure have shown up in shipped PRs anyway, because the
+SPEC text does not surface them. Use this checklist in addition to
+reading SPEC and the reference module — every item is tied to a
+specific observed failure per the "Earned rules" principle.
+
+1. **Audit adjacent paths for aiops-platform extensions before
+   touching a SPEC code path.** Upstream Symphony is single-project;
+   this port layers extensions on top of the SPEC algorithm
+   (service routing via `selectRoutedCandidates`, multi-tracker
+   fan-out, per-state capacity caps, reconciliation hooks).
+   When you touch a path that consumes a SPEC concept (candidates,
+   retries, dispatch, reconcile), `grep` the symbol and list the
+   other consumers. Every aiops-platform-specific filter they apply
+   must either also apply on your new path or carry a written reason
+   to differ. **Earned by:** PR #287 retry-fire bypassed
+   `selectRoutedCandidates` because SPEC §16.6 has no service-routing
+   concept; the poll loop's filter was missed for several review
+   rounds.
+
+2. **Replicate Elixir's implicit runtime guarantees explicitly in
+   Go.** BEAM gives a few things for free that the SPEC text takes
+   for granted but a Go port inherits in weaker form:
+
+   - `GenServer.call` has a default timeout → wrap every external
+     I/O call from a followup goroutine in `context.WithTimeout`,
+     even when the underlying client claims to honor `ctx`.
+   - Process link + supervisor isolates panics → `defer
+     recoverPanic(site)` on every `go func` and `time.AfterFunc`,
+     or route through `safeGo` (`internal/orchestrator/recover.go`).
+   - `Process.cancel_timer` is mandatory before reassigning a timer
+     → store the `*time.Timer` on state and `Stop()` it before
+     replacing.
+
+   A 1:1 port from Elixir without these compensations is a latent
+   stuck-state bug. **Earned by:** PR #287 retry-fire fetch had no
+   timeout (upstream relied on GenServer's implicit deadline), so a
+   tracker client that ignored `ctx` could orphan a claim forever;
+   PR #304 had to retrofit `recoverPanic` across actor + timer
+   goroutines after a panic in one path crashed the whole worker.
+
+3. **Run an adversarial pass on your own diff before asking a human
+   to look.** `@codex review` reads SPEC + the Elixir reference +
+   this file, and surfaces precisely the gaps that human review
+   tends to miss. Trigger it on the head commit before marking the
+   PR ready, and for each finding either fix it or document in the
+   PR body why it's deferred. Treat the agent's first draft as a
+   candidate, not a delivery. **Earned by:** PR #287's HIGH +
+   MEDIUM findings were both surfaced by `@codex review` after
+   submit; both could have been caught one round earlier.
+
 Rules for agents working on this repo:
 
 1. **Read SPEC.md and the relevant Elixir module before designing any

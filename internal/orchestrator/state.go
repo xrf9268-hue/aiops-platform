@@ -12,10 +12,10 @@ package orchestrator
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // IssueID is the tracker-assigned stable identifier (tracker.Issue.ID).
@@ -449,8 +449,11 @@ func (s *OrchestratorState) runningIssueIDs() map[IssueID]struct{} {
 	return counted
 }
 
+// normalizeStateConcurrencyKey delegates to the canonical
+// [workflow.NormalizeStateConcurrencyKey] so the dispatch-time lookup
+// shape and the load-time key shape can never drift apart (#294).
 func normalizeStateConcurrencyKey(state string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(state)), " ", "_")
+	return workflow.NormalizeStateConcurrencyKey(state)
 }
 
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
@@ -653,6 +656,10 @@ type StateView struct {
 	CumulativeFailedTotal    int64
 	CodexTotals              CodexTotals
 	CodexRateLimits          *RateLimitSnapshot
+	// RecentEvents is the bounded orchestrator-wide event log (capped at
+	// MaxRuntimeEvents). It carries SPEC §13.7 operator-visible signals
+	// like dispatch_preflight_failed that are not scoped to one issue.
+	RecentEvents []RuntimeEvent
 }
 
 // RunningView is the per-running-entry projection in StateView. It
@@ -759,6 +766,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		CumulativeFailedTotal:      s.CumulativeFailedTotal,
 		CodexTotals:                totals,
 		CodexRateLimits:            copyRateLimitSnapshot(s.CodexRateLimits),
+		RecentEvents:               append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
 	for id, r := range s.Running {
 		// Deep-copy RetryAttempt so a snapshot consumer mutating the

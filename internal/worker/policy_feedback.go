@@ -38,7 +38,7 @@ func policyViolationFeedbackPath(workspaceRoot string, t task.Task) string {
 		workspace.SanitizeComponent(t.RepoOwner),
 		workspace.SanitizeComponent(t.RepoName),
 		".aiops-policy-feedback",
-		workspace.SanitizeSourceType(sourceType),
+		workspace.SanitizeComponent(sourceType),
 		workspace.SanitizeComponent(sourceID)+".json",
 	)
 }

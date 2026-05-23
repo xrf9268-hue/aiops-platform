@@ -147,6 +147,92 @@ Operational notes:
   deployment platforms (Linux containers, macOS LaunchAgents) both use
   the full file-lock path.
 
+## SPEC §4.2 path-component sanitization
+
+Workspace path components (`<owner>`, `<repo>`, `<source_type>`,
+`<source_event_id>`, task-ID fallback) go through
+`workspace.SanitizeComponent`. The rule, lifted from SPEC §4.2:
+
+> Derive from `issue.identifier` by replacing any character not in
+> `[A-Za-z0-9._-]` with `_`.
+
+That is exactly what the sanitizer does today — case is preserved
+verbatim, and any other character (including the multi-byte runes of a
+CJK identifier) is substituted with a single `_`. On top of the SPEC
+rule the harness adds three filesystem-safety guards:
+
+1. **Rune-length cap**: long inputs are truncated to 120 runes so the
+   resulting directory name fits common filesystem limits.
+2. **Path-traversal block**: a component that sanitizes to exactly `.`
+   or `..` (the only two values that `filepath.Join` would interpret as
+   a traversal segment) is replaced with the literal string `unknown`.
+   A `..` *substring* inside a longer component (e.g. `a..b`) is fine
+   and is left untouched, because `filepath.Join` treats it as a name.
+3. **Empty fallback**: an empty input maps to `unknown` so `PathFor`
+   never produces an empty path segment.
+
+### Migration from the pre-SPEC layout
+
+Before #229 the sanitizer lowercased the input, accepted any
+`unicode.IsLetter` rune (so CJK identifiers passed through unchanged),
+and substituted `-` for invalid characters. The resulting workspace
+paths therefore looked like `acme/demo/linear_issue/lin-1-needs-fix`
+rather than the SPEC-conformant `acme/demo/linear_issue/LIN_1_Needs_Fix`.
+
+Because the project is pre-release ([`AGENTS.md`
+§SPEC-alignment-is-a-hard-requirement](../../AGENTS.md#spec-alignment-is-a-hard-requirement),
+[`DEVIATIONS.md`](../../DEVIATIONS.md)) the cutover is hard, not
+gradual: dirs created under the pre-#229 sanitizer are orphaned on
+disk and will be removed by the next startup reconciliation pass as
+"unknown" workspaces. Operators should clean up the orphans before
+rolling out the change to avoid a one-time burst of reconcile-remove
+events on the next worker boot:
+
+```sh
+# Audit (no removals): list workspace components that contain old-style
+# dash separators or lowercase identifiers under the per-issue subtree.
+find "$WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
+
+# Migrate by wiping the workspace root entirely. The bare mirror cache
+# under $AIOPS_MIRROR_ROOT is untouched, so the next task pays only a
+# fresh worktree-add, not a fresh clone.
+rm -rf "$WORKSPACE_ROOT"/*
+```
+
+The wipe also removes the `<owner>/<repo>/.aiops-policy-feedback`
+subtree alongside the per-task worktrees, so every in-flight issue's
+SPEC §11.4 `policy_violation_budget` counter resets to zero on the
+first retry after the upgrade. For the Linear, Gitea, and GitHub
+trackers shipped today the counter would already be preserved across
+the cutover even without the wipe (the `SourceType` / `SourceEventID`
+path components are case-identical before and after #229, so
+`policy_feedback.go` writes to the same on-disk path under both
+sanitizers); the reset matters only for a hypothetical future tracker
+whose `SourceType` or `SourceEventID` contains characters the pre-#229
+sanitizer would have collapsed.
+
+Active *rework* workspaces survive the cutover even without a manual
+sweep: `reworkWorkspaceKeyPrefixes` emits three prefix forms for each
+extracted base key so it matches every aiops-platform sanitizer
+vintage that may have written to disk
+(`internal/worker/reconcile.go`):
+
+1. `<base>_rework_…` — current SPEC §4.2 sanitizer.
+2. `<base>-rework-…` — interim case-preserved layout with dash
+   separators.
+3. `<lowercased-pre-spec-base>-rework-…` — pre-#229 sanitizer, which
+   lowercased the workspace key and collapsed non-letter/digit runes
+   into a single `-` separator. This matches dirs named e.g.
+   `linear_issue/issue-3-rework-2026-05-16t10-00-00z` produced by an
+   older worker for an active Linear Rework issue. The poller composes
+   the Rework workspace key from `issue.ID` (see
+   `cmd/linear-poller/main.go`'s `sourceEventID`), not
+   `issue.Identifier`, so the base of the dir name is the issue ID
+   (`issue-3`) rather than the human-facing identifier (`LIN-123`).
+
+Plain (non-rework) per-issue dirs created under the old sanitizer are
+not back-compat-matched and will be reconciled away.
+
 ## Cleanup policy
 
 The worker does **not** automatically delete old worktrees. The

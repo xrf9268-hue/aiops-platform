@@ -107,10 +107,31 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	p.tracker = trackerClients[0]
 	p.trackers = trackerClients
 	p.lastSnapshotKey = key
-	poller := NewPollerWithReconciliation(multiIssueStateLister{trackers: trackerClients}, p.orchestrator, snap.Reconciliation)
+	multiLister := multiIssueStateLister{trackers: trackerClients}
+	poller := NewPollerWithReconciliation(multiLister, p.orchestrator, snap.Reconciliation)
 	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
 		poller.routing = &snap.Workflow.Config
 	}
+	preflightCfg := snap.Workflow.Config
+	poller.preflight = &preflightCfg
+	// Feed the orchestrator the same lister the poll loop uses so a
+	// fired failure-retry timer can run the SPEC §16.6 candidate fetch
+	// against the same active-state vocabulary. The lister must mirror
+	// every filter the poll loop applies between ListActiveIssues and
+	// dispatch (poller.go:152): service routing (selectRoutedCandidates)
+	// when configured, plus filterEligibleCandidates' required-field
+	// and Todo-blocked-by-non-terminal checks. Mirror order matches the
+	// poll loop: active → routed → eligible. Skipping any of these
+	// means a retry can dispatch an issue the poll loop would refuse.
+	var retryLister ActiveIssueLister = activeIssueListerFromStates{
+		tracker: multiLister,
+		states:  snap.Reconciliation.ActiveStates,
+	}
+	if poller.routing != nil {
+		retryLister = routedActiveIssueLister{inner: retryLister, cfg: *poller.routing}
+	}
+	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates}
+	p.orchestrator.SetCandidateLister(retryLister)
 	return poller, nil
 }
 
@@ -205,6 +226,51 @@ func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueI
 		return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
 	}
 	return map[string]string{}, nil
+}
+
+// routedActiveIssueLister wraps an ActiveIssueLister with the same
+// service-routing filter the poll loop applies in (*Poller).runOnce
+// (see poller.go selectRoutedCandidates). SPEC §16.6's on_retry_timer
+// only knows about candidate fetch; service routing is an
+// aiops-platform extension layered on top, and the retry-fire path
+// must mirror the poll loop's filter so a queued retry whose issue
+// has since routed to another service cannot bypass the gate. Routing
+// errors are propagated so a fetch that resolves to an ambiguous
+// route is treated as a fetch failure (reschedule via "retry poll
+// failed"), not as a silent absence (release claim).
+type routedActiveIssueLister struct {
+	inner ActiveIssueLister
+	cfg   workflow.Config
+}
+
+func (l routedActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	issues, fetchErr := l.inner.ListActiveIssues(ctx)
+	routed, routeErr := selectRoutedCandidates(issues, l.cfg)
+	if fetchErr != nil || routeErr != nil {
+		return routed, errors.Join(fetchErr, routeErr)
+	}
+	return routed, nil
+}
+
+// eligibleActiveIssueLister wraps an ActiveIssueLister with the same
+// eligibility filter the poll loop applies between routing and dispatch
+// (filterEligibleCandidates in poller.go). The filter drops issues
+// missing required SPEC §4.1.1 fields (ID / Identifier / Title / State)
+// and Todo-state issues whose BlockedBy carries a non-terminal blocker.
+// Without this wrap a queued failure-retry whose Todo issue gained a
+// fresh non-terminal blocker between schedule and fire would still be
+// dispatched, while the poll loop would refuse the same issue on the
+// next tick. The fetch error is propagated unchanged because an empty
+// post-filter result is meaningful (genuine absence) but only if the
+// fetch itself succeeded.
+type eligibleActiveIssueLister struct {
+	inner          ActiveIssueLister
+	terminalStates []string
+}
+
+func (l eligibleActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	issues, fetchErr := l.inner.ListActiveIssues(ctx)
+	return filterEligibleCandidates(issues, l.terminalStates), fetchErr
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {

@@ -72,6 +72,12 @@ type Poller struct {
 	reconcile      ReconciliationConfig
 	reconcileKnown bool
 	routing        *workflow.Config
+	// preflight is the workflow.Config used for SPEC §8.1 step 2
+	// dispatch-preflight validation. nil disables the gate (legacy
+	// constructors / tests). RuntimePoller sets it on every workflow
+	// snapshot reload so `$VAR` resolution drift is detected on the
+	// next tick rather than at the next tracker call.
+	preflight *workflow.Config
 }
 
 // NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
@@ -108,6 +114,14 @@ func (p *Poller) PollOnce(ctx context.Context) error {
 	}
 	if p.orchestrator == nil {
 		return errors.New("orchestrator poller requires orchestrator")
+	}
+	if p.preflight != nil {
+		if err := validateDispatchPreflight(*p.preflight); err != nil {
+			if recErr := p.orchestrator.recordPreflightFailed(ctx, err); recErr != nil {
+				return errors.Join(fmt.Errorf("dispatch preflight failed: %w", err), recErr)
+			}
+			return fmt.Errorf("dispatch preflight failed: %w", err)
+		}
 	}
 	issues, activeErr := p.tracker.ListActiveIssues(ctx)
 	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
@@ -607,6 +621,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 	out := make(chan WorkerResult, 1)
 	go func() {
 		defer close(out)
+		defer recoverPanic("orchestrator.worker_task_dispatcher")
 		start := time.Now()
 		tk, recordedTaskID, err := d.buildTaskWithAttempt(issue, copiedAttempt)
 		if err != nil {
