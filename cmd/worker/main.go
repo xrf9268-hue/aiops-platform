@@ -953,7 +953,7 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		SessionID:     row.SessionID,
 		TurnCount:     row.TurnCount,
 		LastEvent:     row.LastEvent,
-		LastMessage:   row.LastMessage,
+		LastMessage:   redactStateAPILastMessage(row.LastMessage),
 		StartedAt:     startedAt,
 		LastCodexAt:   lastCodexAt,
 		RetryAttempt:  copyIntPointer(row.RetryAttempt),
