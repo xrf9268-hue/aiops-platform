@@ -297,6 +297,7 @@ func sleepOrRetryWake(ctx context.Context, sleep func(context.Context, time.Dura
 	defer cancel()
 	sleepErr := make(chan error, 1)
 	go func() {
+		defer recoverPanic("orchestrator.workflow_reload_sleep")
 		sleepErr <- sleep(sleepCtx, interval)
 	}()
 	select {
