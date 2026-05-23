@@ -167,14 +167,15 @@ diverged from SPEC §6.4's cheat sheet:
 | `workspace.root` | `~/aiops-workspaces` | `<system-temp>/symphony_workspaces` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` — typically `/tmp/symphony_workspaces` on Linux, mirroring Elixir `Path.join(System.tmp_dir!(), "symphony_workspaces")`) |
 | `tracker.active_states` | `[AI Ready, In Progress, Rework]` | `[Todo, In Progress]` | `[Todo, In Progress]` |
 | `tracker.terminal_states` | `[Done, Canceled, Cancelled, Closed, Duplicate]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` |
-| `tracker.kind` | `gitea` | REQUIRED (`linear`) | `gitea` (partial — see DEVIATIONS D28) |
+| `tracker.kind` | `gitea` | REQUIRED (`linear`) | unset; loader rejects an empty value with an error that names the field and the allowed set |
 
-Five of the six defaults are now SPEC-aligned. `tracker.kind` stays at
-`gitea` as an implementation default because removing it cascades
-through ~60 minimal-front-matter test fixtures across `internal/workflow`
-that omit the field today; that audit is filed as DEVIATIONS D28 with a
-follow-up to enforce REQUIRED semantics under a coordinated test-fixture
-sweep.
+All six defaults are now SPEC-aligned. The `tracker.kind` REQUIRED
+follow-up landed after the coordinated test-fixture sweep across
+`internal/workflow` and `cmd/worker`: every minimal-front-matter test
+that previously inherited the silent `gitea` default now declares
+`tracker.kind` explicitly, and `validateConfig` rejects an empty kind
+with a SPEC-aware error before falling through to the
+`supportedTrackerKinds` allowlist check. DEVIATIONS D28 is closed.
 
 The personal-profile values that previously rode in as silent defaults
 now live as explicit declarations in

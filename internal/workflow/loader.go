@@ -347,6 +347,9 @@ func validateConfig(path string, cfg Config) error {
 			return fmt.Errorf("%s: services[%d].repo.clone_url is required", path, i)
 		}
 	}
+	if strings.TrimSpace(cfg.Tracker.Kind) == "" {
+		return fmt.Errorf("%s: tracker.kind is required per SPEC §6.4 (allowed: gitea, github, linear)", path)
+	}
 	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
 		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, github, linear)", path, cfg.Tracker.Kind)
 	}

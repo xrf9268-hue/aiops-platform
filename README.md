@@ -61,7 +61,7 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `policy.mode` | `draft_pr` | implementation |
 | `policy.max_changed_files` | `12` | implementation |
 | `policy.max_changed_loc` | `300` | implementation |
-| `tracker.kind` | `gitea` (SPEC §6.4 marks this REQUIRED; see DEVIATIONS D28) | partial deviation |
+| `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |
 | `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs | SPEC §6.4 |
 | `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |

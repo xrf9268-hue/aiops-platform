@@ -443,16 +443,12 @@ func DefaultConfig() Config {
 		// run on a non-SPEC vocabulary (e.g. the personal profile's
 		// "AI Ready"/"Rework") declare the override in WORKFLOW.md front
 		// matter — see examples/WORKFLOW.md.
-		// Tracker.Kind defaults to "gitea" here even though SPEC §6.4
-		// marks it REQUIRED — see DEVIATIONS.md (#244 follow-up) for the
-		// rationale: removing the default cascades through ~60 test
-		// fixtures and would require either a coordinated test-fixture
-		// audit or a `tracker.kind: gitea` line added to every
-		// minimal-front-matter test. The implementation default is
-		// documented in README.md so SPEC readers know to declare it
-		// explicitly in production WORKFLOW.md files.
+		// Tracker.Kind is intentionally left empty: SPEC §6.4 marks it
+		// REQUIRED, so DefaultConfig must not silently default it. A
+		// WORKFLOW.md that declares front matter must set `tracker.kind`
+		// explicitly; the loader rejects an empty kind with a SPEC-aware
+		// error (see validateConfig in loader.go).
 		Tracker: TrackerConfig{
-			Kind:           "gitea",
 			ActiveStates:   []string{"Todo", "In Progress"},
 			TerminalStates: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
 			PollIntervalMs: 30000,

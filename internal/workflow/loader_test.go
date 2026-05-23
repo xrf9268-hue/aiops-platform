@@ -75,6 +75,8 @@ repo:
   clone_url: git@example.com:o/r.git
 hooks:
   timeout_ms: -1
+tracker:
+  kind: gitea
 ---
 Prompt body
 `,
@@ -88,6 +90,8 @@ repo:
   clone_url: git@example.com:o/r.git
 hooks:
   timeout_ms: 0
+tracker:
+  kind: gitea
 ---
 Prompt body
 `,
@@ -102,6 +106,8 @@ repo:
 workspace:
   hooks:
     timeout_ms: -1
+tracker:
+  kind: gitea
 ---
 Prompt body
 `,
@@ -116,6 +122,8 @@ repo:
 workspace:
   hooks:
     timeout_ms: 0
+tracker:
+  kind: gitea
 ---
 Prompt body
 `,
@@ -149,6 +157,7 @@ repo:
   name: r
   clone_url: git@example.com:o/r.git
 tracker:
+  kind: gitea
   base_url: https://tracker.example/legacy-base-url
 ---
 prompt body
@@ -174,6 +183,7 @@ repo:
   name: r
   clone_url: git@example.com:o/r.git
 tracker:
+  kind: gitea
   endpoint: https://tracker.example/canonical
   base_url: https://tracker.example/legacy
 ---
@@ -205,6 +215,7 @@ repo:
   name: r
   clone_url: $AIOPS_TEST_REPO_URL
 tracker:
+  kind: gitea
   api_key: ${AIOPS_TEST_TRACKER_KEY}
   endpoint: $AIOPS_TEST_TRACKER_BASE_URL
 workspace:
@@ -257,6 +268,7 @@ repo:
   name: r
   clone_url: https://gitea.example/$USER/aiops
 tracker:
+  kind: gitea
   endpoint: https://tracker.example/$USER/api
 workspace:
   root: .aiops-$USER
@@ -307,6 +319,7 @@ repo:
   name: r
   clone_url: git@example.com:o/r.git
 tracker:
+  kind: gitea
   api_key: $AIOPS_TEST_EMPTY_TRACKER_KEY
 ---
 Prompt body
@@ -331,6 +344,7 @@ repo:
   name: r
   clone_url: git@example.com:o/r.git
 tracker:
+  kind: gitea
   api_key: literal-key
 codex:
   command: $AIOPS_TEST_UNSET_CODEX_COMMAND
@@ -363,6 +377,7 @@ repo:
   name: r
   clone_url: $aiops_test_repo_url
 tracker:
+  kind: gitea
   api_key: ${linear_token}
   endpoint: $Mixed_Case_Url
 ---
