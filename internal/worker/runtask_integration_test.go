@@ -173,16 +173,18 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 		yamlRoot := defaultWorkflowWorkspaceRootForTest(t)
 		cfg := workerCfgForIntegrationWithWorkspaceRoot(t, yamlRoot)
 		cfg.WorkspaceRoot = envRoot
+		tkLocal := tk
+		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
 		t.Cleanup(func() {
-			os.RemoveAll(filepath.Join(yamlRoot, tk.RepoOwner))
+			os.RemoveAll(filepath.Join(yamlRoot, tkLocal.RepoOwner))
 		})
 
-		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
 			t.Fatalf("runTask: %v", rterr.Err)
 		}
 
-		assertTaskWorkdir(t, yamlRoot, tk)
-		if _, err := os.Stat(filepath.Join(envRoot, "acme", "demo", "linear_issue", "issue-uuid")); !os.IsNotExist(err) {
+		assertTaskWorkdir(t, yamlRoot, tkLocal)
+		if _, err := os.Stat(filepath.Join(envRoot, tkLocal.RepoOwner, tkLocal.RepoName, "linear_issue", tkLocal.SourceEventID)); !os.IsNotExist(err) {
 			t.Fatalf("env workspace root should not be used when explicit workflow workspace.root equals default; stat err=%v", err)
 		}
 	})
@@ -197,20 +199,37 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 		cfg := workerCfgForIntegration(t)
 		cfg.WorkspaceRoot = ""
 		specDefault := defaultWorkflowWorkspaceRootForTest(t)
+		tkLocal := tk
+		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
 		t.Cleanup(func() {
-			os.RemoveAll(filepath.Join(specDefault, tk.RepoOwner))
+			os.RemoveAll(filepath.Join(specDefault, tkLocal.RepoOwner))
 		})
 
-		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
 			t.Fatalf("runTask: %v", rterr.Err)
 		}
 
-		assertTaskWorkdir(t, specDefault, tk)
+		assertTaskWorkdir(t, specDefault, tkLocal)
 		legacyRoot := "/tmp/aiops-workspaces"
-		if _, err := os.Stat(filepath.Join(legacyRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(legacyRoot, tkLocal.RepoOwner, tkLocal.RepoName, "linear_issue", tkLocal.SourceEventID)); !os.IsNotExist(err) {
 			t.Fatalf("pre-#319 legacy /tmp/aiops-workspaces path should not be used; stat err=%v", err)
 		}
 	})
+}
+
+// uniqueRepoOwnerForTest returns a RepoOwner unique to this
+// (process, subtest) pair. The two precedence subtests that exercise
+// the SPEC default (`<system-temp>/symphony_workspaces`) write into a
+// path shared across the host, so the fixed `acme/demo` owner/name pair
+// from initBareUpstreamWithWorkflow would let two concurrent `go test`
+// invocations — or a real worker running on the same host — collide on
+// the same `<owner>/<name>/linear_issue/<event>` subtree. PID rules
+// out cross-process collision; the sanitized subtest name rules out
+// in-process collision between sibling subtests.
+func uniqueRepoOwnerForTest(t *testing.T) string {
+	t.Helper()
+	safe := strings.ReplaceAll(filepath.Base(t.Name()), "/", "_")
+	return fmt.Sprintf("acme-pid%d-%s", os.Getpid(), safe)
 }
 
 func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
