@@ -24,9 +24,15 @@ This runbook wires the local macOS operator flow for resolving
   active tracker state after that many clean turns, the orchestrator records a
   non-retryable failure for the unchanged issue instead of dispatching another
   full agent run.
-- Failure-driven worker retries are bounded by `agent.max_retry_attempts`
-  (default in the local workflow: `1`, meaning first run plus one retry).
-  Runner-timeout retries remain separately bounded by
+- Failure-driven worker retries follow SPEC §8.4 by default: unbounded, with
+  the exponential-backoff ceiling at `agent.max_retry_backoff_ms` (default
+  5 minutes), released only when the tracker takes the issue out of active
+  work. Setting an explicit `agent.max_retry_attempts` opts into the SPEC
+  §15.5 harness-hardening cap; the local workflow at
+  [`examples/github-local-WORKFLOW.md`](../../examples/github-local-WORKFLOW.md)
+  pins `max_retry_attempts: 1` as that opt-in (first run plus one retry,
+  then pinned under `OrchestratorState.Failed` until the tracker changes).
+  Runner-timeout retries follow the same pattern via
   `agent.max_timeout_retries`.
 - Codex is the primary implementer and is configured for full access through
   `codex.profile: bypass`.

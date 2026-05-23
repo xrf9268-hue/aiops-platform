@@ -1234,11 +1234,19 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 }
 
-func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) {
+// TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget verifies
+// the SPEC §15.5 harness-hardening opt-in: when a workflow sets an
+// explicit agent.max_retry_attempts cap, the orchestrator stops
+// scheduling retries once the cap is exhausted and pins the issue
+// under OrchestratorState.Failed. The default (no cap) is exercised
+// by TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault.
+func TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget(t *testing.T) {
 	disp := &fakeDispatcher{}
+	cap := 1
 	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		Dispatcher:        disp,
+		Scheduler:         RetryScheduler{MaxBackoff: time.Hour},
+		MaxFailureRetries: &cap,
 	})
 	defer cancel()
 
@@ -1264,6 +1272,53 @@ func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) 
 	}
 	if got := disp.count(); got != 1 {
 		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional retry after exhausted budget", got)
+	}
+	if len(v.Failed) != 1 {
+		t.Fatalf("failed entries after exhausted opt-in budget = %d, want 1 (issue pinned until tracker changes)", len(v.Failed))
+	}
+}
+
+// TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault verifies
+// the SPEC §8.4 / §16.6 default — no MaxFailureRetries in Deps means
+// the cap is disabled and the orchestrator keeps scheduling retries
+// past the historical default-1 threshold. Without this guard, a
+// regression that re-introduces a finite default would silently
+// truncate retry sequences for issues a SPEC-conforming operator
+// expects to keep tapping the backoff wall.
+func TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-UNBOUNDED", Identifier: "ENG-UNBOUNDED", Title: "no cap"}
+	// Simulate a second failure: the worker has already failed once and
+	// rescheduled, and the tracker recheck redispatched at attempt=1.
+	// Under the legacy default-1 cap this attempt+1 would exceed the
+	// budget; under the SPEC default it must enter Retrying again.
+	attempt := 1
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient again"), Elapsed: 50 * time.Millisecond})
+
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Retrying) != 1 || v.Retrying[0].Attempt != 2 {
+		t.Fatalf("retry view = %+v, want one entry with Attempt=2 under unbounded default", v.Retrying)
+	}
+	if len(v.Failed) != 0 {
+		t.Fatalf("failed entries with unbounded default = %d, want 0 (SPEC §8.4 keeps retrying)", len(v.Failed))
 	}
 }
 

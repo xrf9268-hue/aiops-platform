@@ -36,6 +36,12 @@ agent:
     open: 1
   max_turns: 12
   timeout: 2h
+  # SPEC §8.4 retries forever (bounded only by the 5-minute backoff ceiling).
+  # The local automation profile opts into the SPEC §15.5 harness-hardening
+  # cap so a single transient failure does not burn unbounded Codex tokens
+  # against an issue an operator hasn't touched. Remove these two keys for
+  # the SPEC default (retry until the tracker takes the issue out of active
+  # work). See DEVIATIONS.md D29.
   max_retry_attempts: 1
   max_timeout_retries: 1
 

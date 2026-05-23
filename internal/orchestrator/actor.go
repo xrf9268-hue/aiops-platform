@@ -130,11 +130,25 @@ func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 	return delay
 }
 
+// UnboundedFailureRetries is the maxFailureRetries sentinel that disables
+// the failure-retry cap. SPEC §8.4 / §16.6 / §4.1.8 do not budget retry
+// attempts, so this value is what an orchestrator constructed without an
+// explicit MaxFailureRetries override sees. The check at finalizeRunOp
+// skips the cap branch whenever maxFailureRetries is negative; any caller
+// that wants the harness-hardening cap (SPEC §15.5) must pass a
+// non-negative value through workflow.AgentConfig.MaxRetryAttempts or
+// orchestrator.Deps.MaxFailureRetries.
+const UnboundedFailureRetries = -1
+
 // Deps bundles construction-time dependencies so adding a new one
 // later doesn't ripple through every call site.
 type Deps struct {
-	Dispatcher        Dispatcher
-	Scheduler         Scheduler
+	Dispatcher Dispatcher
+	Scheduler  Scheduler
+	// MaxFailureRetries opts into a non-SPEC cap on failure-driven
+	// orchestrator retries. nil (the default) and any negative value
+	// leave the SPEC §8.4 unbounded behavior in place; a non-negative
+	// integer applies the harness-hardening cap.
 	MaxFailureRetries *int
 	MaxTurns          *int
 	// CandidateLister, when set, enables the SPEC §16.6 retry-fire
@@ -159,7 +173,11 @@ type Orchestrator struct {
 	dispatcher Dispatcher
 	scheduler  Scheduler
 	// maxFailureRetries bounds failure-driven retry entries after retryable
-	// worker failures.
+	// worker failures. SPEC §8.4 / §16.6 expect unbounded retries (with the
+	// exponential-backoff ceiling), so a negative value here means "no cap —
+	// keep retrying until the tracker takes the issue out of active work".
+	// Non-negative values opt into the SPEC §15.5 harness-hardening cap and
+	// pin the issue under OrchestratorState.Failed once exceeded.
 	maxFailureRetries int
 	// maxTurns bounds clean continuation dispatches for one-shot runners that
 	// cannot enforce agent.max_turns internally. App-server runners still enforce
@@ -186,11 +204,15 @@ type Orchestrator struct {
 // must call Run(ctx) in a separate goroutine before the actor processes
 // any submitted op; tests can wait via WaitStarted.
 func New(state *OrchestratorState, deps Deps) *Orchestrator {
-	maxFailureRetries := 1
+	// Default to unbounded so the SPEC §8.4 contract — retry forever,
+	// bounded only by backoff and tracker state — is what a caller gets
+	// without explicit opt-in. A negative pointer normalizes to the same
+	// "no cap" sentinel so test/production callers can pass either.
+	maxFailureRetries := UnboundedFailureRetries
 	if deps.MaxFailureRetries != nil {
 		maxFailureRetries = *deps.MaxFailureRetries
 		if maxFailureRetries < 0 {
-			maxFailureRetries = 0
+			maxFailureRetries = UnboundedFailureRetries
 		}
 	}
 	maxTurns := 20
@@ -507,11 +529,14 @@ func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Sched
 
 // UpdateMaxFailureRetries applies the reloaded failure retry budget through the
 // actor. The budget counts scheduled failure retry entries after the first run;
-// zero disables failure retries. Clean continuations are bounded separately by
-// agent.max_turns.
+// any negative value (including the workflow-layer UnboundedRetryBudget sentinel
+// that a workflow with no `agent.max_retry_attempts` produces) disables the cap
+// and restores SPEC §8.4 unbounded retries. Zero disables failure retries
+// outright as a deliberate opt-in. Clean continuations are bounded separately
+// by agent.max_turns.
 func (o *Orchestrator) UpdateMaxFailureRetries(ctx context.Context, maxFailureRetries int) error {
 	if maxFailureRetries < 0 {
-		maxFailureRetries = 0
+		maxFailureRetries = UnboundedFailureRetries
 	}
 	done := make(chan struct{}, 1)
 	op := opFunc(func(*OrchestratorState) func() {
@@ -1504,14 +1529,17 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
-	// and so on. The local automation contract bounds failure-driven
-	// retries so retryable worker failures cannot spend tokens forever.
+	// and so on. SPEC §8.4 / §16.6 expect the orchestrator to keep
+	// scheduling retries indefinitely (with the exponential-backoff
+	// ceiling) — only an explicit harness-hardening opt-in (SPEC §15.5)
+	// caps the count. A negative maxFailureRetries leaves the SPEC
+	// behavior in place; non-negative opts into the cap.
 	nextAttempt := 1
 	if f.attempt != nil {
 		nextAttempt = *f.attempt + 1
 	}
 	runErr := f.result.Err.Error()
-	if nextAttempt > f.o.maxFailureRetries {
+	if f.o.maxFailureRetries >= 0 && nextAttempt > f.o.maxFailureRetries {
 		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
