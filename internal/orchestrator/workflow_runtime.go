@@ -222,19 +222,14 @@ func copyStateConcurrencyLimits(in map[string]int) map[string]int {
 	return out
 }
 
+// normalizeStateConcurrencyLimits is an internal-package alias for the
+// canonical [workflow.NormalizeStateConcurrencyLimits] helper. Keeping a
+// thin local wrapper avoids touching every call site that depended on
+// the old local function while the consolidation closes #294: the
+// initial-load (loader.go) and the snapshot-build (this file) paths now
+// go through one set of semantics.
 func normalizeStateConcurrencyLimits(in map[string]int) map[string]int {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(in))
-	for state, limit := range in {
-		key := normalizeStateConcurrencyKey(state)
-		if key == "" || limit <= 0 {
-			continue
-		}
-		out[key] = limit
-	}
-	return out
+	return workflow.NormalizeStateConcurrencyLimits(in)
 }
 
 func workflowFileFingerprint(path string) (string, error) {

@@ -12,10 +12,10 @@ package orchestrator
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // IssueID is the tracker-assigned stable identifier (tracker.Issue.ID).
@@ -449,8 +449,11 @@ func (s *OrchestratorState) runningIssueIDs() map[IssueID]struct{} {
 	return counted
 }
 
+// normalizeStateConcurrencyKey delegates to the canonical
+// [workflow.NormalizeStateConcurrencyKey] so the dispatch-time lookup
+// shape and the load-time key shape can never drift apart (#294).
 func normalizeStateConcurrencyKey(state string) string {
-	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(state)), " ", "_")
+	return workflow.NormalizeStateConcurrencyKey(state)
 }
 
 // BeginDispatch records the SPEC §16.4 dispatch step: an eligible
