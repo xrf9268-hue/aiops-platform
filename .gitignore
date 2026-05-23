@@ -28,8 +28,11 @@ coverage.out
 # macOS
 .DS_Store
 
-# Local Claude Code state (worktrees, plugin cache, transcripts)
-.claude/
+# Local Claude Code state (worktrees, plugin cache, transcripts).
+# Project skills under .claude/skills/ are version-controlled per
+# https://code.claude.com/docs/en/skills "Share skills → Project skills".
+.claude/*
+!.claude/skills/
 
 # Deploy SSH scaffolding (#221) — keep the dir + README tracked, ignore real keys
 deploy/ssh/*
