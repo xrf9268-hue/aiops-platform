@@ -115,6 +115,9 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 	if err := p.orchestrator.UpdateMaxTurns(ctx, snap.MaxTurns); err != nil {
 		return err
 	}
+	if err := p.orchestrator.UpdateRunnerEnforcesMaxTurns(ctx, runner.EnforcesMaxTurnsInternally(snap.Workflow.Config.Agent.Default)); err != nil {
+		return err
+	}
 	return poller.PollOnce(ctx)
 }
 

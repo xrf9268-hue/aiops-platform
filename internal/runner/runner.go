@@ -74,6 +74,12 @@ func IsInputRequired(err error) bool {
 	return errors.As(err, &input)
 }
 
+// NameCodexAppServer is the agent.default value selecting the SPEC §10.1
+// codex app-server runner. Shared by New (which constructs the runner) and
+// EnforcesMaxTurnsInternally (which the orchestrator consults to gate the
+// continuation-spawn cap, see issue #216) so the two lists cannot drift.
+const NameCodexAppServer = "codex-app-server"
+
 func New(name string) (Runner, error) {
 	switch name {
 	case "", "mock":
@@ -92,12 +98,31 @@ func New(name string) (Runner, error) {
 		return MockRunner{WriteAiopsWorkflow: true}, nil
 	case "codex":
 		return CodexRunner{}, nil
-	case "codex-app-server":
+	case NameCodexAppServer:
 		return CodexAppServerRunner{}, nil
 	case "claude":
 		return ShellRunner{Name: "claude"}, nil
 	default:
 		return nil, fmt.Errorf("unknown runner: %s", name)
+	}
+}
+
+// EnforcesMaxTurnsInternally reports whether the runner selected by name runs
+// its own per-session turn loop bounded by agent.max_turns. SPEC §5.3.5 scopes
+// max_turns to "within one worker session"; SPEC §7.1 leaves continuation
+// worker spawns unbounded. The orchestrator uses this to decide whether to
+// apply its own continuation-spawn cap: when the runner already enforces
+// max_turns inside the session, the orchestrator must not reuse the same
+// value as a cross-worker budget (see issue #216). Only the codex app-server
+// runner runs an in-session turn loop today; the one-shot codex exec runner
+// and the shell-based claude runner exit after a single turn, so the
+// orchestrator-side cap remains their only spawn safety net.
+func EnforcesMaxTurnsInternally(name string) bool {
+	switch name {
+	case NameCodexAppServer:
+		return true
+	default:
+		return false
 	}
 }
 

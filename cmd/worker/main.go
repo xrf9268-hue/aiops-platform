@@ -21,6 +21,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -301,11 +302,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
 	maxTurns := wf.Config.Agent.MaxTurns
+	runnerEnforcesMaxTurns := runner.EnforcesMaxTurnsInternally(wf.Config.Agent.Default)
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher:        dispatcher,
-		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
-		MaxFailureRetries: &maxFailureRetries,
-		MaxTurns:          &maxTurns,
+		Dispatcher:             dispatcher,
+		Scheduler:              orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		MaxFailureRetries:      &maxFailureRetries,
+		MaxTurns:               &maxTurns,
+		RunnerEnforcesMaxTurns: &runnerEnforcesMaxTurns,
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
