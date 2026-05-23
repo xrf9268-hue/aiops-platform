@@ -74,6 +74,12 @@ func IsInputRequired(err error) bool {
 	return errors.As(err, &input)
 }
 
+// NameCodexAppServer is the agent.default value selecting the SPEC §10.1
+// codex app-server runner. Shared by New (which constructs the runner) and
+// EnforcesMaxTurnsInternally (which the orchestrator consults to gate the
+// continuation-spawn cap, see issue #216) so the two lists cannot drift.
+const NameCodexAppServer = "codex-app-server"
+
 func New(name string) (Runner, error) {
 	switch name {
 	case "", "mock":
@@ -92,7 +98,7 @@ func New(name string) (Runner, error) {
 		return MockRunner{WriteAiopsWorkflow: true}, nil
 	case "codex":
 		return CodexRunner{}, nil
-	case "codex-app-server":
+	case NameCodexAppServer:
 		return CodexAppServerRunner{}, nil
 	case "claude":
 		return ShellRunner{Name: "claude"}, nil
@@ -113,7 +119,7 @@ func New(name string) (Runner, error) {
 // orchestrator-side cap remains their only spawn safety net.
 func EnforcesMaxTurnsInternally(name string) bool {
 	switch name {
-	case "codex-app-server":
+	case NameCodexAppServer:
 		return true
 	default:
 		return false
