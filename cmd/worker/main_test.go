@@ -1083,11 +1083,13 @@ func TestStartupReconcileConfigFallsBackToEnvWorkspaceRoot(t *testing.T) {
 }
 
 func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
-	}
-	yamlRoot := filepath.Join(home, "aiops-workspaces")
+	// Pin SPEC §6.4 precedence: an explicit `workspace.root` in
+	// WORKFLOW.md wins over WORKSPACE_ROOT env even when its value
+	// equals the SPEC default itself. Pre-#319 this test used the
+	// personal-profile legacy `~/aiops-workspaces` literal — the same
+	// literal PR #316 retired at the workflow-loader floor — which kept
+	// the SPEC drift alive at the worker layer.
+	yamlRoot := filepath.Join(os.TempDir(), "symphony_workspaces")
 	workflowPath := writeWorkflowForStartupReconcileTest(t, fmt.Sprintf("workspace:\n  root: %s\n", yamlRoot))
 	wf, err := workflow.Load(workflowPath)
 	if err != nil {
@@ -1099,6 +1101,29 @@ func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *tes
 	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
 	if reconcile.WorkspaceRoot != yamlRoot {
 		t.Fatalf("WorkspaceRoot = %q, want explicit workflow default root %q", reconcile.WorkspaceRoot, yamlRoot)
+	}
+}
+
+// TestStartupReconcileConfigFallsBackToSPECWorkspaceRootDefault covers
+// the #319 fix: when WORKFLOW.md omits `workspace.root` and
+// WORKSPACE_ROOT is unset, the startup reconcile resolves to the SPEC
+// §6.4 default (`<system-temp>/symphony_workspaces`) that
+// workflow.DefaultConfig seeds. Pre-#319 the env loader's
+// `/tmp/aiops-workspaces` literal shadowed the SPEC default in this
+// case; `worker --print-config` reported one path while the runtime
+// used another.
+func TestStartupReconcileConfigFallsBackToSPECWorkspaceRootDefault(t *testing.T) {
+	workflowPath := writeWorkflowForStartupReconcileTest(t, "")
+	wf, err := workflow.Load(workflowPath)
+	if err != nil {
+		t.Fatalf("Load workflow: %v", err)
+	}
+	t.Setenv("WORKSPACE_ROOT", "")
+
+	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
+	want := filepath.Join(os.TempDir(), "symphony_workspaces")
+	if reconcile.WorkspaceRoot != want {
+		t.Fatalf("WorkspaceRoot = %q, want SPEC §6.4 default %q", reconcile.WorkspaceRoot, want)
 	}
 }
 
