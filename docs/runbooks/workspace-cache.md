@@ -28,6 +28,84 @@ $WORKSPACE_ROOT/                    # per-task worktrees
 - Each task gets its own directory under `WORKSPACE_ROOT`, so two
   concurrent workers never share a working tree.
 
+## Workspace reuse across runs (SPEC §9.1 + §9.4)
+
+Per-issue workspaces are **reused across runs for the same issue**
+(SPEC §9.1). `PrepareGitWorkspace` only adds a fresh worktree on the
+first touch (or when recovering from a corrupted leftover); subsequent
+prepares for the same `(repo, issue)` pair reset the work branch to
+`origin/<base-branch>` via:
+
+```text
+git reset --quiet HEAD -- .
+git checkout --force --no-track -B <work-branch> origin/<base-branch>
+```
+
+What this preserves and what it resets:
+
+- **Untracked files survive.** Cached deps (`node_modules/`, `venv/`,
+  Go build caches under `.cache/`), build outputs, and any
+  `.aiops/POLICY_VIOLATION_FEEDBACK.md` left by a prior policy
+  violation carry over so the next run benefits from the warm cache
+  and sees the same operator/agent feedback.
+  - The `git reset --quiet HEAD -- .` step is load-bearing: the prior
+    run's `EnforcePolicy` calls `git add --intent-to-add --all` to make
+    untracked files visible to `git diff --numstat`, which leaves those
+    paths in the index pointing at the empty blob. Without the reset,
+    the subsequent `git checkout --force -B` would treat them as
+    "files in the index but not in the target ref" and silently delete
+    them from the working tree. The reset clears the index back to HEAD
+    so the checkout only updates tracked files.
+- **Tracked-file modifications are reset.** The `--force` flag
+  discards any uncommitted edits to tracked files; `RUN_SUMMARY.md` is
+  also wiped explicitly by `workspace.ResetRunSummary` before the
+  runner starts, and `enforceAnalysisOnlyChanges` resets
+  `.aiops/PLAN.md` for analysis-only mode. The runner therefore starts
+  every run from a known-clean tracked state.
+- **The work branch is rebased to `origin/<base-branch>`.** Commits the
+  previous run pushed on the work branch live in the PR / remote; the
+  next run starts from the refreshed base, not on top of those
+  commits. `--no-track` matches the create path's
+  `worktree add --no-track` so the work branch never tracks the base
+  branch (otherwise a stray `git pull` inside the worktree would merge
+  the base into the work branch).
+
+The `after_create` workspace hook runs only on the first touch
+(SPEC §9.4 / §17.2 conformance test): `RunTask` checks the
+`createdNow` boolean from `PrepareGitWorkspace` and skips the hook on
+reuse. Expensive one-time bootstrap commands (`npm ci`,
+`pip install -r requirements.txt`) belong in `after_create`; per-run
+setup belongs in `before_run`.
+
+If you depend on a brand-new workspace for a particular run, delete
+the workspace directory yourself before the next task tick — the
+worker treats a missing path as "first touch" and fires
+`after_create` again.
+
+### Recovery from a corrupted or hostile workspace
+
+Before taking the reuse path, `PrepareGitWorkspace` runs three gates
+against `<workdir>`. Failing any one falls through to the
+nuke-and-recreate path, reports `createdNow=true`, and fires
+`after_create` again:
+
+1. **No symlinks.** `os.Lstat` rejects a symlinked `<workdir>` so the
+   reuse-path `git reset` / `git checkout -B` can never be redirected
+   into a repository outside the workspace root by a planted
+   symlink. The recreate path's `os.RemoveAll` removes the symlink
+   itself, not its target.
+2. **Valid git worktree.** `git rev-parse --git-dir` must succeed.
+   Catches the "crashed `worktree add` / `rm -rf .git` race / chmod
+   broke linkage" cases.
+3. **Linked to OUR mirror.** `git rev-parse --git-common-dir` must
+   resolve (via `filepath.EvalSymlinks`) to the same path as the
+   cached bare mirror for `t.CloneURL`. Catches an independent
+   `git init` planted at the workspace path and a worktree linked to
+   a different mirror (e.g. clone URL changed between prepares).
+
+Operators can always force a clean reset by removing `<workdir>` (or
+just `<workdir>/.git`) — the worker recovers on the next prepare.
+
 ## Configuration
 
 | Env var               | Default                                                                 | Purpose                                                  |

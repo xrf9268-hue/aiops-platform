@@ -688,37 +688,65 @@ func TestRunTaskFailsOnUnknownPromptVariable(t *testing.T) {
 	}
 }
 
-func TestRunTaskExecutesAfterCreateHookOnRecreatedWorkspace(t *testing.T) {
+// TestRunTaskReusesWorkspaceAcrossRunsAndGatesAfterCreate covers SPEC §9.1
+// (workspaces are reused across runs for the same issue) and SPEC §9.4
+// (after_create runs only on new workspace creation).
+//
+// First run: after_create fires once, before_run fires once.
+// Second run: after_create must NOT fire again, before_run must fire again,
+// and untracked artifacts (cached deps, .aiops feedback) written between
+// the runs must survive.
+func TestRunTaskReusesWorkspaceAcrossRunsAndGatesAfterCreate(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
 		AfterCreate: workflow.WorkspaceHook{Commands: []string{"printf after_create >> hook.log"}},
+		BeforeRun:   workflow.WorkspaceHook{Commands: []string{"printf before_run >> hook.log"}},
 	}
 
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("first runTask: %v", rterr.Err)
 	}
 	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
+	if body, err := os.ReadFile(filepath.Join(workdir, "hook.log")); err != nil {
+		t.Fatalf("read hook log after first run: %v", err)
+	} else if got := string(body); got != "after_createbefore_run" {
+		t.Fatalf("hook log after first run = %q, want %q", got, "after_createbefore_run")
+	}
+	// Drop an untracked artifact that SPEC §9.1 reuse semantics must
+	// preserve into the next run.
 	if err := os.WriteFile(filepath.Join(workdir, "stale.txt"), []byte("stale"), 0o644); err != nil {
 		t.Fatalf("write stale marker: %v", err)
 	}
 
-	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+	ev2 := &fakeEmitter{}
+	if rterr := worker.RunTaskForTest(context.Background(), ev2, tk, cfg); rterr != nil {
 		t.Fatalf("second runTask: %v", rterr.Err)
 	}
 
+	// after_create must NOT fire on the second run; before_run must.
 	body, err := os.ReadFile(filepath.Join(workdir, "hook.log"))
 	if err != nil {
-		t.Fatalf("read recreated hook log: %v", err)
+		t.Fatalf("read hook log after second run: %v", err)
 	}
-	if string(body) != "after_create" {
-		t.Fatalf("recreated hook log = %q, want after_create from the second fresh checkout", body)
+	if got := string(body); got != "after_createbefore_runbefore_run" {
+		t.Fatalf("hook log after second run = %q, want %q (SPEC §9.4: after_create fires once)", got, "after_createbefore_runbefore_run")
 	}
-	if _, err := os.Stat(filepath.Join(workdir, "stale.txt")); !os.IsNotExist(err) {
-		t.Fatalf("second run should recreate a clean workspace without stale marker; stat err=%v", err)
+	for _, e := range ev2.byKind(task.EventWorkspaceHookStart) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			t.Fatalf("hook start payload = %#v, want map", e.Payload)
+		}
+		if hook := fmt.Sprint(payload["hook"]); hook == "after_create" {
+			t.Fatalf("after_create hook fired on reuse run; SPEC §9.4 forbids; events=%#v", ev2.events)
+		}
+	}
+	// Untracked artifact from the previous run must survive (SPEC §9.1).
+	if _, err := os.Stat(filepath.Join(workdir, "stale.txt")); err != nil {
+		t.Fatalf("untracked file should survive reuse per SPEC §9.1; stat err=%v", err)
 	}
 }
 

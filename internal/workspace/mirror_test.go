@@ -315,7 +315,12 @@ func TestPrepareGitWorkspaceDoesNotSetBaseBranchAsWorkBranchUpstream(t *testing.
 	}
 }
 
-func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
+// TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns covers SPEC §9.1:
+// workspaces are reused across runs for the same issue. Untracked artifacts
+// (cached deps, build outputs, .aiops policy feedback) must survive a
+// re-prepare, while tracked-file modifications get snapped back to the
+// refreshed base ref so the next runner starts from a clean tracked state.
+func TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
 	ctx := context.Background()
@@ -328,23 +333,288 @@ func TestPrepareGitWorkspace_RerunReusesPathIdempotently(t *testing.T) {
 	if !createdNow {
 		t.Fatal("first prepare reported createdNow=false")
 	}
-	// Simulate a partial run leaving an extra file behind. The next
-	// PrepareGitWorkspace must give us a clean checkout.
+	// Untracked cache that the next run must inherit.
 	if err := os.WriteFile(filepath.Join(dir, "stale.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Local modification to a tracked file that the next run must NOT
+	// inherit — the reuse path resets tracked state to origin/<base>.
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
 		t.Fatalf("second prepare: %v", err)
 	}
 	if createdNow {
-		t.Fatal("second prepare reported createdNow=true")
+		t.Fatal("second prepare reported createdNow=true; SPEC §9.1 requires reuse")
 	}
 	if dir != dir2 {
 		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
 	}
-	if _, err := os.Stat(filepath.Join(dir2, "stale.txt")); !os.IsNotExist(err) {
-		t.Fatalf("stale file survived re-prepare: %v", err)
+	if body, err := os.ReadFile(filepath.Join(dir2, "stale.txt")); err != nil {
+		t.Fatalf("untracked file should survive reuse per SPEC §9.1: %v", err)
+	} else if string(body) != "x" {
+		t.Fatalf("untracked file body = %q, want %q", body, "x")
+	}
+	if body, err := os.ReadFile(filepath.Join(dir2, "README.md")); err != nil {
+		t.Fatalf("read README.md after reuse: %v", err)
+	} else if string(body) == "dirty\n" {
+		t.Fatalf("tracked-file modification survived reuse; want reset to base")
+	}
+	// The work branch tip must equal origin/main (i.e., the base ref) so
+	// the next run starts from a clean tracked state regardless of what
+	// the previous attempt committed on the work branch.
+	headOut, err := exec.Command("git", "-C", dir2, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	baseOut, err := exec.Command("git", "-C", dir2, "rev-parse", "origin/main").Output()
+	if err != nil {
+		t.Fatalf("rev-parse origin/main: %v", err)
+	}
+	if strings.TrimSpace(string(headOut)) != strings.TrimSpace(string(baseOut)) {
+		t.Fatalf("HEAD = %q, want origin/main = %q after reuse", strings.TrimSpace(string(headOut)), strings.TrimSpace(string(baseOut)))
+	}
+	branchOut, err := exec.Command("git", "-C", dir2, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
+		t.Fatalf("worktree on branch %q after reuse, want %q", got, tk.WorkBranch)
+	}
+}
+
+// TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink covers the security
+// gate on the reuse path: a symlink planted at the workspace path could
+// otherwise redirect the reuse-path `git reset` / `git checkout -B` into
+// a repository outside the workspace root. PrepareGitWorkspace must
+// refuse the reuse, remove the symlink (without following it), and
+// recreate a fresh worktree linked to OUR mirror, reporting
+// `createdNow=true`.
+func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-symlink", upstream)
+
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
+	}
+
+	// Capture the mirror's git-common-dir for later comparison.
+	firstCommon, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("first git-common-dir: %v", err)
+	}
+	firstCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(firstCommon)))
+	if err != nil {
+		t.Fatalf("eval first common: %v", err)
+	}
+
+	// Replace the workspace path with a symlink pointing at an attacker
+	// controlled git repo elsewhere on disk. The reuse path must NOT
+	// follow this symlink and run `git reset` inside it.
+	attacker := t.TempDir()
+	for _, args := range [][]string{
+		{"git", "init", "-q", "-b", "main", attacker},
+		{"git", "-C", attacker, "config", "user.email", "u@example.com"},
+		{"git", "-C", attacker, "config", "user.name", "u"},
+		{"git", "-C", attacker, "config", "commit.gpgsign", "false"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(attacker, "canary.txt"), []byte("attacker"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "-C", attacker, "add", "."},
+		{"git", "-C", attacker, "commit", "-q", "-m", "attacker"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	canaryRef, err := exec.Command("git", "-C", attacker, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("attacker rev-parse: %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove workspace dir for symlink swap: %v", err)
+	}
+	if err := os.Symlink(attacker, dir); err != nil {
+		t.Fatalf("plant symlink: %v", err)
+	}
+
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare after symlink swap: %v", err)
+	}
+	if dir != dir2 {
+		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
+	}
+	if !createdNow {
+		t.Fatal("second prepare reported createdNow=false; symlinked path must fall back to recreate")
+	}
+
+	// The attacker repo must be untouched — its HEAD ref must not have
+	// been moved by our `git reset` / `git checkout -B`.
+	canaryRefAfter, err := exec.Command("git", "-C", attacker, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("attacker rev-parse after: %v", err)
+	}
+	if string(canaryRef) != string(canaryRefAfter) {
+		t.Fatalf("attacker repo HEAD moved by reuse path: before=%q after=%q", canaryRef, canaryRefAfter)
+	}
+	if body, err := os.ReadFile(filepath.Join(attacker, "canary.txt")); err != nil {
+		t.Fatalf("attacker canary file removed: %v", err)
+	} else if string(body) != "attacker" {
+		t.Fatalf("attacker canary file modified: %q", body)
+	}
+
+	// The recreated workspace must be linked to OUR mirror (same
+	// git-common-dir as the first prepare), not to the attacker's repo.
+	secondCommon, err := exec.Command("git", "-C", dir2, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("second git-common-dir: %v", err)
+	}
+	secondCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(secondCommon)))
+	if err != nil {
+		t.Fatalf("eval second common: %v", err)
+	}
+	if secondCommonReal != firstCommonReal {
+		t.Fatalf("recreated workspace linked to a different mirror: before=%q after=%q", firstCommonReal, secondCommonReal)
+	}
+}
+
+// TestPrepareGitWorkspace_RecreatesWhenPathIsForeignGitRepo covers the
+// second half of the same gate: an independent git repo planted at the
+// workspace path (e.g. a previous agent `git init` that bypassed the
+// worktree linkage) still passes `git rev-parse --git-dir`, but its
+// git-common-dir does NOT resolve to our mirror. The reuse path must
+// reject it and recreate from the mirror.
+func TestPrepareGitWorkspace_RecreatesWhenPathIsForeignGitRepo(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-foreign", upstream)
+
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
+	}
+
+	firstCommon, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("first git-common-dir: %v", err)
+	}
+	firstCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(firstCommon)))
+	if err != nil {
+		t.Fatalf("eval first common: %v", err)
+	}
+
+	// Rewrite the workspace path as an independent git repo with a
+	// distinctive commit. The reuse path must not adopt it.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("remove workspace dir for foreign-repo swap: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "init", "-q", "-b", "main", dir},
+		{"git", "-C", dir, "config", "user.email", "u@example.com"},
+		{"git", "-C", dir, "config", "user.name", "u"},
+		{"git", "-C", dir, "config", "commit.gpgsign", "false"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "foreign.txt"), []byte("foreign"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "-C", dir, "add", "."},
+		{"git", "-C", dir, "commit", "-q", "-m", "foreign"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare after foreign-repo swap: %v", err)
+	}
+	if dir != dir2 {
+		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
+	}
+	if !createdNow {
+		t.Fatal("second prepare reported createdNow=false; foreign git repo must fall back to recreate")
+	}
+	if _, err := os.Stat(filepath.Join(dir2, "foreign.txt")); !os.IsNotExist(err) {
+		t.Fatalf("foreign repo content survived recreate; stat err=%v", err)
+	}
+	secondCommon, err := exec.Command("git", "-C", dir2, "rev-parse", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("second git-common-dir: %v", err)
+	}
+	secondCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(secondCommon)))
+	if err != nil {
+		t.Fatalf("eval second common: %v", err)
+	}
+	if secondCommonReal != firstCommonReal {
+		t.Fatalf("recreated workspace not linked back to our mirror: before=%q after=%q", firstCommonReal, secondCommonReal)
+	}
+}
+
+// TestPrepareGitWorkspace_RecreatesCorruptedWorkdir covers the safety net
+// for the reuse path: if the leftover dir at the workspace path is not a
+// valid git worktree (crashed prepare, partial rm -rf, hostile leftover),
+// PrepareGitWorkspace must fall back to a clean recreate and report
+// createdNow=true so the worker fires `after_create` again.
+func TestPrepareGitWorkspace_RecreatesCorruptedWorkdir(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-corrupt", upstream)
+
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
+	}
+	// Corrupt the worktree linkage so `git rev-parse --git-dir` fails.
+	gitLink := filepath.Join(dir, ".git")
+	if err := os.RemoveAll(gitLink); err != nil {
+		t.Fatalf("remove .git linkage: %v", err)
+	}
+
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare after corruption: %v", err)
+	}
+	if dir != dir2 {
+		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
+	}
+	if !createdNow {
+		t.Fatal("second prepare reported createdNow=false; corrupted leftover must fall back to recreate")
+	}
+	if _, err := os.Stat(filepath.Join(dir2, ".git")); err != nil {
+		t.Fatalf("recreated workdir missing .git linkage: %v", err)
 	}
 }
 

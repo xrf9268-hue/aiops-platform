@@ -220,7 +220,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	workspaceRoot := EffectiveWorkspaceRoot(cfg, wcfg)
 	mgr := workspace.New(workspaceRoot)
 	mgr.MirrorRoot = cfg.MirrorRoot
-	workdir, _, err := mgr.PrepareGitWorkspace(ctx, t)
+	workdir, createdNow, err := mgr.PrepareGitWorkspace(ctx, t)
 	if err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
@@ -231,9 +231,15 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
 		}
 	}
-	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		removeWorkdirAfterHookFailure(ctx, ev, t.ID, t.SourceEventID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
-		return &RunTaskError{Cfg: wcfg, Err: err}
+	if createdNow {
+		// SPEC §9.4: after_create runs only when a workspace directory
+		// is newly created. Reuses skip it so bootstrap commands
+		// (`npm ci`, `pip install`, …) remain the one-time init they're
+		// documented as.
+		if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
+			removeWorkdirAfterHookFailure(ctx, ev, t.ID, t.SourceEventID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
+			return &RunTaskError{Cfg: wcfg, Err: err}
+		}
 	}
 
 	if t.Model == "" || t.Model == "mock" {
@@ -299,12 +305,16 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	// Make sure post-runner artifact gates cannot pass on stale files from
-	// the base branch. PrepareGitWorkspace already nukes the workdir on a
-	// fresh clone, but we still defend against the case where the base branch
-	// itself has committed .aiops artifacts (left over from a prior PR or
-	// seeded by hand). Deleting them here means the gates can only succeed
-	// when the runner produced artifacts during this invocation.
+	// Make sure post-runner artifact gates cannot pass on stale files
+	// from a previous run or from the base branch. PrepareGitWorkspace
+	// resets tracked files to origin/<base> on every prepare (fresh
+	// checkout on first touch, `checkout --force -B` on reuse per
+	// SPEC §9.1), but RUN_SUMMARY.md / .aiops/PLAN.md may also be
+	// committed on the base branch itself (left over from a prior PR
+	// or seeded by hand), and on reuse any untracked artifact written
+	// by the previous run still lingers in the workdir. Deleting them
+	// here means the gates can only succeed when the runner produced
+	// artifacts during this invocation.
 	if err := workspace.ResetRunSummary(workdir); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
 	}

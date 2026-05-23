@@ -171,25 +171,35 @@ func issueWorkspaceKey(t task.Task) string {
 	return SanitizeComponent(t.ID)
 }
 
-// PrepareGitWorkspace materialises a per-issue workspace by adding a fresh
-// worktree off the cached bare mirror for t.CloneURL. The worktree is
-// created at PathFor(t) on the work branch, with origin set back to the
-// upstream URL so `git push origin <branch>` works without further setup.
+// PrepareGitWorkspace materialises a per-issue workspace as a worktree off
+// the cached bare mirror for t.CloneURL. The worktree lives at PathFor(t)
+// on the work branch, with origin set back to the upstream URL so
+// `git push origin <branch>` works without further setup.
 //
 // On every call we refresh the mirror first so the worktree starts from
 // up-to-date refs. The returned createdNow flag reports whether this call
-// first touched the issue workspace path; reruns still receive a fresh
-// checkout at the same path to preserve the existing clean-worktree behavior.
+// first touched the issue workspace path:
+//
+//   - createdNow=true (first touch or recovery from a corrupted leftover):
+//     the worktree is added fresh from origin/<base>. The worker uses this
+//     edge to fire the `after_create` hook exactly once per workspace,
+//     matching SPEC §9.4.
+//   - createdNow=false (reuse path, SPEC §9.1): the existing worktree's
+//     tracked state is reset to origin/<base> via `git checkout --force -B`
+//     so the runner starts from a clean base, but untracked artifacts
+//     (cached deps, build outputs, .aiops policy feedback) survive across
+//     runs.
 func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) {
 	workdir := m.PathFor(t)
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
 		return "", false, err
 	}
-	_, statErr := os.Stat(workdir)
-	createdNow := os.IsNotExist(statErr)
+	info, statErr := os.Stat(workdir)
 	if statErr != nil && !os.IsNotExist(statErr) {
 		return "", false, statErr
 	}
+	workdirExists := statErr == nil && info.IsDir()
+
 	mirror := mirrorPathFor(MirrorRoot(m.MirrorRoot), t.CloneURL)
 	unlock, err := acquireMirrorLock(mirror)
 	if err != nil {
@@ -201,26 +211,93 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	if err != nil {
 		return "", false, err
 	}
-	// Drop any leftover worktree from a previous run *before* asking git to
-	// add a new one at the same path. We deliberately ignore failures and
-	// silence stderr because the common case ("no such worktree") prints a
-	// scary fatal line that obscures real worker logs.
+	// Resolve the base ref via `origin/<base>` because the bare cache
+	// stores upstream branches as remote-tracking refs (see EnsureMirror);
+	// falling back to the bare name covers `file://` test fixtures where
+	// the upstream is the same on-disk repo.
+	startRef := "origin/" + t.BaseBranch
+	if err := runQuiet(ctx, mirror, "git", "rev-parse", "--verify", startRef); err != nil {
+		startRef = t.BaseBranch
+	}
+
+	// A workdir that exists but isn't a valid, mirror-linked git worktree
+	// must not pin the worker into a bad state. Three classes of "looks
+	// reusable but isn't" we explicitly reject:
+	//
+	//  1. The path is a symlink. An attacker who can plant a symlink at
+	//     the workspace path could otherwise redirect the reuse-path
+	//     `git reset` / `git checkout -B` into a repository outside the
+	//     workspace root entirely. `os.Lstat` (vs the earlier `os.Stat`
+	//     that follows the link) catches this.
+	//  2. The path holds an independent git repository — for example, a
+	//     prior agent run that rewrote its workspace as a fresh `git
+	//     init` would still pass `git rev-parse --git-dir`. We verify
+	//     `git rev-parse --git-common-dir` resolves to *our* mirror so
+	//     unrelated repos can't masquerade as a reusable workspace.
+	//  3. The path is the worktree of a different mirror (different
+	//     clone URL routed to the same key, mirror was wiped and
+	//     recreated between prepares, etc.). The git-common-dir check
+	//     above also covers this.
+	//
+	// On any rejection we fall through to the nuke-and-recreate path
+	// (`os.RemoveAll` removes the symlink itself, not its target) and
+	// report `createdNow=true` so the worker fires `after_create` on
+	// the recovery run.
+	reusable := false
+	if workdirExists {
+		lstatInfo, lstatErr := os.Lstat(workdir)
+		if lstatErr == nil && lstatInfo.Mode()&os.ModeSymlink == 0 {
+			if err := runQuiet(ctx, workdir, "git", "rev-parse", "--git-dir"); err == nil {
+				cdOut, cdErr := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir").Output()
+				if cdErr == nil && sameRealPath(strings.TrimSpace(string(cdOut)), workdir, mirror) {
+					reusable = true
+				}
+			}
+		}
+	}
+
+	if reusable {
+		// SPEC §9.1: workspaces are reused across runs for the same issue.
+		// We clear the index first, then snap the work branch to the
+		// refreshed base:
+		//   - `git reset --quiet HEAD -- .` drops any intent-to-add
+		//     entries the previous run's `EnforcePolicy` diffstat
+		//     (`git add --intent-to-add --all` in Diffstat) left in the
+		//     index. Without this step `git checkout` below would treat
+		//     those untracked-but-staged files as removable from the
+		//     working tree because they aren't present in startRef, and
+		//     cached deps / hook artifacts would silently vanish on
+		//     reuse.
+		//   - `git checkout --force --no-track -B` then rebases the work
+		//     branch to startRef and updates the working tree:
+		//     `--force` discards tracked-file modifications, `--no-track`
+		//     keeps the work branch from tracking the base branch (the
+		//     SPEC contract honored by the create path's `worktree add
+		//     --no-track`), and `-B` makes the rebase idempotent.
+		// Untracked files (cached deps, build outputs, .aiops policy
+		// feedback) survive intact.
+		if err := runQuiet(ctx, workdir, "git", "reset", "--quiet", "HEAD", "--", "."); err != nil {
+			return "", false, fmt.Errorf("worktree index reset: %w", err)
+		}
+		if err := run(ctx, workdir, "git", "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
+			return "", false, fmt.Errorf("worktree checkout: %w", err)
+		}
+		_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
+		return workdir, false, nil
+	}
+
+	// First touch (or recovery from a corrupted leftover). Drop any stale
+	// worktree entry the mirror still tracks for this path before asking
+	// it to add a new one. Failures are ignored and stderr silenced
+	// because the common case ("no such worktree") prints a scary fatal
+	// line that obscures real worker logs.
 	_ = runQuiet(ctx, mirror, "git", "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
 	if err := runQuiet(ctx, mirror, "git", "worktree", "prune"); err != nil {
 		return "", false, fmt.Errorf("worktree prune: %w", err)
 	}
-	// Create the worktree on the work branch, branched from the requested
-	// base ref. We resolve the base via `origin/<base>` because the bare
-	// cache stores upstream branches as remote-tracking refs (see
-	// EnsureMirror); falling back to the bare name covers `file://` test
-	// fixtures where the upstream is the same on-disk repo. Using -B makes
-	// the operation idempotent if a previous attempt left an in-mirror
-	// branch behind.
-	startRef := "origin/" + t.BaseBranch
-	if err := runQuiet(ctx, mirror, "git", "rev-parse", "--verify", startRef); err != nil {
-		startRef = t.BaseBranch
-	}
+	// Using -B makes the operation idempotent if a previous attempt left
+	// an in-mirror branch behind.
 	if err := run(ctx, mirror, "git", "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
 		return "", false, fmt.Errorf("worktree add: %w", err)
 	}
@@ -229,7 +306,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// out of the box. We still set the URL explicitly for clarity in case
 	// downstream tooling inspects `git remote -v` from within the worktree.
 	_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
-	return workdir, createdNow, nil
+	return workdir, true, nil
 }
 
 // RunWorkspaceHook executes the configured shell commands for a lifecycle hook
@@ -896,6 +973,30 @@ func exitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
+}
+
+// sameRealPath reports whether the path that `git rev-parse --git-common-dir`
+// printed from workdir resolves to the same filesystem location as want.
+// `--git-common-dir` may emit a relative path (e.g. `.git` for a non-worktree
+// repo) which has to be resolved against workdir first, and both sides are
+// passed through `filepath.EvalSymlinks` so the comparison ignores symlinked
+// path prefixes (e.g. `/tmp` -> `/private/tmp` on macOS).
+func sameRealPath(commonDir, workdir, want string) bool {
+	if commonDir == "" {
+		return false
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(workdir, commonDir)
+	}
+	commonReal, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return false
+	}
+	wantReal, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		return false
+	}
+	return commonReal == wantReal
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) error {
