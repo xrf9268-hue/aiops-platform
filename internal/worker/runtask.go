@@ -319,18 +319,20 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	if _, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
+	res, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
 		emitTaskPhase(from, to)
-	}}, wcfg.Agent.Timeout, workflowSource); runErr != nil {
+	}}, wcfg.Agent.Timeout, workflowSource)
+	sessionID := sessionIDFromRuntimeEvents(res.RuntimeEvents)
+	if runErr != nil {
 		if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-			LogIssueEventf(t, "after_run_hook_failed", "after_runner_error=true error=%q", err)
+			LogIssueSessionEventf(t, sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 		}
 		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
 		return &RunTaskError{Cfg: wcfg, Err: runErr}
 	}
 
 	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		LogIssueEventf(t, "after_run_hook_failed", "error=%q", err)
+		LogIssueSessionEventf(t, sessionID, "after_run_hook_failed", "error=%q", err)
 	}
 
 	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {
