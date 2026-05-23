@@ -253,9 +253,14 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 	// field, so the destructive operation is never executed. Maintaining
 	// a client-side denylist of Linear mutation field names would drift
 	// every time Linear adds a mutation; we rely on Linear's type system
-	// for that defense layer instead. The token is still presented in
-	// the Authorization header for the rejected request, which is the
-	// same risk surface that ordinary read queries already carry.
+	// for that defense layer instead. The Authorization header still
+	// carries the workspace token on the rejected request, which is
+	// broadly comparable to the surface ordinary read queries already
+	// expose — but two soft signals differ: Linear records the rejected
+	// request in its server-side audit log (an attempted-write signal
+	// for operators watching Linear directly), and repeated rejections
+	// could plausibly contribute to Linear-side rate limiting on the
+	// token. Neither alters the destructive-operation guarantee.
 	op := parseLinearGraphQLOperation(query)
 	switch op.Kind {
 	case linearGraphQLOperationSubscription:
@@ -296,11 +301,7 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 		}
 	}
 
-	result, err := p.callRaw(ctx, call)
-	if err != nil {
-		return result, err
-	}
-	return result, nil
+	return p.dispatch(ctx, query, op, call.Variables)
 }
 
 // callRaw is the harness-internal transport. It does NOT apply the
@@ -310,7 +311,7 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 // composed deterministically by harness code, not by the agent.
 //
 // Auditing is universal: every successful mutation dispatched through
-// callRaw — whether reached via the gated `call` (agent-driven) or
+// dispatch — whether reached via the gated `call` (agent-driven) or
 // directly from a harness component like linear_ai_workpad — fires the
 // audit sink when one is installed in ctx. The audit event therefore
 // captures harness-attributable Linear writes the same way it captures
@@ -332,14 +333,23 @@ func (p linearGraphQLProxy) callRaw(ctx context.Context, call ToolCall) (string,
 			},
 		})
 	}
+	return p.dispatch(ctx, query, parseLinearGraphQLOperation(query), call.Variables)
+}
+
+// dispatch is the shared transport for the gated and ungated entry
+// points. Both `call` and `callRaw` parse the operation once and hand
+// the result here so the parser does not run twice per request. The
+// audit-sink fire lives here so harness-driven and agent-driven
+// mutations share a single source of truth.
+func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) (string, error) {
 	endpoint := p.baseURL
 	if endpoint == "" {
 		endpoint = defaultLinearGraphQLEndpoint
 	}
 
 	payload := map[string]any{"query": query}
-	if call.Variables != nil {
-		payload["variables"] = call.Variables
+	if variables != nil {
+		payload["variables"] = variables
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -405,12 +415,9 @@ func (p linearGraphQLProxy) callRaw(ctx context.Context, call ToolCall) (string,
 		})
 	}
 	result, toolErr := linearGraphQLToolResponse(respBody.Bytes())
-	if toolErr == nil && toolResultSucceeded(result) {
-		op := parseLinearGraphQLOperation(query)
-		if op.Kind == linearGraphQLOperationMutation {
-			if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
-				sink(op.FieldName)
-			}
+	if toolErr == nil && op.Kind == linearGraphQLOperationMutation && toolResultSucceeded(result) {
+		if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
+			sink(op.FieldName)
 		}
 	}
 	return result, toolErr

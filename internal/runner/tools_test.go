@@ -803,41 +803,66 @@ func TestLinearGraphQLAdversarialMutationsAreRejected(t *testing.T) {
 // TestLinearGraphQLWorkpadEmitsAuditEvent verifies the should-fix from
 // the review: harness-driven mutations dispatched via the workpad must
 // also surface as tool_call_mutation events so operators see
-// harness-attributable Linear writes alongside agent-driven ones.
+// harness-attributable Linear writes alongside agent-driven ones. Both
+// branches of the workpad's create/update fork are exercised so a
+// future refactor that breaks field-name detection on either path is
+// caught.
 func TestLinearGraphQLWorkpadEmitsAuditEvent(t *testing.T) {
-	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.Contains(string(body), "AIWorkpadFind"):
-			_, _ = io.WriteString(w, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}`)
-		default:
-			_, _ = io.WriteString(w, `{"data":{"commentCreate":{"success":true,"comment":{"id":"c-1"}}}}`)
-		}
-	}))
-	defer httpServer.Close()
-
-	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
-	harnessTool := DynamicTool{Name: "linear_graphql", Call: proxy.callRaw}
-	workpad := NewLinearWorkpadTool(harnessTool)
-
-	var sinkCalls []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
-		sinkCalls = append(sinkCalls, name)
-	})
-
-	result, err := workpad.Call(ctx, ToolCall{Variables: map[string]any{
-		"issueId": "LIN-123",
-		"summary": "test",
-	}})
-	if err != nil {
-		t.Fatalf("workpad call: %v", err)
+	tests := []struct {
+		name      string
+		findReply string
+		wantField string
+	}{
+		{
+			name:      "create_branch_when_no_existing_workpad",
+			findReply: `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}`,
+			wantField: "commentCreate",
+		},
+		{
+			name:      "update_branch_when_workpad_exists",
+			findReply: `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[{"id":"comment-existing","body":"<!-- aiops:ai-workpad -->\n# AI Workpad\nold"}]}}}}`,
+			wantField: "commentUpdate",
+		},
 	}
-	if !toolResultSucceeded(result) {
-		t.Fatalf("workpad mutation failed: %s", result)
-	}
-	if len(sinkCalls) != 1 || sinkCalls[0] != "commentCreate" {
-		t.Fatalf("workpad audit sink calls = %v, want [commentCreate]", sinkCalls)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(string(body), "AIWorkpadFind"):
+					_, _ = io.WriteString(w, tt.findReply)
+				case strings.Contains(string(body), "commentUpdate"):
+					_, _ = io.WriteString(w, `{"data":{"commentUpdate":{"success":true,"comment":{"id":"comment-existing"}}}}`)
+				default:
+					_, _ = io.WriteString(w, `{"data":{"commentCreate":{"success":true,"comment":{"id":"c-1"}}}}`)
+				}
+			}))
+			defer httpServer.Close()
+
+			proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+			harnessTool := DynamicTool{Name: "linear_graphql", Call: proxy.callRaw}
+			workpad := NewLinearWorkpadTool(harnessTool)
+
+			var sinkCalls []string
+			ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
+				sinkCalls = append(sinkCalls, name)
+			})
+
+			result, err := workpad.Call(ctx, ToolCall{Variables: map[string]any{
+				"issueId": "LIN-123",
+				"summary": "test",
+			}})
+			if err != nil {
+				t.Fatalf("workpad call: %v", err)
+			}
+			if !toolResultSucceeded(result) {
+				t.Fatalf("workpad mutation failed: %s", result)
+			}
+			if len(sinkCalls) != 1 || sinkCalls[0] != tt.wantField {
+				t.Fatalf("workpad audit sink calls = %v, want [%s]", sinkCalls, tt.wantField)
+			}
+		})
 	}
 }
 
