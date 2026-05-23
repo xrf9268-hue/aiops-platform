@@ -33,8 +33,6 @@ services:
       project_slug: api-platform
       team_key: ENG
       labels: [backend]
-      custom_fields:
-        Runtime: go
 ```
 
 Each service object has these fields:
@@ -49,7 +47,10 @@ Each service object has these fields:
 | `tracker.project_slug` | string | conditional | top-level `tracker.project_slug` if omitted | Linear project slug predicate and polling scope for this service. |
 | `tracker.team_key` | string | no | none | Linear team key predicate. |
 | `tracker.labels` | string array | no | empty | Linear labels that must be present on the issue. |
-| `tracker.custom_fields` | string map | no | empty | Linear custom field name/value predicates that must match the issue. |
+
+`tracker.custom_fields` is currently rejected at workflow load: Linear's GraphQL
+schema does not expose Issue custom fields, so the predicate can never match a
+polled issue. See [#326](https://github.com/xrf9268-hue/aiops-platform/issues/326).
 
 The top-level `tracker.project_slug` may provide the polling scope for services
 that omit `services[].tracker.project_slug`. A service-only Linear workflow may
@@ -68,7 +69,7 @@ Validation happens when `WORKFLOW.md` is loaded:
 - Every service requires `name` and `repo.clone_url`.
 - Service names must be unique case-insensitively.
 - Every Linear service route must define at least one route predicate among
-  `project_slug`, `team_key`, `labels`, or `custom_fields`.
+  `project_slug`, `team_key`, or `labels`.
 - Every Linear service route must have a project slug either in
   `services[].tracker.project_slug` or top-level `tracker.project_slug`, so the
   poller has an explicit project scope.

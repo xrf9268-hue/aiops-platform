@@ -140,6 +140,14 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	if len(nonEmpty) == 0 {
 		return nil, nil
 	}
+	// customFieldValues is intentionally NOT requested. Linear's GraphQL
+	// schema does not expose a customFieldValues field on Issue (only
+	// customerTicketCount matches `custom*`); requesting it produced
+	// HTTP 400 GRAPHQL_VALIDATION_FAILED on every poll (#326). The
+	// upstream Elixir reference (elixir/lib/symphony_elixir/linear/client.ex)
+	// also omits any custom-field fragment for the same reason.
+	// `services[].tracker.custom_fields` route predicates are rejected at
+	// workflow load time until Linear surfaces a working query field.
 	query := `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
@@ -155,7 +163,6 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
       project { slugId }
       team { key }
       labels(first: 50) { nodes { name } }
-      customFieldValues(first: 50) { nodes { customField { name } value } }
       state { name }
     }
     pageInfo { hasNextPage endCursor }
@@ -188,14 +195,6 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 								Name string `json:"name"`
 							} `json:"nodes"`
 						} `json:"labels"`
-						CustomFieldValues struct {
-							Nodes []struct {
-								CustomField struct {
-									Name string `json:"name"`
-								} `json:"customField"`
-								Value json.RawMessage `json:"value"`
-							} `json:"nodes"`
-						} `json:"customFieldValues"`
 						State struct {
 							Name string `json:"name"`
 						} `json:"state"`
@@ -237,14 +236,10 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 					labels = append(labels, strings.ToLower(strings.TrimSpace(label.Name)))
 				}
 			}
-			customFields := make(map[string]string, len(n.CustomFieldValues.Nodes))
-			for _, field := range n.CustomFieldValues.Nodes {
-				if strings.TrimSpace(field.CustomField.Name) == "" {
-					continue
-				}
-				customFields[strings.TrimSpace(field.CustomField.Name)] = stringifyLinearCustomFieldValue(field.Value)
-			}
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, CustomFields: customFields, State: n.State.Name, BlockedBy: blockers})
+			// Issue.CustomFields stays nil — Linear's GraphQL schema does not
+			// expose any custom-field data on Issue (introspection confirms
+			// only `customerTicketCount` matches `custom*`). See #326.
+			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, State: n.State.Name, BlockedBy: blockers})
 		}
 		if !out.Data.Issues.PageInfo.HasNextPage {
 			return issues, nil
@@ -267,17 +262,6 @@ func parseLinearIssueTime(field, value string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse Linear issue %s %q: %w", field, value, err)
 	}
 	return parsed, nil
-}
-
-func stringifyLinearCustomFieldValue(raw json.RawMessage) string {
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return ""
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return strings.TrimSpace(s)
-	}
-	return strings.TrimSpace(string(raw))
 }
 
 func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {

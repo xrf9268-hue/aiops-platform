@@ -299,8 +299,7 @@ var supportedSandboxNetworks = map[string]struct{}{
 func hasExplicitServiceRoute(route ServiceTrackerRouteConfig) bool {
 	return strings.TrimSpace(route.ProjectSlug) != "" ||
 		strings.TrimSpace(route.TeamKey) != "" ||
-		len(route.Labels) > 0 ||
-		len(route.CustomFields) > 0
+		len(route.Labels) > 0
 }
 
 func validateConfig(path string, cfg Config) error {
@@ -335,7 +334,17 @@ func validateConfig(path string, cfg Config) error {
 				return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
 			}
 			if !hasExplicitServiceRoute(service.Tracker) {
-				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, labels, or custom_fields)", path, i)
+				return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, or labels)", path, i)
+			}
+			// Linear's GraphQL schema does not expose any custom-field data
+			// on Issue (introspection: only `customerTicketCount` matches
+			// `custom*`); the upstream Elixir reference omits the fragment
+			// for the same reason. A `custom_fields:` predicate can never
+			// match a polled issue and would silently drop work, so reject
+			// it at load time per AGENTS.md "Failures are configuration
+			// problems". See #326.
+			if len(service.Tracker.CustomFields) > 0 {
+				return fmt.Errorf("%s: services[%d].tracker.custom_fields is not supported — Linear's GraphQL schema does not expose Issue custom fields (see #326)", path, i)
 			}
 		}
 	}

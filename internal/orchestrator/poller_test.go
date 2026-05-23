@@ -1234,6 +1234,12 @@ func TestFilterEligibleCandidatesUsesOnlyConfiguredTerminalSet(t *testing.T) {
 	}
 }
 
+// TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField pins
+// the routing-predicate matching primitive at the orchestrator layer. The
+// custom_fields predicate is rejected at workflow load (#326) because
+// Linear's GraphQL schema does not expose Issue custom fields, but the
+// matching loop itself is still defensive — keeping the primitive intact
+// preserves a deprecation runway if Linear ever surfaces the field.
 func TestSelectRoutedCandidatesMatchesLinearProjectTeamLabelAndCustomField(t *testing.T) {
 	cfg := workflow.Config{Services: []workflow.ServiceConfig{
 		{

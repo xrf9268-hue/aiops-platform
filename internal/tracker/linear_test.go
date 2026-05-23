@@ -323,13 +323,20 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "project { slugId }", "team { key }", "labels(first: 50)", "customFieldValues(first: 50)", "customField { name }"} {
+		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "project { slugId }", "team { key }", "labels(first: 50)"} {
 			if !strings.Contains(payload.Query, fragment) {
 				t.Fatalf("ListIssues query = %s, want fragment %q", payload.Query, fragment)
 			}
 		}
+		// Per #326, customFieldValues is NOT in Linear's GraphQL schema; the
+		// query must omit it so the request stops 400'ing.
+		for _, banned := range []string{"customFieldValues", "customField {"} {
+			if strings.Contains(payload.Query, banned) {
+				t.Fatalf("ListIssues query must not request %q (Linear schema rejects it): %s", banned, payload.Query)
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"customFieldValues":{"nodes":[{"customField":{"name":"Runtime"},"value":"go"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -356,8 +363,8 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 	if got := strings.Join(issue.Labels, ","); got != "backend,customer" {
 		t.Fatalf("labels = %q, want lower-cased backend,customer", got)
 	}
-	if issue.CustomFields["Runtime"] != "go" {
-		t.Fatalf("custom field Runtime = %q, want go", issue.CustomFields["Runtime"])
+	if len(issue.CustomFields) != 0 {
+		t.Fatalf("CustomFields = %#v, want empty — Linear GraphQL does not expose Issue custom fields (#326)", issue.CustomFields)
 	}
 }
 
@@ -371,10 +378,25 @@ func TestParseLinearIssueTimeErrorsOnMalformedTimestamp(t *testing.T) {
 	}
 }
 
-func TestListIssuesByStatesMapsNonStringCustomFieldValues(t *testing.T) {
+// TestListIssuesByStatesUsesLinearSupportedQueryShape pins #326: the query
+// must not ask Linear for `customFieldValues` (the GraphQL schema does not
+// expose that field on Issue; every poll 400'd with GRAPHQL_VALIDATION_FAILED
+// before this regression was caught). Verified against live Linear
+// introspection 2026-05-23.
+func TestListIssuesByStatesUsesLinearSupportedQueryShape(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		for _, banned := range []string{"customFieldValues", "customField {"} {
+			if strings.Contains(payload.Query, banned) {
+				t.Fatalf("ListIssues query must not request %q (Linear schema rejects it): %s", banned, payload.Query)
+			}
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[]},"customFieldValues":{"nodes":[{"customField":{"name":"Risk"},"value":3},{"customField":{"name":"CustomerFacing"},"value":true},{"customField":{"name":"Option"},"value":{"name":"gold"}}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -386,9 +408,8 @@ func TestListIssuesByStatesMapsNonStringCustomFieldValues(t *testing.T) {
 	if len(issues) != 1 {
 		t.Fatalf("issues = %d, want 1", len(issues))
 	}
-	fields := issues[0].CustomFields
-	if fields["Risk"] != "3" || fields["CustomerFacing"] != "true" || fields["Option"] != `{"name":"gold"}` {
-		t.Fatalf("custom fields = %#v, want stringified non-string values", fields)
+	if len(issues[0].CustomFields) != 0 {
+		t.Fatalf("CustomFields = %#v, want empty — Linear GraphQL does not expose Issue custom fields (#326)", issues[0].CustomFields)
 	}
 }
 
