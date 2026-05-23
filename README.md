@@ -43,25 +43,32 @@ Symphony implementation while the remaining open/partial D1–D24 items in
 
 The worker resolves one canonical workflow source: `WORKFLOW.md` in the service/repository root, or an explicit startup workflow path where supported. Legacy fallback files such as `.aiops/WORKFLOW.md` and `.github/WORKFLOW.md` are not searched and are not reported as shadowed workflow sources.
 
-If the canonical file does not exist, the worker proceeds with built-in defaults:
+If the canonical file does not exist, the worker proceeds with built-in defaults. The table below mirrors SPEC §6.4's cheat-sheet so a SPEC reader's mental model lines up with `worker --print-config` output; defaults that diverge from SPEC are called out explicitly and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 
-| Setting | Default |
-|---------|---------|
-| `agent.default` | `mock` |
-| `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs |
-| `agent.timeout` | `30m` |
-| `agent.max_concurrent_agents` | `1` |
-| `agent.max_turns` | `20` clean turns per issue before continuation stops |
-| `agent.max_retry_attempts` | `1` failure retry after the first run (`0` disables) |
-| `agent.max_timeout_retries` | `1` timeout retry after the first timeout (`0` disables) |
-| `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) |
-| `pr.draft` | `false` |
-| `pr.labels` | `[ai-generated, needs-review]` |
-| `server.port` | `4000` (`-1` disables the HTTP state server) |
-| `policy.mode` | `draft_pr` |
-| `policy.max_changed_files` | `12` |
-| `policy.max_changed_loc` | `300` |
-| `verify.commands` | none |
+| Setting | Default | Source |
+|---------|---------|--------|
+| `agent.default` | `mock` | implementation (SPEC defers to operator) |
+| `agent.max_concurrent_agents` | `10` | SPEC §6.4 |
+| `agent.max_turns` | `20` clean turns per issue before continuation stops | SPEC §6.4 |
+| `agent.timeout` | `30m` | implementation (#215) |
+| `agent.max_retry_attempts` | `1` failure retry after the first run (`0` disables) | implementation (#215) |
+| `agent.max_timeout_retries` | `1` timeout retry after the first timeout (`0` disables) | implementation (#215) |
+| `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) | implementation (#230) |
+| `codex.command` | `codex app-server` | SPEC §6.4 |
+| `pr.draft` | `false` | implementation |
+| `pr.labels` | `[ai-generated, needs-review]` | implementation |
+| `server.port` | `4000` (`-1` disables the HTTP state server) | implementation |
+| `policy.mode` | `draft_pr` | implementation |
+| `policy.max_changed_files` | `12` | implementation |
+| `policy.max_changed_loc` | `300` | implementation |
+| `tracker.kind` | `gitea` (SPEC §6.4 marks this REQUIRED; see DEVIATIONS D28) | partial deviation |
+| `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs | SPEC §6.4 |
+| `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
+| `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |
+| `workspace.root` | `/symphony_workspaces` (per-boot) — set explicitly to a long-lived path for persistence | SPEC §6.4 |
+| `verify.commands` | none | implementation |
+
+Operators who want the historical personal-profile values — `agent.max_concurrent_agents: 1`, `codex.command: codex exec`, `workspace.root: ~/aiops-workspaces/personal`, the Linear-vocabulary state lists — copy [`examples/WORKFLOW.md`](examples/WORKFLOW.md) and declare them explicitly. The example file pins every divergent value so a SPEC reader can see the personal-profile envelope without reading source.
 
 When present, `hooks.timeout_ms` must be a positive integer. Omit it to use the
 default `60000` ms timeout.

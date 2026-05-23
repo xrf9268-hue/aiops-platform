@@ -619,7 +619,10 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 		cfg.Agent.Default = "mock"
 	}
 	if cfg.Agent.MaxConcurrentAgents <= 0 {
-		cfg.Agent.MaxConcurrentAgents = 1
+		// SPEC §6.4 default; previously coerced to 1 to match the
+		// personal-profile floor. An explicit 0 in WORKFLOW.md now lands
+		// on the SPEC default rather than silently jailing dispatch.
+		cfg.Agent.MaxConcurrentAgents = 10
 	}
 	if cfg.Agent.Timeout <= 0 {
 		cfg.Agent.Timeout = 30 * time.Minute

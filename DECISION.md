@@ -153,6 +153,42 @@ The operator picks; both are defensible.
 3. **Pick sequencing** (Open question above).
 4. **Begin closing deviations.** AI-led; human approves at the outcome level.
 
+## §6.4 default-value alignment (#244)
+
+> Status: Decided 2026-05-23. Option A (align defaults to SPEC) chosen.
+
+`internal/workflow.DefaultConfig()` previously shipped six values that
+diverged from SPEC §6.4's cheat sheet:
+
+| Setting | Was | SPEC §6.4 | Now |
+|---------|-----|-----------|-----|
+| `codex.command` | `codex exec` | `codex app-server` | `codex app-server` |
+| `agent.max_concurrent_agents` | `1` (floored) | `10` | `10` |
+| `workspace.root` | `~/aiops-workspaces` | `/symphony_workspaces` | `/symphony_workspaces` |
+| `tracker.active_states` | `[AI Ready, In Progress, Rework]` | `[Todo, In Progress]` | `[Todo, In Progress]` |
+| `tracker.terminal_states` | `[Done, Canceled, Cancelled, Closed, Duplicate]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` |
+| `tracker.kind` | `gitea` | REQUIRED (`linear`) | `gitea` (partial — see DEVIATIONS D28) |
+
+Five of the six defaults are now SPEC-aligned. `tracker.kind` stays at
+`gitea` as an implementation default because removing it cascades
+through ~60 minimal-front-matter test fixtures across `internal/workflow`
+that omit the field today; that audit is filed as DEVIATIONS D28 with a
+follow-up to enforce REQUIRED semantics under a coordinated test-fixture
+sweep.
+
+The personal-profile values that previously rode in as silent defaults
+now live as explicit declarations in
+[`examples/WORKFLOW.md`](examples/WORKFLOW.md), so an operator who wants
+the historical behavior copies that file rather than relying on
+`DefaultConfig()` to ship it. The README "WORKFLOW.md discovery"
+defaults table mirrors SPEC §6.4 so a SPEC reader's mental model lines
+up with `worker --print-config` output.
+
+The loader's `agent.max_concurrent_agents` floor is rebased from `1` to
+`10`: an explicit `0` in WORKFLOW.md (or a YAML value that fails to
+parse as a positive int) now lands on the SPEC default rather than
+silently jailing the dispatch loop to a single agent.
+
 ## Historical note
 
 The 2026-05-13 fork decision was a reasonable read of the state at that

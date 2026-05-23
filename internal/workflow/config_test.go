@@ -2179,11 +2179,15 @@ prompt
 	}
 }
 
-func TestDefaultConfig_CodexAppServerDefaultsPreserveOneShotCommand(t *testing.T) {
+// TestDefaultConfig_CodexAppServerDefaultsMatchSPEC pins the SPEC §6.4
+// codex.command default. The personal profile that historically shipped
+// `codex exec` now opts into it explicitly via examples/WORKFLOW.md;
+// workflows that omit codex.command inherit the SPEC default.
+func TestDefaultConfig_CodexAppServerDefaultsMatchSPEC(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultConfig()
-	if cfg.Codex.Command != "codex exec" {
-		t.Fatalf("Default Codex.Command = %q, want legacy codex exec", cfg.Codex.Command)
+	if cfg.Codex.Command != "codex app-server" {
+		t.Fatalf("Default Codex.Command = %q, want SPEC default codex app-server", cfg.Codex.Command)
 	}
 	if cfg.Agent.MaxTurns != 20 {
 		t.Fatalf("Default Agent.MaxTurns = %d, want Symphony default 20", cfg.Agent.MaxTurns)

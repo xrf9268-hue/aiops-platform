@@ -425,10 +425,24 @@ type PRConfig struct {
 func DefaultConfig() Config {
 	return Config{
 		Server: ServerConfig{Port: 4000},
+		// Tracker.ActiveStates / TerminalStates mirror SPEC §6.4's
+		// cheat-sheet defaults (Todo/In Progress active; Closed,
+		// Cancelled, Canceled, Duplicate, Done terminal). Workflows that
+		// run on a non-SPEC vocabulary (e.g. the personal profile's
+		// "AI Ready"/"Rework") declare the override in WORKFLOW.md front
+		// matter — see examples/WORKFLOW.md.
+		// Tracker.Kind defaults to "gitea" here even though SPEC §6.4
+		// marks it REQUIRED — see DEVIATIONS.md (#244 follow-up) for the
+		// rationale: removing the default cascades through ~60 test
+		// fixtures and would require either a coordinated test-fixture
+		// audit or a `tracker.kind: gitea` line added to every
+		// minimal-front-matter test. The implementation default is
+		// documented in README.md so SPEC readers know to declare it
+		// explicitly in production WORKFLOW.md files.
 		Tracker: TrackerConfig{
 			Kind:           "gitea",
-			ActiveStates:   []string{"AI Ready", "In Progress", "Rework"},
-			TerminalStates: []string{"Done", "Canceled", "Cancelled", "Closed", "Duplicate"},
+			ActiveStates:   []string{"Todo", "In Progress"},
+			TerminalStates: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
 			PollIntervalMs: 30000,
 			Statuses: TrackerStatusConfig{
 				InProgress:  "In Progress",
@@ -439,7 +453,7 @@ func DefaultConfig() Config {
 		Polling:               PollingConfig{IntervalMs: 30000},
 		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
 		hooksTimeoutDefaulted: true,
-		Workspace:             WorkspaceConfig{Root: "~/aiops-workspaces"},
+		Workspace:             WorkspaceConfig{Root: "/symphony_workspaces"},
 		// Agent.MaxRetryAttempts is intentionally left nil here so the
 		// "absent" signal survives YAML overlay. The effective default of
 		// one failure retry is supplied by MaxRetryAttemptsValue().
@@ -449,13 +463,13 @@ func DefaultConfig() Config {
 		// MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
-			MaxConcurrentAgents: 1,
+			MaxConcurrentAgents: 10,
 			MaxTurns:            20,
 			MaxRetryBackoffMs:   300000,
 			Timeout:             30 * time.Minute,
 		},
 		Codex: CommandConfig{
-			Command:        "codex exec",
+			Command:        "codex app-server",
 			Profile:        "safe",
 			ApprovalPolicy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}},
 			ThreadSandbox:  "workspace-write",
