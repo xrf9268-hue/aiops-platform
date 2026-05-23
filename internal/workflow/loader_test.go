@@ -578,3 +578,113 @@ Prompt body across the inner --- line.
 		t.Fatalf("prompt template missing expected body: %q", wf.PromptTemplate)
 	}
 }
+
+func TestLoadAcceptsLinearGraphQLMutationOptIn(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+codex:
+  linear_graphql:
+    allow_mutations: true
+    allowed_mutations:
+      - issueUpdate
+      - commentCreate
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !wf.Config.Codex.LinearGraphQL.AllowMutations {
+		t.Fatalf("AllowMutations = false, want true")
+	}
+	if got := wf.Config.Codex.LinearGraphQL.AllowedMutations; len(got) != 2 || got[0] != "issueUpdate" || got[1] != "commentCreate" {
+		t.Fatalf("AllowedMutations = %#v, want [issueUpdate commentCreate]", got)
+	}
+}
+
+func TestLoadRejectsAllowedMutationsWithoutAllowMutations(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+codex:
+  linear_graphql:
+    allowed_mutations:
+      - issueUpdate
+---
+Prompt body
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load(allowed_mutations without allow_mutations) = nil, want validation error")
+	}
+	for _, want := range []string{path, "allowed_mutations requires", "allow_mutations: true"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load error = %q, want substring %q", err, want)
+		}
+	}
+}
+
+func TestLoadRejectsInvalidAllowedMutationNames(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{name: "empty string", entry: `""`},
+		{name: "leading space", entry: `" issueUpdate"`},
+		{name: "punctuation", entry: `"issue-update"`},
+		{name: "leading digit", entry: `"1issueUpdate"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+codex:
+  linear_graphql:
+    allow_mutations: true
+    allowed_mutations:
+      - `+tt.entry+`
+---
+Prompt body
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(invalid allowed_mutations entry %s) = nil, want validation error", tt.entry)
+			}
+			if !strings.Contains(err.Error(), "codex.linear_graphql.allowed_mutations") {
+				t.Fatalf("Load error = %q, want it to name codex.linear_graphql.allowed_mutations", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsLinearGraphQLOnClaudeEmbed(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+claude:
+  linear_graphql:
+    allow_mutations: true
+---
+Prompt body
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load(claude.linear_graphql) = nil, want validation error")
+	}
+	for _, want := range []string{path, "claude.linear_graphql", "codex.linear_graphql"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load error = %q, want substring %q", err, want)
+		}
+	}
+}

@@ -85,6 +85,21 @@ codex:
   #   custom           - run the literal codex.command via sh -lc; PROMPT.md
   #                      is piped on stdin. Escape hatch for bespoke wrappers.
   profile: safe
+  # linear_graphql narrows the agent-visible Linear GraphQL tool to the
+  # operator-chosen surface (SPEC §15.5 harness hardening / #298). The
+  # zero value (omit the block) keeps the safest posture: queries are
+  # permitted, mutations are rejected before any HTTP request leaves
+  # the orchestrator, and prompt-injected `issueDelete` /
+  # `commentDelete` mutations cannot reach Linear. Flip
+  # `allow_mutations: true` once you intend agents to drive Linear
+  # state moves themselves; optionally narrow to a per-operation
+  # allow-list.
+  #
+  # linear_graphql:
+  #   allow_mutations: true
+  #   allowed_mutations:
+  #     - issueUpdate
+  #     - commentCreate
 
 claude:
   command: claude

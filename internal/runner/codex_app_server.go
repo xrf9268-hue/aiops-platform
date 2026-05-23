@@ -1096,7 +1096,17 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 		if err := json.Unmarshal(arguments, &call); err != nil {
 			result, err = dynamicToolFailure(err.Error())
 		} else {
-			result, err = tool.Call(ctx, call)
+			toolCtx := ctx
+			if name == "linear_graphql" {
+				toolCtx = WithLinearGraphQLMutationSink(ctx, func(operationField string) {
+					payload := map[string]any{"tool": name}
+					if operationField != "" {
+						payload["operation_field"] = operationField
+					}
+					c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+				})
+			}
+			result, err = tool.Call(toolCtx, call)
 			if err != nil {
 				result, err = dynamicToolFailure(err.Error())
 			}

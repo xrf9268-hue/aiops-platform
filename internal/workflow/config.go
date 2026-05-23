@@ -322,6 +322,41 @@ type CommandConfig struct {
 	TurnTimeoutMs     int            `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
 	ReadTimeoutMs     int            `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
 	StallTimeoutMs    int            `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
+	// LinearGraphQL narrows the agent-visible linear_graphql client-side tool
+	// (SPEC §15.5 harness hardening). The field lives on the shared
+	// CommandConfig type for the same pragmatic reason as Profile above; the
+	// loader rejects a non-zero embed on Claude so a copy-paste mistake fails
+	// loud at load time. See #298.
+	LinearGraphQL LinearGraphQLConfig `yaml:"linear_graphql,omitempty" json:"linear_graphql,omitempty"`
+}
+
+// LinearGraphQLConfig narrows the agent-visible linear_graphql tool surface
+// to operator-chosen GraphQL operations. With the zero value (the default),
+// the runner rejects every GraphQL mutation issued through the tool before
+// any request leaves the process; the agent can still read everything Linear
+// permits. Operators that rely on agent-side tracker writes (issueUpdate for
+// state moves, commentCreate for handoff comments) flip AllowMutations to
+// true once in WORKFLOW.md and optionally constrain the mutation field names
+// via AllowedMutations.
+type LinearGraphQLConfig struct {
+	// AllowMutations turns the mutation gate off when true. With the
+	// zero value the runner returns a typed error for any mutation and
+	// no HTTP request is dispatched.
+	AllowMutations bool `yaml:"allow_mutations,omitempty" json:"allow_mutations,omitempty"`
+	// AllowedMutations is the optional per-operation allow-list applied
+	// once AllowMutations is true. Entries are top-level GraphQL field
+	// names on Linear's Mutation root (e.g. "issueUpdate",
+	// "commentCreate"). When the list is empty, every mutation is
+	// accepted; when populated, mutations whose first selected field is
+	// not in the list are rejected with a typed error.
+	AllowedMutations []string `yaml:"allowed_mutations,omitempty" json:"allowed_mutations,omitempty"`
+}
+
+// IsZero reports whether the config carries no operator-set narrowing.
+// Used by the loader to validate that the Claude embed of CommandConfig
+// stays empty.
+func (c LinearGraphQLConfig) IsZero() bool {
+	return !c.AllowMutations && len(c.AllowedMutations) == 0
 }
 
 type PolicyConfig struct {

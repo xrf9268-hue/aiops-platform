@@ -776,6 +776,7 @@ for line in sys.stdin:
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret}
+	in.Workflow.Config.Codex.LinearGraphQL = workflow.LinearGraphQLConfig{AllowMutations: true}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
@@ -803,6 +804,23 @@ for line in sys.stdin:
 	}
 	if !strings.Contains(body, `"query"`) || !strings.Contains(body, `"variables"`) {
 		t.Fatalf("GraphQL request body missing query/variables: %s", body)
+	}
+	mutationEvents := runtimeEventsNamed(res.RuntimeEvents, task.EventToolCallMutation)
+	if len(mutationEvents) != 1 {
+		t.Fatalf("tool_call_mutation events = %d, want 1; events=%#v", len(mutationEvents), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, mutationEvents[0], "operation_field"); got != "issueUpdate" {
+		t.Fatalf("tool_call_mutation operation_field = %#v, want issueUpdate", got)
+	}
+	if got := runtimeEventField(t, mutationEvents[0], "tool"); got != "linear_graphql" {
+		t.Fatalf("tool_call_mutation tool = %#v, want linear_graphql", got)
+	}
+	payloadJSON, err := json.Marshal(mutationEvents[0].Payload)
+	if err != nil {
+		t.Fatalf("marshal mutation payload: %v", err)
+	}
+	if strings.Contains(string(payloadJSON), "issueUpdate(id:") || strings.Contains(string(payloadJSON), `"issue-1"`) {
+		t.Fatalf("tool_call_mutation leaked GraphQL query body / variables onto status surface: %s", payloadJSON)
 	}
 }
 
