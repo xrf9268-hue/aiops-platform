@@ -202,11 +202,31 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case op := <-o.ops:
-			if followup := op.apply(o.state); followup != nil {
-				go followup()
+			followup := o.applyWithRecover(op)
+			if followup != nil {
+				safeGo("orchestrator.followup", followup)
 			}
 		}
 	}
+}
+
+// applyWithRecover invokes op.apply with a panic guard so a malformed
+// notification or unexpected nil deep in a state transition cannot
+// crash the actor goroutine — the only goroutine driving every
+// in-flight run. SPEC §7.4 requires serialized mutation, so on panic
+// the actor logs the event and drops the followup; the state may be
+// partially mutated but the actor keeps draining subsequent ops
+// instead of taking the whole worker down. Operators see the typed
+// `event=panic site=orchestrator.op_apply` line plus the runtime stack
+// so the failure is diagnosable.
+func (o *Orchestrator) applyWithRecover(op stateOp) (followup func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			recoverPanicValue("orchestrator.op_apply", r)
+			followup = nil
+		}
+	}()
+	return op.apply(o.state)
 }
 
 // WaitStarted blocks until Run has begun executing or ctx is cancelled.
@@ -1067,6 +1087,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		Kind:       s.kind,
 	}
 	entry.Timer = time.AfterFunc(delay, func() {
+		defer recoverPanic("orchestrator.retry_timer")
 		_ = o.submit(o.runCtx, &retryFireOp{
 			o:       o,
 			id:      id,
@@ -1136,6 +1157,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		kind := r.kind
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+			defer recoverPanic("orchestrator.retry_capacity_timer")
 			_ = o.submit(o.runCtx, &retryFireOp{
 				o:       o,
 				id:      id,
@@ -1159,6 +1181,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		kind := r.kind
 		entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
 		entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
+			defer recoverPanic("orchestrator.retry_state_capacity_timer")
 			_ = o.submit(o.runCtx, &retryFireOp{
 				o:       o,
 				id:      id,
@@ -1352,6 +1375,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 	}
 	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt)
 	go func() {
+		defer recoverPanic("orchestrator.spawn_result_fanout")
 		var res WorkerResult
 		select {
 		case r, ok := <-resultCh:

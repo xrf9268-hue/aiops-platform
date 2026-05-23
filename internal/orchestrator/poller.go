@@ -621,6 +621,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 	out := make(chan WorkerResult, 1)
 	go func() {
 		defer close(out)
+		defer recoverPanic("orchestrator.worker_task_dispatcher")
 		start := time.Now()
 		tk, recordedTaskID, err := d.buildTaskWithAttempt(issue, copiedAttempt)
 		if err != nil {
