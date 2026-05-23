@@ -259,7 +259,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	}
 
 	threadResult, err := c.request(ctx, "thread/start", map[string]any{
-		"approvalPolicy": in.Workflow.Config.Codex.ApprovalPolicy,
+		"approvalPolicy": codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy),
 		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
 		"cwd":            in.Workdir,
 		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
@@ -296,7 +296,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			"input":          input,
 			"cwd":            in.Workdir,
 			"title":          appServerTurnTitle(in),
-			"approvalPolicy": in.Workflow.Config.Codex.ApprovalPolicy,
+			"approvalPolicy": codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy),
 			"sandboxPolicy":  in.Workflow.Config.Codex.TurnSandboxPolicy,
 		})
 		if err != nil {
@@ -904,6 +904,19 @@ func protocolServerRequestAutoApproved(method string, approvalPolicy any) bool {
 	}
 }
 
+// autoApproveRequest reports whether protocolServerRequestResult should
+// auto-approve a server-side approval prompt that codex sent the harness.
+// The decision tracks codex's own `AskForApproval` semantics (codex-rs
+// protocol/src/protocol.rs):
+//
+//   - "never"                     — codex never asks; if a prompt still
+//     surfaces, auto-approve it (matches codex's "failures returned to the
+//     model" intent).
+//   - "on-failure"                — codex asks only on failure; the harness
+//     auto-approves to keep the unattended loop moving.
+//   - "untrusted" / "on-request"  — operator-supervised modes; decline.
+//   - {"granular": {...}}         — per-method bool flags where TRUE means
+//     ALLOW (codex semantics since #14516, b7dba72db, 2026-03-12).
 func autoApproveRequest(method string, approvalPolicy any) bool {
 	if policy, ok := approvalPolicy.(string); ok {
 		switch strings.ToLower(strings.TrimSpace(policy)) {
@@ -920,19 +933,7 @@ func autoApproveRequest(method string, approvalPolicy any) bool {
 	if granular, ok := policy["granular"].(map[string]any); ok {
 		return approvalRuleAllowsRequest(granular, method)
 	}
-	if reject, ok := policy["reject"].(map[string]any); ok {
-		return !approvalRuleRequiresReview(reject, method)
-	}
 	return false
-}
-
-func approvalRuleRequiresReview(rules map[string]any, method string) bool {
-	if method == "item/permissions/requestApproval" {
-		return approvalRuleEnabled(rules, "request_permissions") ||
-			approvalRuleEnabled(rules, "sandbox_approval") ||
-			approvalRuleEnabled(rules, "rules")
-	}
-	return approvalRuleEnabled(rules, "sandbox_approval") || approvalRuleEnabled(rules, "rules")
 }
 
 func approvalRuleAllowsRequest(rules map[string]any, method string) bool {
@@ -945,6 +946,58 @@ func approvalRuleAllowsRequest(rules map[string]any, method string) bool {
 func approvalRuleEnabled(rules map[string]any, key string) bool {
 	enabled, _ := rules[key].(bool)
 	return enabled
+}
+
+// codexWireApprovalPolicy maps aiops-platform's ApprovalPolicy value to the
+// codex app-server JSON-RPC wire format. Codex's `AskForApproval` enum
+// (codex-rs/protocol/src/protocol.rs and
+// codex-rs/app-server-protocol/src/protocol/v2/shared.rs) accepts exactly
+// {"untrusted", "on-failure", "on-request", "granular": {...}, "never"}.
+// Sending anything else makes thread/start return JSON-RPC -32600
+// `Invalid request: unknown variant ...` and breaks startup (#329).
+//
+// The obsolete `{"reject": {...}}` shape — which used to be valid in codex
+// up to PR #14516 (commit b7dba72db, renamed to `granular` and field
+// polarity inverted on 2026-03-12) — is translated here for back-compat
+// with WORKFLOW.md files written against the old protocol. The polarity
+// flip (`reject.sandbox_approval=true` meant "reject"; the new
+// `granular.sandbox_approval=true` means "allow") is preserved so the
+// translated payload retains the operator's original intent.
+//
+// All codex-recognized values (`"untrusted"`/`"on-failure"`/`"on-request"`/
+// `"never"` strings, and the `{"granular": {...}}` map) pass through
+// unchanged. Unrecognized shapes also pass through so codex's own
+// validation error reaches the operator verbatim rather than getting
+// masked behind a translator silently rewriting their payload.
+func codexWireApprovalPolicy(internal any) any {
+	policy, ok := internal.(map[string]any)
+	if !ok {
+		return internal
+	}
+	rejectShape, hasReject := policy["reject"].(map[string]any)
+	if !hasReject {
+		return internal
+	}
+	// Translate obsolete reject:{flag:true} → granular:{flag:false} per the
+	// codex #14516 polarity flip. Pass through any extra keys verbatim so a
+	// future codex addition doesn't get lost.
+	granular := make(map[string]any, len(rejectShape))
+	for k, v := range rejectShape {
+		if b, ok := v.(bool); ok {
+			granular[k] = !b
+			continue
+		}
+		granular[k] = v
+	}
+	translated := make(map[string]any, len(policy))
+	for k, v := range policy {
+		if k == "reject" {
+			continue
+		}
+		translated[k] = v
+	}
+	translated["granular"] = granular
+	return translated
 }
 
 func protocolUserInputResult(msg map[string]any) map[string]any {

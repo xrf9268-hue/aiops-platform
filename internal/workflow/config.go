@@ -546,9 +546,17 @@ func DefaultConfig() Config {
 			Timeout:             30 * time.Minute,
 		},
 		Codex: CommandConfig{
-			Command:        "codex app-server",
-			Profile:        "safe",
-			ApprovalPolicy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}},
+			Command: "codex app-server",
+			Profile: "safe",
+			// See loader.go for why this is `granular:` with all flags
+			// false instead of the obsolete `reject:` shape (#329).
+			ApprovalPolicy: map[string]any{"granular": map[string]any{
+				"sandbox_approval":    false,
+				"rules":               false,
+				"skill_approval":      false,
+				"request_permissions": false,
+				"mcp_elicitations":    false,
+			}},
 			ThreadSandbox:  "workspace-write",
 			TurnTimeoutMs:  3600000,
 			ReadTimeoutMs:  5000,

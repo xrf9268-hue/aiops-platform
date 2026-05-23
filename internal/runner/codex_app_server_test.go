@@ -1696,7 +1696,13 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 		{name: "on-request", policy: "on-request", wantModernDecision: "decline"},
 		{name: "untrusted", policy: "untrusted", wantModernDecision: "decline"},
 		{name: "on-failure", policy: "on-failure", wantModernDecision: "acceptForSession", wantPermissions: true},
-		{name: "reject legacy map", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
+		// `reject:` is the obsolete codex variant renamed to `granular:` in
+		// PR #14516 (b7dba72db). Harness no longer special-cases it — the
+		// codexWireApprovalPolicy boundary translates it to granular before
+		// going to codex, so by the time protocolServerRequestResult sees a
+		// payload it should never observe a raw reject:. The case below
+		// pins the safe fallback: unknown shapes don't auto-approve.
+		{name: "reject legacy map (unknown to harness)", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
 		{name: "granular denies all disabled allowances", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": false}}, wantModernDecision: "decline"},
 		{name: "granular allows sandbox only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "request_permissions": false}}, wantModernDecision: "acceptForSession"},
 		{name: "granular allows permissions only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": true}}, wantModernDecision: "decline", wantPermissions: true},
@@ -1731,6 +1737,84 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 	}
 	if _, ok := elicitationResult["content"]; !ok || elicitationResult["content"] != nil {
 		t.Fatalf("elicitation content = %#v, present %v; want explicit null content", elicitationResult["content"], ok)
+	}
+}
+
+// TestCodexWireApprovalPolicy pins the translation contract between
+// aiops-platform's ApprovalPolicy value and codex's `AskForApproval` wire
+// format (codex-rs/protocol/src/protocol.rs `AskForApproval`).
+//
+// The codex enum is the source of truth: codex commit b7dba72db (PR #14516,
+// 2026-03-12) renamed the `Reject` variant to `Granular` and inverted the
+// field polarity (true = ALLOW, was true = REJECT). Sending the obsolete
+// `{"reject": {...}}` payload to a current codex returns
+// `-32600 unknown variant ` and breaks startup (#329).
+//
+// Future maintainers: do NOT "fix" this by reverting to `reject:` — the
+// rename is a deliberate codex protocol change. Check
+// codex-rs/protocol/src/protocol.rs `pub enum AskForApproval` first.
+func TestCodexWireApprovalPolicy(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want any
+	}{
+		{
+			name: "never string passes through",
+			in:   "never",
+			want: "never",
+		},
+		{
+			name: "untrusted string passes through",
+			in:   "untrusted",
+			want: "untrusted",
+		},
+		{
+			name: "on-failure string passes through",
+			in:   "on-failure",
+			want: "on-failure",
+		},
+		{
+			name: "on-request string passes through",
+			in:   "on-request",
+			want: "on-request",
+		},
+		{
+			name: "granular map passes through unchanged",
+			in:   map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": true}},
+			want: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": true}},
+		},
+		{
+			name: "legacy reject:{true} translates to granular:{false}",
+			// Operator intent: reject sandbox+rules+mcp prompts.
+			in: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}},
+			// Codex equivalent: granular flags ALL false (none allowed).
+			want: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "mcp_elicitations": false}},
+		},
+		{
+			name: "legacy reject:{false} translates to granular:{true}",
+			// Operator intent: don't reject; allow sandbox approvals.
+			in:   map[string]any{"reject": map[string]any{"sandbox_approval": false, "rules": true, "mcp_elicitations": true}},
+			want: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": false}},
+		},
+		{
+			name: "unrecognized shape passes through so codex surfaces its own validation error",
+			in:   map[string]any{"future_variant": map[string]any{"x": 1}},
+			want: map[string]any{"future_variant": map[string]any{"x": 1}},
+		},
+		{
+			name: "nil passes through",
+			in:   nil,
+			want: nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := codexWireApprovalPolicy(tc.in)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("codexWireApprovalPolicy(%#v) = %#v, want %#v", tc.in, got, tc.want)
+			}
+		})
 	}
 }
 

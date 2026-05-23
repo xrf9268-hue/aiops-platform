@@ -707,7 +707,20 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 		cfg.Codex.ThreadSandbox = "workspace-write"
 	}
 	if cfg.Codex.ApprovalPolicy == nil {
-		cfg.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}}
+		// Default mirrors codex's `granular` policy with every flag set to
+		// false, i.e. "auto-reject every approval / elicitation prompt".
+		// Codex renamed the variant from `reject` → `granular` and flipped
+		// the field polarity (true = allow) in
+		// codex commit b7dba72db (#14516); aiops-platform had been sending
+		// the obsolete `reject:` payload, which made every thread/start
+		// return `-32600 unknown variant ` (#329).
+		cfg.Codex.ApprovalPolicy = map[string]any{"granular": map[string]any{
+			"sandbox_approval":    false,
+			"rules":               false,
+			"skill_approval":      false,
+			"request_permissions": false,
+			"mcp_elicitations":    false,
+		}}
 	}
 	return nil
 }
