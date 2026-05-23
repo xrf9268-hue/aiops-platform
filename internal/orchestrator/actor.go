@@ -89,7 +89,6 @@ type RetryScheduler struct {
 	MaxBackoff time.Duration
 }
 
-const retryCapacityRecheckDelay = 100 * time.Millisecond
 const continuationRetryDelay = time.Second
 
 // retryFetchTimeout caps the SPEC §16.6 candidate-fetch call a fired
@@ -1244,9 +1243,10 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 }
 
 // retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
-// honor global + per-state capacity gates, then either spawn or re-arm a
-// short capacity-recheck timer. Shared between the legacy direct-dispatch
-// path (no CandidateLister) and the SPEC §16.6 post-fetch path.
+// honor global + per-state capacity gates, then either spawn or reschedule
+// the retry through the configured backoff. Shared between the legacy
+// direct-dispatch path (no CandidateLister) and the SPEC §16.6 post-fetch
+// path.
 func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, kind RetryKind, o *Orchestrator) func() {
 	// Use entry.Issue rather than any timer-captured snapshot: reconciliation
 	// (and the SPEC §16.6 candidate fetch) may have refreshed the tracker
@@ -1254,16 +1254,10 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	// must see the live state.
 	issue := entry.Issue
 	if st.RunningCount() >= st.MaxConcurrentAgents {
-		// Retry timers must obey the same capacity gate as fresh dispatch.
-		// Leave the retry queued and arm a short follow-up timer so the issue
-		// is retried after capacity can free instead of spawning over the cap.
-		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_capacity_timer")
+		return rescheduleRetryCapacityFull(st, entry, id, issue, attempt, o)
 	}
 	if st.StateCapacityFull(issue.State) {
-		// Retry timers must also obey per-state capacity gates. Leave the retry
-		// queued and arm a short follow-up timer so noisy states cannot exceed
-		// max_concurrent_agents_by_state while other states are running.
-		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_state_capacity_timer")
+		return rescheduleRetryCapacityFull(st, entry, id, issue, attempt, o)
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
@@ -1275,22 +1269,29 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	}
 }
 
-func rearmRetryCapacityRecheck(entry *RetryEntry, id IssueID, issue tracker.Issue, attempt int, kind RetryKind, o *Orchestrator, site string) func() {
-	if entry.Timer != nil {
-		entry.Timer.Stop()
-	}
-	entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
-	entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
-		defer recoverPanic(site)
-		_ = o.submit(o.runCtx, &retryFireOp{
-			o:       o,
-			id:      id,
-			issue:   issue,
-			attempt: attempt,
-			kind:    kind,
-		})
+// rescheduleRetryCapacityFull mirrors upstream handle_active_retry
+// (orchestrator.ex:1142-1161): when a fired failure-retry timer finds
+// capacity full (global or per-state), reschedule the retry through
+// the configured backoff with attempt+1 and a typed
+// "no available orchestrator slots" error, instead of busy-looping on a
+// fixed-delay recheck. The followup submits a fresh scheduleRetryOp the
+// same way retryPollFailedOp.apply does for the fetch-error branch.
+func rescheduleRetryCapacityFull(st *OrchestratorState, entry *RetryEntry, id IssueID, issue tracker.Issue, attempt int, o *Orchestrator) func() {
+	// Clear the fired timer so OrchestratorState.ScheduleRetry's prior-
+	// timer-stop on replace is a no-op rather than a zombie reference.
+	entry.Timer = nil
+	identifier := entry.Identifier
+	nextAttempt := attempt + 1
+	runErr := "no available orchestrator slots"
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    id,
+		Identifier: identifier,
+		Message:    runErr,
 	})
-	return nil
+	return func() {
+		_ = o.ScheduleRetry(o.runCtx, issue, identifier, nextAttempt, runErr)
+	}
 }
 
 func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {

@@ -1812,16 +1812,21 @@ func TestRetryFire_RespectsCapacityBeforeSpawning(t *testing.T) {
 	}
 }
 
-// TestRetryFire_CapacityDeferralUsesShortRecheckDelay is a regression for
-// capacity-blocked retries being re-enqueued through the normal scheduler
-// backoff. Temporary capacity pressure should recheck soon, not wait a full
-// retry interval while the issue stays claimed and poll ticks cannot help it.
-func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
+// TestRetryFire_GlobalCapacityFullReschedulesWithBackoff pins the upstream
+// handle_active_retry (orchestrator.ex:1142-1161) alignment: when a fired
+// failure-retry timer finds global capacity full, the retry is rescheduled
+// through the configured backoff with attempt+1 and a typed "no available
+// orchestrator slots" error — not busy-looped on a 100 ms recheck.
+func TestRetryFire_GlobalCapacityFullReschedulesWithBackoff(t *testing.T) {
 	disp := &fakeDispatcher{}
+	// MaxConcurrentAgents=1; one slot is filled by the blocker so the retry
+	// fire trips the global cap.
 	st := NewOrchestratorState(15000, 1)
+	maxRetries := 5
 	o := New(st, Deps{
-		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: []time.Duration{50 * time.Millisecond}},
+		Dispatcher:        disp,
+		Scheduler:         &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
+		MaxFailureRetries: &maxRetries,
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1830,35 +1835,133 @@ func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
 		t.Fatalf("WaitStarted: %v", err)
 	}
 
-	issueA := tracker.Issue{ID: "ENG-A", Identifier: "ENG-A", Title: "retry soon"}
-	issueB := tracker.Issue{ID: "ENG-B", Identifier: "ENG-B", Title: "running now"}
-	if err := o.RequestDispatch(context.Background(), issueA, nil); err != nil {
-		t.Fatalf("dispatch A: %v", err)
+	blocker := tracker.Issue{ID: "ENG-RUN", Identifier: "ENG-RUN", Title: "running"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch blocker: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+
+	retryIssue := tracker.Issue{ID: "ENG-RETRY", Identifier: "ENG-RETRY", Title: "retry under cap"}
+	if err := o.ScheduleRetry(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(retryIssue.ID),
+		issue:   retryIssue,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	// Upstream handle_active_retry: capacity full → schedule_issue_retry
+	// with attempt + 1 and "no available orchestrator slots" metadata.
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
-		return len(v.Retrying) == 1
-	}, time.Second)
+		return len(v.Retrying) == 1 &&
+			v.Retrying[0].Attempt == 2 &&
+			v.Retrying[0].Error == "no available orchestrator slots"
+	}, 2*time.Second)
 
-	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
-		t.Fatalf("dispatch B while A is retrying: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-
-	// Let A's retry timer fire while B occupies the only slot; then free B.
-	time.Sleep(150 * time.Millisecond)
-	disp.finishAt(1, WorkerResult{Err: nil, Elapsed: time.Millisecond})
-
-	waitFor(t, func() bool { return disp.count() == 3 }, time.Second)
 	v, err := o.Snapshot(context.Background())
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(v.Running) != 1 || v.Running[0].IssueID != IssueID(issueA.ID) {
-		t.Fatalf("running entries after capacity frees = %+v, want retry issue A re-dispatched by short recheck", v.Running)
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 1 (blocker only); capacity-full retry must not dispatch", got)
 	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 (rescheduled with backoff)", len(v.Retrying))
+	}
+	if v.Retrying[0].Attempt != 2 {
+		t.Fatalf("Retrying[0].Attempt = %d, want 2 (attempt+1 after capacity full)", v.Retrying[0].Attempt)
+	}
+	if v.Retrying[0].Error != "no available orchestrator slots" {
+		t.Fatalf("Retrying[0].Error = %q, want %q", v.Retrying[0].Error, "no available orchestrator slots")
+	}
+	if !hasRuntimeEventMessage(v.RecentEvents, RuntimeEventFailed, IssueID(retryIssue.ID), "no available orchestrator slots") {
+		t.Fatalf("no RuntimeEventFailed with %q in recent events: %+v", "no available orchestrator slots", v.RecentEvents)
+	}
+}
+
+// TestRetryFire_PerStateCapacityFullReschedulesWithBackoff mirrors the
+// global-cap test for the per-state capacity gate: a noisy state at its
+// max_concurrent_agents_by_state cap also routes through the backoff
+// reschedule with "no available orchestrator slots" rather than the
+// dropped 100 ms recheck timer.
+func TestRetryFire_PerStateCapacityFullReschedulesWithBackoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 5)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	maxRetries := 5
+	o := New(st, Deps{
+		Dispatcher:        disp,
+		Scheduler:         &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
+		MaxFailureRetries: &maxRetries,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	// Fill the per-state cap for "Rework" with a different issue.
+	blocker := tracker.Issue{ID: "RW-RUN", Identifier: "RW-RUN", Title: "running rework", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch rework blocker: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	retryIssue := tracker.Issue{ID: "RW-RETRY", Identifier: "RW-RETRY", Title: "retry under per-state cap", State: "Rework"}
+	if err := o.ScheduleRetry(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(retryIssue.ID),
+		issue:   retryIssue,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 &&
+			v.Retrying[0].Attempt == 2 &&
+			v.Retrying[0].Error == "no available orchestrator slots"
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 1 (blocker only); per-state cap retry must not dispatch", got)
+	}
+	if v.Retrying[0].Attempt != 2 {
+		t.Fatalf("Retrying[0].Attempt = %d, want 2 (attempt+1 after per-state capacity full)", v.Retrying[0].Attempt)
+	}
+	if v.Retrying[0].Error != "no available orchestrator slots" {
+		t.Fatalf("Retrying[0].Error = %q, want %q", v.Retrying[0].Error, "no available orchestrator slots")
+	}
+	if !hasRuntimeEventMessage(v.RecentEvents, RuntimeEventFailed, IssueID(retryIssue.ID), "no available orchestrator slots") {
+		t.Fatalf("no RuntimeEventFailed with %q in recent events: %+v", "no available orchestrator slots", v.RecentEvents)
+	}
+}
+
+func hasRuntimeEventMessage(events []RuntimeEvent, kind RuntimeEventKind, id IssueID, msg string) bool {
+	for _, e := range events {
+		if e.Kind == kind && e.IssueID == id && e.Message == msg {
+			return true
+		}
+	}
+	return false
 }
 
 func TestScheduleRetryUsesReloadedSchedulerWithoutRacing(t *testing.T) {
@@ -2543,9 +2646,10 @@ func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T)
 	lister := &fakeCandidateLister{issues: []tracker.Issue{fresh}}
 
 	// Cap capacity at 1 and fill it with a different issue so the retry's
-	// dispatch tail trips the global cap and re-arms via
-	// rearmRetryCapacityRecheck — leaving the refreshed entry in
-	// RetryAttempts for the snapshot to observe.
+	// dispatch tail trips the global cap and reschedules via
+	// rescheduleRetryCapacityFull — the followup ScheduleRetry replaces the
+	// entry under the refreshed identifier so the snapshot still observes a
+	// single Retrying row keyed by the live identifier.
 	st := NewOrchestratorState(15000, 1)
 	o := New(st, Deps{
 		Dispatcher:      disp,
@@ -2583,8 +2687,11 @@ func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T)
 	// The retry-fire chain: candidate fetch → retryFireAfterFetchOp.apply
 	// (refreshes entry.Issue + entry.Identifier from r.found) →
 	// retryFireDispatchTail observes RunningCount=1 >= cap=1 →
-	// rearmRetryCapacityRecheck leaves the entry in RetryAttempts. The
-	// Retrying snapshot view must surface the refreshed identifier.
+	// rescheduleRetryCapacityFull records the "no available orchestrator
+	// slots" event and the followup ScheduleRetry installs a new entry
+	// keyed by the refreshed identifier. The Retrying snapshot view must
+	// surface that refreshed identifier (either through the in-flight old
+	// entry post-refresh or the post-followup new entry; both carry NEW-1).
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
 		return len(v.Retrying) == 1 && v.Retrying[0].Identifier == "NEW-1"
