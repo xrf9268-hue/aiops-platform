@@ -322,7 +322,12 @@ func run(ctx context.Context, args []string) error {
 	// NewRuntimePollerWithTrackerFactory creates internally. Without this
 	// the tracker fan-in built each tick would only update the poller's
 	// own (unused) dispatcher and operator-cancel would still wait for
-	// the next poll tick.
+	// the next poll tick. Must precede RunPollLoopWithRuntime below so
+	// the first PollOnce sees the external dispatcher; this is safe today
+	// because OrchestratorState is freshly constructed with no claimed
+	// issues, so the actor cannot Spawn before the poll loop drives it.
+	// Any future persisted-state recovery added before this point must
+	// move AttachDispatcher above it.
 	poller.AttachDispatcher(dispatcher)
 	go func() {
 		if err := orchestrator.RunWorkflowReloadLoop(ctx, runtime, orchestrator.WorkflowReloadLoopOptions{}); err != nil && ctx.Err() == nil {

@@ -894,7 +894,9 @@ func TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns(t *test
 	codexAppServerStubScript(t, `
 import json
 turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
 for line in sys.stdin:
+    log.write(line); log.flush()
     msg=json.loads(line)
     if msg.get('method') == 'initialize':
         print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
@@ -935,6 +937,17 @@ for line in sys.stdin:
 	}
 	if res.Summary != "turn 2 done" {
 		t.Fatalf("Summary = %q, want last completed turn's message", res.Summary)
+	}
+	// The stdin log captures every JSON-RPC message the runner sent to
+	// codex. Counting turn/start requests proves the runner *didn't even
+	// send* a third turn — without this, "only 2 completions" could just
+	// mean the third response never returned in time.
+	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
+	if err != nil {
+		t.Fatalf("read CODEX_STDIN_LOG: %v", err)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 2 {
+		t.Fatalf("turn/start requests sent = %d, want 2 (runner should not send a third turn after refresher returns inactive); stdin=\n%s", got, stdinLog)
 	}
 }
 

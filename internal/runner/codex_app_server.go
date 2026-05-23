@@ -221,14 +221,14 @@ type appServerClient struct {
 	// Keeping both lets cooperative agents end early (continueRun=false)
 	// while still letting the operator cancel an otherwise-productive
 	// worker by moving the issue out of the active states.
-	continueRun        bool
-	refreshIssueState  IssueStateRefresher
-	tools              DynamicToolSet
-	turnTimeoutMs      int
-	readTimeoutMs      int
-	stallTimeoutMs     int
-	approvalPolicy     any
-	lastTerminal       time.Time
+	continueRun       bool
+	refreshIssueState IssueStateRefresher
+	tools             DynamicToolSet
+	turnTimeoutMs     int
+	readTimeoutMs     int
+	stallTimeoutMs    int
+	approvalPolicy    any
+	lastTerminal      time.Time
 }
 
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
