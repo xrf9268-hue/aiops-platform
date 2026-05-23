@@ -645,6 +645,70 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	}
 }
 
+// TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting
+// pins the no-routing branch of the retry-fire lister chain: when the
+// workflow has no Services (gitea, service-less Linear), the orchestrator
+// must still receive an eligibleActiveIssueLister wrap so Todo issues with
+// non-terminal blockers are filtered the same way the poll loop filters
+// them. Without this test a future refactor that conditionally dropped
+// the eligibility wrap in the no-routing branch would silently regress —
+// the routing-branch test below would still pass.
+func TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Repo = workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git", DefaultBranch: "main"}
+	// No Services configured — no routing wrap, eligibility wrap only.
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+
+	lister := orch.currentCandidateLister()
+	if lister == nil {
+		t.Fatal("orchestrator candidate lister not installed by RuntimePoller for no-routing path")
+	}
+
+	// Behavioral assertion: feed in a Todo issue blocked by a non-terminal
+	// blocker and confirm the eligibility wrap drops it. Without the wrap
+	// the issue would surface and the retry would dispatch.
+	trackerClient.issues = []tracker.Issue{{
+		ID: "gitea-blocked", Identifier: "BLOCKED-1", Title: "blocked todo", State: "Todo",
+		BlockedBy: []tracker.BlockerRef{{ID: "gitea-blocker", Identifier: "BLOCKER-1", State: "In Progress"}},
+	}}
+	got, err := lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("no-routing lister surfaced Todo+non-terminal-blocker = %+v, want filterEligibleCandidates to drop it (eligibility wrap missing?)", got)
+	}
+
+	// Positive control: a clean issue passes the wrap.
+	trackerClient.issues = []tracker.Issue{{ID: "gitea-ready", Identifier: "READY-1", Title: "ready", State: "AI Ready"}}
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues (positive control): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "gitea-ready" {
+		t.Fatalf("no-routing lister surfaced issues = %+v, want exactly gitea-ready", got)
+	}
+}
+
 // TestRuntimePollerRetryListerMirrorsPollLoopFilters asserts the SPEC §16.6
 // retry-fire lister installed on the orchestrator mirrors every filter the
 // poll loop applies between ListActiveIssues and dispatch (poller.go:152):

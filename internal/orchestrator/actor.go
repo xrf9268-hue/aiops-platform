@@ -1326,12 +1326,13 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 		return nil
 	}
 	o := r.o
-	if o.runCtx != nil && o.runCtx.Err() != nil {
+	if o.runCtx.Err() != nil {
 		// Orchestrator is shutting down between the fetch and this apply.
 		// The followup's ScheduleRetry would fail anyway; recording the
-		// event and clearing the timer would leave the entry orphaned
-		// with Timer == nil if the actor were ever restarted in-process.
-		// Drop silently and let shutdown reclaim state.
+		// event and then dropping the followup would only leak a
+		// "retry poll failed" line into shutdown logs while the entry
+		// goes nowhere. Drop silently and let process exit reclaim the
+		// entry along with everything else.
 		return nil
 	}
 	issue := entry.Issue

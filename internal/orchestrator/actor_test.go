@@ -2517,23 +2517,53 @@ func TestRetryFire_TodoIssueBlockedByOpenDependencyReleasesClaim(t *testing.T) {
 	}
 }
 
-// TestRetryFireAfterFetch_RefreshesEntryIdentifier asserts the LOW-severity
-// finding from the post-merge audit: when the candidate fetch surfaces a
-// refreshed issue whose Identifier has been renamed upstream (Linear
-// supports identifier renames on team key changes), retryFireAfterFetchOp
-// must propagate the new Identifier into entry.Identifier so subsequent
-// runtime events and retry reschedules stamp the live value, not the
-// stale schedule-time snapshot.
-func TestRetryFireAfterFetch_RefreshesEntryIdentifier(t *testing.T) {
+// TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot pins the
+// LOW-severity audit finding: when the candidate fetch surfaces a refreshed
+// issue with a renamed Identifier (Linear supports identifier renames on
+// team key changes), retryFireAfterFetchOp.apply must mutate
+// entry.Identifier — not just entry.Issue — so subsequent runtime events
+// and retry reschedules stamp the live value, not the stale schedule-time
+// snapshot.
+//
+// The previous version of this test asserted only against the dispatched
+// issue (`disp.issueAt(0).Identifier`), which is fed by
+// `entry.Issue = *r.found` — the pre-existing line. A mutation test
+// (deleting the new `entry.Identifier = id` line) showed it still
+// passed: the assertion never exercised the entry.Identifier field.
+//
+// The fix: block dispatch at the capacity gate so the entry stays in
+// RetryAttempts after the fetch+refresh. The Retrying snapshot view
+// reads RetryEntry.Identifier directly (state.go:818), so asserting
+// against `v.Retrying[0].Identifier` does pin the new mutation. With
+// the new line deleted, the entry retains the stale "OLD-1" and the
+// test fails.
+func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T) {
 	disp := &fakeDispatcher{}
-	freshState := tracker.Issue{ID: "ID-STABLE", Identifier: "NEW-1", Title: "renamed", State: "Rework"}
-	lister := &fakeCandidateLister{issues: []tracker.Issue{freshState}}
-	o, cancel := startActor(t, Deps{
+	fresh := tracker.Issue{ID: "ID-STABLE", Identifier: "NEW-1", Title: "renamed", State: "Rework"}
+	lister := &fakeCandidateLister{issues: []tracker.Issue{fresh}}
+
+	// Cap capacity at 1 and fill it with a different issue so the retry's
+	// dispatch tail trips the global cap and re-arms via
+	// rearmRetryCapacityRecheck — leaving the refreshed entry in
+	// RetryAttempts for the snapshot to observe.
+	st := NewOrchestratorState(15000, 1)
+	o := New(st, Deps{
 		Dispatcher:      disp,
 		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
 		CandidateLister: lister,
 	})
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	blocker := tracker.Issue{ID: "ID-BLOCKER", Identifier: "BLOCKER-1", Title: "blocker", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch blocker: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
 	stale := tracker.Issue{ID: "ID-STABLE", Identifier: "OLD-1", Title: "renamed", State: "AI Ready"}
 	if err := o.ScheduleRetry(context.Background(), stale, stale.Identifier, 1, "transient"); err != nil {
@@ -2550,9 +2580,24 @@ func TestRetryFireAfterFetch_RefreshesEntryIdentifier(t *testing.T) {
 		t.Fatalf("submit retry fire: %v", err)
 	}
 
-	waitFor(t, func() bool { return disp.count() == 1 }, 2*time.Second)
-	got := disp.issueAt(0)
-	if got.Identifier != "NEW-1" {
-		t.Fatalf("dispatched issue identifier = %q, want NEW-1 from refreshed candidate fetch", got.Identifier)
+	// The retry-fire chain: candidate fetch → retryFireAfterFetchOp.apply
+	// (refreshes entry.Issue + entry.Identifier from r.found) →
+	// retryFireDispatchTail observes RunningCount=1 >= cap=1 →
+	// rearmRetryCapacityRecheck leaves the entry in RetryAttempts. The
+	// Retrying snapshot view must surface the refreshed identifier.
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 && v.Retrying[0].Identifier == "NEW-1"
+	}, 2*time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 1 (blocker only); retry must not spawn under capacity", got)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 (capacity-deferred refreshed entry)", len(v.Retrying))
+	}
+	if v.Retrying[0].Identifier != "NEW-1" {
+		t.Fatalf("Retrying[0].Identifier = %q, want NEW-1 from refreshed candidate fetch — entry.Identifier mutation is missing", v.Retrying[0].Identifier)
 	}
 }
