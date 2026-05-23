@@ -269,6 +269,56 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 }
 
+func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/html") {
+		t.Fatalf("content type = %q, want text/html", got)
+	}
+	html := w.Body.String()
+	for _, want := range []string{"<title>aiops-platform dashboard</title>", `id="root"`, "Operations Dashboard", "/api/v1/state"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("dashboard HTML missing %q:\n%s", want, html)
+		}
+	}
+	if strings.Contains(html, "Runtime state: <a href=\"/api/v1/state\">") {
+		t.Fatalf("dashboard is still the old API-link stub: %s", html)
+	}
+
+	assetPath := firstScriptAssetPath(t, html)
+	assetReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)
+	assetW := httptest.NewRecorder()
+	server.Handler.ServeHTTP(assetW, assetReq)
+	if assetW.Code != http.StatusOK {
+		t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
+	}
+	asset := assetW.Body.String()
+	for _, want := range []string{"/api/v1/state", "Running sessions", "Retry queue", "Blocked sessions", "Total tokens", "Rate limits"} {
+		if !strings.Contains(asset, want) {
+			t.Fatalf("dashboard asset missing state surface label %q", want)
+		}
+	}
+}
+
+func firstScriptAssetPath(t *testing.T, html string) string {
+	t.Helper()
+	re := regexp.MustCompile(`<script[^>]+src="([^"]+)"`)
+	match := re.FindStringSubmatch(html)
+	if len(match) != 2 {
+		t.Fatalf("dashboard HTML has no script asset: %s", html)
+	}
+	return match[1]
+}
+
 func TestStateHTTPHandlerPropagatesRequestCancellation(t *testing.T) {
 	requestErr := context.Canceled
 	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {

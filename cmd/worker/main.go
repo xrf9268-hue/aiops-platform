@@ -528,13 +528,13 @@ func newStateHTTPServer(port int, snapshot stateSnapshotFunc, refresh ...stateRe
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
 	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
 	mux.Handle("/api/v1/", issueHTTPHandler(snapshot))
+	mux.Handle("/assets/", dashboardAssetHandler())
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte("<!doctype html><title>aiops-platform state</title><h1>aiops-platform</h1><p>Runtime state: <a href=\"/api/v1/state\">/api/v1/state</a></p>"))
+		dashboardHTMLHandler().ServeHTTP(w, r)
 	})
 	return &http.Server{
 		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
