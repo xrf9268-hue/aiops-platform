@@ -487,15 +487,87 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 		}
 	}
 
-	// reworkWorkspaceKeyPrefixes emits both the canonical SPEC §4.2
-	// `_rework_` form (produced by the current sanitizer) and the legacy
-	// `-rework-` form, so reconciliation matches workspaces from either
-	// vintage on disk.
+	// reworkWorkspaceKeyPrefixes emits three prefix forms so
+	// reconciliation matches workspaces from every aiops-platform
+	// sanitizer vintage on disk: the canonical SPEC §4.2 `_rework_`,
+	// the interim case-preserved `-rework-`, and the pre-#229
+	// lowercased-base `-rework-`.
 	got := reworkWorkspaceKeyPrefixes(issue, keys)
 	want := []string{"issue-3_rework_", "issue-3-rework-"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want %#v", got, want)
 	}
+}
+
+// TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace pins the
+// migration promise made in PR #290 / issue #229: a Rework workspace
+// created by the pre-#229 sanitizer (lowercased identifier, `-`
+// separators throughout, lowercased timestamp) must still be
+// classified as `active_rework` on the first reconcile after the
+// upgrade, instead of being removed as `unknown` once a terminal
+// fetch unlocks the unknown-removal path.
+func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
+	root := t.TempDir()
+	// Pre-#229 dir name shape: `lowercased-id-rework-lowercased-timestamp`.
+	preSpecPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-123-rework-2026-05-16t10-00-00z")
+	if err := os.MkdirAll(preSpecPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"Rework"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
+			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
+		}},
+		Emitter:         &fakeEmitter{},
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(preSpecPath); err != nil {
+		t.Fatalf("pre-#229 Rework workspace should remain after the SPEC §4.2 cutover: %v", err)
+	}
+}
+
+// TestReworkWorkspaceKeyPrefixesIncludesPreSpecLowercaseForm guards the
+// production code that powers the migration test above.
+func TestReworkWorkspaceKeyPrefixesIncludesPreSpecLowercaseForm(t *testing.T) {
+	issue := tracker.Issue{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T10:00:00Z")}
+	// Simulate the activeKey set that workspaceKeysForRawIssueKeys
+	// produces for this issue under the current sanitizer.
+	keys := func(tracker.Issue) []string {
+		return []string{
+			"LIN-123",
+			"issue-3",
+			"LIN-123_rework_2026-05-16T10_00_00Z",
+			"issue-3_rework_2026-05-16T10_00_00Z",
+		}
+	}
+
+	got := reworkWorkspaceKeyPrefixes(issue, keys)
+	for _, want := range []string{
+		"LIN-123_rework_", // SPEC §4.2 form
+		"LIN-123-rework-", // interim dash form
+		"lin-123-rework-", // pre-#229 lowercased form
+		"issue-3_rework_", // SPEC form for ID
+		"issue-3-rework-", // interim form for ID (deduped against pre-spec)
+	} {
+		if !containsStringWorker(got, want) {
+			t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, missing %q", got, want)
+		}
+	}
+}
+
+func containsStringWorker(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing.T) {

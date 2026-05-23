@@ -122,12 +122,22 @@ rm -rf "$WORKSPACE_ROOT"/*
 ```
 
 Active *rework* workspaces survive the cutover even without a manual
-sweep: `reworkWorkspaceKeyPrefixes` emits both the canonical SPEC
-`_rework_` prefix and the pre-#229 `-rework-` prefix when looking for
-on-disk dirs that belong to a still-active Rework issue
-(`internal/worker/reconcile.go`). Plain (non-rework) per-issue dirs
-created under the old sanitizer are not back-compat-matched and will
-be reconciled away.
+sweep: `reworkWorkspaceKeyPrefixes` emits three prefix forms for each
+extracted base key so it matches every aiops-platform sanitizer
+vintage that may have written to disk
+(`internal/worker/reconcile.go`):
+
+1. `<base>_rework_…` — current SPEC §4.2 sanitizer.
+2. `<base>-rework-…` — interim case-preserved layout with dash
+   separators.
+3. `<lowercased-pre-spec-base>-rework-…` — pre-#229 sanitizer, which
+   lowercased the identifier and collapsed non-letter/digit runes
+   into a single `-` separator. This matches dirs named e.g.
+   `lin-123-rework-2026-05-16t10-00-00z` produced by an older worker
+   for an active issue with identifier `LIN-123`.
+
+Plain (non-rework) per-issue dirs created under the old sanitizer are
+not back-compat-matched and will be reconciled away.
 
 ## Cleanup policy
 

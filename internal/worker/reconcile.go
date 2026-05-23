@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -310,12 +311,29 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 		if key == "" {
 			continue
 		}
-		// The current SPEC §4.2 sanitizer maps `|` to `_`, so a rework
-		// workspace key looks like `<base>_rework_<sanitized-updatedAt>`.
-		// Pre-SPEC layouts produced `<base>-rework-<sanitized-updatedAt>`
-		// when `|` collapsed into a `-` separator. Emit both prefix
-		// forms so reconciliation matches workspaces from either vintage.
-		for _, prefix := range []string{key + "_rework_", key + "-rework-"} {
+		// Emit three prefix forms so reconciliation recognizes Rework
+		// workspaces from every sanitizer vintage that aiops-platform
+		// has shipped:
+		//   1. `<base>_rework_…` — current SPEC §4.2 sanitizer, which
+		//      maps `|` and `:` to `_` and preserves case.
+		//   2. `<base>-rework-…` — interim layout where the base was
+		//      already case-preserved but the rework separator was the
+		//      dash form left over from an earlier `_rework_`/`-rework-`
+		//      split.
+		//   3. `<lowercased-base>-rework-…` — pre-#229 sanitizer, which
+		//      lowercased the input and collapsed any non-letter/digit
+		//      rune into a `-` separator. Without this third form an
+		//      in-flight Rework workspace named e.g.
+		//      `lin-123-rework-2026-05-16t10-00-00z` would not match
+		//      its active issue (identifier `LIN-123`) on the first
+		//      reconcile after upgrading past #229, and `ReconcileStartup`
+		//      would remove it as `unknown`.
+		preSpec := sanitizePreSpecWorkspaceKey(key)
+		for _, prefix := range []string{
+			key + "_rework_",
+			key + "-rework-",
+			preSpec + "-rework-",
+		} {
 			if _, ok := seen[prefix]; ok {
 				continue
 			}
@@ -325,6 +343,38 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 	}
 	return prefixes
 }
+
+// sanitizePreSpecWorkspaceKey reproduces the pre-#229 workspace-key
+// sanitizer (lowercased input, only `unicode.IsLetter` and
+// `unicode.IsDigit` runes preserved, any other rune collapsed into a
+// single `-` separator, edge `-` trimmed, 120-rune cap). It exists
+// purely so reconciliation can recognize Rework directories that were
+// created on disk before the SPEC §4.2 realignment landed; nothing in
+// the worker writes new dirs with this name.
+func sanitizePreSpecWorkspaceKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inSeparator := false
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			inSeparator = false
+			continue
+		}
+		if !inSeparator && b.Len() > 0 {
+			b.WriteByte('-')
+			inSeparator = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	runes := []rune(out)
+	if len(runes) > maxPreSpecSanitizedLength {
+		out = strings.TrimRight(string(runes[:maxPreSpecSanitizedLength]), "-")
+	}
+	return out
+}
+
+const maxPreSpecSanitizedLength = 120
 
 func nonEmptyStates(states []string) []string {
 	out := make([]string, 0, len(states))
