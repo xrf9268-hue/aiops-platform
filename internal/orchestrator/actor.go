@@ -1287,6 +1287,13 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 // counter frozen across thousands of re-fires, and produced no runtime
 // event for the cap-pressure case.
 func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, o *Orchestrator) func() {
+	if o.runCtx.Err() != nil {
+		// Mirror retryPollFailedOp's shutdown guard (actor.go above):
+		// the followup's ScheduleRetry would fail submit anyway, so
+		// recording a cap-pressure event during shutdown would only
+		// leak a misleading line into shutdown logs.
+		return nil
+	}
 	const runErr = "no available orchestrator slots"
 	nextAttempt := attempt + 1
 	st.RecordEvent(RuntimeEvent{
