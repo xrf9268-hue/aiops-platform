@@ -1433,13 +1433,18 @@ func TestLoadWorkflowForStartupReconcileClassifiesConfiguredPromptOnlyWorkflow(t
 	// matter) surfaces an empty kind in the startup log. Operators
 	// must add a `tracker.kind:` line for tracker integration to
 	// dispatch. See DEVIATIONS D28 / #244.
+	//
+	// Assert the trailing-newline form so a regression that re-introduces
+	// any silent default (gitea / linear / github) fails this test —
+	// `strings.Contains(s, "tracker.kind=")` alone would still match
+	// `"tracker.kind=gitea\n"`.
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=prompt_only", "path=" + workflowPath, "tracker.kind="} {
+	for _, want := range []string{"startup reconciliation: workflow source=prompt_only", "path=" + workflowPath, "tracker.kind=\n"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
 	}
-	for _, forbidden := range []string{"workflow source=file", "reconciliation will be skipped"} {
+	for _, forbidden := range []string{"workflow source=file", "reconciliation will be skipped", "tracker.kind=gitea", "tracker.kind=linear", "tracker.kind=github"} {
 		if strings.Contains(gotLog, forbidden) {
 			t.Fatalf("startup reconciliation log = %q, did not expect %q", gotLog, forbidden)
 		}
@@ -1523,14 +1528,21 @@ func TestLoadWorkflowForStartupReconcileDefaultsWhenNoWorkflowExists(t *testing.
 	// SPEC §6.4 marks tracker.kind REQUIRED; DefaultConfig leaves it
 	// empty so a worker that starts without any WORKFLOW.md surfaces
 	// an empty kind in the startup log. See DEVIATIONS D28 / #244.
+	//
+	// Assert the trailing-newline form so a regression that re-introduces
+	// any silent default (gitea / linear / github) fails this test —
+	// `strings.Contains(s, "tracker.kind=")` alone would still match
+	// `"tracker.kind=gitea\n"`.
 	gotLog := logs.String()
-	for _, want := range []string{"startup reconciliation: workflow source=default", "tracker.kind="} {
+	for _, want := range []string{"startup reconciliation: workflow source=default", "tracker.kind=\n"} {
 		if !strings.Contains(gotLog, want) {
 			t.Fatalf("startup reconciliation log = %q, want substring %q", gotLog, want)
 		}
 	}
-	if strings.Contains(gotLog, "reconciliation will be skipped") {
-		t.Fatalf("startup reconciliation log = %q, did not expect skip diagnostic", gotLog)
+	for _, forbidden := range []string{"reconciliation will be skipped", "tracker.kind=gitea", "tracker.kind=linear", "tracker.kind=github"} {
+		if strings.Contains(gotLog, forbidden) {
+			t.Fatalf("startup reconciliation log = %q, did not expect %q", gotLog, forbidden)
+		}
 	}
 }
 

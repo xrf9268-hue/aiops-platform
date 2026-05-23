@@ -5,6 +5,8 @@ repo:
   # webhook payload), not this field. The value here is never dereferenced by
   # the worker during a webhook-driven run; it just satisfies the validator.
   clone_url: http://localhost:3000/aiops-bot/demo-allow-fail.git
+tracker:
+  kind: gitea
 agent:
   default: mock
   timeout: 5m

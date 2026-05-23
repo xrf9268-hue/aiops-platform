@@ -129,7 +129,7 @@ func TestResolve_DoesNotReportShadowedLegacyPaths(t *testing.T) {
 // theatre. The error must name the offending field and the file path.
 func TestResolve_PropagatesSchemaErrors(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n---\nprompt\n" // no clone_url
+	body := "---\nrepo:\n  owner: o\n  name: r\ntracker:\n  kind: gitea\n---\nprompt\n" // no clone_url
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
