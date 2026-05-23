@@ -632,10 +632,13 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 		cfg.Agent.Timeout = 30 * time.Minute
 	}
 	// MaxTimeoutRetries is *int so callers can distinguish "absent"
-	// (nil → MaxTimeoutRetriesValue() returns the schema default of 1)
-	// from "explicitly 0" (zero retries). We deliberately do not coerce
-	// here: forcing 0 → 1 stripped users of the ability to disable the
-	// runner-timeout retry budget entirely.
+	// (nil → MaxTimeoutRetriesValue() returns UnboundedRetryBudget so the
+	// SPEC §8.4 retry-until-tracker-changes contract is the default) from
+	// "explicitly 0" (no runner-timeout re-queue) or an explicit positive
+	// integer (SPEC §15.5 harness-hardening cap). We deliberately do not
+	// coerce here: forcing 0 → unbounded would strip operators of the
+	// ability to opt into a single-shot run, and forcing nil → 1 would
+	// silently deviate from SPEC §8.4.
 	if cfg.Polling.IntervalMs <= 0 {
 		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
 	}

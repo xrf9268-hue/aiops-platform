@@ -157,8 +157,12 @@ func (s *Store) Fail(ctx context.Context, id string, msg string) (bool, error) {
 // the task only if it has not yet reached its dedicated timeout retry
 // budget. The budget is intentionally separate from the generic
 // max_attempts (covering verify/policy/other failures) so a flaky
-// runner cannot exhaust the global retry pool. Returns true when the
-// task was re-queued, false when it was permanently failed.
+// runner cannot exhaust the global retry pool. A negative
+// maxTimeoutRetries means "no cap" — SPEC §8.4 expresses runner-timeout
+// recovery purely through backoff, so an absent `agent.max_timeout_retries`
+// (workflow.UnboundedRetryBudget) keeps re-queuing until the tracker takes
+// the issue out of active work. Returns true when the task was re-queued,
+// false when it was permanently failed.
 func (s *Store) FailTimeout(ctx context.Context, id string, msg string, maxTimeoutRetries int) (bool, error) {
 	prior, err := s.CountEvents(ctx, id, "runner_timeout")
 	if err != nil {
@@ -166,8 +170,9 @@ func (s *Store) FailTimeout(ctx context.Context, id string, msg string, maxTimeo
 	}
 	// `prior` already includes the timeout event for the current attempt
 	// (callers should have emitted runner_timeout before invoking us).
-	// Re-queue while we still have unused budget.
-	if prior <= maxTimeoutRetries {
+	// Re-queue while we still have unused budget, or unconditionally when
+	// the operator did not opt into a cap.
+	if maxTimeoutRetries < 0 || prior <= maxTimeoutRetries {
 		_, err := s.db.Exec(ctx, `UPDATE tasks SET status='queued', available_at=now()+interval '60 seconds', updated_at=now() WHERE id=$1`, id)
 		if err != nil {
 			return false, err
