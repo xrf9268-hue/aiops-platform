@@ -625,6 +625,23 @@ func TestRunTaskPolicyViolationFeedbackReadErrorIsNonRetryable(t *testing.T) {
 	}
 }
 
+// TestRunTaskPolicyViolationFeedbackWriteErrorIsNonRetryable provokes the
+// feedback-write failure structurally — by making the per-source-type
+// feedback directory a dangling symlink — so the assertion holds for any
+// uid. A previous shape (chmod 0o555 on the directory) was bypassed by
+// root (see issue #317): unix mode bits do not constrain uid 0, so the
+// underlying os.WriteFile + os.Rename inside writePolicyViolationFeedback
+// silently succeeded in containers that run tests as root.
+//
+// The dangling-symlink shape works the same for root and non-root:
+//   - The outer readPolicyViolationFeedback at runtask.go:270 follows the
+//     symlink to a missing target, gets ENOENT (matched by os.IsNotExist),
+//     and reports "no prior feedback" — the runner still runs.
+//   - When policy enforcement then fails, writePolicyViolationFeedback's
+//     MkdirAll(<symlink-dir>) returns EEXIST (the link exists, Lstat says
+//     it is not a directory), so the write path fails exactly where the
+//     test means it to and the policy_violation event carries
+//     feedback_error.
 func TestRunTaskPolicyViolationFeedbackWriteErrorIsNonRetryable(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
@@ -633,16 +650,15 @@ func TestRunTaskPolicyViolationFeedbackWriteErrorIsNonRetryable(t *testing.T) {
 	cfg.Workflow.Config.Policy.DenyPaths = []string{"mock-source-change.txt"}
 	tk.Model = "mock-source-change"
 
-	feedbackDir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, ".aiops-policy-feedback", tk.SourceType)
-	if err := os.MkdirAll(feedbackDir, 0o755); err != nil {
-		t.Fatalf("create feedback dir: %v", err)
+	feedbackParent := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, ".aiops-policy-feedback")
+	if err := os.MkdirAll(feedbackParent, 0o755); err != nil {
+		t.Fatalf("create feedback parent: %v", err)
 	}
-	if err := os.Chmod(feedbackDir, 0o555); err != nil {
-		t.Fatalf("chmod feedback dir readonly: %v", err)
+	feedbackDir := filepath.Join(feedbackParent, tk.SourceType)
+	feedbackTarget := filepath.Join(t.TempDir(), "missing-feedback-target")
+	if err := os.Symlink(feedbackTarget, feedbackDir); err != nil {
+		t.Fatalf("create dangling feedback symlink: %v", err)
 	}
-	defer func() {
-		_ = os.Chmod(feedbackDir, 0o755)
-	}()
 
 	ev := &fakeEmitter{}
 	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
