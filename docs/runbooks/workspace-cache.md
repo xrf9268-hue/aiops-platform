@@ -121,6 +121,18 @@ find "$WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
 rm -rf "$WORKSPACE_ROOT"/*
 ```
 
+The wipe also removes the `<owner>/<repo>/.aiops-policy-feedback`
+subtree alongside the per-task worktrees, so every in-flight issue's
+SPEC §11.4 `policy_violation_budget` counter resets to zero on the
+first retry after the upgrade. For the Linear, Gitea, and GitHub
+trackers shipped today the counter would already be preserved across
+the cutover even without the wipe (the `SourceType` / `SourceEventID`
+path components are case-identical before and after #229, so
+`policy_feedback.go` writes to the same on-disk path under both
+sanitizers); the reset matters only for a hypothetical future tracker
+whose `SourceType` or `SourceEventID` contains characters the pre-#229
+sanitizer would have collapsed.
+
 Active *rework* workspaces survive the cutover even without a manual
 sweep: `reworkWorkspaceKeyPrefixes` emits three prefix forms for each
 extracted base key so it matches every aiops-platform sanitizer
@@ -131,10 +143,14 @@ vintage that may have written to disk
 2. `<base>-rework-…` — interim case-preserved layout with dash
    separators.
 3. `<lowercased-pre-spec-base>-rework-…` — pre-#229 sanitizer, which
-   lowercased the identifier and collapsed non-letter/digit runes
+   lowercased the workspace key and collapsed non-letter/digit runes
    into a single `-` separator. This matches dirs named e.g.
-   `lin-123-rework-2026-05-16t10-00-00z` produced by an older worker
-   for an active issue with identifier `LIN-123`.
+   `linear_issue/issue-3-rework-2026-05-16t10-00-00z` produced by an
+   older worker for an active Linear Rework issue. The poller composes
+   the Rework workspace key from `issue.ID` (see
+   `cmd/linear-poller/main.go`'s `sourceEventID`), not
+   `issue.Identifier`, so the base of the dir name is the issue ID
+   (`issue-3`) rather than the human-facing identifier (`LIN-123`).
 
 Plain (non-rework) per-issue dirs created under the old sanitizer are
 not back-compat-matched and will be reconciled away.

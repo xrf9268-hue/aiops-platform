@@ -321,13 +321,21 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 		//      dash form left over from an earlier `_rework_`/`-rework-`
 		//      split.
 		//   3. `<lowercased-base>-rework-…` — pre-#229 sanitizer, which
-		//      lowercased the input and collapsed any non-letter/digit
-		//      rune into a `-` separator. Without this third form an
-		//      in-flight Rework workspace named e.g.
-		//      `lin-123-rework-2026-05-16t10-00-00z` would not match
-		//      its active issue (identifier `LIN-123`) on the first
-		//      reconcile after upgrading past #229, and `ReconcileStartup`
-		//      would remove it as `unknown`.
+		//      lowercased the workspace key and collapsed any
+		//      non-letter/digit rune into a `-` separator. For the
+		//      Linear, Gitea, and GitHub trackers shipped today the
+		//      Rework key is composed from `issue.ID` (see
+		//      `cmd/linear-poller/main.go`'s `sourceEventID`) — an
+		//      all-lowercase UUID or numeric value — so form 2 already
+		//      covers every directory shape any released worker actually
+		//      wrote to disk and form 3 is dead defensive code for the
+		//      current set of trackers. It is kept (rather than deleted)
+		//      to absorb a hypothetical future tracker whose `issue.ID`
+		//      contains uppercase letters or characters in
+		//      `[^a-zA-Z0-9._-]` that the pre-#229 sanitizer would have
+		//      collapsed; without form 3 such an in-flight Rework
+		//      workspace would be removed as `unknown` on the first
+		//      reconcile after upgrading past #229.
 		preSpec := sanitizePreSpecWorkspaceKey(key)
 		for _, prefix := range []string{
 			key + "_rework_",
