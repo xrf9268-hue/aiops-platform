@@ -243,14 +243,39 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// (`os.RemoveAll` removes the symlink itself, not its target) and
 	// report `createdNow=true` so the worker fires `after_create` on
 	// the recovery run.
+	// foreignCommonDir is non-empty only when the gate ran the
+	// `--git-common-dir` probe successfully and the result pointed at a
+	// different mirror (e.g. `t.CloneURL`'s host changed between prepares
+	// and `mirrorPathFor` routed it to a new mirror). We use it later to
+	// prune the orphaned worktree admin entry from the foreign mirror
+	// before recreating against the new one — otherwise the entry would
+	// linger until `gc.worktreePruneExpire` (3 months default) expires it.
+	var foreignCommonDir string
 	reusable := false
 	if workdirExists {
 		lstatInfo, lstatErr := os.Lstat(workdir)
 		if lstatErr == nil && lstatInfo.Mode()&os.ModeSymlink == 0 {
 			if err := runQuiet(ctx, workdir, "git", "rev-parse", "--git-dir"); err == nil {
-				cdOut, cdErr := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir").Output()
-				if cdErr == nil && sameRealPath(strings.TrimSpace(string(cdOut)), workdir, mirror) {
-					reusable = true
+				// Silence the probe's stderr: on a broken-but-existing
+				// `.git` (mid-corruption, partial `worktree add` crash,
+				// race with `os.RemoveAll`) git prints `fatal: not a git
+				// repository` while we're about to fall through to the
+				// recreate path anyway. Without io.Discard that fatal line
+				// pollutes the worker's inherited fd 2 and obscures the
+				// recovery the gate is about to perform.
+				probe := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir")
+				probe.Stderr = io.Discard
+				cdOut, cdErr := probe.Output()
+				if cdErr == nil {
+					common := strings.TrimSpace(string(cdOut))
+					if sameRealPath(common, workdir, mirror) {
+						reusable = true
+					} else if common != "" {
+						foreignCommonDir = common
+						if !filepath.IsAbs(foreignCommonDir) {
+							foreignCommonDir = filepath.Join(workdir, foreignCommonDir)
+						}
+					}
 				}
 			}
 		}
@@ -282,30 +307,40 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 		if err := run(ctx, workdir, "git", "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
 			return "", false, fmt.Errorf("worktree checkout: %w", err)
 		}
-		_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
 		return workdir, false, nil
 	}
 
-	// First touch (or recovery from a corrupted leftover). Drop any stale
-	// worktree entry the mirror still tracks for this path before asking
-	// it to add a new one. Failures are ignored and stderr silenced
-	// because the common case ("no such worktree") prints a scary fatal
-	// line that obscures real worker logs.
+	// First touch (or recovery from a corrupted leftover). If the gate
+	// just rejected a workspace that linked to a *different* mirror,
+	// prune the orphaned admin entry off that mirror first so its
+	// `worktrees/` directory stays in sync with what's actually on disk.
+	// Without this, the foreign mirror keeps a dead worktree record until
+	// `gc.worktreePruneExpire` (3 months default) expires it; harmless in
+	// the common case, confusing for an operator inspecting
+	// `git worktree list` and a latent collision risk if the same
+	// workspace path is ever re-targeted to the old mirror.
+	if foreignCommonDir != "" {
+		_ = runQuiet(ctx, foreignCommonDir, "git", "worktree", "prune")
+	}
+	// Drop any stale worktree entry the mirror still tracks for this path
+	// before asking it to add a new one. Failures are ignored and stderr
+	// silenced because the common case ("no such worktree") prints a scary
+	// fatal line that obscures real worker logs.
 	_ = runQuiet(ctx, mirror, "git", "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
 	if err := runQuiet(ctx, mirror, "git", "worktree", "prune"); err != nil {
 		return "", false, fmt.Errorf("worktree prune: %w", err)
 	}
 	// Using -B makes the operation idempotent if a previous attempt left
-	// an in-mirror branch behind.
+	// an in-mirror branch behind. The new worktree inherits remote config
+	// from the linked bare mirror, where `EnsureMirror`'s `git clone --bare`
+	// already recorded origin = t.CloneURL (see internal/workspace/mirror.go);
+	// we deliberately do not re-`git remote set-url` from inside the
+	// worktree because there is no per-worktree config and the write would
+	// land back in the shared mirror config redundantly.
 	if err := run(ctx, mirror, "git", "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
 		return "", false, fmt.Errorf("worktree add: %w", err)
 	}
-	// The mirror's "origin" remote points at the upstream URL, but inside
-	// the worktree git resolves remotes via the linked repo, so push works
-	// out of the box. We still set the URL explicitly for clarity in case
-	// downstream tooling inspects `git remote -v` from within the worktree.
-	_ = run(ctx, workdir, "git", "remote", "set-url", "origin", t.CloneURL)
 	return workdir, true, nil
 }
 

@@ -95,8 +95,7 @@ nuke-and-recreate path, reports `createdNow=true`, and fires
    symlink. The recreate path's `os.RemoveAll` removes the symlink
    itself, not its target.
 2. **Valid git worktree.** `git rev-parse --git-dir` must succeed.
-   Catches the "crashed `worktree add` / `rm -rf .git` race / chmod
-   broke linkage" cases.
+   Catches the "crashed `worktree add` / `rm -rf .git` race" cases.
 3. **Linked to OUR mirror.** `git rev-parse --git-common-dir` must
    resolve (via `filepath.EvalSymlinks`) to the same path as the
    cached bare mirror for `t.CloneURL`. Catches an independent

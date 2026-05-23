@@ -618,6 +618,261 @@ func TestPrepareGitWorkspace_RecreatesCorruptedWorkdir(t *testing.T) {
 	}
 }
 
+// TestPrepareGitWorkspace_RecreatesWhenPathIsSymlinkToPeerWorktree covers
+// the load-bearing scenario for the symlink gate: a symlink planted at the
+// workspace path that points at a peer worktree of the SAME mirror.
+// `git rev-parse --git-common-dir` would happily report the matching
+// mirror (so the foreign-repo gate would not trip), and without the
+// `os.Lstat` symlink check the reuse-path `git reset` / `git checkout -B`
+// would silently mutate the peer worktree's tracked state and work-branch
+// ref. The gate must refuse the reuse, recreate a fresh worktree, and
+// leave the peer worktree's branch tip and tracked files untouched.
+func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlinkToPeerWorktree(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	victim := makeTask("task-sibling-victim", upstream)
+	pivot := makeTask("task-sibling-pivot", upstream)
+
+	victimDir, _, err := mgr.PrepareGitWorkspace(ctx, victim)
+	if err != nil {
+		t.Fatalf("prepare victim: %v", err)
+	}
+	if err := configureGitIdentity(victimDir); err != nil {
+		t.Fatalf("configure victim identity: %v", err)
+	}
+	// Commit a distinctive tracked change on the victim's work branch so a
+	// stray `git checkout -B <pivot-work-branch>` inside the victim would
+	// either move the branch ref off the commit or rewrite the tracked
+	// file. Either mutation is observable from the bare mirror's refs and
+	// from the victim worktree's content.
+	if err := os.WriteFile(filepath.Join(victimDir, "victim.txt"), []byte("victim-content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "-C", victimDir, "add", "victim.txt"},
+		{"git", "-C", victimDir, "commit", "-q", "-m", "victim commit"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	victimHeadBefore, err := exec.Command("git", "-C", victimDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("victim rev-parse HEAD: %v", err)
+	}
+
+	pivotDir, _, err := mgr.PrepareGitWorkspace(ctx, pivot)
+	if err != nil {
+		t.Fatalf("prepare pivot: %v", err)
+	}
+	if pivotDir == victimDir {
+		t.Fatalf("pivot and victim collapsed to same workdir %q", pivotDir)
+	}
+	// Replace the pivot workspace path with a symlink pointing at the
+	// victim's peer worktree (same mirror).
+	if err := os.RemoveAll(pivotDir); err != nil {
+		t.Fatalf("remove pivot dir for symlink swap: %v", err)
+	}
+	if err := os.Symlink(victimDir, pivotDir); err != nil {
+		t.Fatalf("plant sibling symlink: %v", err)
+	}
+
+	pivotDir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, pivot)
+	if err != nil {
+		t.Fatalf("re-prepare pivot after symlink swap: %v", err)
+	}
+	if pivotDir2 != pivotDir {
+		t.Fatalf("pivot dir changed: %s vs %s", pivotDir2, pivotDir)
+	}
+	if !createdNow {
+		t.Fatal("re-prepare pivot reported createdNow=false; sibling symlink must fall through to recreate")
+	}
+
+	// Victim worktree's branch tip and tracked content must be unchanged
+	// — neither the pivot's `git reset` nor the pivot's `git checkout -B`
+	// can have been redirected into it.
+	victimHeadAfter, err := exec.Command("git", "-C", victimDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("victim rev-parse HEAD after: %v", err)
+	}
+	if string(victimHeadAfter) != string(victimHeadBefore) {
+		t.Fatalf("victim work branch moved by pivot reuse: before=%q after=%q", victimHeadBefore, victimHeadAfter)
+	}
+	if body, err := os.ReadFile(filepath.Join(victimDir, "victim.txt")); err != nil {
+		t.Fatalf("victim tracked file removed: %v", err)
+	} else if string(body) != "victim-content\n" {
+		t.Fatalf("victim tracked file mutated: %q", body)
+	}
+
+	// The recreated pivot worktree must be a real worktree (not a
+	// symlink) and on the pivot's work branch.
+	lstatInfo, err := os.Lstat(pivotDir2)
+	if err != nil {
+		t.Fatalf("lstat recreated pivot: %v", err)
+	}
+	if lstatInfo.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("recreated pivot is still a symlink: %v", lstatInfo.Mode())
+	}
+	branchOut, err := exec.Command("git", "-C", pivotDir2, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("pivot rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != pivot.WorkBranch {
+		t.Fatalf("recreated pivot on branch %q, want %q", got, pivot.WorkBranch)
+	}
+}
+
+// TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat locks
+// the reuse-path `git reset --quiet HEAD -- .` invariant at the workspace
+// boundary. A prior run's `EnforcePolicy` / `Diffstat` calls
+// `git add --intent-to-add --all`, leaving untracked files staged as
+// empty-blob entries in the index. Without the reset, the next prepare's
+// `git checkout --force -B` would treat those entries as
+// "files-in-index-not-in-target-ref" and delete them from the working
+// tree — silently nuking cached deps and hook artifacts that SPEC §9.1
+// reuse semantics promise to preserve.
+//
+// `TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns` covers the
+// happy reuse path but never calls Diffstat, so the reset is a no-op
+// there. Only the worker-integration test
+// `TestRunTaskReusesWorkspaceAcrossRunsAndGatesAfterCreate` exercises
+// this scenario today, which means removing the reset only fails the
+// worker test, not anything in the workspace package. This test pins the
+// invariant where the code lives.
+func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-intent-to-add", upstream)
+
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("first prepare: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare reported createdNow=false")
+	}
+	// Cached untracked artifacts a prior agent run would leave behind
+	// (build outputs, .aiops policy feedback, etc.).
+	if err := os.WriteFile(filepath.Join(dir, "cached-dep.txt"), []byte("cache\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "POLICY_VIOLATION_FEEDBACK.md"), []byte("feedback\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Diffstat runs `git add --intent-to-add --all`, leaving cached-dep.txt
+	// and the .aiops file in the index as empty-blob entries. The next
+	// prepare's reset must drop those entries before the checkout, or
+	// `git checkout --force -B` would treat them as removable.
+	if _, err := Diffstat(ctx, dir); err != nil {
+		t.Fatalf("Diffstat: %v", err)
+	}
+
+	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if createdNow {
+		t.Fatal("second prepare reported createdNow=true; SPEC §9.1 reuse expected")
+	}
+	if dir != dir2 {
+		t.Fatalf("workspace dir changed across runs: %s vs %s", dir, dir2)
+	}
+	for _, rel := range []string{"cached-dep.txt", filepath.Join(".aiops", "POLICY_VIOLATION_FEEDBACK.md")} {
+		if body, err := os.ReadFile(filepath.Join(dir2, rel)); err != nil {
+			t.Fatalf("untracked artifact %q removed across reuse despite intent-to-add gate: %v", rel, err)
+		} else if len(body) == 0 {
+			t.Fatalf("untracked artifact %q truncated on reuse: empty body", rel)
+		}
+	}
+}
+
+// TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName covers the
+// `startRef = t.BaseBranch` fallback in PrepareGitWorkspace. The production
+// path (HTTPS clone via EnsureMirror) always populates
+// `refs/remotes/origin/<base>` through the post-clone fetch refspec
+// rewrite, so `git rev-parse --verify origin/<base>` succeeds and the
+// fallback never fires in production. This test drives the fallback
+// explicitly by deleting `refs/remotes/origin/main` from a freshly
+// prepared mirror and emptying the fetch refspec so the next
+// `ensureMirrorLocked`'s fetch does not repopulate it — guarding the
+// fallback against a future refactor of EnsureMirror's refspec layout
+// (and ensuring `file://` test fixtures continue to work even when the
+// mirror only carries `refs/heads/<base>`).
+func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Prime the mirror via a first task so the bare clone + refspec config
+	// exist on disk.
+	primer := makeTask("task-primer", upstream)
+	if _, _, err := mgr.PrepareGitWorkspace(ctx, primer); err != nil {
+		t.Fatalf("prime mirror: %v", err)
+	}
+
+	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), upstream)
+	// Capture the expected start-ref commit (refs/heads/main on the bare
+	// mirror) so we can assert the recreated worktree's HEAD matches it
+	// once the fallback resolves to bare `main` instead of `origin/main`.
+	mainCommit, err := exec.Command("git", "--git-dir", mirror, "rev-parse", "refs/heads/main").Output()
+	if err != nil {
+		t.Fatalf("mirror rev-parse refs/heads/main: %v", err)
+	}
+	// Strip `refs/remotes/origin/*` and empty the fetch refspec so the
+	// next prepare's `git fetch --prune --tags origin` does not bring
+	// `origin/main` back. With no refspec, the fetch is effectively a
+	// no-op for ref tracking; the mirror keeps its `refs/heads/main` from
+	// the original `git clone --bare`.
+	if out, err := exec.Command("git", "--git-dir", mirror, "update-ref", "-d", "refs/remotes/origin/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete refs/remotes/origin/main: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "--git-dir", mirror, "config", "--unset-all", "remote.origin.fetch").CombinedOutput(); err != nil {
+		t.Fatalf("unset remote.origin.fetch: %v\n%s", err, out)
+	}
+	// Sanity: confirm the precondition the fallback branch needs — the
+	// remote-tracking ref is gone but the bare head ref survives.
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/remotes/origin/main").Run(); err == nil {
+		t.Fatal("precondition broken: refs/remotes/origin/main still resolves on the mirror")
+	}
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/heads/main").Run(); err != nil {
+		t.Fatalf("precondition broken: refs/heads/main missing on mirror: %v", err)
+	}
+
+	// New task → first-touch path runs through the startRef resolution.
+	// With `origin/main` deleted, the `git rev-parse --verify origin/main`
+	// gate fails and startRef falls back to bare `main`; the subsequent
+	// `git worktree add ... main` must succeed against the mirror's
+	// `refs/heads/main`.
+	tk := makeTask("task-fallback", upstream)
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare with startRef fallback: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare for new task reported createdNow=false")
+	}
+	headOut, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("worktree rev-parse HEAD: %v", err)
+	}
+	if strings.TrimSpace(string(headOut)) != strings.TrimSpace(string(mainCommit)) {
+		t.Fatalf("worktree HEAD = %q, want bare-main commit %q after startRef fallback",
+			strings.TrimSpace(string(headOut)), strings.TrimSpace(string(mainCommit)))
+	}
+	branchOut, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("worktree rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
+		t.Fatalf("worktree on branch %q, want %q", got, tk.WorkBranch)
+	}
+}
+
 func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	mgr := &Manager{Root: "/workspaces"}
 
