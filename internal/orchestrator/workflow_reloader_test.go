@@ -884,6 +884,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  clone_url: https://github.com/xrf9268-hue/aiops-platform.git\n" +
 		"tracker:\n" +
 		"  kind: " + trackerKind + "\n" +
+		"  api_key: lin_dummy_for_test\n" +
 		reloadTestLinearProjectSlugYAML(trackerKind) +
 		"  active_states: [\"" + activeState + "\"]\n" +
 		"  terminal_states: [\"Done\"]\n" +

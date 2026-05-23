@@ -14,6 +14,13 @@ const (
 	RuntimeEventFailed           RuntimeEventKind = "failed"
 	RuntimeEventCandidateBlocked RuntimeEventKind = "blocked"
 	RuntimeEventInputBlocked     RuntimeEventKind = "input_blocked"
+	// RuntimeEventDispatchPreflightFailed flags SPEC §8.1 step 2 failures:
+	// the per-tick dispatch preflight could not validate the workflow's
+	// tracker / agent / API-key config, so the orchestrator skipped
+	// candidate fetch/sort/dispatch for the tick. The Message field carries
+	// the joined preflight reason(s); IssueID is empty because the gate is
+	// not scoped to a single issue.
+	RuntimeEventDispatchPreflightFailed RuntimeEventKind = "dispatch_preflight_failed"
 )
 
 // RuntimeEvent is an operator-facing event observed by the orchestrator runtime.

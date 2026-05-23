@@ -653,6 +653,10 @@ type StateView struct {
 	CumulativeFailedTotal    int64
 	CodexTotals              CodexTotals
 	CodexRateLimits          *RateLimitSnapshot
+	// RecentEvents is the bounded orchestrator-wide event log (capped at
+	// MaxRuntimeEvents). It carries SPEC §13.7 operator-visible signals
+	// like dispatch_preflight_failed that are not scoped to one issue.
+	RecentEvents []RuntimeEvent
 }
 
 // RunningView is the per-running-entry projection in StateView. It
@@ -759,6 +763,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		CumulativeFailedTotal:      s.CumulativeFailedTotal,
 		CodexTotals:                totals,
 		CodexRateLimits:            copyRateLimitSnapshot(s.CodexRateLimits),
+		RecentEvents:               append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
 	for id, r := range s.Running {
 		// Deep-copy RetryAttempt so a snapshot consumer mutating the
