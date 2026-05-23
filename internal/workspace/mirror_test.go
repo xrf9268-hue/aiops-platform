@@ -357,14 +357,17 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	second.ID = "tsk-second"
 	second.WorkBranch = "ai/tsk-second"
 
-	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", "issue-abc-123-needs-fix"); got != want {
+	if got, want := mgr.PathFor(first), filepath.Join("/workspaces", "acme", "demo", "linear_issue", "Issue_ABC_123__Needs_Fix"); got != want {
 		t.Fatalf("PathFor() = %q, want %q", got, want)
 	}
 
 	unsafeSource := first
 	unsafeSource.SourceType = "../Linear Issue//Needs_Safety"
-	if got, want := mgr.PathFor(unsafeSource), filepath.Join("/workspaces", "acme", "demo", "linear-issue-needs_safety", "issue-abc-123-needs-fix"); got != want {
+	if got, want := mgr.PathFor(unsafeSource), filepath.Join("/workspaces", "acme", "demo", ".._Linear_Issue__Needs_Safety", "Issue_ABC_123__Needs_Fix"); got != want {
 		t.Fatalf("PathFor() unsafe source type = %q, want %q", got, want)
+	}
+	if clean := filepath.Clean(mgr.PathFor(unsafeSource)); !strings.HasPrefix(clean, "/workspaces/") {
+		t.Fatalf("PathFor() escaped workspace root: %q", clean)
 	}
 	collidingOwner := first
 	collidingOwner.RepoOwner = "acme-demo"
@@ -397,20 +400,53 @@ func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	}
 }
 
-func TestSanitizeLowercasesCollapsesSeparatorsAndCapsLength(t *testing.T) {
+// TestSanitizeComponentFollowsSpec covers the SPEC §4.2 sanitization rule:
+// any character outside [A-Za-z0-9._-] is replaced with `_`, and case is
+// preserved verbatim. The harness additions (rune length cap, path-traversal
+// guard, empty fallback) are exercised in the tail of the table.
+func TestSanitizeComponentFollowsSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		// SPEC §4.2 examples — case preserved, single-char substitution.
+		{"preserves ascii identifier case", "ABC-123", "ABC-123"},
+		{"replaces slash with underscore", "feat/new-ui", "feat_new-ui"},
+		{"replaces space with underscore", "a b c", "a_b_c"},
+		{"preserves leading and trailing underscores", "___leading___", "___leading___"},
+		{"replaces every non-ascii rune one-for-one", "日本語-456", "___-456"},
+		{"replaces only invalid characters", "  Issue/ABC 123!!Needs_Fix  ", "__Issue_ABC_123__Needs_Fix__"},
+		// Harness extensions.
+		{"empty input falls back to unknown", "", "unknown"},
+		{"separators-only collapses to unknown via substitution", "!!!", "___"},
+		{"single dot maps to unknown to block path traversal", ".", "unknown"},
+		{"double dot maps to unknown to block path traversal", "..", "unknown"},
+		{"interior double-dot is left untouched", "a..b", "a..b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SanitizeComponent(tc.in); got != tc.want {
+				t.Fatalf("SanitizeComponent(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+
 	long := strings.Repeat("A", maxSanitizedLength+20)
+	if got := SanitizeComponent(long); len([]rune(got)) != maxSanitizedLength {
+		t.Fatalf("SanitizeComponent(long) rune length = %d, want %d", len([]rune(got)), maxSanitizedLength)
+	}
 	unicodeLong := strings.Repeat("界", maxSanitizedLength+20)
-	if got, want := SanitizeComponent("  Issue/ABC 123!!Needs_Fix  "), "issue-abc-123-needs-fix"; got != want {
-		t.Fatalf("SanitizeComponent() = %q, want %q", got, want)
-	}
-	if got := SanitizeComponent(long); len(got) != maxSanitizedLength {
-		t.Fatalf("SanitizeComponent(long) length = %d, want %d", len(got), maxSanitizedLength)
-	}
-	if got := SanitizeComponent("!!!"); got != "unknown" {
-		t.Fatalf("SanitizeComponent(separators only) = %q, want unknown", got)
-	}
 	if got := SanitizeComponent(unicodeLong); len([]rune(got)) != maxSanitizedLength || !utf8.ValidString(got) {
 		t.Fatalf("SanitizeComponent(unicode long) = %q (runes=%d valid=%v), want %d valid runes", got, len([]rune(got)), utf8.ValidString(got), maxSanitizedLength)
+	}
+}
+
+// TestSanitizeComponentCasesDoNotCollide guards against the case-conflation
+// that lowercasing-based sanitization caused for distinct Linear identifiers.
+func TestSanitizeComponentCasesDoNotCollide(t *testing.T) {
+	if SanitizeComponent("ABC-123") == SanitizeComponent("abc-123") {
+		t.Fatalf("uppercase and lowercase identifiers collapsed into the same workspace key")
 	}
 }
 
