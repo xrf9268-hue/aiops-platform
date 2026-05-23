@@ -82,16 +82,29 @@ the workspace directory yourself before the next task tick — the
 worker treats a missing path as "first touch" and fires
 `after_create` again.
 
-### Recovery from a corrupted workspace
+### Recovery from a corrupted or hostile workspace
 
-A workspace path that exists but is not a valid git worktree (a
-crashed `worktree add`, an `rm -rf .git` race with a separate cleanup,
-an operator chmod that broke linkage) is detected by
-`git rev-parse --git-dir`: if the probe fails,
-`PrepareGitWorkspace` falls through to the nuke-and-recreate path,
-reports `createdNow=true`, and fires `after_create` again. This means
-operators can always force a clean reset by removing only `<workdir>/.git`
-(or the whole `<workdir>`) — the worker recovers on the next prepare.
+Before taking the reuse path, `PrepareGitWorkspace` runs three gates
+against `<workdir>`. Failing any one falls through to the
+nuke-and-recreate path, reports `createdNow=true`, and fires
+`after_create` again:
+
+1. **No symlinks.** `os.Lstat` rejects a symlinked `<workdir>` so the
+   reuse-path `git reset` / `git checkout -B` can never be redirected
+   into a repository outside the workspace root by a planted
+   symlink. The recreate path's `os.RemoveAll` removes the symlink
+   itself, not its target.
+2. **Valid git worktree.** `git rev-parse --git-dir` must succeed.
+   Catches the "crashed `worktree add` / `rm -rf .git` race / chmod
+   broke linkage" cases.
+3. **Linked to OUR mirror.** `git rev-parse --git-common-dir` must
+   resolve (via `filepath.EvalSymlinks`) to the same path as the
+   cached bare mirror for `t.CloneURL`. Catches an independent
+   `git init` planted at the workspace path and a worktree linked to
+   a different mirror (e.g. clone URL changed between prepares).
+
+Operators can always force a clean reset by removing `<workdir>` (or
+just `<workdir>/.git`) — the worker recovers on the next prepare.
 
 ## Configuration
 

@@ -227,15 +227,39 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 		startRef = t.BaseBranch
 	}
 
-	// A workdir that exists but isn't a valid git worktree (corrupted
-	// leftover from a crashed prepare, partial chmod, etc.) must not pin
-	// the worker in a bad state. Probe with `git rev-parse --git-dir`; if
-	// it fails, fall through to the nuke-and-recreate path so the next run
-	// starts fresh and `after_create` fires.
+	// A workdir that exists but isn't a valid, mirror-linked git worktree
+	// must not pin the worker into a bad state. Three classes of "looks
+	// reusable but isn't" we explicitly reject:
+	//
+	//  1. The path is a symlink. An attacker who can plant a symlink at
+	//     the workspace path could otherwise redirect the reuse-path
+	//     `git reset` / `git checkout -B` into a repository outside the
+	//     workspace root entirely. `os.Lstat` (vs the earlier `os.Stat`
+	//     that follows the link) catches this.
+	//  2. The path holds an independent git repository — for example, a
+	//     prior agent run that rewrote its workspace as a fresh `git
+	//     init` would still pass `git rev-parse --git-dir`. We verify
+	//     `git rev-parse --git-common-dir` resolves to *our* mirror so
+	//     unrelated repos can't masquerade as a reusable workspace.
+	//  3. The path is the worktree of a different mirror (different
+	//     clone URL routed to the same key, mirror was wiped and
+	//     recreated between prepares, etc.). The git-common-dir check
+	//     above also covers this.
+	//
+	// On any rejection we fall through to the nuke-and-recreate path
+	// (`os.RemoveAll` removes the symlink itself, not its target) and
+	// report `createdNow=true` so the worker fires `after_create` on
+	// the recovery run.
 	reusable := false
 	if workdirExists {
-		if err := runQuiet(ctx, workdir, "git", "rev-parse", "--git-dir"); err == nil {
-			reusable = true
+		lstatInfo, lstatErr := os.Lstat(workdir)
+		if lstatErr == nil && lstatInfo.Mode()&os.ModeSymlink == 0 {
+			if err := runQuiet(ctx, workdir, "git", "rev-parse", "--git-dir"); err == nil {
+				cdOut, cdErr := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir").Output()
+				if cdErr == nil && sameRealPath(strings.TrimSpace(string(cdOut)), workdir, mirror) {
+					reusable = true
+				}
+			}
 		}
 	}
 
@@ -956,6 +980,30 @@ func exitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
+}
+
+// sameRealPath reports whether the path that `git rev-parse --git-common-dir`
+// printed from workdir resolves to the same filesystem location as want.
+// `--git-common-dir` may emit a relative path (e.g. `.git` for a non-worktree
+// repo) which has to be resolved against workdir first, and both sides are
+// passed through `filepath.EvalSymlinks` so the comparison ignores symlinked
+// path prefixes (e.g. `/tmp` -> `/private/tmp` on macOS).
+func sameRealPath(commonDir, workdir, want string) bool {
+	if commonDir == "" {
+		return false
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(workdir, commonDir)
+	}
+	commonReal, err := filepath.EvalSymlinks(commonDir)
+	if err != nil {
+		return false
+	}
+	wantReal, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		return false
+	}
+	return commonReal == wantReal
 }
 
 func run(ctx context.Context, dir string, name string, args ...string) error {
