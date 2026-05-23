@@ -116,10 +116,13 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	poller.preflight = &preflightCfg
 	// Feed the orchestrator the same lister the poll loop uses so a
 	// fired failure-retry timer can run the SPEC §16.6 candidate fetch
-	// against the same active-state vocabulary. When the workflow
-	// configures service routing, the lister must also mirror the
-	// poll loop's selectRoutedCandidates filter so a retry cannot
-	// dispatch an issue that has since routed to another service.
+	// against the same active-state vocabulary. The lister must mirror
+	// every filter the poll loop applies between ListActiveIssues and
+	// dispatch (poller.go:152): service routing (selectRoutedCandidates)
+	// when configured, plus filterEligibleCandidates' required-field
+	// and Todo-blocked-by-non-terminal checks. Mirror order matches the
+	// poll loop: active → routed → eligible. Skipping any of these
+	// means a retry can dispatch an issue the poll loop would refuse.
 	var retryLister ActiveIssueLister = activeIssueListerFromStates{
 		tracker: multiLister,
 		states:  snap.Reconciliation.ActiveStates,
@@ -127,6 +130,7 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	if poller.routing != nil {
 		retryLister = routedActiveIssueLister{inner: retryLister, cfg: *poller.routing}
 	}
+	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates}
 	p.orchestrator.SetCandidateLister(retryLister)
 	return poller, nil
 }
@@ -246,6 +250,27 @@ func (l routedActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracke
 		return routed, errors.Join(fetchErr, routeErr)
 	}
 	return routed, nil
+}
+
+// eligibleActiveIssueLister wraps an ActiveIssueLister with the same
+// eligibility filter the poll loop applies between routing and dispatch
+// (filterEligibleCandidates in poller.go). The filter drops issues
+// missing required SPEC §4.1.1 fields (ID / Identifier / Title / State)
+// and Todo-state issues whose BlockedBy carries a non-terminal blocker.
+// Without this wrap a queued failure-retry whose Todo issue gained a
+// fresh non-terminal blocker between schedule and fire would still be
+// dispatched, while the poll loop would refuse the same issue on the
+// next tick. The fetch error is propagated unchanged because an empty
+// post-filter result is meaningful (genuine absence) but only if the
+// fetch itself succeeded.
+type eligibleActiveIssueLister struct {
+	inner          ActiveIssueLister
+	terminalStates []string
+}
+
+func (l eligibleActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	issues, fetchErr := l.inner.ListActiveIssues(ctx)
+	return filterEligibleCandidates(issues, l.terminalStates), fetchErr
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {

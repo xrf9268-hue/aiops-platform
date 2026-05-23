@@ -645,14 +645,16 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	}
 }
 
-// TestRuntimePollerInstallsRoutedCandidateListerForServiceRouting asserts
-// the SPEC §16.6 retry-fire lister installed on the orchestrator mirrors
-// the poll loop's selectRoutedCandidates filter when the workflow
-// configures service routing. Without this wiring a queued retry whose
-// issue has since routed to another service can still be dispatched
-// against this workflow, which would run an agent against work the
-// workflow no longer owns until the next reconciliation tick caught up.
-func TestRuntimePollerInstallsRoutedCandidateListerForServiceRouting(t *testing.T) {
+// TestRuntimePollerRetryListerMirrorsPollLoopFilters asserts the SPEC §16.6
+// retry-fire lister installed on the orchestrator mirrors every filter the
+// poll loop applies between ListActiveIssues and dispatch (poller.go:152):
+// active-state → selectRoutedCandidates → filterEligibleCandidates. The
+// chain shape is exercised both by type assertion (so a future refactor
+// that drops a wrap fails here) and behaviorally (so a future filter
+// added to the poll loop but not mirrored to the retry path also fails).
+// Cross-cutting consistency is the new AGENTS.md "Audit adjacent paths"
+// rule earned by #287; this test pins it.
+func TestRuntimePollerRetryListerMirrorsPollLoopFilters(t *testing.T) {
 	ctx := context.Background()
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)
@@ -693,34 +695,56 @@ func TestRuntimePollerInstallsRoutedCandidateListerForServiceRouting(t *testing.
 	if lister == nil {
 		t.Fatal("orchestrator candidate lister not installed by RuntimePoller")
 	}
-	routed, ok := lister.(routedActiveIssueLister)
+	// Outer wrap must be eligibility filter (matches poll loop's
+	// filterEligibleCandidates step). Without this wrap a Todo issue
+	// with a non-terminal blocker would be dispatched on retry.
+	eligible, ok := lister.(eligibleActiveIssueLister)
 	if !ok {
-		t.Fatalf("orchestrator candidate lister type = %T, want routedActiveIssueLister when Services are configured", lister)
+		t.Fatalf("orchestrator candidate lister type = %T, want eligibleActiveIssueLister as outer wrap", lister)
+	}
+	// Inner wrap (with Services configured) must be routing filter.
+	if _, ok := eligible.inner.(routedActiveIssueLister); !ok {
+		t.Fatalf("eligibleActiveIssueLister.inner type = %T, want routedActiveIssueLister when Services are configured", eligible.inner)
 	}
 
-	// In-route issue passes through.
-	got, err := routed.ListActiveIssues(ctx)
+	// In-route + eligible issue passes the full chain.
+	got, err := lister.ListActiveIssues(ctx)
 	if err != nil {
-		t.Fatalf("routed ListActiveIssues: %v", err)
+		t.Fatalf("ListActiveIssues: %v", err)
 	}
 	if len(got) != 1 || got[0].ID != "api-1" {
-		t.Fatalf("routed lister surfaced issues = %+v, want exactly api-1", got)
+		t.Fatalf("lister surfaced issues = %+v, want exactly api-1 (in-route + eligible)", got)
 	}
 	if got[0].ServiceName != "api" {
 		t.Fatalf("routed issue service = %q, want \"api\" stamped by selectRoutedCandidates", got[0].ServiceName)
 	}
 
-	// Issue that routes outside this workflow's services is filtered out:
-	// flip the tracker to surface only an off-route ticket and re-fetch.
+	// Off-route issue gets dropped by the routing layer.
 	trackerClient.replace(map[string][]tracker.Issue{
 		"api-platform": {{ID: "ops-9", Identifier: "OPS-9", Title: "now routed to ops", State: "AI Ready", ProjectSlug: "ops-platform"}},
 	})
-	got, err = routed.ListActiveIssues(ctx)
+	got, err = lister.ListActiveIssues(ctx)
 	if err != nil {
-		t.Fatalf("routed ListActiveIssues after route flip: %v", err)
+		t.Fatalf("ListActiveIssues after route flip: %v", err)
 	}
 	if len(got) != 0 {
-		t.Fatalf("routed lister surfaced off-route issues = %+v, want SPEC §16.6 retry fetch to drop them so the claim is released", got)
+		t.Fatalf("lister surfaced off-route issues = %+v, want SPEC §16.6 retry fetch to drop them so the claim is released", got)
+	}
+
+	// Todo issue with a non-terminal blocker gets dropped by the
+	// eligibility layer — the gap the post-merge audit found.
+	trackerClient.replace(map[string][]tracker.Issue{
+		"api-platform": {{
+			ID: "api-2", Identifier: "API-2", Title: "blocked todo", State: "Todo", ProjectSlug: "api-platform",
+			BlockedBy: []tracker.BlockerRef{{ID: "api-blocker", Identifier: "API-BLOCKER", State: "In Progress"}},
+		}},
+	})
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues after blocker flip: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("lister surfaced Todo issue with non-terminal blocker = %+v, want filterEligibleCandidates to drop it", got)
 	}
 }
 

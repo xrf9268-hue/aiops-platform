@@ -1325,6 +1325,15 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 		// re-dispatch.
 		return nil
 	}
+	o := r.o
+	if o.runCtx != nil && o.runCtx.Err() != nil {
+		// Orchestrator is shutting down between the fetch and this apply.
+		// The followup's ScheduleRetry would fail anyway; recording the
+		// event and clearing the timer would leave the entry orphaned
+		// with Timer == nil if the actor were ever restarted in-process.
+		// Drop silently and let shutdown reclaim state.
+		return nil
+	}
 	issue := entry.Issue
 	identifier := entry.Identifier
 	nextAttempt := r.attempt + 1
@@ -1332,7 +1341,6 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	if r.fetchErr != nil {
 		runErr = "retry poll failed: " + r.fetchErr.Error()
 	}
-	o := r.o
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventFailed,
 		IssueID:    r.id,
@@ -1381,9 +1389,16 @@ func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
 	}
 	// SPEC §16.6 step 4: refresh entry.Issue from the live tracker state
 	// before proceeding to capacity check + dispatch. The per-state cap
-	// must see the latest state, not the dispatch-time snapshot.
+	// must see the latest state, not the dispatch-time snapshot. Upstream
+	// handle_active_retry (orchestrator.ex:1142-1161) uses issue.identifier
+	// from the refreshed issue on every subsequent reschedule, so a
+	// Linear identifier rename between schedule and fire would otherwise
+	// leave runtime events stamped with the stale identifier.
 	entry.Issue = *r.found
 	st.ClaimedIssues[r.id] = *r.found
+	if id := strings.TrimSpace(r.found.Identifier); id != "" {
+		entry.Identifier = id
+	}
 	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.kind, r.o)
 }
 

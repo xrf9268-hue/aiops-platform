@@ -13,6 +13,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // fakeDispatcher records every Spawn call and lets the test control
@@ -2356,25 +2357,29 @@ func TestRetryFire_FetchTimeoutReschedulesAsRetryPollFailed(t *testing.T) {
 	}
 }
 
-// routingFilteringCandidateLister rejects issues whose ID does not match
-// the allowed set, modelling the SPEC §16.6 retry-fire candidate fetch
-// after selectRoutedCandidates has stripped issues that have since routed
-// to another service. The routed wrapper installed by RuntimePoller does
-// the real filtering; this lister just lets the actor-level test assert
-// that a "routed away" issue surfaces as absent rather than dispatched.
-type routingFilteringCandidateLister struct {
-	mu      sync.Mutex
-	allowed map[string]tracker.Issue
+// stubActiveIssueLister returns canned issues without applying any
+// downstream filters. Tests stack the real production wrappers
+// (routedActiveIssueLister, eligibleActiveIssueLister) on top of it
+// so the assertions exercise the actual filter code rather than a
+// mock that pre-filters.
+type stubActiveIssueLister struct {
+	mu     sync.Mutex
+	issues []tracker.Issue
+	err    error
 }
 
-func (l *routingFilteringCandidateLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := make([]tracker.Issue, 0, len(l.allowed))
-	for _, iss := range l.allowed {
-		out = append(out, iss)
-	}
-	return out, nil
+func (s *stubActiveIssueLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]tracker.Issue, len(s.issues))
+	copy(out, s.issues)
+	return out, s.err
+}
+
+func (s *stubActiveIssueLister) replace(issues []tracker.Issue) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.issues = issues
 }
 
 // TestRetryFire_RoutedAwayIssueReleasesClaim asserts the SPEC §16.6
@@ -2382,16 +2387,25 @@ func (l *routingFilteringCandidateLister) ListActiveIssues(_ context.Context) ([
 // on top of the active-state filter: an issue that is still in an active
 // state but has routed to another service must look absent to the retry
 // timer (no dispatch, claim released) instead of being dispatched against
-// a workflow that no longer owns it. The companion runtime-poller wiring
-// (routedActiveIssueLister) is what makes this fall out in production;
-// this test pins the actor-side contract so a future refactor cannot
-// silently regress it.
+// a workflow that no longer owns it. The test installs the real
+// routedActiveIssueLister wrap (the production code path) over a stub
+// inner lister, so a future refactor that bypasses the wrap will fail
+// here — not just a mock that pre-filters.
 func TestRetryFire_RoutedAwayIssueReleasesClaim(t *testing.T) {
 	disp := &fakeDispatcher{}
-	// The retry was scheduled when the issue still matched this workflow's
-	// service route; by the time the timer fires the route has changed,
-	// so the lister no longer surfaces it.
-	lister := &routingFilteringCandidateLister{allowed: map[string]tracker.Issue{}}
+	inner := &stubActiveIssueLister{}
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear"},
+		Services: []workflow.ServiceConfig{
+			{
+				Name:    "api",
+				Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"},
+				Repo:    workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"},
+			},
+		},
+	}
+	lister := routedActiveIssueLister{inner: inner, cfg: cfg}
+
 	o, cancel := startActor(t, Deps{
 		Dispatcher:      disp,
 		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
@@ -2399,10 +2413,17 @@ func TestRetryFire_RoutedAwayIssueReleasesClaim(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ServiceName: "old-service"}
+	// At schedule time the issue still matched the "api" service route.
+	iss := tracker.Issue{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ProjectSlug: "api-platform"}
 	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
+
+	// Between schedule and fire the issue routes away — its ProjectSlug
+	// now points at ops-platform, which has no matching service entry.
+	// selectRoutedCandidates inside routedActiveIssueLister must drop
+	// it, so the retry-fire path sees an empty candidate set.
+	inner.replace([]tracker.Issue{{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ProjectSlug: "ops-platform"}})
 
 	if err := o.submit(context.Background(), &retryFireOp{
 		o:       o,
@@ -2428,5 +2449,110 @@ func TestRetryFire_RoutedAwayIssueReleasesClaim(t *testing.T) {
 	}
 	if len(v.Retrying) != 0 {
 		t.Fatalf("retrying view after routed-away fetch = %+v, want claim released", v.Retrying)
+	}
+}
+
+// TestRetryFire_TodoIssueBlockedByOpenDependencyReleasesClaim is the
+// HIGH-severity regression test for the cross-cutting filter gap a
+// post-merge adversarial audit found: the poll loop applies
+// filterEligibleCandidates between active-state fetch and dispatch
+// (poller.go), and the retry-fire lister chain must mirror it. Without
+// the eligibleActiveIssueLister wrap, a Todo issue whose retry was
+// scheduled when its blocker was terminal would still be dispatched
+// after the blocker re-opens, because the active-state filter alone
+// would not reject it. The wrap is in runtime_poller.go; this test
+// pins the actor-side contract using the real production wrap stack.
+func TestRetryFire_TodoIssueBlockedByOpenDependencyReleasesClaim(t *testing.T) {
+	disp := &fakeDispatcher{}
+	inner := &stubActiveIssueLister{}
+	// Mirror the poll loop's filter chain — active → eligible. No routing
+	// configured so this isolates the eligibility filter alone.
+	lister := eligibleActiveIssueLister{inner: inner, terminalStates: []string{"Done", "Cancelled"}}
+
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	// Retry was scheduled when the Todo issue's only blocker was terminal.
+	iss := tracker.Issue{ID: "ENG-TODO", Identifier: "ENG-TODO", Title: "todo", State: "Todo"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	// Between schedule and fire the blocker re-opens — its state is now
+	// "In Progress", which is non-terminal. The poll loop would refuse
+	// this issue via filterEligibleCandidates; retry-fire must too.
+	inner.replace([]tracker.Issue{{
+		ID: "ENG-TODO", Identifier: "ENG-TODO", Title: "todo", State: "Todo",
+		BlockedBy: []tracker.BlockerRef{{ID: "ENG-BLOCK", Identifier: "ENG-BLOCK", State: "In Progress"}},
+	}})
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 0
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot after fire: %v", err)
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; Todo with non-terminal blocker must not be dispatched", got)
+	}
+	if len(v.Retrying) != 0 {
+		t.Fatalf("retrying view after blocked-Todo fetch = %+v, want claim released to match poll-loop filter", v.Retrying)
+	}
+}
+
+// TestRetryFireAfterFetch_RefreshesEntryIdentifier asserts the LOW-severity
+// finding from the post-merge audit: when the candidate fetch surfaces a
+// refreshed issue whose Identifier has been renamed upstream (Linear
+// supports identifier renames on team key changes), retryFireAfterFetchOp
+// must propagate the new Identifier into entry.Identifier so subsequent
+// runtime events and retry reschedules stamp the live value, not the
+// stale schedule-time snapshot.
+func TestRetryFireAfterFetch_RefreshesEntryIdentifier(t *testing.T) {
+	disp := &fakeDispatcher{}
+	freshState := tracker.Issue{ID: "ID-STABLE", Identifier: "NEW-1", Title: "renamed", State: "Rework"}
+	lister := &fakeCandidateLister{issues: []tracker.Issue{freshState}}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	stale := tracker.Issue{ID: "ID-STABLE", Identifier: "OLD-1", Title: "renamed", State: "AI Ready"}
+	if err := o.ScheduleRetry(context.Background(), stale, stale.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(stale.ID),
+		issue:   stale,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool { return disp.count() == 1 }, 2*time.Second)
+	got := disp.issueAt(0)
+	if got.Identifier != "NEW-1" {
+		t.Fatalf("dispatched issue identifier = %q, want NEW-1 from refreshed candidate fetch", got.Identifier)
 	}
 }
