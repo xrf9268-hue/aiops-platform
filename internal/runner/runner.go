@@ -23,7 +23,25 @@ type RunInput struct {
 
 	RuntimeEventSink    func(task.RuntimeEvent)
 	PhaseTransitionSink func(from, to task.RunAttemptPhase)
+
+	// RefreshIssueState, when non-nil, implements SPEC §16.5's per-turn
+	// tracker refresh: the runner calls it after each agent turn finishes
+	// and exits cleanly when the issue is no longer in the workflow's
+	// active states. Without it the runner falls back to the agent-driven
+	// `continue` notification flag and operator-cancel only becomes
+	// visible at the next orchestrator poll tick. Nil keeps the legacy
+	// behavior for callers (tests, mock runners) that have no tracker.
+	RefreshIssueState IssueStateRefresher
 }
+
+// IssueStateRefresher is the SPEC §16.5 per-turn tracker hook. The runner
+// invokes it after `awaitTurnCompletion` succeeds; the returned bool reports
+// whether the linked issue is still in an active workflow state. A non-nil
+// error short-circuits the turn loop with the wrapped error (SPEC: "if
+// refreshed_issue failed: fail"). Defined as a function value rather than an
+// interface so callers can adapt any tracker client (or test fake) without
+// pulling internal/tracker into the runner package.
+type IssueStateRefresher func(ctx context.Context) (active bool, err error)
 
 type Result struct {
 	Summary       string

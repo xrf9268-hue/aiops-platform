@@ -329,7 +329,11 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: err}
 	}
 
-	res, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
+	var refreshIssueState runner.IssueStateRefresher
+	if cfg.IssueStateRefresher != nil {
+		refreshIssueState = cfg.IssueStateRefresher(t, wcfg)
+	}
+	res, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, RefreshIssueState: refreshIssueState, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
 		emitTaskPhase(from, to)
 	}}, wcfg.Agent.Timeout, workflowSource)
 	sessionID := sessionIDFromRuntimeEvents(res.RuntimeEvents)

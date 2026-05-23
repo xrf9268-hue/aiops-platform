@@ -213,13 +213,22 @@ type appServerClient struct {
 	runtimeEvents       []task.RuntimeEvent
 	runtimeEventSink    func(task.RuntimeEvent)
 	phaseTransitionSink func(from, to task.RunAttemptPhase)
-	continueRun         bool
-	tools               DynamicToolSet
-	turnTimeoutMs       int
-	readTimeoutMs       int
-	stallTimeoutMs      int
-	approvalPolicy      any
-	lastTerminal        time.Time
+	// continueRun is the agent-emitted "should we keep going?" signal
+	// from turn/completed notifications (`params.continue`). It only
+	// gates the legacy path: when refreshIssueState is wired, SPEC §16.5
+	// per-turn tracker refresh is the authoritative continuation gate
+	// and continueRun is consulted only as the agent's secondary opinion.
+	// Keeping both lets cooperative agents end early (continueRun=false)
+	// while still letting the operator cancel an otherwise-productive
+	// worker by moving the issue out of the active states.
+	continueRun       bool
+	refreshIssueState IssueStateRefresher
+	tools             DynamicToolSet
+	turnTimeoutMs     int
+	readTimeoutMs     int
+	stallTimeoutMs    int
+	approvalPolicy    any
+	lastTerminal      time.Time
 }
 
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
@@ -227,6 +236,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	c.phaseTransitionSink = in.PhaseTransitionSink
 	c.nextID = 1
 	c.continueRun = false
+	c.refreshIssueState = in.RefreshIssueState
 	c.tools = DynamicToolsForWorkflow(workflow.Workflow{Config: in.Workflow.Config})
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
@@ -335,6 +345,22 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 				return &TurnTimeoutError{Timeout: time.Duration(c.turnTimeoutMs) * time.Millisecond, Elapsed: time.Since(turnStarted), Cause: err}
 			}
 			return err
+		}
+		// SPEC §16.5: refresh tracker state between turns so an
+		// operator who cancelled the issue mid-run sees the worker
+		// exit after the current turn rather than at the next
+		// orchestrator poll tick. Errors here are surfaced verbatim per
+		// SPEC ("if refreshed_issue failed: fail"); a nil refresher
+		// keeps the legacy continueRun-only path for callers (mock
+		// runner, tests) with no tracker hook.
+		if c.refreshIssueState != nil {
+			active, err := c.refreshIssueState(ctx)
+			if err != nil {
+				return fmt.Errorf("codex app-server refresh issue state: %w", err)
+			}
+			if !active {
+				return nil
+			}
 		}
 		if !c.continueRun {
 			return nil
