@@ -101,6 +101,25 @@ func New(name string) (Runner, error) {
 	}
 }
 
+// EnforcesMaxTurnsInternally reports whether the runner selected by name runs
+// its own per-session turn loop bounded by agent.max_turns. SPEC §5.3.5 scopes
+// max_turns to "within one worker session"; SPEC §7.1 leaves continuation
+// worker spawns unbounded. The orchestrator uses this to decide whether to
+// apply its own continuation-spawn cap: when the runner already enforces
+// max_turns inside the session, the orchestrator must not reuse the same
+// value as a cross-worker budget (see issue #216). Only the codex app-server
+// runner runs an in-session turn loop today; the one-shot codex exec runner
+// and the shell-based claude runner exit after a single turn, so the
+// orchestrator-side cap remains their only spawn safety net.
+func EnforcesMaxTurnsInternally(name string) bool {
+	switch name {
+	case "codex-app-server":
+		return true
+	default:
+		return false
+	}
+}
+
 type RunnerErrorCategory string
 
 const (

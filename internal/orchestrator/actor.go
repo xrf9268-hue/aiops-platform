@@ -156,6 +156,12 @@ type Deps struct {
 	// integer applies the harness-hardening cap.
 	MaxFailureRetries *int
 	MaxTurns          *int
+	// RunnerEnforcesMaxTurns reports whether the configured agent runner
+	// applies agent.max_turns inside its own session loop (SPEC §5.3.5). When
+	// true, the actor must not also reuse max_turns as a continuation-spawn
+	// budget. Wired from workflow config via runner.EnforcesMaxTurnsInternally.
+	// nil defaults to false (legacy one-shot runners).
+	RunnerEnforcesMaxTurns *bool
 	// CandidateLister, when set, enables the SPEC §16.6 retry-fire
 	// candidate-fetch step. A fired failure-retry timer fetches the
 	// active candidate list, confirms the issue is still present,
@@ -184,11 +190,19 @@ type Orchestrator struct {
 	// Non-negative values opt into the SPEC §15.5 harness-hardening cap and
 	// pin the issue under OrchestratorState.Failed once exceeded.
 	maxFailureRetries int
-	// maxTurns bounds clean continuation dispatches for one-shot runners that
-	// cannot enforce agent.max_turns internally. App-server runners still enforce
-	// the same setting before they return.
-	maxTurns  int
-	retryWake chan struct{}
+	// maxTurns bounds clean continuation dispatches only for runners that
+	// cannot enforce agent.max_turns inside their own session loop (one-shot
+	// codex exec, shell-based claude, mocks). For those runners the cap is a
+	// worker-spawn safety net, not the SPEC §5.3.5 in-session budget.
+	//
+	// When runnerEnforcesMaxTurns is true (codex app-server, which already
+	// caps turns per session per SPEC §5.3.5), the orchestrator does not apply
+	// this cap: SPEC §7.1 leaves continuation worker spawns unbounded and an
+	// active issue should keep getting fresh sessions until tracker state
+	// changes. See issue #216.
+	maxTurns               int
+	runnerEnforcesMaxTurns bool
+	retryWake              chan struct{}
 
 	// candidateLister supplies the SPEC §16.6 candidate fetch that a
 	// fired failure-retry timer consults before re-dispatching. The
@@ -227,16 +241,21 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 			maxTurns = 1
 		}
 	}
+	runnerEnforcesMaxTurns := false
+	if deps.RunnerEnforcesMaxTurns != nil {
+		runnerEnforcesMaxTurns = *deps.RunnerEnforcesMaxTurns
+	}
 	o := &Orchestrator{
-		ops:               make(chan stateOp),
-		state:             state,
-		dispatcher:        deps.Dispatcher,
-		scheduler:         deps.Scheduler,
-		maxFailureRetries: maxFailureRetries,
-		maxTurns:          maxTurns,
-		retryWake:         make(chan struct{}, 1),
-		candidateLister:   deps.CandidateLister,
-		started:           make(chan struct{}),
+		ops:                    make(chan stateOp),
+		state:                  state,
+		dispatcher:             deps.Dispatcher,
+		scheduler:              deps.Scheduler,
+		maxFailureRetries:      maxFailureRetries,
+		maxTurns:               maxTurns,
+		runnerEnforcesMaxTurns: runnerEnforcesMaxTurns,
+		retryWake:              make(chan struct{}, 1),
+		candidateLister:        deps.CandidateLister,
+		started:                make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
 		aware.AttachOrchestrator(o)
@@ -570,6 +589,29 @@ func (o *Orchestrator) UpdateMaxTurns(ctx context.Context, maxTurns int) error {
 	done := make(chan struct{}, 1)
 	op := opFunc(func(*OrchestratorState) func() {
 		o.maxTurns = maxTurns
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// UpdateRunnerEnforcesMaxTurns toggles whether the continuation-spawn cap
+// applies. The runtime poller calls this on every tick with the result of
+// runner.EnforcesMaxTurnsInternally for the workflow's configured agent so a
+// hot-reloaded agent.default flips the gate without an orchestrator restart.
+// See the maxTurns field comment for the SPEC §5.3.5 / §7.1 split this gates.
+func (o *Orchestrator) UpdateRunnerEnforcesMaxTurns(ctx context.Context, enforces bool) error {
+	done := make(chan struct{}, 1)
+	op := opFunc(func(*OrchestratorState) func() {
+		o.runnerEnforcesMaxTurns = enforces
 		done <- struct{}{}
 		return nil
 	})
@@ -1482,7 +1524,10 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.result.Err == nil {
 		nextContinuationAttempt := f.entry.ContinuationAttempt + 1
-		if nextContinuationAttempt >= f.o.maxTurns {
+		// SPEC §7.1 leaves continuation worker spawns unbounded; only apply
+		// the orchestrator-side cap for runners that cannot enforce
+		// agent.max_turns inside their own session. See issue #216.
+		if !f.o.runnerEnforcesMaxTurns && nextContinuationAttempt >= f.o.maxTurns {
 			if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
 				close(f.done)
 				return nil
