@@ -843,6 +843,61 @@ func TestRunVerifyEnvPassthroughLetsNamedVarThrough(t *testing.T) {
 	}
 }
 
+// TestRunWorkspaceHookDoesNotSourceUserLoginProfile is a regression for
+// #314: the hook runner used `sh -lc`, which under dash re-sources
+// /etc/profile.d/* per command and leaks any stdout those scripts emit into
+// HookResult.Output. The fix runs hooks under `sh -c`, so a $HOME/.profile
+// that prints to stdout (a portable stand-in for /etc/profile.d/nvm.sh)
+// must no longer contaminate the captured hook output.
+func TestRunWorkspaceHookDoesNotSourceUserLoginProfile(t *testing.T) {
+	home := t.TempDir()
+	profilePath := filepath.Join(home, ".profile")
+	if err := os.WriteFile(profilePath, []byte("printf 'LEAKED_FROM_PROFILE\\n'\n"), 0o644); err != nil {
+		t.Fatalf("seed .profile: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{`printf clean`}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Output != "clean" {
+		t.Fatalf("hook output = %q, want %q (login-profile stdout leaked into hook output buffer)", results[0].Output, "clean")
+	}
+}
+
+// TestRunVerifyDoesNotSourceUserLoginProfile mirrors the hook regression for
+// the verify command path (manager.go RunVerify): per #314, dropping the
+// `-l` flag must prevent $HOME/.profile from being sourced per command.
+func TestRunVerifyDoesNotSourceUserLoginProfile(t *testing.T) {
+	home := t.TempDir()
+	profilePath := filepath.Join(home, ".profile")
+	if err := os.WriteFile(profilePath, []byte("printf 'LEAKED_FROM_PROFILE\\n'\n"), 0o644); err != nil {
+		t.Fatalf("seed .profile: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	dir := t.TempDir()
+	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{`printf clean`}}}
+
+	results, err := RunVerify(context.Background(), dir, cfg)
+	if err != nil {
+		t.Fatalf("RunVerify: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Output != "clean" {
+		t.Fatalf("verify output = %q, want %q (login-profile stdout leaked into verify output buffer)", results[0].Output, "clean")
+	}
+}
+
 func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
 	t.Setenv("DEFINITELY_SET_227", "v1")
 	os.Unsetenv("DEFINITELY_UNSET_227")

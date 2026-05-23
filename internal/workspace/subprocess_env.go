@@ -36,6 +36,16 @@ func subprocessEnv(passthrough []string) []string {
 			return
 		}
 		seen[name] = struct{}{}
+		if name == "PATH" {
+			// Use the once-captured login-shell PATH so the subprocess
+			// inherits version-manager additions (nvm, rustup, etc.) without
+			// sourcing the login profile per command — which would otherwise
+			// echo profile stdout into the hook/verify output buffer (#314).
+			if v := loginPATH(); v != "" {
+				env = append(env, "PATH="+v)
+				return
+			}
+		}
 		if v, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+v)
 		}
