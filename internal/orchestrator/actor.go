@@ -138,6 +138,11 @@ func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 // that wants the harness-hardening cap (SPEC §15.5) must pass a
 // non-negative value through workflow.AgentConfig.MaxRetryAttempts or
 // orchestrator.Deps.MaxFailureRetries.
+//
+// This sentinel mirrors workflow.UnboundedRetryBudget; both equal -1
+// today and are interoperable via the `< 0` predicate that all
+// consumers use. Future renumbering must keep the predicate, not the
+// literal value.
 const UnboundedFailureRetries = -1
 
 // Deps bundles construction-time dependencies so adding a new one
