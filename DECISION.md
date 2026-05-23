@@ -164,7 +164,7 @@ diverged from SPEC §6.4's cheat sheet:
 |---------|-----|-----------|-----|
 | `codex.command` | `codex exec` | `codex app-server` | `codex app-server` |
 | `agent.max_concurrent_agents` | `1` (floored) | `10` | `10` |
-| `workspace.root` | `~/aiops-workspaces` | `/symphony_workspaces` | `/symphony_workspaces` |
+| `workspace.root` | `~/aiops-workspaces` | `<system-temp>/symphony_workspaces` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` — typically `/tmp/symphony_workspaces` on Linux, mirroring Elixir `Path.join(System.tmp_dir!(), "symphony_workspaces")`) |
 | `tracker.active_states` | `[AI Ready, In Progress, Rework]` | `[Todo, In Progress]` | `[Todo, In Progress]` |
 | `tracker.terminal_states` | `[Done, Canceled, Cancelled, Closed, Duplicate]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | `[Closed, Cancelled, Canceled, Duplicate, Done]` |
 | `tracker.kind` | `gitea` | REQUIRED (`linear`) | `gitea` (partial — see DEVIATIONS D28) |
@@ -184,10 +184,15 @@ the historical behavior copies that file rather than relying on
 defaults table mirrors SPEC §6.4 so a SPEC reader's mental model lines
 up with `worker --print-config` output.
 
-The loader's `agent.max_concurrent_agents` floor is rebased from `1` to
-`10`: an explicit `0` in WORKFLOW.md (or a YAML value that fails to
-parse as a positive int) now lands on the SPEC default rather than
-silently jailing the dispatch loop to a single agent.
+The loader's `agent.max_concurrent_agents <= 0` coercion is removed:
+an explicit `0` in WORKFLOW.md now fails validation with
+`agent.max_concurrent_agents must be a positive integer`, matching the
+Elixir reference's `validate_number(:max_concurrent_agents,
+greater_than: 0)` (`schema.ex:131,145`). When the field is absent from
+front matter, the SPEC §6.4 default of `10` supplied by
+`DefaultConfig()` survives the YAML overlay — so silent jailing to a
+single agent is gone, but explicit zero is treated as the validation
+error it is rather than silently substituted for the default.
 
 ## Historical note
 

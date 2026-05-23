@@ -400,6 +400,9 @@ func validateConfig(path string, cfg Config) error {
 	if cfg.Agent.MaxTurns <= 0 {
 		return fmt.Errorf("%s: agent.max_turns must be positive", path)
 	}
+	if cfg.Agent.MaxConcurrentAgents <= 0 {
+		return fmt.Errorf("%s: agent.max_concurrent_agents must be a positive integer (SPEC §6.4 default 10; explicit 0 is not allowed — Elixir validate_number greater_than: 0)", path)
+	}
 	if cfg.Agent.MaxRetryAttempts != nil && *cfg.Agent.MaxRetryAttempts < 0 {
 		return fmt.Errorf("%s: agent.max_retry_attempts must be non-negative", path)
 	}
@@ -618,12 +621,13 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	if cfg.Agent.Default == "" {
 		cfg.Agent.Default = "mock"
 	}
-	if cfg.Agent.MaxConcurrentAgents <= 0 {
-		// SPEC §6.4 default; previously coerced to 1 to match the
-		// personal-profile floor. An explicit 0 in WORKFLOW.md now lands
-		// on the SPEC default rather than silently jailing dispatch.
-		cfg.Agent.MaxConcurrentAgents = 10
-	}
+	// agent.max_concurrent_agents: SPEC §6.4 default of 10 is supplied by
+	// DefaultConfig() and survives YAML overlay when the field is absent.
+	// An explicit `max_concurrent_agents: 0` (or any non-positive value)
+	// is rejected by validateConfig rather than silently coerced — Elixir
+	// `validate_number(:max_concurrent_agents, greater_than: 0)`
+	// (schema.ex:131,145) makes 0 a validation error, not a request for
+	// the default.
 	if cfg.Agent.Timeout <= 0 {
 		cfg.Agent.Timeout = 30 * time.Minute
 	}

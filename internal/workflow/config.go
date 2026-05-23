@@ -2,10 +2,22 @@ package workflow
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// defaultWorkspaceRoot resolves SPEC §6.4's `<system-temp>/symphony_workspaces`
+// default at call time so it tracks the running process's TMPDIR (Elixir uses
+// `Path.join(System.tmp_dir!(), "symphony_workspaces")` — schema.ex:93).
+// Resolving in DefaultConfig keeps it absolute so operators on non-root hosts
+// can write to it on first run; the previous bare `/symphony_workspaces`
+// shipped a path only root could create.
+func defaultWorkspaceRoot() string {
+	return filepath.Join(os.TempDir(), "symphony_workspaces")
+}
 
 type Config struct {
 	Repo       RepoConfig      `yaml:"repo" json:"repo"`
@@ -453,7 +465,7 @@ func DefaultConfig() Config {
 		Polling:               PollingConfig{IntervalMs: 30000},
 		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
 		hooksTimeoutDefaulted: true,
-		Workspace:             WorkspaceConfig{Root: "/symphony_workspaces"},
+		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
 		// Agent.MaxRetryAttempts is intentionally left nil here so the
 		// "absent" signal survives YAML overlay. The effective default of
 		// one failure retry is supplied by MaxRetryAttemptsValue().

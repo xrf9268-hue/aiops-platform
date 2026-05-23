@@ -2179,24 +2179,104 @@ prompt
 	}
 }
 
-// TestDefaultConfig_CodexAppServerDefaultsMatchSPEC pins the SPEC §6.4
-// codex.command default. The personal profile that historically shipped
-// `codex exec` now opts into it explicitly via examples/WORKFLOW.md;
-// workflows that omit codex.command inherit the SPEC default.
-func TestDefaultConfig_CodexAppServerDefaultsMatchSPEC(t *testing.T) {
+// TestDefaultConfig_AlignsToSPEC_6_4 pins every SPEC §6.4 default
+// `DefaultConfig()` is responsible for. Each field gets its own
+// assertion so a regression on any one of them surfaces in CI rather
+// than being papered over by a sibling field's check. Mirrors the
+// Elixir reference (`elixir/lib/symphony_elixir/config/schema.ex`
+// lines 53, 54, 93, 131, 160).
+func TestDefaultConfig_AlignsToSPEC_6_4(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultConfig()
+
 	if cfg.Codex.Command != "codex app-server" {
-		t.Fatalf("Default Codex.Command = %q, want SPEC default codex app-server", cfg.Codex.Command)
+		t.Errorf("Codex.Command = %q, want SPEC §6.4 default %q", cfg.Codex.Command, "codex app-server")
+	}
+	if cfg.Agent.MaxConcurrentAgents != 10 {
+		t.Errorf("Agent.MaxConcurrentAgents = %d, want SPEC §6.4 default 10", cfg.Agent.MaxConcurrentAgents)
 	}
 	if cfg.Agent.MaxTurns != 20 {
-		t.Fatalf("Default Agent.MaxTurns = %d, want Symphony default 20", cfg.Agent.MaxTurns)
+		t.Errorf("Agent.MaxTurns = %d, want SPEC §6.4 default 20", cfg.Agent.MaxTurns)
 	}
+
+	// SPEC §6.4 says `<system-temp>/symphony_workspaces`; Elixir resolves
+	// the same via Path.join(System.tmp_dir!(), ...). Comparing against
+	// os.TempDir() pins the contract that the default lives under the
+	// system temp dir (and remains writable for non-root processes),
+	// rather than against a hard-coded `/tmp` that would diverge on
+	// hosts with a non-default TMPDIR.
+	wantRoot := filepath.Join(os.TempDir(), "symphony_workspaces")
+	if cfg.Workspace.Root != wantRoot {
+		t.Errorf("Workspace.Root = %q, want SPEC §6.4 default %q", cfg.Workspace.Root, wantRoot)
+	}
+
+	wantActive := []string{"Todo", "In Progress"}
+	if !reflect.DeepEqual(cfg.Tracker.ActiveStates, wantActive) {
+		t.Errorf("Tracker.ActiveStates = %#v, want SPEC §6.4 default %#v", cfg.Tracker.ActiveStates, wantActive)
+	}
+	wantTerminal := []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"}
+	if !reflect.DeepEqual(cfg.Tracker.TerminalStates, wantTerminal) {
+		t.Errorf("Tracker.TerminalStates = %#v, want SPEC §6.4 default %#v (order matters; mirrors Elixir schema.ex:54)", cfg.Tracker.TerminalStates, wantTerminal)
+	}
+
+	// Codex sub-defaults retained from the previous pinning so we do
+	// not regress them when extending the SPEC §6.4 coverage above.
 	if cfg.Codex.ThreadSandbox != "workspace-write" {
-		t.Fatalf("Default Codex.ThreadSandbox = %q, want workspace-write", cfg.Codex.ThreadSandbox)
+		t.Errorf("Codex.ThreadSandbox = %q, want workspace-write", cfg.Codex.ThreadSandbox)
 	}
 	if cfg.Codex.TurnTimeoutMs != 3600000 || cfg.Codex.ReadTimeoutMs != 5000 || cfg.Codex.StallTimeoutMs != 300000 {
-		t.Fatalf("Codex timeout defaults = turn %d read %d stall %d", cfg.Codex.TurnTimeoutMs, cfg.Codex.ReadTimeoutMs, cfg.Codex.StallTimeoutMs)
+		t.Errorf("Codex timeouts = turn %d read %d stall %d, want 3600000/5000/300000", cfg.Codex.TurnTimeoutMs, cfg.Codex.ReadTimeoutMs, cfg.Codex.StallTimeoutMs)
+	}
+}
+
+// TestLoad_RejectsExplicitZeroMaxConcurrentAgents pins the loader's
+// Elixir-aligned rejection of `agent.max_concurrent_agents: 0`. Upstream
+// `validate_number(:max_concurrent_agents, greater_than: 0)` errors on
+// explicit zero rather than silently substituting the default — see
+// `elixir/lib/symphony_elixir/config/schema.ex:131,145`.
+func TestLoad_RejectsExplicitZeroMaxConcurrentAgents(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://example.invalid/repo.git
+tracker:
+  kind: gitea
+agent:
+  max_concurrent_agents: 0
+---
+prompt`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatalf("Load with agent.max_concurrent_agents: 0 succeeded; want validation error")
+	}
+	if !strings.Contains(err.Error(), "agent.max_concurrent_agents") {
+		t.Fatalf("error %q does not mention agent.max_concurrent_agents", err)
+	}
+}
+
+// TestLoad_AbsentMaxConcurrentAgentsKeepsSPECDefault pins that a
+// front-matter block which omits `agent.max_concurrent_agents` still
+// inherits the SPEC §6.4 default of 10 (not the loader floor that the
+// previous code carried).
+func TestLoad_AbsentMaxConcurrentAgentsKeepsSPECDefault(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://example.invalid/repo.git
+tracker:
+  kind: gitea
+---
+prompt`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Agent.MaxConcurrentAgents != 10 {
+		t.Fatalf("Agent.MaxConcurrentAgents = %d, want SPEC §6.4 default 10", wf.Config.Agent.MaxConcurrentAgents)
 	}
 }
 

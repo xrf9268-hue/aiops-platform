@@ -65,7 +65,7 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs | SPEC §6.4 |
 | `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |
-| `workspace.root` | `/symphony_workspaces` (per-boot) — set explicitly to a long-lived path for persistence | SPEC §6.4 |
+| `workspace.root` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` at startup, typically `/tmp/symphony_workspaces` on Linux; per-boot — set explicitly to a long-lived path for persistence) | SPEC §6.4 |
 | `verify.commands` | none | implementation |
 
 Operators who want the historical personal-profile values — `agent.max_concurrent_agents: 1`, `codex.command: codex exec`, `workspace.root: ~/aiops-workspaces/personal`, the Linear-vocabulary state lists — copy [`examples/WORKFLOW.md`](examples/WORKFLOW.md) and declare them explicitly. The example file pins every divergent value so a SPEC reader can see the personal-profile envelope without reading source.
