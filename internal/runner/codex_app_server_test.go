@@ -884,6 +884,94 @@ for line in sys.stdin:
 	}
 }
 
+// TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns pins
+// SPEC §16.5: after each turn the runner consults the tracker and exits
+// cleanly when the linked issue is no longer active, even when the agent
+// is requesting another turn via params.continue=true. Without this gate
+// the worker would burn the full agent.max_turns budget before the
+// orchestrator's next per-tick reconcile noticed the operator cancel.
+func TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+turns=0
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 8
+
+	var refreshCalls int
+	in.RefreshIssueState = func(ctx context.Context) (bool, error) {
+		refreshCalls++
+		// First turn: issue is still active, runner should request
+		// another turn. Second turn: operator cancelled (issue moved to
+		// "Done"); refresher reports inactive and the runner must exit
+		// before sending the third turn/start even though the agent's
+		// continue=true would otherwise keep the loop running.
+		return refreshCalls < 2, nil
+	}
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if refreshCalls != 2 {
+		t.Fatalf("RefreshIssueState calls = %d, want 2 (one after each completed turn before the third start)", refreshCalls)
+	}
+	completed := runtimeEventsNamed(res.RuntimeEvents, task.EventTurnCompleted)
+	if len(completed) != 2 {
+		t.Fatalf("turn_completed events = %d, want exactly 2 (refresher cut off the agent's third turn); events=%#v", len(completed), res.RuntimeEvents)
+	}
+	if res.Summary != "turn 2 done" {
+		t.Fatalf("Summary = %q, want last completed turn's message", res.Summary)
+	}
+}
+
+// TestCodexAppServerRunnerSurfacesRefreshIssueStateError pins the SPEC
+// §16.5 "if refreshed_issue failed: fail" branch: a tracker outage during
+// the per-turn refresh aborts the loop with the refresher's error
+// wrapped, instead of letting the worker continue running with stale
+// continuation state.
+func TestCodexAppServerRunnerSurfacesRefreshIssueStateError(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'mid-run', 'continue': True}}), flush=True)
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 4
+	refresherErr := errors.New("tracker unreachable")
+	in.RefreshIssueState = func(ctx context.Context) (bool, error) {
+		return false, refresherErr
+	}
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err == nil || !errors.Is(err, refresherErr) {
+		t.Fatalf("Run error = %v, want wrapped refresher error %q", err, refresherErr)
+	}
+}
+
 func TestCodexAppServerRunnerTreatsFailedTurnCompletedAsError(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json

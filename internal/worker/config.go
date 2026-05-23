@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -17,7 +19,20 @@ type Config struct {
 	WorkspaceRoot string
 	MirrorRoot    string
 	Workflow      *workflow.Workflow
+	// IssueStateRefresher, when non-nil, is consulted by RunTask to build
+	// the runner-level SPEC §16.5 per-turn refresh hook
+	// (runner.RunInput.RefreshIssueState). Returning nil for a task opts
+	// that run out of the refresh (e.g. mock tasks with no tracker row);
+	// the runner then falls back to the agent-driven continue flag.
+	IssueStateRefresher IssueStateRefresherFactory
 }
+
+// IssueStateRefresherFactory builds a per-task refresher closure that the
+// runner invokes between turns. The factory receives the task and the
+// workflow config that resolved for it (so the closure can read the
+// active_states vocabulary) and returns either a callable or nil when the
+// task should keep the legacy continue-driven loop.
+type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.IssueStateRefresher
 
 // LoadConfigFromEnv reads the worker configuration from the environment using
 // the same defaults the original cmd/worker/main.go used.

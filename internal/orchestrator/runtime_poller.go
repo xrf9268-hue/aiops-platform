@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
@@ -21,10 +22,11 @@ type RuntimePoller struct {
 	config         worker.Config
 	emitter        worker.EventEmitter
 
-	mu              sync.Mutex
-	poller          *Poller
-	dispatcher      *RuntimeDispatcher
-	lastSnapshotKey string
+	mu               sync.Mutex
+	poller           *Poller
+	dispatcher       *RuntimeDispatcher
+	lastSnapshotKey  string
+	currentRefresher IssueStateRefresher
 }
 
 func NewRuntimePoller(tracker IssueStateLister, orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
@@ -55,6 +57,30 @@ func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (Is
 	}
 	rp.poller = initialPoller
 	return rp, nil
+}
+
+// AttachDispatcher rewires the dispatcher the RuntimePoller updates when
+// it builds a new tracker fan-in. Callers that construct their own
+// *RuntimeDispatcher externally (and pass it to orchestrator.Deps.Dispatcher
+// so the actor's Spawn uses it) must call this — otherwise the SPEC §16.5
+// refresher would land on the poller's internal dispatcher, which the
+// actor never sees. Passing nil is a no-op so tests that do not exercise
+// the refresher path can keep their existing construction.
+//
+// The poller copies its most recent tracker refresher onto the freshly
+// attached dispatcher so callers don't have to wait for the next workflow
+// snapshot change before the refresher hook activates.
+func (p *RuntimePoller) AttachDispatcher(d *RuntimeDispatcher) {
+	if p == nil || d == nil {
+		return
+	}
+	p.mu.Lock()
+	p.dispatcher = d
+	carry := p.currentRefresher
+	p.mu.Unlock()
+	if carry != nil {
+		d.SetIssueStateRefresher(carry)
+	}
 }
 
 func (p *RuntimePoller) PollOnce(ctx context.Context) error {
@@ -108,6 +134,10 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	p.trackers = trackerClients
 	p.lastSnapshotKey = key
 	multiLister := multiIssueStateLister{trackers: trackerClients}
+	p.currentRefresher = multiLister
+	if p.dispatcher != nil {
+		p.dispatcher.SetIssueStateRefresher(multiLister)
+	}
 	poller := NewPollerWithReconciliation(multiLister, p.orchestrator, snap.Reconciliation)
 	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
 		poller.routing = &snap.Workflow.Config
@@ -288,6 +318,28 @@ type RuntimeDispatcher struct {
 	baseConfig   worker.Config
 	emitter      worker.EventEmitter
 	orchestrator *Orchestrator
+
+	mu        sync.Mutex
+	refresher IssueStateRefresher
+}
+
+// SetIssueStateRefresher updates the tracker reader the dispatcher uses to
+// build SPEC §16.5 per-turn refresh closures handed to worker.RunTask. The
+// RuntimePoller calls it after each workflow-snapshot reload so the closure
+// always points at the current tracker fan-in (multiIssueStateLister).
+func (d *RuntimeDispatcher) SetIssueStateRefresher(refresher IssueStateRefresher) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.refresher = refresher
+}
+
+func (d *RuntimeDispatcher) currentRefresher() IssueStateRefresher {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.refresher
 }
 
 func NewRuntimeDispatcher(runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimeDispatcher, error) {
@@ -327,5 +379,46 @@ func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, atte
 func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config {
 	cfg := d.baseConfig
 	cfg.Workflow = snap.Workflow
+	refresher := d.currentRefresher()
+	if refresher != nil {
+		cfg.IssueStateRefresher = func(t task.Task, wcfg workflow.Config) runner.IssueStateRefresher {
+			issueID := strings.TrimSpace(t.ID)
+			if issueID == "" {
+				return nil
+			}
+			activeStates := normalizedStateSet(wcfg.Tracker.ActiveStates)
+			if len(activeStates) == 0 {
+				return nil
+			}
+			return func(ctx context.Context) (bool, error) {
+				statesByID, err := refresher.FetchIssueStatesByIDs(ctx, []string{issueID})
+				if err != nil {
+					return false, err
+				}
+				state, ok := statesByID[issueID]
+				if !ok || strings.TrimSpace(state) == "" {
+					// SPEC §16.5 "issue = refreshed_issue[0] or
+					// issue": no row means we treat the issue as
+					// still in its prior (active) state rather
+					// than aborting on a benign absence.
+					return true, nil
+				}
+				_, active := activeStates[strings.ToLower(strings.TrimSpace(state))]
+				return active, nil
+			}
+		}
+	}
 	return cfg
+}
+
+func normalizedStateSet(states []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		trimmed := strings.ToLower(strings.TrimSpace(state))
+		if trimmed == "" {
+			continue
+		}
+		out[trimmed] = struct{}{}
+	}
+	return out
 }
