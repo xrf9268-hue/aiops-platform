@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -682,6 +683,161 @@ func TestParseLinearGraphQLOperationIdentifiesFieldNames(t *testing.T) {
 				t.Fatalf("fieldName = %q, want %q", got.FieldName, tc.fieldName)
 			}
 		})
+	}
+}
+
+// TestParseLinearGraphQLOperationRejectsAdversarialFraming exercises the
+// shapes a prompt-injection attempt would use to confuse the gate into
+// mis-classifying a mutation as a query or hiding the mutation field
+// name. The parser must see through GraphQL comments, single/triple
+// string literals containing GraphQL-shaped text, operation-header
+// directives, and leading fragment definitions.
+func TestParseLinearGraphQLOperationRejectsAdversarialFraming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		query     string
+		kind      linearGraphQLOperationKind
+		fieldName string
+	}{
+		{
+			name:      "leading comment then mutation",
+			query:     "# this comment mentions mutation { issueDelete } but is just text\nmutation { issueUpdate(id: \"1\", input: {}) { success } }",
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "leading comment then shorthand query",
+			query:     "# mutation { issueDelete }\n{ viewer { id } }",
+			kind:      linearGraphQLOperationQuery,
+			fieldName: "viewer",
+		},
+		{
+			name:      "default-value string contains mutation keyword",
+			query:     `mutation M($x: String = "mutation { issueDelete }") { issueUpdate(id: "1", input: {}) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "default-value string contains query shorthand",
+			query:     `mutation M($x: String = "{ viewer { id } }") { commentCreate(input: { issueId: "1", body: "" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "commentCreate",
+		},
+		{
+			name:      "triple-quoted block-string with braces",
+			query:     `mutation { commentCreate(input: { issueId: "1", body: """{ inner } mutation { fake }""" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "commentCreate",
+		},
+		{
+			name:      "operation-header directive",
+			query:     `mutation M @auth(token: "x") { issueArchive(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueArchive",
+		},
+		{
+			name:      "leading fragment then mutation",
+			query:     `fragment F on Issue { id title } mutation { issueDelete(id: "1") { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueDelete",
+		},
+		{
+			name:      "fragment with directive then mutation",
+			query:     `fragment F on Issue @cache(ttl: 60) { id } mutation { issueUpdate(id: "1", input: {}) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "mutation keyword inside escaped string",
+			query:     `mutation { issueUpdate(id: "1", input: { description: "a \"mutation\" inside" }) { success } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueUpdate",
+		},
+		{
+			name:      "interior block does not shadow first field",
+			query:     `mutation { issueDelete(id: "1") { success deletedIssue { id } } }`,
+			kind:      linearGraphQLOperationMutation,
+			fieldName: "issueDelete",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseLinearGraphQLOperation(tc.query)
+			if got.Kind != tc.kind {
+				t.Fatalf("kind = %q, want %q", got.Kind, tc.kind)
+			}
+			if got.FieldName != tc.fieldName {
+				t.Fatalf("fieldName = %q, want %q", got.FieldName, tc.fieldName)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLAdversarialMutationsAreRejected end-to-ends the
+// adversarial-framing cases through the gate: every mutation shape in
+// the table must produce a structured failure and zero HTTP requests
+// under default-deny.
+func TestLinearGraphQLAdversarialMutationsAreRejected(t *testing.T) {
+	queries := []string{
+		"# innocuous comment\nmutation { issueDelete(id: \"1\") { success } }",
+		`mutation M($x: String = "{ viewer { id } }") { issueDelete(id: "1") { success } }`,
+		`fragment F on Issue { id } mutation { issueDelete(id: "1") { success } }`,
+		`mutation M @auth(token: "x") { issueDelete(id: "1") { success } }`,
+		`mutation { issueDelete(id: "1") { success deletedIssue { id } } }`,
+	}
+	for i, q := range queries {
+		t.Run(fmt.Sprintf("query_%d", i), func(t *testing.T) {
+			server := &fakeLinearGraphQLServer{}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+			result, err := proxy.call(context.Background(), ToolCall{Query: q})
+			assertStructuredFailure(t, result, err, "mutations are disabled by this workflow")
+			if _, _, requests := server.recorded(); requests != 0 {
+				t.Fatalf("server received %d requests for adversarial query %q, want 0", requests, q)
+			}
+		})
+	}
+}
+
+// TestLinearGraphQLWorkpadEmitsAuditEvent verifies the should-fix from
+// the review: harness-driven mutations dispatched via the workpad must
+// also surface as tool_call_mutation events so operators see
+// harness-attributable Linear writes alongside agent-driven ones.
+func TestLinearGraphQLWorkpadEmitsAuditEvent(t *testing.T) {
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(string(body), "AIWorkpadFind"):
+			_, _ = io.WriteString(w, `{"data":{"issue":{"comments":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[]}}}}`)
+		default:
+			_, _ = io.WriteString(w, `{"data":{"commentCreate":{"success":true,"comment":{"id":"c-1"}}}}`)
+		}
+	}))
+	defer httpServer.Close()
+
+	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client()}
+	harnessTool := DynamicTool{Name: "linear_graphql", Call: proxy.callRaw}
+	workpad := NewLinearWorkpadTool(harnessTool)
+
+	var sinkCalls []string
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
+		sinkCalls = append(sinkCalls, name)
+	})
+
+	result, err := workpad.Call(ctx, ToolCall{Variables: map[string]any{
+		"issueId": "LIN-123",
+		"summary": "test",
+	}})
+	if err != nil {
+		t.Fatalf("workpad call: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("workpad mutation failed: %s", result)
+	}
+	if len(sinkCalls) != 1 || sinkCalls[0] != "commentCreate" {
+		t.Fatalf("workpad audit sink calls = %v, want [commentCreate]", sinkCalls)
 	}
 }
 

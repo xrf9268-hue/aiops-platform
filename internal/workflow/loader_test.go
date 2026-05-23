@@ -666,6 +666,33 @@ Prompt body
 	}
 }
 
+func TestLoadRejectsDuplicateAllowedMutations(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+codex:
+  linear_graphql:
+    allow_mutations: true
+    allowed_mutations:
+      - issueUpdate
+      - commentCreate
+      - issueUpdate
+---
+Prompt body
+`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load(duplicate allowed_mutations) = nil, want validation error")
+	}
+	for _, want := range []string{path, "allowed_mutations[2]", "duplicates", "issueUpdate"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Load error = %q, want substring %q", err, want)
+		}
+	}
+}
+
 func TestLoadRejectsLinearGraphQLOnClaudeEmbed(t *testing.T) {
 	path := writeTempWorkflow(t, `---
 repo:

@@ -73,8 +73,8 @@ const (
 	// (see #295).
 	EventToolCallMutation = "tool_call_mutation"
 	EventNotification     = "notification"
-	EventOtherMessage         = "other_message"
-	EventMalformed            = "malformed"
+	EventOtherMessage     = "other_message"
+	EventMalformed        = "malformed"
 
 	EventEnqueued                = "enqueued"
 	EventClaimed                 = "claimed"

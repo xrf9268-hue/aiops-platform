@@ -397,6 +397,7 @@ func validateConfig(path string, cfg Config) error {
 	if !cfg.Claude.LinearGraphQL.IsZero() {
 		return fmt.Errorf("%s: claude.linear_graphql is not supported (linear_graphql narrowing is a codex-side tool gate; declare it under codex.linear_graphql)", path)
 	}
+	seenAllowedMutations := make(map[string]int, len(cfg.Codex.LinearGraphQL.AllowedMutations))
 	for i, name := range cfg.Codex.LinearGraphQL.AllowedMutations {
 		if strings.TrimSpace(name) == "" {
 			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] is empty", path, i)
@@ -404,6 +405,10 @@ func validateConfig(path string, cfg Config) error {
 		if !isLinearGraphQLMutationName(name) {
 			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] %q is not a valid GraphQL field name", path, i, name)
 		}
+		if first, ok := seenAllowedMutations[name]; ok {
+			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] %q duplicates allowed_mutations[%d]", path, i, name, first)
+		}
+		seenAllowedMutations[name] = i
 	}
 	if len(cfg.Codex.LinearGraphQL.AllowedMutations) > 0 && !cfg.Codex.LinearGraphQL.AllowMutations {
 		return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations requires codex.linear_graphql.allow_mutations: true", path)
