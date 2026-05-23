@@ -89,7 +89,6 @@ type RetryScheduler struct {
 	MaxBackoff time.Duration
 }
 
-const retryCapacityRecheckDelay = 100 * time.Millisecond
 const continuationRetryDelay = time.Second
 
 // retryFetchTimeout caps the SPEC §16.6 candidate-fetch call a fired
@@ -1244,8 +1243,8 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 }
 
 // retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
-// honor global + per-state capacity gates, then either spawn or re-arm a
-// short capacity-recheck timer. Shared between the legacy direct-dispatch
+// honor global + per-state capacity gates, then either spawn or reschedule
+// via the configured backoff. Shared between the legacy direct-dispatch
 // path (no CandidateLister) and the SPEC §16.6 post-fetch path.
 func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, kind RetryKind, o *Orchestrator) func() {
 	// Use entry.Issue rather than any timer-captured snapshot: reconciliation
@@ -1253,17 +1252,19 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	// state, and both the per-state capacity gate and the spawned worker
 	// must see the live state.
 	issue := entry.Issue
+	identifier := entry.Identifier
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
-		// Leave the retry queued and arm a short follow-up timer so the issue
-		// is retried after capacity can free instead of spawning over the cap.
-		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_capacity_timer")
+		// Mirror upstream handle_active_retry (orchestrator.ex:1142-1161):
+		// reschedule through the configured backoff with attempt+1 and a
+		// typed "no available orchestrator slots" error instead of arming a
+		// short 100ms re-fire timer.
+		return capacityDeferRetry(st, id, issue, identifier, attempt, o)
 	}
 	if st.StateCapacityFull(issue.State) {
-		// Retry timers must also obey per-state capacity gates. Leave the retry
-		// queued and arm a short follow-up timer so noisy states cannot exceed
-		// max_concurrent_agents_by_state while other states are running.
-		return rearmRetryCapacityRecheck(entry, id, issue, attempt, kind, o, "orchestrator.retry_state_capacity_timer")
+		// Retry timers must also obey per-state capacity gates. Same
+		// upstream-aligned reschedule shape as the global-cap branch.
+		return capacityDeferRetry(st, id, issue, identifier, attempt, o)
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
@@ -1275,22 +1276,28 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	}
 }
 
-func rearmRetryCapacityRecheck(entry *RetryEntry, id IssueID, issue tracker.Issue, attempt int, kind RetryKind, o *Orchestrator, site string) func() {
-	if entry.Timer != nil {
-		entry.Timer.Stop()
-	}
-	entry.DueAt = time.Now().Add(retryCapacityRecheckDelay)
-	entry.Timer = time.AfterFunc(retryCapacityRecheckDelay, func() {
-		defer recoverPanic(site)
-		_ = o.submit(o.runCtx, &retryFireOp{
-			o:       o,
-			id:      id,
-			issue:   issue,
-			attempt: attempt,
-			kind:    kind,
-		})
+// capacityDeferRetry mirrors upstream handle_active_retry's no-slots
+// branch (elixir/lib/symphony_elixir/orchestrator.ex:1142-1161): when a
+// fired failure-retry observes a full global or per-state capacity gate,
+// reschedule the retry through the configured backoff (SPEC §8.4), bump
+// the attempt counter, and stamp the entry with the upstream-canonical
+// "no available orchestrator slots" error so operators can observe
+// sustained capacity pressure in the runtime event stream. The prior
+// 100ms re-fire loop bypassed the backoff formula, left the attempt
+// counter frozen across thousands of re-fires, and produced no runtime
+// event for the cap-pressure case.
+func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, o *Orchestrator) func() {
+	const runErr = "no available orchestrator slots"
+	nextAttempt := attempt + 1
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    id,
+		Identifier: identifier,
+		Message:    runErr,
 	})
-	return nil
+	return func() {
+		_ = o.ScheduleRetry(o.runCtx, issue, identifier, nextAttempt, runErr)
+	}
 }
 
 func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {

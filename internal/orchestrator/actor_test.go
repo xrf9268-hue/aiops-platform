@@ -1812,16 +1812,19 @@ func TestRetryFire_RespectsCapacityBeforeSpawning(t *testing.T) {
 	}
 }
 
-// TestRetryFire_CapacityDeferralUsesShortRecheckDelay is a regression for
-// capacity-blocked retries being re-enqueued through the normal scheduler
-// backoff. Temporary capacity pressure should recheck soon, not wait a full
-// retry interval while the issue stays claimed and poll ticks cannot help it.
-func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
+// TestRetryFire_GlobalCapacityFullReschedulesViaBackoff pins the SPEC §16.6
+// algorithm-alignment fix for #306: when a fired failure-retry observes
+// global capacity full, the orchestrator must reschedule via the
+// configured backoff (attempt+1) and stamp the entry with the upstream
+// "no available orchestrator slots" error — not arm a 100ms re-fire
+// timer that leaves the attempt counter frozen and produces no runtime
+// event for the cap-pressure case.
+func TestRetryFire_GlobalCapacityFullReschedulesViaBackoff(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 1)
 	o := New(st, Deps{
 		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: []time.Duration{50 * time.Millisecond}},
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1830,34 +1833,114 @@ func TestRetryFire_CapacityDeferralUsesShortRecheckDelay(t *testing.T) {
 		t.Fatalf("WaitStarted: %v", err)
 	}
 
-	issueA := tracker.Issue{ID: "ENG-A", Identifier: "ENG-A", Title: "retry soon"}
-	issueB := tracker.Issue{ID: "ENG-B", Identifier: "ENG-B", Title: "running now"}
-	if err := o.RequestDispatch(context.Background(), issueA, nil); err != nil {
-		t.Fatalf("dispatch A: %v", err)
+	blocker := tracker.Issue{ID: "BLOCKER", Identifier: "BLOCKER", Title: "blocker"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch blocker: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+
+	retryIssue := tracker.Issue{ID: "RETRY", Identifier: "RETRY", Title: "retry me"}
+	if err := o.ScheduleRetry(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
 		return len(v.Retrying) == 1
 	}, time.Second)
 
-	if err := o.RequestDispatch(context.Background(), issueB, nil); err != nil {
-		t.Fatalf("dispatch B while A is retrying: %v", err)
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(retryIssue.ID),
+		issue:   retryIssue,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
 	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
 
-	// Let A's retry timer fire while B occupies the only slot; then free B.
-	time.Sleep(150 * time.Millisecond)
-	disp.finishAt(1, WorkerResult{Err: nil, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 &&
+			v.Retrying[0].Attempt == 2 &&
+			strings.Contains(v.Retrying[0].Error, "no available orchestrator slots")
+	}, 2*time.Second)
 
-	waitFor(t, func() bool { return disp.count() == 3 }, time.Second)
-	v, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
+	v, _ := o.Snapshot(context.Background())
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 1 (no spawn while capacity full)", got)
 	}
-	if len(v.Running) != 1 || v.Running[0].IssueID != IssueID(issueA.ID) {
-		t.Fatalf("running entries after capacity frees = %+v, want retry issue A re-dispatched by short recheck", v.Running)
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 (capacity-deferred reschedule)", len(v.Retrying))
+	}
+	if got := v.Retrying[0].Attempt; got != 2 {
+		t.Fatalf("Retrying[0].Attempt = %d, want 2 (attempt+1 from capacity defer)", got)
+	}
+	if got := v.Retrying[0].Error; !strings.Contains(got, "no available orchestrator slots") {
+		t.Fatalf("Retrying[0].Error = %q, want substring %q", got, "no available orchestrator slots")
+	}
+}
+
+// TestRetryFire_PerStateCapacityFullReschedulesViaBackoff is the symmetric
+// per-state version of the global-capacity test above: with
+// max_concurrent_agents_by_state[Rework]=1 and one running Rework issue,
+// firing a queued Rework retry must reschedule via the backoff with the
+// same upstream-canonical error.
+func TestRetryFire_PerStateCapacityFullReschedulesViaBackoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	blocker := tracker.Issue{ID: "BLOCKER", Identifier: "BLOCKER", Title: "blocker", State: "Rework"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch blocker: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	retryIssue := tracker.Issue{ID: "RETRY", Identifier: "RETRY", Title: "retry me", State: "Rework"}
+	if err := o.ScheduleRetry(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1
+	}, time.Second)
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(retryIssue.ID),
+		issue:   retryIssue,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 &&
+			v.Retrying[0].Attempt == 2 &&
+			strings.Contains(v.Retrying[0].Error, "no available orchestrator slots")
+	}, 2*time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if got := disp.count(); got != 1 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 1 (no spawn while per-state cap full)", got)
+	}
+	if got := v.Retrying[0].Attempt; got != 2 {
+		t.Fatalf("Retrying[0].Attempt = %d, want 2 (attempt+1 from per-state cap defer)", got)
+	}
+	if got := v.Retrying[0].Error; !strings.Contains(got, "no available orchestrator slots") {
+		t.Fatalf("Retrying[0].Error = %q, want substring %q", got, "no available orchestrator slots")
 	}
 }
 
@@ -2543,9 +2626,9 @@ func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T)
 	lister := &fakeCandidateLister{issues: []tracker.Issue{fresh}}
 
 	// Cap capacity at 1 and fill it with a different issue so the retry's
-	// dispatch tail trips the global cap and re-arms via
-	// rearmRetryCapacityRecheck — leaving the refreshed entry in
-	// RetryAttempts for the snapshot to observe.
+	// dispatch tail trips the global cap and reschedules via
+	// capacityDeferRetry — leaving a refreshed entry in RetryAttempts
+	// (carrying the same Identifier) for the snapshot to observe.
 	st := NewOrchestratorState(15000, 1)
 	o := New(st, Deps{
 		Dispatcher:      disp,
@@ -2583,8 +2666,9 @@ func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T)
 	// The retry-fire chain: candidate fetch → retryFireAfterFetchOp.apply
 	// (refreshes entry.Issue + entry.Identifier from r.found) →
 	// retryFireDispatchTail observes RunningCount=1 >= cap=1 →
-	// rearmRetryCapacityRecheck leaves the entry in RetryAttempts. The
-	// Retrying snapshot view must surface the refreshed identifier.
+	// capacityDeferRetry submits a fresh ScheduleRetry that carries the
+	// refreshed Identifier into a new RetryEntry. The Retrying snapshot
+	// view must surface that identifier.
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
 		return len(v.Retrying) == 1 && v.Retrying[0].Identifier == "NEW-1"
