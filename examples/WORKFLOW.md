@@ -64,8 +64,8 @@ polling:
 #       project_slug: api-platform
 #       team_key: ENG
 #       labels: [backend]
-#       custom_fields:
-#         Runtime: go
+# `tracker.custom_fields:` is currently rejected at workflow load —
+# Linear's GraphQL schema does not expose Issue custom fields. See #326.
 
 workspace:
   root: ~/aiops-workspaces/personal
