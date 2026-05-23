@@ -39,6 +39,8 @@ func initBareUpstreamWithWorkflow(t *testing.T, workflowBody string) (cloneURL s
 		{"git", "init", "-q", "-b", "main", work},
 		{"git", "-C", work, "config", "user.email", "u@example.com"},
 		{"git", "-C", work, "config", "user.name", "u"},
+		{"git", "-C", work, "config", "commit.gpgsign", "false"},
+		{"git", "-C", work, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
@@ -857,6 +859,8 @@ func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
 		{"git", "clone", "-q", seed, work},
 		{"git", "-C", work, "config", "user.email", "u@example.com"},
 		{"git", "-C", work, "config", "user.name", "u"},
+		{"git", "-C", work, "config", "commit.gpgsign", "false"},
+		{"git", "-C", work, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)

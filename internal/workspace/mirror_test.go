@@ -33,6 +33,8 @@ func initBareUpstream(t *testing.T) string {
 		{"git", "init", "-q", "-b", "main", work},
 		{"git", "-C", work, "config", "user.email", "u@example.com"},
 		{"git", "-C", work, "config", "user.name", "u"},
+		{"git", "-C", work, "config", "commit.gpgsign", "false"},
+		{"git", "-C", work, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			t.Fatalf("%v: %v\n%s", args, err, out)
@@ -570,11 +572,15 @@ func unsetEnvForTest(t *testing.T, keys ...string) {
 // worktree. PrepareGitWorkspace inherits config from the bare mirror, but the
 // mirror is created without an identity (we never commit inside it), so a
 // commit issued from the worktree would otherwise fail in CI environments
-// without a global git identity.
+// without a global git identity. The gpgsign disables protect the fixture
+// from inheriting a host-level commit.gpgsign=true when the signing program
+// is missing or broken (see #288).
 func configureGitIdentity(dir string) error {
 	for _, args := range [][]string{
 		{"git", "-C", dir, "config", "user.email", "u@example.com"},
 		{"git", "-C", dir, "config", "user.name", "u"},
+		{"git", "-C", dir, "config", "commit.gpgsign", "false"},
+		{"git", "-C", dir, "config", "tag.gpgsign", "false"},
 	} {
 		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
 			return errFromOut(args, err, out)
