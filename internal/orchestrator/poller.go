@@ -644,12 +644,17 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 	return out
 }
 
+// workspacePathForTask resolves where the worker will materialize tk's
+// worktree. The dispatcher constructors (RuntimeDispatcher.Spawn,
+// cmd/worker, e2e harness, every poller_test fixture) all set
+// cfg.Workflow non-nil before reaching this path; the previous defensive
+// nil branch was load-bearing only when LoadConfigFromEnv stamped a
+// literal `/tmp/aiops-workspaces` onto cfg.WorkspaceRoot. Post-#319 that
+// literal is gone, so a nil Workflow would yield an empty root and a
+// useless workspace path — surfacing that as a nil-deref panic at the
+// call site beats silently writing to "" further downstream.
 func workspacePathForTask(cfg worker.Config, tk task.Task) string {
-	root := cfg.WorkspaceRoot
-	if cfg.Workflow != nil {
-		root = worker.EffectiveWorkspaceRoot(cfg, cfg.Workflow.Config)
-	}
-	return workspace.New(root).PathFor(tk)
+	return workspace.New(worker.EffectiveWorkspaceRoot(cfg, cfg.Workflow.Config)).PathFor(tk)
 }
 
 func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, string, error) {

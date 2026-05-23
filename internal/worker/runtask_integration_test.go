@@ -173,16 +173,63 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 		yamlRoot := defaultWorkflowWorkspaceRootForTest(t)
 		cfg := workerCfgForIntegrationWithWorkspaceRoot(t, yamlRoot)
 		cfg.WorkspaceRoot = envRoot
+		tkLocal := tk
+		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
+		t.Cleanup(func() {
+			os.RemoveAll(filepath.Join(yamlRoot, tkLocal.RepoOwner))
+		})
 
-		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
 			t.Fatalf("runTask: %v", rterr.Err)
 		}
 
-		assertTaskWorkdir(t, yamlRoot, tk)
-		if _, err := os.Stat(filepath.Join(envRoot, "acme", "demo", "linear_issue", "issue-uuid")); !os.IsNotExist(err) {
+		assertTaskWorkdir(t, yamlRoot, tkLocal)
+		if _, err := os.Stat(filepath.Join(envRoot, tkLocal.RepoOwner, tkLocal.RepoName, "linear_issue", tkLocal.SourceEventID)); !os.IsNotExist(err) {
 			t.Fatalf("env workspace root should not be used when explicit workflow workspace.root equals default; stat err=%v", err)
 		}
 	})
+
+	// SPEC §6.4 default fallback (#319): with no `workspace.root` in
+	// WORKFLOW.md and no WORKSPACE_ROOT env, the worker must land on
+	// `<system-temp>/symphony_workspaces` — the same path
+	// `worker --print-config` reports. Pre-#319 it silently landed on
+	// the env loader's `/tmp/aiops-workspaces` literal.
+	t.Run("spec default wins when neither env nor yaml set", func(t *testing.T) {
+		ev := &fakeEmitter{}
+		cfg := workerCfgForIntegration(t)
+		cfg.WorkspaceRoot = ""
+		specDefault := defaultWorkflowWorkspaceRootForTest(t)
+		tkLocal := tk
+		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
+		t.Cleanup(func() {
+			os.RemoveAll(filepath.Join(specDefault, tkLocal.RepoOwner))
+		})
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+
+		assertTaskWorkdir(t, specDefault, tkLocal)
+		legacyRoot := "/tmp/aiops-workspaces"
+		if _, err := os.Stat(filepath.Join(legacyRoot, tkLocal.RepoOwner, tkLocal.RepoName, "linear_issue", tkLocal.SourceEventID)); !os.IsNotExist(err) {
+			t.Fatalf("pre-#319 legacy /tmp/aiops-workspaces path should not be used; stat err=%v", err)
+		}
+	})
+}
+
+// uniqueRepoOwnerForTest returns a RepoOwner unique to this
+// (process, subtest) pair. The two precedence subtests that exercise
+// the SPEC default (`<system-temp>/symphony_workspaces`) write into a
+// path shared across the host, so the fixed `acme/demo` owner/name pair
+// from initBareUpstreamWithWorkflow would let two concurrent `go test`
+// invocations — or a real worker running on the same host — collide on
+// the same `<owner>/<name>/linear_issue/<event>` subtree. PID rules
+// out cross-process collision; the sanitized subtest name rules out
+// in-process collision between sibling subtests.
+func uniqueRepoOwnerForTest(t *testing.T) string {
+	t.Helper()
+	safe := strings.ReplaceAll(filepath.Base(t.Name()), "/", "_")
+	return fmt.Sprintf("acme-pid%d-%s", os.Getpid(), safe)
 }
 
 func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
@@ -202,13 +249,15 @@ func workerCfgForIntegrationWithWorkspaceRoot(t *testing.T, root string) worker.
 	return workerCfgForIntegrationWithWorkflow(t, body)
 }
 
+// defaultWorkflowWorkspaceRootForTest returns the SPEC §6.4 default
+// `workspace.root` (`<system-temp>/symphony_workspaces`) — the same path
+// DefaultConfig seeds and `worker --print-config` reports. The pre-#319
+// helper returned `~/aiops-workspaces`, the personal-profile legacy that
+// PR #316 retired at the loader floor; tests that pinned that literal
+// kept the SPEC drift alive at the worker layer.
 func defaultWorkflowWorkspaceRootForTest(t *testing.T) string {
 	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("user home dir: %v", err)
-	}
-	return filepath.Join(home, "aiops-workspaces")
+	return filepath.Join(os.TempDir(), "symphony_workspaces")
 }
 
 func writeServiceWorkflowForIntegration(t *testing.T, body string) string {

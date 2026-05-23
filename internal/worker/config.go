@@ -34,11 +34,17 @@ type Config struct {
 // task should keep the legacy continue-driven loop.
 type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.IssueStateRefresher
 
-// LoadConfigFromEnv reads the worker configuration from the environment using
-// the same defaults the original cmd/worker/main.go used.
+// LoadConfigFromEnv reads the worker configuration from the environment.
+//
+// WorkspaceRoot intentionally has no literal default here — when
+// WORKSPACE_ROOT is unset, Config.WorkspaceRoot stays empty and
+// EffectiveWorkspaceRoot falls back to the workflow's `Workspace.Root`
+// (the SPEC §6.4 default seeded by workflow.DefaultConfig). The previous
+// `/tmp/aiops-workspaces` fallback silently shadowed that SPEC default
+// regardless of WORKFLOW.md content; see #319.
 func LoadConfigFromEnv() Config {
 	return Config{
-		WorkspaceRoot: env("WORKSPACE_ROOT", "/tmp/aiops-workspaces"),
+		WorkspaceRoot: os.Getenv("WORKSPACE_ROOT"),
 		MirrorRoot:    os.Getenv("AIOPS_MIRROR_ROOT"),
 	}
 }
@@ -46,11 +52,4 @@ func LoadConfigFromEnv() Config {
 // PrintConfig dispatches the `worker --print-config <workdir>` subcommand.
 func PrintConfig(workdir string, stdout, stderr io.Writer) int {
 	return printConfig(workdir, stdout, stderr)
-}
-
-func env(k, d string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return d
 }

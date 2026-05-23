@@ -109,7 +109,7 @@ just `<workdir>/.git`) — the worker recovers on the next prepare.
 
 | Env var               | Default                                                                 | Purpose                                                  |
 | --------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------- |
-| `WORKSPACE_ROOT`      | `/tmp/aiops-workspaces`                                                 | Where per-task worktrees live.                           |
+| `WORKSPACE_ROOT`      | _unset_ — falls back to WORKFLOW.md `workspace.root` (SPEC §6.4 default `<system-temp>/symphony_workspaces`) | Where per-task worktrees live.                           |
 | `AIOPS_MIRROR_ROOT`   | `os.UserCacheDir()/aiops-platform/mirrors` (fallback `$TMPDIR/...`)     | Where bare mirror clones are cached.                     |
 
 On Linux containers `os.UserCacheDir()` resolves to `$XDG_CACHE_HOME` or
