@@ -401,6 +401,25 @@ func validateConfig(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
+	if !cfg.Claude.LinearGraphQL.IsZero() {
+		return fmt.Errorf("%s: claude.linear_graphql is not supported (linear_graphql narrowing is a codex-side tool gate; declare it under codex.linear_graphql)", path)
+	}
+	seenAllowedMutations := make(map[string]int, len(cfg.Codex.LinearGraphQL.AllowedMutations))
+	for i, name := range cfg.Codex.LinearGraphQL.AllowedMutations {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] is empty", path, i)
+		}
+		if !isLinearGraphQLMutationName(name) {
+			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] %q is not a valid GraphQL field name", path, i, name)
+		}
+		if first, ok := seenAllowedMutations[name]; ok {
+			return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations[%d] %q duplicates allowed_mutations[%d]", path, i, name, first)
+		}
+		seenAllowedMutations[name] = i
+	}
+	if len(cfg.Codex.LinearGraphQL.AllowedMutations) > 0 && !cfg.Codex.LinearGraphQL.AllowMutations {
+		return fmt.Errorf("%s: codex.linear_graphql.allowed_mutations requires codex.linear_graphql.allow_mutations: true", path)
+	}
 	if cfg.Agent.MaxRetryBackoffMs <= 0 {
 		return fmt.Errorf("%s: agent.max_retry_backoff_ms must be positive", path)
 	}
@@ -639,10 +658,13 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 		cfg.Agent.Timeout = 30 * time.Minute
 	}
 	// MaxTimeoutRetries is *int so callers can distinguish "absent"
-	// (nil → MaxTimeoutRetriesValue() returns the schema default of 1)
-	// from "explicitly 0" (zero retries). We deliberately do not coerce
-	// here: forcing 0 → 1 stripped users of the ability to disable the
-	// runner-timeout retry budget entirely.
+	// (nil → MaxTimeoutRetriesValue() returns UnboundedRetryBudget so the
+	// SPEC §8.4 retry-until-tracker-changes contract is the default) from
+	// "explicitly 0" (no runner-timeout re-queue) or an explicit positive
+	// integer (SPEC §15.5 harness-hardening cap). We deliberately do not
+	// coerce here: forcing 0 → unbounded would strip operators of the
+	// ability to opt into a single-shot run, and forcing nil → 1 would
+	// silently deviate from SPEC §8.4.
 	if cfg.Polling.IntervalMs <= 0 {
 		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
 	}
@@ -812,6 +834,33 @@ func NormalizeStateConcurrencyLimits(limits map[string]int) map[string]int {
 		out[key] = limit
 	}
 	return out
+}
+
+// isLinearGraphQLMutationName reports whether s is a valid GraphQL Name
+// per the spec (https://spec.graphql.org/October2021/#sec-Names): an ASCII
+// letter or underscore followed by ASCII letters, digits, or underscores.
+// Used by the codex.linear_graphql.allowed_mutations validator so a typo
+// like " issueUpdate" (with leading space) fails at load time rather than
+// at the first attempted mutation.
+func isLinearGraphQLMutationName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		letter := (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+		digit := ch >= '0' && ch <= '9'
+		if i == 0 {
+			if !letter && ch != '_' {
+				return false
+			}
+			continue
+		}
+		if !letter && !digit && ch != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 // NormalizeStateConcurrencyKey canonicalizes a single tracker state name

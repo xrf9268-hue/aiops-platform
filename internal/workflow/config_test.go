@@ -861,22 +861,72 @@ body
 }
 
 // TestDefaultConfigAgentTimeout pins the schema-level defaults the
-// platform contract advertises: a 30-minute per-task timeout, one
-// generic failure retry, and one dedicated retry slot for runner
-// timeouts.
+// platform contract advertises: a 30-minute per-task timeout and
+// SPEC-aligned unbounded retry budgets (the §15.5 harness-hardening
+// caps are opt-in). The exponential-backoff ceiling is 5 minutes per
+// SPEC §6.4.
 func TestDefaultConfigAgentTimeout(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("default Agent.Timeout: got %v want 30m", cfg.Agent.Timeout)
 	}
-	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != 1 {
-		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want 1", got)
+	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != UnboundedRetryBudget {
+		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
 	}
-	if got := cfg.Agent.MaxRetryAttemptsValue(); got != 1 {
-		t.Fatalf("default Agent.MaxRetryAttemptsValue: got %d want 1", got)
+	if got := cfg.Agent.MaxRetryAttemptsValue(); got != UnboundedRetryBudget {
+		t.Fatalf("default Agent.MaxRetryAttemptsValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
 	}
 	if cfg.Agent.MaxRetryBackoffMs != 300000 {
 		t.Fatalf("default Agent.MaxRetryBackoffMs: got %d want 300000", cfg.Agent.MaxRetryBackoffMs)
+	}
+}
+
+// TestMaxRetryAttemptsValue_OptInCapHonored verifies that an explicit
+// positive opt-in survives MaxRetryAttemptsValue() exactly and that
+// explicit zero is honored as "no retries" (the deliberate single-shot
+// mode) rather than coerced back to the unbounded default. This is the
+// harness-hardening path documented under SPEC §15.5.
+func TestMaxRetryAttemptsValue_OptInCapHonored(t *testing.T) {
+	cases := []struct {
+		name string
+		set  int
+		want int
+	}{
+		{"explicit zero disables retries", 0, 0},
+		{"explicit one matches historical default", 1, 1},
+		{"explicit three caps at three", 3, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val := tc.set
+			cfg := AgentConfig{MaxRetryAttempts: &val}
+			if got := cfg.MaxRetryAttemptsValue(); got != tc.want {
+				t.Fatalf("MaxRetryAttemptsValue(%d) = %d, want %d", tc.set, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMaxTimeoutRetriesValue_OptInCapHonored mirrors
+// TestMaxRetryAttemptsValue_OptInCapHonored for runner-timeout retries.
+func TestMaxTimeoutRetriesValue_OptInCapHonored(t *testing.T) {
+	cases := []struct {
+		name string
+		set  int
+		want int
+	}{
+		{"explicit zero disables re-queue", 0, 0},
+		{"explicit one matches historical default", 1, 1},
+		{"explicit five caps at five", 5, 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			val := tc.set
+			cfg := AgentConfig{MaxTimeoutRetries: &val}
+			if got := cfg.MaxTimeoutRetriesValue(); got != tc.want {
+				t.Fatalf("MaxTimeoutRetriesValue(%d) = %d, want %d", tc.set, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1646,8 +1696,8 @@ func TestLoadOptionalAppliesAgentTimeoutDefaults(t *testing.T) {
 	if wf.Config.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("expanded Agent.Timeout: got %v want 30m", wf.Config.Agent.Timeout)
 	}
-	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 1 {
-		t.Fatalf("expanded Agent.MaxTimeoutRetriesValue: got %d want 1", got)
+	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != UnboundedRetryBudget {
+		t.Fatalf("expanded Agent.MaxTimeoutRetriesValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
 	}
 }
 

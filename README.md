@@ -51,8 +51,8 @@ If the canonical file does not exist, the worker proceeds with built-in defaults
 | `agent.max_concurrent_agents` | `10` | SPEC §6.4 |
 | `agent.max_turns` | `20` clean turns per issue before continuation stops | SPEC §6.4 |
 | `agent.timeout` | `30m` | implementation (#215) |
-| `agent.max_retry_attempts` | `1` failure retry after the first run (`0` disables) | implementation (#215) |
-| `agent.max_timeout_retries` | `1` timeout retry after the first timeout (`0` disables) | implementation (#215) |
+| `agent.max_retry_attempts` | unbounded (SPEC §8.4 retry-until-tracker-changes); explicit positive integer opts into the §15.5 harness-hardening cap, explicit `0` disables failure retries | SPEC §8.4 / §16.6 default; opt-in cap tracked under DEVIATIONS D29 |
+| `agent.max_timeout_retries` | unbounded (SPEC §8.4 backoff-only); explicit positive integer opts into the §15.5 cap, explicit `0` disables runner-timeout re-queues | SPEC §8.4 default; opt-in cap tracked under DEVIATIONS D29 |
 | `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) | implementation (#230) |
 | `codex.command` | `codex app-server` | SPEC §6.4 |
 | `pr.draft` | `false` | implementation |

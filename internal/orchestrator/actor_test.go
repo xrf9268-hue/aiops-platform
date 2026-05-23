@@ -1200,6 +1200,58 @@ func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
 	}
 }
 
+// TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap covers SPEC
+// §7.1 + §5.3.5 (issue #216): when the agent runner enforces agent.max_turns
+// inside its own session loop (codex app-server), the orchestrator must not
+// reuse the same value as a continuation-spawn budget. The clean-continuation
+// loop should keep dispatching fresh sessions past max_turns until tracker
+// state changes.
+func TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap(t *testing.T) {
+	disp := &fakeDispatcher{}
+	maxTurns := 2
+	enforces := true
+	o, cancel := startActor(t, Deps{
+		Dispatcher:             disp,
+		Scheduler:              &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}},
+		MaxTurns:               &maxTurns,
+		RunnerEnforcesMaxTurns: &enforces,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-APPSERVER-CONT", Identifier: "ENG-APPSERVER-CONT", Title: "app-server continuation"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	// Drive several clean continuation cycles past max_turns. With the
+	// app-server runner gating in place each clean exit must schedule another
+	// continuation rather than landing in Failed.
+	for cycle := 0; cycle < 4; cycle++ {
+		disp.finishAt(cycle, WorkerResult{Elapsed: time.Millisecond})
+		expectedAttempt := cycle + 1
+		waitFor(t, func() bool {
+			v, err := o.Snapshot(context.Background())
+			return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == expectedAttempt
+		}, time.Second)
+		if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+			t.Fatalf("tracker-rechecked continuation dispatch cycle %d: %v", cycle, err)
+		}
+		waitFor(t, func() bool { return disp.count() == cycle+2 }, time.Second)
+	}
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Failed) != 0 {
+		t.Fatalf("Failed entries with runner-enforced max_turns = %+v, want none", v.Failed)
+	}
+	if got := disp.count(); got <= maxTurns {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want strictly more than max_turns=%d continuation spawns", got, maxTurns)
+	}
+}
+
 // TestFinalize_AbnormalExitSchedulesRetry covers the §7.3 abnormal exit
 // branch: the dispatcher reports an error, finalize records elapsed
 // without marking Completed, and schedules a retry through the actor.
@@ -1234,11 +1286,19 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 }
 
-func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) {
+// TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget verifies
+// the SPEC §15.5 harness-hardening opt-in: when a workflow sets an
+// explicit agent.max_retry_attempts cap, the orchestrator stops
+// scheduling retries once the cap is exhausted and pins the issue
+// under OrchestratorState.Failed. The default (no cap) is exercised
+// by TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault.
+func TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget(t *testing.T) {
 	disp := &fakeDispatcher{}
+	cap := 1
 	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		Dispatcher:        disp,
+		Scheduler:         RetryScheduler{MaxBackoff: time.Hour},
+		MaxFailureRetries: &cap,
 	})
 	defer cancel()
 
@@ -1264,6 +1324,53 @@ func TestFinalize_AbnormalExitStopsAfterDefaultFailureRetryBudget(t *testing.T) 
 	}
 	if got := disp.count(); got != 1 {
 		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional retry after exhausted budget", got)
+	}
+	if len(v.Failed) != 1 {
+		t.Fatalf("failed entries after exhausted opt-in budget = %d, want 1 (issue pinned until tracker changes)", len(v.Failed))
+	}
+}
+
+// TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault verifies
+// the SPEC §8.4 / §16.6 default — no MaxFailureRetries in Deps means
+// the cap is disabled and the orchestrator keeps scheduling retries
+// past the historical default-1 threshold. Without this guard, a
+// regression that re-introduces a finite default would silently
+// truncate retry sequences for issues a SPEC-conforming operator
+// expects to keep tapping the backoff wall.
+func TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-UNBOUNDED", Identifier: "ENG-UNBOUNDED", Title: "no cap"}
+	// Simulate a second failure: the worker has already failed once and
+	// rescheduled, and the tracker recheck redispatched at attempt=1.
+	// Under the legacy default-1 cap this attempt+1 would exceed the
+	// budget; under the SPEC default it must enter Retrying again.
+	attempt := 1
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("transient again"), Elapsed: 50 * time.Millisecond})
+
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Retrying) != 1 || v.Retrying[0].Attempt != 2 {
+		t.Fatalf("retry view = %+v, want one entry with Attempt=2 under unbounded default", v.Retrying)
+	}
+	if len(v.Failed) != 0 {
+		t.Fatalf("failed entries with unbounded default = %d, want 0 (SPEC §8.4 keeps retrying)", len(v.Failed))
 	}
 }
 

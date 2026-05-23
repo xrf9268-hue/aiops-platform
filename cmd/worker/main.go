@@ -21,6 +21,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -301,11 +302,13 @@ func run(ctx context.Context, args []string) error {
 	}
 	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
 	maxTurns := wf.Config.Agent.MaxTurns
+	runnerEnforcesMaxTurns := runner.EnforcesMaxTurnsInternally(wf.Config.Agent.Default)
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher:        dispatcher,
-		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
-		MaxFailureRetries: &maxFailureRetries,
-		MaxTurns:          &maxTurns,
+		Dispatcher:             dispatcher,
+		Scheduler:              orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		MaxFailureRetries:      &maxFailureRetries,
+		MaxTurns:               &maxTurns,
+		RunnerEnforcesMaxTurns: &runnerEnforcesMaxTurns,
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -317,6 +320,18 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// SPEC §16.5 per-turn refresh wires through the dispatcher the actor
+	// actually spawns workers with (the line-298 instance), not the one
+	// NewRuntimePollerWithTrackerFactory creates internally. Without this
+	// the tracker fan-in built each tick would only update the poller's
+	// own (unused) dispatcher and operator-cancel would still wait for
+	// the next poll tick. Must precede RunPollLoopWithRuntime below so
+	// the first PollOnce sees the external dispatcher; this is safe today
+	// because OrchestratorState is freshly constructed with no claimed
+	// issues, so the actor cannot Spawn before the poll loop drives it.
+	// Any future persisted-state recovery added before this point must
+	// move AttachDispatcher above it.
+	poller.AttachDispatcher(dispatcher)
 	go func() {
 		if err := orchestrator.RunWorkflowReloadLoop(ctx, runtime, orchestrator.WorkflowReloadLoopOptions{}); err != nil && ctx.Err() == nil {
 			log.Printf("workflow reload loop exited: %v", err)

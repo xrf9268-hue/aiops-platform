@@ -40,13 +40,17 @@ failed run can be reconstructed from the event timeline alone:
   and `CanceledByReconciliation`.
 - `session_started`, `startup_failed`, `turn_completed`, `turn_failed`,
   `turn_cancelled`, `turn_ended_with_error`, `turn_input_required`,
-  `approval_auto_approved`, `unsupported_tool_call`, `notification`,
-  `other_message`, `malformed` — SPEC §10.4 app-server runtime vocabulary. The
-  `codex-app-server` runner captures the observed protocol branches for this
-  vocabulary, including auto-approved approvals, malformed protocol-like lines,
-  and known JSON payloads that do not match a handled method. The worker forwards
-  captured runtime events into the task event stream with their structured
-  payloads.
+  `approval_auto_approved`, `unsupported_tool_call`, `tool_call_mutation`,
+  `notification`, `other_message`, `malformed` — SPEC §10.4 app-server runtime
+  vocabulary. The `codex-app-server` runner captures the observed protocol
+  branches for this vocabulary, including auto-approved approvals, malformed
+  protocol-like lines, and known JSON payloads that do not match a handled
+  method. The worker forwards captured runtime events into the task event
+  stream with their structured payloads. `tool_call_mutation` is emitted once
+  per successful Linear GraphQL mutation dispatched through the agent-visible
+  `linear_graphql` tool (SPEC §15.5 harness narrowing, #298); its payload
+  carries the top-level mutation field name (`operation_field`) but never the
+  query body or variables.
 - `runner_start`, `runner_end`, `runner_timeout` — transitional worker runner
   timing and summary events retained for compatibility while the SPEC phase
   stream is adopted.

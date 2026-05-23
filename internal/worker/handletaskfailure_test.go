@@ -211,3 +211,21 @@ func TestHandleTaskFailure_TimeoutHonorsConfiguredBudget(t *testing.T) {
 		t.Fatalf("FailTimeout budget = %d, want %d", got, budget)
 	}
 }
+
+// TestHandleTaskFailure_TimeoutDefaultsToUnboundedBudget verifies that
+// a workflow.Config with no explicit agent.max_timeout_retries passes
+// workflow.UnboundedRetryBudget to FailTimeout. SPEC §8.4 expresses
+// runner-timeout recovery purely through backoff, so the default must
+// not silently truncate the retry sequence (issue #215).
+func TestHandleTaskFailure_TimeoutDefaultsToUnboundedBudget(t *testing.T) {
+	store := &fakeFailingStore{failTimeoutReq: true}
+	cfg := workflow.Config{}
+	terr := &runner.TimeoutError{Timeout: time.Second, Elapsed: 2 * time.Second}
+	_ = handleTaskFailure(context.Background(), store, sampleTask(), cfg, terr, false)
+	if len(store.failTimoutCalls) != 1 {
+		t.Fatalf("FailTimeout calls = %d, want 1", len(store.failTimoutCalls))
+	}
+	if got := store.failTimoutCalls[0].MaxTimeoutRetries; got != workflow.UnboundedRetryBudget {
+		t.Fatalf("FailTimeout budget = %d, want UnboundedRetryBudget (%d)", got, workflow.UnboundedRetryBudget)
+	}
+}
