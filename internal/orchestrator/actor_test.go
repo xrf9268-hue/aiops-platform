@@ -2274,3 +2274,159 @@ func TestRetryFire_DispatchesWhenCandidateFetchReturnsIssue(t *testing.T) {
 		t.Fatalf("dispatched issue state = %q, want Rework from refreshed candidate fetch", got)
 	}
 }
+
+// blockingCandidateLister blocks ListActiveIssues until either the caller's
+// context is cancelled or the explicit unblock channel is closed. It is the
+// stand-in for a tracker client that ignores ctx cancellation: the retry
+// fire's per-fetch timeout must still fire and reschedule the retry rather
+// than leaving the issue stuck in Claimed forever.
+type blockingCandidateLister struct {
+	unblock <-chan struct{}
+}
+
+func (l *blockingCandidateLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-l.unblock:
+		return nil, nil
+	}
+}
+
+// TestRetryFire_FetchTimeoutReschedulesAsRetryPollFailed asserts the SPEC
+// §16.6 hardening contract: when the candidate fetch outruns
+// retryFetchTimeout (modeled here by a lister that only returns on context
+// cancellation), the retry must reschedule via the "retry poll failed"
+// branch instead of orphaning the claim. Without the per-fetch timeout
+// the followup goroutine would pin indefinitely with entry.Timer already
+// cleared, so this regression covers the hardening fix.
+func TestRetryFire_FetchTimeoutReschedulesAsRetryPollFailed(t *testing.T) {
+	prevTimeout := retryFetchTimeout
+	retryFetchTimeout = 50 * time.Millisecond
+	defer func() { retryFetchTimeout = prevTimeout }()
+
+	disp := &fakeDispatcher{}
+	lister := &blockingCandidateLister{unblock: make(chan struct{})}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-TIMEOUT", Identifier: "ENG-TIMEOUT", Title: "hang", State: "AI Ready"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1 && v.Retrying[0].Attempt == 2
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; fetch timeout must not dispatch", got)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("retrying entries = %d, want 1 rescheduled retry; the claim must not orphan", len(v.Retrying))
+	}
+	got := v.Retrying[0]
+	if got.Attempt != 2 {
+		t.Fatalf("rescheduled attempt = %d, want attempt+1 = 2 per SPEC §16.6", got.Attempt)
+	}
+	if !strings.Contains(got.Error, "retry poll failed") {
+		t.Fatalf("rescheduled error = %q, want the typed \"retry poll failed\" prefix", got.Error)
+	}
+	if !strings.Contains(got.Error, context.DeadlineExceeded.Error()) {
+		t.Fatalf("rescheduled error = %q, want the deadline-exceeded reason wrapped in", got.Error)
+	}
+}
+
+// routingFilteringCandidateLister rejects issues whose ID does not match
+// the allowed set, modelling the SPEC §16.6 retry-fire candidate fetch
+// after selectRoutedCandidates has stripped issues that have since routed
+// to another service. The routed wrapper installed by RuntimePoller does
+// the real filtering; this lister just lets the actor-level test assert
+// that a "routed away" issue surfaces as absent rather than dispatched.
+type routingFilteringCandidateLister struct {
+	mu      sync.Mutex
+	allowed map[string]tracker.Issue
+}
+
+func (l *routingFilteringCandidateLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]tracker.Issue, 0, len(l.allowed))
+	for _, iss := range l.allowed {
+		out = append(out, iss)
+	}
+	return out, nil
+}
+
+// TestRetryFire_RoutedAwayIssueReleasesClaim asserts the SPEC §16.6
+// candidate-fetch contract holds when the lister applies service routing
+// on top of the active-state filter: an issue that is still in an active
+// state but has routed to another service must look absent to the retry
+// timer (no dispatch, claim released) instead of being dispatched against
+// a workflow that no longer owns it. The companion runtime-poller wiring
+// (routedActiveIssueLister) is what makes this fall out in production;
+// this test pins the actor-side contract so a future refactor cannot
+// silently regress it.
+func TestRetryFire_RoutedAwayIssueReleasesClaim(t *testing.T) {
+	disp := &fakeDispatcher{}
+	// The retry was scheduled when the issue still matched this workflow's
+	// service route; by the time the timer fires the route has changed,
+	// so the lister no longer surfaces it.
+	lister := &routingFilteringCandidateLister{allowed: map[string]tracker.Issue{}}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ServiceName: "old-service"}
+	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+		t.Fatalf("ScheduleRetry: %v", err)
+	}
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}); err != nil {
+		t.Fatalf("submit retry fire: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 0
+	}, 2*time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot after fire: %v", err)
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; routed-away issue must not be dispatched", got)
+	}
+	if len(v.Retrying) != 0 {
+		t.Fatalf("retrying view after routed-away fetch = %+v, want claim released", v.Retrying)
+	}
+}

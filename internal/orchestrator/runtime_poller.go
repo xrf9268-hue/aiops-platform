@@ -116,11 +116,18 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	poller.preflight = &preflightCfg
 	// Feed the orchestrator the same lister the poll loop uses so a
 	// fired failure-retry timer can run the SPEC §16.6 candidate fetch
-	// against the same active-state vocabulary.
-	p.orchestrator.SetCandidateLister(activeIssueListerFromStates{
+	// against the same active-state vocabulary. When the workflow
+	// configures service routing, the lister must also mirror the
+	// poll loop's selectRoutedCandidates filter so a retry cannot
+	// dispatch an issue that has since routed to another service.
+	var retryLister ActiveIssueLister = activeIssueListerFromStates{
 		tracker: multiLister,
 		states:  snap.Reconciliation.ActiveStates,
-	})
+	}
+	if poller.routing != nil {
+		retryLister = routedActiveIssueLister{inner: retryLister, cfg: *poller.routing}
+	}
+	p.orchestrator.SetCandidateLister(retryLister)
 	return poller, nil
 }
 
@@ -215,6 +222,30 @@ func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueI
 		return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
 	}
 	return map[string]string{}, nil
+}
+
+// routedActiveIssueLister wraps an ActiveIssueLister with the same
+// service-routing filter the poll loop applies in (*Poller).runOnce
+// (see poller.go selectRoutedCandidates). SPEC §16.6's on_retry_timer
+// only knows about candidate fetch; service routing is an
+// aiops-platform extension layered on top, and the retry-fire path
+// must mirror the poll loop's filter so a queued retry whose issue
+// has since routed to another service cannot bypass the gate. Routing
+// errors are propagated so a fetch that resolves to an ambiguous
+// route is treated as a fetch failure (reschedule via "retry poll
+// failed"), not as a silent absence (release claim).
+type routedActiveIssueLister struct {
+	inner ActiveIssueLister
+	cfg   workflow.Config
+}
+
+func (l routedActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
+	issues, fetchErr := l.inner.ListActiveIssues(ctx)
+	routed, routeErr := selectRoutedCandidates(issues, l.cfg)
+	if fetchErr != nil || routeErr != nil {
+		return routed, errors.Join(fetchErr, routeErr)
+	}
+	return routed, nil
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {

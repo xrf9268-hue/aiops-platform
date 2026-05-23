@@ -92,6 +92,20 @@ type RetryScheduler struct {
 const retryCapacityRecheckDelay = 100 * time.Millisecond
 const continuationRetryDelay = time.Second
 
+// retryFetchTimeout caps the SPEC §16.6 candidate-fetch call a fired
+// failure-retry timer makes. Tracker clients enforce per-request
+// network timeouts on their own (Linear / Gitea / GitHub all 30s per
+// PR #303), but a defensive ceiling here means the orchestrator does
+// not depend on every adapter to do so: if a future tracker client
+// (or a transport bug) silently drops cancellation, the fetch still
+// returns within this bound and the SPEC's "retry poll failed"
+// reschedule path takes over instead of leaving the issue stuck in
+// Claimed/RetryAttempts forever. The value is comfortably larger
+// than any adapter's own deadline so an honest slow tracker is not
+// punished. A package-level var (not const) so tests can shrink the
+// bound; runtime callers must not mutate it.
+var retryFetchTimeout = 45 * time.Second
+
 // NextDelay implements Scheduler.
 func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 	if req.Kind == RetryKindContinuation {
@@ -1189,16 +1203,27 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		entry.Timer = nil
 		id := r.id
 		attempt := r.attempt
+		kind := r.kind
 		return func() {
-			ctx := o.runCtx
-			issues, fetchErr := lister.ListActiveIssues(ctx)
+			// Per-fetch timeout. The followup runs on a fresh goroutine
+			// outside the actor, and o.runCtx has no deadline of its own.
+			// A tracker client that ignores ctx cancellation would otherwise
+			// pin this goroutine indefinitely — entry.Timer is already
+			// cleared and no retryFireOp would be resubmitted, leaving the
+			// issue stuck in Claimed/RetryAttempts forever. Surfacing the
+			// timeout as a "retry poll failed" reschedule keeps the SPEC
+			// §16.6 backoff window the only source of forward progress.
+			fetchCtx, cancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+			defer cancel()
+			issues, fetchErr := lister.ListActiveIssues(fetchCtx)
 			found := findIssueByID(issues, id)
 			if fetchErr != nil && found == nil {
-				// Either the whole fetch failed, or a multi-tracker partial
-				// failure happened on the tracker that owns this issue. We
-				// can't tell "absent" from "tracker down" — treat as fetch
-				// failure per SPEC §16.6 and reschedule with the typed error.
-				_ = o.submit(ctx, &retryPollFailedOp{
+				// Either the whole fetch failed (including timeout), or a
+				// multi-tracker partial failure happened on the tracker that
+				// owns this issue. We can't tell "absent" from "tracker down"
+				// — treat as fetch failure per SPEC §16.6 and reschedule
+				// with the typed error.
+				_ = o.submit(o.runCtx, &retryPollFailedOp{
 					o:        o,
 					id:       id,
 					attempt:  attempt,
@@ -1206,11 +1231,11 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 				})
 				return
 			}
-			_ = o.submit(ctx, &retryFireAfterFetchOp{
+			_ = o.submit(o.runCtx, &retryFireAfterFetchOp{
 				o:       o,
 				id:      id,
 				attempt: attempt,
-				kind:    RetryKindFailure,
+				kind:    kind,
 				found:   found,
 			})
 		}

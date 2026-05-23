@@ -645,6 +645,85 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	}
 }
 
+// TestRuntimePollerInstallsRoutedCandidateListerForServiceRouting asserts
+// the SPEC §16.6 retry-fire lister installed on the orchestrator mirrors
+// the poll loop's selectRoutedCandidates filter when the workflow
+// configures service routing. Without this wiring a queued retry whose
+// issue has since routed to another service can still be dispatched
+// against this workflow, which would run an agent against work the
+// workflow no longer owns until the next reconciliation tick caught up.
+func TestRuntimePollerInstallsRoutedCandidateListerForServiceRouting(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Services = []workflow.ServiceConfig{
+		{
+			Name:    "api",
+			Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"},
+			Repo:    workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"},
+		},
+	}
+	initial.Config.Tracker.ProjectSlug = ""
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeProjectScopedIssueTracker{
+		issuesByProject: map[string][]tracker.Issue{
+			"api-platform": {{ID: "api-1", Identifier: "API-1", Title: "matches route", State: "AI Ready", ProjectSlug: "api-platform"}},
+		},
+	}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
+		return trackerClient.forProject(cfg.Tracker.ProjectSlug), nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+
+	lister := orch.currentCandidateLister()
+	if lister == nil {
+		t.Fatal("orchestrator candidate lister not installed by RuntimePoller")
+	}
+	routed, ok := lister.(routedActiveIssueLister)
+	if !ok {
+		t.Fatalf("orchestrator candidate lister type = %T, want routedActiveIssueLister when Services are configured", lister)
+	}
+
+	// In-route issue passes through.
+	got, err := routed.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("routed ListActiveIssues: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "api-1" {
+		t.Fatalf("routed lister surfaced issues = %+v, want exactly api-1", got)
+	}
+	if got[0].ServiceName != "api" {
+		t.Fatalf("routed issue service = %q, want \"api\" stamped by selectRoutedCandidates", got[0].ServiceName)
+	}
+
+	// Issue that routes outside this workflow's services is filtered out:
+	// flip the tracker to surface only an off-route ticket and re-fetch.
+	trackerClient.replace(map[string][]tracker.Issue{
+		"api-platform": {{ID: "ops-9", Identifier: "OPS-9", Title: "now routed to ops", State: "AI Ready", ProjectSlug: "ops-platform"}},
+	})
+	got, err = routed.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("routed ListActiveIssues after route flip: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("routed lister surfaced off-route issues = %+v, want SPEC §16.6 retry fetch to drop them so the claim is released", got)
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
 	initial, err := workflow.Load(path)
@@ -846,6 +925,16 @@ func (f *fakeProjectScopedIssueTracker) ListIssuesByStates(_ context.Context, st
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeProjectScopedIssueTracker) replace(issues map[string][]tracker.Issue) {
+	root := f.root
+	if root == nil {
+		root = f
+	}
+	root.mu.Lock()
+	defer root.mu.Unlock()
+	root.issuesByProject = issues
 }
 
 func (f *fakeProjectScopedIssueTracker) projects() []string {
