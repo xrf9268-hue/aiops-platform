@@ -32,9 +32,31 @@ type GitHubClient struct {
 	Config  workflow.TrackerConfig
 	HTTP    *http.Client
 	Logf    func(format string, args ...any)
+	// RequestTimeout caps the wall-clock duration of a single GitHub
+	// REST request. Zero falls back to defaultGitHubRequestTimeout.
+	// Closes #295: without a per-request bound, a hung api.github.com
+	// response (TCP half-open, NLB blackhole, slow server) would wedge
+	// the worker's poll loop until the OS keepalive timeout
+	// (`tcp_keepalive_time=7200s` default on Linux) and leak goroutines
+	// + fds in the meantime.
+	RequestTimeout time.Duration
 
 	paginationCapHits atomic.Int64
 	issueNumbers      sync.Map // map[string]int — global issue ID → repo issue number, populated by listing
+}
+
+// defaultGitHubRequestTimeout bounds a single GitHub REST request when
+// the caller does not set GitHubClient.RequestTimeout explicitly.
+// 30 s is well above the GitHub API's documented response targets and
+// short enough that a wedged connection fails fast in a SPEC §8.1
+// minute-scale poll tick.
+const defaultGitHubRequestTimeout = 30 * time.Second
+
+func (c *GitHubClient) requestTimeout() time.Duration {
+	if c == nil || c.RequestTimeout <= 0 {
+		return defaultGitHubRequestTimeout
+	}
+	return c.RequestTimeout
 }
 
 type githubIssue struct {
@@ -178,7 +200,9 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 	}
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -245,7 +269,9 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 	q.Set("page", strconv.Itoa(page))
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -459,7 +485,9 @@ func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 
 func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (githubIssue, bool, error) {
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return githubIssue{}, false, err
 	}

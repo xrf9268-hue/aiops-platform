@@ -7,12 +7,35 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
+
+// defaultGiteaRequestTimeout bounds a single Gitea HTTP request when the
+// caller does not set Client.RequestTimeout explicitly. SPEC §8.1's
+// poll-tick cadence is minute-scale, so a 30 s per-request ceiling
+// catches hung-but-not-yet-RST connections (the failure mode #295
+// described — TCP half-open, NLB blackhole, slow server) well before
+// the OS-level keepalive RTO trips.
+const defaultGiteaRequestTimeout = 30 * time.Second
 
 type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
+	// RequestTimeout caps the wall-clock duration of a single Gitea
+	// request. Zero falls back to defaultGiteaRequestTimeout. Closes
+	// #295: without a per-request bound, a hung upstream would wedge
+	// the worker's poll loop until the OS keepalive timeout (typically
+	// tcp_keepalive_time=7200s on Linux) and leak goroutines + fds in
+	// the meantime.
+	RequestTimeout time.Duration
+}
+
+func (c Client) requestTimeout() time.Duration {
+	if c.RequestTimeout > 0 {
+		return c.RequestTimeout
+	}
+	return defaultGiteaRequestTimeout
 }
 
 type CreatePullRequestInput struct {
@@ -101,13 +124,16 @@ func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestI
 	base := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
 	for page := 1; page <= listPullsMaxPages; page++ {
 		u := fmt.Sprintf("%s?state=open&page=%d&limit=%d", base, page, listPullsPageSize)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u, nil)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 		req.Header.Set("Authorization", "token "+c.Token)
 		resp, err := client.Do(req)
 		if err != nil {
+			cancel()
 			return nil, err
 		}
 		var batch []struct {
@@ -120,10 +146,12 @@ func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestI
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			resp.Body.Close()
+			cancel()
 			return nil, fmt.Errorf("list pull requests failed: %s", resp.Status)
 		}
 		err = json.NewDecoder(resp.Body).Decode(&batch)
 		resp.Body.Close()
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -155,7 +183,9 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 	}
 	b, _ := json.Marshal(payload)
 	url := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
