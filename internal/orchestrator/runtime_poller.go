@@ -111,6 +111,8 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
 		poller.routing = &snap.Workflow.Config
 	}
+	preflightCfg := snap.Workflow.Config
+	poller.preflight = &preflightCfg
 	return poller, nil
 }
 
