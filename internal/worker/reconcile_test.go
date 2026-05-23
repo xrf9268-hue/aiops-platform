@@ -501,15 +501,22 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 
 // TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace pins the
 // migration promise made in PR #290 / issue #229: a Rework workspace
-// created by the pre-#229 sanitizer (lowercased identifier, `-`
-// separators throughout, lowercased timestamp) must still be
-// classified as `active_rework` on the first reconcile after the
-// upgrade, instead of being removed as `unknown` once a terminal
-// fetch unlocks the unknown-removal path.
+// created by the pre-#229 sanitizer (lowercased input, `-` separators
+// throughout, lowercased timestamp) must still be classified as
+// `active_rework` on the first reconcile after the upgrade, instead of
+// being removed as `unknown` once a terminal fetch unlocks the
+// unknown-removal path.
 func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	root := t.TempDir()
-	// Pre-#229 dir name shape: `lowercased-id-rework-lowercased-timestamp`.
-	preSpecPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-123-rework-2026-05-16t10-00-00z")
+	// Pre-#229 actual on-disk shape for a Linear Rework workspace, mirroring
+	// what `cmd/linear-poller` + the pre-#229 sanitizer would have written
+	// for `SourceEventID = "<issue.ID>|rework|<updatedAt>"`:
+	//   - source-type subdir is `linear_issue` (pre-#229 `SanitizeSourceType`
+	//     preserved `_`),
+	//   - workspace key is `<issue.ID>-rework-<lowercased-timestamp>`
+	//     (pre-#229 `SanitizeComponent` lowercased and collapsed `|` / `:`
+	//     into `-`).
+	preSpecPath := filepath.Join(root, "acme", "repo", "linear_issue", "issue-3-rework-2026-05-16t10-00-00z")
 	if err := os.MkdirAll(preSpecPath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
