@@ -109,9 +109,18 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 		if _, err := exec.LookPath("codex"); err != nil {
 			return nil, fmt.Errorf("codex binary not found in PATH; install codex CLI or set agent.default to claude/mock")
 		}
+		// `--sandbox workspace-write` replaces the deprecated `--full-auto`.
+		// Per codex commit 3d10ba9f3 (PR openai/codex#20133) `--full-auto`
+		// is now a deprecation alias whose migration target is
+		// `--sandbox workspace-write`; codex-rs/exec/src/lib.rs maps the
+		// removed flag to `SandboxMode::WorkspaceWrite` and prints
+		//   warning: `--full-auto` is deprecated; use `--sandbox workspace-write` instead.
+		// on every invocation, polluting stderr capture (#330). Both flags
+		// resolve to the same sandbox mode; the new spelling is forward-
+		// compatible if codex eventually removes the alias.
 		return exec.CommandContext(ctx,
 			"codex", "exec",
-			"--full-auto",
+			"--sandbox", "workspace-write",
 			"--skip-git-repo-check",
 			"--cd", in.Workdir,
 			"-o", lastMessageAbs,
