@@ -79,7 +79,8 @@ func TestCodexRunner_SafeProfileBuildsExpectedArgv(t *testing.T) {
 	}
 	want := []string{
 		"exec",
-		"--full-auto",
+		"--sandbox",
+		"workspace-write",
 		"--skip-git-repo-check",
 		"--cd",
 		wd,
@@ -93,6 +94,17 @@ func TestCodexRunner_SafeProfileBuildsExpectedArgv(t *testing.T) {
 	for i := range want {
 		if gotLines[i] != want[i] {
 			t.Fatalf("argv[%d] = %q, want %q", i, gotLines[i], want[i])
+		}
+	}
+	// Per #330, the safe profile MUST use `--sandbox workspace-write`
+	// rather than the deprecated `--full-auto` shorthand. Codex commit
+	// 3d10ba9f3 (openai/codex#20133) flagged `--full-auto` as deprecated
+	// in `codex exec`, prints a warning on every invocation, and codex-cli
+	// b7dba72db removed it at the top level entirely. Pin the new
+	// spelling here so a future "let's revert this one-liner" can't pass.
+	for _, line := range gotLines {
+		if line == "--full-auto" {
+			t.Fatalf("safe profile must not emit --full-auto; codex deprecated it (see #330): argv=%q", gotLines)
 		}
 	}
 }
