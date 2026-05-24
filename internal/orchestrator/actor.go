@@ -1630,7 +1630,17 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 			terminalState := ""
 			if found == nil {
 				if resolver, terminalStates := o.currentRetryTerminalResolver(); resolver != nil && len(terminalStates) > 0 {
-					if statesByID, rerr := resolver.FetchIssueStatesByIDs(fetchCtx, []string{string(id)}); rerr == nil {
+					// Give the terminal-state lookup its own timeout budget rather
+					// than the already-consumed fetchCtx: a slow-but-successful
+					// ListActiveIssues near the deadline would otherwise leave this
+					// call to fail immediately with context-deadline-exceeded,
+					// dropping a terminal issue onto the release-only path and
+					// leaking its workspace — the exact leak this resolves (Codex
+					// P2). Derived from runCtx so actor shutdown still cancels it.
+					resolveCtx, resolveCancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+					statesByID, rerr := resolver.FetchIssueStatesByIDs(resolveCtx, []string{string(id)})
+					resolveCancel()
+					if rerr == nil {
 						if s := strings.TrimSpace(statesByID[string(id)]); s != "" && isTerminalTrackerState(s, terminalStates) {
 							terminal = true
 							terminalState = s
