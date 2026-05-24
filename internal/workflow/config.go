@@ -45,7 +45,15 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port int `yaml:"port" json:"port"`
+	// Host is the bind address for the dashboard/state HTTP server. It
+	// defaults to 127.0.0.1 (SPEC §15.3 loopback-only trust boundary). An
+	// empty value is treated as the loopback default rather than a bind-all
+	// wildcard so a blank override never silently widens exposure. Set it to
+	// 0.0.0.0 only behind a loopback-scoped host port mapping (see the
+	// dashboard Compose overlay); the loopback Host-header guard is not
+	// authentication, so a routable bind needs auth that this server lacks.
+	Host string `yaml:"host" json:"host"`
+	Port int    `yaml:"port" json:"port"`
 }
 
 type RepoConfig struct {
@@ -505,7 +513,7 @@ type PRConfig struct {
 
 func DefaultConfig() Config {
 	return Config{
-		Server: ServerConfig{Port: 4000},
+		Server: ServerConfig{Host: "127.0.0.1", Port: 4000},
 		// Tracker.ActiveStates / TerminalStates mirror SPEC §6.4's
 		// cheat-sheet defaults (Todo/In Progress active; Closed,
 		// Cancelled, Canceled, Duplicate, Done terminal). Workflows that
@@ -532,12 +540,14 @@ func DefaultConfig() Config {
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
 		// Agent.MaxRetryAttempts is intentionally left nil here so the
-		// "absent" signal survives YAML overlay. The effective default of
-		// one failure retry is supplied by MaxRetryAttemptsValue().
+		// "absent" signal survives YAML overlay. The effective default is
+		// unbounded failure retries (UnboundedRetryBudget), supplied by
+		// MaxRetryAttemptsValue() per SPEC §8.4 / §16.6 (README "unbounded";
+		// DEVIATIONS D29).
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this
-		// default. The effective default of 1 retry is supplied by
-		// MaxTimeoutRetriesValue().
+		// default. The effective default is likewise unbounded timeout
+		// requeues (UnboundedRetryBudget), supplied by MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
 			MaxConcurrentAgents: 10,

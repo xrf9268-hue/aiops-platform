@@ -82,7 +82,7 @@ orchestrator state:
 
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
-export WORKSPACE_ROOT=$PWD/.aiops/workspaces
+export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear
 export LINEAR_API_KEY=your-linear-personal-key
@@ -103,8 +103,9 @@ go run ./cmd/worker
 
 `WORKFLOW.md` front matter is the source of truth for runtime workspace
 placement: when `workspace.root` is set in the selected workflow, the worker
-creates and reconciles task workspaces under that path. `WORKSPACE_ROOT` is only
-the fallback for workflows that omit `workspace.root`.
+creates and reconciles task workspaces under that path. `AIOPS_WORKSPACE_ROOT`
+(legacy alias: `WORKSPACE_ROOT`) is only the fallback for workflows that omit
+`workspace.root`.
 
 No `DATABASE_URL` or Postgres service is required for `cmd/worker`. Restart
 recovery follows SPEC §14.3: the worker starts with fresh runtime state, cleans
@@ -126,9 +127,11 @@ README ever diverge, **this README is canonical**.
 
 ## Operator surfaces
 
-The worker binds a private-loopback HTTP server at `127.0.0.1:<server.port>`
-(default `4000`). The same listener serves the JSON state API and the web
-dashboard:
+The worker binds an HTTP server at `<server.host>:<server.port>`, defaulting to
+the private loopback `127.0.0.1:4000`. Override the bind host with `server.host`
+in `WORKFLOW.md` or the `AIOPS_SERVER_HOST` environment variable (a blank value
+keeps the loopback default). The same listener serves the JSON state API and the
+web dashboard:
 
 | Path | Purpose |
 |------|---------|
@@ -144,6 +147,23 @@ listener entirely (e.g. when you provide your own state bridge). If the
 configured listener cannot start, the worker logs the failure, continues without
 the HTTP surface, and retries on later workflow-reload checks until the bind
 succeeds or `server.port` changes.
+
+Under Docker Compose the default loopback bind is unreachable from the host
+(Docker publishes ports to the container interface, not its loopback). Merge the
+opt-in overlay to reach the dashboard from the host:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.yml up worker
+```
+
+The overlay sets `AIOPS_SERVER_HOST=0.0.0.0` (bind all interfaces *inside* the
+container) but publishes only to host loopback (`127.0.0.1:4000:4000`), so the
+host trust boundary stays the loopback. It also moves the worker onto a
+dedicated `dashboard` bridge network — off the project default network — so
+sibling containers (e.g. the legacy-queue services) cannot reach `worker:4000`
+and spoof the loopback Host guard. The surface is still unauthenticated, so do
+**not** publish on a routable host interface or attach untrusted containers to
+the dashboard network without adding authentication first.
 
 **Treat the status surface as live agent text even though it binds to loopback.**
 Per SPEC §15.3, each running row's `last_message` is a passthrough of the most

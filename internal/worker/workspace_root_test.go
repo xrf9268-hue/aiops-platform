@@ -100,6 +100,7 @@ tracker:
 // fall through to the workflow's SPEC default. Pre-#319 the loader
 // returned the literal `/tmp/aiops-workspaces`.
 func TestLoadConfigFromEnv_NoLiteralWorkspaceRootDefault(t *testing.T) {
+	t.Setenv("AIOPS_WORKSPACE_ROOT", "")
 	t.Setenv("WORKSPACE_ROOT", "")
 
 	cfg := worker.LoadConfigFromEnv()
@@ -109,14 +110,42 @@ func TestLoadConfigFromEnv_NoLiteralWorkspaceRootDefault(t *testing.T) {
 }
 
 // TestLoadConfigFromEnv_HonorsWorkspaceRootEnv covers the still-supported
-// override path: an explicit WORKSPACE_ROOT flows through to
-// Config.WorkspaceRoot verbatim.
+// legacy alias path: an explicit WORKSPACE_ROOT flows through to
+// Config.WorkspaceRoot verbatim (now as a deprecated alias; see #368).
 func TestLoadConfigFromEnv_HonorsWorkspaceRootEnv(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "operator-root")
+	t.Setenv("AIOPS_WORKSPACE_ROOT", "")
 	t.Setenv("WORKSPACE_ROOT", want)
 
 	cfg := worker.LoadConfigFromEnv()
 	if cfg.WorkspaceRoot != want {
 		t.Fatalf("LoadConfigFromEnv().WorkspaceRoot = %q, want %q", cfg.WorkspaceRoot, want)
+	}
+}
+
+// TestLoadConfigFromEnv_HonorsAIOPSWorkspaceRoot is the #368 regression: the
+// AIOPS_-prefixed canonical name a user naturally tries is no longer silently
+// ignored in favor of the code default.
+func TestLoadConfigFromEnv_HonorsAIOPSWorkspaceRoot(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "prefixed-root")
+	t.Setenv("WORKSPACE_ROOT", "")
+	t.Setenv("AIOPS_WORKSPACE_ROOT", want)
+
+	cfg := worker.LoadConfigFromEnv()
+	if cfg.WorkspaceRoot != want {
+		t.Fatalf("LoadConfigFromEnv().WorkspaceRoot = %q, want %q (AIOPS_WORKSPACE_ROOT must be honored)", cfg.WorkspaceRoot, want)
+	}
+}
+
+// TestLoadConfigFromEnv_CanonicalWorkspaceRootWinsOverLegacy pins precedence
+// when both the canonical and the deprecated alias are set.
+func TestLoadConfigFromEnv_CanonicalWorkspaceRootWinsOverLegacy(t *testing.T) {
+	canonical := filepath.Join(t.TempDir(), "canonical")
+	t.Setenv("AIOPS_WORKSPACE_ROOT", canonical)
+	t.Setenv("WORKSPACE_ROOT", filepath.Join(t.TempDir(), "legacy"))
+
+	cfg := worker.LoadConfigFromEnv()
+	if cfg.WorkspaceRoot != canonical {
+		t.Fatalf("LoadConfigFromEnv().WorkspaceRoot = %q, want canonical %q", cfg.WorkspaceRoot, canonical)
 	}
 }
