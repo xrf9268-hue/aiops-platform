@@ -148,6 +148,18 @@ The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
 
+> **Upgrading from a root-running worker image.** The worker now runs as the
+> unprivileged `aiops` user (#365). A `workspaces` named volume created by an
+> older root-running image stays root-owned and the non-root worker cannot
+> write to it, surfacing as permission errors. Workspace contents are
+> disposable per-issue git checkouts, so drop and recreate the volume once
+> after upgrading:
+>
+> ```bash
+> docker compose --env-file .env -f deploy/docker-compose.yml down
+> docker volume rm deploy_workspaces   # name may be <project>_workspaces
+> ```
+
 ## 3. Smoke test
 
 The fastest way to verify local configuration is to print the

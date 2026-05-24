@@ -26,13 +26,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # these from .env). See deploy/ssh/README.md.
 ARG AIOPS_UID=1000
 ARG AIOPS_GID=1000
-RUN groupadd --gid "${AIOPS_GID}" aiops \
-    && useradd --create-home --uid "${AIOPS_UID}" --gid "${AIOPS_GID}" --shell /bin/bash aiops \
-    && mkdir -p /app /workspaces /home/aiops/.ssh \
-    && chown -R aiops:aiops /app /workspaces /home/aiops \
-    && chmod 700 /home/aiops/.ssh
+# Reuse any group/user already holding the requested GID/UID so a host-mapped
+# id (e.g. a low GID that collides with a base-image system group) does not
+# fail the build. HOME is pinned so ssh/git find /home/aiops/.ssh regardless of
+# whether the UID resolves to a preexisting passwd entry. Ownership is set by
+# numeric id for the same reason.
+RUN set -eux; \
+    if ! getent group "${AIOPS_GID}" >/dev/null; then groupadd --gid "${AIOPS_GID}" aiops; fi; \
+    if ! getent passwd "${AIOPS_UID}" >/dev/null; then \
+        useradd --no-log-init --create-home --home-dir /home/aiops --uid "${AIOPS_UID}" --gid "${AIOPS_GID}" --shell /bin/bash aiops; \
+    fi; \
+    mkdir -p /app /workspaces /home/aiops/.ssh; \
+    chown -R "${AIOPS_UID}:${AIOPS_GID}" /app /workspaces /home/aiops; \
+    chmod 700 /home/aiops/.ssh
+ENV HOME=/home/aiops
 COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/linear-poller /usr/local/bin/linear-poller
 COPY --from=build /out/gitea-poller /usr/local/bin/gitea-poller
 WORKDIR /app
-USER aiops
+USER ${AIOPS_UID}:${AIOPS_GID}
