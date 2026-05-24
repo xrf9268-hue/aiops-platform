@@ -53,18 +53,24 @@ install_gh() {
     return 0
   fi
 
-  # Resolve the latest release tag from the GitHub API. The trailing `|| true`
-  # keeps a transient failure (network, unauthenticated rate limit) from
-  # tripping `set -e` so the empty-check below can report it; `head` is last
-  # in the pipeline to avoid a SIGPIPE-induced non-zero status under pipefail.
+  # Resolve the latest release tag from the github.com `releases/latest`
+  # redirect (the Location header points at .../releases/tag/vX.Y.Z) rather than
+  # the api.github.com REST endpoint: this container's network policy returns 403
+  # for unauthenticated api.github.com requests, so the API-based lookup used to
+  # fail and skip the install. github.com itself is reachable, so the redirect is
+  # a token-free, policy-friendly way to learn the version. The trailing
+  # `|| true` keeps a transient failure from tripping `set -e` so the empty-check
+  # below can report it; `head` is last in the pipeline to avoid a SIGPIPE-induced
+  # non-zero status under pipefail.
   local gh_version=""
-  gh_version="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest 2>/dev/null \
-    | grep -o '"tag_name":[[:space:]]*"v[^"]*"' \
-    | grep -o 'v[0-9][^"]*' \
+  gh_version="$(curl -fsSI --max-time 20 https://github.com/cli/cli/releases/latest 2>/dev/null \
+    | tr -d '\r' \
+    | awk 'tolower($1) == "location:" { print $2 }' \
+    | grep -o 'v[0-9][^/]*$' \
     | head -1)" || true
 
   if [[ -z "${gh_version}" ]]; then
-    echo "[SessionStart] Could not determine latest gh version (network or API rate limit); skipping gh install" >&2
+    echo "[SessionStart] Could not determine latest gh version (network or redirect parse failure); skipping gh install" >&2
     return 1
   fi
 
