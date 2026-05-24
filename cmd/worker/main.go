@@ -194,9 +194,8 @@ func startupWorkflowPath(args []string) (string, error) {
 	if len(args) == 1 {
 		return args[0], nil
 	}
-	if res := worker.ResolveEnv("AIOPS_WORKFLOW_PATH", "WORKFLOW_PATH"); res.Value != "" {
-		res.LogWarning()
-		return res.Value, nil
+	if path := worker.WorkflowPathEnv().Value; path != "" {
+		return path, nil
 	}
 	workdir, err := os.Getwd()
 	if err != nil {
@@ -257,6 +256,9 @@ func run(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Emit deprecated-alias warnings exactly once per startup; the env loaders
+	// below are pure and run more than once.
+	worker.WarnDeprecatedEnv()
 	var resolveArgs []string
 	if workflowPath != "" {
 		resolveArgs = []string{workflowPath}

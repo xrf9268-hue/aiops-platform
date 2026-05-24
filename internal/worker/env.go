@@ -6,6 +6,36 @@ import (
 	"os"
 )
 
+// Worker env var names. The AIOPS_ prefix is the single convention (#368); the
+// *Legacy unprefixed forms are deprecated aliases kept for back-compat.
+const (
+	workspaceRootEnv       = "AIOPS_WORKSPACE_ROOT"
+	workspaceRootEnvLegacy = "WORKSPACE_ROOT"
+	mirrorRootEnv          = "AIOPS_MIRROR_ROOT"
+	mirrorRootEnvLegacy    = "MIRROR_ROOT"
+	workflowPathEnv        = "AIOPS_WORKFLOW_PATH"
+	workflowPathEnvLegacy  = "WORKFLOW_PATH"
+)
+
+// WorkflowPathEnv resolves the workflow-path env var (canonical AIOPS_WORKFLOW_PATH,
+// deprecated alias WORKFLOW_PATH). It is exported because cmd/worker resolves
+// this one outside LoadConfigFromEnv. The resolution is pure; deprecation
+// warnings are emitted once per startup via WarnDeprecatedEnv.
+func WorkflowPathEnv() EnvResolution {
+	return ResolveEnv(workflowPathEnv, workflowPathEnvLegacy)
+}
+
+// WarnDeprecatedEnv logs a one-time structured deprecation warning for every
+// worker env var supplied under its legacy unprefixed alias. Call it exactly
+// once per process startup: the value loaders (LoadConfigFromEnv,
+// WorkflowPathEnv) are pure and may run multiple times, so logging there would
+// duplicate the warning (#368, PR review).
+func WarnDeprecatedEnv() {
+	ResolveEnv(workspaceRootEnv, workspaceRootEnvLegacy).LogWarning()
+	ResolveEnv(mirrorRootEnv, mirrorRootEnvLegacy).LogWarning()
+	ResolveEnv(workflowPathEnv, workflowPathEnvLegacy).LogWarning()
+}
+
 // EnvResolution records which environment variable supplied a worker
 // configuration value, so callers can both read the value and surface a
 // deprecation/misconfiguration warning when it came from a non-canonical name.

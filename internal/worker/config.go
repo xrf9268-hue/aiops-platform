@@ -48,13 +48,9 @@ type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.Is
 // `/tmp/aiops-workspaces` fallback silently shadowed that SPEC default
 // regardless of WORKFLOW.md content; see #319.
 func LoadConfigFromEnv() Config {
-	workspace := ResolveEnv("AIOPS_WORKSPACE_ROOT", "WORKSPACE_ROOT")
-	workspace.LogWarning()
-	mirror := ResolveEnv("AIOPS_MIRROR_ROOT", "MIRROR_ROOT")
-	mirror.LogWarning()
 	return Config{
-		WorkspaceRoot: workspace.Value,
-		MirrorRoot:    mirror.Value,
+		WorkspaceRoot: ResolveEnv(workspaceRootEnv, workspaceRootEnvLegacy).Value,
+		MirrorRoot:    ResolveEnv(mirrorRootEnv, mirrorRootEnvLegacy).Value,
 	}
 }
 
