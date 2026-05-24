@@ -10,10 +10,21 @@
 /* Drive the dark: variant from a .dark class on <html> (Tailwind v4 docs). */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Brand typography tokens → font-display / font-serif utilities. */
+/* Brand typography tokens → font-display / font-serif utilities, plus a
+   modular type scale (≈1.2 ratio) exposed as text-label / text-section /
+   text-h1 / text-display utilities so heading sizes are systematic. */
 @theme {
   --font-display: "Poppins", Arial, sans-serif;
   --font-serif: "Lora", Georgia, serif;
+
+  --text-label: 0.75rem;
+  --text-label--line-height: 1rem;
+  --text-section: 1.25rem;
+  --text-section--line-height: 1.75rem;
+  --text-h1: 2.25rem;
+  --text-h1--line-height: 2.5rem;
+  --text-display: 3rem;
+  --text-display--line-height: 1.05;
 }
 
 /* Semantic colour tokens. `inline` makes utilities reference the raw vars at

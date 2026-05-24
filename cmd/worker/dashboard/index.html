@@ -22,9 +22,19 @@
     <div id="root">
       <main class="w-full max-w-[1280px] mx-auto px-4 py-8">
         <header class="p-6 sm:p-7 border border-line-strong rounded-3xl bg-surface">
-          <span class="block h-1.5 w-14 rounded-full bg-accent mb-4"></span>
-          <p class="text-accent-ink uppercase text-xs tracking-widest font-bold mb-2 font-display">aiops-platform</p>
-          <h1 class="text-4xl sm:text-5xl font-bold tracking-tight leading-none mb-3">Operations Dashboard</h1>
+          <div class="flex items-center gap-2.5 mb-3">
+            <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-accent text-white shrink-0">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 12 5 6M12 12l7-6M12 12v7" />
+                <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+                <circle cx="5" cy="6" r="2" />
+                <circle cx="19" cy="6" r="2" />
+                <circle cx="12" cy="20" r="2" />
+              </svg>
+            </span>
+            <span class="text-accent-ink uppercase text-label tracking-widest font-bold font-display">aiops-platform</span>
+          </div>
+          <h1 class="text-h1 sm:text-display font-bold tracking-tight mb-3">Operations Dashboard</h1>
           <p class="text-muted font-serif">Loading runtime state from <code>/api/v1/state</code>…</p>
         </header>
       </main>

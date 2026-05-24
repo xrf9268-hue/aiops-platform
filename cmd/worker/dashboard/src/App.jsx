@@ -95,6 +95,27 @@ function ThemeToggle({ theme, onToggle }) {
   );
 }
 
+// Brand lockup: a hub-and-spoke mark (orchestrator + agents) on a terracotta
+// tile, paired with the wordmark. Doubles as the hero's bold orange moment.
+function Wordmark() {
+  return (
+    <div className="flex items-center gap-2.5 mb-3">
+      <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-accent text-white shrink-0">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 12 5 6M12 12l7-6M12 12v7" />
+          <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
+          <circle cx="5" cy="6" r="2" />
+          <circle cx="19" cy="6" r="2" />
+          <circle cx="12" cy="20" r="2" />
+        </svg>
+      </span>
+      <span className="text-accent-ink uppercase text-label tracking-widest font-bold font-display">
+        aiops-platform
+      </span>
+    </div>
+  );
+}
+
 const BADGE_TONES = {
   default: 'bg-inset text-muted border-line',
   active: 'bg-good-bg text-good border-good-line',
@@ -123,7 +144,7 @@ function MetricCard({ label, value, hint, tone = 'default', loading = false }) {
   const t = METRIC_TONES[tone] || METRIC_TONES.default;
   return (
     <article className={`p-4 rounded-2xl border flex flex-col min-w-0 ${t.card}`}>
-      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted font-display">
+      <span className="flex items-center gap-1.5 text-label font-semibold uppercase tracking-wide text-muted font-display">
         {t.dot && <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />}
         {label}
       </span>
@@ -151,7 +172,7 @@ function Panel({ title, subtitle, accent = 'orange', children }) {
     <section className="rounded-2xl bg-surface border border-line p-5 overflow-hidden">
       <span className={`block h-1 w-8 rounded-full mb-3 ${PANEL_ACCENTS[accent] || PANEL_ACCENTS.orange}`} aria-hidden="true" />
       <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
-        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+        <h2 className="text-section font-semibold tracking-tight">{title}</h2>
         {subtitle && <span className="text-muted text-sm">{subtitle}</span>}
       </div>
       {children}
@@ -175,7 +196,7 @@ function ResponsiveTable({ columns, rows, emptyText }) {
               {columns.map((col) => (
                 <th
                   key={col.header}
-                  className={`text-xs font-semibold uppercase tracking-wider text-muted font-display border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
+                  className={`text-label font-semibold uppercase tracking-wider text-muted font-display border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
                     col.align === 'right' ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -526,11 +547,8 @@ export default function App() {
       {/* Hero */}
       <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-6 sm:p-7 border border-line-strong rounded-3xl bg-surface shadow-[0_20px_60px_rgba(20,20,19,0.1)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
         <div>
-          <span className="block h-1.5 w-14 rounded-full bg-accent mb-4" aria-hidden="true" />
-          <p className="text-accent-ink uppercase text-xs tracking-widest font-bold mb-2 font-display">
-            aiops-platform
-          </p>
-          <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-none mb-3">
+          <Wordmark />
+          <h1 className="text-h1 sm:text-display font-bold tracking-tight mb-3">
             Operations Dashboard
           </h1>
           <p className="text-muted max-w-2xl font-serif">
