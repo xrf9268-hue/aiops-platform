@@ -18,13 +18,13 @@ metadata:
 
 ## Upstream 就位
 
-!`if [ -d /tmp/symphony-upstream/.git ]; then git -C /tmp/symphony-upstream pull --ff-only 2>&1 | tail -1; else git clone --depth 1 https://github.com/openai/symphony.git /tmp/symphony-upstream 2>&1 | tail -2; fi`
+!`U=https://github.com/openai/symphony.git; D=/tmp/symphony-upstream; if [ "$(git -C "$D" remote get-url origin 2>/dev/null)" = "$U" ]; then git -C "$D" pull --ff-only 2>&1 | tail -1; else rm -rf "$D" && git clone --depth 1 "$U" "$D" 2>&1 | tail -2; fi`
 
 参考：`/tmp/symphony-upstream/SPEC.md` + `/tmp/symphony-upstream/elixir/lib/symphony_elixir/*.ex`。**先刷新镜像**（上面的命令已 `git pull --ff-only`）再据它做 SPEC 判断，别信旧 clone。SPEC 文本歧义时直接 grep Elixir 源码找原算法/分支，不要用 WebFetch 总结。
 
 ## 当前 issue + main HEAD
 
-!`gh issue view $ARGUMENTS --repo xrf9268-hue/aiops-platform --json number,title,labels,body --jq '"#\(.number) \(.title)\nlabels: \(.labels|map(.name)|join(", "))\n\n\(.body)"' 2>&1`
+!`N="$(printf %s "$ARGUMENTS" | tr -cd '0-9')"; [ -n "$N" ] && gh issue view "$N" --repo xrf9268-hue/aiops-platform --json number,title,labels,body --jq '"#\(.number) \(.title)\nlabels: \(.labels|map(.name)|join(", "))\n\n\(.body)"' 2>&1 || echo "usage: handle-issue <numeric-issue-number>"`
 !`git fetch origin main 2>&1 | tail -1 && git log --oneline origin/main -1 | cat`
 
 > 上面是 issue **全文**（未截断）。开工前完整读完正文，尤其逐条 Acceptance criteria；别只看标题/摘要。
