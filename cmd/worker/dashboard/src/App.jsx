@@ -32,6 +32,19 @@ function jsonDetailsPath(row) {
   return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
 }
 
+// compactSession mirrors the TUI's compact_session_id: long IDs render as 4…6.
+function compactSession(id) {
+  if (!id) return 'n/a';
+  if (id.length > 10) return `${id.slice(0, 4)}…${id.slice(-6)}`;
+  return id;
+}
+
+function toNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isNaN(n) ? null : n;
+}
+
 function StateBadge({ value, type = 'default' }) {
   const colors = {
     default: 'bg-slate-800 text-slate-300 border-slate-700/50',
@@ -46,12 +59,24 @@ function StateBadge({ value, type = 'default' }) {
   );
 }
 
-function MetricCard({ label, value, hint }) {
+const METRIC_TONES = {
+  default: 'border-slate-700/20 text-slate-100',
+  good: 'border-emerald-700/30 text-emerald-300',
+  warn: 'border-amber-700/30 text-amber-300',
+  danger: 'border-red-700/30 text-red-300',
+};
+
+function MetricCard({ label, value, hint, tone = 'default', loading = false }) {
+  const toneClass = METRIC_TONES[tone] || METRIC_TONES.default;
   return (
-    <article className="p-4 rounded-2xl bg-slate-900/80 border border-slate-700/20 flex flex-col">
+    <article className={`p-4 rounded-2xl bg-slate-900/80 border flex flex-col ${toneClass.split(' ')[0]}`}>
       <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</span>
-      <strong className="block my-2 text-3xl font-bold tracking-tight">{value}</strong>
-      <small className="text-slate-500 text-xs">{hint}</small>
+      {loading ? (
+        <span className="block my-2 h-8 w-20 rounded bg-slate-700/40 animate-pulse" aria-hidden="true" />
+      ) : (
+        <strong className={`block my-2 text-3xl font-bold tracking-tight ${toneClass.split(' ')[1]}`}>{value}</strong>
+      )}
+      <small className="text-slate-400 text-xs">{hint}</small>
     </article>
   );
 }
@@ -61,120 +86,175 @@ function Panel({ title, subtitle, children }) {
     <section className="rounded-2xl bg-slate-900/80 border border-slate-700/20 p-5 overflow-hidden">
       <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
         <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-        {subtitle && <span className="text-slate-500 text-sm">{subtitle}</span>}
+        {subtitle && <span className="text-slate-400 text-sm">{subtitle}</span>}
       </div>
       {children}
     </section>
   );
 }
 
-function DataTable({ columns, rows, emptyText }) {
+// ResponsiveTable renders a table on md+ screens and a stacked card list on
+// mobile, driven by a single column config so the two views never drift.
+function ResponsiveTable({ columns, rows, emptyText }) {
+  if (!rows || rows.length === 0) {
+    return <p className="text-center text-slate-500 py-6">{emptyText}</p>;
+  }
+  const rowKey = (row, i) => row.issue_id || row.issue_identifier || i;
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr>
-            {columns.map((col) => (
-              <th
-                key={col}
-                className="text-left text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-700/30 pb-3 pt-0 pr-2 first:pl-0"
-              >
-                {col}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
+    <>
+      <div className="hidden md:block overflow-x-auto">
+        <table className="w-full border-collapse text-sm min-w-[640px]">
+          <thead>
             <tr>
-              <td
-                colSpan={columns.length}
-                className="text-center text-slate-500 py-6 border-b border-slate-700/15"
-              >
-                {emptyText}
-              </td>
+              {columns.map((col) => (
+                <th
+                  key={col.header}
+                  className={`text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-700/30 pb-3 pr-3 first:pl-0 last:pr-0 ${
+                    col.align === 'right' ? 'text-right' : 'text-left'
+                  }`}
+                >
+                  {col.header}
+                </th>
+              ))}
             </tr>
-          ) : (
-            rows
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={rowKey(row, i)} className="border-b border-slate-700/15 last:border-0">
+                {columns.map((col) => (
+                  <td
+                    key={col.header}
+                    className={`py-3 pr-3 align-top first:pl-0 last:pr-0 ${
+                      col.align === 'right' ? 'text-right tabular-nums' : ''
+                    }`}
+                  >
+                    {col.cell(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <ul className="md:hidden flex flex-col gap-3">
+        {rows.map((row, i) => (
+          <li key={rowKey(row, i)} className="rounded-xl border border-slate-700/30 bg-slate-950/40 p-4">
+            <div className="mb-3">{columns[0].cell(row)}</div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              {columns.slice(1).map((col) => (
+                <div key={col.header} className="flex flex-col min-w-0">
+                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{col.header}</dt>
+                  <dd className="text-sm text-slate-200 mt-0.5">{col.cell(row)}</dd>
+                </div>
+              ))}
+            </dl>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function UsageBar({ remaining, limit }) {
+  if (remaining === null || limit === null || limit <= 0) return null;
+  const ratio = Math.max(0, Math.min(1, remaining / limit));
+  const pct = Math.round(ratio * 100);
+  const tone =
+    ratio > 0.5 ? 'bg-emerald-400' : ratio > 0.2 ? 'bg-amber-400' : 'bg-red-400';
+  return (
+    <div
+      className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden"
+      role="progressbar"
+      aria-valuenow={pct}
+      aria-valuemin={0}
+      aria-valuemax={100}
+    >
+      <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
 
-function RunningRow({ row }) {
-  const runtimeSecs = row.started_at
-    ? (Date.now() - new Date(row.started_at).getTime()) / 1000
-    : 0;
+function RateLimitBucket({ label, bucket }) {
+  const remaining = bucket ? toNumber(bucket.remaining) : null;
+  const limit = bucket ? toNumber(bucket.limit) : null;
 
-  const badgeType =
-    row.state === 'running' ? 'active'
-    : row.state === 'blocked' ? 'danger'
-    : 'default';
+  let headline = 'n/a';
+  if (remaining !== null && limit !== null) headline = `${formatCount(remaining)} / ${formatCount(limit)}`;
+  else if (remaining !== null) headline = `${formatCount(remaining)} left`;
+  else if (limit !== null) headline = `limit ${formatCount(limit)}`;
+
+  let reset = null;
+  if (bucket) {
+    for (const key of ['reset_in_seconds', 'resetInSeconds', 'reset_at', 'resetAt', 'resets_at']) {
+      if (bucket[key] !== undefined && bucket[key] !== null) {
+        const rv = bucket[key];
+        reset = typeof rv === 'number' ? `resets in ${Math.round(rv)}s` : `resets ${rv}`;
+        break;
+      }
+    }
+  }
 
   return (
-    <tr className="border-b border-slate-700/15 last:border-0">
-      <td className="py-3 pr-2 align-top">
-        <div className="font-semibold">
-          <a href={jsonDetailsPath(row)}>{issueLabel(row)}</a>
-        </div>
-        {row.workspace_path && (
-          <div className="text-xs text-slate-500 mt-0.5 truncate max-w-[12rem]">{row.workspace_path}</div>
-        )}
-      </td>
-      <td className="py-3 pr-2 align-top">
-        <StateBadge value={row.state || 'running'} type={badgeType} />
-      </td>
-      <td className="py-3 pr-2 align-top font-mono text-xs text-slate-300">
-        {row.session_id || 'n/a'}
-      </td>
-      <td className="py-3 pr-2 align-top tabular-nums text-slate-300">
-        {formatRuntime(runtimeSecs)} / {formatCount(row.turn_count)}
-      </td>
-      <td className="py-3 pr-2 align-top max-w-[18rem]">
-        <div className="truncate text-slate-200">{row.last_message || row.last_event || 'n/a'}</div>
-        <div className="text-xs text-slate-500 mt-0.5">{formatDate(row.last_event_at)}</div>
-      </td>
-      <td className="py-3 pr-0 align-top tabular-nums text-right text-slate-300">
-        <div>Total {formatCount(row.tokens?.total_tokens)}</div>
-        <div className="text-xs text-slate-500">
-          In {formatCount(row.tokens?.input_tokens)} / Out {formatCount(row.tokens?.output_tokens)}
-        </div>
-      </td>
-    </tr>
+    <div className="rounded-xl bg-slate-950/50 border border-slate-700/20 p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-slate-100">{headline}</div>
+      <UsageBar remaining={remaining} limit={limit} />
+      {reset && <div className="mt-2 text-xs text-slate-400">{reset}</div>}
+    </div>
   );
 }
 
-function BlockedRow({ row }) {
-  return (
-    <tr className="border-b border-slate-700/15 last:border-0">
-      <td className="py-3 pr-2 align-top">
-        <a href={jsonDetailsPath(row)} className="font-semibold">{issueLabel(row)}</a>
-      </td>
-      <td className="py-3 pr-2 align-top">
-        <StateBadge value={row.state || 'blocked'} type="danger" />
-      </td>
-      <td className="py-3 pr-2 align-top font-mono text-xs text-slate-300">
-        {row.session_id || 'n/a'}
-      </td>
-      <td className="py-3 pr-2 align-top text-slate-300">{formatDate(row.blocked_at)}</td>
-      <td className="py-3 pr-2 align-top text-slate-300">{row.method || 'n/a'}</td>
-      <td className="py-3 pr-0 align-top text-red-400 max-w-[16rem] truncate">{row.error || 'n/a'}</td>
-    </tr>
-  );
+function formatCredits(credits) {
+  if (!credits || typeof credits !== 'object') return { text: 'n/a', tone: 'text-slate-400' };
+  if (credits.unlimited) return { text: 'Unlimited', tone: 'text-emerald-300' };
+  if (credits.has_credits) {
+    const balance = toNumber(credits.balance);
+    return {
+      text: balance !== null ? balance.toFixed(2) : 'Available',
+      tone: 'text-emerald-300',
+    };
+  }
+  return { text: 'None', tone: 'text-red-300' };
 }
 
-function RetryRow({ row }) {
+function RateLimits({ rateLimits, loading }) {
+  if (loading) {
+    return <div className="h-24 rounded-xl bg-slate-800/30 animate-pulse" aria-hidden="true" />;
+  }
+  if (!rateLimits || typeof rateLimits !== 'object') {
+    return <p className="text-slate-500 text-sm py-2">No rate-limit snapshot reported.</p>;
+  }
+
+  const tier = rateLimits.limit_id || rateLimits.limit_name || 'unknown tier';
+  const hasShape =
+    rateLimits.primary !== undefined ||
+    rateLimits.secondary !== undefined ||
+    rateLimits.credits !== undefined;
+
+  // Unknown payload shape — keep the data visible rather than guessing layout.
+  if (!hasShape) {
+    return (
+      <pre className="overflow-auto rounded-xl p-4 bg-slate-950/70 text-violet-300 text-xs leading-relaxed">
+        {JSON.stringify(rateLimits, null, 2)}
+      </pre>
+    );
+  }
+
+  const credits = formatCredits(rateLimits.credits);
+
   return (
-    <tr className="border-b border-slate-700/15 last:border-0">
-      <td className="py-3 pr-2 align-top">
-        <a href={jsonDetailsPath(row)} className="font-semibold">{issueLabel(row)}</a>
-      </td>
-      <td className="py-3 pr-2 align-top tabular-nums text-amber-400">#{formatCount(row.attempt)}</td>
-      <td className="py-3 pr-2 align-top text-slate-300">{formatDate(row.due_at)}</td>
-      <td className="py-3 pr-0 align-top text-red-400 max-w-[22rem] truncate">{row.error || 'n/a'}</td>
-    </tr>
+    <div className="flex flex-col gap-4">
+      <StateBadge value={tier} type="default" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <RateLimitBucket label="Primary" bucket={rateLimits.primary} />
+        <RateLimitBucket label="Secondary" bucket={rateLimits.secondary} />
+        <div className="rounded-xl bg-slate-950/50 border border-slate-700/20 p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Credits</div>
+          <div className={`mt-1 text-lg font-semibold tabular-nums ${credits.tone}`}>{credits.text}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -182,6 +262,7 @@ export default function App() {
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
 
   useEffect(() => {
     let cancelled = false;
@@ -207,15 +288,155 @@ export default function App() {
     };
   }, []);
 
+  // Tick once a second so running-session runtimes count up smoothly instead
+  // of jumping on each 5s data refresh.
+  useEffect(() => {
+    const tick = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, []);
+
+  const loading = state === null && !error;
   const totals = state?.codex_totals || {};
   const counts = state?.counts || {};
   const totalRuntime = Number(totals.seconds_running || 0);
   const maxAgents = state?.max_concurrent_agents ?? '—';
 
+  const completed = Number(counts.completed_total ?? counts.completed ?? 0);
+  const failed = Number(counts.failed_total ?? counts.failed ?? 0);
+  const blocked = Number(counts.blocked ?? 0);
+  const retrying = Number(counts.retrying ?? 0);
+
+  const status = error ? 'offline' : loadedAt ? 'live' : 'connecting';
+  const statusStyles = {
+    live: 'bg-emerald-900/20 text-emerald-300 border-emerald-700/30',
+    offline: 'bg-red-900/20 text-red-300 border-red-700/40',
+    connecting: 'bg-slate-800 text-slate-300 border-slate-700/50',
+  };
+  const statusLabel = { live: 'Live', offline: 'Offline', connecting: 'Connecting…' };
+
+  const runningColumns = [
+    {
+      header: 'Issue',
+      cell: (row) => (
+        <div>
+          <div className="font-semibold">
+            <a href={jsonDetailsPath(row)}>{issueLabel(row)}</a>
+          </div>
+          {row.workspace_path && (
+            <div className="text-xs text-slate-500 mt-0.5 truncate max-w-[12rem]" title={row.workspace_path}>
+              {row.workspace_path}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      header: 'State',
+      cell: (row) => (
+        <StateBadge
+          value={row.state || 'running'}
+          type={row.state === 'blocked' ? 'danger' : row.state === 'running' ? 'active' : 'default'}
+        />
+      ),
+    },
+    {
+      header: 'Session',
+      cell: (row) => (
+        <span className="font-mono text-xs text-slate-300" title={row.session_id || undefined}>
+          {compactSession(row.session_id)}
+        </span>
+      ),
+    },
+    {
+      header: 'Runtime / turns',
+      align: 'right',
+      cell: (row) => {
+        const runtimeSecs = row.started_at ? (nowTs - new Date(row.started_at).getTime()) / 1000 : 0;
+        return (
+          <span className="tabular-nums text-slate-300">
+            {formatRuntime(runtimeSecs)} / {formatCount(row.turn_count)}
+          </span>
+        );
+      },
+    },
+    {
+      header: 'Last update',
+      cell: (row) => (
+        <div className="max-w-[18rem]">
+          <div className="truncate text-slate-200">{row.last_message || row.last_event || 'n/a'}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{formatDate(row.last_event_at)}</div>
+        </div>
+      ),
+    },
+    {
+      header: 'Tokens',
+      align: 'right',
+      cell: (row) => (
+        <div className="tabular-nums text-slate-300">
+          <div>Total {formatCount(row.tokens?.total_tokens)}</div>
+          <div className="text-xs text-slate-500">
+            In {formatCount(row.tokens?.input_tokens)} / Out {formatCount(row.tokens?.output_tokens)}
+          </div>
+        </div>
+      ),
+    },
+  ];
+
+  const blockedColumns = [
+    {
+      header: 'Issue',
+      cell: (row) => (
+        <a href={jsonDetailsPath(row)} className="font-semibold">
+          {issueLabel(row)}
+        </a>
+      ),
+    },
+    { header: 'State', cell: (row) => <StateBadge value={row.state || 'blocked'} type="danger" /> },
+    {
+      header: 'Session',
+      cell: (row) => (
+        <span className="font-mono text-xs text-slate-300" title={row.session_id || undefined}>
+          {compactSession(row.session_id)}
+        </span>
+      ),
+    },
+    { header: 'Blocked at', cell: (row) => <span className="text-slate-300">{formatDate(row.blocked_at)}</span> },
+    { header: 'Method', cell: (row) => <span className="text-slate-300">{row.method || 'n/a'}</span> },
+    {
+      header: 'Error',
+      cell: (row) => (
+        <span className="text-red-400 block max-w-[16rem] truncate" title={row.error || undefined}>
+          {row.error || 'n/a'}
+        </span>
+      ),
+    },
+  ];
+
+  const retryColumns = [
+    {
+      header: 'Issue',
+      cell: (row) => (
+        <a href={jsonDetailsPath(row)} className="font-semibold">
+          {issueLabel(row)}
+        </a>
+      ),
+    },
+    { header: 'Attempt', align: 'right', cell: (row) => <span className="tabular-nums text-amber-400">#{formatCount(row.attempt)}</span> },
+    { header: 'Due at', cell: (row) => <span className="text-slate-300">{formatDate(row.due_at)}</span> },
+    {
+      header: 'Error',
+      cell: (row) => (
+        <span className="text-red-400 block max-w-[22rem] truncate" title={row.error || undefined}>
+          {row.error || 'n/a'}
+        </span>
+      ),
+    },
+  ];
+
   return (
     <main className="w-full max-w-[1280px] mx-auto px-4 py-8">
       {/* Hero */}
-      <header className="flex justify-between gap-6 items-start mb-6 p-7 border border-slate-400/25 rounded-3xl bg-slate-900/70 shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-7 border border-slate-400/25 rounded-3xl bg-slate-900/70 shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <div>
           <p className="text-sky-400 uppercase text-xs tracking-widest font-bold mb-2">
             aiops-platform
@@ -229,19 +450,17 @@ export default function App() {
             {REFRESH_MS / 1000}s.
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2 shrink-0">
+        <div className="flex flex-col items-end gap-2 shrink-0" aria-live="polite">
           <span
-            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${
-              error
-                ? 'bg-red-900/20 text-red-300 border-red-700/40'
-                : 'bg-emerald-900/20 text-emerald-300 border-emerald-700/30'
-            }`}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${statusStyles[status]}`}
           >
-            <span className="w-2 h-2 rounded-full bg-current" />
-            {error ? 'Offline' : 'Live'}
+            <span
+              className={`w-2 h-2 rounded-full bg-current ${status === 'live' ? 'animate-pulse' : ''}`}
+            />
+            {statusLabel[status]}
           </span>
           {maxAgents !== '—' && (
-            <span className="text-xs text-slate-500">
+            <span className="text-xs text-slate-400">
               Max {maxAgents} concurrent agents
             </span>
           )}
@@ -250,37 +469,41 @@ export default function App() {
 
       {/* Error banner */}
       {error && (
-        <div className="mb-6 px-5 py-4 rounded-2xl bg-red-900/30 border border-red-700/40 text-red-300">
+        <div role="alert" className="mb-6 px-5 py-4 rounded-2xl bg-red-900/30 border border-red-700/40 text-red-300">
           <strong>Error:</strong> {error}
         </div>
       )}
 
       {/* Metrics row */}
       <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6">
-        <MetricCard
-          label="Running"
-          value={formatCount(counts.running)}
-          hint="Active sessions"
-        />
+        <MetricCard label="Running" value={formatCount(counts.running)} hint="Active sessions" loading={loading} />
         <MetricCard
           label="Retrying"
-          value={formatCount(counts.retrying)}
+          value={formatCount(retrying)}
           hint="In retry backoff"
+          tone={retrying > 0 ? 'warn' : 'default'}
+          loading={loading}
         />
         <MetricCard
           label="Blocked"
-          value={formatCount(counts.blocked)}
+          value={formatCount(blocked)}
           hint="Awaiting operator"
+          tone={blocked > 0 ? 'danger' : 'default'}
+          loading={loading}
         />
         <MetricCard
           label="Completed"
-          value={formatCount(counts.completed_total ?? counts.completed)}
+          value={formatCount(completed)}
           hint={`Recent window: ${formatCount(counts.completed)}`}
+          tone={completed > 0 ? 'good' : 'default'}
+          loading={loading}
         />
         <MetricCard
           label="Failed"
-          value={formatCount(counts.failed_total ?? counts.failed)}
+          value={formatCount(failed)}
           hint={`Suppression set: ${formatCount(counts.failed)}`}
+          tone={failed > 0 ? 'danger' : 'default'}
+          loading={loading}
         />
       </section>
 
@@ -290,42 +513,40 @@ export default function App() {
           label="Total tokens"
           value={formatCount(totals.total_tokens)}
           hint={`In ${formatCount(totals.input_tokens)} / Out ${formatCount(totals.output_tokens)}`}
+          loading={loading}
         />
         <MetricCard
           label="Runtime"
           value={formatRuntime(totalRuntime)}
           hint="Completed + active Codex time"
+          loading={loading}
         />
         <MetricCard
           label="Poll interval"
           value={`${formatCount(state?.poll_interval_ms)}ms`}
           hint="Tracker poll cadence"
+          loading={loading}
         />
         <MetricCard
           label="Snapshot"
           value={loadedAt ? loadedAt.toLocaleTimeString() : '—'}
           hint={state?.generated_at ? `API: ${formatDate(state.generated_at)}` : 'Fetching…'}
+          loading={loading}
         />
       </section>
 
       {/* Rate limits */}
       <Panel title="Rate limits" subtitle="Latest upstream snapshot">
-        <pre className="overflow-auto rounded-xl p-4 bg-slate-950/70 text-violet-300 text-xs leading-relaxed">
-          {state?.rate_limits
-            ? JSON.stringify(state.rate_limits, null, 2)
-            : 'No rate-limit snapshot reported.'}
-        </pre>
+        <RateLimits rateLimits={state?.rate_limits} loading={loading} />
       </Panel>
 
       {/* Running sessions */}
       <div className="mt-4">
         <Panel title="Running sessions" subtitle="Current active issue work">
-          <DataTable
-            columns={['Issue', 'State', 'Session', 'Runtime / turns', 'Last update', 'Tokens']}
-            rows={(state?.running || []).map((row) => (
-              <RunningRow key={row.issue_id} row={row} />
-            ))}
-            emptyText="No active sessions."
+          <ResponsiveTable
+            columns={runningColumns}
+            rows={state?.running || []}
+            emptyText={loading ? 'Loading…' : 'No active sessions.'}
           />
         </Panel>
       </div>
@@ -333,12 +554,10 @@ export default function App() {
       {/* Blocked sessions */}
       <div className="mt-4">
         <Panel title="Blocked sessions" subtitle="Operator input and error indicators">
-          <DataTable
-            columns={['Issue', 'State', 'Session', 'Blocked at', 'Method', 'Error']}
-            rows={(state?.blocked || []).map((row) => (
-              <BlockedRow key={row.issue_id} row={row} />
-            ))}
-            emptyText="No blocked sessions."
+          <ResponsiveTable
+            columns={blockedColumns}
+            rows={state?.blocked || []}
+            emptyText={loading ? 'Loading…' : 'No blocked sessions.'}
           />
         </Panel>
       </div>
@@ -346,19 +565,16 @@ export default function App() {
       {/* Retry queue */}
       <div className="mt-4">
         <Panel title="Retry queue" subtitle="Backoff delays before redispatch">
-          <DataTable
-            columns={['Issue', 'Attempt', 'Due at', 'Error']}
-            rows={(state?.retrying || []).map((row) => (
-              <RetryRow key={row.issue_id} row={row} />
-            ))}
-            emptyText="No issues are currently backing off."
+          <ResponsiveTable
+            columns={retryColumns}
+            rows={state?.retrying || []}
+            emptyText={loading ? 'Loading…' : 'No issues are currently backing off.'}
           />
         </Panel>
       </div>
 
-      <footer className="mt-8 text-center text-xs text-slate-600">
-        Generated: {formatDate(state?.generated_at)} · Last refreshed:{' '}
-        {formatDate(loadedAt)} · Poll interval: {formatCount(state?.poll_interval_ms)}ms
+      <footer className="mt-8 text-center text-xs text-slate-500">
+        API snapshot: {formatDate(state?.generated_at)} · Last refreshed: {formatDate(loadedAt)}
       </footer>
     </main>
   );
