@@ -88,6 +88,9 @@ func TestEnqueueDefaults(t *testing.T) {
 	if deduped {
 		t.Fatal("first enqueue should not be deduped")
 	}
+	// Clean up so the queued row does not interfere with later tests that call
+	// Claim (e.g. TestFIFO, TestClaimEmpty, TestFailRetryAndTerminal).
+	t.Cleanup(func() { _ = testDB.Complete(context.Background(), out.ID) })
 	if out.ID == "" {
 		t.Error("ID should be populated by Enqueue")
 	}
@@ -130,26 +133,36 @@ func TestEnqueueDeduplication(t *testing.T) {
 }
 
 // TestClaimEmpty verifies the empty-dequeue invariant: Claim returns nil
-// without error when no queued tasks are available.  We use a source_event_id
-// that is unlikely to collide with real work items.
+// without error when no queued tasks are available.
+//
+// To enforce the invariant correctly in a shared DB, all pre-existing queued
+// rows are first drained (marked succeeded) so that subsequent Claim calls
+// observe a truly empty queue.
 func TestClaimEmpty(t *testing.T) {
 	ctx := context.Background()
 
-	// Drain any tasks we own in this test by checking Claim; if something
-	// comes back it belonged to a prior test run sharing the DB.  We log
-	// but do not fail, since this is a shared-DB environment.
+	// Drain any queued rows left by prior test runs so the assertion below
+	// is meaningful rather than a silent no-op.
+	for {
+		got, err := testDB.Claim(ctx)
+		if err != nil {
+			t.Fatalf("drain Claim: %v", err)
+		}
+		if got == nil {
+			break
+		}
+		t.Logf("drained pre-existing task id=%s", got.ID)
+		_ = testDB.Complete(ctx, got.ID)
+	}
+
+	// Queue is now empty; Claim must return nil.
 	got, err := testDB.Claim(ctx)
 	if err != nil {
-		t.Fatalf("Claim: %v", err)
+		t.Fatalf("Claim on empty queue: %v", err)
 	}
-	if got == nil {
-		// Clean state: nil is the empty-dequeue signal.
-		return
+	if got != nil {
+		t.Errorf("Claim on empty queue returned id=%s, want nil", got.ID)
 	}
-	// If a task was claimed, it was from a prior run; mark it succeeded so it
-	// does not pollute further tests.
-	t.Logf("Claim returned pre-existing task id=%s; marking succeeded to drain queue", got.ID)
-	_ = testDB.Complete(ctx, got.ID)
 }
 
 // TestFIFO verifies that Claim returns tasks in priority-DESC, created_at-ASC
