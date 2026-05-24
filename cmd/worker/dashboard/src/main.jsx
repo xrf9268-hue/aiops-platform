@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -81,18 +81,9 @@ function App() {
     };
   }, []);
 
-  const runningRuntime = useMemo(() => {
-    const now = Date.now();
-    return (state?.running || []).reduce((total, row) => {
-      if (!row.started_at) return total;
-      const started = new Date(row.started_at).getTime();
-      return Number.isNaN(started) ? total : total + Math.max(0, (now - started) / 1000);
-    }, 0);
-  }, [state, loadedAt]);
-
   const totals = state?.codex_totals || {};
   const counts = state?.counts || {};
-  const totalRuntime = Number(totals.seconds_running || 0) + runningRuntime;
+  const totalRuntime = Number(totals.seconds_running || 0);
 
   return (
     <main className="app-shell">

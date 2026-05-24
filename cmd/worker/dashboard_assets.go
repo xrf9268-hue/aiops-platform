@@ -16,8 +16,8 @@ var dashboardDist embed.FS
 
 func dashboardHTMLHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
 			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 			return
 		}

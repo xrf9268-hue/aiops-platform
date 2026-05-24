@@ -319,6 +319,41 @@ func firstScriptAssetPath(t *testing.T, html string) string {
 	return match[1]
 }
 
+func TestRootDashboardAllowsHeadProbes(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodHead, "http://127.0.0.1:4000/", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("HEAD / status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Body.Len(); got != 0 {
+		t.Fatalf("HEAD / body length = %d, want 0", got)
+	}
+}
+
+func TestRootDashboardRejectsUnsafeMethodsWithHeadInAllow(t *testing.T) {
+	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+		t.Fatal("snapshot function should not be called for unsafe root methods")
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST / status code = %d, want %d; body=%s", w.Code, http.StatusMethodNotAllowed, w.Body.String())
+	}
+	if got, want := w.Header().Get("Allow"), "GET, HEAD"; got != want {
+		t.Fatalf("Allow = %q, want %q", got, want)
+	}
+}
+
 func TestStateHTTPHandlerPropagatesRequestCancellation(t *testing.T) {
 	requestErr := context.Canceled
 	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
