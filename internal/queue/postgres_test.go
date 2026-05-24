@@ -135,35 +135,26 @@ func TestEnqueueDeduplication(t *testing.T) {
 // TestClaimEmpty verifies the empty-dequeue invariant: Claim returns nil
 // without error when no queued tasks are available.
 //
-// To avoid any side effects on non-test rows in a shared database, we check
-// for non-test queued rows with a read-only count query before calling Claim.
-// If non-test rows exist we skip rather than risk claiming and mutating them.
-// Test-owned rows are drained via a targeted UPDATE that does not go through
-// Claim (so no running-state transition occurs on test fixtures).
+// This test is read-only with respect to existing queue state: it does not
+// drain, complete, or otherwise mutate any rows it does not own.  If any
+// queued tasks exist (from this or any other run) the test skips with an
+// explanatory message; run with an isolated DB to enforce the invariant.
 func TestClaimEmpty(t *testing.T) {
 	ctx := context.Background()
 
-	// Drain only test-owned queued rows without calling Claim (no state
-	// transition side effects on test rows beyond marking them succeeded).
-	if _, err := testPool.Exec(ctx,
-		"UPDATE tasks SET status='succeeded', updated_at=now() WHERE source_type='test' AND status='queued'"); err != nil {
-		t.Fatalf("drain test tasks: %v", err)
-	}
-
-	// Check for non-test queued rows without claiming them.  If any exist
-	// we cannot enforce the empty-dequeue invariant in this shared DB.
-	var nonTestCount int
+	// Read-only check: if any queued rows exist we cannot safely assert that
+	// Claim returns nil without risking claiming (and mutating) foreign tasks.
+	var count int
 	if err := testPool.QueryRow(ctx,
-		"SELECT count(*) FROM tasks WHERE source_type != 'test' AND status = 'queued'",
-	).Scan(&nonTestCount); err != nil {
-		t.Fatalf("count non-test queued tasks: %v", err)
+		"SELECT count(*) FROM tasks WHERE status = 'queued'",
+	).Scan(&count); err != nil {
+		t.Fatalf("count queued tasks: %v", err)
 	}
-	if nonTestCount > 0 {
-		t.Skipf("non-test queued tasks exist (count=%d); run with an isolated DB schema to validate empty-dequeue invariant", nonTestCount)
+	if count > 0 {
+		t.Skipf("queue has %d queued task(s); run with an isolated DB schema to validate empty-dequeue invariant", count)
 	}
 
-	// Queue contains only test-owned rows and we just drained them; Claim
-	// must return nil.
+	// Queue is empty — Claim must return nil.
 	got, err := testDB.Claim(ctx)
 	if err != nil {
 		t.Fatalf("Claim on empty queue: %v", err)
@@ -241,10 +232,9 @@ func TestFailRetryAndTerminal(t *testing.T) {
 		t.Fatalf("Claim attempt 1: err=%v task=%v", err, claimed)
 	}
 	if claimed.ID != out.ID {
-		// Another task was claimed; fail it back to re-queue so it is not
-		// stranded in 'running', then skip.
-		_, _ = testDB.Fail(ctx, claimed.ID, "test collision cleanup")
-		t.Skipf("unexpected task claimed (id=%s); shared-DB collision — re-run with isolated schema", claimed.ID)
+		// A foreign task was claimed; do not mutate it (no Fail/Complete).
+		// The worker will reclaim it via its normal timeout/reconcile path.
+		t.Skipf("unexpected task claimed (id=%s source_type=%s); shared-DB collision — re-run with isolated schema", claimed.ID, claimed.SourceType)
 	}
 
 	// First failure: attempts(1) < max_attempts(2) → re-queued.
@@ -269,9 +259,8 @@ func TestFailRetryAndTerminal(t *testing.T) {
 		t.Fatalf("Claim attempt 2: err=%v task=%v", err, claimed2)
 	}
 	if claimed2.ID != out.ID {
-		// Fail the unexpected task back to re-queue so it is not left in 'running'.
-		_, _ = testDB.Fail(ctx, claimed2.ID, "test collision cleanup")
-		t.Skipf("unexpected task claimed on attempt 2 (id=%s); shared-DB collision", claimed2.ID)
+		// Foreign task — do not mutate it; skip and let the worker reclaim it.
+		t.Skipf("unexpected task claimed on attempt 2 (id=%s source_type=%s); shared-DB collision", claimed2.ID, claimed2.SourceType)
 	}
 
 	// Second failure: attempts(2) >= max_attempts(2) → terminal.
