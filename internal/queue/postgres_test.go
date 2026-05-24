@@ -115,13 +115,15 @@ func TestEnqueueDeduplication(t *testing.T) {
 	ctx := context.Background()
 
 	t1 := minimalTask(uniqueID("dedup"))
-	_, dup1, err := testDB.Enqueue(ctx, t1)
+	out1, dup1, err := testDB.Enqueue(ctx, t1)
 	if err != nil {
 		t.Fatalf("first Enqueue: %v", err)
 	}
 	if dup1 {
 		t.Fatal("first enqueue: deduped=true, want false")
 	}
+	// Clean up so the queued row does not interfere with later tests that Claim.
+	t.Cleanup(func() { _ = testDB.Complete(context.Background(), out1.ID) })
 
 	_, dup2, err := testDB.Enqueue(ctx, t1)
 	if err != nil {
