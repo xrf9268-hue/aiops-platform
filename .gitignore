@@ -25,6 +25,7 @@ tmp/
 /linear-poller
 /gitea-poller
 /tui
+/tui.exe
 
 # Node / npm
 node_modules/
