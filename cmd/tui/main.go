@@ -180,17 +180,49 @@ func main() {
 
 	scr := newScreen(os.Stdout, isTerminal(os.Stdout), *rawFlag)
 
-	// NotifyContext is the idiomatic modern pattern: the context is cancelled
-	// on SIGINT/SIGTERM, which both breaks the render loop and aborts any
-	// in-flight fetch so Ctrl-C restores the terminal immediately even mid-poll.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	// Translate the first signal into context cancellation: this both breaks
+	// the render loop and aborts any in-flight fetch (the per-fetch context is
+	// derived from ctx), so Ctrl-C restores the terminal immediately even
+	// mid-poll. The caught signal is handed back for a conventional exit code.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	caught := make(chan os.Signal, 1)
+	go func() {
+		select {
+		case s := <-sigCh:
+			caught <- s
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	fetch := func(ctx context.Context) (*stateResponse, error) {
 		return fetchState(ctx, client, stateURL)
 	}
 
 	run(ctx, scr, fetch, interval, baseURL)
+
+	// run has already restored the terminal (its deferred restore). If a signal
+	// caused the shutdown, re-raise it under the default handler so we exit with
+	// the conventional 128+signum status (130 for SIGINT) rather than 0.
+	select {
+	case s := <-caught:
+		signal.Reset(os.Interrupt, syscall.SIGTERM)
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			_ = p.Signal(s)
+		}
+		// Safety net if the re-raised signal doesn't terminate the process.
+		time.Sleep(100 * time.Millisecond)
+		if sysSig, ok := s.(syscall.Signal); ok {
+			os.Exit(128 + int(sysSig))
+		}
+		os.Exit(1)
+	default:
+	}
 }
 
 // run drives the poll/render loop until ctx is cancelled (signal or otherwise),
@@ -288,16 +320,6 @@ func (s *screen) draw(content string) {
 	} else {
 		io.WriteString(s.w, content+"\n")
 	}
-}
-
-// isTerminal reports whether f refers to a character device (a real terminal),
-// using only the standard library (no x/term dependency).
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
 }
 
 // safeRenderFrame wraps renderFrame with panic recovery, mirroring the
