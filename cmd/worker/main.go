@@ -309,6 +309,10 @@ func run(ctx context.Context, args []string) error {
 		MaxFailureRetries:      &maxFailureRetries,
 		MaxTurns:               &maxTurns,
 		RunnerEnforcesMaxTurns: &runnerEnforcesMaxTurns,
+		// SPEC §18.1 active-transition cleanup: the dispatcher removes the
+		// workspace (firing before_remove against the live workflow snapshot)
+		// when a running issue moves to a terminal state mid-run.
+		WorkspaceCleaner: dispatcher,
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {

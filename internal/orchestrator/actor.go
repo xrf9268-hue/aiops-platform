@@ -66,6 +66,42 @@ type Scheduler interface {
 	NextDelay(RetryRequest) time.Duration
 }
 
+// ReconciledWorkspace identifies the per-issue workspace that SPEC §18.1
+// active-transition cleanup removes after a terminal-state run is cancelled
+// and its worker has exited.
+type ReconciledWorkspace struct {
+	IssueID    IssueID
+	Identifier string
+	Path       string
+	// Root is the workspace root Path was created under (captured at dispatch
+	// time). The cleaner removes Path via SafeRemove against this root, so a
+	// hot-reloaded workspace.root cannot make the removal fail the containment
+	// check and silently skip cleanup. Empty falls back to the live snapshot
+	// root.
+	Root   string
+	State  string
+	Reason string
+}
+
+// WorkspaceCleaner removes a per-issue workspace through the same
+// before_remove hook → remove → reconcile_workspace event sequence the
+// startup sweep uses (SPEC §18.1). The orchestrator invokes it from the
+// reconcile-cancel finalize path on a followup goroutine — after the worker
+// goroutine has exited — so the directory is no longer in use. A nil cleaner
+// disables active-transition cleanup (unit tests / legacy callers); the
+// startup sweep still reclaims the directory on the next boot.
+type WorkspaceCleaner interface {
+	CleanupReconciledWorkspace(ctx context.Context, w ReconciledWorkspace)
+}
+
+// reconcileWorkspaceCleanupTimeout bounds the post-exit cleanup followup so a
+// wedged before_remove hook cannot pin the followup goroutine forever. The
+// before_remove hook enforces its own per-command timeout; this is the outer
+// guard required of every followup that does external I/O (AGENTS.md
+// "Replicate Elixir's implicit runtime guarantees explicitly in Go"). A
+// package var so tests can shrink it.
+var reconcileWorkspaceCleanupTimeout = 60 * time.Second
+
 // RetryKind identifies whether the retry follows a failed worker run or a
 // clean continuation turn.
 type RetryKind string
@@ -171,6 +207,12 @@ type Deps struct {
 	// poll loop uses; when nil, retry fires dispatch directly from
 	// the cached entry.Issue (legacy behavior, kept for unit tests).
 	CandidateLister ActiveIssueLister
+	// WorkspaceCleaner, when set, removes the workspace of a run that was
+	// cancelled because its issue moved to a terminal tracker state mid-run
+	// (SPEC §18.1 active transition). nil leaves cleanup to the startup
+	// sweep. Production wires the RuntimeDispatcher, which fires before_remove
+	// against the live workflow snapshot's hook config.
+	WorkspaceCleaner WorkspaceCleaner
 }
 
 // Orchestrator is the SPEC §3.1 / §7.4 "single authority" that owns
@@ -203,6 +245,11 @@ type Orchestrator struct {
 	maxTurns               int
 	runnerEnforcesMaxTurns bool
 	retryWake              chan struct{}
+
+	// workspaceCleaner removes the workspace of a terminal-state run after its
+	// worker exits (SPEC §18.1 active transition). nil disables the active
+	// cleanup; the startup sweep still reclaims the directory on next boot.
+	workspaceCleaner WorkspaceCleaner
 
 	// candidateLister supplies the SPEC §16.6 candidate fetch that a
 	// fired failure-retry timer consults before re-dispatching. The
@@ -255,6 +302,7 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 		runnerEnforcesMaxTurns: runnerEnforcesMaxTurns,
 		retryWake:              make(chan struct{}, 1),
 		candidateLister:        deps.CandidateLister,
+		workspaceCleaner:       deps.WorkspaceCleaner,
 		started:                make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
@@ -792,13 +840,80 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 	return o.RunningRetryingAndBlockedIssueIDs(ctx)
 }
 
+// beginReconcileWorkspaceCleanup atomically reserves issue id for an
+// active-transition workspace removal. It returns false — abort the cleanup —
+// when the issue is already claimed (re-dispatched since it went terminal, so
+// a new run now owns the deterministic workspace path) or another cleanup is
+// already in flight for it. On success the issue is marked cleaning, which
+// dispatchOp treats like a claim, so no run can be dispatched onto the path
+// until endReconcileWorkspaceCleanup clears the mark. Because both this check
+// and the dispatch claim run on the single actor goroutine, there is no
+// check-then-delete race (the deletion happens entirely within the marked
+// window). Returns false if the actor is unreachable (shutdown), leaving the
+// directory for the next startup sweep.
+func (o *Orchestrator) beginReconcileWorkspaceCleanup(id IssueID) bool {
+	reply := make(chan bool, 1)
+	if err := o.submit(o.runCtx, &beginWorkspaceCleanupOp{id: id, result: reply}); err != nil {
+		return false
+	}
+	select {
+	case ok := <-reply:
+		return ok
+	case <-o.runCtx.Done():
+		return false
+	}
+}
+
+func (o *Orchestrator) endReconcileWorkspaceCleanup(id IssueID) {
+	done := make(chan struct{}, 1)
+	if err := o.submit(o.runCtx, &endWorkspaceCleanupOp{id: id, done: done}); err != nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-o.runCtx.Done():
+	}
+}
+
+type beginWorkspaceCleanupOp struct {
+	id     IssueID
+	result chan<- bool
+}
+
+func (o *beginWorkspaceCleanupOp) apply(st *OrchestratorState) func() {
+	if st.IsClaimed(o.id) || st.IsCleaningWorkspace(o.id) {
+		o.result <- false
+		return nil
+	}
+	st.MarkCleaningWorkspace(o.id)
+	o.result <- true
+	return nil
+}
+
+type endWorkspaceCleanupOp struct {
+	id   IssueID
+	done chan<- struct{}
+}
+
+func (o *endWorkspaceCleanupOp) apply(st *OrchestratorState) func() {
+	st.UnmarkCleaningWorkspace(o.id)
+	o.done <- struct{}{}
+	return nil
+}
+
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
 // partial state listings under pagination caps.
-func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, workerExitTimeout time.Duration) error {
+//
+// terminalStates is the lowercased terminal-state set. A running entry whose
+// refreshed issue sits in a terminal state is flagged for workspace cleanup
+// after its worker exits (SPEC §18.1); a merely-inactive cancel keeps the
+// workspace. Pass an empty set to disable the cleanup gating (every cancel
+// then behaves as inactive — workspace preserved).
+func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, terminalStates map[string]struct{}, workerExitTimeout time.Duration) error {
 	reply := make(chan []*RunningEntry, 1)
-	op := &reconcileInactiveTrackerIssuesOp{issuesByID: issuesByID, result: reply}
+	op := &reconcileInactiveTrackerIssuesOp{o: o, issuesByID: issuesByID, terminalStates: terminalStates, result: reply}
 	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
@@ -857,7 +972,7 @@ func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(run.Issue, issue) {
 			continue
 		}
-		run.Issue = issue
+		refreshRunningIssue(run, issue)
 		st.ClaimedIssues[id] = issue
 	}
 	for id, retry := range st.RetryAttempts {
@@ -981,7 +1096,7 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			// state. Without this, an issue that moved between active states
 			// keeps counting toward its dispatch-time bucket and a later poll
 			// can exceed max_concurrent_agents_by_state for the new state.
-			run.Issue = issue
+			refreshRunningIssue(run, issue)
 			st.ClaimedIssues[id] = issue
 			continue
 		}
@@ -1016,19 +1131,40 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 }
 
 type reconcileInactiveTrackerIssuesOp struct {
-	issuesByID map[string]tracker.Issue
-	result     chan<- []*RunningEntry
+	o              *Orchestrator
+	issuesByID     map[string]tracker.Issue
+	terminalStates map[string]struct{}
+	result         chan<- []*RunningEntry
 }
 
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	var cleanupEntries []workspaceCleanup
+	// blockedCleanups collects terminal-state blocked entries whose workspace
+	// must be removed now (no live worker holds them, unlike running entries
+	// which defer cleanup to the finalize path). Both paths go through the
+	// same WorkspaceCleaner so before_remove fires and a reconcile_workspace
+	// event is emitted — mirroring upstream reconcile_blocked_issue_state,
+	// which cleans the workspace only on a terminal transition.
+	var blockedCleanups []ReconciledWorkspace
 	for id, run := range st.Running {
-		if _, ok := r.issuesByID[string(id)]; !ok {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok {
 			continue
 		}
 		st.ReleaseClaim(id)
 		run.ReconcileCancel = true
+		// Refresh the stored issue and (re)evaluate the terminal cleanup gate
+		// against the CURRENT observation every tick. A terminal transition
+		// flags the entry so finalize fires before_remove + remove (SPEC §18.1
+		// active transition) with the terminal state labeling the
+		// reconcile_workspace event; a merely-inactive cancel leaves it false,
+		// keeping the workspace for reuse (upstream terminate_running_issue
+		// cleanup gating). Assigning unconditionally — rather than only setting
+		// true — clears a flag left by an earlier terminal blip when the issue
+		// has since flipped back to a non-terminal inactive state before the
+		// worker exits (Codex P2 follow-up).
+		run.Issue = issue
+		run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
 		cancelEntries = append(cancelEntries, run)
 	}
 	for id := range st.RetryAttempts {
@@ -1037,14 +1173,33 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	for id := range st.Blocked {
-		if _, ok := r.issuesByID[string(id)]; !ok {
+	for id, blocked := range st.Blocked {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok {
 			continue
 		}
-		cleanupEntries = appendBlockedWorkspaceCleanup(cleanupEntries, id, st.Blocked[id])
+		if isTerminalTrackerState(issue.State, r.terminalStates) {
+			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State); okw {
+				blockedCleanups = append(blockedCleanups, w)
+			}
+		}
 		st.ReleaseClaim(id)
 	}
-	return reconcileCancelFollowup(cancelEntries, cleanupEntries, r.result)
+	o := r.o
+	result := r.result
+	return func() {
+		for _, entry := range cancelEntries {
+			if entry.CancelWorker != nil {
+				entry.CancelWorker()
+			}
+		}
+		for _, w := range blockedCleanups {
+			o.runReconciledWorkspaceCleanup(w)
+		}
+		if result != nil {
+			result <- cancelEntries
+		}
+	}
 }
 
 type workspaceCleanup struct {
@@ -1094,6 +1249,89 @@ func isActiveTrackerState(state string, activeStates map[string]struct{}) bool {
 	return ok
 }
 
+// isTerminalTrackerState reports whether state is in the lowercased terminal
+// set. Used by reconciliation to gate SPEC §18.1 workspace cleanup on a
+// terminal transition only (an empty set disables the gating).
+func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bool {
+	if len(terminalStates) == 0 {
+		return false
+	}
+	_, ok := terminalStates[strings.ToLower(strings.TrimSpace(state))]
+	return ok
+}
+
+// reconciledWorkspaceCleanup returns a followup that removes the workspace of
+// a terminal-state run whose worker has now exited (SPEC §18.1 active
+// transition). It returns nil — leaving cleanup to the startup sweep — when
+// the entry was not flagged for terminal cleanup, no cleaner is wired, or the
+// run never recorded a workspace path. The returned func runs on the actor's
+// followup goroutine, off the actor loop, so the before_remove hook and
+// remove cannot block state mutation.
+func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntry) func() {
+	if entry == nil || !entry.ReconcileCleanupWorkspace {
+		return nil
+	}
+	w, ok := terminalWorkspaceForCleanup(id, entry.Identifier, entry.Workspace.Path, entry.Workspace.Root, entry.Issue.State)
+	if !ok || o.workspaceCleaner == nil {
+		return nil
+	}
+	return func() { o.runReconciledWorkspaceCleanup(w) }
+}
+
+// refreshRunningIssue updates a still-active run's stored issue and clears any
+// terminal-cleanup flag left by an earlier terminal observation. The issue is
+// active again, so its workspace must be preserved: without this reset a
+// transient terminal blip (terminal seen on one tick, back to active before
+// the worker exits) would still trigger removal at finalize (Codex P2).
+func refreshRunningIssue(run *RunningEntry, issue tracker.Issue) {
+	run.Issue = issue
+	run.ReconcileCleanupWorkspace = false
+}
+
+// terminalWorkspaceForCleanup builds the ReconciledWorkspace for a terminal
+// active-transition removal, returning ok=false when there is no workspace
+// path to remove. Shared by the running (finalize) and blocked (immediate)
+// cleanup paths so both label the reconcile_workspace event identically.
+func terminalWorkspaceForCleanup(id IssueID, identifier, path, root, state string) (ReconciledWorkspace, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ReconciledWorkspace{}, false
+	}
+	return ReconciledWorkspace{
+		IssueID:    id,
+		Identifier: identifier,
+		Path:       path,
+		Root:       strings.TrimSpace(root),
+		State:      state,
+		Reason:     "terminal",
+	}, true
+}
+
+// runReconciledWorkspaceCleanup invokes the WorkspaceCleaner under a bounded
+// context. It is a no-op when no cleaner is wired (unit tests / legacy
+// callers); the startup sweep then reclaims the directory on next boot. The
+// before_remove hook enforces its own per-command timeout; the outer deadline
+// here guards against a hook that ignores cancellation (AGENTS.md Go-runtime
+// hardening). Callers must invoke it from a followup goroutine, never inside
+// an apply.
+func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace) {
+	if o.workspaceCleaner == nil || strings.TrimSpace(w.Path) == "" {
+		return
+	}
+	// Reserve the issue for cleanup on the actor. This aborts if the issue was
+	// re-claimed since it went terminal (a new run owns the path), and while
+	// reserved dispatchOp denies dispatch — so the removal below cannot race a
+	// re-dispatch onto the same deterministic workspace path. Pairs with
+	// endReconcileWorkspaceCleanup via defer so the mark never leaks.
+	if !o.beginReconcileWorkspaceCleanup(w.IssueID) {
+		return
+	}
+	defer o.endReconcileWorkspaceCleanup(w.IssueID)
+	ctx, cancel := context.WithTimeout(o.runCtx, reconcileWorkspaceCleanupTimeout)
+	defer cancel()
+	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
+}
+
 // dispatchOp is the actor-side half of RequestDispatch: it checks
 // IsClaimed and either reserves the slot (followup spawns + records
 // Running) or signals dispatch denied. The two-step design keeps the
@@ -1109,6 +1347,14 @@ type dispatchOp struct {
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
+	if st.IsCleaningWorkspace(id) {
+		// A terminal-transition workspace cleanup is in flight for this issue
+		// (SPEC §18.1). Deny dispatch so a re-opened issue cannot land on the
+		// deterministic workspace path while before_remove/SafeRemove runs; the
+		// next poll tick retries once the cleanup clears the mark.
+		d.result <- ErrNotDispatched
+		return nil
+	}
 	st.ReleaseFailedIfIssueChanged(d.issue)
 	attempt := d.attempt
 	continuationAttempt := 0
@@ -1570,12 +1816,24 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		return nil
 	}
 	if f.entry.ReconcileCancel {
+		// Capture the cleanup followup before FinishRunReconciledCancelled
+		// drops the entry from state: the worker has now exited, so the
+		// workspace dir is free to remove (SPEC §18.1 active transition).
+		// Done stays tied to worker exit (closed here), so the reconcile wait
+		// keeps its worker_exit_timeout meaning and a slow before_remove hook
+		// cannot surface as a spurious "deadline exceeded" poll error (Codex
+		// P2). Cleanup runs asynchronously, bounded by its own hook timeout;
+		// the re-dispatch data-loss race — a re-opened issue dispatched to the
+		// same deterministic path while cleanup is still running — is prevented
+		// inside the cleaner, which skips removal when the issue has been
+		// re-claimed (Codex P1), rather than by gating the wait on cleanup.
+		cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
 		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
 		}
 		close(f.done)
-		return nil
+		return cleanup
 	}
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,

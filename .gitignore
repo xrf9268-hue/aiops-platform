@@ -38,6 +38,10 @@ coverage.out
 .claude/*
 !.claude/skills/
 
+# Local Codex CLI config (machine/user-specific model + reasoning overrides);
+# never repo policy, so keep it out of version control.
+.codex/
+
 # Deploy SSH scaffolding (#221) — keep the dir + README tracked, ignore real keys
 deploy/ssh/*
 !deploy/ssh/.gitkeep

@@ -264,19 +264,59 @@ func issueWorkspaceSourceDirs(trackerKind string) []string {
 }
 
 func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path string, issue tracker.Issue, reason string) (bool, error) {
-	if err := runWorkspaceHook(ctx, cfg.Emitter, taskID, issue.Identifier, path, workspace.HookBeforeRemove, cfg.BeforeRemoveHook, cfg.HookTimeoutMillis, cfg.HookEnvPassthrough); err != nil {
-		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", taskID, issue.ID, issue.Identifier, reason, path, err)
+	return RemoveIssueWorkspace(ctx, cfg.Emitter, RemoveWorkspaceRequest{
+		WorkspaceRoot:      cfg.WorkspaceRoot,
+		TaskID:             taskID,
+		Path:               path,
+		IssueID:            issue.ID,
+		Identifier:         issue.Identifier,
+		State:              issue.State,
+		Reason:             reason,
+		BeforeRemoveHook:   cfg.BeforeRemoveHook,
+		HookTimeoutMillis:  cfg.HookTimeoutMillis,
+		HookEnvPassthrough: cfg.HookEnvPassthrough,
+	})
+}
+
+// RemoveWorkspaceRequest carries the inputs for a single per-issue workspace
+// removal through the shared before_remove → SafeRemove → reconcile_workspace
+// event sequence.
+type RemoveWorkspaceRequest struct {
+	WorkspaceRoot      string
+	TaskID             string
+	Path               string
+	IssueID            string
+	Identifier         string
+	State              string
+	Reason             string
+	BeforeRemoveHook   workflow.WorkspaceHook
+	HookTimeoutMillis  int
+	HookEnvPassthrough []string
+}
+
+// RemoveIssueWorkspace runs the before_remove hook (best effort: a hook
+// failure is logged but does not abort removal), removes the workspace
+// directory via SafeRemove, then emits a reconcile_workspace remove event.
+// It is the single removal routine shared by the startup sweep
+// (ReconcileStartup) and the SPEC §18.1 active-transition cleanup the
+// orchestrator triggers when a running issue moves to a terminal state
+// mid-run, so both honor the same hook and event contract — mirroring
+// upstream Workspace.remove_issue_workspaces, which both paths also share.
+// It returns true when the directory was removed.
+func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorkspaceRequest) (bool, error) {
+	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough); err != nil {
+		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
 	}
-	if err := workspace.SafeRemove(cfg.WorkspaceRoot, path); err != nil {
-		return false, fmt.Errorf("remove %s workspace %s: %w", reason, path, err)
+	if err := workspace.SafeRemove(req.WorkspaceRoot, req.Path); err != nil {
+		return false, fmt.Errorf("remove %s workspace %s: %w", req.Reason, req.Path, err)
 	}
-	Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "removed workspace", map[string]any{
-		"path":       path,
-		"issue_id":   issue.ID,
-		"identifier": issue.Identifier,
-		"state":      issue.State,
+	Emit(ctx, ev, req.TaskID, "", task.EventReconcileWorkspace, "removed workspace", map[string]any{
+		"path":       req.Path,
+		"issue_id":   req.IssueID,
+		"identifier": req.Identifier,
+		"state":      req.State,
 		"action":     "remove",
-		"reason":     reason,
+		"reason":     req.Reason,
 	})
 	return true, nil
 }

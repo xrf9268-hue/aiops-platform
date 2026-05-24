@@ -219,6 +219,15 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	if p.routing != nil {
 		// Routing-aware listings are complete for their scope, so absence from
 		// the active set is real evidence of inactivity and may cancel runs.
+		//
+		// NOTE(#331): a routed running issue that moves to a terminal state is
+		// cancelled here (it drops out of the active set) before the inactive
+		// pass below — which carries the terminal-state set — can flag it for
+		// SPEC §18.1 active workspace cleanup. So in routing mode the terminal
+		// workspace is reclaimed by the next startup sweep rather than mid-run.
+		// The before_remove hook still fires on the active transition for the
+		// non-routing (default) path; wiring it through the routing cancel is
+		// tracked as #340.
 		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, p.reconcile.WorkerExitTimeout); err != nil {
 			return nil, err
 		}
@@ -258,7 +267,7 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 			inactiveByID[issue.ID] = issue
 		}
 	}
-	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, p.reconcile.WorkerExitTimeout)
+	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
 	return inactiveByID, errors.Join(reconcileErr, fetchErr)
 }
 

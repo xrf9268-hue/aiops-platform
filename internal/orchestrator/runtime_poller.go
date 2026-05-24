@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 
@@ -372,11 +373,55 @@ func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, atte
 		},
 		WorkspacePrepared: func(ctx context.Context, issue tracker.Issue, _ task.Task, path string) {
 			if d.orchestrator != nil {
-				_ = d.orchestrator.RecordWorkspace(ctx, issue.ID, Workspace{Path: path})
+				// Capture the root this path was created under so SPEC §18.1
+				// cleanup removes it against the same root even if
+				// workspace.root is hot-reloaded before terminal reconciliation.
+				_ = d.orchestrator.RecordWorkspace(ctx, issue.ID, Workspace{
+					Path: path,
+					Root: worker.EffectiveWorkspaceRoot(d.baseConfig, snap.Workflow.Config),
+				})
 			}
 		},
 	}
 	return dispatcher.Spawn(ctx, issue, attempt)
+}
+
+// CleanupReconciledWorkspace implements WorkspaceCleaner: it removes the
+// workspace of a run cancelled because its issue moved to a terminal state
+// mid-run (SPEC §18.1 active transition). It reads the live workflow snapshot
+// so the before_remove hook, workspace root, and hook env passthrough match
+// what a dispatch on this same tick would have used (honoring hot reloads),
+// then delegates to worker.RemoveIssueWorkspace — the same routine the
+// startup sweep uses — so both paths fire before_remove and emit the same
+// reconcile_workspace remove event.
+func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w ReconciledWorkspace) {
+	if d == nil {
+		return
+	}
+	cfg := d.runtime.Current().Workflow.Config
+	hooks := cfg.WorkspaceHooks()
+	// Prefer the root captured when the path was created; fall back to the live
+	// snapshot root only when it was not recorded (older entry). Using a
+	// hot-reloaded root here would make SafeRemove reject the path as escaping
+	// root and silently skip cleanup (Codex P2).
+	root := strings.TrimSpace(w.Root)
+	if root == "" {
+		root = worker.EffectiveWorkspaceRoot(d.baseConfig, cfg)
+	}
+	if _, err := worker.RemoveIssueWorkspace(ctx, d.emitter, worker.RemoveWorkspaceRequest{
+		WorkspaceRoot:      root,
+		TaskID:             "reconcile-active",
+		Path:               w.Path,
+		IssueID:            string(w.IssueID),
+		Identifier:         w.Identifier,
+		State:              w.State,
+		Reason:             w.Reason,
+		BeforeRemoveHook:   hooks.BeforeRemove,
+		HookTimeoutMillis:  hooks.TimeoutMs,
+		HookEnvPassthrough: hooks.EnvPassthrough,
+	}); err != nil {
+		log.Printf("event=reconcile_active_workspace_remove_failed issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", w.IssueID, w.Identifier, w.Reason, w.Path, err)
+	}
 }
 
 func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config {

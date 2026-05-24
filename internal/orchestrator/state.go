@@ -30,7 +30,14 @@ type IssueID string
 // workspace.Manager produced and CreatedNow tells reconciliation
 // whether this run created the directory or reused an existing one.
 type Workspace struct {
-	Path       string
+	Path string
+	// Root is the workspace root the Path was created under, captured at
+	// dispatch time. Active-transition cleanup (SPEC §18.1) removes Path via
+	// SafeRemove against this root, not the live workflow snapshot's root, so a
+	// hot-reload of workspace.root between dispatch and terminal reconciliation
+	// cannot make SafeRemove reject the path as escaping root and silently skip
+	// the removal.
+	Root       string
 	Key        string
 	CreatedNow bool
 }
@@ -143,6 +150,14 @@ type RunningEntry struct {
 	// context cancellation, but finalization must release the run without
 	// scheduling a retry because the tracker made the issue ineligible.
 	ReconcileCancel bool
+	// ReconcileCleanupWorkspace is set alongside ReconcileCancel only when the
+	// issue moved to a terminal tracker state (not merely inactive). It tells
+	// the finalize path to remove the workspace via the before_remove hook
+	// after the worker has exited, mirroring the startup sweep (SPEC §18.1
+	// active transition). Upstream gates the same cleanup on terminal state
+	// only (orchestrator.ex terminate_running_issue cleanup_workspace=true);
+	// non-active/route-change cancels keep the workspace for possible reuse.
+	ReconcileCleanupWorkspace bool
 }
 
 // BlockedEntry is an input-required run that has stopped executing but remains
@@ -218,6 +233,15 @@ type OrchestratorState struct {
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
 
+	// cleaningWorkspaces holds issue ids whose terminal workspace is being
+	// removed by an active-transition cleanup (SPEC §18.1). dispatchOp treats a
+	// cleaning id like a claim and denies dispatch, so a re-opened issue cannot
+	// be dispatched onto the deterministic workspace path while the delayed
+	// before_remove/SafeRemove is still running. Set and cleared only on the
+	// actor goroutine, around the cleanup I/O, so the check and the dispatch
+	// claim never race.
+	cleaningWorkspaces map[IssueID]struct{}
+
 	RecentEvents []RuntimeEvent
 }
 
@@ -262,9 +286,32 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		RetryAttempts:              map[IssueID]*RetryEntry{},
 		Failed:                     map[IssueID]FailedEntry{},
 		Completed:                  map[IssueID]struct{}{},
+		cleaningWorkspaces:         map[IssueID]struct{}{},
 		MaxRecentCompleted:         DefaultMaxRecentCompleted,
 		MaxRecentFailed:            DefaultMaxRecentFailed,
 	}
+}
+
+// IsCleaningWorkspace reports whether an active-transition workspace cleanup is
+// in flight for id (SPEC §18.1). dispatchOp denies dispatch while it is, so a
+// re-opened issue cannot land on the deterministic path mid-removal.
+func (s *OrchestratorState) IsCleaningWorkspace(id IssueID) bool {
+	_, ok := s.cleaningWorkspaces[id]
+	return ok
+}
+
+// MarkCleaningWorkspace records that id's workspace removal has begun. Callers
+// must pair it with UnmarkCleaningWorkspace once the removal completes.
+func (s *OrchestratorState) MarkCleaningWorkspace(id IssueID) {
+	if s.cleaningWorkspaces == nil {
+		s.cleaningWorkspaces = map[IssueID]struct{}{}
+	}
+	s.cleaningWorkspaces[id] = struct{}{}
+}
+
+// UnmarkCleaningWorkspace clears the cleanup-in-flight mark for id.
+func (s *OrchestratorState) UnmarkCleaningWorkspace(id IssueID) {
+	delete(s.cleaningWorkspaces, id)
 }
 
 // IsClaimed reports whether id is currently held by any of Running,
