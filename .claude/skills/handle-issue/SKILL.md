@@ -69,6 +69,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 - 强推统一 `--force-with-lease=<branch>:<known-sha>`。
 
 ## 反模式备忘（踩过的坑）
+- **pre-release 别加 back-compat**：别名 / 双发同一数据 / 保留旧 wire 名都是技术债，要单独清理 PR（#338 双发 `last_codex_at`+`last_event_at` → 清理 #342）。SPEC 重命名就全量原子改名，内部 Go 标识符也对齐 SPEC 词汇，注释只解释 why（AGENTS.md「These rules apply to every PR」§1–§5）。仓库内消费者用旧名就在同一 PR 改掉。
 - 把已有的等待（worker-exit `Done`）耦合到异步 cleanup → 假超时 / 砍断 hook。把不变量守在正确的层。
 - 确定性共享路径上的 check-then-delete TOCTOU → recheck 关不掉，需单一权威（actor）串行化的锁。
 - 设了状态标志却无清除路径 → 瞬时抖动触发误删；标志应每 tick 按当前观测重算。
@@ -77,7 +78,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 - 一个契约在姊妹路径上只兑现一半（running vs blocked；reconcile-poll vs §16.5 self-stop）。
 
 ## 示例（两条真实路径）
-**标准路径 — #328（PR #338，一轮过）**：`/api/v1/state` 缺 SPEC §13.7.2 的 `rate_limits` + `last_event_at`。纯增量序列化改动：去掉 `omitempty` 让 `rate_limits` 恒在、新增 spec 名 `last_event_at` 与 back-compat 字段并存；显式标注 `worker_host` 不在范围。一个 commit、一轮 `@codex review` 干净通过、合并。→ 增量改动用最小轮次。
+**看似简单实则有坑 — #328（PR #338）**：`/api/v1/state` 缺 SPEC §13.7.2 的 `rate_limits` + `last_event_at`。一个 commit、一轮 review 就合了——但它**双发** `last_codex_at`（旧名）+ `last_event_at`（spec 名）当 back-compat，违反本仓库 pre-release 的「无 back-compat shim / 一个概念一个真相源 / 名字对齐 domain」规则（AGENTS.md「These rules apply to every PR」§1–§4），结果要靠清理 PR #342 删掉别名。→ 教训：pre-release 没有外部消费者，SPEC 重命名就**全量原子改名**（struct 字段 + JSON tag + dashboard + runbook + test 一次改完），别加别名/双发；小改动也逃不过这些规则。`rate_limits` 去 `omitempty` 让键恒在那部分是干净的 spec 对齐。
 
 **硬路径 — #331（PR #339，多轮级联）**：running issue mid-run 转终态时未清理 workspace（§18.1）。破坏性 + 并发路径，经历 P1 数据丢失竞态 → P2 超时耦合（前一个修复引入的）→ P2 陈旧标志 → TOCTOU → P2 root 不匹配 的级联，每轮 `@codex review` 抓到新缺陷（含修复引入的）。每个修复配回归 + 变异测试；路由模式与 §16.5 self-stop 两处缺口延后到 #340/#341。→ 破坏性/并发路径要穷尽对抗式审查，且**每个 push 都重新 @codex review**。
 
