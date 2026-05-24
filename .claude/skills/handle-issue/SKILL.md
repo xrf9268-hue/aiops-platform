@@ -2,7 +2,7 @@
 description: Take a tracked GitHub issue in aiops-platform from triage through SPEC/upstream investigation, TDD implementation, and local gates to an open PR, then hand off to handle-pr / gh-pr-follow-through. Use when starting work on an issue here — "处理下一个 issue", "修 #N", "实现这个 issue", "handle issue 331". Manual invoke only. Do NOT use when a PR already exists (use handle-pr / gh-pr-follow-through) or for trivial changes needing no SPEC/upstream investigation.
 argument-hint: "[issue-number]"
 disable-model-invocation: true
-allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *) Bash(gh *)
+allowed-tools: Bash(bash .claude/skills/handle-issue/scripts/bootstrap.sh *) Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *) Bash(gh *)
 metadata:
   pattern: inversion+pipeline+reviewer
   phase: issue→PR (hands off to handle-pr / gh-pr-follow-through)
@@ -16,18 +16,13 @@ metadata:
 - **用**：要开始处理本仓库一个已建的 GitHub issue（"处理下一个 issue"、"修 #N"、"实现这个 issue"）。
 - **不该用**：PR 已存在 → 用 `handle-pr` + `gh-pr-follow-through`；无需 SPEC/upstream 调研的琐碎改动；非 GitHub 的 tracker。
 
-## Upstream 就位
+## 上下文就位（issue 全文 + upstream 镜像 + main HEAD）
 
-!`U=https://github.com/openai/symphony.git; D=/tmp/symphony-upstream; if [ "$(git -C "$D" remote get-url origin 2>/dev/null)" = "$U" ]; then git -C "$D" pull --ff-only 2>&1 | tail -1; else rm -rf "$D" && git clone --depth 1 "$U" "$D" 2>&1 | tail -2; fi`
+!`bash .claude/skills/handle-issue/scripts/bootstrap.sh "$ARGUMENTS" 2>&1`
 
-参考：`/tmp/symphony-upstream/SPEC.md` + `/tmp/symphony-upstream/elixir/lib/symphony_elixir/*.ex`。**先刷新镜像**（上面的命令已 `git pull --ff-only`）再据它做 SPEC 判断，别信旧 clone。SPEC 文本歧义时直接 grep Elixir 源码找原算法/分支，不要用 WebFetch 总结。
+`scripts/bootstrap.sh`（`set -euo pipefail`，fail-fast）依次做：校验参数为数字 issue 号（坏参数 exit 2，与后续 fetch 失败区分）→ 校验/刷新 SPEC 上游镜像 `/tmp/symphony-upstream`（origin 不是 symphony 就重新 clone；`pull --ff-only`/`clone` 失败即中止，不留陈旧镜像）→ 打印 issue **全文**（pin `--repo`，不截断）→ `git fetch origin main` 后打印 main HEAD（fetch 失败即中止，无管道掩盖状态）。
 
-## 当前 issue + main HEAD
-
-!`N="$(printf %s "$ARGUMENTS" | tr -cd '0-9')"; [ -n "$N" ] && gh issue view "$N" --repo xrf9268-hue/aiops-platform --json number,title,labels,body --jq '"#\(.number) \(.title)\nlabels: \(.labels|map(.name)|join(", "))\n\n\(.body)"' 2>&1 || echo "usage: handle-issue <numeric-issue-number>"`
-!`git fetch origin main 2>&1 | tail -1 && git log --oneline origin/main -1 | cat`
-
-> 上面是 issue **全文**（未截断）。开工前完整读完正文，尤其逐条 Acceptance criteria；别只看标题/摘要。
+开工前完整读 issue 正文，尤其逐条 Acceptance criteria。SPEC 文本歧义时直接 grep `/tmp/symphony-upstream/elixir/lib/symphony_elixir/*.ex` 找原算法/分支，不要用 WebFetch 总结。
 
 ## 流程（按序）
 
@@ -59,7 +54,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 
 ### 6. 开 PR + 审查环（关键）
 1. 开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`）。治理/文档类改动**单开 PR**，不要塞进 fix PR。
-2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → 轮询它自带的 reactions 计数摘要：`gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`（issue-comment 对象本身就含 `.reactions` 计数摘要，要的是 👀 的计数，不必用单独的 `/reactions` 列举端点）。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
+2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → **轮询**它自带的 reactions 计数摘要：`gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`（issue-comment 对象本身就含 `.reactions` 计数摘要，要的是 👀 的计数，不必用单独的 `/reactions` 列举端点）。Codex review 不是 check run，reactions 也没有 watch/订阅 API（REST 仅 GET/POST/DELETE），所以只能轮询；**CI 绿**则用原生 `gh pr checks <pr> --watch --fail-fast`（阻塞到 checks 完成），别 sleep 轮询。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
 3. **并行本地审查提速**：同时派 Claude general-purpose subagent + Codex（`codex:codex-rescue`）审 `git diff origin/main...HEAD`，盲审、附 severity + verdict。两者抓不同缺陷类。（注：本环境 codex-rescue 沙箱可能被 bwrap/netns 限制；那就以 stop-time gate + GitHub @codex 为 Codex 信号。）
 4. 每条 finding 归入 ≥1 类（算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试），然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 5. **审查深度匹配 blast radius**：破坏性/并发路径要穷尽对抗式审查；纯增量序列化改动一轮即可。
@@ -87,7 +82,8 @@ go vet ./... ; go test -race ./... ; go build ./...
 ## 验证（完成判定）
 - 本地门禁全绿：`gofmt -l` 为空、`go vet`、`go test -race ./...`、`go build ./...`、`go mod tidy` 无改动。
 - 新测试经变异验证（删关键行 FAIL / 恢复 PASS）。
-- PR 最新 head 上 `@codex review` 收敛：👀 出现后消失、**且**有正向完成信号（Codex 在该 head 贴了 review/comment 或 👍），无新的未解决 actionable thread；CI 全绿。仅 `eyes==0` 不足以判定完成。
+- CI 全绿：`gh pr checks <pr> --watch --fail-fast` 阻塞到完成。
+- PR 最新 head 上 `@codex review` 收敛：👀 出现后消失、**且**有正向完成信号（Codex 在该 head 贴了 review/comment 或 👍），无新的未解决 actionable thread。仅 `eyes==0` 不足以判定完成（也可能还没开始）。
 - issue 的每条 Acceptance criteria 满足或显式延后到 tracked issue。
 - 用户明确许可后才合并。
 
