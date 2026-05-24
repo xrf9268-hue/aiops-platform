@@ -18,14 +18,16 @@ metadata:
 
 ## Upstream 就位
 
-!`[ -d /tmp/symphony-upstream ] || git clone --depth 1 https://github.com/openai/symphony.git /tmp/symphony-upstream 2>&1 | tail -2`
+!`if [ -d /tmp/symphony-upstream/.git ]; then git -C /tmp/symphony-upstream pull --ff-only 2>&1 | tail -1; else git clone --depth 1 https://github.com/openai/symphony.git /tmp/symphony-upstream 2>&1 | tail -2; fi`
 
-参考：`/tmp/symphony-upstream/SPEC.md` + `/tmp/symphony-upstream/elixir/lib/symphony_elixir/*.ex`。SPEC 文本歧义时直接 grep Elixir 源码找原算法/分支，不要用 WebFetch 总结。
+参考：`/tmp/symphony-upstream/SPEC.md` + `/tmp/symphony-upstream/elixir/lib/symphony_elixir/*.ex`。**先刷新镜像**（上面的命令已 `git pull --ff-only`）再据它做 SPEC 判断，别信旧 clone。SPEC 文本歧义时直接 grep Elixir 源码找原算法/分支，不要用 WebFetch 总结。
 
 ## 当前 issue + main HEAD
 
-!`gh issue view $ARGUMENTS --json number,title,labels,body --jq '"#\(.number) \(.title)\nlabels: \(.labels|map(.name)|join(", "))\n\n\(.body)"' 2>&1 | head -60`
+!`gh issue view $ARGUMENTS --repo xrf9268-hue/aiops-platform --json number,title,labels,body --jq '"#\(.number) \(.title)\nlabels: \(.labels|map(.name)|join(", "))\n\n\(.body)"' 2>&1`
 !`git fetch origin main 2>&1 | tail -1 && git log --oneline origin/main -1 | cat`
+
+> 上面是 issue **全文**（未截断）。开工前完整读完正文，尤其逐条 Acceptance criteria；别只看标题/摘要。
 
 ## 流程（按序）
 
@@ -57,7 +59,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 
 ### 6. 开 PR + 审查环（关键）
 1. 开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`）。治理/文档类改动**单开 PR**，不要塞进 fix PR。
-2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"` → 轮询 trigger comment 的 reactions 直到 `eyes==0` → 再查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
+2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → 轮询 `gh api repos/<owner>/<repo>/issues/comments/<id> --jq .reactions`。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
 3. **并行本地审查提速**：同时派 Claude general-purpose subagent + Codex（`codex:codex-rescue`）审 `git diff origin/main...HEAD`，盲审、附 severity + verdict。两者抓不同缺陷类。（注：本环境 codex-rescue 沙箱可能被 bwrap/netns 限制；那就以 stop-time gate + GitHub @codex 为 Codex 信号。）
 4. 每条 finding 归入 ≥1 类（算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试），然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 5. **审查深度匹配 blast radius**：破坏性/并发路径要穷尽对抗式审查；纯增量序列化改动一轮即可。
@@ -85,7 +87,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 ## 验证（完成判定）
 - 本地门禁全绿：`gofmt -l` 为空、`go vet`、`go test -race ./...`、`go build ./...`、`go mod tidy` 无改动。
 - 新测试经变异验证（删关键行 FAIL / 恢复 PASS）。
-- PR 最新 head 上 `@codex review` 收敛（👀 消失、无新的未解决 actionable thread）、CI 全绿。
+- PR 最新 head 上 `@codex review` 收敛：👀 出现后消失、**且**有正向完成信号（Codex 在该 head 贴了 review/comment 或 👍），无新的未解决 actionable thread；CI 全绿。仅 `eyes==0` 不足以判定完成。
 - issue 的每条 Acceptance criteria 满足或显式延后到 tracked issue。
 - 用户明确许可后才合并。
 
