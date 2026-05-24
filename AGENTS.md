@@ -305,7 +305,7 @@ failure per the "Earned rules" principle above.
 
 ## Conventions
 
-- **gofmt is non-negotiable**: CI fails on any diff. Always run before committing.
+- **gofmt is non-negotiable**: CI fails on any diff. Always run before committing. A PostToolUse hook (`.claude/scripts/format-go.sh`) auto-runs `gofmt -w` on every edited `.go` file, but still verify with `gofmt -l` before pushing.
 - **`go mod tidy` must leave `go.mod`/`go.sum` clean**: don't add deps you don't use.
 - **No `t.Parallel()` in tests that touch shared Postgres state** — the queue tests rely on serial execution to assert ordering.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
