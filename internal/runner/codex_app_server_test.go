@@ -1648,6 +1648,73 @@ for line in sys.stdin:
 	}
 }
 
+// TestCodexAppServerRunnerTranslatesLegacyRejectPolicyForApprovalDecisions
+// pins the boundary contract from #335: the approval policy is translated to
+// codex's `granular` wire shape exactly once (codexWireApprovalPolicy) and the
+// SAME translated value drives both the wire payload and the harness-side
+// auto-approve decision (autoApproveRequest).
+//
+// The config below is the obsolete reject:{...} shape with every flag false —
+// legacy operator intent "don't reject, allow these approval flows". Codex
+// receives the translated granular:{...true} (so it emits approval prompts),
+// and autoApproveRequest — which no longer special-cases reject: since #334 —
+// only produces the right ALLOW decision if it is fed the translated value.
+// If c.approvalPolicy were instead the raw reject:{...} map, autoApproveRequest
+// would fall through to its safe-fallback decline, the runner would emit
+// turn_input_required + InputRequiredError, and Run would error here.
+func TestCodexAppServerRunnerTranslatesLegacyRejectPolicyForApprovalDecisions(t *testing.T) {
+	binDir := codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'jsonrpc': '2.0', 'id': 'approval-command', 'method': 'item/commandExecution/requestApproval', 'params': {'command': 'go test ./...'}}), flush=True)
+    elif msg.get('id') == 'approval-command':
+        if msg.get('result') == {'decision': 'acceptForSession'}:
+            print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'approvals handled'}}), flush=True)
+        else:
+            print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'unexpected approval response', 'got': msg.get('result')}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	// Obsolete reject:{flag:false} == "don't reject; allow these prompts".
+	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": false, "rules": false, "mcp_elicitations": false}}
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Run: %v (legacy reject:{false} must auto-approve, not decline)", err)
+	}
+	if res.Summary != "approvals handled" {
+		t.Fatalf("Summary = %q, want approvals handled", res.Summary)
+	}
+	if events := runtimeEventsNamed(res.RuntimeEvents, task.EventApprovalAutoApproved); len(events) != 1 {
+		t.Fatalf("approval_auto_approved events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	stdin, err := os.ReadFile(filepath.Join(binDir, "stdin.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stdin), `"decision":"acceptForSession"`) {
+		t.Fatalf("stdin missing acceptForSession in approval response: %s", stdin)
+	}
+	// The translated granular payload — not the raw reject: shape — must be
+	// what reached codex on the wire.
+	if strings.Contains(string(stdin), `"reject"`) {
+		t.Fatalf("raw reject: shape leaked onto the wire: %s", stdin)
+	}
+	if !strings.Contains(string(stdin), `"granular"`) {
+		t.Fatalf("stdin missing translated granular policy on the wire: %s", stdin)
+	}
+}
+
 // Replaced by TestCodexAppServerRunnerEmitsTurnInputRequiredOnDeclinedApproval:
 // the previous TestCodexAppServerRunnerDeclinesApprovalsWhenPolicyRequiresReview
 // pinned the SPEC §10.4-non-compliant silent-decline behavior (decline sent
