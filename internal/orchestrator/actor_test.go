@@ -1771,6 +1771,53 @@ func TestReconcileTerminalBlipClearedByActiveRefreshKeepsWorkspace(t *testing.T)
 	}
 }
 
+// TestReconcileTerminalBlipClearedByInactiveRefreshKeepsWorkspace is the
+// regression for the Codex P2 follow-up: the clear must also happen on the
+// inactive reconcile path. A run seen terminal (Done) is flagged, but if a
+// later tick sees the same still-running issue in a non-terminal inactive
+// state (Backlog) the flag must be cleared so finalize keeps the workspace.
+func TestReconcileTerminalBlipClearedByInactiveRefreshKeepsWorkspace(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	blip := tracker.Issue{ID: "ENG-B2", Identifier: "ENG-B2", State: "In Progress"}
+	barrier := tracker.Issue{ID: "ENG-T4", Identifier: "ENG-T4", State: "In Progress"}
+	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-T4"
+	dispatchRunningIssue(t, o, disp, blip, "/var/aiops/workspaces/acme/repo/linear_issue/ENG-B2", 1)
+	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
+
+	terminalStates := map[string]struct{}{"done": {}}
+	// Tick 1: both observed terminal (Done) → flagged + cancelled.
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		blip.ID:    {ID: blip.ID, Identifier: blip.Identifier, State: "Done"},
+		barrier.ID: {ID: barrier.ID, Identifier: barrier.Identifier, State: "Done"},
+	}, terminalStates, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait tick 1: %v", err)
+	}
+	// Tick 2 (workers not yet exited): ENG-B2 reopened to a non-terminal
+	// inactive state must clear its flag; ENG-T4 still terminal stays flagged.
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		blip.ID:    {ID: blip.ID, Identifier: blip.Identifier, State: "Backlog"},
+		barrier.ID: {ID: barrier.ID, Identifier: barrier.Identifier, State: "Done"},
+	}, terminalStates, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait tick 2: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	disp.finishAt(1, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
+		t.Fatalf("only the still-terminal barrier may be cleaned, got %+v", calls)
+	}
+}
+
 // while the worker is exiting abnormally, and verify the dispatcher
 // is asked to spawn exactly once for the lifetime of the issue. With
 // the bug present, additional Spawn calls slip through the gap; with

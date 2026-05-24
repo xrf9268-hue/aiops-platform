@@ -1086,16 +1086,18 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 		run.ReconcileCancel = true
-		if isTerminalTrackerState(issue.State, r.terminalStates) {
-			// Terminal transition: refresh the stored issue so the post-exit
-			// cleanup followup labels the reconcile_workspace event with the
-			// terminal state, and flag the entry so finalize fires
-			// before_remove + remove (SPEC §18.1 active transition). A
-			// merely-inactive cancel leaves the flag false and the workspace
-			// intact, matching upstream terminate_running_issue cleanup gating.
-			run.Issue = issue
-			run.ReconcileCleanupWorkspace = true
-		}
+		// Refresh the stored issue and (re)evaluate the terminal cleanup gate
+		// against the CURRENT observation every tick. A terminal transition
+		// flags the entry so finalize fires before_remove + remove (SPEC §18.1
+		// active transition) with the terminal state labeling the
+		// reconcile_workspace event; a merely-inactive cancel leaves it false,
+		// keeping the workspace for reuse (upstream terminate_running_issue
+		// cleanup gating). Assigning unconditionally — rather than only setting
+		// true — clears a flag left by an earlier terminal blip when the issue
+		// has since flipped back to a non-terminal inactive state before the
+		// worker exits (Codex P2 follow-up).
+		run.Issue = issue
+		run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
 		cancelEntries = append(cancelEntries, run)
 	}
 	for id := range st.RetryAttempts {
