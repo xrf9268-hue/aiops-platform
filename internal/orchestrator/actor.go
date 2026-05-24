@@ -1304,7 +1304,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	return r.o.reconcileCancelFollowup(cancelEntries, blockedCleanups, r.result)
+	return r.o.reconcileCancelFollowup(cancelEntries, terminalCleanups, r.result)
 }
 
 // reconcileCancelFollowup builds the off-actor followup both reconcile passes
@@ -1319,7 +1319,7 @@ func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, bl
 				entry.CancelWorker()
 			}
 		}
-		for _, w := range terminalCleanups {
+		for _, w := range blockedCleanups {
 			o.runReconciledWorkspaceCleanup(w)
 		}
 		if result != nil {
