@@ -1,37 +1,21 @@
-:root {
-  color: #e5eefc;
-  background: #09111f;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply min-h-screen bg-[#09111f] text-slate-200;
+    background-image: radial-gradient(circle at top left, #193154 0%, #09111f 45%);
+  }
+
+  a {
+    @apply text-sky-300 hover:text-sky-200 transition-colors;
+  }
+
+  code,
+  pre {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
 }
-
-* { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradient(circle at top left, #193154, #09111f 45%); }
-a { color: #7dd3fc; }
-code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
-
-.app-shell { width: min(1280px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 48px; }
-.app-shell--loading { min-height: 100vh; display: grid; place-content: center; }
-.hero { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 24px; padding: 28px; border: 1px solid rgba(148, 163, 184, .24); border-radius: 24px; background: rgba(15, 23, 42, .72); box-shadow: 0 24px 80px rgba(0,0,0,.28); }
-.eyebrow { margin: 0 0 8px; color: #93c5fd; text-transform: uppercase; font-size: 12px; letter-spacing: .16em; font-weight: 700; }
-h1 { margin: 0 0 12px; font-size: clamp(32px, 5vw, 56px); line-height: 1; }
-h2 { margin: 0; }
-.hero p { margin: 0; color: #cbd5e1; max-width: 760px; }
-.status { border-radius: 999px; padding: 8px 14px; white-space: nowrap; font-weight: 700; }
-.status--ok { color: #bbf7d0; background: rgba(22, 163, 74, .18); border: 1px solid rgba(34, 197, 94, .3); }
-.status--error { color: #fecaca; background: rgba(220, 38, 38, .18); border: 1px solid rgba(248, 113, 113, .3); }
-.error-panel { margin-bottom: 24px; padding: 16px 18px; border-radius: 16px; color: #fecaca; background: rgba(127, 29, 29, .42); border: 1px solid rgba(248, 113, 113, .32); }
-.metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin-bottom: 24px; }
-.metric-card { padding: 18px; border-radius: 18px; background: rgba(15, 23, 42, .82); border: 1px solid rgba(148, 163, 184, .18); }
-.metric-card span, .panel-heading span, small, footer { color: #94a3b8; }
-.metric-card strong { display: block; margin: 8px 0 4px; font-size: 32px; }
-.panel { margin: 18px 0; padding: 20px; border-radius: 20px; background: rgba(15, 23, 42, .82); border: 1px solid rgba(148, 163, 184, .18); overflow: hidden; }
-.panel-heading { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; margin-bottom: 14px; }
-pre { overflow: auto; margin: 0; padding: 16px; border-radius: 14px; color: #c4b5fd; background: rgba(2, 6, 23, .74); }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { color: #bfdbfe; text-align: left; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
-th, td { border-bottom: 1px solid rgba(148, 163, 184, .14); padding: 12px 10px; vertical-align: top; }
-tr:last-child td { border-bottom: 0; }
-.empty-row td { color: #94a3b8; text-align: center; padding: 22px; }
-footer { margin-top: 24px; text-align: center; }
-@media (max-width: 960px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } .hero { flex-direction: column; } table { display: block; overflow-x: auto; } }
-@media (max-width: 560px) { .metrics { grid-template-columns: 1fr; } .app-shell { width: min(100% - 20px, 1280px); padding-top: 16px; } .hero, .panel { padding: 16px; } }
