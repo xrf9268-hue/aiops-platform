@@ -259,6 +259,41 @@ go run ./cmd/worker --print-config /path/to/repo/clone
 
 Go toolchain: pinned via `go.mod` (Go 1.25). Don't edit `go.mod`'s `go` directive opportunistically.
 
+## Clean code (Robert C. Martin)
+
+These rules apply to every PR. The project is pre-release — the cost of doing
+it right is at its minimum now.
+
+1. **No technical debt by default.** "We'll clean it up later" is rarely true.
+   If a decision produces debt (duplicate fields, back-compat shims, dead code
+   paths), fix it before merging or open a tracking issue tagged
+   `area:tech-debt` with a concrete acceptance criteria. Do not merge both in
+   the same PR.
+
+2. **No unnecessary backward compatibility.** Pre-release means no external
+   users to protect. Remove old wire names, deprecated fields, and legacy code
+   paths outright rather than aliasing or dual-emitting. If a consumer inside
+   this repo uses an old name, update the consumer in the same PR.
+
+3. **One source of truth per concept.** Never emit the same data under two
+   keys or store the same value in two fields. When SPEC renames a concept
+   (e.g. `last_codex_at` → `last_event_at`), rename it everywhere — struct
+   field, JSON tag, dashboard, runbook, test — in a single atomic change.
+
+4. **Names must match the domain.** Internal Go identifiers should mirror the
+   SPEC vocabulary, not a historical implementation artefact. If SPEC says
+   `last_event_at`, the struct field is `LastEventAt`, not `LastCodexAt`.
+
+5. **Every comment explains *why*, not *what*.** A comment that restates what
+   the code already says is noise. Back-compat comments ("retained for
+   §13.7…") that outlive the back-compat code are doubly harmful — delete
+   both together.
+
+6. **Tests must assert the new code path.** A test that would pass even if the
+   feature were deleted is a placebo. After writing a test, do a quick mental
+   mutation (or literal sed) to confirm the test fails when the production code
+   is broken.
+
 ## Conventions
 
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing.

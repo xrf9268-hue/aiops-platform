@@ -670,20 +670,12 @@ type apiStateRunning struct {
 	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
 	// run with zero/empty values must still emit the keys. omitempty would
 	// let consumers confuse "known zero/empty" with "field missing".
-	State       string     `json:"state"`
-	SessionID   string     `json:"session_id"`
-	TurnCount   int        `json:"turn_count"`
-	LastEvent   string     `json:"last_event"`
-	LastMessage string     `json:"last_message"`
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	// LastCodexAt is the SPEC §13.7.2 `last_event_at` value; the wire name
-	// `last_codex_at` is preserved for back-compat with existing dashboards
-	// (no fields removed per §13.7 "SHOULD avoid breaking existing fields").
-	// LastEventAt carries the same timestamp under the SPEC §13.7.2-canonical
-	// key so consumers reading the spec name find it (#328); both are emitted
-	// from the one source and are omitempty so a freshly-dispatched run with
-	// no observed event yet emits neither.
-	LastCodexAt       *time.Time       `json:"last_codex_at,omitempty"`
+	State             string           `json:"state"`
+	SessionID         string           `json:"session_id"`
+	TurnCount         int              `json:"turn_count"`
+	LastEvent         string           `json:"last_event"`
+	LastMessage       string           `json:"last_message"`
+	StartedAt         *time.Time       `json:"started_at,omitempty"`
 	LastEventAt       *time.Time       `json:"last_event_at,omitempty"`
 	RetryAttempt      *int             `json:"retry_attempt,omitempty"`
 	WorkspacePath     string           `json:"workspace_path,omitempty"`
@@ -705,7 +697,7 @@ type apiStateBlocked struct {
 	BlockedAt         *time.Time           `json:"blocked_at,omitempty"`
 	WorkspacePath     string               `json:"workspace_path,omitempty"`
 	SessionID         string               `json:"session_id,omitempty"`
-	LastCodexAt       *time.Time           `json:"last_codex_at,omitempty"`
+	LastEventAt       *time.Time           `json:"last_event_at,omitempty"`
 	Method            string               `json:"method,omitempty"`
 	Error             string               `json:"error,omitempty"`
 	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
@@ -966,17 +958,9 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		v := row.StartedAt
 		startedAt = &v
 	}
-	var lastCodexAt *time.Time
+	var lastEventAt *time.Time
 	if !row.LastCodexAt.IsZero() {
 		v := row.LastCodexAt
-		lastCodexAt = &v
-	}
-	// last_event_at carries the same instant as last_codex_at under the
-	// SPEC §13.7.2-canonical key. Use a distinct pointer so a consumer
-	// mutating one decoded field cannot reach the other (#328).
-	var lastEventAt *time.Time
-	if lastCodexAt != nil {
-		v := *lastCodexAt
 		lastEventAt = &v
 	}
 	return apiStateRunning{
@@ -988,7 +972,6 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		LastEvent:     row.LastEvent,
 		LastMessage:   redactStateAPILastMessage(row.LastMessage),
 		StartedAt:     startedAt,
-		LastCodexAt:   lastCodexAt,
 		LastEventAt:   lastEventAt,
 		RetryAttempt:  copyIntPointer(row.RetryAttempt),
 		WorkspacePath: row.WorkspacePath,
@@ -1060,10 +1043,10 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			v := row.BlockedAt
 			blockedAt = &v
 		}
-		var lastCodexAt *time.Time
+		var lastEventAt *time.Time
 		if !row.LastCodexAt.IsZero() {
 			v := row.LastCodexAt
-			lastCodexAt = &v
+			lastEventAt = &v
 		}
 		blocked = append(blocked, apiStateBlocked{
 			IssueID:           row.IssueID,
@@ -1072,7 +1055,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			BlockedAt:         blockedAt,
 			WorkspacePath:     row.WorkspacePath,
 			SessionID:         row.SessionID,
-			LastCodexAt:       lastCodexAt,
+			LastEventAt:       lastEventAt,
 			Method:            row.Method,
 			Error:             row.Error,
 			CodexAppServerPID: row.CodexAppServerPID,

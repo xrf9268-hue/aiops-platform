@@ -132,7 +132,7 @@ function App() {
                 <td>{row.state || 'running'}</td>
                 <td><code>{row.session_id || 'n/a'}</code></td>
                 <td>{formatRuntime(row.started_at ? (Date.now() - new Date(row.started_at).getTime()) / 1000 : 0)} / {formatInt(row.turn_count)}</td>
-                <td>{row.last_message || row.last_event || 'n/a'}<br /><small>{formatDate(row.last_codex_at)}</small></td>
+                <td>{row.last_message || row.last_event || 'n/a'}<br /><small>{formatDate(row.last_event_at)}</small></td>
                 <td>Total {formatInt(row.tokens?.total_tokens)}<br /><small>In {formatInt(row.tokens?.input_tokens)} / Out {formatInt(row.tokens?.output_tokens)}</small></td>
               </tr>
             ))}

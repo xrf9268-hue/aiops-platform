@@ -120,7 +120,6 @@ the shape here without updating the handler — or vice versa — fails the buil
       "last_event": "turn_completed",
       "last_message": "Working on it...",
       "started_at": "2026-05-21T09:09:55Z",
-      "last_codex_at": "2026-05-21T09:10:00Z",
       "last_event_at": "2026-05-21T09:10:00Z",
       "retry_attempt": 1,
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
@@ -140,7 +139,7 @@ the shape here without updating the handler — or vice versa — fails the buil
       "blocked_at": "2026-05-20T06:05:38Z",
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-2",
       "session_id": "thread-1-turn-1",
-      "last_codex_at": "2026-05-20T06:05:30Z",
+      "last_event_at": "2026-05-20T06:05:30Z",
       "method": "mcpServer/elicitation/request",
       "error": "input required: mcpServer/elicitation/request",
       "codex_app_server_pid": 67890
@@ -231,12 +230,8 @@ Each entry in the `running` array follows SPEC §13.7.2:
 - `last_message` — the most-recent `payload.message` string from a runtime
   event; sticky across later events that do not include one.
 - `started_at` — RFC3339 timestamp the worker spawned at.
-- `last_codex_at` — RFC3339 timestamp of the last observed runtime event,
-  semantically the SPEC §13.7.2 `last_event_at`. The wire name `last_codex_at`
-  is kept for back-compat with existing dashboards.
-- `last_event_at` — the same timestamp under the SPEC §13.7.2-canonical key,
-  emitted alongside `last_codex_at` for spec parity (#328). Like `last_codex_at`
-  it is absent until the runner emits its first event.
+- `last_event_at` — RFC3339 timestamp of the last observed runtime event
+  (SPEC §13.7.2). Absent until the runner emits its first event.
 - `retry_attempt` — retry attempt number when the dispatch is a retry; absent
   on the first run (SPEC §4.1.5 first-run semantic).
 - `workspace_path` — absolute path of the per-issue workspace.

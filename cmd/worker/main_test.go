@@ -78,12 +78,10 @@ func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
 	}
 }
 
-// TestApiRunningRowEmitsLastEventAtAliasingLastCodexAt pins the SPEC §13.7.2
-// running-row contract from #328: once a runtime event has been observed the
-// row exposes the spec-canonical `last_event_at` key carrying the same instant
-// as the back-compat `last_codex_at` key. Both share one source so they can
-// never disagree.
-func TestApiRunningRowEmitsLastEventAtAliasingLastCodexAt(t *testing.T) {
+// TestApiRunningRowEmitsLastEventAt pins the SPEC §13.7.2 running-row
+// contract: once a runtime event has been observed the row exposes
+// last_event_at as an RFC3339 string; no back-compat alias is emitted.
+func TestApiRunningRowEmitsLastEventAt(t *testing.T) {
 	lastEvent := time.Date(2026, 5, 20, 9, 5, 30, 0, time.UTC)
 	row := apiRunningFromView(orchestrator.RunningView{
 		IssueID:     "issue-1",
@@ -102,12 +100,8 @@ func TestApiRunningRowEmitsLastEventAtAliasingLastCodexAt(t *testing.T) {
 	if !ok {
 		t.Fatalf("last_event_at must be present once an event is observed: %s", raw)
 	}
-	lastCodexAt, ok := got["last_codex_at"].(string)
-	if !ok {
-		t.Fatalf("last_codex_at must remain present for back-compat: %s", raw)
-	}
-	if lastEventAt != lastCodexAt {
-		t.Fatalf("last_event_at = %q, last_codex_at = %q, want identical instants", lastEventAt, lastCodexAt)
+	if _, exists := got["last_codex_at"]; exists {
+		t.Fatalf("last_codex_at must not be emitted (removed in #342): %s", raw)
 	}
 	if want := lastEvent.Format(time.RFC3339); lastEventAt != want {
 		t.Fatalf("last_event_at = %q, want %q (RFC3339 of source)", lastEventAt, want)
@@ -294,9 +288,6 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		if _, ok := rowObject["started_at"]; ok {
 			t.Fatalf("zero started_at should be omitted from running row: %#v", rowObject)
 		}
-		if _, ok := rowObject["last_codex_at"]; ok {
-			t.Fatalf("zero last_codex_at should be omitted from running row: %#v", rowObject)
-		}
 		if _, ok := rowObject["last_event_at"]; ok {
 			t.Fatalf("zero last_event_at should be omitted from running row: %#v", rowObject)
 		}
@@ -313,8 +304,8 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		if _, ok := rowObject["blocked_at"]; ok {
 			t.Fatalf("zero blocked_at should be omitted from blocked row: %#v", rowObject)
 		}
-		if _, ok := rowObject["last_codex_at"]; ok {
-			t.Fatalf("zero last_codex_at should be omitted from blocked row: %#v", rowObject)
+		if _, ok := rowObject["last_event_at"]; ok {
+			t.Fatalf("zero last_event_at should be omitted from blocked row: %#v", rowObject)
 		}
 	}
 	rawRetrying, ok := raw["retrying"].([]any)

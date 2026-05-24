@@ -86,7 +86,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 	t.Helper()
 	startedAt := time.Date(2026, 5, 21, 9, 9, 55, 0, time.UTC)
 	blockedAt := time.Date(2026, 5, 20, 6, 5, 38, 0, time.UTC)
-	lastCodexAt := time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC)
+	lastEventAt := time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC)
 	dueAt := time.Date(2026, 5, 21, 9, 11, 0, 0, time.UTC)
 	retryAttempt := 1
 	resp := apiStateResponse{
@@ -112,7 +112,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			LastEvent:     "turn_completed",
 			LastMessage:   "Working on it...",
 			StartedAt:     &startedAt,
-			LastCodexAt:   &lastCodexAt,
+			LastEventAt:   &lastEventAt,
 			RetryAttempt:  &retryAttempt,
 			WorkspacePath: "/var/aiops/workspaces/acme/repo/issue-1",
 			Tokens: apiRunningTokens{
@@ -129,7 +129,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			BlockedAt:         &blockedAt,
 			WorkspacePath:     "/var/aiops/workspaces/acme/repo/issue-2",
 			SessionID:         "thread-1-turn-1",
-			LastCodexAt:       &lastCodexAt,
+			LastEventAt:       &lastEventAt,
 			Method:            "mcpServer/elicitation/request",
 			Error:             "input required: mcpServer/elicitation/request",
 			CodexAppServerPID: 67890,
