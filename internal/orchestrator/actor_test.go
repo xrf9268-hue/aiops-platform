@@ -1199,6 +1199,135 @@ func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
 	}
 }
 
+// TestFinalize_ContinuationBudgetExhaustedEmitsStderrLine covers SPEC §13.1
+// (issue #332): the continuation-budget-exhausted terminal failure must emit
+// a structured stderr line, not only a RecordEvent into the in-memory ring.
+// Operators tailing stderr otherwise see a run of "Succeeded" lines followed
+// by silence when an issue is permanently suppressed.
+func TestFinalize_ContinuationBudgetExhaustedEmitsStderrLine(t *testing.T) {
+	disp := &fakeDispatcher{}
+	maxTurns := 2
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		MaxTurns:   &maxTurns,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-CLEAN-BUDGET", Identifier: "ENG-CLEAN-BUDGET", Title: "clean budget"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+
+	// The Snapshot op is serviced strictly after the finalize apply returns,
+	// so observing Failed guarantees the in-apply log.Printf already ran.
+	got := captureOrchestratorLog(t, func() {
+		disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
+		waitFor(t, func() bool {
+			v, err := o.Snapshot(context.Background())
+			return err == nil && len(v.Failed) == 1
+		}, time.Second)
+	})
+	for _, want := range []string{
+		"event=run_failed",
+		"issue_id=ENG-CLEAN-BUDGET",
+		"issue_identifier=ENG-CLEAN-BUDGET",
+		"reason=continuation_budget_exhausted",
+		"budget=2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("continuation-budget stderr line missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestFinalize_NonRetryableErrorEmitsStderrLine covers SPEC §13.1 (issue #332)
+// for the explicit non-retryable runner-error terminal path.
+func TestFinalize_NonRetryableErrorEmitsStderrLine(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-NONRETRY", Identifier: "ENG-NONRETRY", Title: "non-retryable"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	got := captureOrchestratorLog(t, func() {
+		disp.finishAt(0, WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), NonRetryable: true, Elapsed: time.Millisecond})
+		waitFor(t, func() bool {
+			v, err := o.Snapshot(context.Background())
+			return err == nil && len(v.Failed) == 1
+		}, time.Second)
+	})
+	for _, want := range []string{
+		"event=run_failed",
+		"issue_id=ENG-NONRETRY",
+		"issue_identifier=ENG-NONRETRY",
+		"reason=non_retryable_runner_error",
+		`error="repo.clone_url missing in WORKFLOW.md"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("non-retryable stderr line missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestFinalize_FailureRetryBudgetExhaustedEmitsStderrLine covers SPEC §13.1
+// (issue #332) for the opt-in failure-retry-budget-exhausted terminal path.
+func TestFinalize_FailureRetryBudgetExhaustedEmitsStderrLine(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cap := 1
+	o, cancel := startActor(t, Deps{
+		Dispatcher:        disp,
+		Scheduler:         RetryScheduler{MaxBackoff: time.Hour},
+		MaxFailureRetries: &cap,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-BUDGET", Identifier: "ENG-BUDGET", Title: "retry budget"}
+	attempt := 1
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	got := captureOrchestratorLog(t, func() {
+		disp.finishAt(0, WorkerResult{Err: errors.New("still failing"), Elapsed: 50 * time.Millisecond})
+		waitFor(t, func() bool {
+			v, err := o.Snapshot(context.Background())
+			return err == nil && len(v.Failed) == 1
+		}, time.Second)
+	})
+	for _, want := range []string{
+		"event=run_failed",
+		"issue_id=ENG-BUDGET",
+		"issue_identifier=ENG-BUDGET",
+		"reason=failure_retry_budget_exhausted",
+		"attempts=1",
+		`error="still failing"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("failure-retry-budget stderr line missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap covers SPEC
 // §7.1 + §5.3.5 (issue #216): when the agent runner enforces agent.max_turns
 // inside its own session loop (codex app-server), the orchestrator must not
