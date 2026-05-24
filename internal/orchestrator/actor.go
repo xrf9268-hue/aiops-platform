@@ -27,8 +27,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"log"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -692,7 +690,7 @@ var ErrCapacityFull = errors.New("orchestrator: max_concurrent_agents reached")
 // revalidates active runs against the latest tracker state and cancels workers
 // whose issues moved out of active states.
 func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}) error {
-	return o.ReconcileTrackerIssuesAndWait(ctx, issuesByID, activeStates, 0)
+	return o.ReconcileTrackerIssuesAndWait(ctx, issuesByID, activeStates, nil, nil, 0)
 }
 
 // ReconcileStalledRuns implements SPEC §8.5 Part A / §16.3
@@ -755,9 +753,10 @@ func (o *Orchestrator) RefreshActiveTrackerIssues(ctx context.Context, issuesByI
 // ReconcileTrackerIssues, then optionally waits for canceled workers to exit.
 // This lets poll ticks provide prompt cancellation semantics without making the
 // actor itself block on worker goroutines.
-func (o *Orchestrator) ReconcileTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}, wait time.Duration) error {
+func (o *Orchestrator) ReconcileTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates, terminalStates map[string]struct{}, refreshedByID map[string]tracker.Issue, wait time.Duration) error {
 	reply := make(chan []*RunningEntry, 1)
-	if err := o.submit(ctx, &reconcileTrackerIssuesOp{issuesByID: issuesByID, activeStates: activeStates, result: reply}); err != nil {
+	op := &reconcileTrackerIssuesOp{o: o, issuesByID: issuesByID, activeStates: activeStates, terminalStates: terminalStates, refreshedByID: refreshedByID, result: reply}
+	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
 	var canceled []*RunningEntry
@@ -1080,14 +1079,25 @@ func (r *reconcileStalledRunsOp) apply(st *OrchestratorState) func() {
 }
 
 type reconcileTrackerIssuesOp struct {
+	o            *Orchestrator
 	issuesByID   map[string]tracker.Issue
 	activeStates map[string]struct{}
-	result       chan<- []*RunningEntry
+	// terminalStates + refreshedByID let this routing-aware pass terminal-gate
+	// the SPEC §18.1 active-transition workspace cleanup for the runs it cancels.
+	// Upstream is single-project and reaches terminate_running_issue (with
+	// cleanup) in one pass; the aiops routing extension cancels (and waits for) a
+	// routed terminal run here, before the terminal-aware inactive pass would see
+	// it, so the cleanup signal must be computed in this pass. refreshedByID
+	// carries the refreshed post-transition state that issuesByID (the active
+	// listing) no longer contains for a now-inactive/terminal issue (#340).
+	terminalStates map[string]struct{}
+	refreshedByID  map[string]tracker.Issue
+	result         chan<- []*RunningEntry
 }
 
 func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	var cleanupEntries []workspaceCleanup
+	var blockedCleanups []ReconciledWorkspace
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
@@ -1102,6 +1112,7 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 		run.ReconcileCancel = true
+		r.flagTerminalRunCleanup(run, id)
 		cancelEntries = append(cancelEntries, run)
 	}
 	for id, retry := range st.RetryAttempts {
@@ -1120,10 +1131,48 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			st.ClaimedIssues[id] = issue
 			continue
 		}
-		cleanupEntries = appendBlockedWorkspaceCleanup(cleanupEntries, id, blocked)
+		if w, okw := r.terminalBlockedCleanup(id, blocked); okw {
+			blockedCleanups = append(blockedCleanups, w)
+		}
 		st.ReleaseClaim(id)
 	}
-	return reconcileCancelFollowup(cancelEntries, cleanupEntries, r.result)
+	return r.o.reconcileCancelFollowup(cancelEntries, blockedCleanups, r.result)
+}
+
+// flagTerminalRunCleanup sets ReconcileCleanupWorkspace on a routed run this
+// pass is cancelling, based on its refreshed post-transition state. A terminal
+// transition flags the cleanup so finalize fires before_remove +
+// reconcile_workspace reason=terminal (SPEC §18.1), matching the non-routing
+// inactive pass; a route-change or non-terminal inactive cancel leaves it false
+// so the workspace is preserved for reuse. Assigned unconditionally so a flag
+// left by an earlier terminal blip is cleared once the issue is no longer
+// terminal, and false when the refresh did not observe this run (no terminal
+// evidence → defer to the startup sweep rather than remove) (#340, Codex P2).
+func (r *reconcileTrackerIssuesOp) flagTerminalRunCleanup(run *RunningEntry, id IssueID) {
+	refreshed, ok := r.refreshedByID[string(id)]
+	if !ok {
+		run.ReconcileCleanupWorkspace = false
+		return
+	}
+	run.Issue = refreshed
+	run.ReconcileCleanupWorkspace = isTerminalTrackerState(refreshed.State, r.terminalStates)
+}
+
+// terminalBlockedCleanup builds the WorkspaceCleaner removal for a routed
+// blocked entry this pass is releasing, but only when its refreshed state is
+// terminal — so a terminal blocked transition fires before_remove +
+// reconcile_workspace reason=terminal (mirroring reconcileInactiveTrackerIssuesOp
+// and upstream reconcile_blocked_issue_state) while a route-change or
+// non-terminal inactive transition keeps the workspace (#340).
+func (r *reconcileTrackerIssuesOp) terminalBlockedCleanup(id IssueID, blocked *BlockedEntry) (ReconciledWorkspace, bool) {
+	if blocked == nil {
+		return ReconciledWorkspace{}, false
+	}
+	refreshed, ok := r.refreshedByID[string(id)]
+	if !ok || !isTerminalTrackerState(refreshed.State, r.terminalStates) {
+		return ReconciledWorkspace{}, false
+	}
+	return terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, refreshed.State)
 }
 
 func sameServiceRoute(previous, current tracker.Issue) bool {
@@ -1185,8 +1234,15 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	o := r.o
-	result := r.result
+	return r.o.reconcileCancelFollowup(cancelEntries, blockedCleanups, r.result)
+}
+
+// reconcileCancelFollowup builds the off-actor followup both reconcile passes
+// return: cancel each worker, then run any terminal blocked-workspace cleanups
+// through the WorkspaceCleaner (before_remove + reconcile_workspace event),
+// then deliver the cancelled entries to the waiting caller. Cleanup runs here,
+// off the actor loop, so a slow before_remove hook cannot block state mutation.
+func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, blockedCleanups []ReconciledWorkspace, result chan<- []*RunningEntry) func() {
 	return func() {
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
@@ -1195,45 +1251,6 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		for _, w := range blockedCleanups {
 			o.runReconciledWorkspaceCleanup(w)
-		}
-		if result != nil {
-			result <- cancelEntries
-		}
-	}
-}
-
-type workspaceCleanup struct {
-	issueID    IssueID
-	identifier string
-	path       string
-}
-
-func appendBlockedWorkspaceCleanup(cleanups []workspaceCleanup, id IssueID, blocked *BlockedEntry) []workspaceCleanup {
-	if blocked == nil {
-		return cleanups
-	}
-	path := strings.TrimSpace(blocked.Workspace.Path)
-	if path == "" {
-		return cleanups
-	}
-	return append(cleanups, workspaceCleanup{issueID: id, identifier: blocked.Identifier, path: path})
-}
-
-func reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanupEntries []workspaceCleanup, result chan<- []*RunningEntry) func() {
-	return func() {
-		for _, entry := range cancelEntries {
-			if entry.CancelWorker != nil {
-				entry.CancelWorker()
-			}
-		}
-		for _, cleanup := range cleanupEntries {
-			if err := os.RemoveAll(cleanup.path); err != nil {
-				if cleanup.identifier != "" {
-					log.Printf("event=blocked_workspace_remove_failed issue_id=%s issue_identifier=%s workspace=%q error=%q", cleanup.issueID, cleanup.identifier, cleanup.path, err)
-				} else {
-					log.Printf("event=blocked_workspace_remove_failed issue_id=%s workspace=%q error=%q", cleanup.issueID, cleanup.path, err)
-				}
-			}
 		}
 		if result != nil {
 			result <- cancelEntries
