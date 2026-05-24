@@ -18,7 +18,7 @@ services:
     environment:
       GITEA_BASE_URL: ${GITEA_BASE_URL}
       GITEA_TOKEN: ${GITEA_TOKEN}
-      WORKSPACE_ROOT: /workspaces
+      AIOPS_WORKSPACE_ROOT: /workspaces
       AIOPS_WORKFLOW_PATH: /app/examples/WORKFLOW.md
       LINEAR_API_KEY: ${LINEAR_API_KEY}
     volumes:

@@ -40,7 +40,8 @@ needs Postgres, it is stale — file an issue.
   - `tracker.kind: gitea` → a Gitea base URL and bot token.
   - `tracker.kind: github` → a GitHub token (`gh auth token` works).
 - A scratch workspace root. `workspace.root` in `WORKFLOW.md` is the
-  source of truth; `WORKSPACE_ROOT` is the fallback when omitted.
+  source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
+  is the fallback when omitted.
 - Optional: Docker and Docker Compose v2, only if you want the
   containerized worker or the legacy compose path.
 - Optional: the Codex CLI installed and on `PATH`, only if you set
@@ -64,10 +65,11 @@ Edit `.env` to fill in only the variables the worker actually reads for
 your tracker kind (see [Prerequisites](#prerequisites)). Never commit
 a real `.env`.
 
-The worker resolves its workflow source from `AIOPS_WORKFLOW_PATH`
-(prefixed) and its fallback workspace root from `WORKSPACE_ROOT`
-(unprefixed). The `.env.example` file documents this naming
-inconsistency; use the names as written there.
+The worker resolves its workflow source from `AIOPS_WORKFLOW_PATH` and
+its fallback workspace root from `AIOPS_WORKSPACE_ROOT`. Worker env vars
+share the `AIOPS_` prefix; the legacy unprefixed forms (`WORKSPACE_ROOT`,
+`MIRROR_ROOT`, `WORKFLOW_PATH`) are still honored as deprecated aliases
+but log a warning at startup. See `.env.example`.
 
 For first-time local testing keep `agent.default: mock` in the
 selected `WORKFLOW.md`. The mock runner produces a deterministic change
@@ -96,7 +98,7 @@ Option A: from source.
 
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
-export WORKSPACE_ROOT=$PWD/.aiops/workspaces
+export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear  (consumed by WORKFLOW.md "api_key: $LINEAR_API_KEY")
 export LINEAR_API_KEY=your-linear-personal-key
@@ -422,7 +424,8 @@ The worker keeps a per-repo bare mirror under `AIOPS_MIRROR_ROOT`
 (default `os.UserCacheDir()/aiops-platform/mirrors`) and creates a
 per-task worktree under the selected workflow's `workspace.root` for
 every claimed task. If `workspace.root` is omitted from `WORKFLOW.md`,
-the worker falls back to `WORKSPACE_ROOT`. This avoids re-cloning on
+the worker falls back to `AIOPS_WORKSPACE_ROOT` (legacy alias
+`WORKSPACE_ROOT`). This avoids re-cloning on
 every retry and lets two tasks run concurrently without sharing a
 working tree. See the dedicated
 [workspace cache runbook](workspace-cache.md) for the on-disk layout,
