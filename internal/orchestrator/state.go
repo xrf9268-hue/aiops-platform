@@ -226,6 +226,15 @@ type OrchestratorState struct {
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
 
+	// cleaningWorkspaces holds issue ids whose terminal workspace is being
+	// removed by an active-transition cleanup (SPEC §18.1). dispatchOp treats a
+	// cleaning id like a claim and denies dispatch, so a re-opened issue cannot
+	// be dispatched onto the deterministic workspace path while the delayed
+	// before_remove/SafeRemove is still running. Set and cleared only on the
+	// actor goroutine, around the cleanup I/O, so the check and the dispatch
+	// claim never race.
+	cleaningWorkspaces map[IssueID]struct{}
+
 	RecentEvents []RuntimeEvent
 }
 
@@ -270,9 +279,32 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		RetryAttempts:              map[IssueID]*RetryEntry{},
 		Failed:                     map[IssueID]FailedEntry{},
 		Completed:                  map[IssueID]struct{}{},
+		cleaningWorkspaces:         map[IssueID]struct{}{},
 		MaxRecentCompleted:         DefaultMaxRecentCompleted,
 		MaxRecentFailed:            DefaultMaxRecentFailed,
 	}
+}
+
+// IsCleaningWorkspace reports whether an active-transition workspace cleanup is
+// in flight for id (SPEC §18.1). dispatchOp denies dispatch while it is, so a
+// re-opened issue cannot land on the deterministic path mid-removal.
+func (s *OrchestratorState) IsCleaningWorkspace(id IssueID) bool {
+	_, ok := s.cleaningWorkspaces[id]
+	return ok
+}
+
+// MarkCleaningWorkspace records that id's workspace removal has begun. Callers
+// must pair it with UnmarkCleaningWorkspace once the removal completes.
+func (s *OrchestratorState) MarkCleaningWorkspace(id IssueID) {
+	if s.cleaningWorkspaces == nil {
+		s.cleaningWorkspaces = map[IssueID]struct{}{}
+	}
+	s.cleaningWorkspaces[id] = struct{}{}
+}
+
+// UnmarkCleaningWorkspace clears the cleanup-in-flight mark for id.
+func (s *OrchestratorState) UnmarkCleaningWorkspace(id IssueID) {
+	delete(s.cleaningWorkspaces, id)
 }
 
 // IsClaimed reports whether id is currently held by any of Running,

@@ -292,13 +292,6 @@ type RemoveWorkspaceRequest struct {
 	BeforeRemoveHook   workflow.WorkspaceHook
 	HookTimeoutMillis  int
 	HookEnvPassthrough []string
-	// ConfirmRemove, when non-nil, is consulted immediately before the
-	// destructive SafeRemove. Returning false aborts the removal (the hook may
-	// already have run). The active-transition cleanup uses it to skip a
-	// workspace whose issue was re-claimed since it went terminal, so a
-	// re-dispatched run's live workspace at the same deterministic path is
-	// never deleted. nil (startup sweep) always removes.
-	ConfirmRemove func() bool
 }
 
 // RemoveIssueWorkspace runs the before_remove hook (best effort: a hook
@@ -313,10 +306,6 @@ type RemoveWorkspaceRequest struct {
 func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorkspaceRequest) (bool, error) {
 	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough); err != nil {
 		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
-	}
-	if req.ConfirmRemove != nil && !req.ConfirmRemove() {
-		log.Printf("event=reconcile_workspace_remove_skipped task_id=%s issue_id=%s issue_identifier=%s reason=reclaimed workspace=%q", req.TaskID, req.IssueID, req.Identifier, req.Path)
-		return false, nil
 	}
 	if err := workspace.SafeRemove(req.WorkspaceRoot, req.Path); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", req.Reason, req.Path, err)

@@ -834,34 +834,64 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 	return o.RunningRetryingAndBlockedIssueIDs(ctx)
 }
 
-// IssueClaimedOrUnknown reports whether the issue currently holds a claim
-// (running, blocked, retrying, or a reserved dispatch slot). The
-// reconciled-workspace cleaner consults it just before the destructive remove
-// to skip a workspace whose issue has been re-dispatched since it went
-// terminal — the new run owns the same deterministic path (Codex P1). It
-// returns true conservatively when the actor cannot be reached (shutdown /
-// cancelled ctx) so an indeterminate state never deletes a possibly-live
-// workspace; the startup sweep reclaims it later if it is genuinely terminal.
-func (o *Orchestrator) IssueClaimedOrUnknown(ctx context.Context, id IssueID) bool {
+// beginReconcileWorkspaceCleanup atomically reserves issue id for an
+// active-transition workspace removal. It returns false — abort the cleanup —
+// when the issue is already claimed (re-dispatched since it went terminal, so
+// a new run now owns the deterministic workspace path) or another cleanup is
+// already in flight for it. On success the issue is marked cleaning, which
+// dispatchOp treats like a claim, so no run can be dispatched onto the path
+// until endReconcileWorkspaceCleanup clears the mark. Because both this check
+// and the dispatch claim run on the single actor goroutine, there is no
+// check-then-delete race (the deletion happens entirely within the marked
+// window). Returns false if the actor is unreachable (shutdown), leaving the
+// directory for the next startup sweep.
+func (o *Orchestrator) beginReconcileWorkspaceCleanup(id IssueID) bool {
 	reply := make(chan bool, 1)
-	if err := o.submit(ctx, &issueClaimedOp{id: id, result: reply}); err != nil {
-		return true
+	if err := o.submit(o.runCtx, &beginWorkspaceCleanupOp{id: id, result: reply}); err != nil {
+		return false
 	}
 	select {
-	case claimed := <-reply:
-		return claimed
-	case <-ctx.Done():
-		return true
+	case ok := <-reply:
+		return ok
+	case <-o.runCtx.Done():
+		return false
 	}
 }
 
-type issueClaimedOp struct {
+func (o *Orchestrator) endReconcileWorkspaceCleanup(id IssueID) {
+	done := make(chan struct{}, 1)
+	if err := o.submit(o.runCtx, &endWorkspaceCleanupOp{id: id, done: done}); err != nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-o.runCtx.Done():
+	}
+}
+
+type beginWorkspaceCleanupOp struct {
 	id     IssueID
 	result chan<- bool
 }
 
-func (o *issueClaimedOp) apply(st *OrchestratorState) func() {
-	o.result <- st.IsClaimed(o.id)
+func (o *beginWorkspaceCleanupOp) apply(st *OrchestratorState) func() {
+	if st.IsClaimed(o.id) || st.IsCleaningWorkspace(o.id) {
+		o.result <- false
+		return nil
+	}
+	st.MarkCleaningWorkspace(o.id)
+	o.result <- true
+	return nil
+}
+
+type endWorkspaceCleanupOp struct {
+	id   IssueID
+	done chan<- struct{}
+}
+
+func (o *endWorkspaceCleanupOp) apply(st *OrchestratorState) func() {
+	st.UnmarkCleaningWorkspace(o.id)
+	o.done <- struct{}{}
 	return nil
 }
 
@@ -1281,6 +1311,15 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace) {
 	if o.workspaceCleaner == nil || strings.TrimSpace(w.Path) == "" {
 		return
 	}
+	// Reserve the issue for cleanup on the actor. This aborts if the issue was
+	// re-claimed since it went terminal (a new run owns the path), and while
+	// reserved dispatchOp denies dispatch — so the removal below cannot race a
+	// re-dispatch onto the same deterministic workspace path. Pairs with
+	// endReconcileWorkspaceCleanup via defer so the mark never leaks.
+	if !o.beginReconcileWorkspaceCleanup(w.IssueID) {
+		return
+	}
+	defer o.endReconcileWorkspaceCleanup(w.IssueID)
 	ctx, cancel := context.WithTimeout(o.runCtx, reconcileWorkspaceCleanupTimeout)
 	defer cancel()
 	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
@@ -1301,6 +1340,14 @@ type dispatchOp struct {
 
 func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	id := IssueID(d.issue.ID)
+	if st.IsCleaningWorkspace(id) {
+		// A terminal-transition workspace cleanup is in flight for this issue
+		// (SPEC §18.1). Deny dispatch so a re-opened issue cannot land on the
+		// deterministic workspace path while before_remove/SafeRemove runs; the
+		// next poll tick retries once the cleanup clears the mark.
+		d.result <- ErrNotDispatched
+		return nil
+	}
 	st.ReleaseFailedIfIssueChanged(d.issue)
 	attempt := d.attempt
 	continuationAttempt := 0

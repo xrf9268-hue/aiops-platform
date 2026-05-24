@@ -1652,25 +1652,54 @@ func TestReconcileInactiveNonTerminalRunKeepsWorkspace(t *testing.T) {
 	}
 }
 
-// TestIssueClaimedOrUnknownReflectsRedispatch backs the Codex P1 re-claim
-// guard: the reconciled-workspace cleaner skips removal when this reports the
-// issue claimed. A freshly dispatched issue must read as claimed; an unknown
-// issue must read as not-claimed (so its stale terminal workspace is removed).
-func TestIssueClaimedOrUnknownReflectsRedispatch(t *testing.T) {
+// TestReconcileWorkspaceCleanupLockDeniesDispatch backs the Codex stop-time
+// finding: the re-claim guard must be race-free. While a terminal workspace
+// cleanup is in flight (reserved on the actor), dispatch onto the same issue —
+// hence the same deterministic workspace path — must be denied, so the delayed
+// removal cannot delete a freshly-dispatched run's workspace. Once cleanup
+// ends, dispatch is allowed again.
+func TestReconcileWorkspaceCleanupLockDeniesDispatch(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
-	issue := tracker.Issue{ID: "ENG-RC1", Identifier: "ENG-RC1", State: "In Progress"}
-	if o.IssueClaimedOrUnknown(context.Background(), IssueID(issue.ID)) {
-		t.Fatal("issue must not be claimed before dispatch")
+	issue := tracker.Issue{ID: "ENG-LK1", Identifier: "ENG-LK1", State: "In Progress"}
+	id := IssueID(issue.ID)
+	if !o.beginReconcileWorkspaceCleanup(id) {
+		t.Fatal("begin must succeed for an unclaimed, not-cleaning issue")
 	}
+	// Reserved for cleanup → dispatch must be denied (no race window: both the
+	// reservation and this dispatch check run on the actor goroutine).
+	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("dispatch during cleanup = %v, want ErrNotDispatched", err)
+	}
+	// A second cleanup for the same issue must also be refused.
+	if o.beginReconcileWorkspaceCleanup(id) {
+		t.Fatal("a second concurrent cleanup must be refused")
+	}
+	o.endReconcileWorkspaceCleanup(id)
+	// Once the mark clears, dispatch proceeds.
+	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
+		t.Fatalf("dispatch after cleanup ended: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+}
+
+// TestReconcileWorkspaceCleanupAbortsWhenReclaimed pins the other half of the
+// guard: if the issue was re-dispatched (claimed) since it went terminal, the
+// cleanup must abort rather than remove the new run's workspace.
+func TestReconcileWorkspaceCleanupAbortsWhenReclaimed(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-LK2", Identifier: "ENG-LK2", State: "In Progress"}
 	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-	if !o.IssueClaimedOrUnknown(context.Background(), IssueID(issue.ID)) {
-		t.Fatal("re-dispatched issue must read as claimed so its workspace is not removed")
+	if o.beginReconcileWorkspaceCleanup(IssueID(issue.ID)) {
+		t.Fatal("cleanup must abort when the issue has been re-claimed")
 	}
 }
 
