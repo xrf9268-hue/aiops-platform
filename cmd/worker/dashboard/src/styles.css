@@ -1,25 +1,122 @@
 @import "tailwindcss";
 
+/* Drive the dark: variant from a .dark class on <html> so the theme can be
+   toggled manually rather than only following prefers-color-scheme.
+   Matches the Tailwind v4 docs' recommended class strategy. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Semantic colour tokens. `inline` makes the generated utilities reference the
+   raw CSS vars at the use site, so redefining them under .dark cascades.
+   Palette is tuned for eye comfort: no pure-white surfaces in light mode and
+   no pure-black background / pure-white text in dark mode. */
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-inset: var(--c-inset);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+
+  --color-good: var(--c-good);
+  --color-good-bg: var(--c-good-bg);
+  --color-good-line: var(--c-good-line);
+  --color-warn: var(--c-warn);
+  --color-warn-bg: var(--c-warn-bg);
+  --color-warn-line: var(--c-warn-line);
+  --color-danger: var(--c-danger);
+  --color-danger-bg: var(--c-danger-bg);
+  --color-danger-line: var(--c-danger-line);
+}
+
 @layer base {
   :root {
+    color-scheme: light;
+
+    /* Soft cool greys — surfaces sit lighter than the canvas without glare. */
+    --c-canvas: #e7ecf3;
+    --c-surface: #f7f9fc;
+    --c-inset: #eef2f8;
+    --c-line: rgb(100 116 139 / 0.2);
+    --c-line-strong: rgb(71 85 105 / 0.28);
+    --c-fg: #1e293b;
+    --c-muted: #475569;
+    --c-faint: #64748b;
+    --c-accent: #0369a1;
+
+    --c-good: #047857;
+    --c-good-bg: #e7f6ee;
+    --c-good-line: rgb(16 185 129 / 0.4);
+    --c-warn: #b45309;
+    --c-warn-bg: #fbf2e3;
+    --c-warn-line: rgb(245 158 11 / 0.45);
+    --c-danger: #b91c1c;
+    --c-danger-bg: #fbeceb;
+    --c-danger-line: rgb(239 68 68 / 0.4);
+  }
+
+  :where(.dark) {
     color-scheme: dark;
+
+    /* Lifted navy rather than pure black; text is off-white, not #fff. */
+    --c-canvas: #0e1726;
+    --c-surface: rgb(22 32 51 / 0.72);
+    --c-inset: rgb(13 20 36 / 0.55);
+    --c-line: rgb(71 85 105 / 0.3);
+    --c-line-strong: rgb(148 163 184 / 0.22);
+    --c-fg: #d7dfec;
+    --c-muted: #9aa7bd;
+    --c-faint: #6b7a93;
+    --c-accent: #56c5f5;
+
+    --c-good: #6ee7b7;
+    --c-good-bg: rgb(6 78 59 / 0.38);
+    --c-good-line: rgb(4 120 87 / 0.4);
+    --c-warn: #fcd34d;
+    --c-warn-bg: rgb(120 53 15 / 0.38);
+    --c-warn-line: rgb(180 83 9 / 0.45);
+    --c-danger: #fca5a5;
+    --c-danger-bg: rgb(127 29 29 / 0.38);
+    --c-danger-line: rgb(185 28 28 / 0.45);
   }
 
   body {
-    @apply min-h-screen bg-[#09111f] text-slate-200;
-    background-image: radial-gradient(circle at top left, #193154 0%, #09111f 45%);
+    @apply min-h-screen bg-canvas text-fg;
+    background-image: radial-gradient(circle at top left, #dbe5f2 0%, #e7ecf3 45%);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .dark body {
+    background-image: radial-gradient(circle at top left, #16273f 0%, #0e1726 48%);
   }
 
   a {
-    @apply text-sky-300 hover:text-sky-200 transition-colors;
+    @apply text-accent transition-colors;
+  }
+
+  a:hover {
+    opacity: 0.82;
   }
 
   :focus-visible {
-    @apply outline-none ring-2 ring-sky-400/70 ring-offset-2 ring-offset-slate-950 rounded-sm;
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas rounded-sm;
   }
 
   code,
   pre {
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  /* Respect users who prefer reduced motion (live dot pulse, skeletons). */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
   }
 }

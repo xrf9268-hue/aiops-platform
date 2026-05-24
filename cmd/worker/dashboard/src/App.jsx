@@ -45,48 +45,99 @@ function toNumber(value) {
   return Number.isNaN(n) ? null : n;
 }
 
-function StateBadge({ value, type = 'default' }) {
-  const colors = {
-    default: 'bg-slate-800 text-slate-300 border-slate-700/50',
-    active: 'bg-emerald-900/40 text-emerald-300 border-emerald-700/40',
-    warning: 'bg-amber-900/40 text-amber-300 border-amber-700/40',
-    danger: 'bg-red-900/40 text-red-300 border-red-700/40',
-  };
+function resolveInitialTheme() {
+  if (typeof window === 'undefined') return 'dark';
+  try {
+    const stored = window.localStorage.getItem('theme');
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch {
+    /* localStorage unavailable */
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function useTheme() {
+  const [theme, setTheme] = useState(resolveInitialTheme);
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    try {
+      window.localStorage.setItem('theme', theme);
+    } catch {
+      /* ignore persistence failures */
+    }
+  }, [theme]);
+  const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+  return [theme, toggle];
+}
+
+function ThemeToggle({ theme, onToggle }) {
+  const next = theme === 'dark' ? 'light' : 'dark';
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${colors[type]}`}>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={`Switch to ${next} theme`}
+      title={`Switch to ${next} theme`}
+      className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-inset border border-line text-muted hover:text-fg transition-colors"
+    >
+      {theme === 'dark' ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="4" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+        </svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+const BADGE_TONES = {
+  default: 'bg-inset text-muted border-line',
+  active: 'bg-good-bg text-good border-good-line',
+  warning: 'bg-warn-bg text-warn border-warn-line',
+  danger: 'bg-danger-bg text-danger border-danger-line',
+};
+
+function StateBadge({ value, type = 'default' }) {
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${BADGE_TONES[type]}`}>
       {value}
     </span>
   );
 }
 
 const METRIC_TONES = {
-  default: 'border-slate-700/20 text-slate-100',
-  good: 'border-emerald-700/30 text-emerald-300',
-  warn: 'border-amber-700/30 text-amber-300',
-  danger: 'border-red-700/30 text-red-300',
+  default: { border: 'border-line', value: 'text-fg' },
+  good: { border: 'border-good-line', value: 'text-good' },
+  warn: { border: 'border-warn-line', value: 'text-warn' },
+  danger: { border: 'border-danger-line', value: 'text-danger' },
 };
 
 function MetricCard({ label, value, hint, tone = 'default', loading = false }) {
   const toneClass = METRIC_TONES[tone] || METRIC_TONES.default;
   return (
-    <article className={`p-4 rounded-2xl bg-slate-900/80 border flex flex-col ${toneClass.split(' ')[0]}`}>
-      <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</span>
+    <article className={`p-4 rounded-2xl bg-surface border flex flex-col ${toneClass.border}`}>
+      <span className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</span>
       {loading ? (
-        <span className="block my-2 h-8 w-20 rounded bg-slate-700/40 animate-pulse" aria-hidden="true" />
+        <span className="block my-2 h-8 w-20 rounded bg-muted/20 animate-pulse" aria-hidden="true" />
       ) : (
-        <strong className={`block my-2 text-3xl font-bold tracking-tight ${toneClass.split(' ')[1]}`}>{value}</strong>
+        <strong className={`block my-2 text-3xl font-bold tracking-tight ${toneClass.value}`}>{value}</strong>
       )}
-      <small className="text-slate-400 text-xs">{hint}</small>
+      <small className="text-muted text-xs">{hint}</small>
     </article>
   );
 }
 
 function Panel({ title, subtitle, children }) {
   return (
-    <section className="rounded-2xl bg-slate-900/80 border border-slate-700/20 p-5 overflow-hidden">
+    <section className="rounded-2xl bg-surface border border-line p-5 overflow-hidden">
       <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
         <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-        {subtitle && <span className="text-slate-400 text-sm">{subtitle}</span>}
+        {subtitle && <span className="text-muted text-sm">{subtitle}</span>}
       </div>
       {children}
     </section>
@@ -97,7 +148,7 @@ function Panel({ title, subtitle, children }) {
 // mobile, driven by a single column config so the two views never drift.
 function ResponsiveTable({ columns, rows, emptyText }) {
   if (!rows || rows.length === 0) {
-    return <p className="text-center text-slate-500 py-6">{emptyText}</p>;
+    return <p className="text-center text-faint py-6">{emptyText}</p>;
   }
   const rowKey = (row, i) => row.issue_id || row.issue_identifier || i;
   return (
@@ -109,7 +160,7 @@ function ResponsiveTable({ columns, rows, emptyText }) {
               {columns.map((col) => (
                 <th
                   key={col.header}
-                  className={`text-xs font-semibold uppercase tracking-wider text-slate-400 border-b border-slate-700/30 pb-3 pr-3 first:pl-0 last:pr-0 ${
+                  className={`text-xs font-semibold uppercase tracking-wider text-muted border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
                     col.align === 'right' ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -120,7 +171,7 @@ function ResponsiveTable({ columns, rows, emptyText }) {
           </thead>
           <tbody>
             {rows.map((row, i) => (
-              <tr key={rowKey(row, i)} className="border-b border-slate-700/15 last:border-0">
+              <tr key={rowKey(row, i)} className="border-b border-line last:border-0">
                 {columns.map((col) => (
                   <td
                     key={col.header}
@@ -139,13 +190,13 @@ function ResponsiveTable({ columns, rows, emptyText }) {
 
       <ul className="md:hidden flex flex-col gap-3">
         {rows.map((row, i) => (
-          <li key={rowKey(row, i)} className="rounded-xl border border-slate-700/30 bg-slate-950/40 p-4">
+          <li key={rowKey(row, i)} className="rounded-xl border border-line bg-inset p-4">
             <div className="mb-3">{columns[0].cell(row)}</div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
               {columns.slice(1).map((col) => (
                 <div key={col.header} className="flex flex-col min-w-0">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{col.header}</dt>
-                  <dd className="text-sm text-slate-200 mt-0.5">{col.cell(row)}</dd>
+                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-faint">{col.header}</dt>
+                  <dd className="text-sm text-fg mt-0.5">{col.cell(row)}</dd>
                 </div>
               ))}
             </dl>
@@ -160,11 +211,10 @@ function UsageBar({ remaining, limit }) {
   if (remaining === null || limit === null || limit <= 0) return null;
   const ratio = Math.max(0, Math.min(1, remaining / limit));
   const pct = Math.round(ratio * 100);
-  const tone =
-    ratio > 0.5 ? 'bg-emerald-400' : ratio > 0.2 ? 'bg-amber-400' : 'bg-red-400';
+  const tone = ratio > 0.5 ? 'bg-good' : ratio > 0.2 ? 'bg-warn' : 'bg-danger';
   return (
     <div
-      className="mt-2 h-1.5 w-full rounded-full bg-slate-800 overflow-hidden"
+      className="mt-2 h-1.5 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"
       role="progressbar"
       aria-valuenow={pct}
       aria-valuemin={0}
@@ -196,34 +246,31 @@ function RateLimitBucket({ label, bucket }) {
   }
 
   return (
-    <div className="rounded-xl bg-slate-950/50 border border-slate-700/20 p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-slate-100">{headline}</div>
+    <div className="rounded-xl bg-inset border border-line p-4">
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">{headline}</div>
       <UsageBar remaining={remaining} limit={limit} />
-      {reset && <div className="mt-2 text-xs text-slate-400">{reset}</div>}
+      {reset && <div className="mt-2 text-xs text-muted">{reset}</div>}
     </div>
   );
 }
 
 function formatCredits(credits) {
-  if (!credits || typeof credits !== 'object') return { text: 'n/a', tone: 'text-slate-400' };
-  if (credits.unlimited) return { text: 'Unlimited', tone: 'text-emerald-300' };
+  if (!credits || typeof credits !== 'object') return { text: 'n/a', tone: 'text-muted' };
+  if (credits.unlimited) return { text: 'Unlimited', tone: 'text-good' };
   if (credits.has_credits) {
     const balance = toNumber(credits.balance);
-    return {
-      text: balance !== null ? balance.toFixed(2) : 'Available',
-      tone: 'text-emerald-300',
-    };
+    return { text: balance !== null ? balance.toFixed(2) : 'Available', tone: 'text-good' };
   }
-  return { text: 'None', tone: 'text-red-300' };
+  return { text: 'None', tone: 'text-danger' };
 }
 
 function RateLimits({ rateLimits, loading }) {
   if (loading) {
-    return <div className="h-24 rounded-xl bg-slate-800/30 animate-pulse" aria-hidden="true" />;
+    return <div className="h-24 rounded-xl bg-muted/20 animate-pulse" aria-hidden="true" />;
   }
   if (!rateLimits || typeof rateLimits !== 'object') {
-    return <p className="text-slate-500 text-sm py-2">No rate-limit snapshot reported.</p>;
+    return <p className="text-faint text-sm py-2">No rate-limit snapshot reported.</p>;
   }
 
   const tier = rateLimits.limit_id || rateLimits.limit_name || 'unknown tier';
@@ -235,7 +282,7 @@ function RateLimits({ rateLimits, loading }) {
   // Unknown payload shape — keep the data visible rather than guessing layout.
   if (!hasShape) {
     return (
-      <pre className="overflow-auto rounded-xl p-4 bg-slate-950/70 text-violet-300 text-xs leading-relaxed">
+      <pre className="overflow-auto rounded-xl p-4 bg-inset text-fg text-xs leading-relaxed">
         {JSON.stringify(rateLimits, null, 2)}
       </pre>
     );
@@ -249,8 +296,8 @@ function RateLimits({ rateLimits, loading }) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <RateLimitBucket label="Primary" bucket={rateLimits.primary} />
         <RateLimitBucket label="Secondary" bucket={rateLimits.secondary} />
-        <div className="rounded-xl bg-slate-950/50 border border-slate-700/20 p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">Credits</div>
+        <div className="rounded-xl bg-inset border border-line p-4">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted">Credits</div>
           <div className={`mt-1 text-lg font-semibold tabular-nums ${credits.tone}`}>{credits.text}</div>
         </div>
       </div>
@@ -259,6 +306,7 @@ function RateLimits({ rateLimits, loading }) {
 }
 
 export default function App() {
+  const [theme, toggleTheme] = useTheme();
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
@@ -308,9 +356,9 @@ export default function App() {
 
   const status = error ? 'offline' : loadedAt ? 'live' : 'connecting';
   const statusStyles = {
-    live: 'bg-emerald-900/20 text-emerald-300 border-emerald-700/30',
-    offline: 'bg-red-900/20 text-red-300 border-red-700/40',
-    connecting: 'bg-slate-800 text-slate-300 border-slate-700/50',
+    live: 'bg-good-bg text-good border-good-line',
+    offline: 'bg-danger-bg text-danger border-danger-line',
+    connecting: 'bg-inset text-muted border-line',
   };
   const statusLabel = { live: 'Live', offline: 'Offline', connecting: 'Connecting…' };
 
@@ -323,7 +371,7 @@ export default function App() {
             <a href={jsonDetailsPath(row)}>{issueLabel(row)}</a>
           </div>
           {row.workspace_path && (
-            <div className="text-xs text-slate-500 mt-0.5 truncate max-w-[12rem]" title={row.workspace_path}>
+            <div className="text-xs text-faint mt-0.5 truncate max-w-[12rem]" title={row.workspace_path}>
               {row.workspace_path}
             </div>
           )}
@@ -342,7 +390,7 @@ export default function App() {
     {
       header: 'Session',
       cell: (row) => (
-        <span className="font-mono text-xs text-slate-300" title={row.session_id || undefined}>
+        <span className="font-mono text-xs text-muted" title={row.session_id || undefined}>
           {compactSession(row.session_id)}
         </span>
       ),
@@ -353,7 +401,7 @@ export default function App() {
       cell: (row) => {
         const runtimeSecs = row.started_at ? (nowTs - new Date(row.started_at).getTime()) / 1000 : 0;
         return (
-          <span className="tabular-nums text-slate-300">
+          <span className="tabular-nums text-muted">
             {formatRuntime(runtimeSecs)} / {formatCount(row.turn_count)}
           </span>
         );
@@ -363,8 +411,8 @@ export default function App() {
       header: 'Last update',
       cell: (row) => (
         <div className="max-w-[18rem]">
-          <div className="truncate text-slate-200">{row.last_message || row.last_event || 'n/a'}</div>
-          <div className="text-xs text-slate-500 mt-0.5">{formatDate(row.last_event_at)}</div>
+          <div className="truncate text-fg">{row.last_message || row.last_event || 'n/a'}</div>
+          <div className="text-xs text-faint mt-0.5">{formatDate(row.last_event_at)}</div>
         </div>
       ),
     },
@@ -372,9 +420,9 @@ export default function App() {
       header: 'Tokens',
       align: 'right',
       cell: (row) => (
-        <div className="tabular-nums text-slate-300">
+        <div className="tabular-nums text-muted">
           <div>Total {formatCount(row.tokens?.total_tokens)}</div>
-          <div className="text-xs text-slate-500">
+          <div className="text-xs text-faint">
             In {formatCount(row.tokens?.input_tokens)} / Out {formatCount(row.tokens?.output_tokens)}
           </div>
         </div>
@@ -395,17 +443,17 @@ export default function App() {
     {
       header: 'Session',
       cell: (row) => (
-        <span className="font-mono text-xs text-slate-300" title={row.session_id || undefined}>
+        <span className="font-mono text-xs text-muted" title={row.session_id || undefined}>
           {compactSession(row.session_id)}
         </span>
       ),
     },
-    { header: 'Blocked at', cell: (row) => <span className="text-slate-300">{formatDate(row.blocked_at)}</span> },
-    { header: 'Method', cell: (row) => <span className="text-slate-300">{row.method || 'n/a'}</span> },
+    { header: 'Blocked at', cell: (row) => <span className="text-muted">{formatDate(row.blocked_at)}</span> },
+    { header: 'Method', cell: (row) => <span className="text-muted">{row.method || 'n/a'}</span> },
     {
       header: 'Error',
       cell: (row) => (
-        <span className="text-red-400 block max-w-[16rem] truncate" title={row.error || undefined}>
+        <span className="text-danger block max-w-[16rem] truncate" title={row.error || undefined}>
           {row.error || 'n/a'}
         </span>
       ),
@@ -421,12 +469,12 @@ export default function App() {
         </a>
       ),
     },
-    { header: 'Attempt', align: 'right', cell: (row) => <span className="tabular-nums text-amber-400">#{formatCount(row.attempt)}</span> },
-    { header: 'Due at', cell: (row) => <span className="text-slate-300">{formatDate(row.due_at)}</span> },
+    { header: 'Attempt', align: 'right', cell: (row) => <span className="tabular-nums text-warn">#{formatCount(row.attempt)}</span> },
+    { header: 'Due at', cell: (row) => <span className="text-muted">{formatDate(row.due_at)}</span> },
     {
       header: 'Error',
       cell: (row) => (
-        <span className="text-red-400 block max-w-[22rem] truncate" title={row.error || undefined}>
+        <span className="text-danger block max-w-[22rem] truncate" title={row.error || undefined}>
           {row.error || 'n/a'}
         </span>
       ),
@@ -436,31 +484,34 @@ export default function App() {
   return (
     <main className="w-full max-w-[1280px] mx-auto px-4 py-8">
       {/* Hero */}
-      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-7 border border-slate-400/25 rounded-3xl bg-slate-900/70 shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-7 border border-line-strong rounded-3xl bg-surface shadow-[0_24px_80px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
         <div>
-          <p className="text-sky-400 uppercase text-xs tracking-widest font-bold mb-2">
+          <p className="text-accent uppercase text-xs tracking-widest font-bold mb-2">
             aiops-platform
           </p>
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-none mb-3">
             Operations Dashboard
           </h1>
-          <p className="text-slate-400 max-w-2xl">
+          <p className="text-muted max-w-2xl">
             Human-readable runtime state from{' '}
             <a href="/api/v1/state">/api/v1/state</a>. Refreshes every{' '}
             {REFRESH_MS / 1000}s.
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2 shrink-0" aria-live="polite">
-          <span
-            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${statusStyles[status]}`}
-          >
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          <div className="flex items-center gap-2" aria-live="polite">
             <span
-              className={`w-2 h-2 rounded-full bg-current ${status === 'live' ? 'animate-pulse' : ''}`}
-            />
-            {statusLabel[status]}
-          </span>
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${statusStyles[status]}`}
+            >
+              <span
+                className={`w-2 h-2 rounded-full bg-current ${status === 'live' ? 'animate-pulse' : ''}`}
+              />
+              {statusLabel[status]}
+            </span>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          </div>
           {maxAgents !== '—' && (
-            <span className="text-xs text-slate-400">
+            <span className="text-xs text-muted">
               Max {maxAgents} concurrent agents
             </span>
           )}
@@ -469,7 +520,7 @@ export default function App() {
 
       {/* Error banner */}
       {error && (
-        <div role="alert" className="mb-6 px-5 py-4 rounded-2xl bg-red-900/30 border border-red-700/40 text-red-300">
+        <div role="alert" className="mb-6 px-5 py-4 rounded-2xl bg-danger-bg border border-danger-line text-danger">
           <strong>Error:</strong> {error}
         </div>
       )}
@@ -573,7 +624,7 @@ export default function App() {
         </Panel>
       </div>
 
-      <footer className="mt-8 text-center text-xs text-slate-500">
+      <footer className="mt-8 text-center text-xs text-faint">
         API snapshot: {formatDate(state?.generated_at)} · Last refreshed: {formatDate(loadedAt)}
       </footer>
     </main>
