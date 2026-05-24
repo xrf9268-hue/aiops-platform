@@ -1605,12 +1605,14 @@ func TestReconcileTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
 // state must NOT have its workspace removed — the issue may return to active
 // work and reuse it.
 //
-// A terminal sibling (ENG-T2) is reconciled in the same batch and serves as a
-// deterministic barrier: cleanup followups are fire-and-forget, so to prove
-// the non-terminal run produced no cleanup we wait for the terminal sibling's
-// cleanup to land, then assert it is the ONLY call (the non-terminal run's
-// followup, if it were wrongly scheduled, is launched in the same batch and
-// would have surfaced by then).
+// A terminal sibling (ENG-T2) reconciled in the same pass acts as a progress
+// barrier: each run's cleanup fires from its own fire-and-forget finalize
+// followup, so we cannot prove a negative instantly. Waiting for the terminal
+// sibling's cleanup to land gives the non-terminal run's followup (if the
+// gating regressed and one were wrongly scheduled) ample opportunity to
+// surface, then we assert the terminal sibling is the ONLY call. Not strictly
+// race-free, but it reliably catches a reverted terminal gate (the wrongly
+// scheduled call pushes the count to 2) and is stable under -race.
 func TestReconcileInactiveNonTerminalRunKeepsWorkspace(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
