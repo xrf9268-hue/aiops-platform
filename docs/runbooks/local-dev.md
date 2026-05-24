@@ -148,6 +148,20 @@ The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
 
+The worker's loopback dashboard is not reachable from the host under the
+base Compose file. To reach it, merge the opt-in overlay, which binds
+`0.0.0.0` inside the container and publishes only to host loopback
+(`127.0.0.1:4000:4000`):
+
+```bash
+docker compose -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dashboard.yml up worker
+```
+
+See README "Operator surfaces" for the trust-boundary caveats; the
+surface is unauthenticated, so never publish it on a routable host
+interface.
+
 ## 3. Smoke test
 
 The fastest way to verify local configuration is to print the
