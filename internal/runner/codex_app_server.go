@@ -241,7 +241,14 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
 	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
-	c.approvalPolicy = in.Workflow.Config.Codex.ApprovalPolicy
+	// Translate once at this boundary and reuse the same value for both the
+	// codex wire payload (thread/start, turn/start) and the harness-side
+	// auto-approve decisions (autoApproveRequest). Storing the raw workflow
+	// value here while sending the translated one to codex desyncs the two:
+	// a legacy reject:{...} config would reach codex as granular:{...} (codex
+	// emits approval prompts) but autoApproveRequest, which no longer handles
+	// reject:, would decline them unconditionally and flip behavior (#335).
+	c.approvalPolicy = codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
 	if _, err := c.request(ctx, "initialize", map[string]any{
 		"capabilities": map[string]any{"experimentalApi": true},
 		"clientInfo": map[string]any{
@@ -259,7 +266,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	}
 
 	threadResult, err := c.request(ctx, "thread/start", map[string]any{
-		"approvalPolicy": codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy),
+		"approvalPolicy": c.approvalPolicy,
 		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
 		"cwd":            in.Workdir,
 		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
@@ -296,7 +303,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			"input":          input,
 			"cwd":            in.Workdir,
 			"title":          appServerTurnTitle(in),
-			"approvalPolicy": codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy),
+			"approvalPolicy": c.approvalPolicy,
 			"sandboxPolicy":  in.Workflow.Config.Codex.TurnSandboxPolicy,
 		})
 		if err != nil {
