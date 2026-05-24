@@ -53,13 +53,18 @@ install_gh() {
     return 0
   fi
 
-  # Resolve the latest release tag from the GitHub API.
-  local gh_version
-  gh_version="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
-    | grep -o '"tag_name":\s*"v[^"]*"' | head -1 | grep -o 'v[^"]*')"
+  # Resolve the latest release tag from the GitHub API. The trailing `|| true`
+  # keeps a transient failure (network, unauthenticated rate limit) from
+  # tripping `set -e` so the empty-check below can report it; `head` is last
+  # in the pipeline to avoid a SIGPIPE-induced non-zero status under pipefail.
+  local gh_version=""
+  gh_version="$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest 2>/dev/null \
+    | grep -o '"tag_name":[[:space:]]*"v[^"]*"' \
+    | grep -o 'v[0-9][^"]*' \
+    | head -1)" || true
 
   if [[ -z "${gh_version}" ]]; then
-    echo "[SessionStart] Failed to determine latest gh version" >&2
+    echo "[SessionStart] Could not determine latest gh version (network or API rate limit); skipping gh install" >&2
     return 1
   fi
 
@@ -108,7 +113,12 @@ install_gh() {
   fi
 }
 
-install_gh
+# Run in a subshell so any failure inside install_gh (including a `set -e`
+# abort) degrades gracefully instead of failing the whole SessionStart hook.
+# Agents fall back to the GitHub MCP server when gh is unavailable (AGENTS.md).
+if ! ( install_gh ); then
+  echo "[SessionStart] gh not installed; agents will fall back to the GitHub MCP server" >&2
+fi
 
 # Verify installation.
 echo "[SessionStart] Tooling ready:" >&2

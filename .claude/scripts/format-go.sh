@@ -17,7 +17,8 @@ if ! command -v jq > /dev/null 2>&1; then
 fi
 
 # PostToolUse delivers {"tool_name":...,"tool_input":{"file_path":...},...} on stdin.
-file="$(cat | jq -r '.tool_input.file_path // empty')"
+# Tolerate unexpected/non-JSON stdin: stay silent and exit 0 rather than erroring.
+file="$(cat | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)"
 
 # Only touch existing .go files; anything else is none of gofmt's business.
 [[ -n "${file}" && "${file}" == *.go && -f "${file}" ]] || exit 0
