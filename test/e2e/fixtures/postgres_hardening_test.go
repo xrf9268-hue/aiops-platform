@@ -1,9 +1,13 @@
 package fixtures_test
 
 import (
+	"net"
 	"strings"
 	"testing"
 )
+
+// publishedHostIP (Compose port-mapping host-IP parser) is shared from
+// dashboard_overlay_test.go in this package.
 
 // TestLegacyPostgresHasNoHardcodedPassword guards #371: the legacy-queue
 // postgres service must not ship a hardcoded password and must source it from
@@ -39,13 +43,15 @@ func TestLegacyPostgresBindsLoopbackOnly(t *testing.T) {
 		if !ok {
 			t.Fatalf("port mapping %#v is not a string", raw)
 		}
-		parts := strings.Split(mapping, ":")
-		if len(parts) != 3 {
-			t.Errorf("port mapping %q must pin a host IP (HOST_IP:HOST_PORT:CONTAINER_PORT)", mapping)
-			continue
+		hostIP, parsed := publishedHostIP(mapping)
+		if !parsed {
+			t.Fatalf("could not parse port mapping %q", mapping)
 		}
-		if parts[0] != "127.0.0.1" && parts[0] != "::1" {
-			t.Errorf("postgres port %q publishes on %q; expected loopback", mapping, parts[0])
+		// An empty host IP means the bare HOST_PORT:CONTAINER_PORT form, which
+		// publishes on every host interface — exactly what we must forbid.
+		ip := net.ParseIP(hostIP)
+		if ip == nil || !ip.IsLoopback() {
+			t.Errorf("postgres port %q publishes on host IP %q; expected a loopback address", mapping, hostIP)
 		}
 	}
 }
