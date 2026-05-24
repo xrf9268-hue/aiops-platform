@@ -232,11 +232,28 @@ poller produces are never claimed.
 
 ### 4.1 Postgres for the legacy pollers
 
+Set a strong `POSTGRES_PASSWORD` in `.env` first — the postgres service
+has no default password and refuses to start without one (#371), and it
+publishes only on host loopback (`127.0.0.1:5432`).
+
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres
 docker compose --env-file .env -f deploy/docker-compose.yml \
   exec postgres psql -U aiops -d aiops -c '\dt'
 ```
+
+> **Migrating an existing volume.** Postgres only applies `POSTGRES_PASSWORD`
+> when it first initializes an empty data directory. A `pgdata` volume created
+> under the old default `aiops` keeps that password, so the pollers' new
+> `PGPASSWORD` would fail to authenticate. The queue volume is disposable, so
+> the simplest path is to recreate it once:
+>
+> ```bash
+> docker compose --env-file .env -f deploy/docker-compose.yml down -v
+> ```
+>
+> To preserve the data instead, rotate the role password in place:
+> `ALTER USER aiops PASSWORD '<new>';` to match the new `POSTGRES_PASSWORD`.
 
 You should see `tasks` and `task_events`. The compose file mounts
 `migrations/` into Postgres's `/docker-entrypoint-initdb.d`, so the
@@ -260,7 +277,8 @@ docker compose --env-file .env -f deploy/docker-compose.yml down -v
 ### 4.2 Linear legacy poller
 
 ```bash
-export DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
+export PGPASSWORD=your-postgres-password   # same value as POSTGRES_PASSWORD in .env
 export LINEAR_API_KEY=your-linear-personal-key
 go run ./cmd/linear-poller examples/WORKFLOW.md
 ```
@@ -276,7 +294,8 @@ For Linear workflows, `tracker.project_slug` in the selected
 ### 4.3 Gitea legacy poller
 
 ```bash
-export DATABASE_URL=postgres://aiops:aiops@localhost:5432/aiops?sslmode=disable
+export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
+export PGPASSWORD=your-postgres-password   # same value as POSTGRES_PASSWORD in .env
 export GITEA_BASE_URL=http://localhost:3000
 export GITEA_TOKEN=your-gitea-bot-token
 go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
