@@ -79,7 +79,7 @@ function ThemeToggle({ theme, onToggle }) {
       onClick={onToggle}
       aria-label={`Switch to ${next} theme`}
       title={`Switch to ${next} theme`}
-      className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-inset border border-line text-muted hover:text-fg transition-colors"
+      className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-inset border border-line text-muted hover:text-fg hover:border-accent-ink/60 transition-colors"
     >
       {theme === 'dark' ? (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -110,33 +110,48 @@ function StateBadge({ value, type = 'default' }) {
   );
 }
 
+// Severity tones escalate beyond a tinted border: warn/danger get a tinted
+// card background + a leading dot so anomalies read as alerts at a glance.
 const METRIC_TONES = {
-  default: { border: 'border-line', value: 'text-fg' },
-  good: { border: 'border-good-line', value: 'text-good' },
-  warn: { border: 'border-warn-line', value: 'text-warn' },
-  danger: { border: 'border-danger-line', value: 'text-danger' },
+  default: { card: 'bg-surface border-line', value: 'text-fg', dot: '' },
+  good: { card: 'bg-surface border-good-line', value: 'text-good', dot: '' },
+  warn: { card: 'bg-warn-bg border-warn-line', value: 'text-warn', dot: 'bg-warn' },
+  danger: { card: 'bg-danger-bg border-danger-line', value: 'text-danger', dot: 'bg-danger' },
 };
 
 function MetricCard({ label, value, hint, tone = 'default', loading = false }) {
-  const toneClass = METRIC_TONES[tone] || METRIC_TONES.default;
+  const t = METRIC_TONES[tone] || METRIC_TONES.default;
   return (
-    <article className={`p-4 rounded-2xl bg-surface border flex flex-col ${toneClass.border}`}>
-      <span className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</span>
+    <article className={`p-4 rounded-2xl border flex flex-col min-w-0 ${t.card}`}>
+      <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted font-display">
+        {t.dot && <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />}
+        {label}
+      </span>
       {loading ? (
         <span className="block my-2 h-8 w-20 rounded bg-muted/20 animate-pulse" aria-hidden="true" />
       ) : (
-        <strong className={`block my-2 text-3xl font-bold tracking-tight ${toneClass.value}`}>{value}</strong>
+        <strong className={`block my-2 text-lg min-[360px]:text-xl min-[400px]:text-2xl sm:text-3xl font-bold tracking-tight tabular-nums leading-tight ${t.value}`}>{value}</strong>
       )}
       <small className="text-muted text-xs">{hint}</small>
     </article>
   );
 }
 
-function Panel({ title, subtitle, children }) {
+// Brand accent for the small rule above each panel title. Neutral panels use
+// the brand orange/blue/green cycle; the bar is decorative chrome — severity is
+// still carried by the status colours inside each panel.
+const PANEL_ACCENTS = {
+  orange: 'bg-accent',
+  blue: 'bg-brand-blue',
+  green: 'bg-brand-green',
+};
+
+function Panel({ title, subtitle, accent = 'orange', children }) {
   return (
     <section className="rounded-2xl bg-surface border border-line p-5 overflow-hidden">
+      <span className={`block h-1 w-8 rounded-full mb-3 ${PANEL_ACCENTS[accent] || PANEL_ACCENTS.orange}`} aria-hidden="true" />
       <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
-        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+        <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
         {subtitle && <span className="text-muted text-sm">{subtitle}</span>}
       </div>
       {children}
@@ -144,23 +159,23 @@ function Panel({ title, subtitle, children }) {
   );
 }
 
-// ResponsiveTable renders a table on md+ screens and a stacked card list on
-// mobile, driven by a single column config so the two views never drift.
+// ResponsiveTable renders a table on lg+ screens and a stacked card list on
+// smaller screens, driven by a single column config so the two never drift.
 function ResponsiveTable({ columns, rows, emptyText }) {
   if (!rows || rows.length === 0) {
-    return <p className="text-center text-faint py-6">{emptyText}</p>;
+    return <p className="text-center text-faint py-6 font-serif">{emptyText}</p>;
   }
   const rowKey = (row, i) => row.issue_id || row.issue_identifier || i;
   return (
     <>
-      <div className="hidden md:block overflow-x-auto">
+      <div className="hidden lg:block overflow-x-auto">
         <table className="w-full border-collapse text-sm min-w-[640px]">
           <thead>
             <tr>
               {columns.map((col) => (
                 <th
                   key={col.header}
-                  className={`text-xs font-semibold uppercase tracking-wider text-muted border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
+                  className={`text-xs font-semibold uppercase tracking-wider text-muted font-display border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
                     col.align === 'right' ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -188,15 +203,15 @@ function ResponsiveTable({ columns, rows, emptyText }) {
         </table>
       </div>
 
-      <ul className="md:hidden flex flex-col gap-3">
+      <ul className="lg:hidden flex flex-col gap-3">
         {rows.map((row, i) => (
           <li key={rowKey(row, i)} className="rounded-xl border border-line bg-inset p-4">
             <div className="mb-3">{columns[0].cell(row)}</div>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
               {columns.slice(1).map((col) => (
                 <div key={col.header} className="flex flex-col min-w-0">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-faint">{col.header}</dt>
-                  <dd className="text-sm text-fg mt-0.5">{col.cell(row)}</dd>
+                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-faint font-display">{col.header}</dt>
+                  <dd className="text-sm text-fg mt-0.5 tabular-nums">{col.cell(row)}</dd>
                 </div>
               ))}
             </dl>
@@ -207,15 +222,19 @@ function ResponsiveTable({ columns, rows, emptyText }) {
   );
 }
 
+// UsageBar fills with consumed fraction (used/limit) and trends toward red as
+// headroom shrinks — the intuitive "filling up toward danger" model.
 function UsageBar({ remaining, limit }) {
   if (remaining === null || limit === null || limit <= 0) return null;
-  const ratio = Math.max(0, Math.min(1, remaining / limit));
+  const used = Math.max(0, Math.min(limit, limit - remaining));
+  const ratio = used / limit;
   const pct = Math.round(ratio * 100);
-  const tone = ratio > 0.5 ? 'bg-good' : ratio > 0.2 ? 'bg-warn' : 'bg-danger';
+  const tone = ratio >= 0.8 ? 'bg-danger' : ratio >= 0.5 ? 'bg-warn' : 'bg-good';
   return (
     <div
       className="mt-2 h-1.5 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"
       role="progressbar"
+      aria-label="quota used"
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
@@ -234,6 +253,11 @@ function RateLimitBucket({ label, bucket }) {
   else if (remaining !== null) headline = `${formatCount(remaining)} left`;
   else if (limit !== null) headline = `limit ${formatCount(limit)}`;
 
+  const usedPct =
+    remaining !== null && limit !== null && limit > 0
+      ? Math.round((Math.max(0, limit - remaining) / limit) * 100)
+      : null;
+
   let reset = null;
   if (bucket) {
     for (const key of ['reset_in_seconds', 'resetInSeconds', 'reset_at', 'resetAt', 'resets_at']) {
@@ -245,12 +269,17 @@ function RateLimitBucket({ label, bucket }) {
     }
   }
 
+  const caption = [usedPct !== null ? `${usedPct}% used` : null, reset].filter(Boolean).join(' · ');
+
   return (
     <div className="rounded-xl bg-inset border border-line p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">{headline}</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted font-display">{label}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
+        {headline}
+        {remaining !== null && limit !== null && <span className="text-xs font-normal text-faint"> remaining</span>}
+      </div>
       <UsageBar remaining={remaining} limit={limit} />
-      {reset && <div className="mt-2 text-xs text-muted">{reset}</div>}
+      {caption && <div className="mt-2 text-xs text-muted tabular-nums">{caption}</div>}
     </div>
   );
 }
@@ -270,7 +299,7 @@ function RateLimits({ rateLimits, loading }) {
     return <div className="h-24 rounded-xl bg-muted/20 animate-pulse" aria-hidden="true" />;
   }
   if (!rateLimits || typeof rateLimits !== 'object') {
-    return <p className="text-faint text-sm py-2">No rate-limit snapshot reported.</p>;
+    return <p className="text-faint text-sm py-2 font-serif">No rate-limit snapshot reported.</p>;
   }
 
   const tier = rateLimits.limit_id || rateLimits.limit_name || 'unknown tier';
@@ -292,12 +321,15 @@ function RateLimits({ rateLimits, loading }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <StateBadge value={tier} type="default" />
+      <div className="flex items-center gap-2 text-sm">
+        <span className="text-muted">Tier</span>
+        <StateBadge value={tier} type="default" />
+      </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <RateLimitBucket label="Primary" bucket={rateLimits.primary} />
         <RateLimitBucket label="Secondary" bucket={rateLimits.secondary} />
         <div className="rounded-xl bg-inset border border-line p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted">Credits</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted font-display">Credits</div>
           <div className={`mt-1 text-lg font-semibold tabular-nums ${credits.tone}`}>{credits.text}</div>
         </div>
       </div>
@@ -411,7 +443,7 @@ export default function App() {
       header: 'Last update',
       cell: (row) => (
         <div className="max-w-[18rem]">
-          <div className="truncate text-fg">{row.last_message || row.last_event || 'n/a'}</div>
+          <div className="line-clamp-2 text-fg">{row.last_message || row.last_event || 'n/a'}</div>
           <div className="text-xs text-faint mt-0.5">{formatDate(row.last_event_at)}</div>
         </div>
       ),
@@ -453,7 +485,7 @@ export default function App() {
     {
       header: 'Error',
       cell: (row) => (
-        <span className="text-danger block max-w-[16rem] truncate" title={row.error || undefined}>
+        <span className="text-danger block max-w-[16rem] line-clamp-2" title={row.error || undefined}>
           {row.error || 'n/a'}
         </span>
       ),
@@ -469,12 +501,20 @@ export default function App() {
         </a>
       ),
     },
-    { header: 'Attempt', align: 'right', cell: (row) => <span className="tabular-nums text-warn">#{formatCount(row.attempt)}</span> },
+    {
+      header: 'Attempt',
+      align: 'right',
+      cell: (row) => (
+        <span className="inline-flex items-center gap-1 tabular-nums text-warn">
+          <span className="w-1.5 h-1.5 rounded-full bg-warn" aria-hidden="true" />#{formatCount(row.attempt)}
+        </span>
+      ),
+    },
     { header: 'Due at', cell: (row) => <span className="text-muted">{formatDate(row.due_at)}</span> },
     {
       header: 'Error',
       cell: (row) => (
-        <span className="text-danger block max-w-[22rem] truncate" title={row.error || undefined}>
+        <span className="text-danger block max-w-[22rem] line-clamp-2" title={row.error || undefined}>
           {row.error || 'n/a'}
         </span>
       ),
@@ -484,15 +524,16 @@ export default function App() {
   return (
     <main className="w-full max-w-[1280px] mx-auto px-4 py-8">
       {/* Hero */}
-      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-7 border border-line-strong rounded-3xl bg-surface shadow-[0_24px_80px_rgba(15,23,42,0.12)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-6 sm:p-7 border border-line-strong rounded-3xl bg-surface shadow-[0_20px_60px_rgba(20,20,19,0.1)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
         <div>
-          <p className="text-accent uppercase text-xs tracking-widest font-bold mb-2">
+          <span className="block h-1.5 w-14 rounded-full bg-accent mb-4" aria-hidden="true" />
+          <p className="text-accent-ink uppercase text-xs tracking-widest font-bold mb-2 font-display">
             aiops-platform
           </p>
           <h1 className="text-4xl sm:text-5xl font-bold tracking-tight leading-none mb-3">
             Operations Dashboard
           </h1>
-          <p className="text-muted max-w-2xl">
+          <p className="text-muted max-w-2xl font-serif">
             Human-readable runtime state from{' '}
             <a href="/api/v1/state">/api/v1/state</a>. Refreshes every{' '}
             {REFRESH_MS / 1000}s.
@@ -545,21 +586,21 @@ export default function App() {
         <MetricCard
           label="Completed"
           value={formatCount(completed)}
-          hint={`Recent window: ${formatCount(counts.completed)}`}
+          hint={`Recent: ${formatCount(counts.completed)}`}
           tone={completed > 0 ? 'good' : 'default'}
           loading={loading}
         />
         <MetricCard
           label="Failed"
           value={formatCount(failed)}
-          hint={`Suppression set: ${formatCount(counts.failed)}`}
+          hint={`Suppressed: ${formatCount(counts.failed)}`}
           tone={failed > 0 ? 'danger' : 'default'}
           loading={loading}
         />
       </section>
 
       {/* Token / runtime metrics row */}
-      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 mb-6">
+      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
         <MetricCard
           label="Total tokens"
           value={formatCount(totals.total_tokens)}
@@ -587,13 +628,13 @@ export default function App() {
       </section>
 
       {/* Rate limits */}
-      <Panel title="Rate limits" subtitle="Latest upstream snapshot">
+      <Panel title="Rate limits" subtitle="Latest upstream snapshot" accent="orange">
         <RateLimits rateLimits={state?.rate_limits} loading={loading} />
       </Panel>
 
       {/* Running sessions */}
       <div className="mt-4">
-        <Panel title="Running sessions" subtitle="Current active issue work">
+        <Panel title="Running sessions" subtitle="Current active issue work" accent="blue">
           <ResponsiveTable
             columns={runningColumns}
             rows={state?.running || []}
@@ -604,7 +645,7 @@ export default function App() {
 
       {/* Blocked sessions */}
       <div className="mt-4">
-        <Panel title="Blocked sessions" subtitle="Operator input and error indicators">
+        <Panel title="Blocked sessions" subtitle="Operator input and error indicators" accent="green">
           <ResponsiveTable
             columns={blockedColumns}
             rows={state?.blocked || []}
@@ -615,7 +656,7 @@ export default function App() {
 
       {/* Retry queue */}
       <div className="mt-4">
-        <Panel title="Retry queue" subtitle="Backoff delays before redispatch">
+        <Panel title="Retry queue" subtitle="Backoff delays before redispatch" accent="orange">
           <ResponsiveTable
             columns={retryColumns}
             rows={state?.retrying || []}
