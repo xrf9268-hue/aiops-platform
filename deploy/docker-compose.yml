@@ -45,7 +45,10 @@ services:
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgres://aiops:${POSTGRES_PASSWORD:-}@postgres:5432/aiops?sslmode=disable
+      # Password is passed via PGPASSWORD (libpq env), not embedded in the
+      # DSN, so a strong password with URL-reserved characters is not mangled.
+      DATABASE_URL: postgres://aiops@postgres:5432/aiops?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
       LINEAR_API_KEY: ${LINEAR_API_KEY}
     volumes:
       - ../examples:/app/examples:ro
@@ -59,7 +62,10 @@ services:
     depends_on:
       - postgres
     environment:
-      DATABASE_URL: postgres://aiops:${POSTGRES_PASSWORD:-}@postgres:5432/aiops?sslmode=disable
+      # Password is passed via PGPASSWORD (libpq env), not embedded in the
+      # DSN, so a strong password with URL-reserved characters is not mangled.
+      DATABASE_URL: postgres://aiops@postgres:5432/aiops?sslmode=disable
+      PGPASSWORD: ${POSTGRES_PASSWORD:-}
       GITEA_BASE_URL: ${GITEA_BASE_URL}
       GITEA_TOKEN: ${GITEA_TOKEN}
     volumes:

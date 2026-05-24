@@ -236,7 +236,8 @@ docker compose --env-file .env -f deploy/docker-compose.yml down -v
 ### 4.2 Linear legacy poller
 
 ```bash
-export DATABASE_URL=postgres://aiops:${POSTGRES_PASSWORD}@localhost:5432/aiops?sslmode=disable
+export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
+export PGPASSWORD="$POSTGRES_PASSWORD"
 export LINEAR_API_KEY=your-linear-personal-key
 go run ./cmd/linear-poller examples/WORKFLOW.md
 ```
@@ -252,7 +253,8 @@ For Linear workflows, `tracker.project_slug` in the selected
 ### 4.3 Gitea legacy poller
 
 ```bash
-export DATABASE_URL=postgres://aiops:${POSTGRES_PASSWORD}@localhost:5432/aiops?sslmode=disable
+export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
+export PGPASSWORD="$POSTGRES_PASSWORD"
 export GITEA_BASE_URL=http://localhost:3000
 export GITEA_TOKEN=your-gitea-bot-token
 go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md

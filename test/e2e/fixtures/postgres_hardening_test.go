@@ -50,9 +50,11 @@ func TestLegacyPostgresBindsLoopbackOnly(t *testing.T) {
 	}
 }
 
-// TestLegacyPollerDBURLsHaveNoHardcodedPassword guards that the poller
-// DATABASE_URLs no longer embed the weak aiops:aiops credentials (#371).
-func TestLegacyPollerDBURLsHaveNoHardcodedPassword(t *testing.T) {
+// TestLegacyPollerDBURLsHaveNoEmbeddedPassword guards that the pollers no
+// longer embed a password in the DSN (#371): the weak aiops password is gone,
+// and the password is supplied via PGPASSWORD (libpq env) so URL-reserved
+// characters in a strong secret are not mangled.
+func TestLegacyPollerDBURLsHaveNoEmbeddedPassword(t *testing.T) {
 	compose := readCompose(t)
 	for _, name := range []string{"linear-poller", "gitea-poller"} {
 		env, ok := service(t, compose, name)["environment"].(map[string]any)
@@ -60,11 +62,18 @@ func TestLegacyPollerDBURLsHaveNoHardcodedPassword(t *testing.T) {
 			t.Fatalf("%s.environment = %#v, want map", name, service(t, compose, name)["environment"])
 		}
 		url, _ := env["DATABASE_URL"].(string)
+		// userinfo must be the bare user with no ":password@" component.
 		if strings.Contains(url, ":aiops@") {
 			t.Errorf("%s DATABASE_URL embeds the hardcoded aiops password: %q", name, url)
 		}
-		if !strings.Contains(url, "POSTGRES_PASSWORD") {
-			t.Errorf("%s DATABASE_URL = %q, want the password sourced from ${POSTGRES_PASSWORD...}", name, url)
+		if at := strings.Index(url, "@"); at >= 0 {
+			if scheme := strings.Index(url, "://"); scheme >= 0 && strings.Contains(url[scheme+3:at], ":") {
+				t.Errorf("%s DATABASE_URL embeds a password in the DSN: %q (use PGPASSWORD)", name, url)
+			}
+		}
+		pgpw, _ := env["PGPASSWORD"].(string)
+		if !strings.Contains(pgpw, "POSTGRES_PASSWORD") {
+			t.Errorf("%s PGPASSWORD = %q, want the password sourced from ${POSTGRES_PASSWORD...}", name, pgpw)
 		}
 	}
 }
