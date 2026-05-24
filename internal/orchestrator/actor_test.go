@@ -326,7 +326,7 @@ func TestScheduleRetry_TimerFireProducesExactlyOneReDispatch(t *testing.T) {
 }
 
 // TestReconcileStalledRunsCancelsWorkerPastTimeout pins SPEC §8.5 Part A:
-// a running entry whose LastCodexAt is older than the configured stall
+// a running entry whose LastEventAt is older than the configured stall
 // budget gets its worker context cancelled, and the finalize path treats
 // the resulting context.Canceled as a normal worker failure (claim
 // retained, retry scheduled), NOT as a reconciled cancel.
@@ -341,10 +341,10 @@ func TestReconcileStalledRunsCancelsWorkerPastTimeout(t *testing.T) {
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	// Force the running entry's LastCodexAt into the past so the stall
+	// Force the running entry's LastEventAt into the past so the stall
 	// budget (100ms) is comfortably exceeded.
 	o.WithStateForTest(func(st *OrchestratorState) {
-		st.Running["STALL-1"].LastCodexAt = time.Now().Add(-10 * time.Second)
+		st.Running["STALL-1"].LastEventAt = time.Now().Add(-10 * time.Second)
 	})
 
 	if err := o.ReconcileStalledRuns(context.Background(), 100, 0); err != nil {
@@ -359,7 +359,7 @@ func TestReconcileStalledRunsCancelsWorkerPastTimeout(t *testing.T) {
 }
 
 // TestReconcileStalledRunsLeavesActiveRunsAlone pins the no-false-positive
-// invariant: an entry with a recent LastCodexAt must not be cancelled
+// invariant: an entry with a recent LastEventAt must not be cancelled
 // even when the stall budget is small.
 func TestReconcileStalledRunsLeavesActiveRunsAlone(t *testing.T) {
 	disp := &fakeDispatcher{}
@@ -373,7 +373,7 @@ func TestReconcileStalledRunsLeavesActiveRunsAlone(t *testing.T) {
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
 	o.WithStateForTest(func(st *OrchestratorState) {
-		st.Running["ACTIVE-1"].LastCodexAt = time.Now()
+		st.Running["ACTIVE-1"].LastEventAt = time.Now()
 	})
 
 	if err := o.ReconcileStalledRuns(context.Background(), 5_000, 0); err != nil {
@@ -382,7 +382,7 @@ func TestReconcileStalledRunsLeavesActiveRunsAlone(t *testing.T) {
 
 	select {
 	case <-disp.contextAt(0).Done():
-		t.Fatal("active worker context was cancelled even though LastCodexAt is recent")
+		t.Fatal("active worker context was cancelled even though LastEventAt is recent")
 	case <-time.After(100 * time.Millisecond):
 		// Expected — context still live.
 	}
@@ -401,10 +401,10 @@ func TestReconcileStalledRunsSkipsWhenTimeoutDisabled(t *testing.T) {
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	// Even with an ancient LastCodexAt, stall detection is a no-op when
+	// Even with an ancient LastEventAt, stall detection is a no-op when
 	// the budget is 0.
 	o.WithStateForTest(func(st *OrchestratorState) {
-		st.Running["OFF-1"].LastCodexAt = time.Now().Add(-10 * time.Second)
+		st.Running["OFF-1"].LastEventAt = time.Now().Add(-10 * time.Second)
 	})
 	if err := o.ReconcileStalledRuns(context.Background(), 0, 0); err != nil {
 		t.Fatalf("ReconcileStalledRuns: %v", err)
@@ -935,8 +935,8 @@ func TestRecordRuntimeEventUpdatesCodexTotalsAndRateLimits(t *testing.T) {
 	if view.CodexTotals.InputTokens != 11 || view.CodexTotals.OutputTokens != 13 || view.CodexTotals.TotalTokens != 24 {
 		t.Fatalf("CodexTotals = %+v, want cumulative absolute telemetry totals", view.CodexTotals)
 	}
-	if len(view.Running) != 1 || view.Running[0].LastCodexAt.IsZero() {
-		t.Fatalf("Running LastCodexAt not updated from runtime event: %+v", view.Running)
+	if len(view.Running) != 1 || view.Running[0].LastEventAt.IsZero() {
+		t.Fatalf("Running LastEventAt not updated from runtime event: %+v", view.Running)
 	}
 	if view.CodexRateLimits == nil {
 		t.Fatal("CodexRateLimits = nil, want latest rate_limits payload")

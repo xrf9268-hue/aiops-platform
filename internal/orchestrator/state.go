@@ -112,7 +112,7 @@ type RunningEntry struct {
 	Workspace           Workspace
 
 	Session     LiveSession
-	LastCodexAt time.Time // SPEC §8.5 Part A input (D14)
+	LastEventAt time.Time // SPEC §8.5 Part A input (D14)
 	// LastCodexEvent is the most-recent runtime event kind (e.g.
 	// "turn_completed", "notification") folded from the worker's runtime
 	// event stream; SPEC §13.7.2 surfaces it as `last_event`.
@@ -153,7 +153,7 @@ type BlockedEntry struct {
 	BlockedAt   time.Time
 	Workspace   Workspace
 	Session     LiveSession
-	LastCodexAt time.Time
+	LastEventAt time.Time
 	Method      string
 	Error       string
 }
@@ -544,7 +544,7 @@ func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt ti
 		BlockedAt:   blockedAt,
 		Workspace:   run.Workspace,
 		Session:     run.Session,
-		LastCodexAt: run.LastCodexAt,
+		LastEventAt: run.LastEventAt,
 		Method:      run.InputRequiredMethod,
 		Error:       runErr,
 	}
@@ -684,7 +684,7 @@ type RunningView struct {
 	LastEvent         string
 	LastMessage       string
 	StartedAt         time.Time
-	LastCodexAt       time.Time
+	LastEventAt       time.Time
 	RetryAttempt      *int
 	WorkspacePath     string
 	Tokens            TokensView
@@ -708,7 +708,7 @@ type BlockedView struct {
 	BlockedAt         time.Time
 	WorkspacePath     string
 	SessionID         string
-	LastCodexAt       time.Time
+	LastEventAt       time.Time
 	Method            string
 	Error             string
 	CodexAppServerPID int
@@ -794,7 +794,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 			LastEvent:     r.LastCodexEvent,
 			LastMessage:   r.LastCodexMessage,
 			StartedAt:     r.StartedAt,
-			LastCodexAt:   r.LastCodexAt,
+			LastEventAt:   r.LastEventAt,
 			RetryAttempt:  retryAttempt,
 			WorkspacePath: r.Workspace.Path,
 			Tokens: TokensView{
@@ -813,7 +813,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 			BlockedAt:         b.BlockedAt,
 			WorkspacePath:     b.Workspace.Path,
 			SessionID:         b.Session.SessionID,
-			LastCodexAt:       b.LastCodexAt,
+			LastEventAt:       b.LastEventAt,
 			Method:            b.Method,
 			Error:             b.Error,
 			CodexAppServerPID: b.Session.CodexAppServerPID,

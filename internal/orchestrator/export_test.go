@@ -3,7 +3,7 @@ package orchestrator
 import "context"
 
 // WithStateForTest runs fn against OrchestratorState on the actor goroutine.
-// Test-only helper for surgical mutations (e.g. backdating LastCodexAt to
+// Test-only helper for surgical mutations (e.g. backdating LastEventAt to
 // trigger a stall reconciliation without sleeping for the full budget).
 // Production code must go through the typed op surface.
 func (o *Orchestrator) WithStateForTest(fn func(*OrchestratorState)) {

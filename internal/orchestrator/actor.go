@@ -649,7 +649,7 @@ func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID ma
 
 // ReconcileStalledRuns implements SPEC §8.5 Part A / §16.3
 // reconcile_stalled_runs: for each running issue compute elapsed time
-// since the last observed runtime event (RunningEntry.LastCodexAt,
+// since the last observed runtime event (RunningEntry.LastEventAt,
 // falling back to StartedAt before any event has been seen) and, if it
 // exceeds stallTimeoutMs, cancel the worker so the finalize path
 // schedules a retry. stallTimeoutMs <= 0 skips detection entirely (SPEC
@@ -658,7 +658,7 @@ func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID ma
 // The Codex app-server runner has its own self-stall detection; this
 // orchestrator-side path closes the gap when the runner goroutine itself
 // wedges or when a non-Codex runner (mock, codex exec) produces no
-// StallError. Without this an issue with `LastCodexAt` long in the past
+// StallError. Without this an issue with `LastEventAt` long in the past
 // would stay claimed forever.
 //
 // wait is the per-tick budget for waiting on cancelled worker
@@ -921,7 +921,7 @@ func (r *runningRetryingAndBlockedIssueIDsOp) apply(st *OrchestratorState) func(
 }
 
 // reconcileStalledRunsOp is the actor-side handler for SPEC §8.5 Part A.
-// It scans st.Running for entries whose LastCodexAt (or StartedAt when no
+// It scans st.Running for entries whose LastEventAt (or StartedAt when no
 // runtime event has been observed yet) is older than the configured
 // stall budget and cancels the worker. The entry stays Claimed: the
 // finalize op observes the canceled ctx as a worker failure and schedules
@@ -936,7 +936,7 @@ type reconcileStalledRunsOp struct {
 func (r *reconcileStalledRunsOp) apply(st *OrchestratorState) func() {
 	var canceled []*RunningEntry
 	for id, run := range st.Running {
-		ref := run.LastCodexAt
+		ref := run.LastEventAt
 		if ref.IsZero() {
 			ref = run.StartedAt
 		}

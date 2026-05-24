@@ -959,8 +959,8 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		startedAt = &v
 	}
 	var lastEventAt *time.Time
-	if !row.LastCodexAt.IsZero() {
-		v := row.LastCodexAt
+	if !row.LastEventAt.IsZero() {
+		v := row.LastEventAt
 		lastEventAt = &v
 	}
 	return apiStateRunning{
@@ -1044,8 +1044,8 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			blockedAt = &v
 		}
 		var lastEventAt *time.Time
-		if !row.LastCodexAt.IsZero() {
-			v := row.LastCodexAt
+		if !row.LastEventAt.IsZero() {
+			v := row.LastEventAt
 			lastEventAt = &v
 		}
 		blocked = append(blocked, apiStateBlocked{

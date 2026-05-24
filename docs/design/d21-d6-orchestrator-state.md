@@ -120,7 +120,7 @@ type RunningEntry struct {
 
     // §4.1.6 live-session fields, populated by D1's app-server client.
     Session     LiveSession
-    LastCodexAt time.Time                              // §8.5 Part A input (D14)
+    LastEventAt time.Time                              // §8.5 Part A input (D14)
 
     // Handles for reconciliation termination (§8.5 Part B).
     CancelWorker context.CancelFunc
@@ -156,7 +156,7 @@ client can fill them without another type churn.
 | Reconciliation: tracker state terminal (§8.5 Part B) | `CancelWorker()`; workspace cleanup queued; `Claimed[id]` + `RetryAttempts[id]` removed |
 | Reconciliation: tracker state non-active, non-terminal (§8.5 Part B) | `CancelWorker()` without workspace cleanup; `Claimed[id]` removed |
 | Stall detected (§8.5 Part A) | `CancelWorker()`; treated as abnormal exit. **Deferred to D14**; hook is no-op here. |
-| Codex update event (§7.3) | `Running[id].LastCodexAt = now()`; tokens / rate-limit updated. **Deferred to D1**; channel exists, no producer yet. |
+| Codex update event (§7.3) | `Running[id].LastEventAt = now()`; tokens / rate-limit updated. **Deferred to D1**; channel exists, no producer yet. |
 
 `Completed` is bookkeeping only per §4.1.8 — never read for dispatch gating.
 

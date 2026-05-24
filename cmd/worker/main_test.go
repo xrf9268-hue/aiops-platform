@@ -86,7 +86,7 @@ func TestApiRunningRowEmitsLastEventAt(t *testing.T) {
 	row := apiRunningFromView(orchestrator.RunningView{
 		IssueID:     "issue-1",
 		Identifier:  "ENG-1",
-		LastCodexAt: lastEvent,
+		LastEventAt: lastEvent,
 	})
 	raw, err := json.Marshal(row)
 	if err != nil {

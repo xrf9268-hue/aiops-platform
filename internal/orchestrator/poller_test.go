@@ -988,7 +988,7 @@ func TestPollOnceContinuesReconciliationWhenStalledRunCleanupTimesOut(t *testing
 	// dispatcher never closes its done channel, so the cancel-wait times
 	// out with context.DeadlineExceeded.
 	orch.WithStateForTest(func(st *OrchestratorState) {
-		st.Running["wedged"].LastCodexAt = time.Now().Add(-10 * time.Second)
+		st.Running["wedged"].LastEventAt = time.Now().Add(-10 * time.Second)
 	})
 
 	// Move the unrelated "movable" run to Cancelled. Part B must still
