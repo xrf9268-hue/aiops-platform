@@ -116,6 +116,9 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.25"
+          # Always resolve the newest 1.25.x rather than a stale cached patch,
+          # so govulncheck evaluates against an up-to-date standard library.
+          check-latest: true
           cache: true
           cache-dependency-path: |
             go.mod

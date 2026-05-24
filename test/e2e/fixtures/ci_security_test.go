@@ -48,6 +48,11 @@ func TestCIActionsArePinnedToSHA(t *testing.T) {
 	}
 	for _, m := range matches {
 		ref := m[1]
+		// Local actions / reusable workflows (e.g. ./.github/workflows/x.yml)
+		// have no @ref and are not a third-party supply-chain pin concern.
+		if strings.HasPrefix(ref, "./") {
+			continue
+		}
 		at := strings.LastIndex(ref, "@")
 		if at < 0 {
 			t.Errorf("action %q is not version-pinned", ref)
