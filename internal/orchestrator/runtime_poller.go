@@ -166,6 +166,12 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	}
 	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates}
 	p.orchestrator.SetCandidateLister(retryLister)
+	// The candidate lister above is active-only, so a fired failure-retry whose
+	// issue moved to a terminal state sees found==nil — indistinguishable there
+	// from a deleted issue. Give the retry-fire path the same state reader and
+	// terminal set the reconcile pass uses so its found==nil branch can clean a
+	// terminal workspace through the §18.1 seam instead of leaking it (#341).
+	p.orchestrator.SetRetryTerminalStateResolver(multiLister, snap.Reconciliation.TerminalStates)
 	return poller, nil
 }
 
