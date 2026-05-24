@@ -1797,6 +1797,10 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			}
 			msg := "clean continuation budget exhausted after " + strconv.Itoa(f.o.maxTurns) + " turns while tracker issue remained active"
 			st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
+			// SPEC §13.1: the failed outcome must be expressible on stderr,
+			// not only in the in-memory recent_events ring. Operators tailing
+			// stderr otherwise see a run of "Succeeded" lines then silence.
+			log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=continuation_budget_exhausted budget=%d", f.id, f.identifier, f.o.maxTurns)
 			close(f.done)
 			return nil
 		}
@@ -1829,6 +1833,8 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 			return nil
 		}
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: f.result.Err.Error()})
+		// SPEC §13.1 failed outcome on stderr (see continuation-budget site).
+		log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=non_retryable_runner_error error=%q", f.id, f.identifier, f.result.Err.Error())
 		close(f.done)
 		return nil
 	}
@@ -1871,6 +1877,8 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		}
 		msg := "failure retry budget exhausted after " + strconv.Itoa(f.o.maxFailureRetries) + " retries: " + runErr
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
+		// SPEC §13.1 failed outcome on stderr (see continuation-budget site).
+		log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=failure_retry_budget_exhausted attempts=%d error=%q", f.id, f.identifier, f.o.maxFailureRetries, runErr)
 		close(f.done)
 		return nil
 	}

@@ -24,6 +24,10 @@ tmp/
 /worker
 /linear-poller
 /gitea-poller
+/tui
+
+# Node / npm
+node_modules/
 
 # Go test artifacts
 coverage.out
