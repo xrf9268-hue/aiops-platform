@@ -82,7 +82,7 @@ orchestrator state:
 
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
-export WORKSPACE_ROOT=$PWD/.aiops/workspaces
+export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear
 export LINEAR_API_KEY=your-linear-personal-key
@@ -103,8 +103,9 @@ go run ./cmd/worker
 
 `WORKFLOW.md` front matter is the source of truth for runtime workspace
 placement: when `workspace.root` is set in the selected workflow, the worker
-creates and reconciles task workspaces under that path. `WORKSPACE_ROOT` is only
-the fallback for workflows that omit `workspace.root`.
+creates and reconciles task workspaces under that path. `AIOPS_WORKSPACE_ROOT`
+(legacy alias: `WORKSPACE_ROOT`) is only the fallback for workflows that omit
+`workspace.root`.
 
 No `DATABASE_URL` or Postgres service is required for `cmd/worker`. Restart
 recovery follows SPEC §14.3: the worker starts with fresh runtime state, cleans

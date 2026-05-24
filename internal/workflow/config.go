@@ -540,12 +540,14 @@ func DefaultConfig() Config {
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
 		// Agent.MaxRetryAttempts is intentionally left nil here so the
-		// "absent" signal survives YAML overlay. The effective default of
-		// one failure retry is supplied by MaxRetryAttemptsValue().
+		// "absent" signal survives YAML overlay. The effective default is
+		// unbounded failure retries (UnboundedRetryBudget), supplied by
+		// MaxRetryAttemptsValue() per SPEC §8.4 / §16.6 (README "unbounded";
+		// DEVIATIONS D29).
 		// Agent.MaxTimeoutRetries is intentionally left nil here so the
 		// "absent" signal survives a YAML unmarshal that overlays this
-		// default. The effective default of 1 retry is supplied by
-		// MaxTimeoutRetriesValue().
+		// default. The effective default is likewise unbounded timeout
+		// requeues (UnboundedRetryBudget), supplied by MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
 			MaxConcurrentAgents: 10,

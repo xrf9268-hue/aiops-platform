@@ -11,7 +11,7 @@ how to prune the cache on a long-running host.
 ```text
 $AIOPS_MIRROR_ROOT/                 # bare mirror cache (one per repo)
   <host>/<owner>/<repo>.git/        # populated by `git clone --bare`
-$WORKSPACE_ROOT/                    # per-task worktrees
+$AIOPS_WORKSPACE_ROOT/                    # per-task worktrees
   <owner>_<repo>/<task-id>/         # populated by `git worktree add`
 ```
 
@@ -25,7 +25,7 @@ $WORKSPACE_ROOT/                    # per-task worktrees
   `git worktree add -B <work-branch> <task-dir> origin/<base-branch>`.
   The worktree shares objects with the mirror via `gitdir` linkage, so
   disk usage is roughly `O(repo)` rather than `O(repo) * O(tasks)`.
-- Each task gets its own directory under `WORKSPACE_ROOT`, so two
+- Each task gets its own directory under `AIOPS_WORKSPACE_ROOT`, so two
   concurrent workers never share a working tree.
 
 ## Workspace reuse across runs (SPEC §9.1 + §9.4)
@@ -109,7 +109,7 @@ just `<workdir>/.git`) — the worker recovers on the next prepare.
 
 | Env var               | Default                                                                 | Purpose                                                  |
 | --------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------- |
-| `WORKSPACE_ROOT`      | _unset_ — falls back to WORKFLOW.md `workspace.root` (SPEC §6.4 default `<system-temp>/symphony_workspaces`) | Where per-task worktrees live.                           |
+| `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`) | _unset_ — falls back to WORKFLOW.md `workspace.root` (SPEC §6.4 default `<system-temp>/symphony_workspaces`) | Where per-task worktrees live.                           |
 | `AIOPS_MIRROR_ROOT`   | `os.UserCacheDir()/aiops-platform/mirrors` (fallback `$TMPDIR/...`)     | Where bare mirror clones are cached.                     |
 
 On Linux containers `os.UserCacheDir()` resolves to `$XDG_CACHE_HOME` or
@@ -190,12 +190,12 @@ events on the next worker boot:
 ```sh
 # Audit (no removals): list workspace components that contain old-style
 # dash separators or lowercase identifiers under the per-issue subtree.
-find "$WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
+find "$AIOPS_WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
 
 # Migrate by wiping the workspace root entirely. The bare mirror cache
 # under $AIOPS_MIRROR_ROOT is untouched, so the next task pays only a
 # fresh worktree-add, not a fresh clone.
-rm -rf "$WORKSPACE_ROOT"/*
+rm -rf "$AIOPS_WORKSPACE_ROOT"/*
 ```
 
 The wipe also removes the `<owner>/<repo>/.aiops-policy-feedback`
@@ -237,7 +237,7 @@ not back-compat-matched and will be reconciled away.
 The worker does **not** automatically delete old worktrees. The
 recommended strategy is age-based pruning, gated on operator preference:
 
-- **Per-task worktrees** (`$WORKSPACE_ROOT/...`): safe to delete once
+- **Per-task worktrees** (`$AIOPS_WORKSPACE_ROOT/...`): safe to delete once
   the corresponding task is `succeeded` or `failed`. Use a 24h-72h
   window for personal use; pick something larger if you frequently
   inspect old runs.
@@ -247,7 +247,7 @@ recommended strategy is age-based pruning, gated on operator preference:
   mirror when you change its upstream URL or the cache disk fills up.
 
 The Go API for cleanup is `(*workspace.Manager).Cleanup(ctx, maxAge)`.
-It walks `$WORKSPACE_ROOT`, deletes each task directory whose mtime
+It walks `$AIOPS_WORKSPACE_ROOT`, deletes each task directory whose mtime
 predates `now - maxAge`, and returns a `CleanupReport` with counts of
 removed/skipped/failed entries. It never touches the mirror cache.
 
@@ -260,7 +260,7 @@ the worker is deployed:
    `workspace.New(root).Cleanup(ctx, 48*time.Hour)`. Suitable for the
    personal daily workflow described in
    [personal-daily-workflow.md](personal-daily-workflow.md).
-2. **Manual**: `rm -rf $WORKSPACE_ROOT/*` between long pauses works in
+2. **Manual**: `rm -rf $AIOPS_WORKSPACE_ROOT/*` between long pauses works in
    a pinch. The next task simply re-creates its worktree from the bare
    mirror, which is fast.
 3. **Future hook**: a follow-up issue may wire `Cleanup` into the
@@ -284,7 +284,7 @@ The two production call sites today are
 after `after_create` hook failure) and
 `internal/worker/reconcile.go::removeWorkspace` (reconcile-driven
 cleanup for closed/cancelled issues). Any new cleanup code that touches
-`$WORKSPACE_ROOT` should call `workspace.SafeRemove` rather than
+`$AIOPS_WORKSPACE_ROOT` should call `workspace.SafeRemove` rather than
 `os.RemoveAll` directly.
 
 ## Troubleshooting
@@ -292,7 +292,7 @@ cleanup for closed/cancelled issues). Any new cleanup code that touches
 - `fatal: '<dir>' is not a working tree` printed during task setup is
   expected on the first prepare for a brand-new task ID and is
   swallowed. If it shows up repeatedly for the same task ID, check
-  whether `$WORKSPACE_ROOT` is on a shared filesystem with a different
+  whether `$AIOPS_WORKSPACE_ROOT` is on a shared filesystem with a different
   worker writing to the same path.
 - If you see `error: cannot lock ref 'refs/heads/<work>'` during
   `worktree add`, run `git -C $AIOPS_MIRROR_ROOT/<host>/<repo>.git
