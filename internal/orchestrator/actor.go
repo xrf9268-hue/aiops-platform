@@ -935,14 +935,18 @@ func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context
 // The 1-based attempt counter is the attempt number this retry will
 // run as (i.e. the prior run was attempt-1, or 0 for first-run).
 func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr)
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, Workspace{})
 }
 
-func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "")
+// scheduleContinuationRetry queues the short SPEC §16.6 wake after a clean
+// turn. workspace carries the finalized run's directory so a continuation
+// whose issue is later seen terminal can be cleaned through the §18.1 seam
+// (#341); pass the finalized RunningEntry.Workspace.
+func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace)
 }
 
-func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string) error {
+func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace) error {
 	op := &scheduleRetryOp{
 		o:          o,
 		issue:      issue,
@@ -951,6 +955,7 @@ func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, i
 		runErr:     runErr,
 		kind:       req.Kind,
 		req:        req,
+		workspace:  workspace,
 	}
 	return o.submit(ctx, op)
 }
@@ -1139,13 +1144,16 @@ type reconcileInactiveTrackerIssuesOp struct {
 
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	// blockedCleanups collects terminal-state blocked entries whose workspace
-	// must be removed now (no live worker holds them, unlike running entries
-	// which defer cleanup to the finalize path). Both paths go through the
+	// terminalCleanups collects terminal-state entries that hold no live worker
+	// — blocked (input-required, stopped executing) and retry-queued (a clean
+	// SPEC §16.5 self-stop finalized the run before scheduling the continuation
+	// retry) — whose workspace must be removed now rather than deferred to the
+	// finalize path the way running entries are. Every path goes through the
 	// same WorkspaceCleaner so before_remove fires and a reconcile_workspace
-	// event is emitted — mirroring upstream reconcile_blocked_issue_state,
-	// which cleans the workspace only on a terminal transition.
-	var blockedCleanups []ReconciledWorkspace
+	// event is emitted — mirroring upstream reconcile_blocked_issue_state and
+	// handle_retry_issue_lookup, which clean the workspace only on a terminal
+	// transition.
+	var terminalCleanups []ReconciledWorkspace
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if !ok {
@@ -1167,9 +1175,21 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
 		cancelEntries = append(cancelEntries, run)
 	}
-	for id := range st.RetryAttempts {
-		if _, ok := r.issuesByID[string(id)]; !ok {
+	for id, retry := range st.RetryAttempts {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok {
 			continue
+		}
+		// Mirror upstream handle_retry_issue_lookup (orchestrator.ex:1082-1100):
+		// a retry whose issue is now terminal cleans its workspace + releases;
+		// a merely-inactive (non-terminal) one releases only, keeping the
+		// directory for possible reuse. The continuation retry carries the
+		// finalized run's workspace (#341); a failure retry without one yields
+		// no path and is released only.
+		if isTerminalTrackerState(issue.State, r.terminalStates) {
+			if w, okw := terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, issue.State); okw {
+				terminalCleanups = append(terminalCleanups, w)
+			}
 		}
 		st.ReleaseClaim(id)
 	}
@@ -1180,7 +1200,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		if isTerminalTrackerState(issue.State, r.terminalStates) {
 			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State); okw {
-				blockedCleanups = append(blockedCleanups, w)
+				terminalCleanups = append(terminalCleanups, w)
 			}
 		}
 		st.ReleaseClaim(id)
@@ -1193,7 +1213,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 				entry.CancelWorker()
 			}
 		}
-		for _, w := range blockedCleanups {
+		for _, w := range terminalCleanups {
 			o.runReconciledWorkspaceCleanup(w)
 		}
 		if result != nil {
@@ -1433,6 +1453,7 @@ type scheduleRetryOp struct {
 	runErr     string
 	kind       RetryKind
 	req        RetryRequest
+	workspace  Workspace
 }
 
 func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
@@ -1454,6 +1475,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		DueAt:      time.Now().Add(delay),
 		Error:      s.runErr,
 		Kind:       s.kind,
+		Workspace:  s.workspace,
 	}
 	entry.Timer = time.AfterFunc(delay, func() {
 		defer recoverPanic("orchestrator.retry_timer")
@@ -1792,6 +1814,13 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		// the tracker state mid-run, and per-state capacity gates must see
 		// the live state, not the dispatch-time snapshot.
 		issue := f.entry.Issue
+		// Carry the finalized run's workspace onto the continuation retry. A
+		// clean exit can be a SPEC §16.5 self-stop (the per-turn refresher saw
+		// the issue leave the active set); if the issue is later observed
+		// terminal while this continuation is queued, the reconcile pass uses
+		// this path to clean the directory through the §18.1 seam instead of
+		// leaking it until the next startup sweep (#341).
+		workspace := f.entry.Workspace
 		st.Claimed[f.id] = struct{}{}
 		st.ClaimedIssues[f.id] = issue
 		close(f.done)
@@ -1803,7 +1832,7 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		o := f.o
 		identifier := f.identifier
 		return func() {
-			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt)
+			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, workspace)
 		}
 	}
 	if f.result.NonRetryable {

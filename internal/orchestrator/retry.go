@@ -34,6 +34,15 @@ type RetryEntry struct {
 	Timer      *time.Timer
 	Error      string
 	Kind       RetryKind
+	// Workspace is the on-disk workspace the prior turn used, carried forward
+	// from the finalized RunningEntry so a continuation retry whose issue is
+	// later observed terminal can route the removal through the same
+	// WorkspaceCleaner seam as the running/blocked paths (SPEC §18.1) instead
+	// of leaking the directory until the next startup sweep (#341). It is empty
+	// for retries scheduled without a recorded workspace (failure retries, or a
+	// run that never recorded one); terminalWorkspaceForCleanup then reports no
+	// path and the entry is released only.
+	Workspace Workspace
 }
 
 // IsDue reports whether the retry's DueAt has passed relative to now.
