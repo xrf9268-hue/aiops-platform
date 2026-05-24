@@ -78,6 +78,66 @@ func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
 	}
 }
 
+// TestApiRunningRowEmitsLastEventAtAliasingLastCodexAt pins the SPEC §13.7.2
+// running-row contract from #328: once a runtime event has been observed the
+// row exposes the spec-canonical `last_event_at` key carrying the same instant
+// as the back-compat `last_codex_at` key. Both share one source so they can
+// never disagree.
+func TestApiRunningRowEmitsLastEventAtAliasingLastCodexAt(t *testing.T) {
+	lastEvent := time.Date(2026, 5, 20, 9, 5, 30, 0, time.UTC)
+	row := apiRunningFromView(orchestrator.RunningView{
+		IssueID:     "issue-1",
+		Identifier:  "ENG-1",
+		LastCodexAt: lastEvent,
+	})
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	lastEventAt, ok := got["last_event_at"].(string)
+	if !ok {
+		t.Fatalf("last_event_at must be present once an event is observed: %s", raw)
+	}
+	lastCodexAt, ok := got["last_codex_at"].(string)
+	if !ok {
+		t.Fatalf("last_codex_at must remain present for back-compat: %s", raw)
+	}
+	if lastEventAt != lastCodexAt {
+		t.Fatalf("last_event_at = %q, last_codex_at = %q, want identical instants", lastEventAt, lastCodexAt)
+	}
+	if want := lastEvent.Format(time.RFC3339); lastEventAt != want {
+		t.Fatalf("last_event_at = %q, want %q (RFC3339 of source)", lastEventAt, want)
+	}
+}
+
+// TestStateResponseSurfacesObservedRateLimits pins the other half of #328:
+// once a rate_limit_updated payload has been recorded, /api/v1/state surfaces
+// it verbatim under the top-level rate_limits key.
+func TestStateResponseSurfacesObservedRateLimits(t *testing.T) {
+	snap := orchestrator.RateLimitSnapshot{"primary": map[string]any{"remaining": float64(42)}}
+	resp := apiStateFromView(orchestrator.StateView{CodexRateLimits: &snap})
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	rateLimits, ok := got["rate_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("rate_limits = %#v, want observed payload object", got["rate_limits"])
+	}
+	primary, ok := rateLimits["primary"].(map[string]any)
+	if !ok || primary["remaining"] != float64(42) {
+		t.Fatalf("rate_limits = %#v, want primary.remaining surfaced verbatim", rateLimits)
+	}
+}
+
 func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	generatedAt := time.Date(2026, 5, 20, 9, 30, 0, 0, time.UTC)
 	view := orchestrator.StateView{
@@ -237,6 +297,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		if _, ok := rowObject["last_codex_at"]; ok {
 			t.Fatalf("zero last_codex_at should be omitted from running row: %#v", rowObject)
 		}
+		if _, ok := rowObject["last_event_at"]; ok {
+			t.Fatalf("zero last_event_at should be omitted from running row: %#v", rowObject)
+		}
 	}
 	rawBlocked, ok := raw["blocked"].([]any)
 	if !ok {
@@ -266,6 +329,16 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		if _, ok := rowObject["due_at"]; ok {
 			t.Fatalf("zero due_at should be omitted from retry row: %#v", rowObject)
 		}
+	}
+	// rate_limits is emitted unconditionally per SPEC §13.7.2 (#328): the
+	// key must be present even when no rate-limit event has been observed,
+	// in which case it serializes to JSON null (not an omitted key).
+	rawRateLimits, ok := raw["rate_limits"]
+	if !ok {
+		t.Fatalf("rate_limits key must be present even when unobserved: %#v", raw)
+	}
+	if rawRateLimits != nil {
+		t.Fatalf("rate_limits = %#v, want null when no rate-limit event observed", rawRateLimits)
 	}
 }
 

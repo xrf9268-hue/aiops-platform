@@ -607,18 +607,23 @@ func optionalStateRefreshFunc(refresh []stateRefreshFunc) stateRefreshFunc {
 }
 
 type apiStateResponse struct {
-	GeneratedAt                time.Time                       `json:"generated_at"`
-	PollIntervalMs             int64                           `json:"poll_interval_ms"`
-	MaxConcurrentAgents        int                             `json:"max_concurrent_agents"`
-	MaxConcurrentAgentsByState map[string]int                  `json:"max_concurrent_agents_by_state,omitempty"`
-	Counts                     apiStateCounts                  `json:"counts"`
-	Running                    []apiStateRunning               `json:"running"`
-	Blocked                    []apiStateBlocked               `json:"blocked"`
-	Retrying                   []apiStateRetry                 `json:"retrying"`
-	Completed                  []orchestrator.IssueID          `json:"completed"`
-	Failed                     []orchestrator.IssueID          `json:"failed"`
-	CodexTotals                apiCodexTotals                  `json:"codex_totals"`
-	RateLimits                 *orchestrator.RateLimitSnapshot `json:"rate_limits,omitempty"`
+	GeneratedAt                time.Time              `json:"generated_at"`
+	PollIntervalMs             int64                  `json:"poll_interval_ms"`
+	MaxConcurrentAgents        int                    `json:"max_concurrent_agents"`
+	MaxConcurrentAgentsByState map[string]int         `json:"max_concurrent_agents_by_state,omitempty"`
+	Counts                     apiStateCounts         `json:"counts"`
+	Running                    []apiStateRunning      `json:"running"`
+	Blocked                    []apiStateBlocked      `json:"blocked"`
+	Retrying                   []apiStateRetry        `json:"retrying"`
+	Completed                  []orchestrator.IssueID `json:"completed"`
+	Failed                     []orchestrator.IssueID `json:"failed"`
+	CodexTotals                apiCodexTotals         `json:"codex_totals"`
+	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
+	// is emitted unconditionally — `null` until a `rate_limit_updated`
+	// notification is observed — so operators can rely on the key always
+	// being present (upstream parity, #328). A nil snapshot marshals to
+	// JSON null, not an omitted key.
+	RateLimits *orchestrator.RateLimitSnapshot `json:"rate_limits"`
 }
 
 type apiCodexTotals struct {
@@ -674,7 +679,12 @@ type apiStateRunning struct {
 	// LastCodexAt is the SPEC §13.7.2 `last_event_at` value; the wire name
 	// `last_codex_at` is preserved for back-compat with existing dashboards
 	// (no fields removed per §13.7 "SHOULD avoid breaking existing fields").
+	// LastEventAt carries the same timestamp under the SPEC §13.7.2-canonical
+	// key so consumers reading the spec name find it (#328); both are emitted
+	// from the one source and are omitempty so a freshly-dispatched run with
+	// no observed event yet emits neither.
 	LastCodexAt       *time.Time       `json:"last_codex_at,omitempty"`
+	LastEventAt       *time.Time       `json:"last_event_at,omitempty"`
 	RetryAttempt      *int             `json:"retry_attempt,omitempty"`
 	WorkspacePath     string           `json:"workspace_path,omitempty"`
 	Tokens            apiRunningTokens `json:"tokens"`
@@ -961,6 +971,14 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		v := row.LastCodexAt
 		lastCodexAt = &v
 	}
+	// last_event_at carries the same instant as last_codex_at under the
+	// SPEC §13.7.2-canonical key. Use a distinct pointer so a consumer
+	// mutating one decoded field cannot reach the other (#328).
+	var lastEventAt *time.Time
+	if lastCodexAt != nil {
+		v := *lastCodexAt
+		lastEventAt = &v
+	}
 	return apiStateRunning{
 		IssueID:       row.IssueID,
 		Identifier:    row.Identifier,
@@ -971,6 +989,7 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		LastMessage:   redactStateAPILastMessage(row.LastMessage),
 		StartedAt:     startedAt,
 		LastCodexAt:   lastCodexAt,
+		LastEventAt:   lastEventAt,
 		RetryAttempt:  copyIntPointer(row.RetryAttempt),
 		WorkspacePath: row.WorkspacePath,
 		Tokens: apiRunningTokens{

@@ -121,6 +121,7 @@ the shape here without updating the handler — or vice versa — fails the buil
       "last_message": "Working on it...",
       "started_at": "2026-05-21T09:09:55Z",
       "last_codex_at": "2026-05-21T09:10:00Z",
+      "last_event_at": "2026-05-21T09:10:00Z",
       "retry_attempt": 1,
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
       "tokens": {
@@ -162,7 +163,7 @@ the shape here without updating the handler — or vice versa — fails the buil
     "total_tokens": 0,
     "seconds_running": 0
   },
-  "rate_limits": {}
+  "rate_limits": null
 }
 ```
 
@@ -210,7 +211,10 @@ Two consequences for dashboard authors:
 - `poll_interval_ms` — current tracker poll interval (SPEC §13.7).
 - `max_concurrent_agents` — global concurrency cap.
 - `max_concurrent_agents_by_state` — optional per-tracker-state cap map; absent when no overrides set.
-- `rate_limits` — optional Codex rate-limit snapshot when one has been observed (omitted otherwise).
+- `rate_limits` — latest Codex rate-limit snapshot (SPEC §13.7.2). Always
+  present: `null` until a `rate_limit_updated` notification is observed, then
+  the payload verbatim. The key is never omitted, so dashboards can bind to it
+  unconditionally.
 
 ### Per-issue running row fields (SPEC §13.7.2)
 
@@ -230,6 +234,9 @@ Each entry in the `running` array follows SPEC §13.7.2:
 - `last_codex_at` — RFC3339 timestamp of the last observed runtime event,
   semantically the SPEC §13.7.2 `last_event_at`. The wire name `last_codex_at`
   is kept for back-compat with existing dashboards.
+- `last_event_at` — the same timestamp under the SPEC §13.7.2-canonical key,
+  emitted alongside `last_codex_at` for spec parity (#328). Like `last_codex_at`
+  it is absent until the runner emits its first event.
 - `retry_attempt` — retry attempt number when the dispatch is a retry; absent
   on the first run (SPEC §4.1.5 first-run semantic).
 - `workspace_path` — absolute path of the per-issue workspace.
