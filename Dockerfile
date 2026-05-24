@@ -14,3 +14,8 @@ COPY --from=build /out/worker /usr/local/bin/worker
 COPY --from=build /out/linear-poller /usr/local/bin/linear-poller
 COPY --from=build /out/gitea-poller /usr/local/bin/gitea-poller
 WORKDIR /app
+# Default to the worker so `docker run <image>` is useful out of the box (#370).
+# CMD (not ENTRYPOINT) keeps it overridable: Compose's `command: ["worker"]`
+# and the poller services' `command: ["linear-poller", ...]` replace it without
+# argument duplication, and `docker run <image> linear-poller ...` still works.
+CMD ["worker"]
