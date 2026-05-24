@@ -1,8 +1,11 @@
 ARG GO_VERSION=1.25
 FROM golang:${GO_VERSION}-bookworm AS build
 WORKDIR /src
-COPY go.mod ./
-RUN go mod download
+# Copy go.sum alongside go.mod so `go mod download` can verify module
+# checksums, and so the cached dependency layer is keyed on both files
+# (matching the CI cache key) — a go.sum-only change now invalidates it (#369).
+COPY go.mod go.sum ./
+RUN go mod download && go mod verify
 COPY . .
 RUN go build -o /out/worker ./cmd/worker
 RUN go build -o /out/linear-poller ./cmd/linear-poller
