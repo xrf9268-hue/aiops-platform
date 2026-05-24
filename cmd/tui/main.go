@@ -180,19 +180,32 @@ func main() {
 
 	scr := newScreen(os.Stdout, isTerminal(os.Stdout), *rawFlag)
 
-	// NotifyContext cancels ctx on SIGINT/SIGTERM, which both breaks the render
-	// loop and aborts any in-flight fetch (the per-fetch context derives from
-	// ctx), so Ctrl-C restores the terminal immediately even mid-poll. The
-	// sibling cmd/ entrypoints use NotifyContext the same way; unlike them, the
-	// TUI re-raises the signal below for a conventional exit status (see run).
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// A second subscription records which signal fired (NotifyContext discards
-	// the value) so it can be re-raised for a conventional exit status.
+	// A single signal subscription drives both shutdown and the exit status.
+	// Using one subscription (rather than signal.NotifyContext plus a second
+	// signal.Notify) avoids a startup race: two independent subscriptions can't
+	// be installed atomically, so a signal landing between them could cancel ctx
+	// without the value reaching the exit-status channel, hanging shutdown.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
+
+	// The first signal cancels ctx — breaking the render loop and aborting any
+	// in-flight fetch (the per-fetch context derives from ctx), so Ctrl-C
+	// restores the terminal immediately even mid-poll. The signal value is
+	// handed to exitSig (buffered, before the cancel) so it can be re-raised for
+	// a conventional exit status.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	exitSig := make(chan os.Signal, 1)
+	go func() {
+		// Channel/cancel only — no panic surface, no external I/O.
+		select {
+		case s := <-sigCh:
+			exitSig <- s
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	fetch := func(ctx context.Context) (*stateResponse, error) {
 		return fetchState(ctx, client, stateURL)
@@ -200,12 +213,15 @@ func main() {
 
 	run(ctx, scr, fetch, interval, baseURL)
 
-	// run returns only once ctx is cancelled, and with a background parent and
-	// stop deferred the sole canceller during the loop is a signal — so a signal
-	// definitely fired and sigCh will receive it (no ordering assumption needed).
-	// run has already restored the terminal; re-raise so we exit with the
-	// conventional 128+signum status (130 for SIGINT) instead of 0.
-	raiseAfterSignal(<-sigCh)
+	// run has already restored the terminal (its deferred restore). On signal
+	// shutdown exitSig holds the value (sent before the cancel that unblocks
+	// run); re-raise it so we exit with the conventional 128+signum status (130
+	// for SIGINT). The non-blocking read guarantees we never hang here.
+	select {
+	case s := <-exitSig:
+		raiseAfterSignal(s)
+	default:
+	}
 }
 
 // raiseAfterSignal restores the default disposition for sig and re-raises it so
