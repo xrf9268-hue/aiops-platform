@@ -30,7 +30,14 @@ type IssueID string
 // workspace.Manager produced and CreatedNow tells reconciliation
 // whether this run created the directory or reused an existing one.
 type Workspace struct {
-	Path       string
+	Path string
+	// Root is the workspace root the Path was created under, captured at
+	// dispatch time. Active-transition cleanup (SPEC §18.1) removes Path via
+	// SafeRemove against this root, not the live workflow snapshot's root, so a
+	// hot-reload of workspace.root between dispatch and terminal reconciliation
+	// cannot make SafeRemove reject the path as escaping root and silently skip
+	// the removal.
+	Root       string
 	Key        string
 	CreatedNow bool
 }

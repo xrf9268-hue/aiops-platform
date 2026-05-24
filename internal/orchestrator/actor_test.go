@@ -1547,13 +1547,18 @@ func (c *recordingWorkspaceCleaner) snapshot() []ReconciledWorkspace {
 // dispatchRunningIssue dispatches issue, waits for the worker spawn, and
 // records its workspace path so the reconcile-cancel cleanup path has a
 // directory to act on.
+// testWorkspaceRoot is the dispatch-time root the helper records for each run,
+// so cleanup tests can assert the captured root (not a live snapshot) reaches
+// the cleaner.
+const testWorkspaceRoot = "/var/aiops/workspaces"
+
 func dispatchRunningIssue(t *testing.T, o *Orchestrator, disp *fakeDispatcher, issue tracker.Issue, wsPath string, wantSpawn int) {
 	t.Helper()
 	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
 		t.Fatalf("RequestDispatch %s: %v", issue.ID, err)
 	}
 	waitFor(t, func() bool { return disp.count() == wantSpawn }, time.Second)
-	if err := o.RecordWorkspace(context.Background(), issue.ID, Workspace{Path: wsPath}); err != nil {
+	if err := o.RecordWorkspace(context.Background(), issue.ID, Workspace{Path: wsPath, Root: testWorkspaceRoot}); err != nil {
 		t.Fatalf("RecordWorkspace %s: %v", issue.ID, err)
 	}
 }
@@ -1590,6 +1595,11 @@ func TestReconcileTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
 	got := cleaner.snapshot()[0]
 	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
 		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
+	}
+	// The dispatch-time root must reach the cleaner so removal is checked
+	// against the root the path was created under, not a hot-reloaded one.
+	if got.Root != testWorkspaceRoot {
+		t.Fatalf("cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
 	}
 	view, err := o.Snapshot(context.Background())
 	if err != nil {

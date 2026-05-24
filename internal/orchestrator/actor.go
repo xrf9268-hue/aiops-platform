@@ -73,8 +73,14 @@ type ReconciledWorkspace struct {
 	IssueID    IssueID
 	Identifier string
 	Path       string
-	State      string
-	Reason     string
+	// Root is the workspace root Path was created under (captured at dispatch
+	// time). The cleaner removes Path via SafeRemove against this root, so a
+	// hot-reloaded workspace.root cannot make the removal fail the containment
+	// check and silently skip cleanup. Empty falls back to the live snapshot
+	// root.
+	Root   string
+	State  string
+	Reason string
 }
 
 // WorkspaceCleaner removes a per-issue workspace through the same
@@ -1173,7 +1179,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			continue
 		}
 		if isTerminalTrackerState(issue.State, r.terminalStates) {
-			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, issue.State); okw {
+			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State); okw {
 				blockedCleanups = append(blockedCleanups, w)
 			}
 		}
@@ -1265,7 +1271,7 @@ func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntr
 	if entry == nil || !entry.ReconcileCleanupWorkspace {
 		return nil
 	}
-	w, ok := terminalWorkspaceForCleanup(id, entry.Identifier, entry.Workspace.Path, entry.Issue.State)
+	w, ok := terminalWorkspaceForCleanup(id, entry.Identifier, entry.Workspace.Path, entry.Workspace.Root, entry.Issue.State)
 	if !ok || o.workspaceCleaner == nil {
 		return nil
 	}
@@ -1286,7 +1292,7 @@ func refreshRunningIssue(run *RunningEntry, issue tracker.Issue) {
 // active-transition removal, returning ok=false when there is no workspace
 // path to remove. Shared by the running (finalize) and blocked (immediate)
 // cleanup paths so both label the reconcile_workspace event identically.
-func terminalWorkspaceForCleanup(id IssueID, identifier, path, state string) (ReconciledWorkspace, bool) {
+func terminalWorkspaceForCleanup(id IssueID, identifier, path, root, state string) (ReconciledWorkspace, bool) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return ReconciledWorkspace{}, false
@@ -1295,6 +1301,7 @@ func terminalWorkspaceForCleanup(id IssueID, identifier, path, state string) (Re
 		IssueID:    id,
 		Identifier: identifier,
 		Path:       path,
+		Root:       strings.TrimSpace(root),
 		State:      state,
 		Reason:     "terminal",
 	}, true

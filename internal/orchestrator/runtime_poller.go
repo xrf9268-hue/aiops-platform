@@ -373,7 +373,13 @@ func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, atte
 		},
 		WorkspacePrepared: func(ctx context.Context, issue tracker.Issue, _ task.Task, path string) {
 			if d.orchestrator != nil {
-				_ = d.orchestrator.RecordWorkspace(ctx, issue.ID, Workspace{Path: path})
+				// Capture the root this path was created under so SPEC §18.1
+				// cleanup removes it against the same root even if
+				// workspace.root is hot-reloaded before terminal reconciliation.
+				_ = d.orchestrator.RecordWorkspace(ctx, issue.ID, Workspace{
+					Path: path,
+					Root: worker.EffectiveWorkspaceRoot(d.baseConfig, snap.Workflow.Config),
+				})
 			}
 		},
 	}
@@ -394,8 +400,16 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 	}
 	cfg := d.runtime.Current().Workflow.Config
 	hooks := cfg.WorkspaceHooks()
+	// Prefer the root captured when the path was created; fall back to the live
+	// snapshot root only when it was not recorded (older entry). Using a
+	// hot-reloaded root here would make SafeRemove reject the path as escaping
+	// root and silently skip cleanup (Codex P2).
+	root := strings.TrimSpace(w.Root)
+	if root == "" {
+		root = worker.EffectiveWorkspaceRoot(d.baseConfig, cfg)
+	}
 	if _, err := worker.RemoveIssueWorkspace(ctx, d.emitter, worker.RemoveWorkspaceRequest{
-		WorkspaceRoot:      worker.EffectiveWorkspaceRoot(d.baseConfig, cfg),
+		WorkspaceRoot:      root,
 		TaskID:             "reconcile-active",
 		Path:               w.Path,
 		IssueID:            string(w.IssueID),
