@@ -157,9 +157,12 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.y
 
 The overlay sets `AIOPS_SERVER_HOST=0.0.0.0` (bind all interfaces *inside* the
 container) but publishes only to host loopback (`127.0.0.1:4000:4000`), so the
-trust boundary stays the host loopback. The Host-header guard is spoofable and
-the surface is unauthenticated, so do **not** publish on a routable host
-interface without adding authentication first.
+host trust boundary stays the loopback. It also moves the worker onto a
+dedicated `dashboard` bridge network — off the project default network — so
+sibling containers (e.g. the legacy-queue services) cannot reach `worker:4000`
+and spoof the loopback Host guard. The surface is still unauthenticated, so do
+**not** publish on a routable host interface or attach untrusted containers to
+the dashboard network without adding authentication first.
 
 **Treat the status surface as live agent text even though it binds to loopback.**
 Per SPEC §15.3, each running row's `last_message` is a passthrough of the most

@@ -9,14 +9,27 @@
 #
 # AIOPS_SERVER_HOST=0.0.0.0 binds all interfaces *inside the container* so the
 # published port reaches it, while the port mapping publishes ONLY to host
-# loopback (127.0.0.1). The effective trust boundary therefore stays the host
-# loopback (SPEC §15.3): the dashboard echoes live agent text and carries no
-# authentication, and the in-process loopback Host-header guard is spoofable, so
-# do NOT widen the host side of the mapping to 0.0.0.0 or a routable address
-# without adding real authentication first.
+# loopback (127.0.0.1). The effective host trust boundary therefore stays the
+# loopback (SPEC §15.3).
+#
+# Because a 0.0.0.0 bind is reachable by any sibling container on the same
+# Compose network (which can spoof Host: localhost past the in-process guard),
+# the overlay also moves the worker onto a dedicated `dashboard` network. This
+# removes it from the project default network, so the legacy-queue services
+# (postgres / pollers) — or any other co-located container — cannot reach
+# worker:4000. The network is a normal bridge (not `internal`), so the worker
+# keeps outbound egress for git/tracker traffic. The dashboard is still
+# unauthenticated, so do NOT widen the host side of the mapping to a routable
+# address or attach untrusted containers to the dashboard network.
 services:
   worker:
     environment:
       AIOPS_SERVER_HOST: 0.0.0.0
     ports:
       - "127.0.0.1:4000:4000"
+    networks:
+      - dashboard
+
+networks:
+  dashboard:
+    name: aiops-dashboard

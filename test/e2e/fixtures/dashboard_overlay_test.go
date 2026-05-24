@@ -56,6 +56,36 @@ func TestDashboardOverlayBindsContainerWide(t *testing.T) {
 	}
 }
 
+// TestDashboardOverlayIsolatesWorkerNetwork guards that the overlay moves the
+// worker onto a dedicated non-default network (#366). Because a 0.0.0.0 bind is
+// reachable by sibling containers on a shared Compose network (which can spoof
+// the loopback Host guard), the worker must leave the project default network
+// so co-located services cannot reach the unauthenticated dashboard.
+func TestDashboardOverlayIsolatesWorkerNetwork(t *testing.T) {
+	overlay := readDashboardOverlay(t)
+	worker := service(t, overlay, "worker")
+	nets, ok := worker["networks"].([]any)
+	if !ok || len(nets) == 0 {
+		t.Fatalf("worker.networks = %#v, want non-empty list pinning a dedicated network", worker["networks"])
+	}
+	declared, ok := overlay["networks"].(map[string]any)
+	if !ok || len(declared) == 0 {
+		t.Fatalf("overlay declares no top-level networks: %#v", overlay["networks"])
+	}
+	for _, raw := range nets {
+		name, ok := raw.(string)
+		if !ok {
+			t.Fatalf("network entry %#v is not a string", raw)
+		}
+		if name == "default" {
+			t.Errorf("worker is attached to the default network; a 0.0.0.0 bind would be reachable by sibling services")
+		}
+		if _, isDeclared := declared[name]; !isDeclared {
+			t.Errorf("worker network %q is not declared at the overlay top level", name)
+		}
+	}
+}
+
 // TestDashboardOverlayPublishesToHostLoopbackOnly guards the security property:
 // the host side of every published port must bind loopback, so the dashboard
 // (unauthenticated, SPEC §15.3) is never exposed on a routable host interface.
