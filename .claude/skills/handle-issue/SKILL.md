@@ -59,7 +59,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 
 ### 6. 开 PR + 审查环（关键）
 1. 开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`）。治理/文档类改动**单开 PR**，不要塞进 fix PR。
-2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → 轮询 `gh api repos/<owner>/<repo>/issues/comments/<id> --jq .reactions`。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
+2. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → 轮询它自带的 reactions 计数摘要：`gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`（issue-comment 对象本身就含 `.reactions` 计数摘要，要的是 👀 的计数，不必用单独的 `/reactions` 列举端点）。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后查 `reviewThreads` 有无新的未解决 actionable thread。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
 3. **并行本地审查提速**：同时派 Claude general-purpose subagent + Codex（`codex:codex-rescue`）审 `git diff origin/main...HEAD`，盲审、附 severity + verdict。两者抓不同缺陷类。（注：本环境 codex-rescue 沙箱可能被 bwrap/netns 限制；那就以 stop-time gate + GitHub @codex 为 Codex 信号。）
 4. 每条 finding 归入 ≥1 类（算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试），然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 5. **审查深度匹配 blast radius**：破坏性/并发路径要穷尽对抗式审查；纯增量序列化改动一轮即可。
