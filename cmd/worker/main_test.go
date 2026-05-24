@@ -2103,9 +2103,21 @@ func TestServerHostOverrideFromEnv(t *testing.T) {
 	if got := serverHostOverrideFromEnv(); got == nil || *got != "0.0.0.0" {
 		t.Fatalf("serverHostOverrideFromEnv() = %v, want 0.0.0.0", got)
 	}
+	// Set-but-empty is an explicit override: it must stay non-nil so
+	// `AIOPS_SERVER_HOST=` forces the loopback default over any workflow value.
 	t.Setenv("AIOPS_SERVER_HOST", "")
+	if got := serverHostOverrideFromEnv(); got == nil || *got != "" {
+		t.Fatalf("serverHostOverrideFromEnv() with empty env = %v, want non-nil empty override", got)
+	}
+}
+
+// TestServerHostOverrideUnsetYieldsNil — the unset case must fall through to the
+// workflow value (nil), distinct from the set-but-empty force-loopback case.
+func TestServerHostOverrideUnsetYieldsNil(t *testing.T) {
+	t.Setenv("AIOPS_SERVER_HOST", "x")
+	os.Unsetenv("AIOPS_SERVER_HOST")
 	if got := serverHostOverrideFromEnv(); got != nil {
-		t.Fatalf("serverHostOverrideFromEnv() with empty env = %v, want nil", got)
+		t.Fatalf("serverHostOverrideFromEnv() unset = %v, want nil", got)
 	}
 }
 

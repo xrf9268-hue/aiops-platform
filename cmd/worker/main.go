@@ -170,11 +170,13 @@ func desiredHostForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) 
 }
 
 // serverHostOverrideFromEnv returns the AIOPS_SERVER_HOST override, or nil when
-// the variable is unset or empty so the workflow `server.host` (then the
-// loopback default) still applies.
+// the variable is unset so the workflow `server.host` (then the loopback
+// default) still applies. A set-but-empty value is an explicit override:
+// normalizeServerHost maps it to the safe loopback default, so
+// `AIOPS_SERVER_HOST=` forces loopback even over a workflow `server.host`.
 func serverHostOverrideFromEnv() *string {
 	host, ok := os.LookupEnv("AIOPS_SERVER_HOST")
-	if !ok || host == "" {
+	if !ok {
 		return nil
 	}
 	return &host
