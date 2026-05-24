@@ -1,0 +1,38 @@
+# Opt-in dashboard exposure overlay for Docker Compose.
+#
+# The base docker-compose.yml binds the worker's dashboard/state API to
+# container loopback, which Docker's published ports cannot reach (publishing
+# forwards to the container interface, not its loopback). Merge this overlay to
+# make the dashboard reachable from the host:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.yml up worker
+#
+# AIOPS_SERVER_HOST=0.0.0.0 binds all interfaces *inside the container* so the
+# published port reaches it, while the port mapping publishes ONLY to host
+# loopback (127.0.0.1). The effective host trust boundary therefore stays the
+# loopback (SPEC §15.3).
+#
+# Because a 0.0.0.0 bind is reachable by any sibling container on the same
+# Compose network (which can spoof Host: localhost past the in-process guard),
+# the overlay also moves the worker onto a dedicated `dashboard` network. This
+# removes it from the project default network, so the legacy-queue services
+# (postgres / pollers) — or any other co-located container — cannot reach
+# worker:4000. The network is a normal bridge (not `internal`), so the worker
+# keeps outbound egress for git/tracker traffic. The dashboard is still
+# unauthenticated, so do NOT widen the host side of the mapping to a routable
+# address or attach untrusted containers to the dashboard network.
+services:
+  worker:
+    environment:
+      AIOPS_SERVER_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:4000:4000"
+    networks:
+      - dashboard
+
+# No explicit `name:` — Compose scopes the network to the project
+# (<project>_dashboard). A fixed global name would be shared across separate
+# Compose projects on the same host, letting their containers attach and reach
+# worker:4000, which would defeat the sibling isolation above.
+networks:
+  dashboard: {}

@@ -40,7 +40,8 @@ needs Postgres, it is stale — file an issue.
   - `tracker.kind: gitea` → a Gitea base URL and bot token.
   - `tracker.kind: github` → a GitHub token (`gh auth token` works).
 - A scratch workspace root. `workspace.root` in `WORKFLOW.md` is the
-  source of truth; `WORKSPACE_ROOT` is the fallback when omitted.
+  source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
+  is the fallback when omitted.
 - Optional: Docker and Docker Compose v2, only if you want the
   containerized worker or the legacy compose path.
 - Optional: the Codex CLI installed and on `PATH`, only if you set
@@ -64,10 +65,11 @@ Edit `.env` to fill in only the variables the worker actually reads for
 your tracker kind (see [Prerequisites](#prerequisites)). Never commit
 a real `.env`.
 
-The worker resolves its workflow source from `AIOPS_WORKFLOW_PATH`
-(prefixed) and its fallback workspace root from `WORKSPACE_ROOT`
-(unprefixed). The `.env.example` file documents this naming
-inconsistency; use the names as written there.
+The worker resolves its workflow source from `AIOPS_WORKFLOW_PATH` and
+its fallback workspace root from `AIOPS_WORKSPACE_ROOT`. Worker env vars
+share the `AIOPS_` prefix; the legacy unprefixed forms (`WORKSPACE_ROOT`,
+`MIRROR_ROOT`, `WORKFLOW_PATH`) are still honored as deprecated aliases
+but log a warning at startup. See `.env.example`.
 
 For first-time local testing keep `agent.default: mock` in the
 selected `WORKFLOW.md`. The mock runner produces a deterministic change
@@ -96,7 +98,7 @@ Option A: from source.
 
 ```bash
 export AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
-export WORKSPACE_ROOT=$PWD/.aiops/workspaces
+export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear  (consumed by WORKFLOW.md "api_key: $LINEAR_API_KEY")
 export LINEAR_API_KEY=your-linear-personal-key
@@ -147,6 +149,32 @@ container against your own workflow:
 The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
+
+The worker's loopback dashboard is not reachable from the host under the
+base Compose file. To reach it, merge the opt-in overlay, which binds
+`0.0.0.0` inside the container and publishes only to host loopback
+(`127.0.0.1:4000:4000`):
+
+```bash
+docker compose -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dashboard.yml up worker
+```
+
+See README "Operator surfaces" for the trust-boundary caveats; the
+surface is unauthenticated, so never publish it on a routable host
+interface.
+
+> **Upgrading from a root-running worker image.** The worker now runs as the
+> unprivileged `aiops` user (#365). A `workspaces` named volume created by an
+> older root-running image stays root-owned and the non-root worker cannot
+> write to it, surfacing as permission errors. Workspace contents are
+> disposable per-issue git checkouts, so drop and recreate the volume once
+> after upgrading:
+>
+> ```bash
+> docker compose --env-file .env -f deploy/docker-compose.yml down
+> docker volume rm deploy_workspaces   # name may be <project>_workspaces
+> ```
 
 ## 3. Smoke test
 
@@ -376,7 +404,7 @@ needs to push:
   the configured remote (SSH key, deploy key, or
   `GITEA_TOKEN`/`GITHUB_TOKEN` exported to the agent process).
 - For Docker Compose, the worker container mounts a **dedicated** SSH
-  keypair at `/root/.ssh/id_ed25519` — not your entire `~/.ssh`. Set
+  keypair at `/home/aiops/.ssh/id_ed25519` — not your entire `~/.ssh`. Set
   it up once:
 
   ```bash
@@ -410,7 +438,8 @@ The worker keeps a per-repo bare mirror under `AIOPS_MIRROR_ROOT`
 (default `os.UserCacheDir()/aiops-platform/mirrors`) and creates a
 per-task worktree under the selected workflow's `workspace.root` for
 every claimed task. If `workspace.root` is omitted from `WORKFLOW.md`,
-the worker falls back to `WORKSPACE_ROOT`. This avoids re-cloning on
+the worker falls back to `AIOPS_WORKSPACE_ROOT` (legacy alias
+`WORKSPACE_ROOT`). This avoids re-cloning on
 every retry and lets two tasks run concurrently without sharing a
 working tree. See the dedicated
 [workspace cache runbook](workspace-cache.md) for the on-disk layout,
