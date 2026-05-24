@@ -1610,7 +1610,7 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	activeStates := map[string]struct{}{"ai ready": {}, "rework": {}}
 	if err := o.ReconcileTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
 		active.ID: {ID: active.ID, Identifier: active.Identifier, State: "Rework", Title: active.Title},
-	}, activeStates, time.Second); err != nil {
+	}, activeStates, nil, nil, time.Second); err != nil {
 		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
 	}
 	view, err := o.Snapshot(context.Background())
@@ -1639,6 +1639,187 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	got := cleaner.snapshot()[0]
 	if got.IssueID != IssueID(active.ID) || got.Path != terminalWorkspace || got.Reason != "terminal" || got.State != "Done" {
 		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, active.ID, terminalWorkspace)
+	}
+}
+
+// TestReconcileRoutingTerminalRunFiresActiveWorkspaceCleanup is the #340
+// regression: in routing mode the routing-aware pass cancels (and waits for) a
+// running issue that goes terminal mid-run before the terminal-aware inactive
+// pass would see it, so the SPEC §18.1 active-transition cleanup must be flagged
+// in this pass. Pre-fix the routing pass never set the flag and the workspace
+// lingered until the next startup sweep.
+func TestReconcileRoutingTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-R1", Identifier: "ENG-R1", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-R1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+
+	// Routing pass: the issue is absent from the active set (it went terminal);
+	// refreshedByID carries its terminal state so the cleanup is flagged here.
+	// wait=0 returns before the worker exits; finishAt then drives finalize →
+	// cleanup.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"in progress": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{issue.ID: {ID: issue.ID, State: "Done"}},
+		0); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	got := cleaner.snapshot()[0]
+	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
+	}
+	if got.Root != testWorkspaceRoot {
+		t.Fatalf("cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
+	}
+	view, _ := o.Snapshot(context.Background())
+	if len(view.Running) != 0 {
+		t.Fatalf("running not cleared after terminal cancel: %+v", view.Running)
+	}
+}
+
+// TestReconcileRoutingRouteChangeKeepsWorkspace pins the #340 negative for the
+// running path: a routed run cancelled because its issue moved to a different
+// service (still active, non-terminal) must keep its workspace. A terminal
+// sibling reconciled in the same pass is cleaned and acts as a progress barrier
+// so the single-call assertion is a real negative for the rerouted run.
+func TestReconcileRoutingRouteChangeKeepsWorkspace(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	rerouted := tracker.Issue{ID: "ENG-RC1", Identifier: "ENG-RC1", State: "In Progress", ServiceName: "svc-a"}
+	barrier := tracker.Issue{ID: "ENG-RC2", Identifier: "ENG-RC2", State: "In Progress"}
+	const reroutedPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RC1"
+	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RC2"
+	dispatchRunningIssue(t, o, disp, rerouted, reroutedPath, 1)
+	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
+
+	// rerouted: still active but moved to svc-b → cancelled for route change,
+	// not terminal → keep. barrier: went terminal (absent from active set) →
+	// cleaned, proving both finalizes ran.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{rerouted.ID: {ID: rerouted.ID, Identifier: rerouted.Identifier, State: "In Progress", ServiceName: "svc-b"}},
+		map[string]struct{}{"in progress": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{
+			rerouted.ID: {ID: rerouted.ID, Identifier: rerouted.Identifier, State: "In Progress", ServiceName: "svc-b"},
+			barrier.ID:  {ID: barrier.ID, State: "Done"},
+		},
+		0); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	disp.finishAt(1, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
+		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
+	}
+}
+
+// TestReconcileRoutingTerminalBlockedFiresWorkspaceCleanup is the #340
+// blocked-path regression (scope addendum): in routing mode a blocked entry
+// that goes terminal must be removed through the WorkspaceCleaner (before_remove
+// + reconcile_workspace reason=terminal), not the bare os.RemoveAll the routing
+// pass used pre-fix.
+func TestReconcileRoutingTerminalBlockedFiresWorkspaceCleanup(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-RB1", Identifier: "ENG-RB1", State: "AI Ready"}
+	blockedWorkspace := t.TempDir()
+	blockRunningIssue(t, o, disp, issue, blockedWorkspace, 1)
+
+	// Routing pass: blocked issue went terminal → cleaned via the WorkspaceCleaner.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"ai ready": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{issue.ID: {ID: issue.ID, State: "Done"}},
+		time.Second); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	got := cleaner.snapshot()[0]
+	if got.IssueID != IssueID(issue.ID) || got.Path != blockedWorkspace || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, issue.ID, blockedWorkspace)
+	}
+	if got.Root != testWorkspaceRoot {
+		t.Fatalf("blocked cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
+	}
+	view, _ := o.Snapshot(context.Background())
+	if len(view.Blocked) != 0 {
+		t.Fatalf("blocked not cleared after terminal release: %+v", view.Blocked)
+	}
+}
+
+// TestReconcileRoutingNonTerminalBlockedKeepsWorkspace pins the #340 blocked
+// negative: a routed blocked entry that moves to a non-terminal inactive state
+// must keep its workspace. A terminal sibling cleaned in the same pass proves
+// the pass ran, so the single-call assertion is a real negative for the kept
+// entry. Pre-fix the routing pass removed every released blocked workspace
+// unconditionally (bare os.RemoveAll).
+func TestReconcileRoutingNonTerminalBlockedKeepsWorkspace(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	kept := tracker.Issue{ID: "ENG-NB1", Identifier: "ENG-NB1", State: "AI Ready"}
+	barrier := tracker.Issue{ID: "ENG-NB2", Identifier: "ENG-NB2", State: "AI Ready"}
+	keptWorkspace := t.TempDir()
+	barrierWorkspace := t.TempDir()
+	blockRunningIssue(t, o, disp, kept, keptWorkspace, 1)
+	blockRunningIssue(t, o, disp, barrier, barrierWorkspace, 2)
+
+	// kept → Backlog (non-terminal inactive) must keep its workspace; barrier →
+	// Done is cleaned. Both released blocked workspaces would be removed pre-fix.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"ai ready": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{
+			kept.ID:    {ID: kept.ID, State: "Backlog"},
+			barrier.ID: {ID: barrier.ID, State: "Done"},
+		},
+		time.Second); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierWorkspace {
+		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
 	}
 }
 
@@ -1690,6 +1871,26 @@ func dispatchRunningIssue(t *testing.T, o *Orchestrator, disp *fakeDispatcher, i
 	if err := o.RecordWorkspace(context.Background(), issue.ID, Workspace{Path: wsPath, Root: testWorkspaceRoot}); err != nil {
 		t.Fatalf("RecordWorkspace %s: %v", issue.ID, err)
 	}
+}
+
+// blockRunningIssue dispatches issue, records its workspace, then drives it into
+// the Blocked set via an input-required turn so reconcile-cancel cleanup tests
+// have a blocked entry with a workspace to act on. wantSpawn is the cumulative
+// spawn count (and expected Blocked count) after this call.
+func blockRunningIssue(t *testing.T, o *Orchestrator, disp *fakeDispatcher, issue tracker.Issue, wsPath string, wantSpawn int) {
+	t.Helper()
+	dispatchRunningIssue(t, o, disp, issue, wsPath, wantSpawn)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
+		Event:   task.EventTurnInputRequired,
+		Payload: map[string]any{"method": "item/tool/requestUserInput"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent %s: %v", issue.ID, err)
+	}
+	disp.finishAt(wantSpawn-1, WorkerResult{Err: errors.New("input required"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Blocked) == wantSpawn
+	}, time.Second)
 }
 
 // TestReconcileTerminalRunFiresActiveWorkspaceCleanup is the regression for
