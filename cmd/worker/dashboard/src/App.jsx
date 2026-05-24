@@ -100,13 +100,13 @@ function ThemeToggle({ theme, onToggle }) {
 function Wordmark() {
   return (
     <div className="flex items-center gap-2.5 mb-3">
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-accent text-white shrink-0">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 12 5 6M12 12l7-6M12 12v7" />
-          <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />
-          <circle cx="5" cy="6" r="2" />
-          <circle cx="19" cy="6" r="2" />
-          <circle cx="12" cy="20" r="2" />
+      <span className="inline-flex items-center justify-center w-[30px] h-[30px] rounded-md bg-accent text-white shrink-0">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 12V5M12 12 6 18.5M12 12l6 6.5" />
+          <circle cx="12" cy="12" r="2.9" fill="currentColor" stroke="none" />
+          <circle cx="12" cy="4.5" r="2.3" fill="currentColor" stroke="none" />
+          <circle cx="5.5" cy="19" r="2.3" fill="currentColor" stroke="none" />
+          <circle cx="18.5" cy="19" r="2.3" fill="currentColor" stroke="none" />
         </svg>
       </span>
       <span className="text-accent-ink uppercase text-label tracking-widest font-bold font-display">
@@ -170,7 +170,7 @@ const PANEL_ACCENTS = {
 function Panel({ title, subtitle, accent = 'orange', children }) {
   return (
     <section className="rounded-2xl bg-surface border border-line p-5 overflow-hidden">
-      <span className={`block h-1 w-8 rounded-full mb-3 ${PANEL_ACCENTS[accent] || PANEL_ACCENTS.orange}`} aria-hidden="true" />
+      <span className={`block h-1 w-8 rounded-full mb-2 ${PANEL_ACCENTS[accent] || PANEL_ACCENTS.orange}`} aria-hidden="true" />
       <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
         <h2 className="text-section font-semibold tracking-tight">{title}</h2>
         {subtitle && <span className="text-muted text-sm">{subtitle}</span>}
@@ -245,7 +245,7 @@ function ResponsiveTable({ columns, rows, emptyText }) {
 
 // UsageBar fills with consumed fraction (used/limit) and trends toward red as
 // headroom shrinks — the intuitive "filling up toward danger" model.
-function UsageBar({ remaining, limit }) {
+function UsageBar({ remaining, limit, label = 'quota' }) {
   if (remaining === null || limit === null || limit <= 0) return null;
   const used = Math.max(0, Math.min(limit, limit - remaining));
   const ratio = used / limit;
@@ -255,10 +255,11 @@ function UsageBar({ remaining, limit }) {
     <div
       className="mt-2 h-1.5 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"
       role="progressbar"
-      aria-label="quota used"
+      aria-label={`${label} used`}
       aria-valuenow={pct}
       aria-valuemin={0}
       aria-valuemax={100}
+      aria-valuetext={`${pct}% used`}
     >
       <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />
     </div>
@@ -299,7 +300,7 @@ function RateLimitBucket({ label, bucket }) {
         {headline}
         {remaining !== null && limit !== null && <span className="text-xs font-normal text-faint"> remaining</span>}
       </div>
-      <UsageBar remaining={remaining} limit={limit} />
+      <UsageBar remaining={remaining} limit={limit} label={label} />
       {caption && <div className="mt-2 text-xs text-muted tabular-nums">{caption}</div>}
     </div>
   );
@@ -390,11 +391,13 @@ export default function App() {
   }, []);
 
   // Tick once a second so running-session runtimes count up smoothly instead
-  // of jumping on each 5s data refresh.
+  // of jumping on each 5s data refresh. Only runs while sessions are active.
+  const runningCount = state?.running?.length ?? 0;
   useEffect(() => {
+    if (runningCount === 0) return undefined;
     const tick = window.setInterval(() => setNowTs(Date.now()), 1000);
     return () => window.clearInterval(tick);
-  }, []);
+  }, [runningCount]);
 
   const loading = state === null && !error;
   const totals = state?.codex_totals || {};
@@ -452,7 +455,8 @@ export default function App() {
       header: 'Runtime / turns',
       align: 'right',
       cell: (row) => {
-        const runtimeSecs = row.started_at ? (nowTs - new Date(row.started_at).getTime()) / 1000 : 0;
+        const startedTs = row.started_at ? new Date(row.started_at).getTime() : NaN;
+        const runtimeSecs = Number.isNaN(startedTs) ? 0 : (nowTs - startedTs) / 1000;
         return (
           <span className="tabular-nums text-muted">
             {formatRuntime(runtimeSecs)} / {formatCount(row.turn_count)}
@@ -558,8 +562,9 @@ export default function App() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-2 shrink-0">
-          <div className="flex items-center gap-2" aria-live="polite">
+          <div className="flex items-center gap-2">
             <span
+              aria-live="polite"
               className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${statusStyles[status]}`}
             >
               <span
@@ -585,7 +590,8 @@ export default function App() {
       )}
 
       {/* Metrics row */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
+        <h2 className="sr-only">Session status counts</h2>
         <MetricCard label="Running" value={formatCount(counts.running)} hint="Active sessions" loading={loading} />
         <MetricCard
           label="Retrying"
@@ -619,6 +625,7 @@ export default function App() {
 
       {/* Token / runtime metrics row */}
       <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
+        <h2 className="sr-only">Token and runtime metrics</h2>
         <MetricCard
           label="Total tokens"
           value={formatCount(totals.total_tokens)}

@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Ensure utility classes used only in the static shell aren't purged. */
+@source "../index.html";
+
 /* Self-hosted brand fonts (latin subset, woff2) served from /fonts (public/). */
 @font-face { font-family: "Poppins"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/poppins-400.woff2") format("woff2"); }
 @font-face { font-family: "Poppins"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/poppins-500.woff2") format("woff2"); }
@@ -67,16 +70,16 @@
     --c-line-strong: rgb(20 20 19 / 0.18);
     --c-fg: #1f1e1c;
     --c-muted: #5f5d54;
-    --c-faint: #87857a;
+    --c-faint: #6b695f;
     --c-accent: #d97757;
-    --c-accent-ink: #bd5d3a;
+    --c-accent-ink: #a8492c;
     --c-brand-blue: #6a9bcc;
     --c-brand-green: #788c5d;
 
     --c-good: #047857;
     --c-good-bg: #e7f1ea;
     --c-good-line: rgb(16 185 129 / 0.4);
-    --c-warn: #b45309;
+    --c-warn: #92400e;
     --c-warn-bg: #f6ecda;
     --c-warn-line: rgb(245 158 11 / 0.45);
     --c-danger: #b91c1c;
@@ -88,7 +91,7 @@
     color-scheme: dark;
 
     --c-canvas: #1a1916;
-    --c-surface: rgb(38 37 34 / 0.72);
+    --c-surface: rgb(48 46 42 / 0.82);
     --c-inset: rgb(20 20 19 / 0.5);
     --c-line: rgb(120 118 110 / 0.26);
     --c-line-strong: rgb(176 174 165 / 0.22);
