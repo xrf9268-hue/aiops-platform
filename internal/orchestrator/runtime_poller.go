@@ -394,6 +394,16 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 	}
 	cfg := d.runtime.Current().Workflow.Config
 	hooks := cfg.WorkspaceHooks()
+	var confirmRemove func() bool
+	if d.orchestrator != nil {
+		issueID := w.IssueID
+		confirmRemove = func() bool {
+			// Skip removal if the issue has been re-claimed since it went
+			// terminal: a new run now owns this deterministic workspace path,
+			// and deleting it would destroy the live run's workspace (Codex P1).
+			return !d.orchestrator.IssueClaimedOrUnknown(ctx, issueID)
+		}
+	}
 	if _, err := worker.RemoveIssueWorkspace(ctx, d.emitter, worker.RemoveWorkspaceRequest{
 		WorkspaceRoot:      worker.EffectiveWorkspaceRoot(d.baseConfig, cfg),
 		TaskID:             "reconcile-active",
@@ -405,6 +415,7 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 		BeforeRemoveHook:   hooks.BeforeRemove,
 		HookTimeoutMillis:  hooks.TimeoutMs,
 		HookEnvPassthrough: hooks.EnvPassthrough,
+		ConfirmRemove:      confirmRemove,
 	}); err != nil {
 		log.Printf("event=reconcile_active_workspace_remove_failed issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", w.IssueID, w.Identifier, w.Reason, w.Path, err)
 	}

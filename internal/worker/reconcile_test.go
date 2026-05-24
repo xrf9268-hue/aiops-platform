@@ -751,6 +751,70 @@ func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *
 	}
 }
 
+// TestRemoveIssueWorkspaceConfirmRemoveSkips backs the Codex P1 re-claim
+// guard: when ConfirmRemove reports the workspace must not be removed (the
+// issue was re-claimed), RemoveIssueWorkspace leaves the directory intact and
+// emits no reconcile_workspace remove event. A nil/true ConfirmRemove removes.
+func TestRemoveIssueWorkspaceConfirmRemoveSkips(t *testing.T) {
+	t.Run("skips when re-claimed", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-9")
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		emitter := &fakeEmitter{}
+		removed, err := RemoveIssueWorkspace(context.Background(), emitter, RemoveWorkspaceRequest{
+			WorkspaceRoot: root,
+			TaskID:        "reconcile-active",
+			Path:          path,
+			IssueID:       "issue-9",
+			Identifier:    "LIN-9",
+			State:         "Done",
+			Reason:        "terminal",
+			ConfirmRemove: func() bool { return false },
+		})
+		if err != nil {
+			t.Fatalf("RemoveIssueWorkspace: %v", err)
+		}
+		if removed {
+			t.Fatal("removed=true, want false when ConfirmRemove denies")
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workspace must remain when re-claimed: %v", err)
+		}
+		if got := emitter.byKind(task.EventReconcileWorkspace); len(got) != 0 {
+			t.Fatalf("no reconcile_workspace event expected on skip, got %+v", got)
+		}
+	})
+	t.Run("removes when confirmed", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-10")
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		emitter := &fakeEmitter{}
+		removed, err := RemoveIssueWorkspace(context.Background(), emitter, RemoveWorkspaceRequest{
+			WorkspaceRoot: root,
+			TaskID:        "reconcile-active",
+			Path:          path,
+			IssueID:       "issue-10",
+			Identifier:    "LIN-10",
+			State:         "Done",
+			Reason:        "terminal",
+			ConfirmRemove: func() bool { return true },
+		})
+		if err != nil {
+			t.Fatalf("RemoveIssueWorkspace: %v", err)
+		}
+		if !removed {
+			t.Fatal("removed=false, want true when ConfirmRemove allows")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("workspace should be removed, stat err=%v", err)
+		}
+	})
+}
+
 func mustTime(value string) time.Time {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {

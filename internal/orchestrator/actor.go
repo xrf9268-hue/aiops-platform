@@ -834,6 +834,37 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 	return o.RunningRetryingAndBlockedIssueIDs(ctx)
 }
 
+// IssueClaimedOrUnknown reports whether the issue currently holds a claim
+// (running, blocked, retrying, or a reserved dispatch slot). The
+// reconciled-workspace cleaner consults it just before the destructive remove
+// to skip a workspace whose issue has been re-dispatched since it went
+// terminal — the new run owns the same deterministic path (Codex P1). It
+// returns true conservatively when the actor cannot be reached (shutdown /
+// cancelled ctx) so an indeterminate state never deletes a possibly-live
+// workspace; the startup sweep reclaims it later if it is genuinely terminal.
+func (o *Orchestrator) IssueClaimedOrUnknown(ctx context.Context, id IssueID) bool {
+	reply := make(chan bool, 1)
+	if err := o.submit(ctx, &issueClaimedOp{id: id, result: reply}); err != nil {
+		return true
+	}
+	select {
+	case claimed := <-reply:
+		return claimed
+	case <-ctx.Done():
+		return true
+	}
+}
+
+type issueClaimedOp struct {
+	id     IssueID
+	result chan<- bool
+}
+
+func (o *issueClaimedOp) apply(st *OrchestratorState) func() {
+	o.result <- st.IsClaimed(o.id)
+	return nil
+}
+
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
@@ -1734,24 +1765,21 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		// Capture the cleanup followup before FinishRunReconciledCancelled
 		// drops the entry from state: the worker has now exited, so the
 		// workspace dir is free to remove (SPEC §18.1 active transition).
+		// Done stays tied to worker exit (closed here), so the reconcile wait
+		// keeps its worker_exit_timeout meaning and a slow before_remove hook
+		// cannot surface as a spurious "deadline exceeded" poll error (Codex
+		// P2). Cleanup runs asynchronously, bounded by its own hook timeout;
+		// the re-dispatch data-loss race — a re-opened issue dispatched to the
+		// same deterministic path while cleanup is still running — is prevented
+		// inside the cleaner, which skips removal when the issue has been
+		// re-claimed (Codex P1), rather than by gating the wait on cleanup.
 		cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
-		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) || cleanup == nil {
+		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
 		}
-		// Defer the Done signal until cleanup finishes. ReconcileInactive/
-		// TrackerIssuesAndWait waits on Done, so closing it before
-		// before_remove/SafeRemove complete would let the poll loop free the
-		// deterministic workspace path for re-dispatch while the delayed
-		// cleanup is still running — a re-opened issue could be dispatched to
-		// the same path and have its live workspace deleted (Codex P1).
-		// Upstream removes the workspace before the run is considered
-		// terminated; folding cleanup into Done gives the same ordering.
-		done := f.done
-		return func() {
-			defer close(done)
-			cleanup()
-		}
+		close(f.done)
+		return cleanup
 	}
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
