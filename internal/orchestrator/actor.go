@@ -66,6 +66,36 @@ type Scheduler interface {
 	NextDelay(RetryRequest) time.Duration
 }
 
+// ReconciledWorkspace identifies the per-issue workspace that SPEC §18.1
+// active-transition cleanup removes after a terminal-state run is cancelled
+// and its worker has exited.
+type ReconciledWorkspace struct {
+	IssueID    IssueID
+	Identifier string
+	Path       string
+	State      string
+	Reason     string
+}
+
+// WorkspaceCleaner removes a per-issue workspace through the same
+// before_remove hook → remove → reconcile_workspace event sequence the
+// startup sweep uses (SPEC §18.1). The orchestrator invokes it from the
+// reconcile-cancel finalize path on a followup goroutine — after the worker
+// goroutine has exited — so the directory is no longer in use. A nil cleaner
+// disables active-transition cleanup (unit tests / legacy callers); the
+// startup sweep still reclaims the directory on the next boot.
+type WorkspaceCleaner interface {
+	CleanupReconciledWorkspace(ctx context.Context, w ReconciledWorkspace)
+}
+
+// reconcileWorkspaceCleanupTimeout bounds the post-exit cleanup followup so a
+// wedged before_remove hook cannot pin the followup goroutine forever. The
+// before_remove hook enforces its own per-command timeout; this is the outer
+// guard required of every followup that does external I/O (AGENTS.md
+// "Replicate Elixir's implicit runtime guarantees explicitly in Go"). A
+// package var so tests can shrink it.
+var reconcileWorkspaceCleanupTimeout = 60 * time.Second
+
 // RetryKind identifies whether the retry follows a failed worker run or a
 // clean continuation turn.
 type RetryKind string
@@ -171,6 +201,12 @@ type Deps struct {
 	// poll loop uses; when nil, retry fires dispatch directly from
 	// the cached entry.Issue (legacy behavior, kept for unit tests).
 	CandidateLister ActiveIssueLister
+	// WorkspaceCleaner, when set, removes the workspace of a run that was
+	// cancelled because its issue moved to a terminal tracker state mid-run
+	// (SPEC §18.1 active transition). nil leaves cleanup to the startup
+	// sweep. Production wires the RuntimeDispatcher, which fires before_remove
+	// against the live workflow snapshot's hook config.
+	WorkspaceCleaner WorkspaceCleaner
 }
 
 // Orchestrator is the SPEC §3.1 / §7.4 "single authority" that owns
@@ -203,6 +239,11 @@ type Orchestrator struct {
 	maxTurns               int
 	runnerEnforcesMaxTurns bool
 	retryWake              chan struct{}
+
+	// workspaceCleaner removes the workspace of a terminal-state run after its
+	// worker exits (SPEC §18.1 active transition). nil disables the active
+	// cleanup; the startup sweep still reclaims the directory on next boot.
+	workspaceCleaner WorkspaceCleaner
 
 	// candidateLister supplies the SPEC §16.6 candidate fetch that a
 	// fired failure-retry timer consults before re-dispatching. The
@@ -255,6 +296,7 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 		runnerEnforcesMaxTurns: runnerEnforcesMaxTurns,
 		retryWake:              make(chan struct{}, 1),
 		candidateLister:        deps.CandidateLister,
+		workspaceCleaner:       deps.WorkspaceCleaner,
 		started:                make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
@@ -796,9 +838,15 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
 // partial state listings under pagination caps.
-func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, workerExitTimeout time.Duration) error {
+//
+// terminalStates is the lowercased terminal-state set. A running entry whose
+// refreshed issue sits in a terminal state is flagged for workspace cleanup
+// after its worker exits (SPEC §18.1); a merely-inactive cancel keeps the
+// workspace. Pass an empty set to disable the cleanup gating (every cancel
+// then behaves as inactive — workspace preserved).
+func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, terminalStates map[string]struct{}, workerExitTimeout time.Duration) error {
 	reply := make(chan []*RunningEntry, 1)
-	op := &reconcileInactiveTrackerIssuesOp{issuesByID: issuesByID, result: reply}
+	op := &reconcileInactiveTrackerIssuesOp{issuesByID: issuesByID, terminalStates: terminalStates, result: reply}
 	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
@@ -1016,19 +1064,31 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 }
 
 type reconcileInactiveTrackerIssuesOp struct {
-	issuesByID map[string]tracker.Issue
-	result     chan<- []*RunningEntry
+	issuesByID     map[string]tracker.Issue
+	terminalStates map[string]struct{}
+	result         chan<- []*RunningEntry
 }
 
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
 	var cleanupEntries []workspaceCleanup
 	for id, run := range st.Running {
-		if _, ok := r.issuesByID[string(id)]; !ok {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok {
 			continue
 		}
 		st.ReleaseClaim(id)
 		run.ReconcileCancel = true
+		if isTerminalTrackerState(issue.State, r.terminalStates) {
+			// Terminal transition: refresh the stored issue so the post-exit
+			// cleanup followup labels the reconcile_workspace event with the
+			// terminal state, and flag the entry so finalize fires
+			// before_remove + remove (SPEC §18.1 active transition). A
+			// merely-inactive cancel leaves the flag false and the workspace
+			// intact, matching upstream terminate_running_issue cleanup gating.
+			run.Issue = issue
+			run.ReconcileCleanupWorkspace = true
+		}
 		cancelEntries = append(cancelEntries, run)
 	}
 	for id := range st.RetryAttempts {
@@ -1092,6 +1152,48 @@ func isActiveTrackerState(state string, activeStates map[string]struct{}) bool {
 	}
 	_, ok := activeStates[strings.ToLower(strings.TrimSpace(state))]
 	return ok
+}
+
+// isTerminalTrackerState reports whether state is in the lowercased terminal
+// set. Used by reconciliation to gate SPEC §18.1 workspace cleanup on a
+// terminal transition only (an empty set disables the gating).
+func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bool {
+	if len(terminalStates) == 0 {
+		return false
+	}
+	_, ok := terminalStates[strings.ToLower(strings.TrimSpace(state))]
+	return ok
+}
+
+// reconciledWorkspaceCleanup returns a followup that removes the workspace of
+// a terminal-state run whose worker has now exited (SPEC §18.1 active
+// transition). It returns nil — leaving cleanup to the startup sweep — when
+// the entry was not flagged for terminal cleanup, no cleaner is wired, or the
+// run never recorded a workspace path. The returned func runs on the actor's
+// followup goroutine, off the actor loop, so the before_remove hook and
+// remove cannot block state mutation.
+func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntry) func() {
+	if entry == nil || !entry.ReconcileCleanupWorkspace || o.workspaceCleaner == nil {
+		return nil
+	}
+	path := strings.TrimSpace(entry.Workspace.Path)
+	if path == "" {
+		return nil
+	}
+	w := ReconciledWorkspace{
+		IssueID:    id,
+		Identifier: entry.Identifier,
+		Path:       path,
+		State:      entry.Issue.State,
+		Reason:     "terminal",
+	}
+	cleaner := o.workspaceCleaner
+	runCtx := o.runCtx
+	return func() {
+		ctx, cancel := context.WithTimeout(runCtx, reconcileWorkspaceCleanupTimeout)
+		defer cancel()
+		cleaner.CleanupReconciledWorkspace(ctx, w)
+	}
 }
 
 // dispatchOp is the actor-side half of RequestDispatch: it checks
@@ -1570,12 +1672,16 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		return nil
 	}
 	if f.entry.ReconcileCancel {
+		// Capture the cleanup followup before FinishRunReconciledCancelled
+		// drops the entry from state: the worker has now exited, so the
+		// workspace dir is free to remove (SPEC §18.1 active transition).
+		cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
 		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
 			close(f.done)
 			return nil
 		}
 		close(f.done)
-		return nil
+		return cleanup
 	}
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
