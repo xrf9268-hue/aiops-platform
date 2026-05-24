@@ -180,25 +180,20 @@ func main() {
 
 	scr := newScreen(os.Stdout, isTerminal(os.Stdout), *rawFlag)
 
+	// NotifyContext cancels ctx on SIGINT/SIGTERM, which both breaks the render
+	// loop and aborts any in-flight fetch (the per-fetch context derives from
+	// ctx), so Ctrl-C restores the terminal immediately even mid-poll. This
+	// mirrors the signal handling in the sibling cmd/ entrypoints.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// A second subscription records which signal fired (NotifyContext discards
+	// the value) so it can be re-raised for a conventional exit status. The
+	// runtime delivers to this channel before NotifyContext's goroutine cancels
+	// ctx, so the value is buffered by the time run returns.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
-
-	// Translate the first signal into context cancellation: this both breaks
-	// the render loop and aborts any in-flight fetch (the per-fetch context is
-	// derived from ctx), so Ctrl-C restores the terminal immediately even
-	// mid-poll. The caught signal is handed back for a conventional exit code.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	caught := make(chan os.Signal, 1)
-	go func() {
-		select {
-		case s := <-sigCh:
-			caught <- s
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
 
 	fetch := func(ctx context.Context) (*stateResponse, error) {
 		return fetchState(ctx, client, stateURL)
@@ -207,22 +202,28 @@ func main() {
 	run(ctx, scr, fetch, interval, baseURL)
 
 	// run has already restored the terminal (its deferred restore). If a signal
-	// caused the shutdown, re-raise it under the default handler so we exit with
-	// the conventional 128+signum status (130 for SIGINT) rather than 0.
+	// caused the shutdown, re-raise it so we exit with the conventional
+	// 128+signum status (130 for SIGINT) instead of 0.
 	select {
-	case s := <-caught:
-		signal.Reset(os.Interrupt, syscall.SIGTERM)
-		if p, err := os.FindProcess(os.Getpid()); err == nil {
-			_ = p.Signal(s)
-		}
-		// Safety net if the re-raised signal doesn't terminate the process.
-		time.Sleep(100 * time.Millisecond)
-		if sysSig, ok := s.(syscall.Signal); ok {
-			os.Exit(128 + int(sysSig))
-		}
-		os.Exit(1)
+	case s := <-sigCh:
+		raiseAfterSignal(s)
 	default:
 	}
+}
+
+// raiseAfterSignal restores the default disposition for sig and re-raises it so
+// the process terminates with the conventional 128+signum status, falling back
+// to an explicit os.Exit if the re-raised signal doesn't terminate us.
+func raiseAfterSignal(sig os.Signal) {
+	signal.Reset(os.Interrupt, syscall.SIGTERM)
+	if p, err := os.FindProcess(os.Getpid()); err == nil {
+		_ = p.Signal(sig)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if sysSig, ok := sig.(syscall.Signal); ok {
+		os.Exit(128 + int(sysSig))
+	}
+	os.Exit(1)
 }
 
 // run drives the poll/render loop until ctx is cancelled (signal or otherwise),
@@ -237,6 +238,10 @@ func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateRe
 	var lastTPSSec int64
 
 	drawOnce := func() {
+		// Bound each fetch to the poll interval so a slow/hung worker can't
+		// outlive its tick and stall the next refresh (#356). A fetch that
+		// cannot finish within the interval is surfaced as an "unavailable"
+		// frame rather than blocking the loop.
 		fetchCtx, cancel := context.WithTimeout(ctx, interval)
 		defer cancel()
 
@@ -304,7 +309,6 @@ func (s *screen) enter() {
 }
 
 // restore reverses enter: show cursor, reset attributes, leave alt-screen.
-// It is a no-op outside lifecycle mode and safe to call more than once.
 func (s *screen) restore() {
 	if s.lifecycle {
 		io.WriteString(s.w, ansiShowCursor+ansiReset+ansiAltScreenLeave)
