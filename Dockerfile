@@ -26,16 +26,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # these from .env). See deploy/ssh/README.md.
 ARG AIOPS_UID=1000
 ARG AIOPS_GID=1000
-# Reuse any group/user already holding the requested GID/UID so a host-mapped
-# id (e.g. a low GID that collides with a base-image system group) does not
-# fail the build. HOME is pinned so ssh/git find /home/aiops/.ssh regardless of
-# whether the UID resolves to a preexisting passwd entry. Ownership is set by
-# numeric id for the same reason.
+# A colliding GID is harmless (group identity does not affect ssh key
+# resolution), so reuse an existing group for it. The UID, however, must be
+# unused: OpenSSH resolves ~/.ssh via getpwuid(), so the worker can only find
+# the mounted deploy key when its UID owns /home/aiops. Rather than silently
+# mis-resolve to a system account's home on a UID collision, fail the build
+# with guidance. Host UIDs >=1000 (the documented default and override range)
+# are unused in debian-slim, so the common path always creates aiops cleanly.
 RUN set -eux; \
     if ! getent group "${AIOPS_GID}" >/dev/null; then groupadd --gid "${AIOPS_GID}" aiops; fi; \
-    if ! getent passwd "${AIOPS_UID}" >/dev/null; then \
-        useradd --no-log-init --create-home --home-dir /home/aiops --uid "${AIOPS_UID}" --gid "${AIOPS_GID}" --shell /bin/bash aiops; \
+    if getent passwd "${AIOPS_UID}" >/dev/null; then \
+        echo "AIOPS_UID=${AIOPS_UID} already exists in the base image; pick an unused UID (e.g. your host id -u, normally >=1000) so the worker owns /home/aiops for ssh key resolution" >&2; \
+        exit 1; \
     fi; \
+    useradd --no-log-init --create-home --home-dir /home/aiops --uid "${AIOPS_UID}" --gid "${AIOPS_GID}" --shell /bin/bash aiops; \
     mkdir -p /app /workspaces /home/aiops/.ssh; \
     chown -R "${AIOPS_UID}:${AIOPS_GID}" /app /workspaces /home/aiops; \
     chmod 700 /home/aiops/.ssh

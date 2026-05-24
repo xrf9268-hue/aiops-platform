@@ -30,6 +30,12 @@ AIOPS_UID=1000   # set to `id -u`
 AIOPS_GID=1000   # set to `id -g`
 ```
 
+`AIOPS_UID` must be a UID not already present in the base image — host UIDs
+`>=1000` normally are. The image build fails fast with guidance if the chosen
+UID collides with a system account (ssh resolves `~/.ssh` from the passwd home,
+so the worker UID must own `/home/aiops`). A colliding `AIOPS_GID` is fine; the
+build reuses the existing group.
+
 ## Overrides
 
 Set `AIOPS_SSH_KEY_PATH` and/or `AIOPS_SSH_KNOWN_HOSTS_PATH` in your `.env`
