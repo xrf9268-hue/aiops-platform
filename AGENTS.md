@@ -308,6 +308,7 @@ failure per the "Earned rules" principle above.
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing.
 - **`go mod tidy` must leave `go.mod`/`go.sum` clean**: don't add deps you don't use.
 - **No `t.Parallel()` in tests that touch shared Postgres state** — the queue tests rely on serial execution to assert ordering.
+- **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
 - **Don't mock the database in integration tests** — hit real Postgres (testcontainers or the E2E harness).
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.

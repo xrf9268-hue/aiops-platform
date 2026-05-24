@@ -35,8 +35,12 @@ coverage.out
 # Local Claude Code state (worktrees, plugin cache, transcripts).
 # Project skills under .claude/skills/ are version-controlled per
 # https://code.claude.com/docs/en/skills "Share skills → Project skills".
+# Shared project hooks/settings are version-controlled so web sessions
+# pick them up; everything else under .claude/ stays local.
 .claude/*
 !.claude/skills/
+!.claude/scripts/
+!.claude/settings.json
 
 # Local Codex CLI config (machine/user-specific model + reasoning overrides);
 # never repo policy, so keep it out of version control.
