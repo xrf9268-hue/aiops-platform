@@ -1,13 +1,20 @@
 ---
-description: Take a GitHub issue end-to-end — SPEC/upstream investigation, implement with TDD, then ship to a PR ready for handle-pr / gh-pr-follow-through. Manual invoke only.
+description: Take a tracked GitHub issue in aiops-platform from triage through SPEC/upstream investigation, TDD implementation, and local gates to an open PR, then hand off to handle-pr / gh-pr-follow-through. Use when starting work on an issue here — "处理下一个 issue", "修 #N", "实现这个 issue", "handle issue 331". Manual invoke only. Do NOT use when a PR already exists (use handle-pr / gh-pr-follow-through) or for trivial changes needing no SPEC/upstream investigation.
 argument-hint: "[issue-number]"
 disable-model-invocation: true
 allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *) Bash(gh *)
+metadata:
+  pattern: inversion+pipeline+reviewer
+  phase: issue→PR (hands off to handle-pr / gh-pr-follow-through)
 ---
 
 # Handle Issue #$ARGUMENTS
 
 本仓库是 OpenAI Symphony SPEC 的 Go 端口，SPEC 对齐是硬要求。本 skill 覆盖 **issue → 开 PR** 阶段；PR 之后交给 `handle-pr`（SPEC 对齐审查轮）+ `gh-pr-follow-through`（盯到 merge-ready）。处理 issue #$ARGUMENTS（xrf9268-hue/aiops-platform）按下面流程。
+
+## 何时用 / 不该用
+- **用**：要开始处理本仓库一个已建的 GitHub issue（"处理下一个 issue"、"修 #N"、"实现这个 issue"）。
+- **不该用**：PR 已存在 → 用 `handle-pr` + `gh-pr-follow-through`；无需 SPEC/upstream 调研的琐碎改动；非 GitHub 的 tracker。
 
 ## Upstream 就位
 
@@ -68,6 +75,18 @@ go vet ./... ; go test -race ./... ; go build ./...
 - 销毁性操作用 live snapshot 重算配置（如 workspace root）而非用创建时捕获的值 → 热重载下静默退化。
 - 修复 A 引入缺陷 B（Done-gating → 超时耦合；ConfirmRemove → TOCTOU）：每次「修复」后重新审整条路径。
 - 一个契约在姊妹路径上只兑现一半（running vs blocked；reconcile-poll vs §16.5 self-stop）。
+
+## 示例（两条真实路径）
+**标准路径 — #328（PR #338，一轮过）**：`/api/v1/state` 缺 SPEC §13.7.2 的 `rate_limits` + `last_event_at`。纯增量序列化改动：去掉 `omitempty` 让 `rate_limits` 恒在、新增 spec 名 `last_event_at` 与 back-compat 字段并存；显式标注 `worker_host` 不在范围。一个 commit、一轮 `@codex review` 干净通过、合并。→ 增量改动用最小轮次。
+
+**硬路径 — #331（PR #339，多轮级联）**：running issue mid-run 转终态时未清理 workspace（§18.1）。破坏性 + 并发路径，经历 P1 数据丢失竞态 → P2 超时耦合（前一个修复引入的）→ P2 陈旧标志 → TOCTOU → P2 root 不匹配 的级联，每轮 `@codex review` 抓到新缺陷（含修复引入的）。每个修复配回归 + 变异测试；路由模式与 §16.5 self-stop 两处缺口延后到 #340/#341。→ 破坏性/并发路径要穷尽对抗式审查，且**每个 push 都重新 @codex review**。
+
+## 验证（完成判定）
+- 本地门禁全绿：`gofmt -l` 为空、`go vet`、`go test -race ./...`、`go build ./...`、`go mod tidy` 无改动。
+- 新测试经变异验证（删关键行 FAIL / 恢复 PASS）。
+- PR 最新 head 上 `@codex review` 收敛（👀 消失、无新的未解决 actionable thread）、CI 全绿。
+- issue 的每条 Acceptance criteria 满足或显式延后到 tracked issue。
+- 用户明确许可后才合并。
 
 ## 默认行为
 - 中文回复，简洁；每次只汇报变化，不复述。
