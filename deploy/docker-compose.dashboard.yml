@@ -30,6 +30,9 @@ services:
     networks:
       - dashboard
 
+# No explicit `name:` — Compose scopes the network to the project
+# (<project>_dashboard). A fixed global name would be shared across separate
+# Compose projects on the same host, letting their containers attach and reach
+# worker:4000, which would defeat the sibling isolation above.
 networks:
-  dashboard:
-    name: aiops-dashboard
+  dashboard: {}
