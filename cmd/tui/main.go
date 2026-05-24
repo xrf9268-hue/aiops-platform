@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -205,6 +207,10 @@ func fetchState(client *http.Client, url string) (*stateResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
 	var s stateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
 		return nil, err
@@ -520,11 +526,21 @@ func cell(s string, width int) string {
 func padLeft(s string, width int) string  { return fmt.Sprintf("%*s", width, s) }
 func padRight(s string, width int) string { return fmt.Sprintf("%-*s", width, s) }
 
-// sanitize collapses whitespace and removes control chars (mirrors sanitize_ansi_and_control_bytes).
+// Compiled once at package init — used by sanitize to strip ANSI and control bytes.
+// Mirrors sanitize_ansi_and_control_bytes/1 in status_dashboard.ex.
+var (
+	reCSISeq     = regexp.MustCompile(`\x1B\[[0-9;]*[A-Za-z]`) // CSI sequences e.g. \x1B[31m
+	reEscapeSeq  = regexp.MustCompile(`\x1B.`)                  // any other \x1B + one char
+	reControlByt = regexp.MustCompile(`[\x00-\x1F\x7F]`)        // control bytes incl. \r \n \t
+)
+
+// sanitize strips ANSI escape sequences and control bytes from API-sourced strings
+// before they are printed to the terminal, preventing terminal injection via
+// crafted last_message / error fields.
 func sanitize(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
+	s = reCSISeq.ReplaceAllString(s, "")
+	s = reEscapeSeq.ReplaceAllString(s, "")
+	s = reControlByt.ReplaceAllString(s, "")
 	return strings.Join(strings.Fields(s), " ")
 }
 
