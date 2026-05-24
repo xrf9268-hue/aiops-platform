@@ -17,3 +17,15 @@ func isTerminal(f *os.File) bool {
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
 }
+
+// terminalWidth has no portable live-width query without the TIOCGWINSZ ioctl,
+// so it reports ok=false and callers fall back to the COLUMNS env.
+func terminalWidth(*os.File) (int, bool) {
+	return 0, false
+}
+
+// notifyResize is a no-op where SIGWINCH is unavailable (e.g. Windows): there
+// are no resize events to deliver, so the returned stop function does nothing.
+func notifyResize(chan os.Signal) func() {
+	return func() {}
+}

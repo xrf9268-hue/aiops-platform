@@ -224,6 +224,49 @@ func TestFormatResetValue_IntegerGetsSuffix(t *testing.T) {
 	}
 }
 
+// ── terminalColumns precedence (live tty width → COLUMNS → default) ────────────
+// Mirrors :io.columns() precedence: the live terminal width wins, then COLUMNS,
+// then the @default_terminal_columns / computed-default fallbacks. The live
+// width is stubbed because a non-tty test process can't be forced to report one.
+
+func TestTerminalColumns_Precedence(t *testing.T) {
+	orig := liveTerminalWidth
+	t.Cleanup(func() { liveTerminalWidth = orig })
+
+	t.Run("live width preferred over COLUMNS", func(t *testing.T) {
+		t.Setenv("COLUMNS", "200")
+		liveTerminalWidth = func() (int, bool) { return 137, true }
+		if got := terminalColumns(); got != 137 {
+			t.Errorf("terminalColumns() = %d, want 137 (live tty width must win over COLUMNS)", got)
+		}
+	})
+
+	t.Run("COLUMNS used when live width unavailable", func(t *testing.T) {
+		liveTerminalWidth = func() (int, bool) { return 0, false }
+		t.Setenv("COLUMNS", "200")
+		if got := terminalColumns(); got != 200 {
+			t.Errorf("terminalColumns() = %d, want 200 (COLUMNS fallback)", got)
+		}
+	})
+
+	t.Run("invalid COLUMNS falls back to default", func(t *testing.T) {
+		liveTerminalWidth = func() (int, bool) { return 0, false }
+		t.Setenv("COLUMNS", "not-a-number")
+		if got := terminalColumns(); got != defaultTermCols {
+			t.Errorf("terminalColumns() = %d, want %d (@default_terminal_columns)", got, defaultTermCols)
+		}
+	})
+
+	t.Run("computed default when neither live width nor COLUMNS", func(t *testing.T) {
+		liveTerminalWidth = func() (int, bool) { return 0, false }
+		t.Setenv("COLUMNS", "")
+		want := fixedRunningWidth() + chromeWidth + colEventDef
+		if got := terminalColumns(); got != want {
+			t.Errorf("terminalColumns() = %d, want %d (computed default)", got, want)
+		}
+	})
+}
+
 // ── screen lifecycle (alt-screen / cursor / non-TTY degrade) ──────────────────
 
 // On a TTY the per-frame output must stay byte-for-byte identical to upstream:

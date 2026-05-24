@@ -250,7 +250,16 @@ func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateRe
 	var lastTPS float64
 	var lastTPSSec int64
 
-	drawOnce := func() {
+	// Last rendered snapshot, reused by redraw() so a resize reflows the table
+	// at the new width without issuing another fetch.
+	var (
+		haveSnapshot bool
+		lastState    *stateResponse
+		lastErr      error
+		lastNow      time.Time
+	)
+
+	poll := func() {
 		// Bound each fetch to the poll interval so a slow/hung worker can't
 		// outlive its tick and stall the next refresh (#356). A fetch that
 		// cannot finish within the interval is surfaced as an "unavailable"
@@ -274,14 +283,29 @@ func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateRe
 			}
 		}
 
-		content := safeRenderFrame(state, fetchErr, now, lastTPS, baseURL, interval)
-		scr.draw(content)
+		lastState, lastErr, lastNow, haveSnapshot = state, fetchErr, now, true
+		scr.draw(safeRenderFrame(state, fetchErr, now, lastTPS, baseURL, interval))
 	}
 
-	drawOnce()
+	// redraw re-renders the last snapshot at the current terminal width (the
+	// width is re-evaluated inside renderFrame via terminalColumns), so a live
+	// SIGWINCH resize reflows immediately instead of waiting for the next tick.
+	redraw := func() {
+		if !haveSnapshot {
+			return
+		}
+		scr.draw(safeRenderFrame(lastState, lastErr, lastNow, lastTPS, baseURL, interval))
+	}
+
+	poll()
 	if ctx.Err() != nil {
 		return
 	}
+
+	// Reflow on terminal resize (SIGWINCH on unix; a no-op where unavailable).
+	winch := make(chan os.Signal, 1)
+	stopResize := notifyResize(winch)
+	defer stopResize()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -290,7 +314,9 @@ func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateRe
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			drawOnce()
+			poll()
+		case <-winch:
+			redraw()
 		}
 	}
 }
@@ -756,10 +782,25 @@ func statusDotColor(event string) string {
 	}
 }
 
-// terminalColumns mirrors terminal_columns/0 + terminal_columns_from_env/0.
+// liveTerminalWidth resolves the dashboard output's live terminal width. It is a
+// package var so tests can stub the tty query — which can't be forced from a
+// non-tty test process — to exercise the terminalColumns precedence.
+var liveTerminalWidth = func() (int, bool) { return terminalWidth(os.Stdout) }
+
+// terminalColumns mirrors terminal_columns/0: query the live terminal width
+// first (TIOCGWINSZ, the :io.columns() equivalent), then fall back to the
+// COLUMNS-env precedence of terminal_columns_from_env/0.
+func terminalColumns() int {
+	if cols, ok := liveTerminalWidth(); ok {
+		return cols
+	}
+	return terminalColumnsFromEnv()
+}
+
+// terminalColumnsFromEnv mirrors terminal_columns_from_env/0.
 // When COLUMNS is absent: Elixir computes fixed_running_width + chrome + event_default.
 // When COLUMNS is present but invalid: Elixir falls back to @default_terminal_columns (115).
-func terminalColumns() int {
+func terminalColumnsFromEnv() int {
 	s := os.Getenv("COLUMNS")
 	if s == "" {
 		return fixedRunningWidth() + chromeWidth + colEventDef
