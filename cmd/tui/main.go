@@ -180,21 +180,23 @@ func main() {
 
 	scr := newScreen(os.Stdout, isTerminal(os.Stdout), *rawFlag)
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
+	// NotifyContext is the idiomatic modern pattern: the context is cancelled
+	// on SIGINT/SIGTERM, which both breaks the render loop and aborts any
+	// in-flight fetch so Ctrl-C restores the terminal immediately even mid-poll.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	fetch := func(ctx context.Context) (*stateResponse, error) {
 		return fetchState(ctx, client, stateURL)
 	}
 
-	run(scr, fetch, interval, baseURL, sigCh)
+	run(ctx, scr, fetch, interval, baseURL)
 }
 
-// run drives the poll/render loop until a signal arrives on sigCh, restoring
-// terminal state on the way out so an interrupted dashboard never leaves the
-// real terminal in alt-screen / cursor-hidden state.
-func run(scr *screen, fetch func(context.Context) (*stateResponse, error), interval time.Duration, baseURL string, sigCh <-chan os.Signal) {
+// run drives the poll/render loop until ctx is cancelled (signal or otherwise),
+// restoring terminal state on the way out so an interrupted dashboard never
+// leaves the real terminal in alt-screen / cursor-hidden state.
+func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateResponse, error), interval time.Duration, baseURL string) {
 	scr.enter()
 	defer scr.restore()
 
@@ -203,10 +205,15 @@ func run(scr *screen, fetch func(context.Context) (*stateResponse, error), inter
 	var lastTPSSec int64
 
 	drawOnce := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), interval)
+		fetchCtx, cancel := context.WithTimeout(ctx, interval)
 		defer cancel()
 
-		state, fetchErr := fetch(ctx)
+		state, fetchErr := fetch(fetchCtx)
+		// If we're shutting down, don't paint a spurious final (error) frame —
+		// just unwind so the deferred restore runs.
+		if ctx.Err() != nil {
+			return
+		}
 		now := time.Now()
 
 		if fetchErr == nil {
@@ -222,12 +229,15 @@ func run(scr *screen, fetch func(context.Context) (*stateResponse, error), inter
 	}
 
 	drawOnce()
+	if ctx.Err() != nil {
+		return
+	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-sigCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			drawOnce()

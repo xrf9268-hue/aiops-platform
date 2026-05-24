@@ -5,7 +5,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -292,6 +291,8 @@ func TestScreen_RawModeIsParity(t *testing.T) {
 
 // ── signal-driven graceful restore (item 2) ──────────────────────────────────
 
+// run exits and restores the terminal when its context is cancelled — exactly
+// what signal.NotifyContext delivers on SIGINT/SIGTERM.
 func TestRun_RestoresTerminalOnSignal(t *testing.T) {
 	var buf bytes.Buffer
 	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
@@ -300,21 +301,23 @@ func TestRun_RestoresTerminalOnSignal(t *testing.T) {
 		return &stateResponse{MaxConcurrentAgents: 3}, nil
 	}
 
-	sigCh := make(chan os.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		// A long interval keeps the ticker from firing; only the initial
-		// frame is drawn before the signal arrives.
-		run(scr, fetch, time.Hour, "http://example", sigCh)
+		// frame is drawn before the context is cancelled.
+		run(ctx, scr, fetch, time.Hour, "http://example")
 		close(done)
 	}()
 
-	sigCh <- os.Interrupt
+	// Give the initial frame time to render, then simulate the signal.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("run did not return after signal")
+		t.Fatal("run did not return after context cancellation")
 	}
 
 	out := buf.String()
@@ -326,5 +329,46 @@ func TestRun_RestoresTerminalOnSignal(t *testing.T) {
 	}
 	if !strings.Contains(out, "AIOPS STATUS") {
 		t.Errorf("output did not contain a rendered frame: %q", out)
+	}
+}
+
+// A signal arriving mid-fetch must abort the fetch and skip the final frame,
+// so the only control bytes after the last frame are the restore sequence.
+func TestRun_CancelDuringFetchAbortsAndRestores(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fetchStarted := make(chan struct{})
+
+	fetch := func(fctx context.Context) (*stateResponse, error) {
+		close(fetchStarted)
+		// Block until the loop's context is cancelled (the fetchCtx derives
+		// from it), mimicking a slow/hung poll interrupted by Ctrl-C.
+		<-fctx.Done()
+		return nil, fctx.Err()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		run(ctx, scr, fetch, time.Hour, "http://example")
+		close(done)
+	}()
+
+	<-fetchStarted
+	cancel() // signal arrives while the very first fetch is in flight
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after cancellation during fetch")
+	}
+
+	// No frame should have been drawn (fetch never returned a usable state
+	// before cancellation), but the terminal must still be restored.
+	out := buf.String()
+	want := ansiAltScreenEnter + ansiHideCursor + ansiShowCursor + ansiReset + ansiAltScreenLeave
+	if out != want {
+		t.Errorf("output = %q, want enter+restore with no frame (%q)", out, want)
 	}
 }
