@@ -133,7 +133,7 @@ dashboard:
 | Path | Purpose |
 |------|---------|
 | `GET /api/v1/state` | SPEC §13.7 state snapshot (the canonical data source). |
-| `GET /api/v1/refresh` | Forces a state refresh where the runtime supports it. |
+| `POST /api/v1/refresh` | Forces a state refresh where the runtime supports it. Requires the `X-AIOPS-Refresh: true` header; non-POST methods get `405`. |
 | `GET /api/v1/{issue}` | Per-issue debug snapshot — see the [task debugging API runbook](docs/runbooks/task-api.md). |
 | `GET /` | The embedded web dashboard (HTML). |
 | `GET /assets/…` | Static dashboard assets. |
