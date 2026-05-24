@@ -1,21 +1,160 @@
 @import "tailwindcss";
 
+/* Ensure utility classes used only in the static shell aren't purged. */
+@source "../index.html";
+
+/* Self-hosted brand fonts (latin subset, woff2) served from /fonts (public/). */
+@font-face { font-family: "Poppins"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/poppins-400.woff2") format("woff2"); }
+@font-face { font-family: "Poppins"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/poppins-500.woff2") format("woff2"); }
+@font-face { font-family: "Poppins"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/poppins-600.woff2") format("woff2"); }
+@font-face { font-family: "Poppins"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/poppins-700.woff2") format("woff2"); }
+@font-face { font-family: "Lora"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/lora-400.woff2") format("woff2"); }
+
+/* Drive the dark: variant from a .dark class on <html> (Tailwind v4 docs). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Brand typography tokens → font-display / font-serif utilities, plus a
+   modular type scale (≈1.2 ratio) exposed as text-label / text-section /
+   text-h1 / text-display utilities so heading sizes are systematic. */
+@theme {
+  --font-display: "Poppins", Arial, sans-serif;
+  --font-serif: "Lora", Georgia, serif;
+
+  --text-label: 0.75rem;
+  --text-label--line-height: 1rem;
+  --text-section: 1.25rem;
+  --text-section--line-height: 1.75rem;
+  --text-h1: 2.25rem;
+  --text-h1--line-height: 2.5rem;
+  --text-display: 3rem;
+  --text-display--line-height: 1.05;
+}
+
+/* Semantic colour tokens. `inline` makes utilities reference the raw vars at
+   the use site, so redefining them under .dark cascades. Anthropic brand:
+   warm cream / ink neutrals + terracotta accent. accent = decorative fill,
+   accent-ink = text/links (AA-safe on cream). */
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-inset: var(--c-inset);
+  --color-line: var(--c-line);
+  --color-line-strong: var(--c-line-strong);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+  --color-accent: var(--c-accent);
+  --color-accent-ink: var(--c-accent-ink);
+  --color-brand-blue: var(--c-brand-blue);
+  --color-brand-green: var(--c-brand-green);
+
+  --color-good: var(--c-good);
+  --color-good-bg: var(--c-good-bg);
+  --color-good-line: var(--c-good-line);
+  --color-warn: var(--c-warn);
+  --color-warn-bg: var(--c-warn-bg);
+  --color-warn-line: var(--c-warn-line);
+  --color-danger: var(--c-danger);
+  --color-danger-bg: var(--c-danger-bg);
+  --color-danger-line: var(--c-danger-line);
+}
+
 @layer base {
   :root {
+    color-scheme: light;
+
+    --c-canvas: #f0ede4;
+    --c-surface: #faf9f5;
+    --c-inset: #e8e6dc;
+    --c-line: rgb(20 20 19 / 0.1);
+    --c-line-strong: rgb(20 20 19 / 0.18);
+    --c-fg: #1f1e1c;
+    --c-muted: #5f5d54;
+    --c-faint: #6b695f;
+    --c-accent: #d97757;
+    --c-accent-ink: #a8492c;
+    --c-brand-blue: #6a9bcc;
+    --c-brand-green: #788c5d;
+
+    --c-good: #047857;
+    --c-good-bg: #e7f1ea;
+    --c-good-line: rgb(16 185 129 / 0.4);
+    --c-warn: #92400e;
+    --c-warn-bg: #f6ecda;
+    --c-warn-line: rgb(245 158 11 / 0.45);
+    --c-danger: #b91c1c;
+    --c-danger-bg: #f6e7e3;
+    --c-danger-line: rgb(239 68 68 / 0.4);
+  }
+
+  :where(.dark) {
     color-scheme: dark;
+
+    --c-canvas: #1a1916;
+    --c-surface: rgb(48 46 42 / 0.82);
+    --c-inset: rgb(20 20 19 / 0.5);
+    --c-line: rgb(120 118 110 / 0.26);
+    --c-line-strong: rgb(176 174 165 / 0.22);
+    --c-fg: #faf9f5;
+    --c-muted: #b0aea5;
+    --c-faint: #8a887e;
+    --c-accent: #d97757;
+    --c-accent-ink: #e89478;
+    --c-brand-blue: #8fb6dd;
+    --c-brand-green: #9cb07d;
+
+    --c-good: #6ee7b7;
+    --c-good-bg: rgb(6 78 59 / 0.38);
+    --c-good-line: rgb(4 120 87 / 0.4);
+    --c-warn: #fcd34d;
+    --c-warn-bg: rgb(120 53 15 / 0.38);
+    --c-warn-line: rgb(180 83 9 / 0.45);
+    --c-danger: #fca5a5;
+    --c-danger-bg: rgb(127 29 29 / 0.38);
+    --c-danger-line: rgb(185 28 28 / 0.45);
   }
 
   body {
-    @apply min-h-screen bg-[#09111f] text-slate-200;
-    background-image: radial-gradient(circle at top left, #193154 0%, #09111f 45%);
+    @apply min-h-screen bg-canvas text-fg;
+    background-image: radial-gradient(circle at top left, #faf6ec 0%, #f0ede4 45%);
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .dark body {
+    background-image: radial-gradient(circle at top left, #2a2723 0%, #1a1916 48%);
+  }
+
+  /* Headings use the brand display face; data/body stay in the default sans. */
+  h1,
+  h2 {
+    font-family: var(--font-display);
   }
 
   a {
-    @apply text-sky-300 hover:text-sky-200 transition-colors;
+    @apply text-accent-ink transition-colors;
+  }
+
+  a:hover {
+    opacity: 0.82;
+    text-decoration: underline;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent-ink ring-offset-2 ring-offset-canvas rounded-sm;
   }
 
   code,
   pre {
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
   }
 }
