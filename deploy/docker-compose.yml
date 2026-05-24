@@ -3,6 +3,12 @@ services:
     build:
       context: ..
     command: ["worker"]
+    # The image runs as the unprivileged aiops user (#365); deny privilege
+    # escalation and drop all Linux capabilities the worker never needs.
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
     environment:
       GITEA_BASE_URL: ${GITEA_BASE_URL}
       GITEA_TOKEN: ${GITEA_TOKEN}
@@ -13,10 +19,10 @@ services:
       - workspaces:/workspaces
       - ../examples:/app/examples:ro
       # Scoped SSH credentials — only the dedicated deploy keypair + its known_hosts
-      # are exposed to the agent process. See deploy/ssh/README.md and
-      # docs/security-posture.md "Docker Compose SSH key isolation".
-      - ${AIOPS_SSH_KEY_PATH:-./ssh/id_ed25519}:/root/.ssh/id_ed25519:ro
-      - ${AIOPS_SSH_KNOWN_HOSTS_PATH:-./ssh/known_hosts}:/root/.ssh/known_hosts:ro
+      # are exposed to the agent process, under the aiops user's home. See
+      # deploy/ssh/README.md and docs/security-posture.md "Docker Compose SSH key isolation".
+      - ${AIOPS_SSH_KEY_PATH:-./ssh/id_ed25519}:/home/aiops/.ssh/id_ed25519:ro
+      - ${AIOPS_SSH_KNOWN_HOSTS_PATH:-./ssh/known_hosts}:/home/aiops/.ssh/known_hosts:ro
 
   # Transitional queue services retained only for legacy poller compatibility;
   # cmd/worker no longer depends on Postgres for tracker polling or dispatch.

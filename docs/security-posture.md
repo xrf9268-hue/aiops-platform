@@ -61,15 +61,16 @@ the workspace-root invariant and SPEC workspace lifecycle behavior deliberately.
 `~/.ssh` directory into the worker container. Doing so was the prior
 default and exposed the operator's entire SSH key set, `known_hosts`, and
 `config` to the agent process — a single prompt-injection or malicious
-dependency that read `/root/.ssh/id_*` could exfiltrate every keypair on
+dependency that read `~/.ssh/id_*` could exfiltrate every keypair on
 the host.
 
-Today the worker container receives only two file-level binds:
+Today the worker container receives only two file-level binds, under the
+unprivileged `aiops` user's home directory:
 
-| Host path (default)       | Container path                    |
-| ------------------------- | --------------------------------- |
-| `deploy/ssh/id_ed25519`   | `/root/.ssh/id_ed25519:ro`        |
-| `deploy/ssh/known_hosts`  | `/root/.ssh/known_hosts:ro`       |
+| Host path (default)       | Container path                       |
+| ------------------------- | ------------------------------------ |
+| `deploy/ssh/id_ed25519`   | `/home/aiops/.ssh/id_ed25519:ro`     |
+| `deploy/ssh/known_hosts`  | `/home/aiops/.ssh/known_hosts:ro`    |
 
 Both paths are overridable through environment variables in the operator's
 `.env`:
@@ -84,12 +85,13 @@ Operators generate the dedicated keypair under `deploy/ssh/` with
 target repository. See `deploy/ssh/README.md` and
 `docs/runbooks/local-dev.md` for the step-by-step setup.
 
-**Threat reduced, not eliminated.** The worker container still runs as
-root (no `USER` directive in `Dockerfile`). A successful container
-breakout or a write-side compromise can still misuse the mounted deploy
-key — but the key's blast radius is bounded to the repos that deploy key
-authorises, not every repo on the operator's host. Dropping root inside
-the container is tracked as a separate hardening step.
+**Threat reduced, not eliminated.** The worker container runs as the
+unprivileged `aiops` user (`USER aiops` in `Dockerfile`), with
+`no-new-privileges:true` and all Linux capabilities dropped in Compose. A
+successful container breakout or a write-side compromise can still misuse
+the mounted deploy key — but the key's blast radius is bounded to the
+repos that deploy key authorises, not every repo on the operator's host,
+and a compromised command no longer executes as root inside the container.
 
 ## Trust boundary
 

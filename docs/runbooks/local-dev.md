@@ -376,7 +376,7 @@ needs to push:
   the configured remote (SSH key, deploy key, or
   `GITEA_TOKEN`/`GITHUB_TOKEN` exported to the agent process).
 - For Docker Compose, the worker container mounts a **dedicated** SSH
-  keypair at `/root/.ssh/id_ed25519` — not your entire `~/.ssh`. Set
+  keypair at `/home/aiops/.ssh/id_ed25519` — not your entire `~/.ssh`. Set
   it up once:
 
   ```bash
