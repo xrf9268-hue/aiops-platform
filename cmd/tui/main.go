@@ -166,6 +166,10 @@ func main() {
 	var lastTPS float64
 	var lastTPSSec int64
 	interval := *intervalFlag
+	if interval <= 0 {
+		fmt.Fprintln(os.Stderr, "--interval must be a positive duration (e.g. 5s)")
+		os.Exit(1)
+	}
 
 	for {
 		state, fetchErr := fetchState(client, stateURL)
