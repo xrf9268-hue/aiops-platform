@@ -120,6 +120,25 @@ requested:
 docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
+The image defaults to the worker (`CMD ["worker"]`), so a plain `docker run`
+starts it; override the command to run a poller instead. The runtime image
+ships only the binaries, so mount your workflow file in (as Compose does):
+
+```bash
+docker build -t aiops-platform .
+
+# Worker (default CMD); mount a workflow and point the worker at it:
+docker run --rm --env-file .env \
+  -v "$PWD/examples:/app/examples:ro" \
+  -e AIOPS_WORKFLOW_PATH=/app/examples/WORKFLOW.md \
+  aiops-platform
+
+# Poller (overrides the default CMD with its own binary + workflow path):
+docker run --rm --env-file .env \
+  -v "$PWD/examples:/app/examples:ro" \
+  aiops-platform linear-poller /app/examples/WORKFLOW.md
+```
+
 For an operator walkthrough — workflow file layout, the `/api/v1/state` and
 `--print-config` smoke checks, and the legacy queue-driven pollers — see the
 [local development runbook](docs/runbooks/local-dev.md). If the runbook and this
