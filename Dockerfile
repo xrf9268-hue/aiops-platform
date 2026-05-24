@@ -16,7 +16,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 # The named workspaces volume mounts empty onto /workspaces and inherits this
 # directory's aiops ownership, and /home/aiops/.ssh is pre-created 0700 so the
 # Compose deploy-key binds land in a directory ssh will accept.
-RUN useradd --create-home --uid 10001 --shell /bin/bash aiops \
+#
+# AIOPS_UID/AIOPS_GID must match the host owner of the bind-mounted deploy key:
+# the key is mounted read-only with its host ownership/permissions (0600)
+# preserved, so the in-container user can only read it when their UID matches
+# the host UID that ran ssh-keygen. Default 1000 covers the common single-user
+# Linux host; operators on a different UID rebuild with
+# `--build-arg AIOPS_UID=$(id -u) --build-arg AIOPS_GID=$(id -g)` (Compose reads
+# these from .env). See deploy/ssh/README.md.
+ARG AIOPS_UID=1000
+ARG AIOPS_GID=1000
+RUN groupadd --gid "${AIOPS_GID}" aiops \
+    && useradd --create-home --uid "${AIOPS_UID}" --gid "${AIOPS_GID}" --shell /bin/bash aiops \
     && mkdir -p /app /workspaces /home/aiops/.ssh \
     && chown -R aiops:aiops /app /workspaces /home/aiops \
     && chmod 700 /home/aiops/.ssh

@@ -16,6 +16,20 @@ ssh-keyscan -H <your-gitea-host> >> ssh/known_hosts
 # Then add ssh/id_ed25519.pub as a deploy key in the target Gitea/GitHub repo.
 ```
 
+## Container UID alignment
+
+The worker container runs as the unprivileged `aiops` user (#365). The key is
+bind-mounted **read-only with its host ownership and `0600` permissions
+preserved**, so the in-container user can read it only when its UID matches the
+host UID that generated the key. The image defaults `aiops` to UID/GID `1000`,
+which matches the typical single-user Linux host. If your host UID/GID differ,
+set them in `.env` so Compose passes them to the build:
+
+```dotenv
+AIOPS_UID=1000   # set to `id -u`
+AIOPS_GID=1000   # set to `id -g`
+```
+
 ## Overrides
 
 Set `AIOPS_SSH_KEY_PATH` and/or `AIOPS_SSH_KNOWN_HOSTS_PATH` in your `.env`

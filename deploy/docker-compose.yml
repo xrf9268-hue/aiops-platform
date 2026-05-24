@@ -2,6 +2,12 @@ services:
   worker:
     build:
       context: ..
+      # Align the in-container user with the host owner of the deploy key so
+      # the read-only 0600 key bind is readable as non-root (#365). Defaults to
+      # 1000; set AIOPS_UID/AIOPS_GID in .env to `id -u`/`id -g` if they differ.
+      args:
+        AIOPS_UID: "${AIOPS_UID:-1000}"
+        AIOPS_GID: "${AIOPS_GID:-1000}"
     command: ["worker"]
     # The image runs as the unprivileged aiops user (#365); deny privilege
     # escalation and drop all Linux capabilities the worker never needs.
