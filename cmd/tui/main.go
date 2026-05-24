@@ -182,15 +182,14 @@ func main() {
 
 	// NotifyContext cancels ctx on SIGINT/SIGTERM, which both breaks the render
 	// loop and aborts any in-flight fetch (the per-fetch context derives from
-	// ctx), so Ctrl-C restores the terminal immediately even mid-poll. This
-	// mirrors the signal handling in the sibling cmd/ entrypoints.
+	// ctx), so Ctrl-C restores the terminal immediately even mid-poll. The
+	// sibling cmd/ entrypoints use NotifyContext the same way; unlike them, the
+	// TUI re-raises the signal below for a conventional exit status (see run).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	// A second subscription records which signal fired (NotifyContext discards
-	// the value) so it can be re-raised for a conventional exit status. The
-	// runtime delivers to this channel before NotifyContext's goroutine cancels
-	// ctx, so the value is buffered by the time run returns.
+	// the value) so it can be re-raised for a conventional exit status.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -201,14 +200,12 @@ func main() {
 
 	run(ctx, scr, fetch, interval, baseURL)
 
-	// run has already restored the terminal (its deferred restore). If a signal
-	// caused the shutdown, re-raise it so we exit with the conventional
-	// 128+signum status (130 for SIGINT) instead of 0.
-	select {
-	case s := <-sigCh:
-		raiseAfterSignal(s)
-	default:
-	}
+	// run returns only once ctx is cancelled, and with a background parent and
+	// stop deferred the sole canceller during the loop is a signal — so a signal
+	// definitely fired and sigCh will receive it (no ordering assumption needed).
+	// run has already restored the terminal; re-raise so we exit with the
+	// conventional 128+signum status (130 for SIGINT) instead of 0.
+	raiseAfterSignal(<-sigCh)
 }
 
 // raiseAfterSignal restores the default disposition for sig and re-raises it so
