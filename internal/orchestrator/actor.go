@@ -905,7 +905,7 @@ func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(run.Issue, issue) {
 			continue
 		}
-		run.Issue = issue
+		refreshRunningIssue(run, issue)
 		st.ClaimedIssues[id] = issue
 	}
 	for id, retry := range st.RetryAttempts {
@@ -1029,7 +1029,7 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			// state. Without this, an issue that moved between active states
 			// keeps counting toward its dispatch-time bucket and a later poll
 			// can exceed max_concurrent_agents_by_state for the new state.
-			run.Issue = issue
+			refreshRunningIssue(run, issue)
 			st.ClaimedIssues[id] = issue
 			continue
 		}
@@ -1207,6 +1207,16 @@ func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntr
 		return nil
 	}
 	return func() { o.runReconciledWorkspaceCleanup(w) }
+}
+
+// refreshRunningIssue updates a still-active run's stored issue and clears any
+// terminal-cleanup flag left by an earlier terminal observation. The issue is
+// active again, so its workspace must be preserved: without this reset a
+// transient terminal blip (terminal seen on one tick, back to active before
+// the worker exits) would still trigger removal at finalize (Codex P2).
+func refreshRunningIssue(run *RunningEntry, issue tracker.Issue) {
+	run.Issue = issue
+	run.ReconcileCleanupWorkspace = false
 }
 
 // terminalWorkspaceForCleanup builds the ReconciledWorkspace for a terminal
@@ -1723,12 +1733,23 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		// drops the entry from state: the worker has now exited, so the
 		// workspace dir is free to remove (SPEC §18.1 active transition).
 		cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
-		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
+		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) || cleanup == nil {
 			close(f.done)
 			return nil
 		}
-		close(f.done)
-		return cleanup
+		// Defer the Done signal until cleanup finishes. ReconcileInactive/
+		// TrackerIssuesAndWait waits on Done, so closing it before
+		// before_remove/SafeRemove complete would let the poll loop free the
+		// deterministic workspace path for re-dispatch while the delayed
+		// cleanup is still running — a re-opened issue could be dispatched to
+		// the same path and have its live workspace deleted (Codex P1).
+		// Upstream removes the workspace before the run is considered
+		// terminated; folding cleanup into Done gives the same ordering.
+		done := f.done
+		return func() {
+			defer close(done)
+			cleanup()
+		}
 	}
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
