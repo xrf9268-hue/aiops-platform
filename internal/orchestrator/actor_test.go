@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -1445,9 +1444,11 @@ func TestFinalize_NormalExitAfterInputRequiredBlocksInsteadOfContinuationRetry(t
 
 func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) {
 	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
 	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
 	})
 	defer cancel()
 
@@ -1502,8 +1503,13 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	if len(view.Blocked) != 0 || len(view.Running) != 0 || len(view.Retrying) != 0 {
 		t.Fatalf("state after terminal blocked release = running %+v retrying %+v blocked %+v", view.Running, view.Retrying, view.Blocked)
 	}
-	if _, err := os.Stat(terminalWorkspace); !os.IsNotExist(err) {
-		t.Fatalf("terminal blocked workspace should be removed, stat err=%v", err)
+	// The terminal blocked release must remove the workspace through the
+	// WorkspaceCleaner (before_remove hook), not a bare os.RemoveAll, matching
+	// upstream reconcile_blocked_issue_state and the running-entry path (#331).
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	got := cleaner.snapshot()[0]
+	if got.IssueID != IssueID(active.ID) || got.Path != terminalWorkspace || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, active.ID, terminalWorkspace)
 	}
 }
 
@@ -1598,6 +1604,13 @@ func TestReconcileTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
 // a run cancelled because its issue went to a merely-inactive (non-terminal)
 // state must NOT have its workspace removed — the issue may return to active
 // work and reuse it.
+//
+// A terminal sibling (ENG-T2) is reconciled in the same batch and serves as a
+// deterministic barrier: cleanup followups are fire-and-forget, so to prove
+// the non-terminal run produced no cleanup we wait for the terminal sibling's
+// cleanup to land, then assert it is the ONLY call (the non-terminal run's
+// followup, if it were wrongly scheduled, is launched in the same batch and
+// would have surfaced by then).
 func TestReconcileInactiveNonTerminalRunKeepsWorkspace(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
@@ -1608,24 +1621,32 @@ func TestReconcileInactiveNonTerminalRunKeepsWorkspace(t *testing.T) {
 	})
 	defer cancel()
 
-	issue := tracker.Issue{ID: "ENG-I1", Identifier: "ENG-I1", State: "In Progress"}
-	dispatchRunningIssue(t, o, disp, issue, "/var/aiops/workspaces/acme/repo/linear_issue/ENG-I1", 1)
+	inactiveIssue := tracker.Issue{ID: "ENG-I1", Identifier: "ENG-I1", State: "In Progress"}
+	terminalIssue := tracker.Issue{ID: "ENG-T2", Identifier: "ENG-T2", State: "In Progress"}
+	const inactivePath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-I1"
+	const terminalPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-T2"
+	dispatchRunningIssue(t, o, disp, inactiveIssue, inactivePath, 1)
+	dispatchRunningIssue(t, o, disp, terminalIssue, terminalPath, 2)
 
-	// Issue moves to a configured-inactive but non-terminal state (Backlog).
+	// One reconcile pass: ENG-I1 → Backlog (configured-inactive, non-terminal),
+	// ENG-T2 → Done (terminal). Only the terminal one may be cleaned.
 	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
-		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Backlog"},
+		inactiveIssue.ID: {ID: inactiveIssue.ID, Identifier: inactiveIssue.Identifier, State: "Backlog"},
+		terminalIssue.ID: {ID: terminalIssue.ID, Identifier: terminalIssue.Identifier, State: "Done"},
 	}, map[string]struct{}{"done": {}}, 0); err != nil {
 		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
 	}
 	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	disp.finishAt(1, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
 
-	// The run must still drain (be released), but no cleanup must fire.
-	waitFor(t, func() bool {
-		view, _ := o.Snapshot(context.Background())
-		return len(view.Running) == 0
-	}, time.Second)
-	if calls := cleaner.snapshot(); len(calls) != 0 {
-		t.Fatalf("inactive non-terminal cancel must not clean workspace, got %+v", calls)
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(terminalIssue.ID) || calls[0].Path != terminalPath {
+		t.Fatalf("only the terminal sibling may be cleaned, got %+v", calls)
+	}
+	view, _ := o.Snapshot(context.Background())
+	if len(view.Running) != 0 {
+		t.Fatalf("running not cleared after reconcile: %+v", view.Running)
 	}
 }
 

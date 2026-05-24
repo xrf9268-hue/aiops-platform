@@ -227,7 +227,7 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		// workspace is reclaimed by the next startup sweep rather than mid-run.
 		// The before_remove hook still fires on the active transition for the
 		// non-routing (default) path; wiring it through the routing cancel is
-		// tracked as a follow-up.
+		// tracked as #340.
 		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, p.reconcile.WorkerExitTimeout); err != nil {
 			return nil, err
 		}

@@ -846,7 +846,7 @@ func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string 
 // then behaves as inactive — workspace preserved).
 func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context, issuesByID map[string]tracker.Issue, terminalStates map[string]struct{}, workerExitTimeout time.Duration) error {
 	reply := make(chan []*RunningEntry, 1)
-	op := &reconcileInactiveTrackerIssuesOp{issuesByID: issuesByID, terminalStates: terminalStates, result: reply}
+	op := &reconcileInactiveTrackerIssuesOp{o: o, issuesByID: issuesByID, terminalStates: terminalStates, result: reply}
 	if err := o.submit(ctx, op); err != nil {
 		return err
 	}
@@ -1064,6 +1064,7 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 }
 
 type reconcileInactiveTrackerIssuesOp struct {
+	o              *Orchestrator
 	issuesByID     map[string]tracker.Issue
 	terminalStates map[string]struct{}
 	result         chan<- []*RunningEntry
@@ -1071,7 +1072,13 @@ type reconcileInactiveTrackerIssuesOp struct {
 
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	var cleanupEntries []workspaceCleanup
+	// blockedCleanups collects terminal-state blocked entries whose workspace
+	// must be removed now (no live worker holds them, unlike running entries
+	// which defer cleanup to the finalize path). Both paths go through the
+	// same WorkspaceCleaner so before_remove fires and a reconcile_workspace
+	// event is emitted — mirroring upstream reconcile_blocked_issue_state,
+	// which cleans the workspace only on a terminal transition.
+	var blockedCleanups []ReconciledWorkspace
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if !ok {
@@ -1097,14 +1104,33 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		st.ReleaseClaim(id)
 	}
-	for id := range st.Blocked {
-		if _, ok := r.issuesByID[string(id)]; !ok {
+	for id, blocked := range st.Blocked {
+		issue, ok := r.issuesByID[string(id)]
+		if !ok {
 			continue
 		}
-		cleanupEntries = appendBlockedWorkspaceCleanup(cleanupEntries, id, st.Blocked[id])
+		if isTerminalTrackerState(issue.State, r.terminalStates) {
+			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, issue.State); okw {
+				blockedCleanups = append(blockedCleanups, w)
+			}
+		}
 		st.ReleaseClaim(id)
 	}
-	return reconcileCancelFollowup(cancelEntries, cleanupEntries, r.result)
+	o := r.o
+	result := r.result
+	return func() {
+		for _, entry := range cancelEntries {
+			if entry.CancelWorker != nil {
+				entry.CancelWorker()
+			}
+		}
+		for _, w := range blockedCleanups {
+			o.runReconciledWorkspaceCleanup(w)
+		}
+		if result != nil {
+			result <- cancelEntries
+		}
+	}
 }
 
 type workspaceCleanup struct {
@@ -1173,27 +1199,48 @@ func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bo
 // followup goroutine, off the actor loop, so the before_remove hook and
 // remove cannot block state mutation.
 func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntry) func() {
-	if entry == nil || !entry.ReconcileCleanupWorkspace || o.workspaceCleaner == nil {
+	if entry == nil || !entry.ReconcileCleanupWorkspace {
 		return nil
 	}
-	path := strings.TrimSpace(entry.Workspace.Path)
+	w, ok := terminalWorkspaceForCleanup(id, entry.Identifier, entry.Workspace.Path, entry.Issue.State)
+	if !ok || o.workspaceCleaner == nil {
+		return nil
+	}
+	return func() { o.runReconciledWorkspaceCleanup(w) }
+}
+
+// terminalWorkspaceForCleanup builds the ReconciledWorkspace for a terminal
+// active-transition removal, returning ok=false when there is no workspace
+// path to remove. Shared by the running (finalize) and blocked (immediate)
+// cleanup paths so both label the reconcile_workspace event identically.
+func terminalWorkspaceForCleanup(id IssueID, identifier, path, state string) (ReconciledWorkspace, bool) {
+	path = strings.TrimSpace(path)
 	if path == "" {
-		return nil
+		return ReconciledWorkspace{}, false
 	}
-	w := ReconciledWorkspace{
+	return ReconciledWorkspace{
 		IssueID:    id,
-		Identifier: entry.Identifier,
+		Identifier: identifier,
 		Path:       path,
-		State:      entry.Issue.State,
+		State:      state,
 		Reason:     "terminal",
+	}, true
+}
+
+// runReconciledWorkspaceCleanup invokes the WorkspaceCleaner under a bounded
+// context. It is a no-op when no cleaner is wired (unit tests / legacy
+// callers); the startup sweep then reclaims the directory on next boot. The
+// before_remove hook enforces its own per-command timeout; the outer deadline
+// here guards against a hook that ignores cancellation (AGENTS.md Go-runtime
+// hardening). Callers must invoke it from a followup goroutine, never inside
+// an apply.
+func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace) {
+	if o.workspaceCleaner == nil || strings.TrimSpace(w.Path) == "" {
+		return
 	}
-	cleaner := o.workspaceCleaner
-	runCtx := o.runCtx
-	return func() {
-		ctx, cancel := context.WithTimeout(runCtx, reconcileWorkspaceCleanupTimeout)
-		defer cancel()
-		cleaner.CleanupReconciledWorkspace(ctx, w)
-	}
+	ctx, cancel := context.WithTimeout(o.runCtx, reconcileWorkspaceCleanupTimeout)
+	defer cancel()
+	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
 }
 
 // dispatchOp is the actor-side half of RequestDispatch: it checks
