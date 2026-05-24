@@ -15,6 +15,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -152,6 +153,33 @@ func desiredPortForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) 
 		return wf.Config.Server.Port
 	}
 	return -1
+}
+
+// desiredHostForLoop selects the effective state-server bind host for one tick.
+// The AIOPS_SERVER_HOST env override wins, then the workflow snapshot's
+// `server.host`, then the loopback default. The empty string is returned as-is
+// and normalized to 127.0.0.1 at bind time (normalizeServerHost).
+func desiredHostForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) string {
+	if opts.HostOverride != nil {
+		return *opts.HostOverride
+	}
+	if wf != nil {
+		return wf.Config.Server.Host
+	}
+	return ""
+}
+
+// serverHostOverrideFromEnv returns the AIOPS_SERVER_HOST override, or nil when
+// the variable is unset so the workflow `server.host` (then the loopback
+// default) still applies. A set-but-empty value is an explicit override:
+// normalizeServerHost maps it to the safe loopback default, so
+// `AIOPS_SERVER_HOST=` forces loopback even over a workflow `server.host`.
+func serverHostOverrideFromEnv() *string {
+	host, ok := os.LookupEnv("AIOPS_SERVER_HOST")
+	if !ok {
+		return nil
+	}
+	return &host
 }
 
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
@@ -345,7 +373,7 @@ func run(ctx context.Context, args []string) error {
 		}
 	}()
 	go func() {
-		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh, PortOverride: portOverride}); err != nil && ctx.Err() == nil {
+		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh, PortOverride: portOverride, HostOverride: serverHostOverrideFromEnv()}); err != nil && ctx.Err() == nil {
 			log.Printf("state HTTP server loop exited: %v", err)
 		}
 	}()
@@ -357,6 +385,7 @@ type stateHTTPServerController struct {
 	refresh  stateRefreshFunc
 
 	desiredSet  bool
+	desiredHost string
 	desiredPort int
 	cancel      context.CancelFunc
 	addr        net.Addr
@@ -367,20 +396,21 @@ func newStateHTTPServerController(snapshot stateSnapshotFunc, refresh ...stateRe
 	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh)}
 }
 
-func (c *stateHTTPServerController) apply(ctx context.Context, port int) error {
+func (c *stateHTTPServerController) apply(ctx context.Context, host string, port int) error {
 	c.refreshStopped()
-	if c.desiredSet && c.desiredPort == port {
+	if c.desiredSet && c.desiredHost == host && c.desiredPort == port {
 		return nil
 	}
 	c.stop()
 	if port < 0 {
 		c.desiredSet = true
+		c.desiredHost = host
 		c.desiredPort = port
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil
 	}
 	serverCtx, cancel := context.WithCancel(ctx)
-	handle, err := startStateHTTPServer(serverCtx, port, c.snapshot, c.refresh)
+	handle, err := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.refresh)
 	if err != nil {
 		cancel()
 		return err
@@ -390,6 +420,7 @@ func (c *stateHTTPServerController) apply(ctx context.Context, port int) error {
 		return nil
 	}
 	c.desiredSet = true
+	c.desiredHost = host
 	c.desiredPort = port
 	c.cancel = cancel
 	c.addr = handle.Addr
@@ -427,6 +458,7 @@ func (c *stateHTTPServerController) stop() {
 
 func (c *stateHTTPServerController) clear() {
 	c.desiredSet = false
+	c.desiredHost = ""
 	c.desiredPort = 0
 	c.cancel = nil
 	c.addr = nil
@@ -442,6 +474,11 @@ type stateHTTPServerLoopOptions struct {
 	// as the CLI `--port` precedence rule. -1 disables the HTTP server,
 	// 0 binds an ephemeral port, 1..65535 binds explicitly.
 	PortOverride *int
+	// HostOverride, when non-nil, replaces the workflow snapshot's
+	// `server.host` for every tick of the loop. It carries the
+	// AIOPS_SERVER_HOST env override, mirroring PortOverride's role for the
+	// CLI --port flag. An empty string normalizes to the loopback default.
+	HostOverride *string
 }
 
 func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error {
@@ -464,8 +501,9 @@ func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowR
 		if snap := runtime.Current(); snap.Workflow != nil {
 			wf = snap.Workflow
 		}
+		host := desiredHostForLoop(opts, wf)
 		port := desiredPortForLoop(opts, wf)
-		if err := controller.apply(ctx, port); err != nil {
+		if err := controller.apply(ctx, host, port); err != nil {
 			return err
 		}
 		checks++
@@ -494,12 +532,12 @@ type stateHTTPServerHandle struct {
 	Done <-chan struct{}
 }
 
-func startStateHTTPServer(ctx context.Context, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
+func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
 	if port < 0 {
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil, nil
 	}
-	server := newStateHTTPServer(port, snapshot, refresh...)
+	server := newStateHTTPServer(host, port, snapshot, refresh...)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
@@ -530,7 +568,17 @@ func startStateHTTPServer(ctx context.Context, port int, snapshot stateSnapshotF
 	return &stateHTTPServerHandle{Addr: listener.Addr(), Done: done}, nil
 }
 
-func newStateHTTPServer(port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
+// normalizeServerHost maps an empty bind host to the loopback default so a
+// blank server.host / AIOPS_SERVER_HOST never resolves to net.Listen's
+// bind-all wildcard (SPEC §15.3 loopback-only trust boundary).
+func normalizeServerHost(host string) string {
+	if host == "" {
+		return "127.0.0.1"
+	}
+	return host
+}
+
+func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
 	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
@@ -544,7 +592,7 @@ func newStateHTTPServer(port int, snapshot stateSnapshotFunc, refresh ...stateRe
 		dashboardHTMLHandler().ServeHTTP(w, r)
 	})
 	return &http.Server{
-		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
+		Addr:              net.JoinHostPort(normalizeServerHost(host), strconv.Itoa(port)),
 		Handler:           loopbackHostOnly(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,

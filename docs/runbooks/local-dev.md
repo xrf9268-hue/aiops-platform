@@ -150,6 +150,20 @@ The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
 
+The worker's loopback dashboard is not reachable from the host under the
+base Compose file. To reach it, merge the opt-in overlay, which binds
+`0.0.0.0` inside the container and publishes only to host loopback
+(`127.0.0.1:4000:4000`):
+
+```bash
+docker compose -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.dashboard.yml up worker
+```
+
+See README "Operator surfaces" for the trust-boundary caveats; the
+surface is unauthenticated, so never publish it on a routable host
+interface.
+
 > **Upgrading from a root-running worker image.** The worker now runs as the
 > unprivileged `aiops` user (#365). A `workspaces` named volume created by an
 > older root-running image stays root-owned and the non-root worker cannot

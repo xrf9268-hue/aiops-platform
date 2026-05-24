@@ -334,7 +334,7 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 }
 
 func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 
@@ -384,7 +384,7 @@ func firstScriptAssetPath(t *testing.T, html string) string {
 }
 
 func TestRootDashboardAllowsHeadProbes(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 
@@ -401,7 +401,7 @@ func TestRootDashboardAllowsHeadProbes(t *testing.T) {
 }
 
 func TestRootDashboardRejectsUnsafeMethodsWithHeadInAllow(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("snapshot function should not be called for unsafe root methods")
 		return orchestrator.StateView{}, nil
 	})
@@ -449,7 +449,7 @@ func TestStateHTTPHandlerRejectsNonGET(t *testing.T) {
 func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
 	startedAt := time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC)
 	retryAttempt := 2
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{
 			Running: []orchestrator.RunningView{{
 				IssueID:       "issue-1",
@@ -514,7 +514,7 @@ func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
 
 func TestIssueHTTPHandlerReturnsRestartCountForRetryingIssue(t *testing.T) {
 	dueAt := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC)
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{
 			Retrying: []orchestrator.RetryView{{
 				IssueID:    "issue-2",
@@ -559,7 +559,7 @@ func TestIssueHTTPHandlerReturnsRestartCountForRetryingIssue(t *testing.T) {
 }
 
 func TestIssueHTTPHandlerOmitsRestartCountForFirstRun(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{
 			Running: []orchestrator.RunningView{{
 				IssueID:    "issue-3",
@@ -595,7 +595,7 @@ func TestIssueHTTPHandlerOmitsRestartCountForFirstRun(t *testing.T) {
 }
 
 func TestIssueHTTPHandlerReturns404EnvelopeForUnknownIssue(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 
@@ -622,7 +622,7 @@ func TestIssueHTTPHandlerReturns404EnvelopeForUnknownIssue(t *testing.T) {
 
 func TestIssueHTTPHandlerRejectsNonGET(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		called = true
 		return orchestrator.StateView{}, nil
 	})
@@ -648,7 +648,7 @@ func TestRefreshHTTPHandlerQueuesAndCoalescesImmediatePoll(t *testing.T) {
 		{Queued: true, Coalesced: true, RequestedAt: time.Date(2026, 5, 21, 9, 10, 1, 0, time.UTC), Operations: []string{"poll", "reconcile"}},
 	}
 	calls := 0
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("snapshot function should not be called for refresh requests")
 		return orchestrator.StateView{}, nil
 	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
@@ -703,7 +703,7 @@ func TestRefreshHTTPHandlerQueuesAndCoalescesImmediatePoll(t *testing.T) {
 
 func TestRefreshHTTPHandlerRequiresRefreshHeader(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
 		called = true
@@ -723,7 +723,7 @@ func TestRefreshHTTPHandlerRequiresRefreshHeader(t *testing.T) {
 
 func TestRefreshHTTPHandlerRejectsUnsupportedMethods(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
 		called = true
@@ -745,7 +745,7 @@ func TestRefreshHTTPHandlerRejectsUnsupportedMethods(t *testing.T) {
 
 func TestRefreshHTTPHandlerRejectsUnsupportedBodies(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
 		called = true
@@ -768,7 +768,7 @@ func TestRefreshHTTPHandlerRejectsUnsupportedBodies(t *testing.T) {
 
 func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		called = true
 		return orchestrator.StateView{}, nil
 	})
@@ -787,7 +787,7 @@ func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
 
 func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		called = true
 		return orchestrator.StateView{}, nil
 	})
@@ -806,7 +806,7 @@ func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
 
 func TestStateHTTPServerAllowsIPv6LoopbackHost(t *testing.T) {
 	called := false
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		called = true
 		return orchestrator.StateView{}, nil
 	})
@@ -853,7 +853,7 @@ func TestIsLoopbackHTTPHost(t *testing.T) {
 }
 
 func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
-	handle, err := startStateHTTPServer(context.Background(), -1, func(context.Context) (orchestrator.StateView, error) {
+	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", -1, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("disabled state server must not evaluate snapshot")
 		return orchestrator.StateView{}, nil
 	})
@@ -873,7 +873,7 @@ func TestStartStateHTTPServerDoesNotFailWorkerWhenPortInUse(t *testing.T) {
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	handle, err := startStateHTTPServer(context.Background(), port, func(context.Context) (orchestrator.StateView, error) {
+	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", port, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 	if err != nil {
@@ -888,7 +888,7 @@ func TestStartStateHTTPServerBindsPrivateLoopback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	handle, err := startStateHTTPServer(ctx, 0, func(context.Context) (orchestrator.StateView, error) {
+	handle, err := startStateHTTPServer(ctx, "127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 	if err != nil {
@@ -916,13 +916,13 @@ func TestStateHTTPServerControllerStopsOnDisabledReload(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	if err := controller.apply(ctx, 0); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
 		t.Fatalf("start state HTTP server: %v", err)
 	}
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
-	if err := controller.apply(ctx, -1); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", -1); err != nil {
 		t.Fatalf("disable state HTTP server: %v", err)
 	}
 	if controller.cancel != nil || controller.addr != nil {
@@ -942,7 +942,7 @@ func TestStateHTTPServerControllerRetriesSamePortAfterListenFailure(t *testing.T
 	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
-	if err := controller.apply(ctx, port); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", port); err != nil {
 		t.Fatalf("apply occupied port: %v", err)
 	}
 	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
@@ -951,7 +951,7 @@ func TestStateHTTPServerControllerRetriesSamePortAfterListenFailure(t *testing.T
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release port: %v", err)
 	}
-	if err := controller.apply(ctx, port); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", port); err != nil {
 		t.Fatalf("retry freed port: %v", err)
 	}
 	if controller.cancel == nil || controller.addr == nil {
@@ -974,19 +974,19 @@ func TestStateHTTPServerControllerRestartsPreviousPortAfterFailedReload(t *testi
 	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
-	if err := controller.apply(ctx, oldPort); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", oldPort); err != nil {
 		t.Fatalf("start old port: %v", err)
 	}
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after old port start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
-	if err := controller.apply(ctx, blockedPort); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", blockedPort); err != nil {
 		t.Fatalf("apply blocked port: %v", err)
 	}
 	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
 		t.Fatalf("controller after blocked reload = cancel:%v addr:%v desiredSet:%v, want retryable idle state", controller.cancel, controller.addr, controller.desiredSet)
 	}
-	if err := controller.apply(ctx, oldPort); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", oldPort); err != nil {
 		t.Fatalf("restart old port: %v", err)
 	}
 	if controller.cancel == nil || controller.addr == nil {
@@ -1009,7 +1009,7 @@ func TestStateHTTPServerControllerRestartsAfterServerExit(t *testing.T) {
 	controller.addr = &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 65535}
 	controller.serverDone = done
 
-	if err := controller.apply(ctx, 0); err != nil {
+	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
 		t.Fatalf("restart after server exit: %v", err)
 	}
 	if controller.cancel == nil || controller.addr == nil {
@@ -1738,7 +1738,7 @@ func TestLoadWorkflowForStartupReconcileDefaultsWhenNoWorkflowExists(t *testing.
 // field is set, and TestNewStateHTTPServer_RejectsOversizedHeader
 // covers behavior on the over-cap side.
 func TestNewStateHTTPServer_SetsMaxHeaderBytes(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 	if got, want := server.MaxHeaderBytes, 64<<10; got != want {
@@ -1754,7 +1754,7 @@ func TestNewStateHTTPServer_SetsMaxHeaderBytes(t *testing.T) {
 // matrix is not a viable boundary for this field — see the comment on
 // SetsMaxHeaderBytes.)
 func TestNewStateHTTPServer_RejectsOversizedHeader(t *testing.T) {
-	server := newStateHTTPServer(0, func(context.Context) (orchestrator.StateView, error) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -2063,6 +2063,112 @@ func TestDesiredPortForLoop_NoWorkflowYieldsDisable(t *testing.T) {
 	got := desiredPortForLoop(stateHTTPServerLoopOptions{}, nil)
 	if got != -1 {
 		t.Fatalf("desiredPortForLoop(nil workflow) = %d, want -1", got)
+	}
+}
+
+// TestDesiredHostForLoop_OverrideWinsOverWorkflow pins AIOPS_SERVER_HOST
+// precedence over the workflow snapshot's server.host, mirroring the --port
+// override rule.
+func TestDesiredHostForLoop_OverrideWinsOverWorkflow(t *testing.T) {
+	override := "0.0.0.0"
+	got := desiredHostForLoop(stateHTTPServerLoopOptions{HostOverride: &override}, &workflow.Workflow{
+		Config: workflow.Config{Server: workflow.ServerConfig{Host: "127.0.0.1"}},
+	})
+	if got != "0.0.0.0" {
+		t.Fatalf("desiredHostForLoop = %q, want 0.0.0.0 (env override wins)", got)
+	}
+}
+
+// TestDesiredHostForLoop_FallsBackToWorkflow covers the no-override path: the
+// workflow server.host is used verbatim.
+func TestDesiredHostForLoop_FallsBackToWorkflow(t *testing.T) {
+	got := desiredHostForLoop(stateHTTPServerLoopOptions{}, &workflow.Workflow{
+		Config: workflow.Config{Server: workflow.ServerConfig{Host: "10.0.0.5"}},
+	})
+	if got != "10.0.0.5" {
+		t.Fatalf("desiredHostForLoop = %q, want 10.0.0.5", got)
+	}
+}
+
+// TestDesiredHostForLoop_NoWorkflowYieldsEmpty — no override and no snapshot
+// yields the empty string, which normalizeServerHost maps to loopback.
+func TestDesiredHostForLoop_NoWorkflowYieldsEmpty(t *testing.T) {
+	if got := desiredHostForLoop(stateHTTPServerLoopOptions{}, nil); got != "" {
+		t.Fatalf("desiredHostForLoop(nil) = %q, want empty", got)
+	}
+}
+
+func TestServerHostOverrideFromEnv(t *testing.T) {
+	t.Setenv("AIOPS_SERVER_HOST", "0.0.0.0")
+	if got := serverHostOverrideFromEnv(); got == nil || *got != "0.0.0.0" {
+		t.Fatalf("serverHostOverrideFromEnv() = %v, want 0.0.0.0", got)
+	}
+	// Set-but-empty is an explicit override: it must stay non-nil so
+	// `AIOPS_SERVER_HOST=` forces the loopback default over any workflow value.
+	t.Setenv("AIOPS_SERVER_HOST", "")
+	if got := serverHostOverrideFromEnv(); got == nil || *got != "" {
+		t.Fatalf("serverHostOverrideFromEnv() with empty env = %v, want non-nil empty override", got)
+	}
+}
+
+// TestServerHostOverrideUnsetYieldsNil — the unset case must fall through to the
+// workflow value (nil), distinct from the set-but-empty force-loopback case.
+func TestServerHostOverrideUnsetYieldsNil(t *testing.T) {
+	t.Setenv("AIOPS_SERVER_HOST", "x")
+	os.Unsetenv("AIOPS_SERVER_HOST")
+	if got := serverHostOverrideFromEnv(); got != nil {
+		t.Fatalf("serverHostOverrideFromEnv() unset = %v, want nil", got)
+	}
+}
+
+// TestNewStateHTTPServerBindsConfiguredHost guards that the configured host
+// reaches the listen address, and that an empty host normalizes to loopback
+// rather than net.Listen's bind-all wildcard.
+func TestNewStateHTTPServerBindsConfiguredHost(t *testing.T) {
+	snap := func(context.Context) (orchestrator.StateView, error) { return orchestrator.StateView{}, nil }
+	cases := []struct {
+		host string
+		want string
+	}{
+		{"0.0.0.0", "0.0.0.0:4000"},
+		{"127.0.0.1", "127.0.0.1:4000"},
+		{"", "127.0.0.1:4000"},
+		{"::1", "[::1]:4000"},
+	}
+	for _, c := range cases {
+		if got := newStateHTTPServer(c.host, 4000, snap).Addr; got != c.want {
+			t.Errorf("newStateHTTPServer(%q, 4000).Addr = %q, want %q", c.host, got, c.want)
+		}
+	}
+}
+
+// TestStartStateHTTPServerHonorsWiderBind proves AIOPS_SERVER_HOST=0.0.0.0
+// actually binds the unspecified address (the Compose reachability fix), while
+// the loopback Host-header guard still rejects non-loopback Hosts.
+func TestStartStateHTTPServerHonorsWiderBind(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handle, err := startStateHTTPServer(ctx, "0.0.0.0", 0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	if err != nil {
+		t.Fatalf("startStateHTTPServer: %v", err)
+	}
+	if handle == nil {
+		t.Fatal("handle = nil, want running server bound to 0.0.0.0")
+	}
+	tcpAddr, ok := handle.Addr.(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("addr = %T, want TCP", handle.Addr)
+	}
+	if !tcpAddr.IP.IsUnspecified() {
+		t.Fatalf("bind IP = %s, want unspecified (0.0.0.0)", tcpAddr.IP)
+	}
+	cancel()
+	select {
+	case <-handle.Done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not stop after cancel")
 	}
 }
 

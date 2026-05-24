@@ -53,6 +53,55 @@ func TestDefaultConfigEnablesStateServerOnPrivateLoopbackPort(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigBindsStateServerToLoopbackHost(t *testing.T) {
+	if got := DefaultConfig().Server.Host; got != "127.0.0.1" {
+		t.Fatalf("default server.host = %q, want 127.0.0.1", got)
+	}
+}
+
+func TestLoadParsesServerHost(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+server:
+  host: 0.0.0.0
+  port: 4000
+repo:
+  clone_url: git@example.com:owner/repo.git
+tracker:
+  kind: gitea
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Server.Host; got != "0.0.0.0" {
+		t.Fatalf("server.host = %q, want 0.0.0.0", got)
+	}
+}
+
+// TestLoadKeepsLoopbackHostWhenServerBlockOmitsHost guards that overlaying a
+// server block that sets only port does not zero out the loopback default.
+func TestLoadKeepsLoopbackHostWhenServerBlockOmitsHost(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+server:
+  port: 4567
+repo:
+  clone_url: git@example.com:owner/repo.git
+tracker:
+  kind: gitea
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Server.Host; got != "127.0.0.1" {
+		t.Fatalf("server.host = %q, want 127.0.0.1 (default survives partial server block)", got)
+	}
+}
+
 func TestLoadDefaultsServerPortWhenServerBlockIsOmitted(t *testing.T) {
 	path := writeTempWorkflow(t, `---
 repo:
