@@ -242,6 +242,19 @@ docker compose --env-file .env -f deploy/docker-compose.yml \
   exec postgres psql -U aiops -d aiops -c '\dt'
 ```
 
+> **Migrating an existing volume.** Postgres only applies `POSTGRES_PASSWORD`
+> when it first initializes an empty data directory. A `pgdata` volume created
+> under the old default `aiops` keeps that password, so the pollers' new
+> `PGPASSWORD` would fail to authenticate. The queue volume is disposable, so
+> the simplest path is to recreate it once:
+>
+> ```bash
+> docker compose --env-file .env -f deploy/docker-compose.yml down -v
+> ```
+>
+> To preserve the data instead, rotate the role password in place:
+> `ALTER USER aiops PASSWORD '<new>';` to match the new `POSTGRES_PASSWORD`.
+
 You should see `tasks` and `task_events`. The compose file mounts
 `migrations/` into Postgres's `/docker-entrypoint-initdb.d`, so the
 schema is applied automatically on first startup.
