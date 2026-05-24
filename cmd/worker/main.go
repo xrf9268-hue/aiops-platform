@@ -194,8 +194,9 @@ func startupWorkflowPath(args []string) (string, error) {
 	if len(args) == 1 {
 		return args[0], nil
 	}
-	if path := os.Getenv("AIOPS_WORKFLOW_PATH"); path != "" {
-		return path, nil
+	if res := worker.ResolveEnv("AIOPS_WORKFLOW_PATH", "WORKFLOW_PATH"); res.Value != "" {
+		res.LogWarning()
+		return res.Value, nil
 	}
 	workdir, err := os.Getwd()
 	if err != nil {

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"io"
-	"os"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -36,16 +35,26 @@ type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.Is
 
 // LoadConfigFromEnv reads the worker configuration from the environment.
 //
-// WorkspaceRoot intentionally has no literal default here — when
-// WORKSPACE_ROOT is unset, Config.WorkspaceRoot stays empty and
+// Worker env vars use the AIOPS_ prefix as the single naming convention
+// (#368). The legacy unprefixed WORKSPACE_ROOT is still honored as a
+// deprecated alias for AIOPS_WORKSPACE_ROOT (with a warning) so existing
+// deployments keep working; using the wrong form no longer silently falls back
+// to the code default.
+//
+// WorkspaceRoot intentionally has no literal default here — when the workspace
+// root env is unset, Config.WorkspaceRoot stays empty and
 // EffectiveWorkspaceRoot falls back to the workflow's `Workspace.Root`
 // (the SPEC §6.4 default seeded by workflow.DefaultConfig). The previous
 // `/tmp/aiops-workspaces` fallback silently shadowed that SPEC default
 // regardless of WORKFLOW.md content; see #319.
 func LoadConfigFromEnv() Config {
+	workspace := ResolveEnv("AIOPS_WORKSPACE_ROOT", "WORKSPACE_ROOT")
+	workspace.LogWarning()
+	mirror := ResolveEnv("AIOPS_MIRROR_ROOT", "MIRROR_ROOT")
+	mirror.LogWarning()
 	return Config{
-		WorkspaceRoot: os.Getenv("WORKSPACE_ROOT"),
-		MirrorRoot:    os.Getenv("AIOPS_MIRROR_ROOT"),
+		WorkspaceRoot: workspace.Value,
+		MirrorRoot:    mirror.Value,
 	}
 }
 
