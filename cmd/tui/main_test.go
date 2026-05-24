@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -181,7 +184,7 @@ func TestFetchState_ReturnsErrorOnNon2xx(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{}
-	_, err := fetchState(client, srv.URL)
+	_, err := fetchState(context.Background(), client, srv.URL)
 	if err == nil {
 		t.Fatal("fetchState returned nil error for 503 response, want error")
 	}
@@ -199,7 +202,7 @@ func TestFetchState_ParsesValidResponse(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{}
-	state, err := fetchState(client, srv.URL)
+	state, err := fetchState(context.Background(), client, srv.URL)
 	if err != nil {
 		t.Fatalf("fetchState error = %v", err)
 	}
@@ -219,5 +222,109 @@ func TestFormatResetValue_IntegerGetsSuffix(t *testing.T) {
 	}
 	if got := formatResetValue("already-string"); got != "already-string" {
 		t.Errorf("formatResetValue(string) = %q, want passthrough", got)
+	}
+}
+
+// ── screen lifecycle (alt-screen / cursor / non-TTY degrade) ──────────────────
+
+// On a TTY the per-frame output must stay byte-for-byte identical to upstream:
+// clear sequence + content + newline.
+func TestScreen_Draw_TTYKeepsParityBytes(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
+	scr.draw("BODY")
+	if got, want := buf.String(), ansiClear+"BODY\n"; got != want {
+		t.Errorf("draw on TTY = %q, want %q", got, want)
+	}
+}
+
+// Non-TTY output must not contain the clear / alt-screen / cursor control bytes
+// (item 5: piped/redirected output should be plain).
+func TestScreen_Draw_NonTTYDropsControlBytes(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, false /* isTTY */, false /* raw */)
+	scr.enter()
+	scr.draw("BODY")
+	scr.restore()
+
+	out := buf.String()
+	if out != "BODY\n" {
+		t.Errorf("non-TTY output = %q, want %q (plain, no control bytes)", out, "BODY\n")
+	}
+	if strings.Contains(out, "\033") {
+		t.Errorf("non-TTY output contains an escape byte: %q", out)
+	}
+}
+
+func TestScreen_EnterRestore_LifecycleSequences(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
+
+	scr.enter()
+	if got, want := buf.String(), ansiAltScreenEnter+ansiHideCursor; got != want {
+		t.Errorf("enter() = %q, want %q", got, want)
+	}
+
+	buf.Reset()
+	scr.restore()
+	if got, want := buf.String(), ansiShowCursor+ansiReset+ansiAltScreenLeave; got != want {
+		t.Errorf("restore() = %q, want %q", got, want)
+	}
+}
+
+// --raw on a TTY is parity mode: no alt-screen / cursor management, and the
+// per-frame body is exactly the upstream clear+content+newline.
+func TestScreen_RawModeIsParity(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, true /* isTTY */, true /* raw */)
+
+	scr.enter()
+	scr.restore()
+	if buf.Len() != 0 {
+		t.Errorf("raw mode enter/restore wrote %q, want nothing", buf.String())
+	}
+
+	scr.draw("BODY")
+	if got, want := buf.String(), ansiClear+"BODY\n"; got != want {
+		t.Errorf("raw draw = %q, want %q", got, want)
+	}
+}
+
+// ── signal-driven graceful restore (item 2) ──────────────────────────────────
+
+func TestRun_RestoresTerminalOnSignal(t *testing.T) {
+	var buf bytes.Buffer
+	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
+
+	fetch := func(ctx context.Context) (*stateResponse, error) {
+		return &stateResponse{MaxConcurrentAgents: 3}, nil
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	go func() {
+		// A long interval keeps the ticker from firing; only the initial
+		// frame is drawn before the signal arrives.
+		run(scr, fetch, time.Hour, "http://example", sigCh)
+		close(done)
+	}()
+
+	sigCh <- os.Interrupt
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after signal")
+	}
+
+	out := buf.String()
+	if !strings.HasPrefix(out, ansiAltScreenEnter+ansiHideCursor) {
+		t.Errorf("output did not start by entering alt-screen / hiding cursor: %q", out[:min(40, len(out))])
+	}
+	if !strings.HasSuffix(out, ansiShowCursor+ansiReset+ansiAltScreenLeave) {
+		t.Errorf("output did not end by restoring the terminal: tail=%q", out[max(0, len(out)-40):])
+	}
+	if !strings.Contains(out, "AIOPS STATUS") {
+		t.Errorf("output did not contain a rendered frame: %q", out)
 	}
 }
