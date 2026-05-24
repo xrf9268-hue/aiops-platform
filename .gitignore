@@ -20,6 +20,10 @@ tmp/
 *.out
 *.pid
 *.tmp
+# Go binaries built at repo root (e.g. `go build ./cmd/worker/`)
+/worker
+/linear-poller
+/gitea-poller
 
 # Go test artifacts
 coverage.out
