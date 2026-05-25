@@ -36,11 +36,13 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 		return Result{}, fmt.Errorf("read %s: %w", PromptPath, err)
 	}
 
-	cmd, err := buildCodexCmd(ctx, in)
+	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
+	cmd, err := buildCodexCmd(ctx, in, env)
 	if err != nil {
 		return Result{}, err
 	}
 	cmd.Dir = in.Workdir
+	cmd.Env = env
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
 		return Result{}, err
 	}
@@ -94,7 +96,7 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 
 // buildCodexCmd assembles the *exec.Cmd for the requested profile. PROMPT.md
 // is always provided via stdin, never via shell redirection.
-func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
+func buildCodexCmd(ctx context.Context, in RunInput, env []string) (*exec.Cmd, error) {
 	profile := in.Workflow.Config.Codex.Profile
 	if profile == "" {
 		profile = "safe"
@@ -106,7 +108,8 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 	lastMessageAbs := filepath.Join(in.Workdir, CodexLastMessagePath)
 	switch profile {
 	case "safe":
-		if _, err := exec.LookPath("codex"); err != nil {
+		codexPath, err := lookPathInEnv("codex", env)
+		if err != nil {
 			return nil, fmt.Errorf("codex binary not found in PATH; install codex CLI or set agent.default to claude/mock")
 		}
 		// `--sandbox workspace-write` replaces the deprecated `--full-auto`.
@@ -119,18 +122,19 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 		// resolve to the same sandbox mode; the new spelling is forward-
 		// compatible if codex eventually removes the alias.
 		return exec.CommandContext(ctx,
-			"codex", "exec",
+			codexPath, "exec",
 			"--sandbox", "workspace-write",
 			"--skip-git-repo-check",
 			"--cd", in.Workdir,
 			"-o", lastMessageAbs,
 		), nil
 	case "bypass":
-		if _, err := exec.LookPath("codex"); err != nil {
+		codexPath, err := lookPathInEnv("codex", env)
+		if err != nil {
 			return nil, fmt.Errorf("codex binary not found in PATH; install codex CLI or set agent.default to claude/mock")
 		}
 		return exec.CommandContext(ctx,
-			"codex", "exec",
+			codexPath, "exec",
 			"--dangerously-bypass-approvals-and-sandbox",
 			"--skip-git-repo-check",
 			"--cd", in.Workdir,
@@ -141,7 +145,7 @@ func buildCodexCmd(ctx context.Context, in RunInput) (*exec.Cmd, error) {
 		if command == "" {
 			return nil, fmt.Errorf("codex.profile=custom requires codex.command to be non-empty")
 		}
-		return exec.CommandContext(ctx, "sh", "-lc", command), nil
+		return exec.CommandContext(ctx, "sh", "-c", command), nil
 	default:
 		return nil, fmt.Errorf("codex.profile %q is not supported", profile)
 	}

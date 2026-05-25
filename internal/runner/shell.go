@@ -32,8 +32,16 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	}
 
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, "sh", "-lc", command+" < .aiops/PROMPT.md")
+	cmd := exec.CommandContext(ctx, "sh", "-c", command+" < .aiops/PROMPT.md")
 	cmd.Dir = in.Workdir
+	switch r.Name {
+	case "codex":
+		cmd.Env = agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
+	case "claude":
+		cmd.Env = agentEnv(in.Workflow.Config.Claude.EnvPassthrough, in.Workflow.Config)
+	default:
+		cmd.Env = agentEnv(nil, in.Workflow.Config)
+	}
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
 		return Result{}, err
 	}

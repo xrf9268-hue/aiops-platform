@@ -252,6 +252,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `agent.max_timeout_retries` | unbounded (SPEC §8.4 backoff-only); explicit positive integer opts into the §15.5 cap, explicit `0` disables runner-timeout re-queues | SPEC §8.4 default; opt-in cap tracked under DEVIATIONS D29 |
 | `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) | implementation (#230) |
 | `codex.command` | `codex app-server` | SPEC §6.4 |
+| `codex.env_passthrough` / `claude.env_passthrough` | none beyond runner baseline (`PATH`, `HOME`, `USER`, locale, `TZ`, `TERM`); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384) |
 | `pr.draft` | `false` | implementation |
 | `pr.labels` | `[ai-generated, needs-review]` | implementation |
 | `server.port` | `4000` (`-1` disables the HTTP state server + dashboard) | implementation |

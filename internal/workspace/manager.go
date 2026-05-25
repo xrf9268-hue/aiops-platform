@@ -402,7 +402,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	// Hook commands run under `sh -c` (not `-lc`) so the user's login
 	// profile is not re-sourced per command. The PATH that a login shell
 	// would build is captured once at startup and propagated via cmd.Env
-	// (see loginPATH in path_snapshot.go and #314). Without this split,
+	// (see LoginPATH in path_snapshot.go and #314). Without this split,
 	// every hook command captured the stdout of /etc/profile.d/* into
 	// HookResult.Output — surfaced to operators in runtime events and
 	// consumed by policy-feedback parsers.
@@ -498,7 +498,7 @@ func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]Verif
 		buf := &cappedBuffer{Cap: VerifyOutputCap}
 		// `sh -c` (no `-l`): see runWorkspaceHookCommand and #314 for why
 		// the login flag was dropped. PATH inheritance is preserved via the
-		// loginPATH snapshot threaded through cmd.Env.
+		// LoginPATH snapshot threaded through cmd.Env.
 		cmd := exec.CommandContext(runCtx, "sh", "-c", command)
 		cmd.Dir = workdir
 		cmd.Env = env

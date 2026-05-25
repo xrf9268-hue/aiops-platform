@@ -52,7 +52,7 @@ func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, e
 	if len(childArgs) == 0 {
 		return nil, fmt.Errorf("sandbox cannot wrap empty command")
 	}
-	env := scopedEnv(cfg.EnvAllowlist)
+	env := sandboxEnv(cmd.Env, cfg.EnvAllowlist, in.Workflow.Config)
 
 	switch cfg.Backend {
 	case "bubblewrap":
@@ -86,9 +86,20 @@ func ensurePathWithinRoot(path, root string) error {
 	return fmt.Errorf("workspace path %q is outside workspace root %q", path, root)
 }
 
-func scopedEnv(allow []string) []string {
+func scopedEnv(allow []string, cfg workflow.Config) []string {
+	return sandboxEnv(nil, allow, cfg)
+}
+
+func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string {
 	if len(allow) == 0 {
 		return []string{}
+	}
+	primaryByName := make(map[string]string, len(primary))
+	for _, envPair := range primary {
+		name, value, ok := strings.Cut(envPair, "=")
+		if ok && name != "" {
+			primaryByName[name] = value
+		}
 	}
 	seen := map[string]struct{}{}
 	var env []string
@@ -97,10 +108,17 @@ func scopedEnv(allow []string) []string {
 		if name == "" || strings.Contains(name, "=") {
 			continue
 		}
+		if workflow.AgentEnvPassthroughDenyReasonForConfig(name, cfg) != "" {
+			continue
+		}
 		if _, ok := seen[name]; ok {
 			continue
 		}
 		seen[name] = struct{}{}
+		if value, ok := primaryByName[name]; ok {
+			env = append(env, name+"="+value)
+			continue
+		}
 		if value, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+value)
 		}

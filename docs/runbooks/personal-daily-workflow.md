@@ -86,7 +86,7 @@ agent:
 
 ### `codex`
 
-Profile-driven runner (`internal/runner/codex.go`) that invokes the codex CLI with sandbox/approval flags chosen by `codex.profile`. PROMPT.md is piped on stdin; output is captured to `.aiops/CODEX_OUTPUT.txt`. The `custom` profile falls back to `sh -lc <codex.command>` (still stdin-fed).
+Profile-driven runner (`internal/runner/codex.go`) that invokes the codex CLI with sandbox/approval flags chosen by `codex.profile`. PROMPT.md is piped on stdin; output is captured to `.aiops/CODEX_OUTPUT.txt`. The `custom` profile falls back to `sh -c <codex.command>` (still stdin-fed).
 
 Use when:
 
@@ -105,7 +105,7 @@ codex:
 
 - `safe` (default): builds `codex exec --sandbox workspace-write --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` from argv (no shell). PROMPT.md is piped on stdin. This avoids the deprecated `--full-auto` shorthand while preserving the workspace-write sandbox behavior.
 - `bypass`: same shape but with `--dangerously-bypass-approvals-and-sandbox`. Use only when the worker host is already isolated (container, dedicated VM); the flag turns codex's own sandbox off.
-- `custom`: runs the literal `codex.command` via `sh -lc` with PROMPT.md on stdin. Note the change from earlier versions: the runner no longer appends `< .aiops/PROMPT.md` to the command — your command must consume stdin (which `codex exec` does by default when no positional prompt is given).
+- `custom`: runs the literal `codex.command` via `sh -c` with PROMPT.md on stdin. Note the change from earlier versions: the runner no longer appends `< .aiops/PROMPT.md` to the command — your command must consume stdin (which `codex exec` does by default when no positional prompt is given).
 
 ### Reading codex output after a run
 
@@ -167,7 +167,7 @@ For legacy queue runs, `/events` is the most useful endpoint. Look for `enqueued
 - `repo.clone_url missing in WORKFLOW.md`: poller log line. Fix `WORKFLOW.md`, restart the poller.
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
-- Runner command not found: confirm `codex.command` or `claude.command` resolves on the worker host. The codex/claude shell runner uses `sh -lc`, so PATH must be set in the worker's login shell. Workspace hooks (`hooks.after_create`, `hooks.before_run`, etc.) and `verify.commands` run under plain `sh -c` with the PATH captured once from the worker's login shell at startup — the same login-shell PATH that resolves `codex` also resolves hook/verify commands, but `/etc/profile.d/*` and `~/.profile` are not re-sourced per command, so their stdout cannot leak into hook/verify output buffers (#314).
+- Runner command not found: confirm `codex.command` or `claude.command` resolves in the worker's scoped `PATH`. The codex/claude shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).
 
 ### Re-running a failed task

@@ -93,8 +93,9 @@ type ServiceTrackerRouteConfig struct {
 }
 
 type TrackerConfig struct {
-	Kind   string `yaml:"kind" json:"kind"`
-	APIKey string `yaml:"api_key" json:"api_key"`
+	Kind         string `yaml:"kind" json:"kind"`
+	APIKey       string `yaml:"api_key" json:"api_key"`
+	apiKeyEnvVar string
 	// Endpoint is the tracker base/GraphQL URL (SPEC §5.3.1). For
 	// `kind: linear` the default is `https://api.linear.app/graphql`;
 	// GitHub Enterprise / Gitea installs name their REST root here.
@@ -360,6 +361,10 @@ func (a AgentConfig) PolicyViolationBudgetValue() int {
 
 type CommandConfig struct {
 	Command string `yaml:"command" json:"command"`
+	// EnvPassthrough names worker environment variables the agent subprocess may
+	// inherit in addition to the runner baseline. Tracker/repo API tokens stay
+	// behind orchestrator-owned tools and are rejected here.
+	EnvPassthrough []string `yaml:"env_passthrough,omitempty" json:"env_passthrough,omitempty"`
 	// Profile is consulted only by the codex runner. Allowed values: "safe"
 	// (default), "bypass", "custom". The field lives on the shared
 	// CommandConfig type to avoid splitting CodexConfig out for one field;

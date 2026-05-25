@@ -82,7 +82,7 @@ codex:
   #   bypass           - codex exec --dangerously-bypass-approvals-and-sandbox ...
   #                      (only when the worker host is already isolated, e.g. a
   #                      container; codex bypasses its own sandbox + approval gates)
-  #   custom           - run the literal codex.command via sh -lc; PROMPT.md
+  #   custom           - run the literal codex.command via sh -c; PROMPT.md
   #                      is piped on stdin. Escape hatch for bespoke wrappers.
   profile: safe
   # linear_graphql narrows the agent-visible Linear GraphQL tool to the
@@ -137,7 +137,8 @@ safety:
 
 # Optional worker-enforced process hardening. Disabled by default so personal
 # workflows continue to rely on the selected coding agent's own sandbox. Enable
-# only after installing and validating the backend on the worker host.
+# only after installing and validating the backend on the worker host. The
+# selected agent binary must live under a path exposed by that backend profile.
 sandbox:
   enabled: false
   backend: none      # none, bubblewrap, or firejail

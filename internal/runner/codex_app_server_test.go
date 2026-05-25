@@ -32,6 +32,11 @@ func appServerInput(workdir string) RunInput {
 				TurnSandboxPolicy: map[string]any{
 					"mode": "workspace-write",
 				},
+				EnvPassthrough: []string{
+					"CODEX_ARGV_LOG",
+					"CODEX_STDIN_LOG",
+					"CODEX_STARTED_LOG",
+				},
 				TurnTimeoutMs:  3000,
 				ReadTimeoutMs:  3000,
 				StallTimeoutMs: 3000,
@@ -55,9 +60,31 @@ with open(os.environ['CODEX_ARGV_LOG'], 'w') as f:
 	if err := os.WriteFile(scriptPath, []byte(header+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	useAgentLoginPATH(t, path)
 	t.Setenv("CODEX_ARGV_LOG", filepath.Join(dir, "argv.txt"))
 	t.Setenv("CODEX_STDIN_LOG", filepath.Join(dir, "stdin.txt"))
+	return dir
+}
+
+func codexAppServerEnvStubScript(t *testing.T, body string) string {
+	t.Helper()
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "codex")
+	header := `#!/usr/bin/env python3
+import os, sys
+with open("env.txt", "w") as f:
+    for name in ("LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "PATH"):
+        if name in os.environ:
+            f.write(f"{name}={os.environ[name]}\n")
+`
+	if err := os.WriteFile(scriptPath, []byte(header+body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	useAgentLoginPATH(t, path)
 	return dir
 }
 
@@ -171,6 +198,46 @@ for line in sys.stdin:
 	}
 	if turnParams["title"] != "AIOPS-64: Wire Codex app-server" {
 		t.Fatalf("turn title = %#v", turnParams["title"])
+	}
+}
+
+func TestCodexAppServerRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
+	codexAppServerEnvStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {'protocolVersion': '0.1.0'}}), flush=True)
+    elif method == 'initialized':
+        pass
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1', 'lastAssistantMessage': 'done'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "app-server env")
+	t.Setenv("LINEAR_API_KEY", "linear-secret")
+	t.Setenv("GITEA_TOKEN", "gitea-secret")
+	t.Setenv("GITHUB_TOKEN", "github-secret")
+
+	if _, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(wd, "env.txt"))
+	if err != nil {
+		t.Fatalf("read env.txt: %v", err)
+	}
+	for _, secretName := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN"} {
+		if strings.Contains(string(body), secretName+"=") {
+			t.Fatalf("codex app-server env leaked %s:\n%s", secretName, body)
+		}
+	}
+	if !strings.Contains(string(body), "PATH=") {
+		t.Fatalf("codex app-server env lost baseline PATH:\n%s", body)
 	}
 }
 
@@ -1350,21 +1417,44 @@ func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchang
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.Command = "codex exec"
 
-	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
 	if err != nil {
 		t.Fatalf("buildCodexAppServerCmd: %v", err)
 	}
 	if !directExec {
 		t.Fatalf("directCodexExec = false for default codex command, want true")
 	}
-	if len(cmd.Args) < 2 || cmd.Args[0] != "codex" || cmd.Args[1] != "app-server" {
+	if len(cmd.Args) < 2 || filepath.Base(cmd.Args[0]) != "codex" || cmd.Args[1] != "app-server" {
 		t.Fatalf("cmd.Args = %#v, want codex app-server", cmd.Args)
+	}
+}
+
+func TestBuildCodexAppServerCmdResolvesCodexFromAgentEnvPATH(t *testing.T) {
+	rawPathDir := t.TempDir()
+	t.Setenv("PATH", rawPathDir)
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false, want true")
+	}
+	if cmd.Path != codex {
+		t.Fatalf("cmd.Path = %q, want codex from agent env PATH %q", cmd.Path, codex)
 	}
 }
 
 // TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the
 // directCodexExec flag's negative case: when `codex.command` is anything other
-// than a `codex ...` invocation, the cmd runs through `sh -lc`. The runner
+// than a `codex ...` invocation, the cmd runs through `sh -c`. The runner
 // uses this signal to suppress codex_app_server_pid emission, since
 // cmd.Process.Pid would be the shell wrapper rather than the actual codex
 // process.
@@ -1373,15 +1463,15 @@ func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.Command = "/usr/local/bin/my-codex-wrapper --foo"
 
-	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in)
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
 	if err != nil {
 		t.Fatalf("buildCodexAppServerCmd: %v", err)
 	}
 	if directExec {
-		t.Fatalf("directCodexExec = true for custom command %q, want false (sh -lc wrapper)", in.Workflow.Config.Codex.Command)
+		t.Fatalf("directCodexExec = true for custom command %q, want false (sh -c wrapper)", in.Workflow.Config.Codex.Command)
 	}
-	if len(cmd.Args) == 0 || cmd.Args[0] != "sh" {
-		t.Fatalf("cmd.Args = %#v, want sh -lc wrapper", cmd.Args)
+	if len(cmd.Args) < 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" || cmd.Args[2] != in.Workflow.Config.Codex.Command {
+		t.Fatalf("cmd.Args = %#v, want sh -c wrapper", cmd.Args)
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// loginPATH returns the PATH value a login shell would expose to a subprocess,
+// LoginPATH returns the PATH value a login shell would expose to a subprocess,
 // captured once per process. Hooks and verify commands use it so they inherit
 // version-manager additions (nvm, rustup, pyenv, etc.) without paying the cost
 // — or the stdout-capture cost — of sourcing the login profile on every command.
@@ -20,7 +20,7 @@ import (
 // VerifyResult.Output. Snapshotting PATH once and running per-command shells
 // without `-l` keeps the PATH-inheritance contract while removing the per-command
 // profile-source side-effect.
-func loginPATH() string {
+func LoginPATH() string {
 	loginPATHOnce.Do(func() {
 		loginPATHCached = captureLoginPATH()
 	})

@@ -423,9 +423,10 @@ PR creation lives **agent-side**, not in the worker. The worker no
 longer holds Gitea credentials. If the agent (Codex, Claude, etc.)
 needs to push:
 
-- The agent invocation environment must carry credentials matching
-  the configured remote (SSH key, deploy key, or
-  `GITEA_TOKEN`/`GITHUB_TOKEN` exported to the agent process).
+- Prefer file-backed Git credentials such as a dedicated SSH deploy key. Agent
+  subprocesses do not inherit the worker's full environment, and
+  `codex.env_passthrough` / `claude.env_passthrough` reject tracker/repo token
+  names such as `LINEAR_API_KEY`, `GITEA_TOKEN`, and `GITHUB_TOKEN`.
 - For Docker Compose, the worker container mounts a **dedicated** SSH
   keypair at `/home/aiops/.ssh/id_ed25519` — not your entire `~/.ssh`. Set
   it up once:

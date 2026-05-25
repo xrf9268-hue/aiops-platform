@@ -36,6 +36,8 @@ Supported enforcement today:
 - the agent working directory must remain under `workspace.root` before the
   sandbox wrapper is applied;
 - the child process environment is reduced to `sandbox.env_allowlist`;
+- the agent executable must live under a path the sandbox backend exposes
+  (for example `/usr` or `/bin` with the current bubblewrap/firejail profile);
 - explicitly listed credential files are checked for readability and bound into
   the sandbox read-only;
 - `network: none` disables network access for supported backends;
@@ -129,16 +131,16 @@ The current Go implementation provides these safety controls:
 - operator-visible blocked state for Codex input-required and MCP elicitation
   requests, so non-interactive runs stop and remain claimed instead of burning
   retries silently;
-- allow-listed environment for hook and verify subprocesses: by default
-  hook scripts (`after_create`, `before_run`, `after_run`,
-  `before_remove`) and verify commands run with only a small POSIX
-  baseline env (`PATH`, `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`,
-  `TZ`, `TERM`). Tracker tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`,
-  `GITEA_TOKEN`), `SSH_AUTH_SOCK`, and any other secret in the worker's
-  `.env` are excluded — a malicious or buggy WORKFLOW.md cannot `env >
-  /tmp/dump` and exfiltrate. Operators opt specific extra vars back in
-  per workflow with `hooks.env_passthrough: [VAR_NAME, ...]` and
-  `verify.env_passthrough: [VAR_NAME, ...]`. See
+- allow-listed environment for agent, hook, and verify subprocesses: by
+  default these children run with only a small POSIX baseline env (`PATH`,
+  `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`). Tracker/repo
+  tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`, `GITEA_TOKEN`) and any other secret
+  in the worker's `.env` are excluded — a malicious or buggy WORKFLOW.md cannot
+  `env > /tmp/dump` and exfiltrate them. Operators opt non-tracker vars back in
+  per workflow with `codex.env_passthrough`, `claude.env_passthrough`,
+  `hooks.env_passthrough`, or `verify.env_passthrough`; agent passthrough
+  rejects tracker/repo API token names so those credentials stay behind
+  orchestrator-owned tools. See
   [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
 - allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
   `turn/completed` protocol payloads: returned error strings and

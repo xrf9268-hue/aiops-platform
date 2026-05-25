@@ -293,7 +293,7 @@ var supportedAgentDefaults = map[string]struct{}{
 // runner package knows how to dispatch. "safe" injects --sandbox
 // workspace-write + --skip-git-repo-check; "bypass" swaps in
 // --dangerously-bypass-approvals-and-sandbox for already-isolated hosts;
-// "custom" falls back to the operator-supplied codex.command via sh -lc.
+// "custom" falls back to the operator-supplied codex.command via sh -c.
 var supportedCodexProfiles = map[string]struct{}{
 	"safe":   {},
 	"bypass": {},
@@ -393,6 +393,12 @@ func validateConfig(path string, cfg Config) error {
 	if _, ok := supportedCodexProfiles[cfg.Codex.Profile]; !ok {
 		return fmt.Errorf("%s: codex.profile %q is not supported (allowed: safe, bypass, custom)", path, cfg.Codex.Profile)
 	}
+	if err := validateAgentEnvPassthrough(path, "codex", cfg.Codex.EnvPassthrough, cfg); err != nil {
+		return err
+	}
+	if err := validateAgentEnvPassthrough(path, "claude", cfg.Claude.EnvPassthrough, cfg); err != nil {
+		return err
+	}
 	if _, ok := supportedSandboxBackends[cfg.Sandbox.Backend]; !ok {
 		return fmt.Errorf("%s: sandbox.backend %q is not supported (allowed: none, bubblewrap, firejail)", path, cfg.Sandbox.Backend)
 	}
@@ -401,6 +407,9 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if cfg.Sandbox.Enabled && len(cfg.Sandbox.EnvAllowlist) == 0 {
 		return fmt.Errorf("%s: sandbox.enabled requires sandbox.env_allowlist to explicitly scope child environment", path)
+	}
+	if err := validateAgentEnvExposure(path, "sandbox.env_allowlist", cfg.Sandbox.EnvAllowlist, cfg); err != nil {
+		return err
 	}
 	if _, ok := supportedSandboxNetworks[cfg.Sandbox.NetworkMode]; !ok {
 		return fmt.Errorf("%s: sandbox.network %q is not supported (allowed: none, allowlist)", path, cfg.Sandbox.NetworkMode)
@@ -494,6 +503,19 @@ func validateConfig(path string, cfg Config) error {
 	}
 	if len(invalid) > 0 {
 		return fmt.Errorf("%s: invalid codex app-server timeout settings: %s", path, strings.Join(invalid, ", "))
+	}
+	return nil
+}
+
+func validateAgentEnvPassthrough(path, section string, names []string, cfg Config) error {
+	return validateAgentEnvExposure(path, section+".env_passthrough", names, cfg)
+}
+
+func validateAgentEnvExposure(path, field string, names []string, cfg Config) error {
+	for i, name := range names {
+		if reason := AgentEnvPassthroughDenyReasonForConfig(name, cfg); reason != "" {
+			return fmt.Errorf("%s: %s[%d] %q is not allowed: %s", path, field, i, name, reason)
+		}
 	}
 	return nil
 }
@@ -643,6 +665,11 @@ func expandConfig(cfg *Config) error {
 
 func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	var err error
+	if envName, ok := explicitEnvReferenceName(cfg.Tracker.APIKey); ok {
+		cfg.Tracker.apiKeyEnvVar = envName
+	} else {
+		cfg.Tracker.apiKeyEnvVar = ""
+	}
 	if cfg.Tracker.APIKey, err = resolveExplicitEnv("tracker.api_key", cfg.Tracker.APIKey); err != nil {
 		return err
 	}

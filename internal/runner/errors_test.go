@@ -38,8 +38,7 @@ func TestRunnerSentinelsCoverSpecCategories(t *testing.T) {
 
 func TestCodexAppServerRunnerSurfacesRunnerErrorCategories(t *testing.T) {
 	t.Run("codex not found", func(t *testing.T) {
-		t.Setenv("PATH", t.TempDir())
-		_, _, err := buildCodexAppServerCmd(context.Background(), appServerInput(t.TempDir()))
+		_, _, err := buildCodexAppServerCmd(context.Background(), appServerInput(t.TempDir()), []string{"PATH=" + t.TempDir()})
 		if !errors.Is(err, ErrCodexNotFound) {
 			t.Fatalf("buildCodexAppServerCmd error = %T %[1]v, want ErrCodexNotFound", err)
 		}
@@ -76,7 +75,9 @@ func TestCodexAppServerRunnerStillReadsPromptForValidWorkspace(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wd, PromptPath), []byte("prompt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
+	emptyPath := t.TempDir()
+	t.Setenv("PATH", emptyPath)
+	useAgentLoginPATH(t, emptyPath)
 	_, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
 	if err == nil || !strings.Contains(err.Error(), "codex binary not found") {
 		t.Fatalf("Run valid workdir error = %T %[1]v, want codex lookup after prompt read", err)

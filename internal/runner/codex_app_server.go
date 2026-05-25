@@ -49,11 +49,13 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		return Result{}, fmt.Errorf("read %s: %w", PromptPath, err)
 	}
 
-	cmd, directCodexExec, err := buildCodexAppServerCmd(ctx, in)
+	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
+	cmd, directCodexExec, err := buildCodexAppServerCmd(ctx, in, env)
 	if err != nil {
 		return Result{}, err
 	}
 	cmd.Dir = in.Workdir
+	cmd.Env = env
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
 		return Result{}, err
 	}
@@ -97,7 +99,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 	// Only emit codex_app_server_pid when we can guarantee cmd.Process.Pid is
 	// the actual codex process: the command must launch the codex binary
-	// directly (no `sh -lc` wrapper from a custom codex.command), and the
+	// directly (no `sh -c` wrapper from a custom codex.command), and the
 	// sandbox must not have wrapped cmd in firejail/bwrap. In any wrapper
 	// scenario the PID belongs to the wrapper, which would mislead operators
 	// trying to map `/api/v1/state` rows to a host process. omitempty makes
@@ -180,10 +182,10 @@ func validateAppServerWorkdir(workdir string) error {
 // directCodexExec flag. The flag is true only when the command launches the
 // `codex` binary directly (so `cmd.Process.Pid` after Start() is the actual
 // app-server pid). Custom `codex.command` configurations route through
-// `sh -lc <command>`, in which case `cmd.Process.Pid` is the shell wrapper,
+// `sh -c <command>`, in which case `cmd.Process.Pid` is the shell wrapper,
 // not codex — see codex_app_server.go's session_started emit for the resulting
 // PID-emission guard.
-func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, bool, error) {
+func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*exec.Cmd, bool, error) {
 	command := strings.TrimSpace(in.Workflow.Config.Codex.Command)
 	if command == "" || command == "codex exec" {
 		command = "codex app-server"
@@ -193,12 +195,13 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput) (*exec.Cmd, bool, 
 		return nil, false, fmt.Errorf("codex app-server command is empty")
 	}
 	if fields[0] == "codex" {
-		if _, err := exec.LookPath("codex"); err != nil {
+		codexPath, err := lookPathInEnv("codex", env)
+		if err != nil {
 			return nil, false, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
 		}
-		return exec.CommandContext(ctx, fields[0], fields[1:]...), true, nil
+		return exec.CommandContext(ctx, codexPath, fields[1:]...), true, nil
 	}
-	return exec.CommandContext(ctx, "sh", "-lc", command), false, nil
+	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
 }
 
 type appServerClient struct {

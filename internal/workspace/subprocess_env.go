@@ -41,7 +41,7 @@ func subprocessEnv(passthrough []string) []string {
 			// inherits version-manager additions (nvm, rustup, etc.) without
 			// sourcing the login profile per command — which would otherwise
 			// echo profile stdout into the hook/verify output buffer (#314).
-			if v := loginPATH(); v != "" {
+			if v := LoginPATH(); v != "" {
 				env = append(env, "PATH="+v)
 				return
 			}

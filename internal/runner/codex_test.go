@@ -34,8 +34,19 @@ cat > "` + dir + `/stdin.txt"
 	if err := os.WriteFile(scriptPath, []byte(header+body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", path)
+	useAgentLoginPATH(t, path)
 	return dir
+}
+
+func useAgentLoginPATH(t *testing.T, path string) {
+	t.Helper()
+	old := agentLoginPATH
+	agentLoginPATH = func() string { return path }
+	t.Cleanup(func() {
+		agentLoginPATH = old
+	})
 }
 
 // codexWorkdir creates a per-test workdir with a populated .aiops/PROMPT.md.
@@ -106,6 +117,25 @@ func TestCodexRunner_SafeProfileBuildsExpectedArgv(t *testing.T) {
 		if line == "--full-auto" {
 			t.Fatalf("safe profile must not emit --full-auto; codex deprecated it (see #330): argv=%q", gotLines)
 		}
+	}
+}
+
+func TestBuildCodexCmdResolvesCodexFromAgentEnvPATH(t *testing.T) {
+	rawPathDir := t.TempDir()
+	t.Setenv("PATH", rawPathDir)
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd := codexWorkdir(t, "x")
+
+	cmd, err := buildCodexCmd(context.Background(), codexInput(wd), []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("buildCodexCmd: %v", err)
+	}
+	if cmd.Path != codex {
+		t.Fatalf("cmd.Path = %q, want codex from agent env PATH %q", cmd.Path, codex)
 	}
 }
 
@@ -228,7 +258,9 @@ func TestCodexRunner_MissingPromptReturnsWrappedError(t *testing.T) {
 
 func TestCodexRunner_MissingBinaryReturnsClearError(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv — sequential only.
-	t.Setenv("PATH", "") // no codex anywhere
+	emptyPath := t.TempDir()
+	t.Setenv("PATH", emptyPath) // no codex anywhere
+	useAgentLoginPATH(t, emptyPath)
 	wd := codexWorkdir(t, "x")
 	_, err := (CodexRunner{}).Run(context.Background(), codexInput(wd))
 	if err == nil {
@@ -307,6 +339,34 @@ func TestCodexRunner_CustomProfileUsesShellWithStdin(t *testing.T) {
 	}
 }
 
+func TestCodexRunner_CustomProfileDoesNotSourceProfile(t *testing.T) {
+	wd := codexWorkdir(t, "custom-profile-canary")
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte("export PROFILE_CANARY=from-profile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	in := RunInput{
+		Task: task.Task{ID: "tsk_custom_profile", Model: "codex"},
+		Workflow: workflow.Workflow{Config: workflow.Config{
+			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(wd)},
+			Codex:     workflow.CommandConfig{Command: `printf '%s' "${PROFILE_CANARY:-}"`, Profile: "custom"},
+		}},
+		Workdir: wd,
+	}
+	if _, err := (CodexRunner{}).Run(context.Background(), in); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(wd, ".aiops/CODEX_OUTPUT.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != "" {
+		t.Fatalf("custom codex profile sourced HOME profile; canary=%q", got)
+	}
+}
+
 func TestCodexRunner_CustomProfileEmptyCommandRejected(t *testing.T) {
 	wd := codexWorkdir(t, "x")
 	in := RunInput{
@@ -323,5 +383,30 @@ func TestCodexRunner_CustomProfileEmptyCommandRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "codex.command") {
 		t.Fatalf("error %q should mention codex.command", err)
+	}
+}
+
+func TestCodexRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
+	codexStubScript(t, `env > env.txt ; exit 0`)
+	wd := codexWorkdir(t, "x")
+	t.Setenv("LINEAR_API_KEY", "linear-secret")
+	t.Setenv("GITEA_TOKEN", "gitea-secret")
+	t.Setenv("GITHUB_TOKEN", "github-secret")
+
+	if _, err := (CodexRunner{}).Run(context.Background(), codexInput(wd)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(wd, "env.txt"))
+	if err != nil {
+		t.Fatalf("read env.txt: %v", err)
+	}
+	for _, secretName := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN"} {
+		if strings.Contains(string(body), secretName+"=") {
+			t.Fatalf("codex env leaked %s:\n%s", secretName, body)
+		}
+	}
+	if !strings.Contains(string(body), "PATH=") {
+		t.Fatalf("codex env lost baseline PATH:\n%s", body)
 	}
 }

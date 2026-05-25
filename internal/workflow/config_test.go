@@ -2542,3 +2542,132 @@ prompt
 		}
 	}
 }
+
+func TestLoadRejectsAgentEnvPassthroughTrackerTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		envName    string
+		envValue   string
+		body       string
+		want       string
+		wantReason string
+	}{
+		{
+			name: "codex_linear_api_key",
+			body: `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+tracker:
+  kind: gitea
+codex:
+  env_passthrough:
+    - LINEAR_API_KEY
+---
+hello
+`,
+			want:       "codex.env_passthrough[0]",
+			wantReason: "tracker/API token",
+		},
+		{
+			name: "claude_github_token",
+			body: `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+tracker:
+  kind: gitea
+claude:
+  env_passthrough:
+    - GITHUB_TOKEN
+---
+hello
+`,
+			want:       "claude.env_passthrough[0]",
+			wantReason: "tracker/API token",
+		},
+		{
+			name:     "codex_tracker_api_key_source_env",
+			envName:  "AIOPS_TEST_TRACKER_TOKEN",
+			envValue: "tracker-secret",
+			body: `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+tracker:
+  kind: gitea
+  api_key: $AIOPS_TEST_TRACKER_TOKEN
+codex:
+  env_passthrough:
+    - AIOPS_TEST_TRACKER_TOKEN
+---
+hello
+`,
+			want:       "codex.env_passthrough[0]",
+			wantReason: "tracker.api_key environment variable",
+		},
+		{
+			name:     "sandbox_tracker_api_key_source_env",
+			envName:  "AIOPS_TEST_TRACKER_TOKEN",
+			envValue: "tracker-secret",
+			body: `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+tracker:
+  kind: gitea
+  api_key: $AIOPS_TEST_TRACKER_TOKEN
+sandbox:
+  enabled: true
+  backend: bubblewrap
+  env_allowlist:
+    - AIOPS_TEST_TRACKER_TOKEN
+---
+hello
+`,
+			want:       "sandbox.env_allowlist[0]",
+			wantReason: "tracker.api_key environment variable",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.envName != "" {
+				t.Setenv(tc.envName, tc.envValue)
+			}
+			_, err := Load(writeTempWorkflow(t, tc.body))
+			if err == nil {
+				t.Fatal("Load succeeded, want denied env_passthrough error")
+			}
+			if !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), tc.wantReason) {
+				t.Fatalf("Load error = %q, want %s %s guidance", err, tc.want, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestLoadedConfigRetainsTrackerAPIKeySourceEnv(t *testing.T) {
+	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "tracker-secret")
+	wf, err := Load(writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: n
+  clone_url: git@example.com:o/n.git
+tracker:
+  kind: gitea
+  api_key: $AIOPS_TEST_TRACKER_TOKEN
+---
+hello
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "rotated-secret")
+	reason := AgentEnvPassthroughDenyReasonForConfig("AIOPS_TEST_TRACKER_TOKEN", wf.Config)
+	if !strings.Contains(reason, "tracker.api_key environment variable") {
+		t.Fatalf("deny reason = %q, want tracker.api_key source env protection", reason)
+	}
+}

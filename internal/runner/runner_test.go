@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,160 @@ func TestShellRunnerNonTimeoutErrorNotMisclassified(t *testing.T) {
 	}
 	if IsTimeout(err) {
 		t.Fatalf("non-zero exit must not be classified as timeout: %v", err)
+	}
+}
+
+func TestShellRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
+	workdir := shellTestWorkdir(t)
+	t.Setenv("LINEAR_API_KEY", "linear-secret")
+	t.Setenv("GITEA_TOKEN", "gitea-secret")
+	t.Setenv("GITHUB_TOKEN", "github-secret")
+
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude: workflow.CommandConfig{
+			Command: "env > shell-env.txt",
+		},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_shell_env"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(workdir, "shell-env.txt"))
+	if err != nil {
+		t.Fatalf("read shell-env.txt: %v", err)
+	}
+	for _, secretName := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN"} {
+		if strings.Contains(string(body), secretName+"=") {
+			t.Fatalf("runner env leaked %s:\n%s", secretName, body)
+		}
+	}
+	if !strings.Contains(string(body), "PATH=") {
+		t.Fatalf("runner env lost baseline PATH:\n%s", body)
+	}
+}
+
+func TestShellRunnerDoesNotSourceProfileByDefault(t *testing.T) {
+	workdir := shellTestWorkdir(t)
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".profile"), []byte("export PROFILE_CANARY=from-profile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude: workflow.CommandConfig{
+			Command: `printf '%s' "${PROFILE_CANARY:-}" > profile-canary.txt`,
+		},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_shell_profile"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(workdir, "profile-canary.txt"))
+	if err != nil {
+		t.Fatalf("read profile-canary.txt: %v", err)
+	}
+	if got := string(body); got != "" {
+		t.Fatalf("shell runner sourced HOME profile; canary=%q", got)
+	}
+}
+
+func TestShellRunnerHonorsExplicitEnvPassthrough(t *testing.T) {
+	workdir := shellTestWorkdir(t)
+	t.Setenv("AIOPS_RUNNER_CANARY", "allowed-value")
+	t.Setenv("LINEAR_API_KEY", "linear-secret")
+
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude: workflow.CommandConfig{
+			Command:        "env > shell-env.txt",
+			EnvPassthrough: []string{"AIOPS_RUNNER_CANARY"},
+		},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_shell_env_allow"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(workdir, "shell-env.txt"))
+	if err != nil {
+		t.Fatalf("read shell-env.txt: %v", err)
+	}
+	if !strings.Contains(string(body), "AIOPS_RUNNER_CANARY=allowed-value") {
+		t.Fatalf("runner env missing explicit passthrough:\n%s", body)
+	}
+	if strings.Contains(string(body), "LINEAR_API_KEY=") {
+		t.Fatalf("runner env leaked token outside explicit passthrough:\n%s", body)
+	}
+}
+
+func TestAgentEnvRejectsTrackerTokenPassthrough(t *testing.T) {
+	t.Setenv("AIOPS_RUNNER_CANARY", "allowed-value")
+	t.Setenv("LINEAR_API_KEY", "linear-secret")
+	t.Setenv("GITEA_TOKEN", "gitea-secret")
+	t.Setenv("GITHUB_TOKEN", "github-secret")
+
+	body := strings.Join(agentEnv([]string{"AIOPS_RUNNER_CANARY", "LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN"}, workflow.Config{}), "\n")
+	if !strings.Contains(body, "AIOPS_RUNNER_CANARY=allowed-value") {
+		t.Fatalf("agent env missing non-secret passthrough:\n%s", body)
+	}
+	for _, secretName := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN"} {
+		if strings.Contains(body, secretName+"=") {
+			t.Fatalf("agent env leaked denied passthrough %s:\n%s", secretName, body)
+		}
+	}
+}
+
+func TestAgentEnvRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
+	t.Setenv("AIOPS_RUNNER_CANARY", "allowed-value")
+	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "tracker-secret")
+
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{APIKey: "tracker-secret"},
+	}
+	body := strings.Join(agentEnv([]string{"AIOPS_RUNNER_CANARY", "AIOPS_TEST_TRACKER_TOKEN"}, cfg), "\n")
+	if !strings.Contains(body, "AIOPS_RUNNER_CANARY=allowed-value") {
+		t.Fatalf("agent env missing non-secret passthrough:\n%s", body)
+	}
+	if strings.Contains(body, "AIOPS_TEST_TRACKER_TOKEN=") {
+		t.Fatalf("agent env leaked tracker API key value:\n%s", body)
+	}
+}
+
+func TestAgentEnvUsesLoginShellPATHSnapshot(t *testing.T) {
+	env := agentEnvWithLookup(
+		nil,
+		workflow.Config{},
+		func(name string) (string, bool) {
+			if name == "PATH" {
+				return "/worker/path", true
+			}
+			return "", false
+		},
+		func() string { return "/login/path" },
+	)
+	body := strings.Join(env, "\n")
+	if !strings.Contains(body, "PATH=/login/path") {
+		t.Fatalf("agent env did not use login-shell PATH snapshot:\n%s", body)
+	}
+	if strings.Contains(body, "PATH=/worker/path") {
+		t.Fatalf("agent env used raw worker PATH instead of login-shell snapshot:\n%s", body)
 	}
 }
 

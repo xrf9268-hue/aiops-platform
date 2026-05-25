@@ -9,7 +9,7 @@ import (
 )
 
 // configurePlatformKill makes the shell runner survive SIGTERM-resistant
-// children (e.g. `sleep` under `sh -lc`). The runner runs in its own
+// children (e.g. `sleep` under `sh -c`). The runner runs in its own
 // process group so we can deliver signals to the entire group on
 // context cancel; otherwise WaitDelay would only kill `sh` and leave
 // grandchildren orphaned, blocking workspace cleanup.

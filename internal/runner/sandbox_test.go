@@ -74,7 +74,7 @@ func TestSandboxBubblewrapBuildsWrappedCommandAndScopesEnvironment(t *testing.T)
 		Enabled:      true,
 		Backend:      "bubblewrap",
 		NetworkMode:  "none",
-		EnvAllowlist: []string{"AIOPS_RUN_TOKEN"},
+		EnvAllowlist: []string{"AIOPS_RUN_TOKEN", "GITHUB_TOKEN"},
 	}), base)
 	if err != nil {
 		t.Fatalf("applySandbox: %v", err)
@@ -88,11 +88,124 @@ func TestSandboxBubblewrapBuildsWrappedCommandAndScopesEnvironment(t *testing.T)
 			t.Fatalf("wrapped args missing %q in %#v", want, wrapped.Args)
 		}
 	}
+	if strings.Contains(joined, "GITHUB_TOKEN") {
+		t.Fatalf("wrapped args leaked denied credential: %#v", wrapped.Args)
+	}
 	for _, env := range wrapped.Env {
 		if strings.HasPrefix(env, "GITHUB_TOKEN=") {
 			t.Fatalf("sandbox env leaked non-allowlisted credential: %q", wrapped.Env)
 		}
 	}
+}
+
+func TestScopedEnvRejectsTrackerTokenNames(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "must-not-leak")
+	t.Setenv("AIOPS_RUN_TOKEN", "allowed-secret")
+
+	env := scopedEnv([]string{"AIOPS_RUN_TOKEN", "GITHUB_TOKEN"}, workflow.Config{})
+	if !envContains(env, "AIOPS_RUN_TOKEN=allowed-secret") {
+		t.Fatalf("scoped env missing allowed value: %q", env)
+	}
+	if envContains(env, "GITHUB_TOKEN=must-not-leak") {
+		t.Fatalf("scoped env leaked denied token name: %q", env)
+	}
+}
+
+func TestScopedEnvRejectsTrackerAPIKeyValue(t *testing.T) {
+	t.Setenv("AIOPS_TEST_TRACKER_TOKEN", "tracker-secret")
+
+	env := scopedEnv([]string{"AIOPS_TEST_TRACKER_TOKEN"}, workflow.Config{
+		Tracker: workflow.TrackerConfig{APIKey: "tracker-secret"},
+	})
+	if envContains(env, "AIOPS_TEST_TRACKER_TOKEN=tracker-secret") {
+		t.Fatalf("scoped env leaked tracker API key value: %q", env)
+	}
+}
+
+func TestSandboxEnvTreatsAllowlistAsFinalBoundary(t *testing.T) {
+	t.Setenv("AIOPS_RUNNER_CANARY", "from-worker-env")
+	t.Setenv("AIOPS_SANDBOX_CANARY", "from-sandbox-allowlist")
+
+	env := sandboxEnv(
+		[]string{"AIOPS_RUNNER_CANARY=from-runner-env", "AIOPS_BLOCKED_CANARY=blocked", "PATH=/agent/bin"},
+		[]string{"AIOPS_RUNNER_CANARY", "AIOPS_SANDBOX_CANARY"},
+		workflow.Config{},
+	)
+	if !envContains(env, "AIOPS_RUNNER_CANARY=from-runner-env") {
+		t.Fatalf("sandbox env missing allowlisted runner value: %q", env)
+	}
+	if envContains(env, "AIOPS_RUNNER_CANARY=from-worker-env") {
+		t.Fatalf("sandbox env used worker env instead of runner-scoped value: %q", env)
+	}
+	if !envContains(env, "AIOPS_SANDBOX_CANARY=from-sandbox-allowlist") {
+		t.Fatalf("sandbox env missing allowlisted worker value: %q", env)
+	}
+	if envContains(env, "AIOPS_BLOCKED_CANARY=blocked") || envContains(env, "PATH=/agent/bin") {
+		t.Fatalf("sandbox env leaked non-allowlisted runner values: %q", env)
+	}
+}
+
+func TestSandboxBubblewrapTreatsEnvAllowlistAsFinalBoundary(t *testing.T) {
+	requireLinuxSandboxHost(t)
+	binDir := t.TempDir()
+	bwrap := filepath.Join(binDir, "bwrap")
+	if err := os.WriteFile(bwrap, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("AIOPS_SANDBOX_CANARY", "from-sandbox-allowlist")
+	t.Setenv("AIOPS_RUNNER_CANARY", "from-worker-env")
+
+	workdir := t.TempDir()
+	base := exec.CommandContext(context.Background(), "codex", "exec", "--cd", workdir)
+	base.Dir = workdir
+	base.Env = []string{"AIOPS_RUNNER_CANARY=from-runner-env", "AIOPS_BLOCKED_CANARY=blocked", "PATH=" + os.Getenv("PATH")}
+
+	wrapped, err := applySandbox(context.Background(), sandboxInput(t, workdir, workflow.SandboxConfig{
+		Enabled:      true,
+		Backend:      "bubblewrap",
+		NetworkMode:  "none",
+		EnvAllowlist: []string{"AIOPS_RUNNER_CANARY", "AIOPS_SANDBOX_CANARY"},
+	}), base)
+	if err != nil {
+		t.Fatalf("applySandbox: %v", err)
+	}
+	joined := strings.Join(wrapped.Args, "\x00")
+	for _, want := range []string{"--setenv", "AIOPS_RUNNER_CANARY", "from-runner-env", "AIOPS_SANDBOX_CANARY", "from-sandbox-allowlist"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("wrapped args missing %q in %#v", want, wrapped.Args)
+		}
+	}
+	for _, denied := range []string{"AIOPS_BLOCKED_CANARY", "PATH=" + os.Getenv("PATH")} {
+		if strings.Contains(joined, denied) {
+			t.Fatalf("wrapped args leaked non-allowlisted runner env %q in %#v", denied, wrapped.Args)
+		}
+	}
+	if !envContains(wrapped.Env, "AIOPS_RUNNER_CANARY=from-runner-env") {
+		t.Fatalf("wrapped Env missing runner-scoped env: %q", wrapped.Env)
+	}
+	if envContains(wrapped.Env, "AIOPS_RUNNER_CANARY=from-worker-env") {
+		t.Fatalf("wrapped Env used worker env instead of runner-scoped env: %q", wrapped.Env)
+	}
+	if envContains(wrapped.Env, "AIOPS_BLOCKED_CANARY=blocked") {
+		t.Fatalf("wrapped Env leaked non-allowlisted runner env: %q", wrapped.Env)
+	}
+	if !envContains(wrapped.Env, "AIOPS_SANDBOX_CANARY=from-sandbox-allowlist") {
+		t.Fatalf("wrapped Env missing sandbox allowlist env: %q", wrapped.Env)
+	}
+}
+
+func envContains(env []string, want string) bool {
+	for _, got := range env {
+		if got == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSandboxBubblewrapSkipsMissingLib64Bind(t *testing.T) {
