@@ -27,6 +27,10 @@ The goal is a practical loop, not a heavy enterprise platform: run `cmd/worker`
 as a Go-based, Gitea-friendly, locally customizable Symphony while the open
 items in [`DEVIATIONS.md`](DEVIATIONS.md) are closed systematically.
 
+## License
+
+aiops-platform is licensed under the [Apache License 2.0](LICENSE).
+
 ## Components
 
 ### Binaries (`cmd/`)
