@@ -4,12 +4,20 @@ How an agent should run a batch of issues (a `/goal` over a set of tracker
 issues) so the work stays reviewable, parallel where it can be, and safe to
 merge.
 
-Every rule below is earned by a specific failure or friction observed in the
-**2026-05 eight-issue sequential batch** (issues #365–#372 → 8 PRs #373, #374,
-#376–#381; the one acceptance-criterion deferral was filed as a separate
-follow-up, issue #375 — which is why the PR numbers skip it). Per the "Earned
-rules" principle in [`AGENTS.md`](../../AGENTS.md), do not generalize beyond
-what that run actually taught.
+Every rule below is earned by a specific failure or friction observed in batch
+runs:
+
+- **2026-05 eight-issue sequential batch** (issues #365–#372 → 8 PRs #373,
+  #374, #376–#381; the one acceptance-criterion deferral was filed as a
+  separate follow-up, issue #375 — which is why the PR numbers skip it).
+- **2026-05 ten-issue automated batch** (issues #384–#393). This run added the
+  quality-over-throughput lessons: post-commit dual local review before push,
+  fresh `@codex review` trigger tracking, thread-aware review closure,
+  size-gated PR sign-off, pause/resume state recovery, and follow-up capture for
+  late unresolved review threads.
+
+Per the "Earned rules" principle in [`AGENTS.md`](../../AGENTS.md), do not
+generalize beyond what those runs actually taught.
 
 ## The unit of work: one issue → one PR
 
@@ -23,10 +31,10 @@ what that run actually taught.
    regression tests, and the test must fail when the production code is broken
    (mutation or negative assertion — see "Clean code" rule 6 in `AGENTS.md`). A
    PR whose tests would pass with the fix reverted does not count as done.
-3. **Run the local CI gate before pushing**, then confirm CI green and run the
-   adversarial pass (`@codex review`) on the head commit. Resolve or
-   explicitly defer every finding before marking ready. This is the
-   cross-cutting checklist in `AGENTS.md`, applied per PR.
+3. **Run the local CI gate and dual local review before pushing**, then confirm
+   CI green and run the adversarial pass (`@codex review`) on the pushed head
+   commit. Resolve or explicitly defer every finding before marking ready. This
+   is the cross-cutting checklist in `AGENTS.md`, applied per PR.
 
 ## Parallelize independent issues by default
 
@@ -54,6 +62,52 @@ ordering dependency.
    (`policy.max_changed_files: 12`, `policy.max_changed_loc: 300`). Parallelism
    is about more small PRs, never bigger ones.
 
+Size budget is an auto-merge eligibility gate, not a quality throttle. If
+HIGH/MEDIUM review feedback exposes a real correctness, safety, or security
+gap, fix it even when that pushes the PR over the default budget. Mark that PR
+`size-gated`, keep it out of auto-merge, and provide a human sign-off bundle:
+why the extra scope is necessary, the final head SHA, local verification, CI
+state, bot review state, unresolved-thread state, and residual risk.
+
+## Review the committed diff before every push
+
+The 2026-05 ten-issue batch showed that review before commit is too easy to
+invalidate with an amend. Make the commit object the review artifact:
+
+1. **Refresh `origin/main`, then commit or amend first**, with only explicit
+   paths staged.
+2. **Before every push**, dispatch two independent diff-only reviewers against
+   the exact committed range (`origin/main...HEAD`):
+   - a Codex reviewer (subagent or `codex exec`)
+   - a Claude Code reviewer (subagent or hardened `claude -p`)
+
+   Bare `claude -p` is shorthand for a diff-only invocation that receives the
+   diff on stdin, disables tool use, and avoids session carryover, for example
+   `claude -p '<review prompt>' --permission-mode bypassPermissions
+   --no-session-persistence --tools "" --max-turns 2`.
+3. **Do not feed either reviewer your conclusions.** Provide the issue/PR
+   intent, head SHA, changed files, relevant SPEC/upstream pointers, and the
+   diff. Ask for severity-tagged findings and a final verdict.
+4. **HIGH/MEDIUM/Critical findings block the push.** Fix them, amend, and rerun
+   both reviewers unless the human explicitly signs off on accepting that risk
+   before push. LOW/P3 findings should be fixed when they are small, localized,
+   and regression-like; otherwise record the decision in review notes and the
+   PR body.
+5. **A failed reviewer run is not approval.** Retry with a bounded diff-only
+   prompt. If one reviewer family remains unavailable, use an equivalent
+   successful diff-only review from the same family or get explicit human
+   sign-off before pushing. Record the fallback/sign-off in local review notes
+   before a first push, then copy it into the PR body when the PR exists. Do not
+   push with only one local reviewer verdict. The pushed PR still needs the
+   GitHub `@codex review` gate.
+
+This local review gate is in addition to the GitHub bot review. It catches
+pre-push defects; it does not replace the post-push, thread-aware gate. Two
+reviewers are the minimum for a pushed head; the blast radius controls how many
+rounds you run after that. A pure documentation change may need only one clean
+dual-review round, while destructive or concurrent code paths need repeated
+rounds until the findings stop.
+
 ## Surface deferrals at the moment you defer, not at the end
 
 In the 2026-05 run, one acceptance criterion that could not be met was carried
@@ -76,11 +130,61 @@ list. Maintain a running checklist instead and refresh it on every meaningful
 transition:
 
 ```text
-issue → branch → PR → state (draft | CI green | review clean | mergeable | merged | deferred→#NNN)
+issue → branch/worktree → PR → head → state
+(triaged | in-progress | draft | CI green | bot-review-pending | review clean |
+ threads-resolved | size-gated | mergeable | merged | merged-by-user |
+ deferred→#NNN | skipped)
 ```
 
 This mirrors the per-event status-checklist discipline the harness expects when
 watching PR activity; apply it to the batch as a whole.
+
+For each PR, also track:
+
+- current head SHA
+- validation commands run locally
+- CI conclusion and run id
+- `@codex review` trigger comment id and reaction state
+- unresolved review thread ids, including whether each is outdated
+- size-budget result
+- deferral/follow-up issue links
+
+Treat the PR body as the public ledger for the same facts. Update it after each
+material push instead of leaving stale validation or review status in place.
+
+## Treat bot review and review threads as live gates
+
+`@codex review` is not a normal check run and `latestReviews` can lag the fresh
+trigger. For every pushed head:
+
+1. Comment `@codex review` and record that issue-comment id.
+2. Wait for the trigger's 👀 reaction to appear, then disappear, and require a
+   positive completion signal: Codex posted a review/comment for that head or
+   reacted 👍 to the trigger.
+3. Query review threads with GraphQL. Flat review comments are not enough.
+4. Resolve addressed or outdated threads only after the fresh trigger completes
+   and a thread-aware recheck shows no non-outdated actionable threads.
+5. If a PR is merged with non-trivial bot review activity, sanity-check the next
+   `Capture unresolved reviews` workflow run or linked follow-up issues. That
+   workflow is a backstop, not a merge substitute.
+
+## Pause, resume, and external merges
+
+Long batches may cross model quota windows or human intervention. Before
+pausing, write down the live ledger: issue, branch/worktree, PR, head SHA, CI
+state, trigger comment id, unresolved thread ids, size-gate state, and next
+action. Schedule the wakeup only after that state exists.
+
+On resume, do not trust the paused snapshot. Re-fetch `origin/main`, refresh
+each live issue/PR with `gh`, and reclassify externally changed work:
+
+- If the human merged a PR, mark it `merged-by-user` and move on.
+- If the head changed, restart local verification and review gates for that
+  head.
+- If a trigger comment is still active, wait for that exact trigger or start a
+  fresh review on the current head.
+- If unresolved review follow-up issues were created after merge, link them in
+  the batch summary and close only after their PRs land.
 
 ## Merge and goal-clear are human actions by default
 
@@ -109,14 +213,17 @@ these hold:
 
 1. **CI is green** on the head commit (not a stale run).
 2. **`@codex review` is clean** — no unresolved HIGH/MEDIUM findings — and
-   there are **zero unresolved, non-outdated review threads**.
+   there are **zero unresolved, non-outdated review threads**. The review must
+   be fresh for the current head: trigger-comment reactions have converged and
+   thread-aware GraphQL state is clean.
 3. **Every acceptance criterion is met, or each gap is deferred to a tracked,
    linked issue** (per the deferral protocol above).
 4. **The PR is within this repo's effective size budget and changes no
    `policy.deny_paths`.** Read both from the repo's `WORKFLOW.md`; do not trust
    a hardcoded list — workflows differ (defaults are 12 files / 300 LOC and
    deny `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but e.g. the
-   `github-local` example uses 20 / 600).
+   `github-local` example uses 20 / 600). A quality-driven size breach may be
+   valid work, but it is `size-gated` and requires human sign-off before merge.
 5. **Branch protection's required reviews are satisfied.**
 6. **The merge uses the agreed method** (default: squash) into the agreed base.
 
@@ -129,15 +236,16 @@ breach. So:
 - Confirm gates 2–4 **yourself, immediately before** enabling auto-merge.
 - A new commit re-opens them — any push restarts the `@codex` round, so
   re-confirm before re-enabling.
-- Prefer native auto-merge over an immediate merge only to win the CI race, not
-  as a substitute for checking the policy gates.
+- Prefer native auto-merge over an immediate merge only after the non-check
+  gates are already confirmed, and only to win the CI race — not as a
+  substitute for checking the policy gates.
 
 Hard stops — **always require human sign-off even under an auto-merge grant:**
 
 - Force-pushing or merging into `main` out of band, or any history rewrite.
 - Editing `go.mod`'s `go` directive opportunistically, or touching `policy.deny_paths`.
 - A PR that breached its scope (size budget, unrelated refactors) — flag, don't
-  merge.
+  merge without explicit human size-gate sign-off.
 - Anything the human's instructions for this batch put off-limits. When a PR
   sits at the edge of the grant, use `AskUserQuestion` rather than assuming the
   grant covers it.
