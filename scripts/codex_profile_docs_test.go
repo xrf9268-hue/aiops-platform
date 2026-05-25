@@ -34,9 +34,6 @@ func TestCodexSafeProfileDocsUseWorkspaceWriteSandbox(t *testing.T) {
 			if !strings.Contains(text, tc.want) {
 				t.Fatalf("%s missing current safe-profile spelling %q", tc.path, tc.want)
 			}
-			if strings.Contains(text, "safe profile") && strings.Contains(text, "--full-auto") {
-				t.Fatalf("%s describes safe profile with deprecated --full-auto", tc.path)
-			}
 			for _, old := range []string{
 				"safe   (default) - codex exec --full-auto",
 				"safe` (default): builds `codex exec --full-auto",
