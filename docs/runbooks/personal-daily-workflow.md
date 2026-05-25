@@ -103,7 +103,7 @@ codex:
 
 **Profiles** select how the runner invokes codex:
 
-- `safe` (default): builds `codex exec --full-auto --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` from argv (no shell). PROMPT.md is piped on stdin. `--full-auto` is codex's documented shorthand for `--sandbox workspace-write --ask-for-approval=never`.
+- `safe` (default): builds `codex exec --sandbox workspace-write --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` from argv (no shell). PROMPT.md is piped on stdin. This avoids the deprecated `--full-auto` shorthand while preserving the workspace-write sandbox behavior.
 - `bypass`: same shape but with `--dangerously-bypass-approvals-and-sandbox`. Use only when the worker host is already isolated (container, dedicated VM); the flag turns codex's own sandbox off.
 - `custom`: runs the literal `codex.command` via `sh -lc` with PROMPT.md on stdin. Note the change from earlier versions: the runner no longer appends `< .aiops/PROMPT.md` to the command — your command must consume stdin (which `codex exec` does by default when no positional prompt is given).
 

@@ -290,8 +290,8 @@ var supportedAgentDefaults = map[string]struct{}{
 }
 
 // supportedCodexProfiles enumerates the codex runner profile names the
-// runner package knows how to dispatch. "safe" injects --full-auto +
-// --skip-git-repo-check; "bypass" swaps in
+// runner package knows how to dispatch. "safe" injects --sandbox
+// workspace-write + --skip-git-repo-check; "bypass" swaps in
 // --dangerously-bypass-approvals-and-sandbox for already-isolated hosts;
 // "custom" falls back to the operator-supplied codex.command via sh -lc.
 var supportedCodexProfiles = map[string]struct{}{
