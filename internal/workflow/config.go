@@ -50,8 +50,8 @@ type ServerConfig struct {
 	// empty value is treated as the loopback default rather than a bind-all
 	// wildcard so a blank override never silently widens exposure. Set it to
 	// 0.0.0.0 only behind a loopback-scoped host port mapping (see the
-	// dashboard Compose overlay); the loopback Host-header guard is not
-	// authentication, so a routable bind needs auth that this server lacks.
+	// dashboard Compose overlay) with AIOPS_STATE_API_TOKEN requiring auth for
+	// every request.
 	Host string `yaml:"host" json:"host"`
 	Port int    `yaml:"port" json:"port"`
 	// portSet records whether server.port was explicitly present in the

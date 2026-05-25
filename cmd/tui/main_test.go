@@ -213,6 +213,30 @@ func TestFetchState_ParsesValidResponse(t *testing.T) {
 	}
 }
 
+func TestFetchStateWithAuthSendsBearerToken(t *testing.T) {
+	body := `{"poll_interval_ms":5000,"max_concurrent_agents":1,"counts":{},"running":[],"retrying":[],"codex_totals":{}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer state-token" {
+			t.Fatalf("Authorization = %q, want Bearer token", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	client := &http.Client{}
+	if _, err := fetchStateWithAuth(context.Background(), client, srv.URL, "state-token"); err != nil {
+		t.Fatalf("fetchStateWithAuth error = %v", err)
+	}
+}
+
+func TestStateAPIAuthTokenFromEnvTrimsWhitespace(t *testing.T) {
+	t.Setenv(stateAPIAuthTokenEnv, "  state-token\n")
+	if got := stateAPIAuthTokenFromEnv(); got != "state-token" {
+		t.Fatalf("stateAPIAuthTokenFromEnv() = %q, want trimmed token", got)
+	}
+}
+
 // ── formatResetValue ──────────────────────────────────────────────────────────
 
 func TestFormatResetValue_IntegerGetsSuffix(t *testing.T) {

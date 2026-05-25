@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -560,6 +561,7 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 }
 
 const stateHTTPServerShutdownTimeout = 10 * time.Second
+const stateHTTPAuthTokenEnv = "AIOPS_STATE_API_TOKEN"
 
 type stateHTTPServerHandle struct {
 	Addr net.Addr
@@ -571,7 +573,7 @@ func startStateHTTPServer(ctx context.Context, host string, port int, snapshot s
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil, nil
 	}
-	server := newStateHTTPServer(host, port, snapshot, refresh...)
+	server := newStateHTTPServerWithAuthToken(host, port, os.Getenv(stateHTTPAuthTokenEnv), snapshot, refresh...)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
@@ -613,6 +615,10 @@ func normalizeServerHost(host string) string {
 }
 
 func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
+	return newStateHTTPServerWithAuthToken(host, port, "", snapshot, refresh...)
+}
+
+func newStateHTTPServerWithAuthToken(host string, port int, authToken string, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
 	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
@@ -625,9 +631,10 @@ func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refre
 		}
 		dashboardHTMLHandler().ServeHTTP(w, r)
 	})
+	guard := stateHTTPAccessGuard{authToken: strings.TrimSpace(authToken)}
 	return &http.Server{
 		Addr:              net.JoinHostPort(normalizeServerHost(host), strconv.Itoa(port)),
-		Handler:           loopbackHostOnly(mux),
+		Handler:           guard.wrap(mux),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -642,14 +649,53 @@ func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refre
 	}
 }
 
-func loopbackHostOnly(next http.Handler) http.Handler {
+type stateHTTPAccessGuard struct {
+	authToken string
+}
+
+func (g stateHTTPAccessGuard) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if g.authToken != "" {
+			if stateHTTPAuthorized(r, g.authToken) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			requireStateHTTPAuth(w)
+			return
+		}
+		if isLoopbackHTTPHost(r.Host) && isLoopbackHTTPRemoteAddr(r.RemoteAddr) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if !isLoopbackHTTPHost(r.Host) {
 			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
 			return
 		}
-		next.ServeHTTP(w, r)
+		http.Error(w, "forbidden", http.StatusForbidden)
 	})
+}
+
+func requireStateHTTPAuth(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="aiops state API", charset="UTF-8"`)
+	http.Error(w, "authentication required", http.StatusUnauthorized)
+}
+
+func stateHTTPAuthorized(r *http.Request, token string) bool {
+	if user, password, ok := r.BasicAuth(); ok && user == "aiops" && stateHTTPTokenMatches(password, token) {
+		return true
+	}
+	scheme, credentials, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if ok && strings.EqualFold(scheme, "Bearer") && stateHTTPTokenMatches(strings.TrimSpace(credentials), token) {
+		return true
+	}
+	return false
+}
+
+func stateHTTPTokenMatches(got, want string) bool {
+	if got == "" || want == "" || len(got) != len(want) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
 
 func isLoopbackHTTPHost(hostport string) bool {
@@ -678,6 +724,15 @@ func isLoopbackHTTPHost(hostport string) bool {
 		return true
 	}
 	return false
+}
+
+func isLoopbackHTTPRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 type stateSnapshotFunc func(context.Context) (orchestrator.StateView, error)

@@ -153,16 +153,19 @@ profile is explicitly requested (see
 The worker's loopback dashboard is not reachable from the host under the
 base Compose file. To reach it, merge the opt-in overlay, which binds
 `0.0.0.0` inside the container and publishes only to host loopback
-(`127.0.0.1:4000:4000`):
+(`127.0.0.1:4000:4000`). Docker forwards from a bridge peer rather than
+container loopback, so the overlay requires a state API token:
 
 ```bash
+export AIOPS_STATE_API_TOKEN=$(openssl rand -hex 24)
 docker compose -f deploy/docker-compose.yml \
   -f deploy/docker-compose.dashboard.yml up worker
 ```
 
 See README "Operator surfaces" for the trust-boundary caveats; the
-surface is unauthenticated, so never publish it on a routable host
-interface.
+overlay requires auth on every request. The browser Basic-auth username is
+`aiops` and the password is `$AIOPS_STATE_API_TOKEN`; `cmd/tui` reads the same
+env var and sends it as a bearer token when polling the overlay.
 
 > **Upgrading from a root-running worker image.** The worker now runs as the
 > unprivileged `aiops` user (#365). A `workspaces` named volume created by an

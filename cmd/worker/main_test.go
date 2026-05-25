@@ -31,6 +31,12 @@ type fakeReconcileTracker struct {
 	issues []tracker.Issue
 }
 
+func newLoopbackRequest(method, target string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, target, body)
+	req.RemoteAddr = "127.0.0.1:54321"
+	return req
+}
+
 func samePath(a, b string) bool {
 	eval := func(path string) string {
 		resolved, err := filepath.EvalSymlinks(path)
@@ -338,7 +344,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/", nil)
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -359,7 +365,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 	}
 
 	assetPath := firstScriptAssetPath(t, html)
-	assetReq := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)
+	assetReq := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)
 	assetW := httptest.NewRecorder()
 	server.Handler.ServeHTTP(assetW, assetReq)
 	if assetW.Code != http.StatusOK {
@@ -388,7 +394,7 @@ func TestRootDashboardAllowsHeadProbes(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodHead, "http://127.0.0.1:4000/", nil)
+	req := newLoopbackRequest(http.MethodHead, "http://127.0.0.1:4000/", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -406,7 +412,7 @@ func TestRootDashboardRejectsUnsafeMethodsWithHeadInAllow(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/", nil)
+	req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -461,7 +467,7 @@ func TestIssueHTTPHandlerReturnsRunningIssueByIdentifier(t *testing.T) {
 		}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/mt-649", nil)
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/mt-649", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -526,7 +532,7 @@ func TestIssueHTTPHandlerReturnsRestartCountForRetryingIssue(t *testing.T) {
 		}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-650", nil)
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-650", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -570,7 +576,7 @@ func TestIssueHTTPHandlerOmitsRestartCountForFirstRun(t *testing.T) {
 		}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-651", nil)
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/MT-651", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -599,7 +605,7 @@ func TestIssueHTTPHandlerReturns404EnvelopeForUnknownIssue(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/NOPE-1", nil)
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/NOPE-1", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -627,7 +633,7 @@ func TestIssueHTTPHandlerRejectsNonGET(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/MT-649", nil)
+	req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/MT-649", nil)
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -661,11 +667,11 @@ func TestRefreshHTTPHandlerQueuesAndCoalescesImmediatePoll(t *testing.T) {
 	})
 
 	first := httptest.NewRecorder()
-	firstReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil)
+	firstReq := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil)
 	firstReq.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
 	server.Handler.ServeHTTP(first, firstReq)
 	second := httptest.NewRecorder()
-	secondReq := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader("{}"))
+	secondReq := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader("{}"))
 	secondReq.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
 	server.Handler.ServeHTTP(second, secondReq)
 
@@ -711,7 +717,7 @@ func TestRefreshHTTPHandlerRequiresRefreshHeader(t *testing.T) {
 	})
 
 	resp := httptest.NewRecorder()
-	server.Handler.ServeHTTP(resp, httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil))
+	server.Handler.ServeHTTP(resp, newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", nil))
 
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("status code = %d, want %d; body=%s", resp.Code, http.StatusForbidden, resp.Body.String())
@@ -731,7 +737,7 @@ func TestRefreshHTTPHandlerRejectsUnsupportedMethods(t *testing.T) {
 	})
 
 	getResp := httptest.NewRecorder()
-	server.Handler.ServeHTTP(getResp, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/refresh", nil))
+	server.Handler.ServeHTTP(getResp, newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/refresh", nil))
 	if getResp.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET status code = %d, want %d; body=%s", getResp.Code, http.StatusMethodNotAllowed, getResp.Body.String())
 	}
@@ -753,7 +759,7 @@ func TestRefreshHTTPHandlerRejectsUnsupportedBodies(t *testing.T) {
 	})
 
 	for _, body := range []string{`[]`, `null`, `"refresh"`, `{"force":true}`} {
-		req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader(body))
+		req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader(body))
 		req.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
 		resp := httptest.NewRecorder()
 		server.Handler.ServeHTTP(resp, req)
@@ -785,6 +791,131 @@ func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
 	}
 }
 
+func TestStateHTTPServerRejectsSpoofedLoopbackHostFromNonLoopbackPeer(t *testing.T) {
+	called := false
+	server := newStateHTTPServer("0.0.0.0", 0, func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	req.RemoteAddr = "203.0.113.10:54321"
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusForbidden)
+	}
+	if called {
+		t.Fatal("snapshot function should not be called for spoofed loopback Host")
+	}
+}
+
+func TestStateHTTPServerRequiresAuthForNonLoopbackPeerWhenTokenConfigured(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("0.0.0.0", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	req.RemoteAddr = "172.18.0.1:54321"
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusUnauthorized, w.Body.String())
+	}
+	if !strings.Contains(w.Header().Get("WWW-Authenticate"), "Basic") {
+		t.Fatalf("WWW-Authenticate = %q, want Basic challenge", w.Header().Get("WWW-Authenticate"))
+	}
+	if called {
+		t.Fatal("snapshot function should not be called without auth from non-loopback peer")
+	}
+}
+
+func TestStateHTTPServerRequiresAuthForLoopbackPeerWhenTokenConfigured(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("127.0.0.1", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusUnauthorized, w.Body.String())
+	}
+	if called {
+		t.Fatal("snapshot function should not be called without auth when token is configured")
+	}
+}
+
+func TestStateHTTPServerRejectsWrongToken(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("0.0.0.0", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://worker.example:4000/api/v1/state", nil)
+	req.RemoteAddr = "172.18.0.1:54321"
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusUnauthorized, w.Body.String())
+	}
+	if called {
+		t.Fatal("snapshot function should not be called for wrong auth token")
+	}
+}
+
+func TestStateHTTPServerAllowsBearerAuthFromNonLoopbackPeer(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("0.0.0.0", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://worker.example:4000/api/v1/state", nil)
+	req.RemoteAddr = "172.18.0.1:54321"
+	req.Header.Set("Authorization", "Bearer state-token")
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !called {
+		t.Fatal("snapshot function was not called for authenticated non-loopback peer")
+	}
+}
+
+func TestStateHTTPServerAllowsBasicAuthFromNonLoopbackPeer(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("0.0.0.0", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	req.RemoteAddr = "172.18.0.1:54321"
+	req.SetBasicAuth("aiops", "state-token")
+	w := httptest.NewRecorder()
+	server.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if !called {
+		t.Fatal("snapshot function was not called for authenticated dashboard request")
+	}
+}
+
 func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
 	called := false
 	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
@@ -793,6 +924,7 @@ func TestStateHTTPServerAllowsLoopbackHost(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:4000/api/v1/state", nil)
+	req.RemoteAddr = "127.0.0.1:54321"
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 
@@ -812,6 +944,7 @@ func TestStateHTTPServerAllowsIPv6LoopbackHost(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "http://[::1]:4000/api/v1/state", nil)
+	req.RemoteAddr = "[::1]:54321"
 	w := httptest.NewRecorder()
 	server.Handler.ServeHTTP(w, req)
 

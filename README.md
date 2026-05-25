@@ -160,29 +160,35 @@ web dashboard:
 | `GET /` | The embedded web dashboard (HTML). |
 | `GET /assets/…` | Static dashboard assets. |
 
-The server accepts only `localhost` / `127.0.0.1` Host headers and assumes local
-host users and processes are trusted. Set `server.port: -1` to disable the
-listener entirely (e.g. when you provide your own state bridge). If the
-configured listener cannot start, the worker logs the failure, continues without
-the HTTP surface, and retries on later workflow-reload checks until the bind
-succeeds or `server.port` changes.
+When `AIOPS_STATE_API_TOKEN` is set, every request must authenticate with either
+`Authorization: Bearer <token>` or HTTP Basic auth user `aiops` and the token as
+the password. Without that token, the server accepts unauthenticated requests
+only when both the Host header and TCP peer are loopback; non-loopback peers
+fail closed. Set `server.port: -1` to disable the listener entirely (e.g. when
+you provide your own state bridge). If the configured listener cannot start, the
+worker logs the failure, continues without the HTTP surface, and retries on
+later workflow-reload checks until the bind succeeds or `server.port` changes.
 
 Under Docker Compose the default loopback bind is unreachable from the host
 (Docker publishes ports to the container interface, not its loopback). Merge the
 opt-in overlay to reach the dashboard from the host:
 
 ```bash
+export AIOPS_STATE_API_TOKEN=$(openssl rand -hex 24)
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.yml up worker
 ```
 
 The overlay sets `AIOPS_SERVER_HOST=0.0.0.0` (bind all interfaces *inside* the
 container) but publishes only to host loopback (`127.0.0.1:4000:4000`), so the
-host trust boundary stays the loopback. It also moves the worker onto a
-dedicated `dashboard` bridge network — off the project default network — so
-sibling containers (e.g. the legacy-queue services) cannot reach `worker:4000`
-and spoof the loopback Host guard. The surface is still unauthenticated, so do
-**not** publish on a routable host interface or attach untrusted containers to
-the dashboard network without adding authentication first.
+host trust boundary stays the loopback. Docker port publishing reaches the
+container from a bridge peer rather than container loopback, so the overlay
+requires `AIOPS_STATE_API_TOKEN`; browsers will receive a Basic-auth challenge
+and should use username `aiops` plus that token. The overlay also moves the
+worker onto a dedicated `dashboard` bridge network — off the project default
+network — so sibling containers (e.g. the legacy-queue services) cannot reach
+`worker:4000` and attempt to spoof loopback access. Do **not** publish on a
+routable host interface or attach untrusted containers to the dashboard network
+unless they should be able to use the token-protected status surface.
 
 **Treat the status surface as live agent text even though it binds to loopback.**
 Per SPEC §15.3, each running row's `last_message` is a passthrough of the most
@@ -218,6 +224,10 @@ go run ./cmd/tui                          # defaults to http://127.0.0.1:4000/, 
 go run ./cmd/tui --url http://127.0.0.1:4000/ --interval 5s
 go run ./cmd/tui --raw                    # disable alt-screen/cursor mgmt (upstream parity)
 ```
+
+When the worker requires state API auth (for example the Docker dashboard
+overlay), set `AIOPS_STATE_API_TOKEN` in the TUI environment; the client sends
+it as a bearer token.
 
 ## WORKFLOW.md configuration
 

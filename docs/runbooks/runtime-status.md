@@ -45,7 +45,11 @@ created or owns them.
 ## HTTP endpoints
 
 When `server.port` is enabled, the worker binds the status API on
-`127.0.0.1:<port>` and accepts only `localhost` or `127.0.0.1` Host headers.
+`127.0.0.1:<port>` by default. When `AIOPS_STATE_API_TOKEN` is set, every
+request must present it as `Authorization: Bearer <token>` or HTTP Basic auth
+user `aiops` with the token as the password. Without a token, unauthenticated
+requests must have both a loopback Host header and a loopback TCP peer;
+non-loopback peers fail closed.
 
 The effective port is resolved in this order, per SPEC §13.7:
 

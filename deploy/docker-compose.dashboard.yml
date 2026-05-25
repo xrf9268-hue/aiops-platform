@@ -10,7 +10,9 @@
 # AIOPS_SERVER_HOST=0.0.0.0 binds all interfaces *inside the container* so the
 # published port reaches it, while the port mapping publishes ONLY to host
 # loopback (127.0.0.1). The effective host trust boundary therefore stays the
-# loopback (SPEC §15.3).
+# loopback (SPEC §15.3). Docker forwards from a bridge peer rather than
+# container loopback, so the overlay also requires AIOPS_STATE_API_TOKEN; use
+# HTTP Basic user `aiops` and that token as the browser password.
 #
 # Because a 0.0.0.0 bind is reachable by any sibling container on the same
 # Compose network (which can spoof Host: localhost past the in-process guard),
@@ -18,13 +20,15 @@
 # removes it from the project default network, so the legacy-queue services
 # (postgres / pollers) — or any other co-located container — cannot reach
 # worker:4000. The network is a normal bridge (not `internal`), so the worker
-# keeps outbound egress for git/tracker traffic. The dashboard is still
-# unauthenticated, so do NOT widen the host side of the mapping to a routable
-# address or attach untrusted containers to the dashboard network.
+# keeps outbound egress for git/tracker traffic. Do NOT widen the host side of
+# the mapping to a routable address or attach untrusted containers to the
+# dashboard network unless they should be able to use the token-protected status
+# surface.
 services:
   worker:
     environment:
       AIOPS_SERVER_HOST: 0.0.0.0
+      AIOPS_STATE_API_TOKEN: ${AIOPS_STATE_API_TOKEN:?set AIOPS_STATE_API_TOKEN for the dashboard overlay}
     ports:
       - "127.0.0.1:4000:4000"
     networks:

@@ -45,6 +45,8 @@ const (
 	ansiShowCursor     = "\033[?25h"
 )
 
+const stateAPIAuthTokenEnv = "AIOPS_STATE_API_TOKEN"
+
 // Column widths (mirrors Elixir @running_*_width constants)
 const (
 	colID       = 8
@@ -170,6 +172,7 @@ func main() {
 		}
 	}
 	stateURL := baseURL + "/api/v1/state"
+	authToken := stateAPIAuthTokenFromEnv()
 	client := &http.Client{Timeout: 10 * time.Second}
 
 	interval := *intervalFlag
@@ -208,7 +211,7 @@ func main() {
 	}()
 
 	fetch := func(ctx context.Context) (*stateResponse, error) {
-		return fetchState(ctx, client, stateURL)
+		return fetchStateWithAuth(ctx, client, stateURL, authToken)
 	}
 
 	run(ctx, scr, fetch, interval, baseURL)
@@ -381,9 +384,16 @@ func safeRenderFrame(state *stateResponse, fetchErr error, now time.Time, tps fl
 }
 
 func fetchState(ctx context.Context, client *http.Client, url string) (*stateResponse, error) {
+	return fetchStateWithAuth(ctx, client, url, "")
+}
+
+func fetchStateWithAuth(ctx context.Context, client *http.Client, url string, authToken string) (*stateResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
+	}
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -399,6 +409,10 @@ func fetchState(ctx context.Context, client *http.Client, url string) (*stateRes
 		return nil, err
 	}
 	return &s, nil
+}
+
+func stateAPIAuthTokenFromEnv() string {
+	return strings.TrimSpace(os.Getenv(stateAPIAuthTokenEnv))
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
