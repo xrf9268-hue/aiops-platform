@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 // CodexOutputPath is where the runner persists captured codex stdout+stderr,
@@ -35,7 +37,9 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	if _, err := os.Stat(promptAbs); err != nil {
 		return Result{}, fmt.Errorf("read %s: %w", PromptPath, err)
 	}
-
+	if err := workspace.WriteSensitiveArtifact(filepath.Join(in.Workdir, CodexLastMessagePath), nil); err != nil {
+		return Result{}, fmt.Errorf("prepare %s: %w", CodexLastMessagePath, err)
+	}
 	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
 	cmd, err := buildCodexCmd(ctx, in, env)
 	if err != nil {
@@ -164,13 +168,13 @@ func writeCodexArtifact(workdir string, buf *cappedWriter) {
 		footer := fmt.Sprintf("\n...output truncated at %d bytes\n", CodexOutputCap)
 		body = append(body, []byte(footer)...)
 	}
-	_ = os.WriteFile(filepath.Join(workdir, CodexOutputPath), body, 0o644)
+	_ = workspace.WriteSensitiveArtifact(filepath.Join(workdir, CodexOutputPath), body)
 }
 
 // readCodexSummary returns the trimmed contents of CODEX_LAST_MESSAGE.md or
 // "codex completed" when the file is missing/empty/unreadable.
 func readCodexSummary(workdir string) string {
-	b, err := os.ReadFile(filepath.Join(workdir, CodexLastMessagePath))
+	b, err := workspace.ReadSensitiveArtifact(filepath.Join(workdir, CodexLastMessagePath))
 	if err != nil {
 		return "codex completed"
 	}

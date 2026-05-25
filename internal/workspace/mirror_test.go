@@ -791,6 +791,157 @@ func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat(t *testin
 	}
 }
 
+func TestPrepareGitWorkspaceProtectsSensitiveAiopsArtifacts(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+	tk := makeTask("task-sensitive-artifacts", upstream)
+
+	dir, _, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("PrepareGitWorkspace: %v", err)
+	}
+	gitDirOut, err := exec.Command("git", "-C", dir, "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --absolute-git-dir: %v", err)
+	}
+	hooksPathOut, err := exec.Command("git", "-C", dir, "config", "--worktree", "--get", "core.hooksPath").Output()
+	if err != nil {
+		t.Fatalf("git config --worktree core.hooksPath: %v", err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(hooksPathOut)), strings.TrimSpace(string(gitDirOut))) {
+		t.Fatalf("hooksPath = %q, want under worktree git dir %q", hooksPathOut, gitDirOut)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range sensitiveArtifactPaths {
+		if err := os.WriteFile(filepath.Join(dir, rel), []byte("sensitive\n"), SensitiveArtifactFileMode); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+		t.Fatalf("git add .: %v", err)
+	}
+	cmd := exec.Command("git", "diff", "--cached", "--name-only", "-z", "--")
+	cmd.Dir = dir
+	staged, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git diff --cached --name-only: %v", err)
+	}
+	for _, rel := range sensitiveArtifactPaths {
+		if strings.Contains("\x00"+string(staged), "\x00"+rel+"\x00") {
+			t.Fatalf("sensitive artifact %q was staged; staged=%v", rel, staged)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "PLAN.md"), []byte("handoff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := configureGitIdentity(dir); err != nil {
+		t.Fatalf("configure identity: %v", err)
+	}
+	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+		t.Fatalf("git add allowlist: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "allowed handoff artifacts").CombinedOutput(); err != nil {
+		t.Fatalf("commit allowlist: %v\n%s", err, out)
+	}
+
+	if err := os.MkdirAll(filepath.Join(dir, ".aiops", "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "logs", "runner.log"), []byte("log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+		t.Fatalf("git add ignored log artifact: %v", err)
+	}
+	cmd = exec.Command("git", "diff", "--cached", "--name-only", "--", ".aiops/logs/runner.log")
+	cmd.Dir = dir
+	staged, err = cmd.Output()
+	if err != nil {
+		t.Fatalf("git diff ignored log artifact: %v", err)
+	}
+	if len(staged) != 0 {
+		t.Fatalf("ignored log artifact was staged: %q", staged)
+	}
+	if err := runQuiet(ctx, dir, "git", "add", "-f", ".aiops/PROMPT.md", ".aiops/logs/runner.log"); err != nil {
+		t.Fatalf("force-add sensitive artifact: %v", err)
+	}
+	commitCmd := exec.Command("git", "commit", "-m", "blocked")
+	commitCmd.Dir = dir
+	out, err := commitCmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("git commit succeeded, want pre-commit hook failure")
+	}
+	output := string(out)
+	for _, want := range []string{".aiops/PROMPT.md", ".aiops/logs/runner.log"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("git commit output = %q, want %s", output, want)
+		}
+	}
+}
+
+func TestWriteSensitiveArtifactRejectsSymlinkedAiopsPaths(t *testing.T) {
+	root := t.TempDir()
+	aiopsDir := filepath.Join(root, ".aiops")
+	target := filepath.Join(root, "PROMPT.md")
+	if err := os.Symlink(".", aiopsDir); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := WriteSensitiveArtifact(filepath.Join(aiopsDir, "PROMPT.md"), []byte("secret\n")); err == nil {
+		t.Fatal("WriteSensitiveArtifact followed symlinked .aiops dir")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("symlinked .aiops wrote outside private dir: %v", err)
+	}
+	if err := os.Remove(aiopsDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(aiopsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../PROMPT.md", filepath.Join(aiopsDir, "PROMPT.md")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := WriteSensitiveArtifact(filepath.Join(aiopsDir, "PROMPT.md"), []byte("secret\n")); err == nil {
+		t.Fatal("WriteSensitiveArtifact followed symlinked sensitive artifact")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("symlinked artifact wrote outside private dir: %v", err)
+	}
+}
+
+func TestWriteSensitiveArtifactReplacesHardLinkedArtifact(t *testing.T) {
+	root := t.TempDir()
+	aiopsDir := filepath.Join(root, ".aiops")
+	if err := os.MkdirAll(aiopsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "PROMPT.md")
+	if err := os.WriteFile(target, []byte("public\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(aiopsDir, "PROMPT.md")
+	if err := os.Link(target, artifact); err != nil {
+		t.Skipf("hardlink unavailable: %v", err)
+	}
+
+	if err := WriteSensitiveArtifact(artifact, []byte("secret\n")); err != nil {
+		t.Fatalf("WriteSensitiveArtifact: %v", err)
+	}
+	if body, err := os.ReadFile(target); err != nil {
+		t.Fatal(err)
+	} else if string(body) != "public\n" {
+		t.Fatalf("hardlinked public target was modified: %q", body)
+	}
+	if body, err := os.ReadFile(artifact); err != nil {
+		t.Fatal(err)
+	} else if string(body) != "secret\n" {
+		t.Fatalf("artifact body = %q, want secret", body)
+	}
+}
+
 // TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName covers the
 // `startRef = t.BaseBranch` fallback in PrepareGitWorkspace. The production
 // path (HTTPS clone via EnsureMirror) always populates

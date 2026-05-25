@@ -171,6 +171,9 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 		if err := run(ctx, mirror, "git", "fetch", "--prune", "--tags", "origin"); err != nil {
 			return "", fmt.Errorf("refresh mirror %s: %w", mirror, err)
 		}
+		if err := run(ctx, mirror, "git", "config", "extensions.worktreeConfig", "true"); err != nil {
+			return "", fmt.Errorf("enable worktree config: %w", err)
+		}
 		return mirror, nil
 	}
 	// First-time clone. Remove any partial directory left over from a prior
@@ -187,6 +190,9 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 	}
 	if err := run(ctx, mirror, "git", "fetch", "--prune", "--tags", "origin"); err != nil {
 		return "", fmt.Errorf("initial fetch: %w", err)
+	}
+	if err := run(ctx, mirror, "git", "config", "extensions.worktreeConfig", "true"); err != nil {
+		return "", fmt.Errorf("enable worktree config: %w", err)
 	}
 	return mirror, nil
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 const (
@@ -1330,5 +1331,5 @@ func writeAppServerArtifact(workdir string, buf *cappedWriter) {
 		footer := fmt.Sprintf("\n...output truncated at %d bytes\n", CodexOutputCap)
 		body = append(body, []byte(footer)...)
 	}
-	_ = os.WriteFile(filepath.Join(workdir, codexAppServerOutputPath), body, 0o644)
+	_ = workspace.WriteSensitiveArtifact(filepath.Join(workdir, codexAppServerOutputPath), body)
 }

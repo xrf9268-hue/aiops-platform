@@ -38,3 +38,15 @@ func TestTerminalUpdateContext_RespectsItsOwnCancel(t *testing.T) {
 		t.Fatalf("cleanup ctx should be Canceled after its cancel func runs; got %v", cleanup.Err())
 	}
 }
+
+func TestAnalysisOnlyArtifactAllowedIsExplicit(t *testing.T) {
+	cases := map[string]bool{
+		".aiops/PLAN.md": true, ".aiops/RUN_SUMMARY.md": true, ".aiops/CHANGED_FILES.txt": true, ".aiops/VERIFICATION.txt": true,
+		".aiops/PROMPT.md": false, ".aiops/TASK.md": false, ".aiops/WORKFLOW.md": false, ".aiops/debug.md": false, ".aiops/logs/runner.log": false,
+	}
+	for path, want := range cases {
+		if got := analysisOnlyArtifactAllowed(path); got != want {
+			t.Fatalf("analysisOnlyArtifactAllowed(%q) = %v, want %v", path, got, want)
+		}
+	}
+}

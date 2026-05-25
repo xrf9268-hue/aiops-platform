@@ -783,7 +783,7 @@ func writeTaskFiles(workdir string, t task.Task, prompt string) error {
 	if err := workspace.WritePrompt(workdir, prompt); err != nil {
 		return err
 	}
-	return os.WriteFile(workdir+"/.aiops/TASK.md", []byte(fmt.Sprintf("# Task %s\n\n%s\n", t.ID, t.Description)), 0o644)
+	return workspace.WriteSensitiveArtifact(workdir+"/.aiops/TASK.md", []byte(fmt.Sprintf("# Task %s\n\n%s\n", t.ID, t.Description)))
 }
 
 // WriteFailureArtifacts persists what we know on the failure path so failed
@@ -902,15 +902,7 @@ func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, id
 }
 
 func analysisOnlyArtifactAllowed(path string) bool {
-	switch path {
-	case ".aiops/PLAN.md", ".aiops/PROMPT.md", ".aiops/TASK.md", workspace.SummaryPath, ".aiops/CHANGED_FILES.txt", ".aiops/VERIFICATION.txt":
-		return true
-	}
-	if strings.HasPrefix(path, ".aiops/") && strings.HasSuffix(path, ".md") {
-		base := strings.TrimPrefix(path, ".aiops/")
-		return !strings.Contains(base, "/") && base != "WORKFLOW.md"
-	}
-	return strings.HasPrefix(path, ".aiops/logs/")
+	return workspace.IsAllowedHandoffArtifact(path)
 }
 
 // AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered

@@ -339,11 +339,24 @@ func TestRunTaskRendersAttemptVariable(t *testing.T) {
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
 	cfg.Workflow.PromptTemplate = "attempt {{ attempt }} for {{ task.title }}"
+	mgr := workspace.New(cfg.WorkspaceRoot)
+	mgr.MirrorRoot = cfg.MirrorRoot
+	workdir, _, err := mgr.PrepareGitWorkspace(context.Background(), tk)
+	if err != nil {
+		t.Fatalf("prime workspace: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(workdir, ".aiops"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"PROMPT.md", "TASK.md"} {
+		if err := os.WriteFile(filepath.Join(workdir, ".aiops", name), []byte("old\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("runTask: %v", rterr.Err)
 	}
-	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
 	prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		t.Fatalf("read rendered prompt: %v", err)
@@ -351,6 +364,8 @@ func TestRunTaskRendersAttemptVariable(t *testing.T) {
 	if !strings.Contains(string(prompt), "attempt 2 for integration") {
 		t.Fatalf("rendered prompt = %q, want attempt variable from task", prompt)
 	}
+	assertPerm(t, filepath.Join(workdir, ".aiops", "PROMPT.md"), 0o600)
+	assertPerm(t, filepath.Join(workdir, ".aiops", "TASK.md"), 0o600)
 }
 
 func TestRunTaskRendersFirstAttemptAsEmptyForBareAttempt(t *testing.T) {
@@ -1017,6 +1032,17 @@ func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr, wantEvent st
 	}
 	if got := len(ev.byKind(wantEvent)); got != 1 {
 		t.Fatalf("%s events = %d, want 1; events=%#v", wantEvent, got, ev.events)
+	}
+}
+
+func assertPerm(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s mode = %#o, want %#o", path, got, want)
 	}
 }
 
