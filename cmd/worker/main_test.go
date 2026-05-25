@@ -772,6 +772,105 @@ func TestRefreshHTTPHandlerRejectsUnsupportedBodies(t *testing.T) {
 	}
 }
 
+func TestRefreshHTTPHandlerAcceptsLimitSizedBodies(t *testing.T) {
+	calls := 0
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		calls++
+		return orchestrator.RefreshRequestResult{Queued: true, RequestedAt: time.Date(2026, 5, 25, 12, 30, 0, 0, time.UTC)}, nil
+	})
+
+	for _, tc := range []struct {
+		name               string
+		body               string
+		forceUnknownLength bool
+		wantContentLength  int64
+	}{
+		{
+			name:              "known length",
+			body:              "{}" + strings.Repeat(" ", refreshBodyLimitBytes-2),
+			wantContentLength: int64(refreshBodyLimitBytes),
+		},
+		{
+			name:               "unknown length",
+			body:               "{}" + strings.Repeat(" ", refreshBodyLimitBytes-2),
+			forceUnknownLength: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader(tc.body))
+			req.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+			if tc.forceUnknownLength {
+				req.ContentLength = -1
+			} else if req.ContentLength != tc.wantContentLength {
+				t.Fatalf("ContentLength = %d, want %d", req.ContentLength, tc.wantContentLength)
+			}
+			resp := httptest.NewRecorder()
+			server.Handler.ServeHTTP(resp, req)
+			if resp.Code != http.StatusAccepted {
+				t.Fatalf("status code = %d, want %d; response=%s", resp.Code, http.StatusAccepted, resp.Body.String())
+			}
+		})
+	}
+	if calls != 2 {
+		t.Fatalf("refresh calls = %d, want 2", calls)
+	}
+}
+
+func TestRefreshHTTPHandlerRejectsOversizedBodies(t *testing.T) {
+	called := false
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	}, func(context.Context) (orchestrator.RefreshRequestResult, error) {
+		called = true
+		return orchestrator.RefreshRequestResult{}, nil
+	})
+
+	for _, tc := range []struct {
+		name               string
+		body               string
+		forceUnknownLength bool
+		wantContentLength  int64
+	}{
+		{
+			name:              "known length",
+			body:              "{}" + strings.Repeat(" ", refreshBodyLimitBytes-1),
+			wantContentLength: int64(refreshBodyLimitBytes + 1),
+		},
+		{
+			name:               "unknown length",
+			body:               "{}" + strings.Repeat(" ", refreshBodyLimitBytes-1),
+			forceUnknownLength: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000/api/v1/refresh", strings.NewReader(tc.body))
+			req.Header.Set(refreshRequestHeader, refreshRequestHeaderValue)
+			if tc.forceUnknownLength {
+				req.ContentLength = -1
+			} else if req.ContentLength != tc.wantContentLength {
+				t.Fatalf("ContentLength = %d, want %d", req.ContentLength, tc.wantContentLength)
+			}
+			resp := httptest.NewRecorder()
+			server.Handler.ServeHTTP(resp, req)
+			if resp.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status code = %d, want %d; response=%s", resp.Code, http.StatusRequestEntityTooLarge, resp.Body.String())
+			}
+			var payload apiErrorResponse
+			if err := json.Unmarshal(resp.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("decode error response: %v; body=%s", err, resp.Body.String())
+			}
+			if payload.Error.Code != "refresh_body_too_large" {
+				t.Fatalf("error code = %q, want refresh_body_too_large", payload.Error.Code)
+			}
+		})
+	}
+	if called {
+		t.Fatal("refresh function should not be called for oversized bodies")
+	}
+}
+
 func TestStateHTTPServerRejectsNonLoopbackHost(t *testing.T) {
 	called := false
 	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {

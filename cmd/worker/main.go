@@ -741,7 +741,10 @@ type stateRefreshFunc func(context.Context) (orchestrator.RefreshRequestResult, 
 const (
 	refreshRequestHeader      = "X-AIOPS-Refresh"
 	refreshRequestHeaderValue = "true"
+	refreshBodyLimitBytes     = 1 << 20
 )
+
+var errRefreshBodyTooLarge = errors.New("refresh request body exceeds 1 MiB")
 
 func optionalStateRefreshFunc(refresh []stateRefreshFunc) stateRefreshFunc {
 	if len(refresh) == 0 {
@@ -950,6 +953,10 @@ func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler {
 			return
 		}
 		if err := validateRefreshBody(r); err != nil {
+			if errors.Is(err, errRefreshBodyTooLarge) {
+				writeAPIError(w, http.StatusRequestEntityTooLarge, "refresh_body_too_large", err.Error())
+				return
+			}
 			writeAPIError(w, http.StatusBadRequest, "invalid_refresh_body", err.Error())
 			return
 		}
@@ -1005,9 +1012,15 @@ func validateRefreshBody(r *http.Request) error {
 	if r.Body == nil {
 		return nil
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if r.ContentLength > refreshBodyLimitBytes {
+		return errRefreshBodyTooLarge
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, refreshBodyLimitBytes+1))
 	if err != nil {
 		return err
+	}
+	if len(body) > refreshBodyLimitBytes {
+		return errRefreshBodyTooLarge
 	}
 	bodyText := strings.TrimSpace(string(body))
 	if bodyText == "" {
