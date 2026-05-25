@@ -1457,13 +1457,8 @@ func TestBuildCodexAppServerCmdResolvesCodexFromAgentEnvPATH(t *testing.T) {
 	}
 }
 
-// TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the
-// directCodexExec flag's negative case: when `codex.command` is anything other
-// than the built-in `codex app-server` invocation, the cmd runs through `sh -c`.
-// The runner
-// uses this signal to suppress codex_app_server_pid emission, since
-// cmd.Process.Pid would be the shell wrapper rather than the actual codex
-// process.
+// TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the direct exec
+// flag's negative case: wrapper commands still run through `sh -c`.
 func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
@@ -1482,19 +1477,129 @@ func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
 }
 
 func TestBuildCodexAppServerCmdPreservesQuotedCustomCodexCommand(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.Command = `codex app-server --config "model = gpt-5"`
 
-	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + binDir})
 	if err != nil {
 		t.Fatalf("buildCodexAppServerCmd: %v", err)
 	}
-	if directExec {
-		t.Fatalf("directCodexExec = true for custom command %q, want false (shell wrapper)", in.Workflow.Config.Codex.Command)
+	if !directExec {
+		t.Fatalf("directCodexExec = false for custom codex app-server command %q, want true", in.Workflow.Config.Codex.Command)
 	}
-	if len(cmd.Args) < 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" || cmd.Args[2] != in.Workflow.Config.Codex.Command {
-		t.Fatalf("cmd.Args = %#v, want shell wrapper preserving quoted command", cmd.Args)
+	if cmd.Path != codex {
+		t.Fatalf("cmd.Path = %q, want codex from agent env PATH %q", cmd.Path, codex)
+	}
+	want := []string{codex, "app-server", "--config", "model = gpt-5"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestBuildCodexAppServerCmdPreservesQuotedBackslashArgument(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = `codex app-server --cd "C:\proj"`
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false for quoted backslash command %q, want true", in.Workflow.Config.Codex.Command)
+	}
+	want := []string{codex, "app-server", "--cd", `C:\proj`}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestBuildCodexAppServerCmdAllowsQuotedConfigMetacharacters(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = `codex app-server --config 'sandbox_permissions = ["read-only"]'`
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false for quoted config command %q, want true", in.Workflow.Config.Codex.Command)
+	}
+	want := []string{codex, "app-server", "--config", `sandbox_permissions = ["read-only"]`}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestBuildCodexAppServerCmdAllowsHashInsideArgument(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = `codex app-server --config release#2026.toml`
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if !directExec {
+		t.Fatalf("directCodexExec = false for hash inside argument %q, want true", in.Workflow.Config.Codex.Command)
+	}
+	want := []string{codex, "app-server", "--config", `release#2026.toml`}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, want)
+	}
+}
+
+func TestBuildCodexAppServerCmdKeepsShellSyntaxCommandsIndirect(t *testing.T) {
+	for _, command := range []string{
+		`codex app-server && echo done`,
+		`codex app-server --config *.toml`,
+		`codex app-server --config "$(cat cfg)"`,
+		`codex app-server --config {a,b}.toml`,
+		"codex app-server --config x # note",
+		"codex app-server\nfoo",
+		`codex app-server --config foo\ bar`,
+		`codex app-server --config foo\z`,
+		`codex app-server --config C:\Users\agent\cfg.toml`,
+		`codex app-server --config "unterminated`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			wd := codexWorkdir(t, "x")
+			in := appServerInput(wd)
+			in.Workflow.Config.Codex.Command = command
+
+			cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
+			if err != nil {
+				t.Fatalf("buildCodexAppServerCmd: %v", err)
+			}
+			if directExec {
+				t.Fatalf("directCodexExec = true for shell syntax command %q, want false", in.Workflow.Config.Codex.Command)
+			}
+			if len(cmd.Args) < 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" || cmd.Args[2] != in.Workflow.Config.Codex.Command {
+				t.Fatalf("cmd.Args = %#v, want sh -c wrapper", cmd.Args)
+			}
+		})
 	}
 }
 
