@@ -200,7 +200,7 @@ type fakeIssueStateTracker struct {
 	issues        []tracker.Issue
 	err           error
 	fetchIDErr    error
-	fetchIDCalls  [][]string
+	fetchRefCalls [][]tracker.IssueRef
 	fetchIDStates map[string]string
 }
 
@@ -231,18 +231,22 @@ func (f *fakeIssueStateTracker) ListIssuesByStates(_ context.Context, states []s
 	return defaultTrackerIssueTitles(out), nil
 }
 
-func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(_ context.Context, issueIDs []string) (map[string]string, error) {
+func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	return f.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
+}
+
+func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.fetchIDCalls = append(f.fetchIDCalls, append([]string(nil), issueIDs...))
+	f.fetchRefCalls = append(f.fetchRefCalls, append([]tracker.IssueRef(nil), refs...))
 	if f.err != nil {
 		return nil, f.err
 	}
 	wanted := map[string]struct{}{}
-	for _, id := range issueIDs {
-		wanted[id] = struct{}{}
+	for _, ref := range refs {
+		wanted[ref.ID] = struct{}{}
 	}
-	out := make(map[string]string, len(issueIDs))
+	out := make(map[string]string, len(refs))
 	if f.fetchIDStates != nil {
 		for id, state := range f.fetchIDStates {
 			if _, ok := wanted[id]; ok {
@@ -259,12 +263,12 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(_ context.Context, issueID
 	return out, nil
 }
 
-func (f *fakeIssueStateTracker) fetchIssueStatesByIDsCalls() [][]string {
+func (f *fakeIssueStateTracker) fetchIssueStatesByRefsCalls() [][]tracker.IssueRef {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make([][]string, len(f.fetchIDCalls))
-	for i, call := range f.fetchIDCalls {
-		out[i] = append([]string(nil), call...)
+	out := make([][]tracker.IssueRef, len(f.fetchRefCalls))
+	for i, call := range f.fetchRefCalls {
+		out[i] = append([]tracker.IssueRef(nil), call...)
 	}
 	return out
 }
@@ -284,7 +288,7 @@ func (f *fakeIssueStateTracker) setFetchIDErr(err error) {
 func (f *fakeIssueStateTracker) resetFetchIssueStatesByIDsCalls() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.fetchIDCalls = nil
+	f.fetchRefCalls = nil
 }
 
 func (f *fakeIssueStateTracker) setIssues(issues []tracker.Issue) {
@@ -435,21 +439,21 @@ func TestPollOnceUsesNarrowStateRefreshForRunningIssue(t *testing.T) {
 		t.Fatalf("narrow-refresh poll once: %v", err)
 	}
 
-	calls := trackerClient.fetchIssueStatesByIDsCalls()
+	calls := trackerClient.fetchIssueStatesByRefsCalls()
 	if len(calls) != 1 {
-		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", len(calls))
+		t.Fatalf("FetchIssueStatesByRefs calls = %d, want 1", len(calls))
 	}
-	if got := calls[0]; len(got) != 1 || got[0] != "issue-1" {
-		t.Fatalf("FetchIssueStatesByIDs ids = %#v, want [issue-1]", got)
+	if got := calls[0]; len(got) != 1 || got[0].ID != "issue-1" || got[0].Identifier != "LIN-1" {
+		t.Fatalf("FetchIssueStatesByRefs refs = %#v, want issue-1 with identifier LIN-1", got)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
 }
 
-func TestMultiIssueStateListerFetchesIssueStatesByIDsOnce(t *testing.T) {
+func TestMultiIssueStateListerFansOutIssueStateRefs(t *testing.T) {
 	ctx := context.Background()
-	linearA := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled", "issue-2": "Done"}}
-	linearB := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled", "issue-2": "Done"}}
+	linearA := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-1": "Cancelled"}}
+	linearB := &fakeIssueStateTracker{fetchIDStates: map[string]string{"issue-2": "Done"}}
 	refresher := IssueStateRefresher(multiIssueStateLister{trackers: []IssueStateLister{linearA, linearB}})
 
 	states, err := refresher.FetchIssueStatesByIDs(ctx, []string{"issue-1", "issue-2"})
@@ -462,13 +466,15 @@ func TestMultiIssueStateListerFetchesIssueStatesByIDsOnce(t *testing.T) {
 	if got := states["issue-2"]; got != "Done" {
 		t.Fatalf("issue-2 state = %q, want Done", got)
 	}
-	if calls := linearA.fetchIssueStatesByIDsCalls(); len(calls) != 1 {
-		t.Fatalf("linearA FetchIssueStatesByIDs calls = %d, want 1", len(calls))
-	} else if got := calls[0]; len(got) != 2 || got[0] != "issue-1" || got[1] != "issue-2" {
-		t.Fatalf("linearA FetchIssueStatesByIDs ids = %#v, want [issue-1 issue-2]", got)
+	if calls := linearA.fetchIssueStatesByRefsCalls(); len(calls) != 1 {
+		t.Fatalf("linearA FetchIssueStatesByRefs calls = %d, want 1", len(calls))
+	} else if got := calls[0]; len(got) != 2 || got[0].ID != "issue-1" || got[1].ID != "issue-2" {
+		t.Fatalf("linearA FetchIssueStatesByRefs refs = %#v, want [issue-1 issue-2]", got)
 	}
-	if calls := linearB.fetchIssueStatesByIDsCalls(); len(calls) != 0 {
-		t.Fatalf("linearB FetchIssueStatesByIDs calls = %d, want 0 (single tracker fan-in)", len(calls))
+	if calls := linearB.fetchIssueStatesByRefsCalls(); len(calls) != 1 {
+		t.Fatalf("linearB FetchIssueStatesByRefs calls = %d, want 1", len(calls))
+	} else if got := calls[0]; len(got) != 1 || got[0].ID != "issue-2" {
+		t.Fatalf("linearB FetchIssueStatesByRefs refs = %#v, want unresolved issue-2 only", got)
 	}
 }
 
@@ -540,8 +546,8 @@ func TestPollOnceRoutingCancelsRunningIssueWhenNarrowRefreshLeavesActiveStates(t
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("refresh poll once: %v", err)
 	}
-	if got := trackerClient.fetchIssueStatesByIDsCalls(); len(got) != 1 {
-		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", len(got))
+	if got := trackerClient.fetchIssueStatesByRefsCalls(); len(got) != 1 {
+		t.Fatalf("FetchIssueStatesByRefs calls = %d, want 1", len(got))
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
 	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
@@ -825,12 +831,12 @@ func TestPollOnceAppliesPartialRunningIDRefreshWhenRefreshReturnsError(t *testin
 	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "secondary tracker state refresh failed") {
 		t.Fatalf("refresh poll error = %v, want partial refresh error", err)
 	}
-	calls := trackerClient.fetchIssueStatesByIDsCalls()
+	calls := trackerClient.fetchIssueStatesByRefsCalls()
 	if len(calls) != 1 {
-		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", len(calls))
+		t.Fatalf("FetchIssueStatesByRefs calls = %d, want 1", len(calls))
 	}
-	if got := calls[0]; len(got) != 1 || got[0] != "issue-1" {
-		t.Fatalf("FetchIssueStatesByIDs ids = %#v, want [issue-1]", got)
+	if got := calls[0]; len(got) != 1 || got[0].ID != "issue-1" {
+		t.Fatalf("FetchIssueStatesByRefs refs = %#v, want [issue-1]", got)
 	}
 
 	select {

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -25,6 +26,26 @@ func (s *stubRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (
 	for _, id := range ids {
 		if state, ok := s.states[id]; ok {
 			out[id] = state
+		}
+	}
+	return out, nil
+}
+
+type stubRefAwareRefresher struct {
+	refs   [][]tracker.IssueRef
+	states map[string]string
+}
+
+func (s *stubRefAwareRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+	return nil, errors.New("legacy ID-only refresh should not be used")
+}
+
+func (s *stubRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+	s.refs = append(s.refs, append([]tracker.IssueRef(nil), refs...))
+	out := map[string]string{}
+	for _, ref := range refs {
+		if state, ok := s.states[ref.ID]; ok {
+			out[ref.ID] = state
 		}
 	}
 	return out, nil
@@ -107,6 +128,36 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 			t.Fatalf("err = %v, want wrapped tracker boom", err)
 		}
 	})
+}
+
+func TestRuntimeDispatcherIssueStateRefresherPassesIssueIdentifierFallback(t *testing.T) {
+	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
+	stub := &stubRefAwareRefresher{states: map[string]string{"global-101": "Done"}}
+	d.SetIssueStateRefresher(stub)
+
+	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
+		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}},
+	}}}
+	cfg := d.configForSnapshot(snap)
+	fn := cfg.IssueStateRefresher(task.Task{
+		ID:            "global-101",
+		SourceEventID: "global-101|service|api",
+		IssueRender:   map[string]any{"identifier": "#7"},
+	}, snap.Workflow.Config)
+
+	active, err := fn(context.Background())
+	if err != nil {
+		t.Fatalf("refresher err: %v", err)
+	}
+	if active {
+		t.Fatal("active = true, want false after ref-aware Done refresh")
+	}
+	if len(stub.refs) != 1 || len(stub.refs[0]) != 1 {
+		t.Fatalf("ref calls = %#v, want one issue ref", stub.refs)
+	}
+	if got := stub.refs[0][0]; got.ID != "global-101" || got.Identifier != "#7" {
+		t.Fatalf("issue ref = %+v, want ID global-101 with identifier #7", got)
+	}
 }
 
 // TestRuntimeDispatcherConfigForSnapshotReturnsNilWithoutRefresher pins the

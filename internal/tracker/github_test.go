@@ -489,6 +489,113 @@ func TestGitHubClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
 	}
 }
 
+func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t *testing.T) {
+	var requestedPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/5":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        555,
+				Number:    5,
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "Done"}},
+			})
+		case "/repos/acme/api/issues/7":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        987654,
+				Number:    7,
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "Done"}},
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		TerminalStates: []string{"Done"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "987654", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+	if got, want := states, map[string]string{"987654": "done"}; len(got) != len(want) || got["987654"] != want["987654"] {
+		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := strings.Join(requestedPaths, ","), "/repos/acme/api/issues/7"; got != want {
+		t.Fatalf("requested paths = %s, want %s", got, want)
+	}
+
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "other-global-id", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs wrong ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched issue id = %#v, want empty", states)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs #number ID: %v", err)
+	}
+	if got := states["#7"]; got != "done" {
+		t.Fatalf("#number fallback state = %q, want done", got)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "#8", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs mismatched #number ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched #number ID = %#v, want empty", states)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "7", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs numeric fallback ID: %v", err)
+	}
+	if got := states["7"]; got != "done" {
+		t.Fatalf("numeric fallback ID state = %q, want done", got)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "5", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs mismatched numeric fallback ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched numeric fallback ID = %#v, want empty", states)
+	}
+	client.cacheIssueNumber("5", 5)
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "5", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs cached mismatched numeric fallback ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for cached mismatched numeric fallback ID = %#v, want empty", states)
+	}
+	client.cacheIssueNumber("555", 5)
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "555", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs cached global ID with stale identifier: %v", err)
+	}
+	if got := states["555"]; got != "done" {
+		t.Fatalf("cached global ID state = %q, want done", got)
+	}
+	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs after fallback cache: %v", err)
+	}
+	if got := states["987654"]; got != "done" {
+		t.Fatalf("cached fallback state = %q, want done", got)
+	}
+}
+
 func TestGitHubClientFetchIssueStatesByIDsRequiresToken(t *testing.T) {
 	client := NewGitHubClient(workflow.TrackerConfig{}, "https://api.github.test", "acme", "api")
 	if _, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1"}); err == nil || !strings.Contains(err.Error(), "GitHub tracker api_key") {
