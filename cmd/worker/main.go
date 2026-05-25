@@ -30,11 +30,12 @@ import (
 
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "--print-config" {
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: worker --print-config <workdir>")
+		workdir, portOverride, err := parsePrintConfigArgs(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(2)
 		}
-		os.Exit(worker.PrintConfig(os.Args[2], os.Stdout, os.Stderr))
+		os.Exit(worker.PrintConfig(workdir, portOverride, os.Stdout, os.Stderr))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -82,24 +83,57 @@ func parseRunArgs(args []string) (string, *int, error) {
 	if fs.NArg() == 1 {
 		path = fs.Arg(0)
 	}
-	// Use fs.Visit to distinguish "flag explicitly provided" from "flag
-	// at its default value". A naked sentinel int has no safe pick: any
-	// reserved value would conflict with a real --port=N for that N.
+	override, err := portOverrideFromFlagSet(fs, portFlag)
+	if err != nil {
+		return "", nil, err
+	}
+	return path, override, nil
+}
+
+// parsePrintConfigArgs parses the args after the `--print-config`
+// subcommand token. It requires exactly one positional (the workdir to
+// inspect) and accepts the same `--port` override as run mode, so
+// `worker --print-config /repo --port=4001` attributes server.port to a
+// `cli` source in the provenance block (#375, SPEC §13.7). The override is
+// nil when --port is not passed.
+func parsePrintConfigArgs(args []string) (string, *int, error) {
+	fs := flag.NewFlagSet("worker --print-config", flag.ContinueOnError)
+	portFlag := fs.Int("port", 0, "override server.port for provenance reporting: -1 disables the HTTP server, 0 binds an ephemeral port, 1..65535 binds explicitly. SPEC §13.7.")
+	if err := fs.Parse(reorderForFlagParse(args)); err != nil {
+		return "", nil, err
+	}
+	if fs.NArg() != 1 {
+		return "", nil, fmt.Errorf("usage: worker --print-config [--port=N] <workdir>")
+	}
+	override, err := portOverrideFromFlagSet(fs, portFlag)
+	if err != nil {
+		return "", nil, err
+	}
+	return fs.Arg(0), override, nil
+}
+
+// portOverrideFromFlagSet extracts the --port override from a parsed flag
+// set shared by run mode and --print-config, so the two paths can never
+// diverge on the accepted range or the set-vs-default detection. It uses
+// fs.Visit to distinguish "flag explicitly provided" from "flag at its
+// default value": a naked sentinel int has no safe pick, since any
+// reserved value would conflict with a real --port=N for that N. Returns
+// nil when --port was not passed.
+func portOverrideFromFlagSet(fs *flag.FlagSet, portFlag *int) (*int, error) {
 	var portSet bool
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "port" {
 			portSet = true
 		}
 	})
-	var override *int
-	if portSet {
-		p := *portFlag
-		if p < -1 || p > 65535 {
-			return "", nil, fmt.Errorf("--port %d out of range: pass -1 to disable the HTTP server, 0 for an ephemeral port, or 1..65535", p)
-		}
-		override = &p
+	if !portSet {
+		return nil, nil
 	}
-	return path, override, nil
+	p := *portFlag
+	if p < -1 || p > 65535 {
+		return nil, fmt.Errorf("--port %d out of range: pass -1 to disable the HTTP server, 0 for an ephemeral port, or 1..65535", p)
+	}
+	return &p, nil
 }
 
 // reorderForFlagParse pulls flag tokens to the front of args so the

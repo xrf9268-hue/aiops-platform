@@ -292,6 +292,8 @@ To inspect the effective configuration for a workdir without consuming a task:
 
 ```bash
 worker --print-config /path/to/repo/clone
+# pass --port to see how a CLI override is attributed:
+worker --print-config /path/to/repo/clone --port=4001
 ```
 
 The output is JSON. `tracker.api_key` is masked as `***`; the prompt template is
@@ -299,6 +301,15 @@ summarized (length + first line) rather than printed verbatim — `cat
 <resolution.path>` to see the full body. For post-hoc inspection, the
 `workflow_resolved` task event records the source and path of every run;
 `shadowed_by` is omitted unless future non-legacy resolution metadata is added.
+
+A `provenance` block reports where each multi-layer value resolved from —
+`default`, `env` (with the env var name and whether it was a deprecated
+unprefixed alias), `workflow`, or `cli`. It currently covers the workspace root
+(`AIOPS_WORKSPACE_ROOT` / legacy `WORKSPACE_ROOT` / `workspace.root`), the mirror
+root (`AIOPS_MIRROR_ROOT`), `server.port` (including the `--port` override), and
+the workflow path source. The `provenance` values are the effective ones the
+worker would actually use, so they reflect env/CLI overrides that the masked
+`config` block (the raw WORKFLOW.md/default values) does not.
 
 ## Runner modes and first safe mode
 

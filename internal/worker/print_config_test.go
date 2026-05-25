@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // TestPrintConfig_MasksTrackerAPIKey verifies the secret-masking
@@ -24,7 +26,7 @@ func TestPrintConfig_MasksTrackerAPIKey(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	got := stdout.String()
@@ -42,7 +44,7 @@ func TestPrintConfig_MasksTrackerAPIKey(t *testing.T) {
 func TestPrintConfig_DefaultSource(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	code := printConfig(dir, &stdout, &stderr)
+	code := printConfig(dir, nil, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
@@ -80,7 +82,7 @@ func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 
@@ -126,7 +128,7 @@ func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 func TestPrintConfig_RendersAgentTimeoutAsDurationString(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	var out struct {
@@ -162,7 +164,7 @@ func TestPrintConfig_AgentTimeoutFromYAMLOverride(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `"timeout": "10m0s"`) {
@@ -181,7 +183,7 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	var out struct {
@@ -206,7 +208,7 @@ func TestPrintConfig_ExposesMaxRetryAttempts(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	var out struct {
@@ -242,7 +244,7 @@ func TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	if strings.Contains(stdout.String(), `"shadowed_by"`) {
@@ -276,7 +278,7 @@ func TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy(t *testing.T) {
 func TestPrintConfig_TopLevelOmitsEmptyShadowedBy(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	if strings.Contains(stdout.String(), `"shadowed_by"`) {
@@ -343,7 +345,7 @@ func TestPrintConfig_MasksRepoCloneURLUserinfo(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 			var stdout, stderr bytes.Buffer
-			if code := printConfig(dir, &stdout, &stderr); code != 0 {
+			if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 			}
 			got := stdout.String()
@@ -409,7 +411,7 @@ func TestPrintConfig_MasksSandboxCredentialFiles(t *testing.T) {
 				t.Fatalf("write: %v", err)
 			}
 			var stdout, stderr bytes.Buffer
-			if code := printConfig(dir, &stdout, &stderr); code != 0 {
+			if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 				t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 			}
 			got := stdout.String()
@@ -451,7 +453,7 @@ func TestPrintConfig_SandboxVisibleInConfigView(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := printConfig(dir, &stdout, &stderr); code != 0 {
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
 	}
 	var out struct {
@@ -492,7 +494,7 @@ func TestPrintConfig_SchemaErrorReturnsExitOne(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	var stdout, stderr bytes.Buffer
-	code := printConfig(dir, &stdout, &stderr)
+	code := printConfig(dir, nil, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -501,5 +503,321 @@ func TestPrintConfig_SchemaErrorReturnsExitOne(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "repo.clone_url") {
 		t.Fatalf("stderr missing field name: %s", stderr.String())
+	}
+}
+
+// clearWorkerEnv neutralizes every worker env var the provenance block
+// reads, so an ambient AIOPS_WORKSPACE_ROOT in the test runner's
+// environment cannot make a "default"/"workflow" assertion flap. ResolveEnv
+// treats an empty value as unset, so setting "" is equivalent to unset for
+// resolution while still being restored by t.Setenv's cleanup.
+func clearWorkerEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv(workspaceRootEnv, "")
+	t.Setenv(workspaceRootEnvLegacy, "")
+	t.Setenv(mirrorRootEnv, "")
+	t.Setenv(mirrorRootEnvLegacy, "")
+}
+
+// runPrintConfigProvenance writes body (when non-empty) as WORKFLOW.md in a
+// fresh dir, runs printConfig with portOverride, and returns the decoded
+// provenance block. dir is returned so callers can cross-check against an
+// independent workflow.Resolve.
+func runPrintConfigProvenance(t *testing.T, body string, portOverride *int) (configProvenance, string) {
+	t.Helper()
+	dir := t.TempDir()
+	if body != "" {
+		if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, portOverride, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Provenance configProvenance `json:"provenance"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode provenance: %v\nstdout: %s", err, stdout.String())
+	}
+	return out.Provenance, dir
+}
+
+// validFrontMatter wraps the minimal valid front matter (repo + linear
+// tracker) around the supplied extra block so loader validation passes.
+func validFrontMatter(extra string) string {
+	return "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n" + extra + "---\nprompt\n"
+}
+
+// TestPrintConfig_WorkspaceRootProvenance pins the #375 acceptance
+// criterion for workspace root: every SPEC §6.4 precedence layer
+// (workflow > env, canonical vs deprecated alias > default) is annotated
+// with the correct source, env var name, and deprecation flag.
+func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
+	cases := []struct {
+		name           string
+		body           string
+		envCanonical   string
+		envLegacy      string
+		wantValue      string
+		wantSource     string
+		wantEnvVar     string
+		wantDeprecated bool
+	}{
+		{
+			// workflow.root wins even though an env var is also set.
+			name:         "workflow_wins_over_env",
+			body:         validFrontMatter("workspace:\n  root: /custom/ws\n"),
+			envCanonical: "/env/should-lose",
+			wantValue:    "/custom/ws",
+			wantSource:   sourceWorkflow,
+		},
+		{
+			name:         "env_canonical",
+			body:         "",
+			envCanonical: "/env/ws",
+			wantValue:    "/env/ws",
+			wantSource:   sourceEnv,
+			wantEnvVar:   workspaceRootEnv,
+		},
+		{
+			name:           "env_deprecated_alias",
+			body:           "",
+			envLegacy:      "/legacy/ws",
+			wantValue:      "/legacy/ws",
+			wantSource:     sourceEnv,
+			wantEnvVar:     workspaceRootEnvLegacy,
+			wantDeprecated: true,
+		},
+		{
+			name:       "default_no_file_no_env",
+			body:       "",
+			wantSource: sourceDefault,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearWorkerEnv(t)
+			if tc.envCanonical != "" {
+				t.Setenv(workspaceRootEnv, tc.envCanonical)
+			}
+			if tc.envLegacy != "" {
+				t.Setenv(workspaceRootEnvLegacy, tc.envLegacy)
+			}
+			prov, dir := runPrintConfigProvenance(t, tc.body, nil)
+			got := prov.WorkspaceRoot
+			if got.Source != tc.wantSource {
+				t.Fatalf("workspace_root.source = %q, want %q", got.Source, tc.wantSource)
+			}
+			if got.EnvVar != tc.wantEnvVar {
+				t.Fatalf("workspace_root.env_var = %q, want %q", got.EnvVar, tc.wantEnvVar)
+			}
+			if got.EnvVarDeprecated != tc.wantDeprecated {
+				t.Fatalf("workspace_root.env_var_deprecated = %v, want %v", got.EnvVarDeprecated, tc.wantDeprecated)
+			}
+			// The reported value must equal what the worker would actually
+			// use, so it cannot drift from EffectiveWorkspaceRoot.
+			wf, _, err := workflow.Resolve(dir)
+			if err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+			wantEffective := EffectiveWorkspaceRoot(LoadConfigFromEnv(), wf.Config)
+			if got.Value != wantEffective {
+				t.Fatalf("workspace_root.value = %q, want effective %q", got.Value, wantEffective)
+			}
+			if tc.wantValue != "" && got.Value != tc.wantValue {
+				t.Fatalf("workspace_root.value = %q, want %q", got.Value, tc.wantValue)
+			}
+			if tc.wantSource == sourceDefault && got.Value == "" {
+				t.Fatalf("default workspace_root.value must be the SPEC default, got empty")
+			}
+		})
+	}
+}
+
+// TestPrintConfig_MirrorRootProvenance pins the #375 acceptance criterion
+// for mirror root. There is no WORKFLOW.md field, so only env (canonical /
+// deprecated alias) and the computed default apply.
+func TestPrintConfig_MirrorRootProvenance(t *testing.T) {
+	cases := []struct {
+		name           string
+		envCanonical   string
+		envLegacy      string
+		wantSource     string
+		wantEnvVar     string
+		wantValue      string
+		wantDeprecated bool
+	}{
+		{
+			name:         "env_canonical",
+			envCanonical: "/env/mirror",
+			wantSource:   sourceEnv,
+			wantEnvVar:   mirrorRootEnv,
+			wantValue:    "/env/mirror",
+		},
+		{
+			name:           "env_deprecated_alias",
+			envLegacy:      "/legacy/mirror",
+			wantSource:     sourceEnv,
+			wantEnvVar:     mirrorRootEnvLegacy,
+			wantValue:      "/legacy/mirror",
+			wantDeprecated: true,
+		},
+		{
+			name:       "default_no_env",
+			wantSource: sourceDefault,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearWorkerEnv(t)
+			if tc.envCanonical != "" {
+				t.Setenv(mirrorRootEnv, tc.envCanonical)
+			}
+			if tc.envLegacy != "" {
+				t.Setenv(mirrorRootEnvLegacy, tc.envLegacy)
+			}
+			prov, _ := runPrintConfigProvenance(t, "", nil)
+			got := prov.MirrorRoot
+			if got.Source != tc.wantSource {
+				t.Fatalf("mirror_root.source = %q, want %q", got.Source, tc.wantSource)
+			}
+			if got.EnvVar != tc.wantEnvVar {
+				t.Fatalf("mirror_root.env_var = %q, want %q", got.EnvVar, tc.wantEnvVar)
+			}
+			if got.EnvVarDeprecated != tc.wantDeprecated {
+				t.Fatalf("mirror_root.env_var_deprecated = %v, want %v", got.EnvVarDeprecated, tc.wantDeprecated)
+			}
+			if tc.wantValue != "" && got.Value != tc.wantValue {
+				t.Fatalf("mirror_root.value = %q, want %q", got.Value, tc.wantValue)
+			}
+			if tc.wantSource == sourceDefault && got.Value == "" {
+				t.Fatalf("default mirror_root.value must be the computed default, got empty")
+			}
+		})
+	}
+}
+
+// TestPrintConfig_ServerPortProvenance pins the #375 acceptance criterion
+// for server.port, including the CLI --port override precedence over a
+// WORKFLOW.md value, and the workflow-vs-default distinction.
+func TestPrintConfig_ServerPortProvenance(t *testing.T) {
+	port := func(n int) *int { return &n }
+	cases := []struct {
+		name         string
+		body         string
+		portOverride *int
+		wantValue    string
+		wantSource   string
+	}{
+		{
+			// --port wins even when WORKFLOW.md sets server.port.
+			name:         "cli_wins_over_workflow",
+			body:         validFrontMatter("server:\n  port: 5000\n"),
+			portOverride: port(4001),
+			wantValue:    "4001",
+			wantSource:   sourceCLI,
+		},
+		{
+			name:       "workflow",
+			body:       validFrontMatter("server:\n  port: 5000\n"),
+			wantValue:  "5000",
+			wantSource: sourceWorkflow,
+		},
+		{
+			name:       "default_no_file",
+			body:       "",
+			wantValue:  "4000",
+			wantSource: sourceDefault,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearWorkerEnv(t)
+			prov, _ := runPrintConfigProvenance(t, tc.body, tc.portOverride)
+			got := prov.ServerPort
+			if got.Source != tc.wantSource {
+				t.Fatalf("server_port.source = %q, want %q", got.Source, tc.wantSource)
+			}
+			if got.Value != tc.wantValue {
+				t.Fatalf("server_port.value = %q, want %q", got.Value, tc.wantValue)
+			}
+		})
+	}
+}
+
+// TestPrintConfig_WorkflowPathProvenance pins the #375 acceptance criterion
+// for the workflow path source: a resolved file (front-matter or
+// prompt-only) reports `workflow` with the repo-relative path, while no
+// file reports `default` with no path.
+func TestPrintConfig_WorkflowPathProvenance(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		wantValue  string
+		wantSource string
+	}{
+		{
+			name:       "file_front_matter",
+			body:       validFrontMatter(""),
+			wantValue:  "WORKFLOW.md",
+			wantSource: sourceWorkflow,
+		},
+		{
+			name:       "prompt_only_file",
+			body:       "just a prompt body, no front matter\n",
+			wantValue:  "WORKFLOW.md",
+			wantSource: sourceWorkflow,
+		},
+		{
+			name:       "default_no_file",
+			body:       "",
+			wantValue:  "",
+			wantSource: sourceDefault,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearWorkerEnv(t)
+			prov, _ := runPrintConfigProvenance(t, tc.body, nil)
+			got := prov.WorkflowPath
+			if got.Source != tc.wantSource {
+				t.Fatalf("workflow_path.source = %q, want %q", got.Source, tc.wantSource)
+			}
+			if got.Value != tc.wantValue {
+				t.Fatalf("workflow_path.value = %q, want %q", got.Value, tc.wantValue)
+			}
+		})
+	}
+}
+
+// TestPrintConfig_ProvenanceDoesNotLeakSecrets keeps the #375 "secret
+// masking unchanged" criterion honest: adding the provenance block must
+// not echo the tracker API key even though provenance threads the env
+// layer into the print path.
+func TestPrintConfig_ProvenanceDoesNotLeakSecrets(t *testing.T) {
+	clearWorkerEnv(t)
+	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin_super_secret_value")
+	t.Setenv(workspaceRootEnv, "/env/ws")
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\n  api_key: $AIOPS_TEST_LINEAR_KEY\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	got := stdout.String()
+	if strings.Contains(got, "lin_super_secret_value") {
+		t.Fatalf("api_key leaked into stdout:\n%s", got)
+	}
+	if !strings.Contains(got, `"api_key": "***"`) {
+		t.Fatalf("api_key not masked; stdout:\n%s", got)
+	}
+	// The provenance block still reports the (non-secret) env workspace root.
+	if !strings.Contains(got, "/env/ws") {
+		t.Fatalf("expected env workspace root in provenance; stdout:\n%s", got)
 	}
 }

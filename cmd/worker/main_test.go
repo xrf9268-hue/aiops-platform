@@ -2019,6 +2019,50 @@ func TestParseRunArgs_WorkflowPathStillSupported(t *testing.T) {
 	}
 }
 
+// TestParsePrintConfigArgs covers the #375 dispatch contract: a required
+// workdir positional plus an optional --port override that shares run
+// mode's accepted range, in either token order.
+func TestParsePrintConfigArgs(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantWorkdir string
+		wantPort    *int
+		wantErr     string // substring, "" = no error
+	}{
+		{name: "workdir_only", args: []string{"/repo"}, wantWorkdir: "/repo", wantPort: nil},
+		{name: "workdir_then_port_equals", args: []string{"/repo", "--port=4001"}, wantWorkdir: "/repo", wantPort: intPtr(4001)},
+		{name: "port_then_workdir", args: []string{"--port=4001", "/repo"}, wantWorkdir: "/repo", wantPort: intPtr(4001)},
+		{name: "port_split_then_workdir", args: []string{"--port", "4001", "/repo"}, wantWorkdir: "/repo", wantPort: intPtr(4001)},
+		{name: "port_disable", args: []string{"/repo", "--port=-1"}, wantWorkdir: "/repo", wantPort: intPtr(-1)},
+		{name: "port_out_of_range", args: []string{"/repo", "--port=65536"}, wantErr: "--port"},
+		{name: "missing_workdir", args: []string{}, wantErr: "usage"},
+		{name: "missing_workdir_with_port", args: []string{"--port=4001"}, wantErr: "usage"},
+		{name: "too_many_positionals", args: []string{"/repo", "/other"}, wantErr: "usage"},
+		{name: "dash_dash_protects_dash_prefixed_workdir", args: []string{"--", "-repo"}, wantWorkdir: "-repo", wantPort: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workdir, port, err := parsePrintConfigArgs(tc.args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePrintConfigArgs(%v): %v", tc.args, err)
+			}
+			if workdir != tc.wantWorkdir {
+				t.Fatalf("workdir = %q, want %q", workdir, tc.wantWorkdir)
+			}
+			if !reflect.DeepEqual(port, tc.wantPort) {
+				t.Fatalf("port = %v, want %v", port, tc.wantPort)
+			}
+		})
+	}
+}
+
 // TestDesiredPortForLoop_OverrideWinsOverWorkflow pins SPEC §13.7's
 // "CLI --port overrides server.port when both are present" against the
 // runStateHTTPServerLoop port-selection step.

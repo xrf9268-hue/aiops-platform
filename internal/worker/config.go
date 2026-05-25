@@ -55,6 +55,8 @@ func LoadConfigFromEnv() Config {
 }
 
 // PrintConfig dispatches the `worker --print-config <workdir>` subcommand.
-func PrintConfig(workdir string, stdout, stderr io.Writer) int {
-	return printConfig(workdir, stdout, stderr)
+// portOverride carries the CLI --port flag (nil when not passed) so the
+// provenance block can attribute server.port to a `cli` source.
+func PrintConfig(workdir string, portOverride *int, stdout, stderr io.Writer) int {
+	return printConfig(workdir, portOverride, stdout, stderr)
 }

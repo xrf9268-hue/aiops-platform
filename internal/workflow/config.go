@@ -54,6 +54,19 @@ type ServerConfig struct {
 	// authentication, so a routable bind needs auth that this server lacks.
 	Host string `yaml:"host" json:"host"`
 	Port int    `yaml:"port" json:"port"`
+	// portSet records whether server.port was explicitly present in the
+	// WORKFLOW.md front matter (vs. inherited from DefaultConfig). It lets
+	// `worker --print-config` distinguish a `workflow` source from a
+	// `default` one without re-parsing the file. Unexported so YAML never
+	// populates it; the loader sets it after Unmarshal (mirrors
+	// WorkspaceConfig.rootSet).
+	portSet bool
+}
+
+// PortSet reports whether server.port was explicitly set in WORKFLOW.md
+// front matter. False means the effective Port came from DefaultConfig.
+func (s ServerConfig) PortSet() bool {
+	return s.portSet
 }
 
 type RepoConfig struct {

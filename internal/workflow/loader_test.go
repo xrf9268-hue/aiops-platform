@@ -740,3 +740,66 @@ Prompt body
 		}
 	}
 }
+
+// TestServerPortSetTracksFrontMatterPresence pins the #375 enabler: the
+// loader must record whether server.port was explicitly present in the
+// front matter, so `worker --print-config` can label the port `workflow`
+// vs `default`. An explicit value sets PortSet; relying on the
+// DefaultConfig port (4000) leaves it false, even when the file carries
+// other server keys.
+func TestServerPortSetTracksFrontMatterPresence(t *testing.T) {
+	explicit := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+server:
+  port: 5000
+tracker:
+  kind: linear
+  project_slug: platform
+---
+Prompt body
+`)
+	wf, err := Load(explicit)
+	if err != nil {
+		t.Fatalf("Load(explicit server.port): %v", err)
+	}
+	if !wf.Config.Server.PortSet() {
+		t.Fatal("PortSet() = false for explicit server.port, want true")
+	}
+	if wf.Config.Server.Port != 5000 {
+		t.Fatalf("Server.Port = %d, want 5000", wf.Config.Server.Port)
+	}
+
+	// server.host present but server.port absent: PortSet must stay false
+	// so the inherited default port is labeled `default`, not `workflow`.
+	hostOnly := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+server:
+  host: 127.0.0.1
+tracker:
+  kind: linear
+  project_slug: platform
+---
+Prompt body
+`)
+	wf, err = Load(hostOnly)
+	if err != nil {
+		t.Fatalf("Load(host only): %v", err)
+	}
+	if wf.Config.Server.PortSet() {
+		t.Fatal("PortSet() = true when only server.host present, want false")
+	}
+	if wf.Config.Server.Port != 4000 {
+		t.Fatalf("Server.Port = %d, want DefaultConfig 4000", wf.Config.Server.Port)
+	}
+
+	// DefaultConfig (no file) must not report the port as workflow-sourced.
+	if DefaultConfig().Server.PortSet() {
+		t.Fatal("DefaultConfig().Server.PortSet() = true, want false")
+	}
+}

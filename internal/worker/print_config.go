@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 // printConfigOutput is the JSON shape of `worker --print-config <dir>`.
@@ -24,7 +26,130 @@ type printConfigOutput struct {
 	ShadowedBy     []string              `json:"shadowed_by,omitempty"`
 	Resolution     printConfigResolution `json:"resolution"`
 	Config         configView            `json:"config"`
+	Provenance     configProvenance      `json:"provenance"`
 	PromptTemplate promptSummary         `json:"prompt_template"`
+}
+
+// Provenance source tokens (#375). Every effective value annotated by
+// --print-config carries exactly one of these, naming the resolution
+// layer that won:
+//   - sourceDefault:  the built-in schema default (no override took effect)
+//   - sourceEnv:      a worker environment variable (the field's EnvVar
+//     names which one; EnvVarDeprecated flags a legacy
+//     unprefixed alias per #368)
+//   - sourceWorkflow: an explicit value in WORKFLOW.md front matter
+//   - sourceCLI:      a command-line override (currently only --port)
+const (
+	sourceDefault  = "default"
+	sourceEnv      = "env"
+	sourceWorkflow = "workflow"
+	sourceCLI      = "cli"
+)
+
+// configProvenance annotates the effective value and origin of the
+// config fields whose value can come from more than one resolution layer
+// (env / WORKFLOW.md / CLI / default). It is a debug aid layered on top of
+// the masked Config block, which alone cannot show that e.g. the effective
+// workspace root came from AIOPS_WORKSPACE_ROOT rather than the file.
+//
+// None of these fields is secret-bearing (filesystem paths, a port, a
+// workflow path), so they are reported verbatim; the maskSecrets contract
+// for Config is unchanged (#375).
+type configProvenance struct {
+	WorkspaceRoot fieldProvenance `json:"workspace_root"`
+	MirrorRoot    fieldProvenance `json:"mirror_root"`
+	ServerPort    fieldProvenance `json:"server_port"`
+	WorkflowPath  fieldProvenance `json:"workflow_path"`
+}
+
+// fieldProvenance is the effective value of one field plus where it came
+// from. Value is rendered as a string for a uniform shape across a path, a
+// port, and a workflow path. EnvVar/EnvVarDeprecated are populated only
+// when Source == sourceEnv.
+type fieldProvenance struct {
+	Value            string `json:"value"`
+	Source           string `json:"source"`
+	EnvVar           string `json:"env_var,omitempty"`
+	EnvVarDeprecated bool   `json:"env_var_deprecated,omitempty"`
+}
+
+// resolveProvenance derives the per-field provenance for --print-config.
+// workerCfg carries the env-layer values (LoadConfigFromEnv); wcfg is the
+// resolved workflow config; res is how the workflow file itself resolved;
+// portOverride is the CLI --port flag (nil when not passed).
+func resolveProvenance(workerCfg Config, wcfg workflow.Config, res workflow.Resolution, portOverride *int) configProvenance {
+	return configProvenance{
+		WorkspaceRoot: workspaceRootProvenance(workerCfg, wcfg),
+		MirrorRoot:    mirrorRootProvenance(),
+		ServerPort:    serverPortProvenance(wcfg, portOverride),
+		WorkflowPath:  workflowPathProvenance(res),
+	}
+}
+
+// workspaceRootProvenance mirrors EffectiveWorkspaceRoot's SPEC §6.4
+// precedence (workflow > env > default) and labels the winning layer. The
+// effective Value always comes from EffectiveWorkspaceRoot so the reported
+// value cannot drift from the value the worker actually uses.
+func workspaceRootProvenance(workerCfg Config, wcfg workflow.Config) fieldProvenance {
+	effective := EffectiveWorkspaceRoot(workerCfg, wcfg)
+	if wcfg.Workspace.RootSet() && strings.TrimSpace(wcfg.Workspace.Root) != "" {
+		return fieldProvenance{Value: effective, Source: sourceWorkflow}
+	}
+	envRes := ResolveEnv(workspaceRootEnv, workspaceRootEnvLegacy)
+	if strings.TrimSpace(envRes.Value) != "" {
+		return envProvenance(effective, envRes)
+	}
+	return fieldProvenance{Value: effective, Source: sourceDefault}
+}
+
+// mirrorRootProvenance reports where the bare-mirror cache root resolves
+// from. There is no WORKFLOW.md field for it, so the only layers are the
+// AIOPS_MIRROR_ROOT env (with its legacy alias) and the computed default.
+func mirrorRootProvenance() fieldProvenance {
+	envRes := ResolveEnv(mirrorRootEnv, mirrorRootEnvLegacy)
+	if strings.TrimSpace(envRes.Value) != "" {
+		return envProvenance(workspace.MirrorRoot(envRes.Value), envRes)
+	}
+	return fieldProvenance{Value: workspace.MirrorRoot(""), Source: sourceDefault}
+}
+
+// serverPortProvenance mirrors desiredPortForLoop's precedence: the CLI
+// --port override wins over the workflow snapshot, which wins over the
+// DefaultConfig port. PortSet() distinguishes a WORKFLOW.md value from the
+// inherited default.
+func serverPortProvenance(wcfg workflow.Config, portOverride *int) fieldProvenance {
+	if portOverride != nil {
+		return fieldProvenance{Value: strconv.Itoa(*portOverride), Source: sourceCLI}
+	}
+	if wcfg.Server.PortSet() {
+		return fieldProvenance{Value: strconv.Itoa(wcfg.Server.Port), Source: sourceWorkflow}
+	}
+	return fieldProvenance{Value: strconv.Itoa(wcfg.Server.Port), Source: sourceDefault}
+}
+
+// workflowPathProvenance reports whether the effective config came from a
+// resolved WORKFLOW.md (sourceWorkflow, with the repo-relative path) or
+// from the built-in defaults (sourceDefault, no path). The file-vs-prompt
+// distinction is preserved by the top-level `source`/`resolution` fields.
+func workflowPathProvenance(res workflow.Resolution) fieldProvenance {
+	switch res.Source {
+	case workflow.SourceFile, workflow.SourcePromptOnly:
+		return fieldProvenance{Value: res.Path, Source: sourceWorkflow}
+	default:
+		return fieldProvenance{Value: "", Source: sourceDefault}
+	}
+}
+
+// envProvenance builds an env-sourced fieldProvenance, flagging the used
+// name as deprecated when it is a legacy alias rather than the canonical
+// AIOPS_-prefixed name (#368).
+func envProvenance(value string, res EnvResolution) fieldProvenance {
+	return fieldProvenance{
+		Value:            value,
+		Source:           sourceEnv,
+		EnvVar:           res.UsedName,
+		EnvVarDeprecated: res.UsedName != res.Canonical,
+	}
 }
 
 // configView mirrors workflow.Config for --print-config output, but
@@ -173,10 +298,12 @@ func maskCloneURL(raw string) string {
 
 // printConfig writes the effective workflow for workdir as JSON to
 // stdout. Returns the process exit code (0 on success, 1 on schema
-// validation error). Used both by main()'s --print-config dispatch and
-// by tests; stdout/stderr are explicit io.Writer parameters so tests
-// can capture the output without subprocessing.
-func printConfig(workdir string, stdout, stderr io.Writer) int {
+// validation error). portOverride carries the CLI --port flag (nil when
+// not passed) so the provenance block can attribute server.port to `cli`.
+// Used both by main()'s --print-config dispatch and by tests;
+// stdout/stderr are explicit io.Writer parameters so tests can capture the
+// output without subprocessing.
+func printConfig(workdir string, portOverride *int, stdout, stderr io.Writer) int {
 	wf, res, err := workflow.Resolve(workdir)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
@@ -191,6 +318,7 @@ func printConfig(workdir string, stdout, stderr io.Writer) int {
 			ShadowedBy: res.ShadowedBy,
 		},
 		Config:         newConfigView(maskSecrets(wf.Config)),
+		Provenance:     resolveProvenance(LoadConfigFromEnv(), wf.Config, *res, portOverride),
 		PromptTemplate: summarizePrompt(wf.PromptTemplate),
 	}
 	enc := json.NewEncoder(stdout)

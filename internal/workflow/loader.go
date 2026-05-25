@@ -155,12 +155,14 @@ func Load(path string) (*Workflow, error) {
 		hookFields := hookFieldPresence(frontBytes, "hooks")
 		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		workspaceRootSet := hasNestedKey(frontBytes, "workspace", "root")
+		serverPortSet := hasNestedKey(frontBytes, "server", "port")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
 			return nil, &Error{Category: CategoryWorkflowParseError, Path: path, Message: "parse workflow front matter", Err: err}
 		}
 		cfg.hookFields = hookFields
 		cfg.Workspace.hookFields = legacyHookFields
 		cfg.Workspace.rootSet = workspaceRootSet
+		cfg.Server.portSet = serverPortSet
 		if hookFields.TimeoutMs {
 			cfg.hooksTimeoutDefaulted = false
 		}
