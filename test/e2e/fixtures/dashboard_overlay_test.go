@@ -54,13 +54,16 @@ func TestDashboardOverlayBindsContainerWide(t *testing.T) {
 	if got := env["AIOPS_SERVER_HOST"]; got != "0.0.0.0" {
 		t.Fatalf("AIOPS_SERVER_HOST = %v, want 0.0.0.0", got)
 	}
+	if got := env["AIOPS_STATE_API_TOKEN"]; got != "${AIOPS_STATE_API_TOKEN:?set AIOPS_STATE_API_TOKEN for the dashboard overlay}" {
+		t.Fatalf("AIOPS_STATE_API_TOKEN = %v, want required Compose interpolation", got)
+	}
 }
 
 // TestDashboardOverlayIsolatesWorkerNetwork guards that the overlay moves the
 // worker onto a dedicated non-default network (#366). Because a 0.0.0.0 bind is
 // reachable by sibling containers on a shared Compose network (which can spoof
-// the loopback Host guard), the worker must leave the project default network
-// so co-located services cannot reach the unauthenticated dashboard.
+// the loopback Host guard and try the token-protected surface), the worker must
+// leave the project default network so co-located services cannot reach it.
 func TestDashboardOverlayIsolatesWorkerNetwork(t *testing.T) {
 	overlay := readDashboardOverlay(t)
 	worker := service(t, overlay, "worker")
@@ -87,8 +90,8 @@ func TestDashboardOverlayIsolatesWorkerNetwork(t *testing.T) {
 }
 
 // TestDashboardOverlayPublishesToHostLoopbackOnly guards the security property:
-// the host side of every published port must bind loopback, so the dashboard
-// (unauthenticated, SPEC §15.3) is never exposed on a routable host interface.
+// the host side of every published port must bind loopback, so the dashboard is
+// never exposed on a routable host interface.
 func TestDashboardOverlayPublishesToHostLoopbackOnly(t *testing.T) {
 	worker := service(t, readDashboardOverlay(t), "worker")
 	ports, ok := worker["ports"].([]any)
