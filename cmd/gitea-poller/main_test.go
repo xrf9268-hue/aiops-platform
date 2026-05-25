@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -119,8 +120,11 @@ func TestGiteaMetricsHandlerExposesPaginationCapHits(t *testing.T) {
 	client := gitea.NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	client.Logf = func(string, ...any) {}
-	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); err != nil {
-		t.Fatalf("ListIssuesByStates: %v", err)
+	// Listing intentionally overflows pagination to drive the cap metric;
+	// per #401/#402, ListIssuesByStates surfaces ErrIssueListingCapped on
+	// partial results so reconcile does not treat them as authoritative.
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); !errors.Is(err, tracker.ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates err = %v, want tracker.ErrIssueListingCapped", err)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)

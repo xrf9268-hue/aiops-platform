@@ -96,21 +96,40 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	var out []tracker.Issue
 	seenIssues := map[string]struct{}{}
 	if len(labelNames) == 0 {
-		issues, _, err := c.listIssuesByStateLabel(ctx, "", issueState, wantedStates, seenIssues)
-		return issues, err
+		issues, capped, err := c.listIssuesByStateLabel(ctx, "", issueState, wantedStates, seenIssues)
+		if err != nil {
+			return nil, err
+		}
+		if capped {
+			return nil, tracker.NewError(
+				tracker.CategoryIssueListingCapped,
+				fmt.Sprintf("gitea issue listing partial: capped state %q", issueState),
+				nil,
+			)
+		}
+		return issues, nil
 	}
+	var cappedLabels []string
 	for _, labelName := range labelNames {
 		issues, capped, err := c.listIssuesByStateLabel(ctx, labelName, issueState, wantedStates, seenIssues)
 		if err != nil {
 			return nil, err
 		}
 		if capped {
+			cappedLabels = append(cappedLabels, labelName)
 			continue
 		}
 		for _, issue := range issues {
 			seenIssues[issue.ID] = struct{}{}
 		}
 		out = append(out, issues...)
+	}
+	if len(cappedLabels) > 0 {
+		return nil, tracker.NewError(
+			tracker.CategoryIssueListingCapped,
+			fmt.Sprintf("gitea issue listing partial: capped labels %v", cappedLabels),
+			nil,
+		)
 	}
 	return out, nil
 }
@@ -238,7 +257,7 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 func (c *TrackerClient) recordPaginationCapHit(labelName string, maxPages int) {
 	c.paginationCapHits.Add(1)
 	if c.Logf != nil {
-		c.Logf("gitea issue pagination exceeded %d pages for label %q; skipping that label and continuing this tracker poll", maxPages, labelName)
+		c.Logf("gitea issue pagination exceeded %d pages for label %q; failing this tracker listing so reconcile does not treat partial results as authoritative", maxPages, labelName)
 	}
 }
 

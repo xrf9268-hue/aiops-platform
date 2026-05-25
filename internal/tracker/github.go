@@ -140,6 +140,7 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 	}
 	seen := map[string]struct{}{}
 	var out []Issue
+	var cappedScopes []string
 	for _, state := range stateFilters {
 		issueState, label, mappedState := githubIssueQueryForState(state)
 		scope := githubIssueCollectionScope(issueState, label)
@@ -147,6 +148,7 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 			if c.Logf != nil {
 				c.Logf("github open pull request pagination exceeded configured cap; skipping issue collection %q to avoid dispatching already-claimed issues", scope)
 			}
+			cappedScopes = append(cappedScopes, scope)
 			continue
 		}
 		issues, capped, err := c.listIssuesForState(ctx, issueState, label, mappedState, seen, claimedIssueNumbers)
@@ -154,12 +156,20 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 			return nil, err
 		}
 		if capped {
+			cappedScopes = append(cappedScopes, scope)
 			continue
 		}
 		for _, issue := range issues {
 			seen[issue.ID] = struct{}{}
 		}
 		out = append(out, issues...)
+	}
+	if len(cappedScopes) > 0 {
+		return nil, NewError(
+			CategoryIssueListingCapped,
+			fmt.Sprintf("github issue listing partial: capped collections %v", cappedScopes),
+			nil,
+		)
 	}
 	return out, nil
 }
@@ -458,7 +468,7 @@ func githubHasNextPage(linkHeaders []string) bool {
 func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 	c.paginationCapHits.Add(1)
 	if c.Logf != nil {
-		c.Logf("github pagination exceeded %d pages for label/state %q; skipping that collection and continuing this tracker poll", maxPages, label)
+		c.Logf("github pagination exceeded %d pages for label/state %q; failing this tracker listing so reconcile does not treat partial results as authoritative", maxPages, label)
 	}
 }
 

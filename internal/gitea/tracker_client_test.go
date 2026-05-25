@@ -3,6 +3,7 @@ package gitea
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -321,7 +322,13 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 	}
 }
 
-func TestTrackerClientListIssuesByStatesSkipsOverflowingLabelAndContinues(t *testing.T) {
+// TestTrackerClientListIssuesByStatesErrorsWhenLabelOverflows pins the
+// fail-safe contract for #402: if any state-label collection overflows
+// pagination, ListIssuesByStates must surface tracker.ErrIssueListingCapped
+// (with nil issues) so startup reconciliation does not treat the partial
+// result as authoritative and delete workspaces for active issues that fell
+// past the page cap.
+func TestTrackerClientListIssuesByStatesErrorsWhenLabelOverflows(t *testing.T) {
 	var logs []string
 	todoPages := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -352,17 +359,17 @@ func TestTrackerClientListIssuesByStatesSkipsOverflowingLabelAndContinues(t *tes
 		t.Fatalf("initial PaginationCapHits = %d, want 0", got)
 	}
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready", "Rework"})
-	if err != nil {
-		t.Fatalf("ListIssuesByStates: %v", err)
+	if !errors.Is(err, tracker.ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates err = %v, want tracker.ErrIssueListingCapped", err)
 	}
-	if len(issues) != 1 || issues[0].Identifier != "#9001" || issues[0].State != "Rework" {
-		t.Fatalf("issues = %#v, want only non-overflowing Rework label", issues)
+	if issues != nil {
+		t.Fatalf("issues = %#v, want nil when listing is partial", issues)
 	}
 	if todoPages != 2 {
 		t.Fatalf("aiops/todo pages = %d, want configured max page plus probe", todoPages)
 	}
-	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "gitea issue pagination exceeded") {
-		t.Fatalf("logs = %#v, want pagination cap diagnostic", logs)
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "failing this tracker listing") {
+		t.Fatalf("logs = %#v, want fail-loud diagnostic", logs)
 	}
 	if got := client.PaginationCapHits(); got != 1 {
 		t.Fatalf("PaginationCapHits = %d, want 1", got)

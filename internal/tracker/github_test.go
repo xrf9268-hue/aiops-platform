@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -195,7 +196,12 @@ func TestGitHubClaimedIssueNumbersMatchesPRContract(t *testing.T) {
 	}
 }
 
-func TestGitHubClientListIssuesByStatesSkipsOverflowingStateAndContinues(t *testing.T) {
+// TestGitHubClientListIssuesByStatesErrorsWhenStateCollectionOverflows pins
+// the fail-safe contract for #401: if any state collection overflows pagination,
+// ListIssuesByStates must surface ErrIssueListingCapped (with nil issues) so
+// startup reconciliation does not treat the partial result as authoritative and
+// delete workspaces for active issues that fell past the page cap.
+func TestGitHubClientListIssuesByStatesErrorsWhenStateCollectionOverflows(t *testing.T) {
 	var logs []string
 	openIssuePages := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -231,11 +237,11 @@ func TestGitHubClientListIssuesByStatesSkipsOverflowingStateAndContinues(t *test
 		logs = append(logs, fmt.Sprintf(format, args...))
 	}
 	issues, err := client.ListIssuesByStates(context.Background(), []string{"open", "closed"})
-	if err != nil {
-		t.Fatalf("ListIssuesByStates: %v", err)
+	if !errors.Is(err, ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates err = %v, want ErrIssueListingCapped", err)
 	}
-	if len(issues) != 1 || issues[0].Identifier != "#42" || issues[0].State != "closed" {
-		t.Fatalf("issues = %#v, want only non-overflowing closed state", issues)
+	if issues != nil {
+		t.Fatalf("issues = %#v, want nil when listing is partial", issues)
 	}
 	if openIssuePages != 2 {
 		t.Fatalf("open issue pages = %d, want configured max page plus probe", openIssuePages)
@@ -243,12 +249,17 @@ func TestGitHubClientListIssuesByStatesSkipsOverflowingStateAndContinues(t *test
 	if got := client.PaginationCapHits(); got != 1 {
 		t.Fatalf("PaginationCapHits = %d, want 1", got)
 	}
-	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "skipping that collection") {
-		t.Fatalf("logs = %#v, want skip diagnostic", logs)
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "failing this tracker listing") {
+		t.Fatalf("logs = %#v, want fail-loud diagnostic", logs)
 	}
 }
 
-func TestGitHubClientListIssuesByStatesSkipsOpenWhenOpenPRPaginationOverflows(t *testing.T) {
+// TestGitHubClientListIssuesByStatesErrorsWhenOpenPRPaginationOverflows pins
+// the fail-safe contract for #401 on the open-PR-claim-cap path: if the open PR
+// listing overflows, any state collection that depends on a complete claim set
+// is skipped AND ListIssuesByStates returns ErrIssueListingCapped so reconcile
+// does not treat the resulting partial issue set as authoritative.
+func TestGitHubClientListIssuesByStatesErrorsWhenOpenPRPaginationOverflows(t *testing.T) {
 	for _, tc := range []struct {
 		name              string
 		states            []string
@@ -292,11 +303,11 @@ func TestGitHubClientListIssuesByStatesSkipsOpenWhenOpenPRPaginationOverflows(t 
 			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
 			client.HTTP = srv.Client()
 			issues, err := client.ListIssuesByStates(context.Background(), tc.states)
-			if err != nil {
-				t.Fatalf("ListIssuesByStates: %v", err)
+			if !errors.Is(err, ErrIssueListingCapped) {
+				t.Fatalf("ListIssuesByStates err = %v, want ErrIssueListingCapped", err)
 			}
-			if len(issues) != 1 || issues[0].Identifier != "#45" || issues[0].State != "closed" {
-				t.Fatalf("issues = %#v, want only closed issue after incomplete open-PR claim scan", issues)
+			if issues != nil {
+				t.Fatalf("issues = %#v, want nil when listing is partial", issues)
 			}
 			if pullPages != 2 {
 				t.Fatalf("open pull request pages = %d, want configured max page plus cap probe", pullPages)

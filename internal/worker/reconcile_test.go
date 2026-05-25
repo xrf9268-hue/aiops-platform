@@ -218,6 +218,63 @@ func TestReconcileStartupTolerantOfActiveFetchFailure(t *testing.T) {
 	}
 }
 
+// TestReconcileStartupSafeWhenActiveListingCapped pins #401/#402: a partial
+// active list (signaled by tracker.ErrIssueListingCapped) MUST be treated as a
+// fetch failure so reconcile skips cleanup. Otherwise an active workspace that
+// fell past the page cap would be deleted as "unknown" on restart whenever
+// terminal issues are present.
+func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	maybeTerminalPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
+	for _, path := range []string{activePath, maybeTerminalPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"AI Ready"},
+		TerminalStates: []string{"Done"},
+		Tracker: &fakeReconcileTrackerByCall{
+			// Active fetch returns capped error; terminal fetch would have
+			// terminal issues, which is what would normally arm canRemoveUnknown.
+			errByCall:    []error{tracker.ErrIssueListingCapped, nil},
+			issuesByCall: [][]tracker.Issue{nil, {{ID: "issue-2", Identifier: "LIN-2", State: "Done"}}},
+		},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup must not fail when active listing is capped: %v", err)
+	}
+	if _, err := os.Stat(activePath); err != nil {
+		t.Fatalf("active workspace must remain when active listing is capped: %v", err)
+	}
+	if _, err := os.Stat(maybeTerminalPath); err != nil {
+		t.Fatalf("any workspace must remain when active listing is capped (safety): %v", err)
+	}
+	endEvents := emitter.byKind(task.EventReconcileEnd)
+	if len(endEvents) != 1 {
+		t.Fatalf("reconcile_end events = %d, want 1", len(endEvents))
+	}
+	payload, ok := endEvents[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("reconcile_end payload = %T, want map", endEvents[0].Payload)
+	}
+	if status, _ := payload["status"].(string); status != "skipped" {
+		t.Fatalf("reconcile_end status = %q, want \"skipped\"", status)
+	}
+	if reason, _ := payload["reason"].(string); reason != "active_fetch_failed" {
+		t.Fatalf("reconcile_end reason = %q, want \"active_fetch_failed\"", reason)
+	}
+	if errMsg, _ := payload["error"].(string); !strings.Contains(errMsg, "issue_listing_capped") {
+		t.Fatalf("reconcile_end error = %q, want issue_listing_capped category surfaced", errMsg)
+	}
+}
+
 // TestReconcileStartupTolerantOfTerminalFetchFailure: terminal-fetch failure
 // is non-fatal. Active workspaces are still kept; terminal/unknown removal is
 // skipped because terminalKeys is empty and canRemoveUnknown stays false.

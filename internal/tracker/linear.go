@@ -29,6 +29,7 @@ const (
 	CategoryLinearGraphQLErrors       Category = "linear_graphql_errors"
 	CategoryLinearUnknownPayload      Category = "linear_unknown_payload"
 	CategoryLinearMissingEndCursor    Category = "linear_missing_end_cursor"
+	CategoryIssueListingCapped        Category = "issue_listing_capped"
 )
 
 var (
@@ -40,6 +41,12 @@ var (
 	ErrLinearGraphQLErrors       = &Error{Category: CategoryLinearGraphQLErrors}
 	ErrLinearUnknownPayload      = &Error{Category: CategoryLinearUnknownPayload}
 	ErrLinearMissingEndCursor    = &Error{Category: CategoryLinearMissingEndCursor}
+	// ErrIssueListingCapped is returned by ListIssuesByStates when pagination
+	// cap is hit on any collection, so the returned issue set would be partial.
+	// Callers that rely on listing completeness (e.g. startup reconciliation,
+	// which deletes workspaces not seen in the active list) must treat this as
+	// a fetch failure and skip cleanup.
+	ErrIssueListingCapped = &Error{Category: CategoryIssueListingCapped}
 )
 
 type Error struct {
