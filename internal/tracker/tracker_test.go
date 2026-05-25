@@ -1,9 +1,18 @@
 package tracker
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestIssueRefsFromIDsTrimsAndSkipsEmptyIDs(t *testing.T) {
+	got := IssueRefsFromIDs([]string{" 123 ", "", " \t\n", "#7 "})
+	want := []IssueRef{{ID: "123"}, {ID: "#7"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("IssueRefsFromIDs = %#v, want %#v", got, want)
+	}
+}
 
 func TestTimeStringReturnsEmptyForZeroTime(t *testing.T) {
 	if got := TimeString(time.Time{}); got != "" {

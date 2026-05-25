@@ -874,6 +874,37 @@ func (o *Orchestrator) RunningRetryingAndBlockedIssueIDs(ctx context.Context) []
 	}
 }
 
+func (o *Orchestrator) RunningRetryingAndBlockedIssueRefs(ctx context.Context) []tracker.IssueRef {
+	view, err := o.Snapshot(ctx)
+	if err != nil {
+		return nil
+	}
+	refs := make([]tracker.IssueRef, 0, len(view.Running)+len(view.Retrying)+len(view.Blocked))
+	seen := map[string]struct{}{}
+	add := func(issueID IssueID, identifier string) {
+		id := strings.TrimSpace(string(issueID))
+		if id == "" {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		refs = append(refs, tracker.IssueRef{ID: id, Identifier: strings.TrimSpace(identifier)})
+	}
+	for _, run := range view.Running {
+		add(run.IssueID, run.Identifier)
+	}
+	for _, retry := range view.Retrying {
+		add(retry.IssueID, retry.Identifier)
+	}
+	for _, blocked := range view.Blocked {
+		add(blocked.IssueID, blocked.Identifier)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
+	return refs
+}
+
 func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string {
 	return o.RunningRetryingAndBlockedIssueIDs(ctx)
 }
@@ -1656,7 +1687,10 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 					// leaking its workspace — the exact leak this resolves (Codex
 					// P2). Derived from runCtx so actor shutdown still cancels it.
 					resolveCtx, resolveCancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
-					statesByID, rerr := resolver.FetchIssueStatesByIDs(resolveCtx, []string{string(id)})
+					statesByID, rerr := fetchIssueStates(resolveCtx, resolver, []tracker.IssueRef{{
+						ID:         string(id),
+						Identifier: entry.Identifier,
+					}})
 					resolveCancel()
 					if rerr == nil {
 						if s := strings.TrimSpace(statesByID[string(id)]); s != "" && isTerminalTrackerState(s, terminalStates) {

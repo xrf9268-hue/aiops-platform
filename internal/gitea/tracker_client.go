@@ -135,19 +135,23 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 }
 
 func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	return c.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
+}
+
+func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) {
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
 	}
 	if c.Owner == "" || c.Repo == "" {
 		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
 	}
-	if len(issueIDs) == 0 {
+	if len(issueRefs) == 0 {
 		return map[string]string{}, nil
 	}
-	states := make(map[string]string, len(issueIDs))
+	states := make(map[string]string, len(issueRefs))
 	seen := map[string]struct{}{}
-	for _, issueID := range issueIDs {
-		issueID = strings.TrimSpace(issueID)
+	for _, issueRef := range issueRefs {
+		issueID := strings.TrimSpace(issueRef.ID)
 		if issueID == "" {
 			continue
 		}
@@ -155,8 +159,9 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 			continue
 		}
 		seen[issueID] = struct{}{}
-		issueNumber, ok := c.cachedIssueNumber(issueID)
+		issueNumber, ok := c.issueNumberForStateRefresh(issueRef)
 		if !ok {
+			c.logStateRefreshCacheMiss(issueRef)
 			continue
 		}
 		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
@@ -166,7 +171,7 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 		if !found {
 			continue
 		}
-		if refreshedID := giteaIssueID(issue); refreshedID != issueID {
+		if !giteaIssueMatchesRef(issueID, issueRef.Identifier, issue) {
 			c.cacheIssueNumber(issue)
 			continue
 		}
@@ -179,6 +184,66 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 		states[issueID] = state
 	}
 	return states, nil
+}
+
+func giteaIssueMatchesRef(issueID, identifier string, issue Issue) bool {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == giteaIssueID(issue) {
+		return true
+	}
+	if !giteaIdentifierMatchesIssueNumber(identifier, issue.Number) {
+		return false
+	}
+	if strings.HasPrefix(issueID, "#") {
+		return issueID == fmt.Sprintf("#%d", issue.Number)
+	}
+	return issueID == giteaIssueNumberID(issue.Number)
+}
+
+func giteaIdentifierMatchesIssueNumber(identifier string, issueNumber int) bool {
+	if identifierNumber, ok := giteaIssueNumberFromIdentifier(identifier); ok {
+		return identifierNumber == issueNumber
+	}
+	return true
+}
+
+func giteaIssueNumberID(issueNumber int) string {
+	if issueNumber <= 0 {
+		return ""
+	}
+	return strconv.Itoa(issueNumber)
+}
+
+func (c *TrackerClient) issueNumberForStateRefresh(ref tracker.IssueRef) (int, bool) {
+	if issueNumber, ok := c.cachedIssueNumber(ref.ID); ok {
+		return issueNumber, true
+	}
+	if issueNumber, ok := giteaIssueNumberFromIdentifier(ref.Identifier); ok {
+		return issueNumber, true
+	}
+	if strings.HasPrefix(strings.TrimSpace(ref.ID), "#") {
+		return giteaIssueNumberFromIdentifier(ref.ID)
+	}
+	return 0, false
+}
+
+func (c *TrackerClient) logStateRefreshCacheMiss(ref tracker.IssueRef) {
+	if c.Logf == nil {
+		return
+	}
+	c.Logf("gitea issue state refresh skipped uncached issue_id=%q issue_identifier=%q; no repo issue-number fallback available", strings.TrimSpace(ref.ID), strings.TrimSpace(ref.Identifier))
+}
+
+func giteaIssueNumberFromIdentifier(identifier string) (int, bool) {
+	identifier = strings.TrimSpace(identifier)
+	if !strings.HasPrefix(identifier, "#") {
+		return 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(identifier, "#"))
+	if err != nil || number <= 0 {
+		return 0, false
+	}
+	return number, true
 }
 
 func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) {

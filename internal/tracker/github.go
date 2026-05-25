@@ -475,15 +475,13 @@ func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 // FetchIssueStatesByIDs implements SPEC §11.1 for the GitHub adapter. GitHub's
 // REST API has no `[ID!]` bulk endpoint, so this iterates one
 // `GET /repos/{owner}/{repo}/issues/{number}` per ID using the repo issue
-// number cached during prior list calls. Per-ID 404/410 responses are treated
-// as "issue removed" and silently skipped so a single deleted issue does not
-// abort reconciliation for the rest of the running set. Other HTTP errors
-// abort the whole call so a transient outage cannot silently degrade per-tick
-// state refresh.
-//
-// IDs without a cached number (e.g. issues we have never listed in this
-// process) are skipped because there is no way to address them by global
-// numeric ID via the REST API. They will be cached on the next list cycle.
+// number cached during prior list calls. Ref-aware callers can also provide
+// the human identifier (`#123`) so a rebuilt tracker client can query by repo
+// issue number before any list call repopulates the cache. Per-ID 404/410
+// responses are treated as "issue removed" and silently skipped so a single
+// deleted issue does not abort reconciliation for the rest of the running set.
+// Other HTTP errors abort the whole call so a transient outage cannot silently
+// degrade per-tick state refresh.
 //
 // State derivation: if any label on the issue matches a state configured in
 // active_states / terminal_states / inactive_states (case-insensitive), the
@@ -491,20 +489,24 @@ func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 // normalization). Otherwise the issue's open/closed state is returned. This
 // matches the GitHub convention where workflow position is encoded as labels.
 func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
+}
+
+func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]string, error) {
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
 	}
-	if len(issueIDs) == 0 {
+	if len(issueRefs) == 0 {
 		return map[string]string{}, nil
 	}
 	if strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Repo) == "" {
 		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
 	}
 	configuredStates := githubConfiguredStates(c.Config)
-	states := make(map[string]string, len(issueIDs))
+	states := make(map[string]string, len(issueRefs))
 	seen := map[string]struct{}{}
-	for _, issueID := range issueIDs {
-		issueID = strings.TrimSpace(issueID)
+	for _, issueRef := range issueRefs {
+		issueID := strings.TrimSpace(issueRef.ID)
 		if issueID == "" {
 			continue
 		}
@@ -512,8 +514,9 @@ func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 			continue
 		}
 		seen[issueID] = struct{}{}
-		issueNumber, ok := c.cachedIssueNumber(issueID)
+		issueNumber, ok := c.issueNumberForStateRefresh(issueRef)
 		if !ok {
+			c.logStateRefreshCacheMiss(issueRef)
 			continue
 		}
 		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
@@ -523,7 +526,15 @@ func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 		if !found {
 			continue
 		}
-		c.cacheIssueNumber(strconv.FormatInt(issue.ID, 10), issue.Number)
+		refreshedID := strconv.FormatInt(issue.ID, 10)
+		if !githubFetchedIssueMatchesRef(issueID, issueRef.Identifier, refreshedID, issue.Number) {
+			c.cacheIssueNumber(refreshedID, issue.Number)
+			continue
+		}
+		c.cacheIssueNumber(refreshedID, issue.Number)
+		if issueNumberID := githubIssueNumberID(issue.Number); issueID == issueNumberID {
+			c.cacheIssueNumber(issueID, issue.Number)
+		}
 		state := githubResolveState(issue, configuredStates)
 		if state == "" {
 			continue
@@ -531,6 +542,66 @@ func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 		states[issueID] = state
 	}
 	return states, nil
+}
+
+func githubFetchedIssueMatchesRef(issueID, identifier, refreshedID string, issueNumber int) bool {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == refreshedID {
+		return true
+	}
+	if !githubIdentifierMatchesIssueNumber(identifier, issueNumber) {
+		return false
+	}
+	if strings.HasPrefix(issueID, "#") {
+		return issueID == fmt.Sprintf("#%d", issueNumber)
+	}
+	return issueID == githubIssueNumberID(issueNumber)
+}
+
+func githubIdentifierMatchesIssueNumber(identifier string, issueNumber int) bool {
+	if identifierNumber, ok := githubIssueNumberFromIdentifier(identifier); ok {
+		return identifierNumber == issueNumber
+	}
+	return true
+}
+
+func githubIssueNumberID(issueNumber int) string {
+	if issueNumber <= 0 {
+		return ""
+	}
+	return strconv.Itoa(issueNumber)
+}
+
+func (c *GitHubClient) issueNumberForStateRefresh(ref IssueRef) (int, bool) {
+	if issueNumber, ok := c.cachedIssueNumber(ref.ID); ok {
+		return issueNumber, true
+	}
+	if issueNumber, ok := githubIssueNumberFromIdentifier(ref.Identifier); ok {
+		return issueNumber, true
+	}
+	if strings.HasPrefix(strings.TrimSpace(ref.ID), "#") {
+		return githubIssueNumberFromIdentifier(ref.ID)
+	}
+	return 0, false
+}
+
+func (c *GitHubClient) logStateRefreshCacheMiss(ref IssueRef) {
+	if c.Logf == nil {
+		return
+	}
+	c.Logf("github issue state refresh skipped uncached issue_id=%q issue_identifier=%q; no repo issue-number fallback available", strings.TrimSpace(ref.ID), strings.TrimSpace(ref.Identifier))
+}
+
+func githubIssueNumberFromIdentifier(identifier string) (int, bool) {
+	identifier = strings.TrimSpace(identifier)
+	if !strings.HasPrefix(identifier, "#") {
+		return 0, false
+	}
+	number, err := strconv.Atoi(strings.TrimPrefix(identifier, "#"))
+	if err != nil || number <= 0 {
+		return 0, false
+	}
+	return number, true
 }
 
 func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (githubIssue, bool, error) {

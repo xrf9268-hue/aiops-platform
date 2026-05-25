@@ -151,6 +151,118 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 	}
 }
 
+func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t *testing.T) {
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		if r.Header.Get("Authorization") != "token secret" {
+			t.Fatalf("Authorization = %q, want token secret", r.Header.Get("Authorization"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:      555,
+				Number:  5,
+				Title:   "done",
+				HTMLURL: "https://gitea.local/o/r/issues/5",
+				Labels:  []Label{{Name: "aiops/done"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/7":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:      987654,
+				Number:  7,
+				Title:   "done",
+				HTMLURL: "https://gitea.local/o/r/issues/7",
+				Labels:  []Label{{Name: "aiops/done"}},
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "987654", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+	if got, want := states, map[string]string{"987654": "Done"}; len(got) != len(want) || got["987654"] != want["987654"] {
+		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := strings.Join(requestedPaths, ","), "/api/v1/repos/owner/repo/issues/7"; got != want {
+		t.Fatalf("requested paths = %s, want %s", got, want)
+	}
+	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs after successful ref refresh: %v", err)
+	}
+	if got := states["987654"]; got != "Done" {
+		t.Fatalf("successful ref refresh cache state = %q, want Done", got)
+	}
+
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "other-global-id", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs wrong ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched issue id = %#v, want empty", states)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs #number ID: %v", err)
+	}
+	if got := states["#7"]; got != "Done" {
+		t.Fatalf("#number fallback state = %q, want Done", got)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "#8", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs mismatched #number ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched #number ID = %#v, want empty", states)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "7", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs numeric fallback ID: %v", err)
+	}
+	if got := states["7"]; got != "Done" {
+		t.Fatalf("numeric fallback ID state = %q, want Done", got)
+	}
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "5", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs mismatched numeric fallback ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for mismatched numeric fallback ID = %#v, want empty", states)
+	}
+	client.cacheIssueNumber(Issue{ID: 5, Number: 5})
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "5", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs cached mismatched numeric fallback ID: %v", err)
+	}
+	if len(states) != 0 {
+		t.Fatalf("states for cached mismatched numeric fallback ID = %#v, want empty", states)
+	}
+	client.cacheIssueNumber(Issue{ID: 555, Number: 5})
+	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "555", Identifier: "#7"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs cached global ID with stale identifier: %v", err)
+	}
+	if got := states["555"]; got != "Done" {
+		t.Fatalf("cached global ID state = %q, want Done", got)
+	}
+	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs after fallback cache: %v", err)
+	}
+	if got := states["987654"]; got != "Done" {
+		t.Fatalf("cached fallback state = %q, want Done", got)
+	}
+}
+
 func TestParseGiteaIssueTimeErrorsOnMalformedTimestamp(t *testing.T) {
 	_, err := parseGiteaIssueTime("updated_at", "not-a-timestamp")
 	if err == nil {

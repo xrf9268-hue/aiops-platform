@@ -258,14 +258,39 @@ func (l multiIssueStateLister) ListIssuesByStates(ctx context.Context, states []
 }
 
 func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+	return l.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
+}
+
+func (l multiIssueStateLister) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) {
+	out := make(map[string]string, len(issueRefs))
+	remaining := append([]tracker.IssueRef(nil), issueRefs...)
+	var errOut error
 	for _, stateTracker := range l.trackers {
 		refresher, ok := stateTracker.(IssueStateRefresher)
 		if !ok {
 			continue
 		}
-		return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+		got, err := fetchIssueStates(ctx, refresher, remaining)
+		if err != nil {
+			errOut = errors.Join(errOut, err)
+		}
+		if len(got) == 0 {
+			continue
+		}
+		next := remaining[:0]
+		for _, ref := range remaining {
+			if state, ok := got[ref.ID]; ok {
+				out[ref.ID] = state
+				continue
+			}
+			next = append(next, ref)
+		}
+		remaining = next
+		if len(remaining) == 0 {
+			return out, nil
+		}
 	}
-	return map[string]string{}, nil
+	return out, errOut
 }
 
 // routedActiveIssueLister wraps an ActiveIssueLister with the same
@@ -444,8 +469,9 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 			if len(activeStates) == 0 {
 				return nil
 			}
+			issueRef := tracker.IssueRef{ID: issueID, Identifier: taskIssueIdentifier(t)}
 			return func(ctx context.Context) (bool, error) {
-				statesByID, err := refresher.FetchIssueStatesByIDs(ctx, []string{issueID})
+				statesByID, err := fetchIssueStates(ctx, refresher, []tracker.IssueRef{issueRef})
 				if err != nil {
 					return false, err
 				}
@@ -463,6 +489,17 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 		}
 	}
 	return cfg
+}
+
+func taskIssueIdentifier(t task.Task) string {
+	if identifier, ok := t.IssueRender["identifier"].(string); ok && strings.TrimSpace(identifier) != "" {
+		return strings.TrimSpace(identifier)
+	}
+	sourceEventID := strings.TrimSpace(t.SourceEventID)
+	if strings.Contains(sourceEventID, "|service|") {
+		return ""
+	}
+	return sourceEventID
 }
 
 func normalizedStateSet(states []string) map[string]struct{} {

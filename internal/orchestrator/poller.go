@@ -37,6 +37,24 @@ type IssueStateRefresher interface {
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
 }
 
+type issueStateRefresherByRefs interface {
+	FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error)
+}
+
+func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]string, error) {
+	if refresher == nil || len(refs) == 0 {
+		return map[string]string{}, nil
+	}
+	if refRefresher, ok := refresher.(issueStateRefresherByRefs); ok {
+		return refRefresher.FetchIssueStatesByRefs(ctx, refs)
+	}
+	issueIDs := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		issueIDs = append(issueIDs, ref.ID)
+	}
+	return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+}
+
 // ReconciliationConfig names the workflow states the poller uses to decide
 // whether in-process work is still eligible to run. A running issue absent from
 // active states is canceled once it is observed in either terminal states or in
@@ -277,11 +295,15 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 	if !ok {
 		return nil, nil
 	}
-	issueIDs := p.orchestrator.RunningRetryingAndBlockedIssueIDs(ctx)
-	if len(issueIDs) == 0 {
+	issueRefs := p.orchestrator.RunningRetryingAndBlockedIssueRefs(ctx)
+	if len(issueRefs) == 0 {
 		return nil, nil
 	}
-	statesByID, err := refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+	statesByID, err := fetchIssueStates(ctx, refresher, issueRefs)
+	refsByID := make(map[string]tracker.IssueRef, len(issueRefs))
+	for _, ref := range issueRefs {
+		refsByID[ref.ID] = ref
+	}
 	refreshed := make(map[string]tracker.Issue, len(statesByID))
 	for id, state := range statesByID {
 		if strings.TrimSpace(id) == "" || strings.TrimSpace(state) == "" {
@@ -289,7 +311,7 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		}
 		issue, ok := activeIssuesByID[id]
 		if !ok {
-			issue = tracker.Issue{ID: id}
+			issue = tracker.Issue{ID: id, Identifier: refsByID[id].Identifier}
 		}
 		issue.ID = id
 		issue.State = state

@@ -3120,6 +3120,26 @@ func (s staticStateRefresher) FetchIssueStatesByIDs(_ context.Context, ids []str
 	return out, nil
 }
 
+type recordingRefStateRefresher struct {
+	states map[string]string
+	refs   [][]tracker.IssueRef
+}
+
+func (r *recordingRefStateRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+	return nil, errors.New("legacy ID-only retry terminal refresh should not be used")
+}
+
+func (r *recordingRefStateRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+	r.refs = append(r.refs, append([]tracker.IssueRef(nil), refs...))
+	out := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		if state, ok := r.states[ref.ID]; ok {
+			out[ref.ID] = state
+		}
+	}
+	return out, nil
+}
+
 // TestRetryFire_TerminalIssueFiresWorkspaceCleanup is the failure-retry half of
 // #341: a failure retry whose issue has since gone terminal must clean its
 // workspace when the SPEC §16.6 retry timer fires. The active-only candidate
@@ -3138,10 +3158,11 @@ func TestRetryFire_TerminalIssueFiresWorkspaceCleanup(t *testing.T) {
 		WorkspaceCleaner: cleaner,
 	})
 	defer cancel()
-	o.SetRetryTerminalStateResolver(staticStateRefresher{"ENG-FR-T": "Done"}, []string{"Done"})
+	resolver := &recordingRefStateRefresher{states: map[string]string{"global-101": "Done"}}
+	o.SetRetryTerminalStateResolver(resolver, []string{"Done"})
 
-	issue := tracker.Issue{ID: "ENG-FR-T", Identifier: "ENG-FR-T", State: "In Progress", Title: "fail then terminal"}
-	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-FR-T"
+	issue := tracker.Issue{ID: "global-101", Identifier: "#7", State: "In Progress", Title: "fail then terminal"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/github_issue/7"
 	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
 
 	// Abnormal (retryable) exit → failure retry that carries the run's workspace.
@@ -3169,6 +3190,9 @@ func TestRetryFire_TerminalIssueFiresWorkspaceCleanup(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, 2*time.Second)
+	if len(resolver.refs) != 1 || len(resolver.refs[0]) != 1 || resolver.refs[0][0].ID != "global-101" || resolver.refs[0][0].Identifier != "#7" {
+		t.Fatalf("terminal resolver refs = %#v, want global-101 with identifier #7", resolver.refs)
+	}
 	got := cleaner.snapshot()[0]
 	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
 		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)

@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -22,6 +23,25 @@ type Issue struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	BlockedBy    []BlockerRef
+}
+
+// IssueRef carries the stable tracker ID plus the human identifier captured at
+// dispatch time. GitHub and Gitea need the identifier as a repo issue-number
+// fallback because their REST state-refresh endpoints cannot address issues by
+// the normalized global ID directly.
+type IssueRef struct {
+	ID         string
+	Identifier string
+}
+
+func IssueRefsFromIDs(issueIDs []string) []IssueRef {
+	refs := make([]IssueRef, 0, len(issueIDs))
+	for _, id := range issueIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			refs = append(refs, IssueRef{ID: id})
+		}
+	}
+	return refs
 }
 
 // BlockerRef is the minimal tracker dependency metadata the orchestrator needs
