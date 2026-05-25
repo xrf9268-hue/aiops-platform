@@ -158,16 +158,21 @@ func TestCodexRunner_PromptPipedToStdin(t *testing.T) {
 func TestCodexRunner_CapturesOutputArtifact(t *testing.T) {
 	codexStubScript(t, `printf 'codex-canary-9134\n' ; printf 'err-line\n' >&2 ; exit 0`)
 	wd := codexWorkdir(t, "x")
+	outPath := filepath.Join(wd, ".aiops/CODEX_OUTPUT.txt")
+	if err := os.WriteFile(outPath, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := (CodexRunner{}).Run(context.Background(), codexInput(wd))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
-	out, err := os.ReadFile(filepath.Join(wd, ".aiops/CODEX_OUTPUT.txt"))
+	out, err := os.ReadFile(outPath)
 	if err != nil {
 		t.Fatalf("read CODEX_OUTPUT.txt: %v", err)
 	}
+	assertSensitiveArtifactPerm(t, outPath)
 	if !strings.Contains(string(out), "codex-canary-9134") {
 		t.Fatalf("artifact missing stdout canary; got %q", out)
 	}
@@ -195,6 +200,66 @@ func TestCodexRunner_LastMessageBecomesSummary(t *testing.T) {
 	}
 	if res.Summary != "codex completed task X" {
 		t.Fatalf("Summary = %q, want %q", res.Summary, "codex completed task X")
+	}
+	assertSensitiveArtifactPerm(t, filepath.Join(wd, ".aiops/CODEX_LAST_MESSAGE.md"))
+}
+
+func TestCodexRunnerRejectsSymlinkedLastMessageArtifact(t *testing.T) {
+	binDir := codexStubScript(t, `printf 'should not run\n' > "$8" ; exit 0`)
+	wd := codexWorkdir(t, "x")
+	lastMessage := filepath.Join(wd, ".aiops/CODEX_LAST_MESSAGE.md")
+	target := filepath.Join(wd, "LAST.md")
+	if err := os.Symlink("../LAST.md", lastMessage); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	_, err := (CodexRunner{}).Run(context.Background(), codexInput(wd))
+	if err == nil || !strings.Contains(err.Error(), "prepare "+CodexLastMessagePath) {
+		t.Fatalf("Run error = %v, want last-message prepare failure", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("symlinked last-message wrote outside .aiops: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(binDir, "argv.txt")); !os.IsNotExist(err) {
+		t.Fatalf("codex command ran despite unsafe last-message path: %v", err)
+	}
+}
+
+func TestCodexRunnerReplacesHardLinkedLastMessageArtifact(t *testing.T) {
+	codexStubScript(t, `printf 'codex hardlink-safe\n' > "$8" ; exit 0`)
+	wd := codexWorkdir(t, "x")
+	lastMessage := filepath.Join(wd, ".aiops/CODEX_LAST_MESSAGE.md")
+	target := filepath.Join(wd, "LAST.md")
+	if err := os.WriteFile(target, []byte("public\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(target, lastMessage); err != nil {
+		t.Skipf("hardlink unavailable: %v", err)
+	}
+
+	res, err := (CodexRunner{}).Run(context.Background(), codexInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "codex hardlink-safe" {
+		t.Fatalf("Summary = %q, want hardlink-safe output", res.Summary)
+	}
+	if body, err := os.ReadFile(target); err != nil {
+		t.Fatal(err)
+	} else if string(body) != "public\n" {
+		t.Fatalf("hardlinked public target was modified: %q", body)
+	}
+	assertSensitiveArtifactPerm(t, lastMessage)
+}
+
+func assertSensitiveArtifactPerm(t *testing.T, path string) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("%s mode = %#o, want %#o", path, got, os.FileMode(0o600))
 	}
 }
 

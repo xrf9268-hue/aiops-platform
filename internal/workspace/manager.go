@@ -307,6 +307,9 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 		if err := run(ctx, workdir, "git", "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
 			return "", false, fmt.Errorf("worktree checkout: %w", err)
 		}
+		if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
+			return "", false, fmt.Errorf("install sensitive artifact excludes: %w", err)
+		}
 		return workdir, false, nil
 	}
 
@@ -340,6 +343,9 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// land back in the shared mirror config redundantly.
 	if err := run(ctx, mirror, "git", "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
 		return "", false, fmt.Errorf("worktree add: %w", err)
+	}
+	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
+		return "", false, fmt.Errorf("install sensitive artifact excludes: %w", err)
 	}
 	return workdir, true, nil
 }
@@ -453,7 +459,7 @@ func WritePrompt(workdir string, prompt string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "PROMPT.md"), []byte(prompt), 0o644)
+	return WriteSensitiveArtifact(filepath.Join(dir, "PROMPT.md"), []byte(prompt))
 }
 
 // RunVerify executes the workflow verify commands in order and returns
@@ -965,6 +971,9 @@ const (
 //     so a leftover tracking ref cannot block a fresh create with `stale info`,
 //     then plain-push to (re)create the branch upstream.
 func CommitAndPush(ctx context.Context, workdir string, title string, branch string) error {
+	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
+		return fmt.Errorf("install sensitive artifact excludes: %w", err)
+	}
 	if err := run(ctx, workdir, "git", "add", "."); err != nil {
 		return err
 	}

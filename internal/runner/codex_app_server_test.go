@@ -143,6 +143,10 @@ for line in sys.stdin:
         break
 `)
 	wd := codexWorkdir(t, "app-server prompt canary")
+	outPath := filepath.Join(wd, ".aiops/CODEX_APP_SERVER_OUTPUT.txt")
+	if err := os.WriteFile(outPath, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
 	if err != nil {
@@ -151,6 +155,7 @@ for line in sys.stdin:
 	if res.Summary != "done via app server" {
 		t.Fatalf("Summary = %q, want app-server completion summary", res.Summary)
 	}
+	assertSensitiveArtifactPerm(t, outPath)
 
 	argv, err := os.ReadFile(filepath.Join(binDir, "argv.txt"))
 	if err != nil {
