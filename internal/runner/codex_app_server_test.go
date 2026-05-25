@@ -1454,7 +1454,8 @@ func TestBuildCodexAppServerCmdResolvesCodexFromAgentEnvPATH(t *testing.T) {
 
 // TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect pins the
 // directCodexExec flag's negative case: when `codex.command` is anything other
-// than a `codex ...` invocation, the cmd runs through `sh -c`. The runner
+// than the built-in `codex app-server` invocation, the cmd runs through `sh -c`.
+// The runner
 // uses this signal to suppress codex_app_server_pid emission, since
 // cmd.Process.Pid would be the shell wrapper rather than the actual codex
 // process.
@@ -1472,6 +1473,23 @@ func TestBuildCodexAppServerCmdReportsCustomCommandAsIndirect(t *testing.T) {
 	}
 	if len(cmd.Args) < 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" || cmd.Args[2] != in.Workflow.Config.Codex.Command {
 		t.Fatalf("cmd.Args = %#v, want sh -c wrapper", cmd.Args)
+	}
+}
+
+func TestBuildCodexAppServerCmdPreservesQuotedCustomCodexCommand(t *testing.T) {
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.Command = `codex app-server --config "model = gpt-5"`
+
+	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
+	if err != nil {
+		t.Fatalf("buildCodexAppServerCmd: %v", err)
+	}
+	if directExec {
+		t.Fatalf("directCodexExec = true for custom command %q, want false (shell wrapper)", in.Workflow.Config.Codex.Command)
+	}
+	if len(cmd.Args) < 3 || cmd.Args[0] != "sh" || cmd.Args[1] != "-c" || cmd.Args[2] != in.Workflow.Config.Codex.Command {
+		t.Fatalf("cmd.Args = %#v, want shell wrapper preserving quoted command", cmd.Args)
 	}
 }
 

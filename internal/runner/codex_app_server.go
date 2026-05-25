@@ -99,7 +99,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 	// Only emit codex_app_server_pid when we can guarantee cmd.Process.Pid is
 	// the actual codex process: the command must launch the codex binary
-	// directly (no `sh -c` wrapper from a custom codex.command), and the
+	// directly (no shell wrapper from a custom codex.command), and the
 	// sandbox must not have wrapped cmd in firejail/bwrap. In any wrapper
 	// scenario the PID belongs to the wrapper, which would mislead operators
 	// trying to map `/api/v1/state` rows to a host process. omitempty makes
@@ -190,16 +190,12 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*ex
 	if command == "" || command == "codex exec" {
 		command = "codex app-server"
 	}
-	fields := strings.Fields(command)
-	if len(fields) == 0 {
-		return nil, false, fmt.Errorf("codex app-server command is empty")
-	}
-	if fields[0] == "codex" {
+	if command == "codex app-server" {
 		codexPath, err := lookPathInEnv("codex", env)
 		if err != nil {
 			return nil, false, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
 		}
-		return exec.CommandContext(ctx, codexPath, fields[1:]...), true, nil
+		return exec.CommandContext(ctx, codexPath, "app-server"), true, nil
 	}
 	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
 }
