@@ -2,6 +2,11 @@
 
 Project guide for AI coding agents (Codex CLI, Claude Code, etc.) working in this repo.
 
+**This file is the single source of truth for all engineering rules.** Other
+coding agents read it via thin bridge files: `CLAUDE.md` imports it with
+`@AGENTS.md` for Claude Code. Do not duplicate content in the bridge files —
+update only this file.
+
 ## What this project is
 
 `aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
