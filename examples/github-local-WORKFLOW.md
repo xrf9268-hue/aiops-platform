@@ -11,6 +11,9 @@ tracker:
   # GitHub tracker states map to issue labels unless the state is open/closed/all.
   # This queue processes priority-labeled open issues first, then any remaining
   # open issues that have not been triaged with a priority label yet.
+  # Optional: raise this for very large repositories. A cap hit skips only the
+  # overflowing state/label scan and logs the diagnostic.
+  # pagination_max_pages: 25
   active_states:
     - priority:p1
     - priority:p2

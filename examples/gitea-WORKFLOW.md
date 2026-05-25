@@ -8,6 +8,9 @@ repo:
 tracker:
   kind: gitea
   endpoint: http://gitea.local
+  # Optional: raise this for large Gitea repositories. A cap hit skips only the
+  # overflowing aiops/* state label and logs the diagnostic.
+  # pagination_max_pages: 25
   active_states:
     - AI Ready
     - Rework

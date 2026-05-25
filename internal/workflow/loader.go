@@ -387,6 +387,9 @@ func validateConfig(path string, cfg Config) error {
 	if _, ok := supportedTrackerKinds[cfg.Tracker.Kind]; !ok {
 		return fmt.Errorf("%s: tracker.kind %q is not supported (allowed: gitea, github, linear)", path, cfg.Tracker.Kind)
 	}
+	if cfg.Tracker.PaginationMaxPages < 0 {
+		return fmt.Errorf("%s: tracker.pagination_max_pages must be zero for the adapter default or greater than zero", path)
+	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
 		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, codex-app-server, claude)", path, cfg.Agent.Default)
 	}

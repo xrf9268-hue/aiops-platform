@@ -3,6 +3,7 @@ package tracker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -194,7 +195,9 @@ func TestGitHubClaimedIssueNumbersMatchesPRContract(t *testing.T) {
 	}
 }
 
-func TestGitHubClientListIssuesByStatesErrorsWhenIssuePaginationOverflows(t *testing.T) {
+func TestGitHubClientListIssuesByStatesSkipsOverflowingStateAndContinues(t *testing.T) {
+	var logs []string
+	openIssuePages := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/api/pulls":
@@ -202,46 +205,156 @@ func TestGitHubClientListIssuesByStatesErrorsWhenIssuePaginationOverflows(t *tes
 			_, _ = io.WriteString(w, `[]`)
 		case "/repos/acme/api/issues":
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Link", `<`+r.URL.String()+`>; rel="next"`)
-			_, _ = io.WriteString(w, `[]`)
+			switch r.URL.Query().Get("state") {
+			case "open":
+				openIssuePages++
+				w.Header().Set("Link", `<`+r.URL.String()+`>; rel="next"`)
+				if r.URL.Query().Get("page") == "1" {
+					_ = json.NewEncoder(w).Encode([]githubIssue{{ID: 42, Number: 42, State: "open"}})
+					return
+				}
+				_, _ = io.WriteString(w, `[]`)
+			case "closed":
+				_ = json.NewEncoder(w).Encode([]githubIssue{{ID: 42, Number: 42, State: "closed"}})
+			default:
+				t.Fatalf("unexpected issue state query %q", r.URL.Query().Get("state"))
+			}
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
-	_, err := client.ListIssuesByStates(context.Background(), []string{"open"})
-	if err == nil || !strings.Contains(err.Error(), "github issue pagination exceeded") {
-		t.Fatalf("ListIssuesByStates error = %v, want pagination overflow", err)
+	client.Logf = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"open", "closed"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 || issues[0].Identifier != "#42" || issues[0].State != "closed" {
+		t.Fatalf("issues = %#v, want only non-overflowing closed state", issues)
+	}
+	if openIssuePages != 2 {
+		t.Fatalf("open issue pages = %d, want configured max page plus probe", openIssuePages)
 	}
 	if got := client.PaginationCapHits(); got != 1 {
 		t.Fatalf("PaginationCapHits = %d, want 1", got)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "skipping that collection") {
+		t.Fatalf("logs = %#v, want skip diagnostic", logs)
 	}
 }
 
-func TestGitHubClientListIssuesByStatesErrorsWhenOpenPRPaginationOverflows(t *testing.T) {
+func TestGitHubClientListIssuesByStatesSkipsOpenWhenOpenPRPaginationOverflows(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		states            []string
+		skippedIssueState string
+		skippedLabel      string
+	}{
+		{name: "open", states: []string{"open", "closed"}, skippedIssueState: "open"},
+		{name: "all", states: []string{"all", "closed"}, skippedIssueState: "all"},
+		{name: "label", states: []string{"priority:p2", "closed"}, skippedIssueState: "open", skippedLabel: "priority:p2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pullPages := 0
+			skippedCollectionRequests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/repos/acme/api/pulls":
+					pullPages++
+					w.Header().Set("Content-Type", "application/json")
+					w.Header().Set("Link", `<`+r.URL.String()+`>; rel="next"`)
+					_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{{Number: 7, State: "open", Title: "claim", Body: "Closes #43"}})
+				case "/repos/acme/api/issues":
+					w.Header().Set("Content-Type", "application/json")
+					state := r.URL.Query().Get("state")
+					label := r.URL.Query().Get("labels")
+					if state == tc.skippedIssueState && label == tc.skippedLabel {
+						skippedCollectionRequests++
+						_ = json.NewEncoder(w).Encode([]githubIssue{{ID: 43, Number: 43, State: "open"}})
+						return
+					}
+					if state == "closed" && label == "" {
+						_ = json.NewEncoder(w).Encode([]githubIssue{{ID: 45, Number: 45, State: "closed"}})
+						return
+					}
+					t.Fatalf("unexpected issue query state=%q labels=%q", state, label)
+				default:
+					t.Fatalf("unexpected path %s", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+			issues, err := client.ListIssuesByStates(context.Background(), tc.states)
+			if err != nil {
+				t.Fatalf("ListIssuesByStates: %v", err)
+			}
+			if len(issues) != 1 || issues[0].Identifier != "#45" || issues[0].State != "closed" {
+				t.Fatalf("issues = %#v, want only closed issue after incomplete open-PR claim scan", issues)
+			}
+			if pullPages != 2 {
+				t.Fatalf("open pull request pages = %d, want configured max page plus cap probe", pullPages)
+			}
+			if skippedCollectionRequests != 0 {
+				t.Fatalf("skipped collection requests = %d, want none when PR claims are incomplete", skippedCollectionRequests)
+			}
+			if got := client.PaginationCapHits(); got != 1 {
+				t.Fatalf("PaginationCapHits = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestGitHubClientOpenPRClaimScanAllowsEmptyProbePage(t *testing.T) {
+	pullPages := 0
+	openIssueRequests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/acme/api/pulls":
+			pullPages++
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Link", `<`+r.URL.String()+`>; rel="next"`)
-			_, _ = io.WriteString(w, `[]`)
+			if r.URL.Query().Get("page") == "1" {
+				w.Header().Set("Link", `<`+r.URL.String()+`>; rel="next"`)
+				_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{{Number: 7, State: "open", Title: "claim", Body: "Closes #43"}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{})
+		case "/repos/acme/api/issues":
+			openIssueRequests++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]githubIssue{
+				{ID: 43, Number: 43, State: "open"},
+				{ID: 44, Number: 44, State: "open"},
+			})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
 
-	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", PaginationMaxPages: 1}, srv.URL, "acme", "api")
 	client.HTTP = srv.Client()
-	_, err := client.ListIssuesByStates(context.Background(), []string{"open"})
-	if err == nil || !strings.Contains(err.Error(), "github open pull request pagination exceeded") {
-		t.Fatalf("ListIssuesByStates error = %v, want PR pagination overflow", err)
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"open"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
 	}
-	if got := client.PaginationCapHits(); got != 1 {
-		t.Fatalf("PaginationCapHits = %d, want 1", got)
+	if len(issues) != 1 || issues[0].Identifier != "#44" {
+		t.Fatalf("issues = %#v, want unclaimed open issue after empty PR probe page", issues)
+	}
+	if pullPages != 2 {
+		t.Fatalf("open pull request pages = %d, want max page plus empty probe", pullPages)
+	}
+	if openIssueRequests != 1 {
+		t.Fatalf("open issue requests = %d, want open collection to proceed after complete PR claim scan", openIssueRequests)
+	}
+	if got := client.PaginationCapHits(); got != 0 {
+		t.Fatalf("PaginationCapHits = %d, want 0", got)
 	}
 }
 

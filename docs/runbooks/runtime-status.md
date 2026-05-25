@@ -249,35 +249,42 @@ Each entry in the `running` array follows SPEC §13.7.2:
 Both the GitHub adapter (`internal/tracker/github.go`) and the Gitea adapter
 (`internal/gitea/tracker_client.go`) cap label-scoped issue listing at a
 small number of pages so a pathological repository cannot spend the worker
-on a single tracker call. When the cap is reached and the next page is
-still non-empty (or carries a `Link: rel="next"` header), the adapter:
+on a single tracker call. The cap is configurable with
+`tracker.pagination_max_pages`; `0` or an omitted value keeps the adapter
+default. When the cap is reached and the next page is still non-empty (or
+carries a `Link: rel="next"` header), the adapter:
 
 1. increments `PaginationCapHits()` so the metric surfaces in operator
    dashboards;
 2. logs `… issue pagination exceeded N pages for label "<label>" …`;
-3. returns an error from `ListIssuesByStates` / `ListActiveIssues`.
+3. skips the overflowing label/state collection and continues the rest of the
+   tracker poll.
+
+For GitHub, an overflowing open-PR claim scan makes open/all issue collections
+unsafe for that tick because later PR pages may already claim those issues. The
+adapter logs the cap hit, skips those open/all collections, and still returns
+any complete collections that do not depend on open-PR claim suppression.
 
 The worker's multi-tracker aggregator (`cmd/worker/main.go`,
 `multiTrackerRuntimeClient`) joins per-tracker errors via `errors.Join` and
-continues with the other trackers' results, so an overflow on one tracker
-does not stop a Linear/GitHub tracker on the same poll tick — but the
-per-tick error is still reported and the affected tracker's candidate set
-is empty for that tick.
+continues with the other trackers' results. Pagination cap hits are now
+handled inside the GitHub/Gitea adapters before they reach the aggregator, so
+one oversized state label no longer empties the whole tracker result set.
 
 ### Triage
 
-If you see this error in a poll tick:
+If you see this diagnostic in a poll tick log:
 
-- Identify the label from the error message (`label "<label>"`).
+- Identify the label from the log line (`label "<label>"`).
 - Check the tracker for the count of issues currently carrying that label.
   If it exceeds the cap (Gitea: 1000 = 20 pages × 50/page; GitHub:
   similarly bounded), the project genuinely has too many active issues for
   the worker's cap to enumerate in one tick.
 - Either reduce the active set on the tracker (move terminal issues out of
-  active states) or, if the cap is wrong for your scale, raise the
-  constant (`listIssuesMaxPages` / `githubMaxIssuePages`) in a follow-up
-  PR — do not silence the error.
+  active states) or raise `tracker.pagination_max_pages` after estimating the
+  API cost for your repository size.
 
 Gitea previously returned a silently capped slice in this scenario, so
 workers missed dispatchable issues beyond the cap. #225 aligned Gitea with
-the GitHub adapter's fail-loud semantics.
+the GitHub adapter's observable cap-hit semantics; #387 keeps the signal but
+limits the blast radius to the overflowing label/state.

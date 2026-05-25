@@ -22,10 +22,6 @@ const (
 	listIssuesMaxPages = 20
 )
 
-func ListIssuesMaxPages() int {
-	return listIssuesMaxPages
-}
-
 // Issue is the subset of Gitea's issue JSON used by the tracker reader.
 type Issue struct {
 	ID        int64   `json:"id"`
@@ -76,6 +72,13 @@ func (c *TrackerClient) PaginationCapHits() int64 {
 	return c.paginationCapHits.Load()
 }
 
+func (c *TrackerClient) IssueMaxPages() int {
+	if c != nil && c.Config.PaginationMaxPages > 0 {
+		return c.Config.PaginationMaxPages
+	}
+	return listIssuesMaxPages
+}
+
 func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
@@ -93,12 +96,19 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	var out []tracker.Issue
 	seenIssues := map[string]struct{}{}
 	if len(labelNames) == 0 {
-		return c.listIssuesByStateLabel(ctx, "", issueState, wantedStates, seenIssues)
+		issues, _, err := c.listIssuesByStateLabel(ctx, "", issueState, wantedStates, seenIssues)
+		return issues, err
 	}
 	for _, labelName := range labelNames {
-		issues, err := c.listIssuesByStateLabel(ctx, labelName, issueState, wantedStates, seenIssues)
+		issues, capped, err := c.listIssuesByStateLabel(ctx, labelName, issueState, wantedStates, seenIssues)
 		if err != nil {
 			return nil, err
+		}
+		if capped {
+			continue
+		}
+		for _, issue := range issues {
+			seenIssues[issue.ID] = struct{}{}
 		}
 		out = append(out, issues...)
 	}
@@ -152,23 +162,32 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 	return states, nil
 }
 
-func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, error) {
+func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) {
 	var out []tracker.Issue
-	for page := 1; page <= listIssuesMaxPages+1; page++ {
+	collectionSeen := make(map[string]struct{}, len(seenIssues))
+	for id := range seenIssues {
+		collectionSeen[id] = struct{}{}
+	}
+	maxPages := c.IssueMaxPages()
+	scope := labelName
+	if scope == "" {
+		scope = issueState
+	}
+	for page := 1; page <= maxPages+1; page++ {
 		batch, hasNext, err := c.listIssuesPage(ctx, labelName, issueState, page)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		if page > listIssuesMaxPages {
+		if page > maxPages {
 			if !hasNext && len(batch) == 0 {
-				return out, nil
+				return out, false, nil
 			}
-			c.recordPaginationCapHit(labelName)
-			return nil, fmt.Errorf("gitea issue pagination exceeded %d pages for label %q", listIssuesMaxPages, labelName)
+			c.recordPaginationCapHit(scope, maxPages)
+			return nil, true, nil
 		}
 		for _, issue := range batch {
 			issueKey := giteaIssueID(issue)
-			if _, ok := seenIssues[issueKey]; ok {
+			if _, ok := collectionSeen[issueKey]; ok {
 				continue
 			}
 			c.cacheIssueNumber(issue)
@@ -184,13 +203,13 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			}
 			createdAt, err := parseGiteaIssueTime("created_at", issue.CreatedAt)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			updatedAt, err := parseGiteaIssueTime("updated_at", issue.UpdatedAt)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
-			seenIssues[issueKey] = struct{}{}
+			collectionSeen[issueKey] = struct{}{}
 			out = append(out, tracker.Issue{
 				ID:          issueKey,
 				Identifier:  fmt.Sprintf("#%d", issue.Number),
@@ -210,16 +229,16 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 			})
 		}
 		if !hasNext && len(batch) < listIssuesPageSize {
-			return out, nil
+			return out, false, nil
 		}
 	}
-	return nil, fmt.Errorf("gitea issue pagination exceeded %d pages", listIssuesMaxPages)
+	return nil, true, nil
 }
 
-func (c *TrackerClient) recordPaginationCapHit(labelName string) {
+func (c *TrackerClient) recordPaginationCapHit(labelName string, maxPages int) {
 	c.paginationCapHits.Add(1)
 	if c.Logf != nil {
-		c.Logf("gitea issue pagination exceeded %d pages for label %q; aborting this tracker poll to avoid acting on a truncated result set", listIssuesMaxPages, labelName)
+		c.Logf("gitea issue pagination exceeded %d pages for label %q; skipping that label and continuing this tracker poll", maxPages, labelName)
 	}
 }
 

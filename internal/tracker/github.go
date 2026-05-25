@@ -111,6 +111,13 @@ func (c *GitHubClient) PaginationCapHits() int64 {
 	return c.paginationCapHits.Load()
 }
 
+func (c *GitHubClient) issueMaxPages() int {
+	if c != nil && c.Config.PaginationMaxPages > 0 {
+		return c.Config.PaginationMaxPages
+	}
+	return githubMaxIssuePages
+}
+
 func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
@@ -123,9 +130,10 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 		return nil, nil
 	}
 	claimedIssueNumbers := map[int]struct{}{}
+	claimsCapped := false
 	if githubStatesMayIncludeOpenIssues(stateFilters) {
 		var err error
-		claimedIssueNumbers, err = c.openPullRequestClaimedIssueNumbers(ctx)
+		claimedIssueNumbers, claimsCapped, err = c.openPullRequestClaimedIssueNumbers(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -134,28 +142,47 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 	var out []Issue
 	for _, state := range stateFilters {
 		issueState, label, mappedState := githubIssueQueryForState(state)
-		issues, err := c.listIssuesForState(ctx, issueState, label, mappedState, seen, claimedIssueNumbers)
+		scope := githubIssueCollectionScope(issueState, label)
+		if claimsCapped && githubIssueQueryRequiresCompleteClaims(issueState) {
+			if c.Logf != nil {
+				c.Logf("github open pull request pagination exceeded configured cap; skipping issue collection %q to avoid dispatching already-claimed issues", scope)
+			}
+			continue
+		}
+		issues, capped, err := c.listIssuesForState(ctx, issueState, label, mappedState, seen, claimedIssueNumbers)
 		if err != nil {
 			return nil, err
+		}
+		if capped {
+			continue
+		}
+		for _, issue := range issues {
+			seen[issue.ID] = struct{}{}
 		}
 		out = append(out, issues...)
 	}
 	return out, nil
 }
 
-func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, error) {
+func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, bool, error) {
 	var out []Issue
-	for page := 1; page <= githubMaxIssuePages+1; page++ {
+	collectionSeen := make(map[string]struct{}, len(seen))
+	for id := range seen {
+		collectionSeen[id] = struct{}{}
+	}
+	maxPages := c.issueMaxPages()
+	scope := githubIssueCollectionScope(issueState, label)
+	for page := 1; page <= maxPages+1; page++ {
 		batch, hasNext, err := c.listIssuesPage(ctx, issueState, label, page)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		if page > githubMaxIssuePages {
+		if page > maxPages {
 			if !hasNext && len(batch) == 0 {
-				return out, nil
+				return out, false, nil
 			}
-			c.recordPaginationCapHit(label)
-			return nil, fmt.Errorf("github issue pagination exceeded %d pages for label/state %q", githubMaxIssuePages, label)
+			c.recordPaginationCapHit(scope, maxPages)
+			return nil, true, nil
 		}
 		for _, issue := range batch {
 			if issue.PullRequest != nil {
@@ -166,23 +193,23 @@ func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label
 			}
 			mapped, err := mapGitHubIssue(issue, mappedState)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if mapped.ID == "" {
 				continue
 			}
 			c.cacheIssueNumber(mapped.ID, issue.Number)
-			if _, ok := seen[mapped.ID]; ok {
+			if _, ok := collectionSeen[mapped.ID]; ok {
 				continue
 			}
-			seen[mapped.ID] = struct{}{}
+			collectionSeen[mapped.ID] = struct{}{}
 			out = append(out, mapped)
 		}
 		if !hasNext && len(batch) < githubIssuePageSize {
-			return out, nil
+			return out, false, nil
 		}
 	}
-	return nil, fmt.Errorf("github issue pagination exceeded %d pages", githubMaxIssuePages)
+	return nil, true, nil
 }
 
 func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label string, page int) ([]githubIssue, bool, error) {
@@ -228,12 +255,20 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 	return issues, githubHasNextPage(resp.Header.Values("Link")), nil
 }
 
-func (c *GitHubClient) openPullRequestClaimedIssueNumbers(ctx context.Context) (map[int]struct{}, error) {
+func (c *GitHubClient) openPullRequestClaimedIssueNumbers(ctx context.Context) (map[int]struct{}, bool, error) {
 	out := map[int]struct{}{}
-	for page := 1; page <= githubMaxIssuePages; page++ {
+	maxPages := c.issueMaxPages()
+	for page := 1; page <= maxPages+1; page++ {
 		pulls, hasNext, err := c.listOpenPullRequestsPage(ctx, page)
 		if err != nil {
-			return nil, err
+			return nil, false, err
+		}
+		if page > maxPages {
+			if !hasNext && len(pulls) == 0 {
+				return out, false, nil
+			}
+			c.recordPaginationCapHit("open pull requests", maxPages)
+			return out, true, nil
 		}
 		for _, pull := range pulls {
 			if !strings.EqualFold(strings.TrimSpace(pull.State), "open") {
@@ -243,18 +278,11 @@ func (c *GitHubClient) openPullRequestClaimedIssueNumbers(ctx context.Context) (
 				out[issueNumber] = struct{}{}
 			}
 		}
-		if page == githubMaxIssuePages {
-			if hasNext {
-				c.recordPaginationCapHit("open pull requests")
-				return nil, fmt.Errorf("github open pull request pagination exceeded %d pages", githubMaxIssuePages)
-			}
-			return out, nil
-		}
 		if !hasNext && len(pulls) < githubIssuePageSize {
-			return out, nil
+			return out, false, nil
 		}
 	}
-	return out, nil
+	return out, false, nil
 }
 
 func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) ([]githubPullRequestSummary, bool, error) {
@@ -365,6 +393,18 @@ func githubStatesMayIncludeOpenIssues(states []string) bool {
 	return false
 }
 
+func githubIssueQueryRequiresCompleteClaims(issueState string) bool {
+	issueState = strings.ToLower(strings.TrimSpace(issueState))
+	return issueState == "open" || issueState == "all"
+}
+
+func githubIssueCollectionScope(issueState, label string) string {
+	if strings.TrimSpace(label) != "" {
+		return label
+	}
+	return issueState
+}
+
 func githubClaimedIssueNumbers(text string) []int {
 	matches := githubClaimedIssueRE.FindAllStringSubmatch(text, -1)
 	out := make([]int, 0, len(matches))
@@ -415,10 +455,10 @@ func githubHasNextPage(linkHeaders []string) bool {
 	return false
 }
 
-func (c *GitHubClient) recordPaginationCapHit(label string) {
+func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 	c.paginationCapHits.Add(1)
 	if c.Logf != nil {
-		c.Logf("github pagination exceeded %d pages for label/state %q; aborting this tracker poll to avoid acting on a truncated result set", githubMaxIssuePages, label)
+		c.Logf("github pagination exceeded %d pages for label/state %q; skipping that collection and continuing this tracker poll", maxPages, label)
 	}
 }
 

@@ -152,7 +152,7 @@ func startMetricsServer(addr string, client *gitea.TrackerClient) {
 
 func writeMetrics(w http.ResponseWriter, _ *http.Request, client *gitea.TrackerClient) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	fmt.Fprintf(w, "# HELP aiops_gitea_issue_pagination_cap_hits_total Gitea issue listings capped after %d pages.\n", gitea.ListIssuesMaxPages())
+	fmt.Fprintf(w, "# HELP aiops_gitea_issue_pagination_cap_hits_total Gitea issue listings capped after %d pages.\n", client.IssueMaxPages())
 	fmt.Fprintln(w, "# TYPE aiops_gitea_issue_pagination_cap_hits_total counter")
 	fmt.Fprintf(w, "aiops_gitea_issue_pagination_cap_hits_total %d\n", client.PaginationCapHits())
 }

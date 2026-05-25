@@ -179,9 +179,12 @@ The local state roots are:
   Read or write errors for these files are also non-retryable, because failing
   open would disable the stop-after counter.
 
-GitHub tracker pagination is fail-closed: if issue or open-PR pagination
-exceeds the configured scan cap, the poll returns an error instead of acting on
-a truncated issue set.
+GitHub tracker pagination is label/state-scoped: if issue pagination exceeds
+`tracker.pagination_max_pages`, that label/state scan is skipped, a cap-hit
+diagnostic is logged, and the remaining configured states continue. If the
+open-PR claim scan exceeds the same cap, the worker logs the cap hit and skips
+open/all issue collections for that tick so it does not dispatch issues that
+may already be claimed by a PR beyond the scan window.
 
 Per-tick state refresh (SPEC §8.5 Part B) for already-running GitHub issues
 issues one `GET /repos/{owner}/{repo}/issues/{number}` per running issue,

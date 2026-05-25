@@ -1915,6 +1915,48 @@ prompt
 	}
 }
 
+func TestLoad_AllowsTrackerPaginationMaxPages(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  kind: github
+  api_key: github-token
+  pagination_max_pages: 42
+---
+prompt`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.PaginationMaxPages; got != 42 {
+		t.Fatalf("tracker.pagination_max_pages = %d, want 42", got)
+	}
+}
+
+func TestLoad_RejectsNegativeTrackerPaginationMaxPages(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  kind: github
+  api_key: github-token
+  pagination_max_pages: -1
+---
+prompt`)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load: expected error for negative tracker.pagination_max_pages")
+	}
+	if !strings.Contains(err.Error(), "tracker.pagination_max_pages") || !strings.Contains(err.Error(), "greater than zero") {
+		t.Fatalf("Load error = %q, want tracker.pagination_max_pages guidance", err)
+	}
+}
+
 // TestLoad_RejectsUnsupportedAgentDefault matches the runner registry in
 // internal/runner: only mock/codex/claude are wired up. Catching a typo
 // like `agent.default: codexx` at Load time prevents the worker from

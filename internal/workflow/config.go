@@ -115,9 +115,12 @@ type TrackerConfig struct {
 	// running issue ineligible. Poll-tick reconciliation probes these states so
 	// operator pauses such as Backlog/Human Review cancel in-flight workers
 	// without treating issues missing from partial tracker listings as inactive.
-	InactiveStates []string            `yaml:"inactive_states" json:"inactive_states"`
-	PollIntervalMs int                 `yaml:"poll_interval_ms" json:"poll_interval_ms"`
-	Statuses       TrackerStatusConfig `yaml:"statuses" json:"statuses"`
+	InactiveStates []string `yaml:"inactive_states" json:"inactive_states"`
+	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
+	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
+	// selected adapter's default budget.
+	PaginationMaxPages int                 `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
+	Statuses           TrackerStatusConfig `yaml:"statuses" json:"statuses"`
 }
 
 type PollingConfig struct {

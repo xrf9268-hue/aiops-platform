@@ -316,9 +316,11 @@ the agent tool surface, not the poller. Default state labels:
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |
 
-Gitea issue listing is capped at 20 pages of 50 issues per state label
-(1000 issues). When the `+1` probe page proves more issues exist, the
-poller keeps running with the capped result set and increments
+Gitea issue listing is capped at 20 pages of 50 issues per state label by
+default (1000 issues). Override the page budget with
+`tracker.pagination_max_pages` when a repository legitimately needs more. When
+the `+1` probe page proves more issues exist, the poller skips that state label,
+continues the remaining labels, and increments
 `aiops_gitea_issue_pagination_cap_hits_total`. Expose the counter via
 `GITEA_POLLER_METRICS_ADDR`:
 

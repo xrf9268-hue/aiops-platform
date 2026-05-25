@@ -1364,13 +1364,17 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 		return multiTrackerRuntimeClient{trackers: clients}, nil
 	case "gitea":
 		baseURL := gitea.BaseURLFromTrackerConfig(cfg.Tracker, env("GITEA_BASE_URL", "http://localhost:3000"))
-		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
+		client := gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name)
+		client.Logf = log.Printf
+		return client, nil
 	case "github":
 		baseURL := cfg.Tracker.Endpoint
 		if baseURL == "" {
 			baseURL = env("GITHUB_API_BASE_URL", "https://api.github.com")
 		}
-		return tracker.NewGitHubClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
+		client := tracker.NewGitHubClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name)
+		client.Logf = log.Printf
+		return client, nil
 	default:
 		return nil, tracker.NewError(tracker.CategoryUnsupportedTrackerKind, fmt.Sprintf("unsupported tracker.kind %q", cfg.Tracker.Kind), nil)
 	}
