@@ -422,6 +422,15 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
 release flow, and local pre-push checks.
 
+## AI agent rules
+
+[`AGENTS.md`](AGENTS.md) is the canonical source for all engineering rules
+(SPEC alignment, clean code, harness engineering principles, Go runtime
+hardening). [`CLAUDE.md`](CLAUDE.md) is a thin bridge that imports it via
+`@AGENTS.md` so Claude Code sessions load the same rules automatically. If
+you add a coding agent that reads a different file (e.g. `.cursorrules`),
+add a bridge that imports `AGENTS.md` rather than duplicating content.
+
 ## Architecture notes
 
 - [SPEC deviations (D1–D24/D29)](DEVIATIONS.md)
