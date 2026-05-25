@@ -45,6 +45,9 @@ type TrackerClient struct {
 	Config  workflow.TrackerConfig
 	HTTP    *http.Client
 	Logf    func(format string, args ...any)
+	// RequestTimeout caps the wall-clock duration of a single Gitea tracker
+	// request. Zero falls back to defaultGiteaRequestTimeout.
+	RequestTimeout time.Duration
 
 	issueNumbers sync.Map
 
@@ -58,8 +61,21 @@ func NewTrackerClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *
 		Owner:   owner,
 		Repo:    repo,
 		Config:  cfg,
-		HTTP:    http.DefaultClient,
 	}
+}
+
+func (c *TrackerClient) requestTimeout() time.Duration {
+	if c != nil && c.RequestTimeout > 0 {
+		return c.RequestTimeout
+	}
+	return defaultGiteaRequestTimeout
+}
+
+func (c *TrackerClient) httpClient() *http.Client {
+	if c != nil && c.HTTP != nil {
+		return c.HTTP
+	}
+	return &http.Client{Timeout: c.requestTimeout()}
 }
 
 func (c *TrackerClient) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
@@ -340,15 +356,14 @@ func parseGiteaIssueTime(field, value string) (time.Time, error) {
 
 func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (Issue, bool, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return Issue{}, false, err
 	}
 	req.Header.Set("Authorization", "token "+c.Token)
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := c.httpClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return Issue{}, false, err
@@ -400,15 +415,14 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 	}
 	u.RawQuery = q.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, false, err
 	}
 	req.Header.Set("Authorization", "token "+c.Token)
-	client := c.HTTP
-	if client == nil {
-		client = http.DefaultClient
-	}
+	client := c.httpClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, false, err
