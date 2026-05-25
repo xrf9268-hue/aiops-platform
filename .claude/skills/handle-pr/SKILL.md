@@ -2,7 +2,7 @@
 description: Audit and ship a GitHub PR through SPEC-aligned review rounds against upstream openai/symphony. Manual invoke only.
 argument-hint: "[pr-number]"
 disable-model-invocation: true
-allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *)
+allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *) Bash(gh *)
 ---
 
 # Handle PR #$ARGUMENTS

@@ -58,7 +58,7 @@ go vet ./... ; go test -race ./... ; go build ./...
 3. **并行本地审查提速**：同时派 Claude general-purpose subagent + Codex（`codex:codex-rescue`）审 `git diff origin/main...HEAD`，盲审、附 severity + verdict。两者抓不同缺陷类。（注：本环境 codex-rescue 沙箱可能被 bwrap/netns 限制；那就以 stop-time gate + GitHub @codex 为 Codex 信号。）
 4. 每条 finding 归入 ≥1 类（算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试），然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 5. **审查深度匹配 blast radius**：破坏性/并发路径要穷尽对抗式审查；纯增量序列化改动一轮即可。
-6. 收敛后交给 `gh-pr-follow-through`（来自私有 `xrf9268-hue/yy-skills`；本地开发机已装，**云端容器通常没装**）盯 CI + 线程到 merge-ready。**该 skill 不可用时（如当前云端环境）就地内联这步**：`gh pr checks <pr> --watch --fail-fast` 等 CI 收敛 → 查 `reviewThreads` 解决所有未决 actionable thread → 直到 merge-ready，别因为缺 skill 而跳过这步。
+6. 收敛后交给 `gh-pr-follow-through`（来自私有 `xrf9268-hue/yy-skills`；本地开发机已装，**云端容器通常没装**）盯 CI + 线程到 merge-ready。**该 skill 不可用时（如当前云端环境）就地内联这步**：`gh pr checks <pr> --watch --fail-fast` 等 CI 收敛 → 查 `reviewThreads` 解决所有未决 actionable thread → 直到 merge-ready，别因为缺 skill 而跳过这步。follow-through 期间若推了修复，按 step 2 对新 head 重跑 `@codex review` 环（新 push 会重开审查轮）。
 
 ### 7. 合并
 - **必须等用户明确许可**再合并。

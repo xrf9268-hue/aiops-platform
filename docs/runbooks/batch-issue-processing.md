@@ -5,10 +5,11 @@ issues) so the work stays reviewable, parallel where it can be, and safe to
 merge.
 
 Every rule below is earned by a specific failure or friction observed in the
-**2026-05 eight-issue sequential batch** (#365–#372 → PRs #373–#381; one
-acceptance-criterion deferral tracked as #375). Per the "Earned rules"
-principle in [`AGENTS.md`](../../AGENTS.md), do not generalize beyond what that
-run actually taught.
+**2026-05 eight-issue sequential batch** (issues #365–#372 → 8 PRs #373, #374,
+#376–#381; the one acceptance-criterion deferral was filed as a separate
+follow-up, issue #375 — which is why the PR numbers skip it). Per the "Earned
+rules" principle in [`AGENTS.md`](../../AGENTS.md), do not generalize beyond
+what that run actually taught.
 
 ## The unit of work: one issue → one PR
 
@@ -35,15 +36,20 @@ ordering dependency.
 
 1. **Map dependencies before starting.** For the issue set, sketch which issues
    touch overlapping paths or have a real ordering constraint (one's fix
-   depends on another's merge). Issues touching disjoint paths are independent.
+   depends on another's merge). Issues touching disjoint paths are independent
+   — but "disjoint" means more than different files: two issues in the same Go
+   package can still collide through shared types, an atomic rename (Clean-code
+   rule 3 in `AGENTS.md`), or `go.mod`/`go.sum`. Treat shared package/module
+   surface as a dependency, not as independent.
 2. **Default to parallel for independent issues.** Open a branch per
    independent issue and progress them concurrently rather than draining them
    in series. Serialize **only** where a dependency is real — a shared file, a
    migration ordering, or an API a later issue consumes.
 3. **Cap concurrency to what you can keep green.** Each in-flight PR still owes
-   the full per-PR gate (local CI, CI green, `@codex review` triage). Do not
-   open more parallel work than you can drive to mergeable without letting
-   reviews rot.
+   the full per-PR gate (local CI, CI green, `@codex review` triage). The
+   worker's per-state capacity caps are the hard ceiling; your review bandwidth
+   is the practical one. Do not open more parallel work than you can drive to
+   mergeable without letting reviews rot.
 4. **Respect the size budget per PR regardless of parallelism**
    (`policy.max_changed_files: 12`, `policy.max_changed_loc: 300`). Parallelism
    is about more small PRs, never bigger ones.
@@ -73,8 +79,8 @@ transition:
 issue → branch → PR → state (draft | CI green | review clean | mergeable | merged | deferred→#NNN)
 ```
 
-This is the same discipline `AGENTS.md` requires for PR-activity events; apply
-it to the batch as a whole.
+This mirrors the per-event status-checklist discipline the harness expects when
+watching PR activity; apply it to the batch as a whole.
 
 ## Merge and goal-clear are human actions by default
 
@@ -106,18 +112,30 @@ these hold:
    there are **zero unresolved, non-outdated review threads**.
 3. **Every acceptance criterion is met, or each gap is deferred to a tracked,
    linked issue** (per the deferral protocol above).
-4. **The PR is within the policy size budget** and changes no `policy.deny_paths`
-   (`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`).
-5. **The merge uses the agreed method** (default: squash) into the agreed base.
+4. **The PR is within this repo's effective size budget and changes no
+   `policy.deny_paths`.** Read both from the repo's `WORKFLOW.md`; do not trust
+   a hardcoded list — workflows differ (defaults are 12 files / 300 LOC and
+   deny `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but e.g. the
+   `github-local` example uses 20 / 600).
+5. **Branch protection's required reviews are satisfied.**
+6. **The merge uses the agreed method** (default: squash) into the agreed base.
 
-Prefer GitHub's native auto-merge so the platform enforces required checks:
-enable auto-merge on the PR rather than issuing an immediate merge, so a
-later-arriving failing check still blocks the merge.
+**Native auto-merge enforces only required status checks (CI) and branch
+protection's required reviews — not gates 2–4.** `gh pr merge --auto` merges the
+instant required CI passes, regardless of an open `@codex` finding, an
+unresolved review thread, an unmet acceptance criterion, or a size-budget
+breach. So:
+
+- Confirm gates 2–4 **yourself, immediately before** enabling auto-merge.
+- A new commit re-opens them — any push restarts the `@codex` round, so
+  re-confirm before re-enabling.
+- Prefer native auto-merge over an immediate merge only to win the CI race, not
+  as a substitute for checking the policy gates.
 
 Hard stops — **always require human sign-off even under an auto-merge grant:**
 
 - Force-pushing or merging into `main` out of band, or any history rewrite.
-- Editing `go.mod`'s `go` directive, or touching `policy.deny_paths`.
+- Editing `go.mod`'s `go` directive opportunistically, or touching `policy.deny_paths`.
 - A PR that breached its scope (size budget, unrelated refactors) — flag, don't
   merge.
 - Anything the human's instructions for this batch put off-limits. When a PR
