@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -274,8 +275,5 @@ func containsIssueLabelFold(labels []giteaIssueLabel, label string) bool {
 }
 
 func giteaBaseURLFromTracker(cfg workflow.TrackerConfig) string {
-	if cfg.ProjectSlug != "" {
-		return strings.TrimRight(cfg.ProjectSlug, "/")
-	}
-	return strings.TrimRight(os.Getenv("GITEA_BASE_URL"), "/")
+	return gitea.BaseURLFromTrackerConfig(cfg, os.Getenv("GITEA_BASE_URL"))
 }

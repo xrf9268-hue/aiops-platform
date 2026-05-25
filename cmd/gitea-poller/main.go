@@ -158,10 +158,7 @@ func writeMetrics(w http.ResponseWriter, _ *http.Request, client *gitea.TrackerC
 }
 
 func giteaBaseURL(cfg workflow.TrackerConfig) string {
-	if cfg.ProjectSlug != "" {
-		return strings.TrimRight(cfg.ProjectSlug, "/")
-	}
-	return env("GITEA_BASE_URL", "http://localhost:3000")
+	return gitea.BaseURLFromTrackerConfig(cfg, env("GITEA_BASE_URL", "http://localhost:3000"))
 }
 
 func databaseURL() string {

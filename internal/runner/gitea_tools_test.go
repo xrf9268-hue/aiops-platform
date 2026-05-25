@@ -74,9 +74,9 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
 		Tracker: workflow.TrackerConfig{
-			Kind:        "gitea",
-			APIKey:      token,
-			ProjectSlug: "https://gitea.example.test/",
+			Kind:     "gitea",
+			APIKey:   token,
+			Endpoint: "https://gitea.example.test/",
 		},
 	}})
 
@@ -127,6 +127,42 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	body = bodies[1]
 	if strings.Contains(body, token) || !strings.Contains(body, "aiops/in-progress") {
 		t.Fatalf("unexpected request body: %s", body)
+	}
+}
+
+func TestDynamicToolsUseGiteaEndpointBeforeProjectSlugAndEnvBaseURL(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "http://127.0.0.1:1")
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo"},
+		Tracker: workflow.TrackerConfig{
+			Kind:        "gitea",
+			APIKey:      "token",
+			Endpoint:    httpServer.URL + "/",
+			ProjectSlug: "http://127.0.0.1:1",
+		},
+	}})
+	tool, ok := tools.Lookup("gitea_issue_labels")
+	if !ok {
+		t.Fatalf("gitea_issue_labels tool not advertised; tools=%#v", tools.Names())
+	}
+
+	result, err := tool.Call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	if err != nil {
+		t.Fatalf("gitea_issue_labels call: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Fatalf("result = %q, want success from endpoint-backed Gitea server", result)
+	}
+	_, _, path, _, requests := server.recorded()
+	if requests != 3 {
+		t.Fatalf("requests = %d, want endpoint server to receive GET, POST, DELETE", requests)
+	}
+	if !strings.HasPrefix(path, "/api/v1/repos/owner/repo/issues/7/labels") {
+		t.Fatalf("path = %q, want endpoint-backed Gitea label request", path)
 	}
 }
 

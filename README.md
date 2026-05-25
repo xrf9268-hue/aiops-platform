@@ -92,6 +92,7 @@ export LINEAR_API_KEY=your-linear-personal-key
 # uses project_slug: aiops-platform-abc123.
 
 # For tracker.kind: gitea
+# Set tracker.endpoint in WORKFLOW.md to the Gitea base URL.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
@@ -258,6 +259,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `policy.max_changed_files` | `12` | implementation |
 | `policy.max_changed_loc` | `300` | implementation |
 | `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |
+| `tracker.endpoint` | Linear defaults to `https://api.linear.app/graphql`; Gitea/GitHub use this as the REST API base URL, with env fallbacks only when omitted | SPEC §6.4 / implementation |
 | `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs | SPEC §6.4 |
 | `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |

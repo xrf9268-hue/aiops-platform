@@ -198,6 +198,80 @@ prompt body
 	}
 }
 
+func TestLoadMigratesGiteaProjectSlugBaseURLToEndpoint(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: gitea
+  project_slug: https://gitea.example/legacy
+---
+prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/legacy" {
+		t.Fatalf("Tracker.Endpoint = %q, want legacy Gitea project_slug migrated to endpoint", got)
+	}
+	if wf.Config.Tracker.ProjectSlug != "" {
+		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
+	}
+}
+
+func TestLoadPrefersGiteaEndpointOverProjectSlugBaseURL(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: gitea
+  endpoint: https://gitea.example/canonical
+  project_slug: https://gitea.example/legacy
+---
+prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/canonical" {
+		t.Fatalf("Tracker.Endpoint = %q, want tracker.endpoint to win over legacy Gitea project_slug", got)
+	}
+	if wf.Config.Tracker.ProjectSlug != "" {
+		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
+	}
+}
+
+func TestLoadPrefersLegacyBaseURLOverGiteaProjectSlugBaseURL(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: gitea
+  base_url: https://gitea.example/base-url
+  project_slug: https://gitea.example/project-slug
+---
+prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/base-url" {
+		t.Fatalf("Tracker.Endpoint = %q, want legacy base_url to win over legacy Gitea project_slug", got)
+	}
+	if wf.Config.Tracker.ProjectSlug != "" {
+		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
+	}
+}
+
 func TestLoadResolvesExactEnvironmentReferences(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspaces")
 	credentialPath := filepath.Join(t.TempDir(), "token")

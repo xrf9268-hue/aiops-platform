@@ -7,7 +7,7 @@ repo:
 
 tracker:
   kind: gitea
-  project_slug: http://gitea.local
+  endpoint: http://gitea.local
   active_states:
     - AI Ready
     - Rework

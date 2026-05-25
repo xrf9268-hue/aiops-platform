@@ -1350,10 +1350,7 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 		}
 		return multiTrackerRuntimeClient{trackers: clients}, nil
 	case "gitea":
-		baseURL := cfg.Tracker.ProjectSlug
-		if baseURL == "" {
-			baseURL = env("GITEA_BASE_URL", "http://localhost:3000")
-		}
+		baseURL := gitea.BaseURLFromTrackerConfig(cfg.Tracker, env("GITEA_BASE_URL", "http://localhost:3000"))
 		return gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name), nil
 	case "github":
 		baseURL := cfg.Tracker.Endpoint

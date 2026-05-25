@@ -1543,11 +1543,12 @@ func TestTrackerClientForWorkflowBuildsMultiProjectLinearClientForServiceRoutes(
 	}
 }
 
-func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
+func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeProjectSlugAndEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.ProjectSlug = "https://gitea-workflow.example.test/"
+	cfg.Tracker.Endpoint = "https://gitea-endpoint.example.test/"
+	cfg.Tracker.ProjectSlug = "https://gitea-legacy.example.test/"
 	cfg.Repo.Owner = "owner"
 	cfg.Repo.Name = "repo"
 
@@ -1559,8 +1560,49 @@ func TestTrackerClientForWorkflowUsesGiteaProjectSlugBeforeEnvBaseURL(t *testing
 	if !ok {
 		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
 	}
-	if giteaClient.BaseURL != "https://gitea-workflow.example.test" {
-		t.Fatalf("base URL = %q, want tracker.project_slug without trailing slash", giteaClient.BaseURL)
+	if giteaClient.BaseURL != "https://gitea-endpoint.example.test" {
+		t.Fatalf("base URL = %q, want tracker.endpoint without trailing slash", giteaClient.BaseURL)
+	}
+}
+
+func TestTrackerClientForWorkflowUsesDeprecatedGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ProjectSlug = "https://gitea-legacy.example.test/"
+	cfg.Repo.Owner = "owner"
+	cfg.Repo.Name = "repo"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+	giteaClient, ok := client.(*gitea.TrackerClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
+	}
+	if giteaClient.BaseURL != "https://gitea-legacy.example.test" {
+		t.Fatalf("base URL = %q, want legacy tracker.project_slug without trailing slash", giteaClient.BaseURL)
+	}
+}
+
+func TestTrackerClientForWorkflowUsesGiteaEnvFallbackWhenEndpointEmpty(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "gitea"
+	cfg.Repo.Owner = "owner"
+	cfg.Repo.Name = "repo"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+	giteaClient, ok := client.(*gitea.TrackerClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
+	}
+	if giteaClient.BaseURL != "https://gitea-env.example.test" {
+		t.Fatalf("base URL = %q, want GITEA_BASE_URL without trailing slash", giteaClient.BaseURL)
 	}
 }
 

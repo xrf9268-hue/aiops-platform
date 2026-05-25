@@ -37,7 +37,8 @@ needs Postgres, it is stale — file an issue.
 - `git` and `curl`.
 - Tracker credentials matching the workflow you're running:
   - `tracker.kind: linear` → a Linear personal API key.
-  - `tracker.kind: gitea` → a Gitea base URL and bot token.
+  - `tracker.kind: gitea` → a Gitea base URL in `tracker.endpoint`
+    and a bot token.
   - `tracker.kind: github` → a GitHub token (`gh auth token` works).
 - A scratch workspace root. `workspace.root` in `WORKFLOW.md` is the
   source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
@@ -104,9 +105,9 @@ export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 export LINEAR_API_KEY=your-linear-personal-key
 
 # For tracker.kind: gitea
-# GITEA_BASE_URL is consumed at runtime as a base-URL fallback when
-# tracker.project_slug is empty; GITEA_TOKEN must be wired through
-# "api_key: $GITEA_TOKEN" in WORKFLOW.md to actually authenticate.
+# Prefer tracker.endpoint in WORKFLOW.md. GITEA_BASE_URL is only a runtime
+# base-URL fallback when tracker.endpoint is empty; GITEA_TOKEN must be wired
+# through "api_key: $GITEA_TOKEN" in WORKFLOW.md to actually authenticate.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
@@ -367,7 +368,7 @@ config field is empty).
 | `tracker.kind` | `WORKFLOW.md` token reference | Base-URL env fallback |
 | --- | --- | --- |
 | `linear` | `tracker.api_key: $LINEAR_API_KEY` (or any `$VAR`) | n/a |
-| `gitea`  | `tracker.api_key: $GITEA_TOKEN`  (or any `$VAR`) | `GITEA_BASE_URL` when `tracker.project_slug` is empty |
+| `gitea`  | `tracker.api_key: $GITEA_TOKEN`  (or any `$VAR`) | `GITEA_BASE_URL` when `tracker.endpoint` is empty |
 | `github` | `tracker.api_key: $GITHUB_TOKEN` (or any `$VAR`) | `GITHUB_API_BASE_URL` when `tracker.endpoint` is empty |
 
 When the failure surfaces depends on how `tracker.api_key` is encoded

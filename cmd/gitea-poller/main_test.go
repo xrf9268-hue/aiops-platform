@@ -34,6 +34,36 @@ func TestDefaultDatabaseURLIsUsablePostgresDSN(t *testing.T) {
 	}
 }
 
+func TestGiteaBaseURLUsesEndpointBeforeProjectSlugAndEnv(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
+
+	got := giteaBaseURL(workflow.TrackerConfig{
+		Endpoint:    "https://gitea-endpoint.example.test/",
+		ProjectSlug: "https://gitea-legacy.example.test/",
+	})
+	if got != "https://gitea-endpoint.example.test" {
+		t.Fatalf("giteaBaseURL = %q, want tracker.endpoint without trailing slash", got)
+	}
+}
+
+func TestGiteaBaseURLUsesDeprecatedProjectSlugBeforeEnv(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
+
+	got := giteaBaseURL(workflow.TrackerConfig{ProjectSlug: "https://gitea-legacy.example.test/"})
+	if got != "https://gitea-legacy.example.test" {
+		t.Fatalf("giteaBaseURL = %q, want legacy tracker.project_slug without trailing slash", got)
+	}
+}
+
+func TestGiteaBaseURLUsesEnvFallbackWhenEndpointEmpty(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
+
+	got := giteaBaseURL(workflow.TrackerConfig{})
+	if got != "https://gitea-env.example.test" {
+		t.Fatalf("giteaBaseURL = %q, want GITEA_BASE_URL without trailing slash", got)
+	}
+}
+
 func TestProcessIssuesEnqueuesGiteaIssueTasks(t *testing.T) {
 	store := &fakeStore{}
 	cfg := &workflow.Config{

@@ -567,7 +567,7 @@ func TestRuntimePollerCancelsHealthyProjectIssueDuringPartialPoll(t *testing.T) 
 func TestRuntimePollerDoesNotFanOutServiceProjectsForGitea(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
-	cfg.Tracker.ProjectSlug = "https://gitea.example.com"
+	cfg.Tracker.Endpoint = "https://gitea.example.com"
 	cfg.Services = []workflow.ServiceConfig{
 		{Name: "api", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"}},
 		{Name: "web", Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "web-platform"}, Repo: workflow.RepoConfig{Owner: "acme", Name: "web", CloneURL: "git@example.com:acme/web.git", DefaultBranch: "main"}},
@@ -577,8 +577,8 @@ func TestRuntimePollerDoesNotFanOutServiceProjectsForGitea(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("tracker configs = %d, want one non-Linear tracker config", len(got))
 	}
-	if got[0].Tracker.ProjectSlug != "https://gitea.example.com" {
-		t.Fatalf("tracker project slug = %q, want original Gitea base URL", got[0].Tracker.ProjectSlug)
+	if got[0].Tracker.Endpoint != "https://gitea.example.com" {
+		t.Fatalf("tracker endpoint = %q, want original Gitea base URL", got[0].Tracker.Endpoint)
 	}
 }
 

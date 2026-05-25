@@ -168,6 +168,7 @@ func Load(path string) (*Workflow, error) {
 		}
 		migratePollingInterval(frontBytes, &cfg)
 		migrateTrackerEndpoint(frontBytes, &cfg)
+		migrateGiteaTrackerProjectSlug(frontBytes, &cfg)
 	}
 	var rawStateCaps map[string]int
 	if hasFrontMatter && len(cfg.Agent.MaxConcurrentAgentsByState) > 0 {
@@ -229,6 +230,24 @@ func migrateTrackerEndpoint(frontBytes []byte, cfg *Config) {
 		cfg.Tracker.Endpoint = cfg.Tracker.BaseURL
 	}
 	cfg.Tracker.BaseURL = ""
+}
+
+func migrateGiteaTrackerProjectSlug(frontBytes []byte, cfg *Config) {
+	if !strings.EqualFold(cfg.Tracker.Kind, "gitea") {
+		return
+	}
+	legacyPresent := hasNestedKey(frontBytes, "tracker", "project_slug")
+	if !legacyPresent {
+		return
+	}
+	switch {
+	case strings.TrimSpace(cfg.Tracker.Endpoint) != "":
+		log.Printf("workflow: tracker.project_slug is ignored for Gitea because tracker.endpoint is already set")
+	case strings.TrimSpace(cfg.Tracker.ProjectSlug) != "":
+		log.Printf("workflow: tracker.project_slug is deprecated as a Gitea base URL; use tracker.endpoint")
+		cfg.Tracker.Endpoint = cfg.Tracker.ProjectSlug
+	}
+	cfg.Tracker.ProjectSlug = ""
 }
 
 func migratePollingInterval(frontBytes []byte, cfg *Config) {
