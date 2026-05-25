@@ -2,7 +2,7 @@
 description: Audit and ship a GitHub PR through SPEC-aligned review rounds against upstream openai/symphony. Manual invoke only.
 argument-hint: "[pr-number]"
 disable-model-invocation: true
-allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *)
+allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(gofmt *) Bash(gh *)
 ---
 
 # Handle PR #$ARGUMENTS
@@ -36,7 +36,7 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
 
 3. **Mutation test 验证新测试有效**：删掉新代码的关键行，跑新测试，确认 fail；恢复，确认 pass。安慰剂测试是最隐蔽的陷阱。
 
-4. **Deferred 偏差必须开 issue**：标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria。AGENTS.md rule 2 要求。
+4. **Deferred 偏差必须开 issue**：标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria。AGENTS.md rule 2 要求。决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 
 5. **Scope 分离**：治理 / 文档改动从 main 开新分支单独 PR，不要塞进 fix PR。
 
@@ -45,5 +45,6 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
 - 工作分支：系统会告诉你具体名字
 - 合并方式：squash（本仓库惯例），commit_message 写最终状态不要按轮次罗列
 - 强推统一 `--force-with-lease=<branch>:<known-sha>`
-- merge 前必须等用户明确许可
+- merge 前必须等用户明确许可；例外：用户给了**按批次、按 scope 的显式授权**时，走 `docs/runbooks/batch-issue-processing.md` 的 opt-in 自动合并流程（全门槛 + hard stops，优先 GitHub 原生 auto-merge），授权不跨批次/scope 沿用
+- 批处理多个 PR 时的并行与状态清单纪律见 `docs/runbooks/batch-issue-processing.md`
 - 中文回复，简洁；每次只汇报变化不复述

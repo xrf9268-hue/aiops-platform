@@ -339,6 +339,7 @@ searched or reported as normal shadow sources.
 - `docs/runbooks/ci.md` — CI behavior, release flow, pre-push checks
 - `docs/runbooks/secret-scanning.md` — opt-in pre-push leak scan
 - `docs/runbooks/workspace-cache.md` — workspace lifecycle and cleanup
+- `docs/runbooks/batch-issue-processing.md` — running a `/goal` over a set of issues: one-issue-per-PR, parallelism, deferral protocol, and the authorized auto-merge flow
 - `docs/adr/0001-symphony-style-personal-orchestrator.md` — the "why"
 
 ## Safety posture for agents
