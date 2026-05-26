@@ -21,12 +21,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    name: Resolve release ref
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      ref: ${{ steps.release.outputs.ref }}
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            ref="refs/tags/${tag}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            ref="${GITHUB_REF}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "ref=${ref}" >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: Reuse CI quality gates
+    needs:
+      - resolve
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.resolve.outputs.ref }}
+
   release:
     name: Build and publish release artifacts
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs:
+      - resolve
+      - ci
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -34,6 +70,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
@@ -44,22 +81,8 @@ jobs:
             go.mod
             go.sum
 
-      - name: Resolve release tag
-        id: release
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
       - name: Verify tag exists
-        run: git rev-parse --verify "refs/tags/${{ steps.release.outputs.tag }}"
-
-      - name: Test before release
-        run: go test ./...
+        run: git rev-parse --verify "refs/tags/${{ needs.resolve.outputs.tag }}"
 
       - name: Build release binaries
         shell: bash
@@ -75,21 +98,42 @@ jobs:
           )
           for target in "${targets[@]}"; do
             read -r goos goarch <<< "$target"
-            out="dist/aiops-platform_${{ steps.release.outputs.tag }}_${goos}_${goarch}"
+            out="dist/aiops-platform_${{ needs.resolve.outputs.tag }}_${goos}_${goarch}"
             for binary in "${binaries[@]}"; do
               GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
                 go build -trimpath -ldflags="-s -w" -o "${out}/${binary}" "./cmd/${binary}"
             done
+          done
+
+      - name: Generate release SBOM (Trivy, CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: dist
+          format: cyclonedx
+          output: dist/aiops-platform_${{ needs.resolve.outputs.tag }}_sbom.cdx.json
+
+      - name: Package release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          for out in dist/aiops-platform_${{ needs.resolve.outputs.tag }}_*; do
+            [ -d "$out" ] || continue
             tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
             rm -rf "$out"
           done
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: dist/*
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.release.outputs.tag }}" dist/*.tar.gz \
+          gh release create "${{ needs.resolve.outputs.tag }}" dist/*.tar.gz dist/*_sbom.cdx.json \
             --repo "$GITHUB_REPOSITORY" \
-            --title "${{ steps.release.outputs.tag }}" \
-            --notes "Automated aiops-platform release for ${{ steps.release.outputs.tag }}" \
+            --title "${{ needs.resolve.outputs.tag }}" \
+            --notes "Automated aiops-platform release for ${{ needs.resolve.outputs.tag }}" \
             --verify-tag

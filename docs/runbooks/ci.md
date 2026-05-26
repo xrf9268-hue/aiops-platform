@@ -17,6 +17,7 @@ Triggers:
 - push to `main`
 - pull request targeting `main`
 - manual `workflow_dispatch`
+- reusable `workflow_call` from release publishing
 
 Checks:
 
@@ -28,7 +29,10 @@ Checks:
 - `go test -race -covermode=atomic ./...`
 - build `worker`, `linear-poller`, and `gitea-poller`
 - upload short-lived CI binaries
+- govulncheck
+- e2e Gitea mock loop
 - Docker image build validation
+- Trivy image scan and CycloneDX SBOM upload
 
 ### Release
 
@@ -49,8 +53,15 @@ Outputs:
 - Linux arm64
 - macOS amd64
 - macOS arm64
+- CycloneDX SBOM attached to the release
+- GitHub artifact attestations for release artifacts
 
-The release job uses `contents: write` only in the release job because publishing a GitHub release needs write access. CI remains read-only.
+Release publishing first resolves the exact tag ref and passes that ref to the
+CI workflow through `workflow_call`, so tag publishing inherits the same
+race-test, security, e2e, Docker, Trivy, and SBOM quality gates on the commit
+being released. The release job keeps `contents: write` scoped to publishing,
+and adds `id-token: write` plus `attestations: write` only for GitHub artifact
+provenance.
 
 ## Local checks before pushing
 
@@ -100,7 +111,9 @@ It runs weekly and groups Go dependency updates to reduce pull request noise.
 ## Security posture
 
 - CI uses top-level `permissions: contents: read`.
-- The release workflow uses `contents: write` only for the release job.
+- The release workflow uses read-only permissions for the reusable CI gate.
+- The release job uses `contents: write`, `id-token: write`, and
+  `attestations: write` only for release publication and provenance.
 - Workflows do not use `pull_request_target`.
 - No workflow stores or prints project secrets.
 - `persist-credentials: false` is used for checkout because the workflows do not need to push commits.
