@@ -31,7 +31,7 @@ type EventEmitter interface {
 type secretScanFn func(ctx context.Context, workdir string, cfg workflow.SecretScanConfig) workspace.SecretScanResult
 
 // RunTaskError bundles the resolved workflow Config alongside the error so
-// handleTaskFailure can route retries without re-resolving.
+// callers can classify failures without re-resolving the workflow.
 type RunTaskError struct {
 	Cfg          workflow.Config
 	Err          error
@@ -46,8 +46,8 @@ type RunTaskError struct {
 // for the prompt template's `issue` variable. The orchestrator's
 // TaskFromIssue precomputes IssueRender at dispatch; this helper falls back
 // to the minimal Task-derived map for callers that build tasks by hand
-// (e.g. legacy queue.Postgres consumers and worker tests) so they still
-// render, just without the §4.1.1 fields the helper cannot reconstruct.
+// (e.g. worker tests) so they still render, just without the §4.1.1 fields
+// the helper cannot reconstruct.
 func issueRenderVarsForTask(t task.Task) map[string]any {
 	if t.IssueRender != nil {
 		out := make(map[string]any, len(t.IssueRender)+1)
@@ -103,53 +103,8 @@ func logWorkflowResolved(taskID, identifier string, res *workflow.Resolution) {
 	LogTaskIDEventf(taskID, identifier, "workflow_resolved", "%s", strings.Join(parts, " "))
 }
 
-// failingStore is the subset of queue.Store handleTaskFailure needs.
-// Defined as an interface so the terminality-routing logic can be
-// unit-tested with a fake; *queue.Store satisfies it implicitly.
-type failingStore interface {
-	Fail(ctx context.Context, id, msg string) (bool, error)
-	FailTerminal(ctx context.Context, id, msg string) error
-	FailTimeout(ctx context.Context, id, msg string, maxTimeoutRetries int) (bool, error)
-}
-
-// handleTaskFailure routes a task error to the right retry bucket and
-// reports whether the task reached its terminal failed state.
-//
-// Runner timeouts use a dedicated budget (agent.max_timeout_retries) so a
-// hung agent cannot consume the generic max_attempts reserved for
-// verify/policy/transient infra failures. Non-timeout failures fall through
-// to the legacy Fail path which is still gated by max_attempts. Failure
-// artifacts (CHANGED_FILES.txt / RUN_SUMMARY.md / VERIFICATION.json) are
-// written by the runTask code path on the way out, so this function is
-// purely concerned with retry routing.
-func handleTaskFailure(ctx context.Context, store failingStore, t task.Task, cfg workflow.Config, err error, nonRetryable bool) bool {
-	if nonRetryable {
-		if ferr := store.FailTerminal(ctx, t.ID, err.Error()); ferr != nil {
-			LogIssueEventf(t, "fail_terminal_store_error", "error=%q", ferr)
-			return false
-		}
-		return true
-	}
-	if runner.IsTimeout(err) || runner.IsStall(err) || runner.IsTurnTimeout(err) || runner.IsReadTimeout(err) {
-		budget := cfg.Agent.MaxTimeoutRetriesValue()
-		requeued, ferr := store.FailTimeout(ctx, t.ID, err.Error(), budget)
-		if ferr != nil {
-			LogIssueEventf(t, "fail_timeout_store_error", "error=%q", ferr)
-			return false
-		}
-		return !requeued
-	}
-	terminal, ferr := store.Fail(ctx, t.ID, err.Error())
-	if ferr != nil {
-		LogIssueEventf(t, "fail_store_error", "error=%q", ferr)
-		return false
-	}
-	return terminal
-}
-
 // runTask executes a single task end-to-end and returns a *RunTaskError when
-// the task fails, bundling the resolved workflow config so callers can route
-// retries by failure class. Returns nil on success.
+// the task fails. Returns nil on success.
 //
 // Per SPEC §1, push, PR creation, and tracker state writes are the agent's
 // responsibility. The worker's role is: claim, prepare workspace, resolve
@@ -415,7 +370,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
 	}
 
-	// Run the optional pre-push secret scanner. The scanner runs even
+	// Run the optional secret scanner. The scanner runs even
 	// though push is now the agent's responsibility — it acts as a final
 	// gate that fails the task before the orchestrator records success, so
 	// a branch carrying credential leaks is never considered complete.
@@ -682,7 +637,7 @@ func countVerifyFailures(results []workspace.VerifyResult) int {
 	return n
 }
 
-// runSecretScan executes the configured pre-push secret scanner and
+// runSecretScan executes the configured secret scanner and
 // records structured task events for the start, clean exit, finding, or
 // execution error cases. It returns a non-nil error only when the task
 // should be failed, so the caller can simply propagate the error and let
@@ -708,7 +663,7 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID, identifier 
 		return nil
 	}
 
-	_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_start", "running pre-push secret scan", map[string]any{
+	_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_start", "running secret scan", map[string]any{
 		"command": scfg.Command,
 	})
 
@@ -728,7 +683,7 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID, identifier 
 	case workspace.SecretScanViolation:
 		msg := fmt.Sprintf("secret scan reported findings (exit %d)", res.ExitCode)
 		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_violation", msg, payload)
-		if res.ShouldBlockPush(scfg) {
+		if res.ShouldBlockCompletion(scfg) {
 			return errors.New(msg)
 		}
 		return nil

@@ -126,8 +126,6 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -ldflags="-s -w" -o dist/worker ./cmd/worker
-          go build -trimpath -ldflags="-s -w" -o dist/linear-poller ./cmd/linear-poller
-          go build -trimpath -ldflags="-s -w" -o dist/gitea-poller ./cmd/gitea-poller
 
       - name: Upload CI binaries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -193,7 +191,6 @@ jobs:
         run: go mod download
       - name: Pre-pull container images
         run: |
-          docker pull postgres:16
           docker pull gitea/gitea:1.26.1-rootless
       - name: Run e2e tests
         run: go test -tags e2e -race -timeout 15m ./test/e2e/...

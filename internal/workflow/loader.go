@@ -268,7 +268,7 @@ func migratePollingInterval(frontBytes []byte, cfg *Config) {
 }
 
 // supportedTrackerKinds enumerates the tracker integrations the platform
-// actually wires up today (see cmd/linear-poller and cmd/gitea-poller).
+// actually wires up today.
 // Anything outside this set would parse as a typed config but could not be
 // claimed by the worker.
 var supportedTrackerKinds = map[string]struct{}{
@@ -614,8 +614,7 @@ func logUnknownTopLevelKeys(front []byte) {
 // resolution metadata.
 //
 // Deprecated: use Resolve(workdir) for repo-relative discovery. Retained
-// for callers that pass an explicit path (e.g. cmd/linear-poller has a
-// related but separate loader contract).
+// for callers that pass an explicit path.
 func LoadOptional(path string) (*Workflow, error) {
 	wf, err := Load(path)
 	if err == nil {

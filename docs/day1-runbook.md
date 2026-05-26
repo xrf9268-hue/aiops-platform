@@ -1,104 +1,97 @@
-# Day 1 Runbook: `/ai-run` to Gitea PR
+# Day 1 Runbook: Gitea Tracker Polling
 
-This runbook proves the first vertical slice of the AI coding platform:
+This runbook proves the current vertical slice of the AI coding platform:
 
 ```text
-Gitea issue comment `/ai-run`
-  -> trigger-api webhook
-  -> Postgres queued task
-  -> worker claim
-  -> git clone + branch
-  -> mock runner writes `.aiops/<task>.md`
-  -> git push
-  -> Gitea pull request
+Gitea issue with an active aiops/* label
+  -> worker poll tick
+  -> orchestrator in-memory dispatch
+  -> workspace prepare
+  -> configured agent run
+  -> verification and policy gates
 ```
 
-## 1. Configure environment
+The agent, not the worker, is responsible for branch pushes, PR creation, and
+tracker writes through the tool surface advertised by the workflow.
+
+## 1. Configure Environment
 
 Copy `.env.example` to `.env` and set:
 
 ```bash
-GITEA_WEBHOOK_SECRET=change-me
 GITEA_BASE_URL=http://your-gitea-host
-GITEA_TOKEN=<token for ai-bot with repo write permission>
+GITEA_TOKEN=<token for an aiops bot with repo access>
 ```
 
 Do not commit real tokens.
 
-## 2. Start services
+## 2. Configure Workflow
+
+Use a Gitea workflow such as `examples/gitea-WORKFLOW.md`. The important
+tracker fields are:
+
+```yaml
+tracker:
+  kind: gitea
+  endpoint: http://your-gitea-host
+  active_states:
+    - AI Ready
+    - Rework
+  terminal_states:
+    - Done
+    - Canceled
+```
+
+Gitea issue state is encoded by `aiops/*` labels. For example, `aiops/todo`
+maps to `AI Ready`.
+
+## 3. Start Worker
 
 From repository root:
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml up --build
+docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
 Health check:
 
 ```bash
-curl http://localhost:8080/healthz
+curl http://127.0.0.1:4000/livez
 ```
 
 Expected:
 
-```json
-{"ok":true}
-```
-
-## 3. Configure Gitea webhook
-
-In the target demo repository:
-
-- URL: `http://<trigger-host>:8080/v1/events/gitea`
-- Secret: same as `GITEA_WEBHOOK_SECRET`
-- Event: Issue comment
-
-## 4. Trigger a task
-
-Create an issue in the demo repository and comment:
-
 ```text
-/ai-run
+ok
 ```
 
-Expected webhook response:
+## 4. Trigger A Task
 
-```json
-{
-  "accepted": true,
-  "task_id": "tsk_...",
-  "deduped": false
-}
-```
+Create an issue in the target Gitea repository, add the `aiops/todo` label, and
+wait for the next worker poll tick.
 
-## 5. Verify task state
+## 5. Verify Runtime State
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml exec postgres \
-  psql -U aiops -d aiops -c "select id,status,repo_owner,repo_name,work_branch from tasks order by created_at desc limit 5;"
+curl http://127.0.0.1:4000/api/v1/state
 ```
 
-Expected final status: `succeeded`.
+The state response should show the issue as a recent candidate or running task,
+then eventually as completed or failed depending on the configured agent and
+verification commands.
 
-## 6. Verify Gitea result
+## 6. Verify Workspace Result
 
-The worker should create a branch named:
+The worker creates deterministic workspaces under the configured
+`workspace.root` (or `AIOPS_WORKSPACE_ROOT` fallback). Inspect the issue
+workspace for `.aiops/RUN_SUMMARY.md`, `.aiops/VERIFICATION.txt`, and
+`.aiops/CHANGED_FILES.txt`.
 
-```text
-ai/tsk_...
-```
+## 7. Current Day 1 Limitations
 
-and open a pull request containing:
-
-```text
-.aiops/TASK.md
-.aiops/<task-id>.md
-```
-
-## 7. Current Day 1 limitations
-
-- Only `issue_comment` webhook is handled.
-- Only `/ai-run` command is recognized.
-- The runner is `mock`; Codex/Claude are not wired yet.
-- No deny-path diff enforcement yet.
-- No automatic merge; human review is required.
+- Scheduler state is in memory by design; restart recovery comes from tracker
+  polling plus deterministic workspace reconciliation.
+- The `mock` agent is useful for loop validation, but real branch/PR behavior
+  requires a configured coding agent workflow.
+- Human review is still required unless the workflow and repository protection
+  explicitly allow automated merge.

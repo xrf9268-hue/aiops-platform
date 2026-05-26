@@ -2,8 +2,7 @@
 
 This is the first document to open after cloning. It walks through
 bootstrapping the local loop: the SPEC-aligned `cmd/worker` against a
-real or mock tracker, optional legacy queue-driven pollers (kept only
-for D6/D7 transitional reasons), and smoke checks for the tracker poll.
+real or mock tracker and smoke checks for the tracker poll.
 
 > This runbook is the operator companion to README's "Quick start:
 > worker-owned tracker polling path". If this runbook and the README
@@ -12,9 +11,8 @@ for D6/D7 transitional reasons), and smoke checks for the tracker poll.
 
 ## What `cmd/worker` does (and doesn't)
 
-The worker is the SPEC-aligned entry point. Per D6 (#73), D7 (#74), and
-D8 (#76), it has stopped owning behaviors that earlier prototypes
-included:
+The worker is the SPEC-aligned entry point. Per D6 (#73/#407), D7 (#74), and
+D8 (#76), it has stopped owning behaviors that earlier prototypes included:
 
 - **No Postgres / queue.** `cmd/worker` does not read `DATABASE_URL`
   and does not enqueue or drain queue rows. Restart recovery follows
@@ -44,12 +42,11 @@ needs Postgres, it is stale — file an issue.
   source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
   is the fallback when omitted.
 - Optional: Docker and Docker Compose v2, only if you want the
-  containerized worker or the legacy compose path.
+  containerized worker or e2e tests.
 - Optional: the Codex CLI installed and on `PATH`, only if you set
   `agent.default: codex` and want a real model loop.
 
-`cmd/worker` does **not** need Postgres. Skip step 2 below unless you
-are intentionally running the legacy queue path.
+`cmd/worker` does **not** need Postgres.
 
 ## 1. Configure the workflow and environment
 
@@ -147,9 +144,7 @@ container against your own workflow:
 - Or maintain a `deploy/docker-compose.override.yml` that re-declares
   `environment.AIOPS_WORKFLOW_PATH` for the `worker` service.
 
-The default Compose service starts only `worker` unless a legacy
-profile is explicitly requested (see
-[Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
+The default Compose service starts only `worker`.
 The worker image and Compose service include a health check against
 `http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez` from inside the
 container. Use `/readyz` when a local orchestrator needs the startup-readiness
@@ -229,91 +224,10 @@ move one issue into an active state, and start the worker. The worker
 discovers the active tracker issue and dispatches it; there is no
 webhook or manual enqueue endpoint in the normal loop.
 
-## 4. Legacy queue-driven pollers (D6/D7/D8)
+## 4. Gitea label mapping
 
-`cmd/linear-poller` and `cmd/gitea-poller` write to a Postgres queue
-that `cmd/worker` no longer reads. The SPEC-aligned loop runs entirely
-inside the worker against the tracker — see Section 2.
-
-Treat anything below as legacy. It is kept only as transitional
-ingress code until D7 cleanup completes. **Do not start
-`linear-poller` (or `gitea-poller`) and `worker` together expecting a
-working stack** — `worker` does not drain the queue, so the rows the
-poller produces are never claimed.
-
-### 4.1 Postgres for the legacy pollers
-
-Set a strong `POSTGRES_PASSWORD` in `.env` first — the postgres service
-has no default password and refuses to start without one (#371), and it
-publishes only on host loopback (`127.0.0.1:5432`).
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml up -d postgres
-docker compose --env-file .env -f deploy/docker-compose.yml \
-  exec postgres psql -U aiops -d aiops -c '\dt'
-```
-
-> **Migrating an existing volume.** Postgres only applies `POSTGRES_PASSWORD`
-> when it first initializes an empty data directory. A `pgdata` volume created
-> under the old default `aiops` keeps that password, so the pollers' new
-> `PGPASSWORD` would fail to authenticate. The queue volume is disposable, so
-> the simplest path is to recreate it once:
->
-> ```bash
-> docker compose --env-file .env -f deploy/docker-compose.yml down -v
-> ```
->
-> To preserve the data instead, rotate the role password in place:
-> `ALTER USER aiops PASSWORD '<new>';` to match the new `POSTGRES_PASSWORD`.
-
-You should see `tasks` and `task_events`. The compose file mounts
-`migrations/` into Postgres's `/docker-entrypoint-initdb.d`, so the
-schema is applied automatically on first startup.
-
-If you need to reapply `migrations/001_init.sql` against an existing
-database, the SQL uses `CREATE TABLE IF NOT EXISTS` and is safe to run
-again:
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml \
-  exec -T postgres psql -U aiops -d aiops < migrations/001_init.sql
-```
-
-To wipe state:
-
-```bash
-docker compose --env-file .env -f deploy/docker-compose.yml down -v
-```
-
-### 4.2 Linear legacy poller
-
-```bash
-export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
-export PGPASSWORD=your-postgres-password   # same value as POSTGRES_PASSWORD in .env
-export LINEAR_API_KEY=your-linear-personal-key
-go run ./cmd/linear-poller examples/WORKFLOW.md
-```
-
-The poller exits immediately with `tracker.kind must be linear` if the
-workflow is not configured for Linear, and logs `skip <issue>:
-repo.clone_url missing in WORKFLOW.md` if `repo.clone_url` is empty.
-
-For Linear workflows, `tracker.project_slug` in the selected
-`WORKFLOW.md` maps to Linear's project `slugId` and is required unless
-`services[]` routes define per-service `tracker.project_slug` values.
-
-### 4.3 Gitea legacy poller
-
-```bash
-export DATABASE_URL=postgres://aiops@localhost:5432/aiops?sslmode=disable
-export PGPASSWORD=your-postgres-password   # same value as POSTGRES_PASSWORD in .env
-export GITEA_BASE_URL=http://localhost:3000
-export GITEA_TOKEN=your-gitea-bot-token
-go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
-```
-
-The poller treats Gitea as a tracker reader; label writes go through
-the agent tool surface, not the poller. Default state labels:
+The worker treats Gitea as a tracker reader; label writes go through the agent
+tool surface, not the worker. Default state labels:
 
 | Workflow state | Gitea label |
 | --- | --- |
@@ -325,24 +239,10 @@ the agent tool surface, not the poller. Default state labels:
 
 Gitea issue listing is capped at 20 pages of 50 issues per state label by
 default (1000 issues). Override the page budget with
-`tracker.pagination_max_pages` when a repository legitimately needs more. When
-the `+1` probe page proves more issues exist, the poller skips that state label,
-continues the remaining labels, and increments
-`aiops_gitea_issue_pagination_cap_hits_total`. Expose the counter via
-`GITEA_POLLER_METRICS_ADDR`:
-
-```bash
-export GITEA_POLLER_METRICS_ADDR=:9091
-go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
-curl http://localhost:9091/metrics | grep aiops_gitea_issue_pagination_cap_hits_total
-```
-
-The same label mapping is also used by the **SPEC-aligned**
-`tracker.kind: gitea` path in `cmd/worker` for per-tick reconciliation:
-after a run starts, moving the issue to `aiops/done` or
-`aiops/canceled` makes the next worker poll refresh that issue by ID
-and cancel the active run. That part is current; only the
-queue-writing poller is legacy.
+`tracker.pagination_max_pages` when a repository legitimately needs more. The
+same label mapping is used for per-tick reconciliation: after a run starts,
+moving the issue to `aiops/done` or `aiops/canceled` makes the next worker poll
+refresh that issue by ID and cancel the active run.
 
 ## Common failure modes
 
@@ -407,25 +307,6 @@ in `WORKFLOW.md`:
 - The server is disabled when `server.port: -1` is set in
   `WORKFLOW.md`. Use `--print-config` to confirm the effective port.
 
-### `connection refused` against Postgres (legacy pollers only)
-
-`cmd/worker` does **not** need Postgres — if you see this error from
-the worker, you are running an out-of-date binary or an old shell with
-stale env vars. For the legacy pollers:
-
-- Check `docker compose ps` and ensure the `postgres` service is
-  healthy.
-- Confirm `DATABASE_URL` matches the host you are running from.
-  Inside compose use `postgres:5432`, from your host use
-  `localhost:5432`.
-
-### `tasks` table does not exist (legacy pollers only)
-
-The init script in `migrations/001_init.sql` only runs on the very
-first start of the Postgres volume. Run `docker compose down -v` to
-drop the volume and start again, or apply the SQL manually as shown
-in [Section 4.1](#41-postgres-for-the-legacy-pollers).
-
 ### Agent fails to push or open PRs
 
 PR creation lives **agent-side**, not in the worker. The worker no
@@ -454,11 +335,6 @@ needs to push:
   Compose SSH key isolation") for the rationale — this scoping closed
   the broad credential exposure described in issue #221.
 
-### Port `5432` already in use (legacy pollers only)
-
-Stop the conflicting local service or change the published port in
-`deploy/docker-compose.yml` and `DATABASE_URL` accordingly.
-
 ### `go: module lookup disabled` or `go.sum` mismatch
 
 Run `go mod tidy`, then re-run the failing command. CI rejects changes
@@ -482,12 +358,12 @@ workspace root once old tasks no longer matter).
 
 ## Running e2e tests locally
 
-The e2e suite under `test/e2e/` validates the Gitea poller loop
-against real Postgres and Gitea containers. It is gated by the `e2e`
+The e2e suite under `test/e2e/` validates the Gitea worker loop
+against a real Gitea container. It is gated by the `e2e`
 build tag and does not run as part of `go test ./...`.
 
 Requirements: a working Docker daemon. Cold first run pulls ~600MB of
-images and takes 2–3 minutes. Warm runs take ~10 seconds for all four
+images and takes 2–3 minutes. Warm runs take ~10 seconds for all
 tests.
 
 ```bash

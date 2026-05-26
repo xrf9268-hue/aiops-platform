@@ -2,7 +2,7 @@
 
 This runbook describes how to use `aiops-platform` day to day so it stays a useful tool instead of another system to babysit.
 
-The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is now the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state. Postgres and the legacy queue remain only for transitional poller compatibility while D6 cleanup is pending.
+The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state.
 
 ## Linear states
 
@@ -67,7 +67,7 @@ Issue template that works well:
 
 ## Choosing a runner
 
-Runners are selected by the `agent.default` field in `WORKFLOW.md` and resolved in `internal/runner/runner.go`. Valid values: `mock`, `codex`, `claude`. Per-task overrides can be sent via the `model` field on the manual task API.
+Runners are selected by the `agent.default` field in `WORKFLOW.md` and resolved in `internal/runner/runner.go`. Valid values: `mock`, `codex`, `claude`.
 
 ### `mock`
 
@@ -109,7 +109,7 @@ codex:
 
 ### Reading codex output after a run
 
-Each codex run writes `.aiops/CODEX_OUTPUT.txt` (combined stdout+stderr, capped at 1 MiB with a truncation footer when the cap fires) and reads `.aiops/CODEX_LAST_MESSAGE.md` (codex's own `-o` artifact) as the run summary. The `runner_end` task event payload also carries `output_head` (first 4 KiB), `output_tail` (last 4 KiB if non-overlapping), `output_bytes`, and `output_dropped` for at-a-glance triage from `/v1/tasks/<id>/events` without cloning the work branch.
+Each codex run writes `.aiops/CODEX_OUTPUT.txt` (combined stdout+stderr, capped at 1 MiB with a truncation footer when the cap fires) and reads `.aiops/CODEX_LAST_MESSAGE.md` (codex's own `-o` artifact) as the run summary. The `runner_end` task event payload also carries `output_head` (first 4 KiB), `output_tail` (last 4 KiB if non-overlapping), `output_bytes`, and `output_dropped` for at-a-glance triage from worker logs and runtime events without cloning the work branch.
 
 ### `claude`
 
@@ -119,7 +119,7 @@ Use when:
 
 - the task touches several files or needs more reasoning across a package.
 - you want richer tool use during the run.
-- Codex produced a thin or wrong patch and you want a second opinion. To switch runner you set `agent.default` in `WORKFLOW.md`, or pass `model` per task via `POST /v1/tasks`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
+- Codex produced a thin or wrong patch and you want a second opinion. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
 
 ```yaml
 agent:
@@ -150,21 +150,23 @@ multi-file or reasoning-heavy    -> claude
 
 The SPEC-aligned worker does not persist scheduler attempts in Postgres. It polls the tracker, records in-flight/completed/retry state in the in-memory orchestrator runtime, and starts with fresh scheduler state after restart. Startup reconciliation compares tracker state with deterministic workspaces before the first poll so terminal/unknown workspace directories are cleaned without reading queue rows.
 
-### Triage with the debugging API
+### Triage with the runtime status API
 
-See `docs/runbooks/task-api.md` for full details. Quick commands:
+Use the worker-owned runtime status surface:
 
 ```bash
-curl 'http://localhost:8080/v1/tasks?status=failed'
-curl 'http://localhost:8080/v1/tasks/<task-id>'
-curl 'http://localhost:8080/v1/tasks/<task-id>/events'
+curl 'http://127.0.0.1:4000/api/v1/state'
 ```
 
-For legacy queue runs, `/events` is the most useful endpoint. Look for `enqueued`, `claimed`, `failed_attempt`, `succeeded`, `failed` in order, and read the messages. For the worker-owned poll path, prefer process logs and task events emitted by `worker.RunTask` such as `workflow_resolved`, `runner_start`, `verify_*`, and reconciliation events.
+For failed tasks, inspect process logs and task events emitted by
+`worker.RunTask` such as `workflow_resolved`, `runner_start`, `verify_*`, and
+reconciliation events. The deterministic workspace also retains
+`.aiops/RUN_SUMMARY.md`, `.aiops/VERIFICATION.txt`, and
+`.aiops/CHANGED_FILES.txt` when the runner reaches those phases.
 
 ### Common causes and fixes
 
-- `repo.clone_url missing in WORKFLOW.md`: poller log line. Fix `WORKFLOW.md`, restart the poller.
+- `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` or `claude.command` resolves in the worker's scoped `PATH`. The codex/claude shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
@@ -183,7 +185,7 @@ Three options, in order of preference:
 Mark the issue back to `Backlog` or `Human Review` and finish it by hand if any of these are true:
 
 - two runner attempts produced wrong or empty diffs.
-- the failure mode is unclear after reading `/v1/tasks/<id>/events`.
+- the failure mode is unclear after reading worker logs and workspace artifacts.
 - the work has crossed into a `deny_paths` area or grown past the size caps.
 
 The platform is meant to save time on small, well-scoped tasks. When it stops doing that for a given issue, do not fight it.

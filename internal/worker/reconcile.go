@@ -364,8 +364,7 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tra
 		//      lowercased the workspace key and collapsed any
 		//      non-letter/digit rune into a `-` separator. For the
 		//      Linear, Gitea, and GitHub trackers shipped today the
-		//      Rework key is composed from `issue.ID` (see
-		//      `cmd/linear-poller/main.go`'s `sourceEventID`) — an
+		//      Rework key is composed from `issue.ID` — an
 		//      all-lowercase UUID or numeric value — so form 2 already
 		//      covers every directory shape any released worker actually
 		//      wrote to disk and form 3 is dead defensive code for the

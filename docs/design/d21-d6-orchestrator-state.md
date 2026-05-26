@@ -1,8 +1,9 @@
 # Design: D21 + D6 — single-source-of-truth orchestrator state
 
-**Status:** Draft for review
+**Status:** Completed; historical design record
 **Tracks:** #95 (D21), #73 (D6)
-**Phase:** 1 of 6 in the SPEC alignment plan
+**Phase:** D21/D6 migration completed across follow-up PRs; #407 removed the
+final queue/poller artifacts.
 **SPEC sections:** §3.1, §4.1.7, §4.1.8, §7.4, §8, §14.3, §16
 **Source for review target:** SPEC.md only; Elixir code is a disambiguation oracle, not a porting target
 
@@ -66,7 +67,7 @@ mutation flows through `handle_call` / `handle_cast` / `handle_info`
 (`/tmp/symphony-spec/orchestrator.ex:6,52,74-217`). The Go analog is the
 single-goroutine actor selected below.
 
-## Current Go state (what we are replacing)
+## Historical Go state (what this design replaced)
 
 - **Worker entry point.** `cmd/worker/main.go:25-35` opens a `pgxpool`,
   constructs `queue.Store`, hands it to `worker.Run`. There is no

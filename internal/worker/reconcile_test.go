@@ -566,7 +566,7 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	root := t.TempDir()
 	// Pre-#229 actual on-disk shape for a Linear Rework workspace, mirroring
-	// what `cmd/linear-poller` + the pre-#229 sanitizer would have written
+	// what the pre-#229 sanitizer would have written
 	// for `SourceEventID = "<issue.ID>|rework|<updatedAt>"`:
 	//   - source-type subdir is `linear_issue` (pre-#229 `SanitizeSourceType`
 	//     preserved `_`),

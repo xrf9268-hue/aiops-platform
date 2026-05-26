@@ -608,28 +608,8 @@ func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
 }
 
 // TaskBuilder converts a tracker candidate into the task shape consumed by the
-// existing worker runner. This is an adapter between the SPEC poller/runtime
-// path and the legacy task execution API; it is intentionally in-memory only.
+// existing worker runner.
 type TaskBuilder func(issue tracker.Issue) (task.Task, error)
-
-type BuiltTask struct {
-	Task            task.Task
-	RecordedQueueID string
-}
-
-// RecordedTaskBuilder converts a tracker candidate into a worker task and can
-// return the queue row ID recorded by transitional compatibility paths. When a
-// queue assigns the row ID, it may differ from the worker task's stable
-// tracker-derived ID.
-type RecordedTaskBuilder func(issue tracker.Issue) (BuiltTask, error)
-
-// TaskCompleter is the optional queue compatibility hook implemented by
-// queue.Store. The SPEC-aligned runtime path does not require durable rows, but
-// tests and transitional tools that record a task row need it marked terminal
-// after the in-memory worker exits successfully.
-type TaskCompleter interface {
-	Complete(ctx context.Context, id string) error
-}
 
 // WorkerTaskDispatcher runs the existing worker task executor for issues
 // accepted by the orchestrator actor. It replaces the old Postgres claim loop:
@@ -637,7 +617,6 @@ type TaskCompleter interface {
 // continues to prepare workspaces and run the configured agent.
 type WorkerTaskDispatcher struct {
 	BuildTask         TaskBuilder
-	BuildRecordedTask RecordedTaskBuilder
 	Config            worker.Config
 	Emitter           worker.EventEmitter
 	WorkspacePrepared func(context.Context, tracker.Issue, task.Task, string)
@@ -655,7 +634,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		defer close(out)
 		defer recoverPanic("orchestrator.worker_task_dispatcher")
 		start := time.Now()
-		tk, recordedTaskID, err := d.buildTaskWithAttempt(issue, copiedAttempt)
+		tk, err := d.buildTaskWithAttempt(issue, copiedAttempt)
 		if err != nil {
 			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
 			return
@@ -667,64 +646,40 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			out <- WorkerResult{Err: rterr.Err, NonRetryable: rterr.NonRetryable, InputRequired: runner.IsInputRequired(rterr.Err), Elapsed: time.Since(start)}
 			return
 		}
-		if err := completeRecordedTask(ctx, d.Emitter, recordedTaskID, tk.ID); err != nil {
-			out <- WorkerResult{Err: err, Elapsed: time.Since(start)}
-			return
-		}
 		out <- WorkerResult{Elapsed: time.Since(start)}
 	}()
 	return out
 }
 
 // workspacePathForTask resolves where the worker will materialize tk's
-// worktree. The dispatcher constructors (RuntimeDispatcher.Spawn,
-// cmd/worker, e2e harness, every poller_test fixture) all set
-// cfg.Workflow non-nil before reaching this path; the previous defensive
-// nil branch was load-bearing only when LoadConfigFromEnv stamped a
-// literal `/tmp/aiops-workspaces` onto cfg.WorkspaceRoot. Post-#319 that
-// literal is gone, so a nil Workflow would yield an empty root and a
-// useless workspace path — surfacing that as a nil-deref panic at the
-// call site beats silently writing to "" further downstream.
+// worktree. Runtime dispatcher, cmd/worker, and e2e harness constructors all
+// set cfg.Workflow before reaching this path.
 func workspacePathForTask(cfg worker.Config, tk task.Task) string {
 	return workspace.New(worker.EffectiveWorkspaceRoot(cfg, cfg.Workflow.Config)).PathFor(tk)
 }
 
-func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, string, error) {
-	if d.BuildRecordedTask != nil {
-		built, err := d.BuildRecordedTask(issue)
-		return built.Task, built.RecordedQueueID, err
-	}
+func (d WorkerTaskDispatcher) buildTask(issue tracker.Issue) (task.Task, error) {
 	if d.BuildTask == nil {
-		return task.Task{}, "", errors.New("worker task dispatcher requires task builder")
+		return task.Task{}, errors.New("worker task dispatcher requires task builder")
 	}
 	tk, err := d.BuildTask(issue)
-	return tk, tk.ID, err
+	return tk, err
 }
 
-func (d WorkerTaskDispatcher) buildTaskWithAttempt(issue tracker.Issue, attempt *int) (task.Task, string, error) {
-	tk, recordedTaskID, err := d.buildTask(issue)
+func (d WorkerTaskDispatcher) buildTaskWithAttempt(issue tracker.Issue, attempt *int) (task.Task, error) {
+	tk, err := d.buildTask(issue)
 	if err != nil {
-		return task.Task{}, "", err
+		return task.Task{}, err
 	}
 	if attempt != nil {
 		tk.Attempts = *attempt + 1
 	}
-	return tk, recordedTaskID, nil
+	return tk, nil
 }
 
 // TaskFromIssue builds the in-memory task handed to worker execution for a
 // tracker candidate. Dedupe/claiming lives in OrchestratorState, not in this
 // task ID: the ID is only a stable per-run/workspace identifier.
-func completeRecordedTask(ctx context.Context, ev worker.EventEmitter, recordedTaskID, fallbackTaskID string) error {
-	if completer, ok := ev.(TaskCompleter); ok {
-		if recordedTaskID != "" {
-			return completer.Complete(ctx, recordedTaskID)
-		}
-		return completer.Complete(ctx, fallbackTaskID)
-	}
-	return nil
-}
-
 func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) {
 	if issue.ServiceName != "" {
 		serviceCfg, ok := serviceConfigByName(cfg, issue.ServiceName)

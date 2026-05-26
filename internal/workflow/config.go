@@ -298,13 +298,12 @@ type AgentConfig struct {
 
 // UnboundedRetryBudget is the sentinel MaxTimeoutRetriesValue() and
 // MaxRetryAttemptsValue() return when the corresponding YAML field is
-// absent. It signals "no cap" to downstream callers (orchestrator,
-// queue.FailTimeout) so the SPEC §8.4 default — keep retrying with
-// exponential backoff until the tracker takes the issue out of active
-// work — is what an out-of-the-box workflow gets. Any value < 0 is
-// equivalent to UnboundedRetryBudget; callers should compare with
-// `< 0` rather than `== UnboundedRetryBudget` so future sentinel
-// renumbering does not require a sweep.
+// absent. It signals "no cap" to downstream callers so the SPEC §8.4
+// default — keep retrying with exponential backoff until the tracker
+// takes the issue out of active work — is what an out-of-the-box
+// workflow gets. Any value < 0 is equivalent to UnboundedRetryBudget;
+// callers should compare with `< 0` rather than `== UnboundedRetryBudget`
+// so future sentinel renumbering does not require a sweep.
 const UnboundedRetryBudget = -1
 
 // MaxTimeoutRetriesValue returns the effective runner-timeout retry
@@ -491,10 +490,10 @@ type VerifyConfig struct {
 	EnvPassthrough []string `yaml:"env_passthrough" json:"env_passthrough"`
 }
 
-// SecretScanConfig describes an optional pre-push secret scanner that runs
-// after verify commands and policy enforcement but before `git push`. The
-// scanner is invoked in the workspace directory; a non-zero exit code is
-// treated as a finding by default and blocks the push.
+// SecretScanConfig describes an optional secret scanner that runs after verify
+// commands and policy enforcement but before task completion. The scanner is
+// invoked in the workspace directory; a non-zero exit code is treated as a
+// finding by default and blocks completion.
 //
 // Recommended tools (installed by the operator, not bundled here):
 //
@@ -504,20 +503,20 @@ type VerifyConfig struct {
 // Leave Enabled=false (or omit the section) to keep the previous behavior.
 type SecretScanConfig struct {
 	// Enabled toggles the hook. When false, the worker skips the scan and
-	// proceeds to push, preserving backward compatibility.
+	// proceeds with completion.
 	Enabled bool `yaml:"enabled" json:"enabled"`
 	// Command is argv to exec inside the workspace. The first element is
 	// the binary; remaining elements are passed verbatim. No shell is used,
 	// so quoting/expansion is not performed.
 	Command []string `yaml:"command" json:"command"`
-	// FailOnFinding controls whether a non-zero exit code blocks the push.
+	// FailOnFinding controls whether a non-zero exit code blocks completion.
 	// Defaults to true. Set to false to surface findings as a warning event
 	// without aborting (useful while tuning false positives).
 	FailOnFinding *bool `yaml:"fail_on_finding,omitempty" json:"fail_on_finding,omitempty"`
 }
 
 // ShouldFailOnFinding reports whether a non-zero exit from the scanner
-// should block the push. The default is true; callers should pass through
+// should block completion. The default is true; callers should pass through
 // this method rather than reading FailOnFinding directly.
 func (s SecretScanConfig) ShouldFailOnFinding() bool {
 	if s.FailOnFinding == nil {

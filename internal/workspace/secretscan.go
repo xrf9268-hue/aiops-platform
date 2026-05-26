@@ -46,10 +46,10 @@ type SecretScanResult struct {
 	Err error `json:"-"`
 }
 
-// ShouldBlockPush reports whether this result should prevent the push,
+// ShouldBlockCompletion reports whether this result should fail the task,
 // honoring the workflow's FailOnFinding setting. Execution errors always
 // block; a clean or skipped result never blocks.
-func (r SecretScanResult) ShouldBlockPush(cfg workflow.SecretScanConfig) bool {
+func (r SecretScanResult) ShouldBlockCompletion(cfg workflow.SecretScanConfig) bool {
 	switch r.Status {
 	case SecretScanError:
 		return true
@@ -67,18 +67,18 @@ type secretScanCommandRunner func(ctx context.Context, dir string, argv []string
 
 var defaultSecretScanRunner secretScanCommandRunner = runSecretScanCommand
 
-// RunSecretScan executes the configured pre-push secret scanner inside
+// RunSecretScan executes the configured secret scanner inside
 // workdir. It returns a structured SecretScanResult; callers decide
-// whether to block the push based on ShouldBlockPush.
+// whether to block completion based on ShouldBlockCompletion.
 //
 // Behavior:
 //   - If the section is disabled or no command is configured, the result
-//     status is SecretScanSkipped and the caller proceeds with push.
+//     status is SecretScanSkipped and the caller proceeds.
 //   - If the scanner exits zero, status is SecretScanClean.
 //   - If the scanner exits non-zero, status is SecretScanViolation. Whether
-//     this blocks the push depends on cfg.ShouldFailOnFinding().
+//     this blocks completion depends on cfg.ShouldFailOnFinding().
 //   - If the scanner cannot be executed (e.g. binary missing), status is
-//     SecretScanError and Err is populated; this always blocks the push.
+//     SecretScanError and Err is populated; this always blocks completion.
 //
 // Captured stdout/stderr are truncated to 1 MiB to bound event payload
 // size, matching the behavior of other long-running command captures.
@@ -120,7 +120,7 @@ func runSecretScanWith(ctx context.Context, workdir string, cfg workflow.SecretS
 		// A normal non-zero exit is a finding to surface (SecretScanViolation).
 		// A failure to start or a signal-killed process is an operator/exec
 		// error: the scan never produced a trustworthy result, so we map
-		// it to SecretScanError, which always blocks the push.
+		// it to SecretScanError, which always blocks completion.
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			if isSignaled(ee) {

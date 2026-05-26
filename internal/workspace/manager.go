@@ -925,7 +925,7 @@ func (e *PolicyError) Error() string {
 
 // EnforcePolicy gathers a diffstat for workdir and evaluates it against the
 // workflow PolicyConfig. On any violation it returns *PolicyError so that
-// the worker can both block the push and write a structured task event.
+// the worker can both block completion and write a structured task event.
 func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) error {
 	d, err := Diffstat(ctx, workdir)
 	if err != nil {
@@ -959,9 +959,9 @@ const (
 
 // CommitAndPush stages the workdir, commits with a Title-derived message,
 // and pushes to origin/<branch>. Retries for the same task ID reuse the same
-// work branch (see queue.Postgres.Enqueue), so on retry origin may already
-// hold a commit from the previous attempt. To make that case safe we probe
-// the upstream first and choose the push mode explicitly:
+// work branch, so on retry origin may already hold a commit from the previous
+// attempt. To make that case safe we probe the upstream first and choose the
+// push mode explicitly:
 //
 //   - Remote branch exists: refresh the local tracking ref via `git fetch`
 //     and push with `--force-with-lease`, so the retry overwrites the stale

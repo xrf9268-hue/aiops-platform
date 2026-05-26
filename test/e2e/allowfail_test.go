@@ -4,7 +4,6 @@ package e2e
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -12,30 +11,25 @@ import (
 )
 
 func TestVerifyAllowFailure(t *testing.T) {
-	testStart := time.Now()
-	t.Cleanup(func() { bed.resetState(t, testStart) })
-
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	taskID, owner, repo := runGiteaPollerWorkerTask(t, ctx, "demo-allow-fail", "allow-failure task", "Try.", "mock-allow-fail.md")
+	taskID, owner, repo, events := runGiteaWorkerTask(t, ctx, "demo-allow-fail", "allow-failure task", "Try.", "mock-allow-fail.md")
 
 	var foundFailedAllowed bool
-	rows, err := bed.pg.pool.Query(ctx,
-		`SELECT payload FROM task_events WHERE task_id=$1 AND event_type=$2`,
-		taskID, task.EventVerifyEnd)
-	if err != nil {
-		t.Fatalf("query verify_end: %v", err)
-	}
-	for rows.Next() {
-		var payload string
-		_ = rows.Scan(&payload)
-		if strings.Contains(payload, "failed_allowed") {
+	for _, ev := range events.byTask(taskID) {
+		if ev.Kind != task.EventVerifyEnd {
+			continue
+		}
+		status, ok := payloadString(ev.Payload, "status")
+		if !ok {
+			t.Fatalf("verify_end event payload missing string status: %#v", ev.Payload)
+		}
+		if status == "failed_allowed" {
 			foundFailedAllowed = true
 			break
 		}
 	}
-	rows.Close()
 	if !foundFailedAllowed {
 		t.Errorf("expected verify_end event with failed_allowed status for task %s", taskID)
 	}

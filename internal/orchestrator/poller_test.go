@@ -101,55 +101,6 @@ func (d *recordingDispatcher) issueIDs() []string {
 	return out
 }
 
-type completingEmitter struct {
-	worker.LogEventEmitter
-	mu        sync.Mutex
-	completed []string
-}
-
-func (e *completingEmitter) Complete(_ context.Context, id string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.completed = append(e.completed, id)
-	return nil
-}
-
-func (e *completingEmitter) count() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.completed)
-}
-
-func (e *completingEmitter) completedID(i int) string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.completed[i]
-}
-
-func TestCompleteRecordedTaskMarksOptionalQueueRowTerminal(t *testing.T) {
-	ctx := context.Background()
-	emitter := &completingEmitter{}
-
-	if err := completeRecordedTask(ctx, emitter, "row-1", "issue-1"); err != nil {
-		t.Fatalf("completeRecordedTask returned error: %v", err)
-	}
-	if got := emitter.count(); got != 1 {
-		t.Fatalf("completed task rows = %d, want 1", got)
-	}
-}
-
-func TestCompleteRecordedTaskUsesRecordedQueueRowID(t *testing.T) {
-	ctx := context.Background()
-	emitter := &completingEmitter{}
-
-	if err := completeRecordedTask(ctx, emitter, "tsk_recorded", "issue-1"); err != nil {
-		t.Fatalf("completeRecordedTask returned error: %v", err)
-	}
-	if got := emitter.completedID(0); got != "tsk_recorded" {
-		t.Fatalf("completed task id = %q, want recorded queue row id", got)
-	}
-}
-
 type erroringTaskDispatcher struct {
 	mu    sync.Mutex
 	calls int
@@ -1416,12 +1367,9 @@ func TestWorkerTaskDispatcherThreadsRunAttemptIntoTask(t *testing.T) {
 		Emitter: nil,
 	}
 
-	tk, recordedTaskID, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	tk, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
 	if err != nil {
 		t.Fatalf("buildTaskWithAttempt: %v", err)
-	}
-	if recordedTaskID != "issue-1" {
-		t.Fatalf("recordedTaskID = %q, want issue-1", recordedTaskID)
 	}
 	want := attempt + 1
 	if tk.Attempts != want {
@@ -1438,7 +1386,7 @@ func TestWorkerTaskDispatcherThreadsFirstRetryAsSecondRunAttempt(t *testing.T) {
 		Config: worker.Config{Workflow: &workflow.Workflow{}},
 	}
 
-	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	tk, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
 	if err != nil {
 		t.Fatalf("buildTaskWithAttempt: %v", err)
 	}
@@ -1455,7 +1403,7 @@ func TestWorkerTaskDispatcherLeavesAttemptWhenRetryAttemptNil(t *testing.T) {
 		Config: worker.Config{Workflow: &workflow.Workflow{}},
 	}
 
-	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, nil)
+	tk, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, nil)
 	if err != nil {
 		t.Fatalf("buildTaskWithAttempt: %v", err)
 	}
@@ -1473,7 +1421,7 @@ func TestWorkerTaskDispatcherCopiesRetryAttemptBeforeRun(t *testing.T) {
 		Config: worker.Config{Workflow: &workflow.Workflow{}},
 	}
 
-	tk, _, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
+	tk, err := dispatcher.buildTaskWithAttempt(tracker.Issue{ID: "issue-1"}, &attempt)
 	if err != nil {
 		t.Fatalf("buildTaskWithAttempt: %v", err)
 	}

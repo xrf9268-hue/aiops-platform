@@ -1,6 +1,6 @@
 ---
 repo:
-  clone_url: http://localhost:3000/aiops-bot/demo-gitea-poller.git
+  clone_url: http://localhost:3000/aiops-bot/demo-gitea-tracker.git
 agent:
   default: mock
   timeout: 5m

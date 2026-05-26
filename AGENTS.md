@@ -24,11 +24,9 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 > from this SPEC-aligned picture and are being reverted. Do not design new
 > code that depends on the legacy behavior:
 >
-> - **Postgres queue** (`internal/queue`, `migrations/`): the worker no
->   longer reads from the Postgres queue (#73 first half landed). The
->   legacy `internal/queue`, `migrations/`, `cmd/linear-poller`, and
->   `cmd/gitea-poller` queue-ingress path remains in tree until #73
->   closes the second half; do not build new worker behavior on it.
+> - **Postgres queue**: removed under #407 as the second half of #73. Do not
+>   reintroduce `internal/queue`, `migrations/`, `cmd/linear-poller`, or
+>   `cmd/gitea-poller`; tracker polling belongs to `cmd/worker`.
 > - **Gitea webhook ingress** (`cmd/trigger-api`, `internal/triggerapi`,
 >   `internal/gitea/webhook*.go`): not in SPEC; removed under #74 in favor
 >   of tracker polling.
@@ -223,21 +221,17 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 
 | Path | What lives there |
 |------|------------------|
-| `cmd/worker` | Claims/dispatches queued tasks and runs the Symphony loop; PR handoff is agent-side |
-| `cmd/linear-poller` | Polls Linear active states and enqueues tasks |
-| `cmd/gitea-poller` | Polls Gitea `aiops/*` label states and enqueues tasks for the transitional queue path |
+| `cmd/worker` | Polls trackers, dispatches eligible issues, and runs the Symphony loop; PR handoff is agent-side |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
-| `internal/queue` | Postgres queue (transitional — being removed per #73) |
 | `internal/runner` | Runner abstraction: `mock`, `codex`, `claude` |
 | `internal/workspace` | Deterministic git workspace, verify, policy checks |
 | `internal/tracker` | Tracker abstraction with Linear client |
 | `internal/gitea` | Gitea tracker/client support and PR/tool helpers |
 | `internal/worker` | Worker lifecycle |
 | `internal/task`, `internal/policy` | Task event constants, policy helpers |
-| `migrations/` | SQL migrations for the Postgres queue |
 | `docs/adr/` | Architectural decisions (start here for "why") |
 | `docs/runbooks/` | Operational guides (CI, local dev, secret scan, workspace cache) |
-| `test/e2e/` | Build-tagged E2E suite (`-tags e2e`) using Postgres + Gitea containers |
+| `test/e2e/` | Build-tagged E2E suite (`-tags e2e`) using Gitea containers |
 
 ## Build, test, lint
 
@@ -247,10 +241,10 @@ The CI gate is the authoritative checklist — match it locally before pushing:
 gofmt -l $(git ls-files '*.go')         # must be empty
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go test -race -covermode=atomic ./...
-go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller
+go build ./cmd/worker
 ```
 
-E2E (requires Docker, pulls `postgres:16` and `gitea/gitea:1.26.1-rootless`):
+E2E (requires Docker, pulls `gitea/gitea:1.26.1-rootless`):
 
 ```bash
 go test -tags e2e -race -timeout 15m ./test/e2e/...
@@ -312,10 +306,8 @@ failure per the "Earned rules" principle above.
 
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing. A PostToolUse hook (`.claude/scripts/format-go.sh`) auto-runs `gofmt -w` on `.go` files edited via the Edit/Write tools; files changed through Bash (e.g. `sed`, heredocs) are not covered, so always verify with `gofmt -l` before pushing — CI's `gofmt -l` gate is the backstop.
 - **`go mod tidy` must leave `go.mod`/`go.sum` clean**: don't add deps you don't use.
-- **No `t.Parallel()` in tests that touch shared Postgres state** — the queue tests rely on serial execution to assert ordering.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
-- **Don't mock the database in integration tests** — hit real Postgres (testcontainers or the E2E harness).
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.
 - **PRs from the worker are draft + labeled by default**; respect `policy.max_changed_files` (12) and `policy.max_changed_loc` (300) defaults when shaping changes.
 - **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is the only post-merge line of defense for shipped-past bot feedback, not a required merge check; agents should still handle actionable review feedback before merging. After merging a PR with non-trivial bot review activity, sanity-check the next-day `Capture unresolved reviews` Actions history so workflow regressions do not age silently.

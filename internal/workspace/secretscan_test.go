@@ -36,7 +36,7 @@ func TestRunSecretScan_DisabledIsSkipped(t *testing.T) {
 	if res.Status != SecretScanSkipped {
 		t.Fatalf("expected skipped, got %q", res.Status)
 	}
-	if res.ShouldBlockPush(workflow.SecretScanConfig{}) {
+	if res.ShouldBlockCompletion(workflow.SecretScanConfig{}) {
 		t.Fatal("skipped result must not block push")
 	}
 }
@@ -74,7 +74,7 @@ func TestRunSecretScan_CleanExit(t *testing.T) {
 	if res.Stdout != "no leaks\n" {
 		t.Fatalf("expected stdout passthrough, got %q", res.Stdout)
 	}
-	if res.ShouldBlockPush(cfg) {
+	if res.ShouldBlockCompletion(cfg) {
 		t.Fatal("clean scan must not block push")
 	}
 }
@@ -94,7 +94,7 @@ func TestRunSecretScan_NonZeroIsViolation(t *testing.T) {
 	if !strings.Contains(res.Stdout, "leak found") {
 		t.Fatalf("stdout not preserved: %q", res.Stdout)
 	}
-	if !res.ShouldBlockPush(cfg) {
+	if !res.ShouldBlockCompletion(cfg) {
 		t.Fatal("violation with default fail_on_finding must block push")
 	}
 }
@@ -113,7 +113,7 @@ func TestRunSecretScan_ViolationWarnOnlyDoesNotBlock(t *testing.T) {
 	if res.Status != SecretScanViolation {
 		t.Fatalf("expected violation, got %q", res.Status)
 	}
-	if res.ShouldBlockPush(cfg) {
+	if res.ShouldBlockCompletion(cfg) {
 		t.Fatal("warn-only mode must not block push on violation")
 	}
 }
@@ -133,7 +133,7 @@ func TestRunSecretScan_ExecErrorBlocksPush(t *testing.T) {
 	// Error status always blocks regardless of FailOnFinding.
 	off := false
 	cfg.FailOnFinding = &off
-	if !res.ShouldBlockPush(cfg) {
+	if !res.ShouldBlockCompletion(cfg) {
 		t.Fatal("exec error must block push even when fail_on_finding=false")
 	}
 }
@@ -236,7 +236,7 @@ func TestRunSecretScan_SignalKilledIsExecError(t *testing.T) {
 	// Always block, including warn-only mode: we never know if there's a secret.
 	off := false
 	cfg.FailOnFinding = &off
-	if !res.ShouldBlockPush(cfg) {
+	if !res.ShouldBlockCompletion(cfg) {
 		t.Fatal("signal-killed scanner must block push even with fail_on_finding=false")
 	}
 }
@@ -261,7 +261,7 @@ func TestRunSecretScan_ContextCanceledIsExecError(t *testing.T) {
 	}
 	off := false
 	cfg.FailOnFinding = &off
-	if !res.ShouldBlockPush(cfg) {
+	if !res.ShouldBlockCompletion(cfg) {
 		t.Fatal("ctx-canceled scan must block push even in warn-only mode")
 	}
 }
@@ -285,7 +285,7 @@ func TestRunSecretScan_ContextDeadlineExceededIsExecError(t *testing.T) {
 	}
 	off := false
 	cfg.FailOnFinding = &off
-	if !res.ShouldBlockPush(cfg) {
+	if !res.ShouldBlockCompletion(cfg) {
 		t.Fatal("deadline-exceeded scan must block push even in warn-only mode")
 	}
 }
