@@ -421,7 +421,8 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
   against real `postgres:16` and `gitea` containers.
 - **`docker`** — a Docker image build of the repository `Dockerfile` (depends on
-  `go`).
+  `go`), plus a blocking Trivy scan for fixed CRITICAL/HIGH image
+  vulnerabilities.
 
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
 release flow, and local pre-push checks.

@@ -39,3 +39,23 @@ func TestDockerfileCopiesGoSumBeforeDownload(t *testing.T) {
 		t.Errorf("`go mod download` (at %d) must run before `COPY . .` (at %d) to keep the cached dependency layer", download, copyAll)
 	}
 }
+
+func TestDockerfileAppliesRuntimeSecurityUpdatesBeforeInstallingTools(t *testing.T) {
+	df := dockerfileContents(t)
+
+	runtimeStage := strings.Index(df, "FROM debian:bookworm-slim")
+	if runtimeStage < 0 {
+		t.Fatal("Dockerfile missing debian runtime stage")
+	}
+	upgrade := strings.Index(df[runtimeStage:], "apt-get upgrade -y")
+	if upgrade < 0 {
+		t.Fatal("runtime stage must apply Debian security updates before installing tools")
+	}
+	install := strings.Index(df[runtimeStage:], "apt-get install -y --no-install-recommends ca-certificates git openssh-client")
+	if install < 0 {
+		t.Fatal("runtime stage missing expected tool installation command")
+	}
+	if upgrade > install {
+		t.Fatalf("runtime apt-get upgrade must precede tool installation: upgrade=%d install=%d", upgrade, install)
+	}
+}
