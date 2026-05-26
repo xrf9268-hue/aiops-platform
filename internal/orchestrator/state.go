@@ -150,13 +150,13 @@ type RunningEntry struct {
 	// context cancellation, but finalization must release the run without
 	// scheduling a retry because the tracker made the issue ineligible.
 	ReconcileCancel bool
-	// ReconcileCleanupWorkspace is set alongside ReconcileCancel only when the
-	// issue moved to a terminal tracker state (not merely inactive). It tells
-	// the finalize path to remove the workspace via the before_remove hook
-	// after the worker has exited, mirroring the startup sweep (SPEC §18.1
-	// active transition). Upstream gates the same cleanup on terminal state
-	// only (orchestrator.ex terminate_running_issue cleanup_workspace=true);
-	// non-active/route-change cancels keep the workspace for possible reuse.
+	// ReconcileCleanupWorkspace is set when reconciliation observes the issue
+	// in a terminal tracker state (not merely inactive). It tells the finalize
+	// path to remove the workspace via the before_remove hook after the worker
+	// has exited, mirroring the startup sweep (SPEC §18.1 active transition).
+	// Upstream gates the same cleanup on terminal state only (orchestrator.ex
+	// terminate_running_issue cleanup_workspace=true); non-active/route-change
+	// cancels keep the workspace for possible reuse.
 	ReconcileCleanupWorkspace bool
 }
 

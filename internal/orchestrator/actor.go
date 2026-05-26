@@ -140,6 +140,12 @@ const continuationRetryDelay = time.Second
 // bound; runtime callers must not mutate it.
 var retryFetchTimeout = 45 * time.Second
 
+// terminalCleanupStateFetchTimeout bounds the deletion-time state recheck that
+// prevents a stale terminal observation from deleting a workspace after the
+// issue has already returned to active work.
+var terminalCleanupStateFetchTimeout = 45 * time.Second
+var terminalCleanupStateRetryDelay = continuationRetryDelay
+
 // NextDelay implements Scheduler.
 func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 	if req.Kind == RetryKindContinuation {
@@ -970,6 +976,29 @@ func (o *endWorkspaceCleanupOp) apply(st *OrchestratorState) func() {
 	return nil
 }
 
+type continuationAfterSkippedCleanup struct {
+	issue      tracker.Issue
+	identifier string
+	attempt    int
+	workspace  Workspace
+}
+
+type continuationBudgetExhaustedOp struct {
+	o          *Orchestrator
+	id         IssueID
+	issue      tracker.Issue
+	identifier string
+}
+
+func (c *continuationBudgetExhaustedOp) apply(st *OrchestratorState) func() {
+	st.ReleaseClaim(c.id)
+	st.recordFailed(c.id, FailedEntry{State: c.issue.State, UpdatedAt: c.issue.UpdatedAt})
+	msg := "clean continuation budget exhausted after " + strconv.Itoa(c.o.maxTurns) + " turns while tracker issue remained active"
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: c.id, Identifier: c.identifier, Message: msg})
+	log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=continuation_budget_exhausted budget=%d", c.id, c.identifier, c.o.maxTurns)
+	return nil
+}
+
 // ReconcileInactiveTrackerIssuesAndWait cancels only issues explicitly observed
 // in a terminal or configured inactive tracker state. Missing issues are
 // treated as unknown instead of inactive because tracker adapters may return
@@ -1290,7 +1319,6 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			continue
 		}
 		st.ReleaseClaim(id)
-		run.ReconcileCancel = true
 		// Refresh the stored issue and (re)evaluate the terminal cleanup gate
 		// against the CURRENT observation every tick. A terminal transition
 		// flags the entry so finalize fires before_remove + remove (SPEC §18.1
@@ -1303,6 +1331,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		// worker exits (Codex P2 follow-up).
 		run.Issue = issue
 		run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
+		run.ReconcileCancel = true
 		cancelEntries = append(cancelEntries, run)
 	}
 	for id, retry := range st.RetryAttempts {
@@ -1351,7 +1380,7 @@ func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, bl
 			}
 		}
 		for _, w := range blockedCleanups {
-			o.runReconciledWorkspaceCleanup(w)
+			o.runReconciledWorkspaceCleanup(w, nil)
 		}
 		if result != nil {
 			result <- cancelEntries
@@ -1378,6 +1407,10 @@ func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bo
 	return ok
 }
 
+func runHasCompletedTurn(run *RunningEntry) bool {
+	return run != nil && run.Session.TurnCount > 0
+}
+
 // reconciledWorkspaceCleanup returns a followup that removes the workspace of
 // a terminal-state run whose worker has now exited (SPEC §18.1 active
 // transition). It returns nil — leaving cleanup to the startup sweep — when
@@ -1386,6 +1419,20 @@ func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bo
 // followup goroutine, off the actor loop, so the before_remove hook and
 // remove cannot block state mutation.
 func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntry) func() {
+	return o.reconciledWorkspaceCleanupFollowup(id, entry, nil)
+}
+
+func (o *Orchestrator) reconciledWorkspaceCleanupOrContinuation(id IssueID, entry *RunningEntry, attempt int) func() {
+	continuation := &continuationAfterSkippedCleanup{
+		issue:      entry.Issue,
+		identifier: entry.Identifier,
+		attempt:    attempt,
+		workspace:  entry.Workspace,
+	}
+	return o.reconciledWorkspaceCleanupFollowup(id, entry, continuation)
+}
+
+func (o *Orchestrator) reconciledWorkspaceCleanupFollowup(id IssueID, entry *RunningEntry, continuation *continuationAfterSkippedCleanup) func() {
 	if entry == nil || !entry.ReconcileCleanupWorkspace {
 		return nil
 	}
@@ -1393,7 +1440,7 @@ func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntr
 	if !ok || o.workspaceCleaner == nil {
 		return nil
 	}
-	return func() { o.runReconciledWorkspaceCleanup(w) }
+	return func() { o.runReconciledWorkspaceCleanup(w, continuation) }
 }
 
 // refreshRunningIssue updates a still-active run's stored issue and clears any
@@ -1432,7 +1479,7 @@ func terminalWorkspaceForCleanup(id IssueID, identifier, path, root, state strin
 // here guards against a hook that ignores cancellation (AGENTS.md Go-runtime
 // hardening). Callers must invoke it from a followup goroutine, never inside
 // an apply.
-func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace) {
+func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
 	if o.workspaceCleaner == nil || strings.TrimSpace(w.Path) == "" {
 		return
 	}
@@ -1445,9 +1492,74 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace) {
 		return
 	}
 	defer o.endReconcileWorkspaceCleanup(w.IssueID)
+	currentState, terminal, known := o.verifyReconciledWorkspaceStillTerminal(w)
+	if !known {
+		o.retryReconciledWorkspaceCleanup(w, continuation)
+		return
+	}
+	if !terminal {
+		o.continueAfterSkippedTerminalCleanup(continuation)
+		return
+	}
+	if strings.TrimSpace(currentState) != "" {
+		w.State = currentState
+	}
 	ctx, cancel := context.WithTimeout(o.runCtx, reconcileWorkspaceCleanupTimeout)
 	defer cancel()
 	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
+}
+
+func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continuationAfterSkippedCleanup) {
+	if continuation == nil {
+		o.queuePollWake()
+		return
+	}
+	if !o.runnerEnforcesMaxTurns && continuation.attempt >= o.maxTurns {
+		_ = o.submit(o.runCtx, &continuationBudgetExhaustedOp{
+			o:          o,
+			id:         IssueID(continuation.issue.ID),
+			issue:      continuation.issue,
+			identifier: continuation.identifier,
+		})
+		return
+	}
+	_ = o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.workspace)
+}
+
+func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
+	safeGo("orchestrator.reconcile_cleanup_retry", func() {
+		timer := time.NewTimer(terminalCleanupStateRetryDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			o.runReconciledWorkspaceCleanup(w, continuation)
+		case <-o.runCtx.Done():
+		}
+	})
+}
+
+func (o *Orchestrator) verifyReconciledWorkspaceStillTerminal(w ReconciledWorkspace) (string, bool, bool) {
+	resolver, terminalStates := o.currentRetryTerminalResolver()
+	if resolver == nil || len(terminalStates) == 0 {
+		return w.State, true, true
+	}
+	ctx, cancel := context.WithTimeout(o.runCtx, terminalCleanupStateFetchTimeout)
+	defer cancel()
+	states, err := fetchIssueStates(ctx, resolver, []tracker.IssueRef{{ID: string(w.IssueID), Identifier: w.Identifier}})
+	if err != nil {
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_refresh_failed error=%q", w.IssueID, w.Identifier, err.Error())
+		return "", false, false
+	}
+	state, ok := states[string(w.IssueID)]
+	if !ok {
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_missing", w.IssueID, w.Identifier)
+		return "", false, false
+	}
+	if !isTerminalTrackerState(state, terminalStates) {
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_not_terminal state=%q", w.IssueID, w.Identifier, state)
+		return state, false, true
+	}
+	return state, true, true
 }
 
 // dispatchOp is the actor-side half of RequestDispatch: it checks
@@ -1895,7 +2007,7 @@ func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
 					Message:    "retry released: issue terminal, removing workspace",
 				})
 				o := r.o
-				return func() { o.runReconciledWorkspaceCleanup(w) }
+				return func() { o.runReconciledWorkspaceCleanup(w, nil) }
 			}
 		}
 		st.ReleaseClaim(r.id)
@@ -1957,6 +2069,16 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.result.Err == nil {
 		nextContinuationAttempt := f.entry.ContinuationAttempt + 1
+		if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
+			cleanup := f.o.reconciledWorkspaceCleanupOrContinuation(f.id, f.entry, nextContinuationAttempt)
+			if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
+				close(f.done)
+				return nil
+			}
+			st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
+			close(f.done)
+			return cleanup
+		}
 		// SPEC §7.1 leaves continuation worker spawns unbounded; only apply
 		// the orchestrator-side cap for runners that cannot enforce
 		// agent.max_turns inside their own session. See issue #216.
@@ -2003,6 +2125,15 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		return func() {
 			_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, workspace)
 		}
+	}
+	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
+		cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
+		if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
+		close(f.done)
+		return cleanup
 	}
 	if f.result.NonRetryable {
 		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {

@@ -1940,6 +1940,300 @@ func TestReconcileTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
 	}
 }
 
+// TestReconcileTerminalRunAfterTurnCompletedCancelsWorkerButRecordsSuccess is
+// the #448 regression: once app-server has emitted turn_completed, an
+// agent-side move to Done should still cancel the worker so terminal
+// reconciliation cannot leave a hung teardown occupying a running slot, but a
+// clean worker result still records success and terminal cleanup after
+// finalization.
+func TestReconcileTerminalRunAfterTurnCompletedCancelsWorkerButRecordsSuccess(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	o.SetRetryTerminalStateResolver(staticStateRefresher{"ENG-TC1": "Done"}, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-TC1", Identifier: "ENG-TC1", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
+		Event:   task.EventTurnCompleted,
+		Payload: map[string]any{"turn_id": "turn-1"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
+		Event:   task.EventNotification,
+		Payload: map[string]any{"message": "doing final local status check"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent notification: %v", err)
+	}
+
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	select {
+	case <-disp.contextAt(0).Done():
+	case <-time.After(time.Second):
+		t.Fatal("worker context was not canceled after terminal reconciliation")
+	}
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	got := cleaner.snapshot()[0]
+	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 0 || len(view.Retrying) != 0 {
+		t.Fatalf("state after clean terminal finalization = running %+v retrying %+v, want neither", view.Running, view.Retrying)
+	}
+	if len(view.Completed) != 1 || view.Completed[0] != IssueID(issue.ID) {
+		t.Fatalf("completed = %+v, want %s", view.Completed, issue.ID)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d, want no continuation retry", got)
+	}
+}
+
+func TestReconcileTerminalRunAfterTurnCompletedErrorDoesNotRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	oldRetryDelay := terminalCleanupStateRetryDelay
+	terminalCleanupStateRetryDelay = time.Millisecond
+	defer func() { terminalCleanupStateRetryDelay = oldRetryDelay }()
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Millisecond},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	o.SetRetryTerminalStateResolver(&flakyStateRefresher{states: staticStateRefresher{"ENG-TC2": "Done"}}, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-TC2", Identifier: "ENG-TC2", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC2"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Err: errors.New("app-server exited after terminal observation"), Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 0 || len(view.Retrying) != 0 || len(view.Completed) != 0 {
+		t.Fatalf("state after terminal errored finalization = running %+v retrying %+v completed %+v, want none", view.Running, view.Retrying, view.Completed)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d, want no failure retry", got)
+	}
+}
+
+func TestReconcileTerminalRunAfterTurnCompletedActiveRefreshSkipsStaleCleanup(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	o.SetRetryTerminalStateResolver(staticStateRefresher{
+		"ENG-TC3": "In Progress",
+		"ENG-T5":  "Done",
+	}, []string{"Done"})
+
+	blip := tracker.Issue{ID: "ENG-TC3", Identifier: "ENG-TC3", State: "In Progress"}
+	barrier := tracker.Issue{ID: "ENG-T5", Identifier: "ENG-T5", State: "In Progress"}
+	const blipPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC3"
+	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-T5"
+	dispatchRunningIssue(t, o, disp, blip, blipPath, 1)
+	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
+	for _, issue := range []tracker.Issue{blip, barrier} {
+		if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+			t.Fatalf("RecordRuntimeEvent %s: %v", issue.ID, err)
+		}
+	}
+
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		blip.ID:    {ID: blip.ID, Identifier: blip.Identifier, State: "Done"},
+		barrier.ID: {ID: barrier.ID, Identifier: barrier.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(cleaner.snapshot()) == 1 && len(view.Retrying) == 1
+	}, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
+		t.Fatalf("only the still-terminal barrier may be cleaned, got %+v", calls)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := view.Retrying[0]; got.IssueID != IssueID(blip.ID) || got.Attempt != 1 {
+		t.Fatalf("stale terminal continuation retry = %+v, want issue %s attempt 1", got, blip.ID)
+	}
+}
+
+type redispatchDuringCleanupRefresher struct {
+	orch      *Orchestrator
+	issue     tracker.Issue
+	state     string
+	attempted chan error
+}
+
+type flakyStateRefresher struct {
+	states staticStateRefresher
+	calls  int
+}
+
+func (f *flakyStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	f.calls++
+	if f.calls == 1 {
+		return nil, errors.New("temporary tracker refresh failure")
+	}
+	return f.states.FetchIssueStatesByIDs(ctx, ids)
+}
+
+func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	return r.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(ids))
+}
+
+func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByRefs(ctx context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+	r.attempted <- r.orch.RequestDispatch(ctx, r.issue, nil)
+	out := make(map[string]string, len(refs))
+	for _, ref := range refs {
+		out[ref.ID] = r.state
+	}
+	return out, nil
+}
+
+func TestReconcileWorkspaceCleanupRechecksStateUnderReservation(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-TC4", Identifier: "ENG-TC4", State: "In Progress"}
+	refresher := &redispatchDuringCleanupRefresher{
+		orch:      o,
+		issue:     issue,
+		state:     "In Progress",
+		attempted: make(chan error, 1),
+	}
+	o.SetRetryTerminalStateResolver(refresher, []string{"Done"})
+
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC4"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	select {
+	case err := <-refresher.attempted:
+		if !errors.Is(err, ErrNotDispatched) {
+			t.Fatalf("dispatch during cleanup recheck = %v, want ErrNotDispatched", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cleanup recheck did not attempt redispatch")
+	}
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("plain dispatch after stale cleanup recheck = %v, want ErrNotDispatched while continuation retry is claimed", err)
+	}
+	waitFor(t, func() bool {
+		return o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil) == nil
+	}, time.Second)
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
+	}
+}
+
+func TestReconcileWorkspaceCleanupActiveRecheckHonorsContinuationBudget(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	maxTurns := 1
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		WorkspaceCleaner: cleaner,
+		MaxTurns:         &maxTurns,
+	})
+	defer cancel()
+	o.SetRetryTerminalStateResolver(staticStateRefresher{"ENG-TC5": "In Progress"}, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-TC5", Identifier: "ENG-TC5", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC5"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Failed) == 1
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Retrying) != 0 {
+		t.Fatalf("retrying after stale terminal active recheck exhausted budget = %+v, want none", view.Retrying)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d, want no continuation beyond max_turns=%d", got, maxTurns)
+	}
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
+	}
+}
+
 // TestReconcileInactiveNonTerminalRunKeepsWorkspace pins the upstream gating:
 // a run cancelled because its issue went to a merely-inactive (non-terminal)
 // state must NOT have its workspace removed — the issue may return to active
@@ -3190,8 +3484,13 @@ func TestRetryFire_TerminalIssueFiresWorkspaceCleanup(t *testing.T) {
 	}
 
 	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, 2*time.Second)
-	if len(resolver.refs) != 1 || len(resolver.refs[0]) != 1 || resolver.refs[0][0].ID != "global-101" || resolver.refs[0][0].Identifier != "#7" {
-		t.Fatalf("terminal resolver refs = %#v, want global-101 with identifier #7", resolver.refs)
+	if len(resolver.refs) != 2 {
+		t.Fatalf("terminal resolver calls = %d, want retry-fire lookup plus cleanup recheck", len(resolver.refs))
+	}
+	for i, refs := range resolver.refs {
+		if len(refs) != 1 || refs[0].ID != "global-101" || refs[0].Identifier != "#7" {
+			t.Fatalf("terminal resolver refs[%d] = %#v, want global-101 with identifier #7", i, refs)
+		}
 	}
 	got := cleaner.snapshot()[0]
 	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
