@@ -50,7 +50,7 @@ gofmt -l $(git ls-files '*.go')          # 必须为空
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go vet ./...
 go test -race -covermode=atomic ./...
-go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller
+go build ./cmd/worker ./cmd/tui
 ```
 **暂存只 add 明确路径，绝不 `git add -A` / `git add .`**（会把 `.codex/` 等本地未跟踪文件卷入 PR）。commit 前 `git status --short` 核对只暂存了预期文件。
 
@@ -85,7 +85,7 @@ go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller
 **硬路径 — #331（PR #339，多轮级联）**：running issue mid-run 转终态时未清理 workspace（§18.1）。破坏性 + 并发路径，经历 P1 数据丢失竞态 → P2 超时耦合（前一个修复引入的）→ P2 陈旧标志 → TOCTOU → P2 root 不匹配 的级联，每轮 `@codex review` 抓到新缺陷（含修复引入的）。每个修复配回归 + 变异测试；路由模式与 §16.5 self-stop 两处缺口延后到 #340/#341。→ 破坏性/并发路径要穷尽对抗式审查，且**每个 push 都重新 @codex review**。
 
 ## 验证（完成判定）
-- 本地门禁全绿：`gofmt -l $(git ls-files '*.go')` 为空、`go mod tidy` 后 `go.mod`/`go.sum` 无改动、`go vet ./...`、`go test -race -covermode=atomic ./...`、`go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller`。
+- 本地门禁全绿：`gofmt -l $(git ls-files '*.go')` 为空、`go mod tidy` 后 `go.mod`/`go.sum` 无改动、`go vet ./...`、`go test -race -covermode=atomic ./...`、`go build ./cmd/worker ./cmd/tui`。
 - 新测试经变异验证（删关键行 FAIL / 恢复 PASS）。
 - 每个已 push 的 head 都先经过提交后、push 前的 Codex + Claude Code 双 reviewer，或有明确人工签核的等价 fallback；HIGH/MEDIUM/Critical 已修复，未修复项必须有 push 前人工签核并在 PR body 记录风险。
 - CI 全绿：`gh pr checks <pr> --watch --fail-fast` 阻塞到完成。
