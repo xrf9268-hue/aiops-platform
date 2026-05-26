@@ -84,6 +84,29 @@ func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
 	}
 }
 
+func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
+	view := orchestrator.StateView{
+		Completed: []orchestrator.IssueID{"linear-global-id"},
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventCompleted,
+			IssueID:    "linear-global-id",
+			Identifier: "ENG-1",
+			Message:    "worker exited cleanly",
+			At:         time.Unix(1700000000, 0).UTC(),
+		}},
+	}
+	got, ok := apiIssueFromView(view, "ENG-1")
+	if !ok {
+		t.Fatal("apiIssueFromView(ENG-1) ok = false; want true")
+	}
+	if got.Status != "completed" || got.IssueID != "linear-global-id" {
+		t.Fatalf("terminal issue = (%s, %s); want (completed, linear-global-id)", got.Status, got.IssueID)
+	}
+	if len(got.RecentEvents) != 1 {
+		t.Fatalf("recent event count = %d; want 1", len(got.RecentEvents))
+	}
+}
+
 // TestApiRunningRowEmitsLastEventAt pins the SPEC §13.7.2 running-row
 // contract: once a runtime event has been observed the row exposes
 // last_event_at as an RFC3339 string; no back-compat alias is emitted.
@@ -2339,6 +2362,26 @@ func TestParseRunArgs_PortAfterPositionalPathStillParses(t *testing.T) {
 // fatal error.
 func TestParseRunArgs_HelpReturnsFlagErrHelp(t *testing.T) {
 	_, _, err := parseRunArgs([]string{"--help"})
+	if !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("err = %v, want flag.ErrHelp", err)
+	}
+	if normalized := normalizeRunError(err, nil); normalized != nil {
+		t.Fatalf("normalizeRunError(flag.ErrHelp) = %v, want nil", normalized)
+	}
+}
+
+func TestParseDoctorArgs_AllowsTrailingFlags(t *testing.T) {
+	opts, err := parseDoctorArgs([]string{"/wf.md", "--mode", "real", "--dashboard-url", "http://127.0.0.1:4000"})
+	if err != nil {
+		t.Fatalf("parseDoctorArgs returned error: %v", err)
+	}
+	if opts.WorkflowPath != "/wf.md" || opts.Mode != "real" || opts.DashboardURL != "http://127.0.0.1:4000" {
+		t.Fatalf("parseDoctorArgs = %+v", opts)
+	}
+}
+
+func TestParseDoctorArgs_HelpReturnsFlagErrHelp(t *testing.T) {
+	_, err := parseDoctorArgs([]string{"--help"})
 	if !errors.Is(err, flag.ErrHelp) {
 		t.Fatalf("err = %v, want flag.ErrHelp", err)
 	}

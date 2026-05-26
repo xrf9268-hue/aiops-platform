@@ -4,6 +4,10 @@ This runbook documents the production-style worker image path for workflows
 that set `agent.default: codex-app-server` and run `codex app-server` inside the
 worker container.
 
+For the full new-operator path, including support matrix, Docker Compose
+secrets, `worker --doctor`, and the todo smoke test, start with
+[`first-run-docker-linear-codex.md`](first-run-docker-linear-codex.md).
+
 ## Current installer status
 
 On 2026-05-26, the online installer failed inside the Linux ARM64 worker image:
@@ -24,6 +28,15 @@ Could not find SHA-256 digest for codex-package-aarch64-unknown-linux-musl.tar.g
 
 Until the installer works for this platform, use a deterministic release-package
 install in the worker image.
+
+The repository Dockerfile now exposes this as the `codex-worker` target:
+
+```bash
+docker build --target codex-worker -t aiops-platform:codex-worker .
+```
+
+The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.133.0`, checks
+the release artifact SHA-256, and runs `codex --version` during the build.
 
 ## Linux ARM64 fallback
 

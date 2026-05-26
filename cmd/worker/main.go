@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/doctor"
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -39,11 +40,65 @@ func main() {
 		}
 		os.Exit(worker.PrintConfig(workdir, portOverride, os.Stdout, os.Stderr))
 	}
+	if len(os.Args) >= 2 && os.Args[1] == "--doctor" {
+		opts, err := parseDoctorArgs(os.Args[2:])
+		if err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				os.Exit(0)
+			}
+			fmt.Fprintln(os.Stderr, err.Error())
+			os.Exit(2)
+		}
+		os.Exit(doctor.Run(context.Background(), opts))
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := normalizeRunError(run(ctx, os.Args[1:]), ctx.Err()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func parseDoctorArgs(args []string) (doctor.Options, error) {
+	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
+	mode := fs.String("mode", "mock", "preflight depth: mock or real")
+	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
+	if err := fs.Parse(reorderDoctorFlags(args)); err != nil {
+		return doctor.Options{}, err
+	}
+	if *mode != "mock" && *mode != "real" {
+		return doctor.Options{}, fmt.Errorf("--mode must be mock or real")
+	}
+	if fs.NArg() > 1 {
+		return doctor.Options{}, fmt.Errorf("usage: worker --doctor [--mode=mock|real] [--dashboard-url=http://127.0.0.1:4000] [path-to-WORKFLOW.md]")
+	}
+	var path string
+	if fs.NArg() == 1 {
+		path = fs.Arg(0)
+	}
+	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, Stdout: os.Stdout, Stderr: os.Stderr}, nil
+}
+
+func reorderDoctorFlags(args []string) []string {
+	flags, positional := make([]string, 0, len(args)), make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			positional = append(positional, append([]string{"--"}, args[i+1:]...)...)
+			i = len(args)
+		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url":
+			flags = append(flags, a)
+			if i+1 < len(args) {
+				flags = append(flags, args[i+1])
+				i++
+			}
+		case strings.HasPrefix(a, "-"):
+			flags = append(flags, a)
+		default:
+			positional = append(positional, a)
+		}
+	}
+	return append(flags, positional...)
 }
 
 func normalizeRunError(err error, runCtxErr error) error {
@@ -1166,7 +1221,65 @@ func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueR
 		payload.LastError = stringPointerIfNotEmpty(row.Error)
 		return payload, true
 	}
+	if payload, ok := apiTerminalIssueFromView(view, want); ok {
+		return payload, true
+	}
 	return apiIssueResponse{}, false
+}
+
+func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string) (apiIssueResponse, bool) {
+	base := func(issueID orchestrator.IssueID, identifier, status string) apiIssueResponse {
+		return apiIssueResponse{
+			IssueIdentifier: identifier,
+			IssueID:         issueID,
+			Status:          status,
+			RecentEvents:    []map[string]any{},
+			Tracked:         map[string]any{},
+		}
+	}
+	for i := len(view.RecentEvents) - 1; i >= 0; i-- {
+		ev := view.RecentEvents[i]
+		if ev.Kind != orchestrator.RuntimeEventCompleted && ev.Kind != orchestrator.RuntimeEventFailed {
+			continue
+		}
+		if !matchesIssueLookup(ev.IssueID, ev.Identifier, normalizedWant) {
+			continue
+		}
+		payload := base(ev.IssueID, ev.Identifier, string(ev.Kind))
+		payload.RecentEvents = []map[string]any{apiRuntimeEventFromView(ev)}
+		if ev.Kind == orchestrator.RuntimeEventFailed {
+			payload.LastError = stringPointerIfNotEmpty(ev.Message)
+		}
+		return payload, true
+	}
+	for _, issueID := range view.Completed {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "completed"), true
+		}
+	}
+	for _, issueID := range view.Failed {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "failed"), true
+		}
+	}
+	return apiIssueResponse{}, false
+}
+
+func apiRuntimeEventFromView(ev orchestrator.RuntimeEvent) map[string]any {
+	out := map[string]any{
+		"kind":       ev.Kind,
+		"issue_id":   ev.IssueID,
+		"identifier": ev.Identifier,
+		"message":    ev.Message,
+		"at":         ev.At,
+	}
+	if ev.Branch != "" {
+		out["branch"] = ev.Branch
+	}
+	if ev.PRURL != "" {
+		out["pr_url"] = ev.PRURL
+	}
+	return out
 }
 
 // restartCountFromRetryAttempt mirrors the Symphony Elixir reference

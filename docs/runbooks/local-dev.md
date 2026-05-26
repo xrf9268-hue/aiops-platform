@@ -186,7 +186,16 @@ it as a bearer token when polling the overlay.
 
 ## 3. Smoke test
 
-The fastest way to verify local configuration is to print the
+For a first install, run the operator preflight before starting a worker:
+
+```bash
+go run ./cmd/worker --doctor --mode=mock "$AIOPS_WORKFLOW_PATH"
+```
+
+Use `--mode=real` only when the selected workflow should validate live Linear
+auth and a real Codex app-server setup.
+
+The fastest way to inspect the effective local configuration is to print the
 effective worker config. `--print-config <workdir>` resolves
 `<workdir>/WORKFLOW.md` directly and does **not** consult
 `AIOPS_WORKFLOW_PATH`, so pass the directory that holds the workflow

@@ -187,7 +187,14 @@ func validateAppServerWorkdir(workdir string) error {
 // codex — see codex_app_server.go's session_started emit for the resulting
 // PID-emission guard.
 func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*exec.Cmd, bool, error) {
-	command := strings.TrimSpace(in.Workflow.Config.Codex.Command)
+	return NewCodexAppServerCommand(ctx, in.Workflow.Config, env)
+}
+
+// NewCodexAppServerCommand returns the configured Codex app-server command plus
+// whether it directly execs the codex binary. Callers that preflight or run the
+// app-server must share this path so codex.command overrides behave identically.
+func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []string) (*exec.Cmd, bool, error) {
+	command := strings.TrimSpace(cfg.Codex.Command)
 	if command == "" || command == "codex exec" {
 		command = "codex app-server"
 	}

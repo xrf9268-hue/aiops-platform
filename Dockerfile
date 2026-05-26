@@ -9,8 +9,8 @@ RUN go mod download && go mod verify
 COPY . .
 RUN go build -o /out/worker ./cmd/worker
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client wget && rm -rf /var/lib/apt/lists/*
+FROM debian:bookworm-slim AS worker
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client ripgrep wget && rm -rf /var/lib/apt/lists/*
 # Run as a dedicated unprivileged user. The worker prepares git workspaces and
 # runs agent/hook/verify/git commands, so root-in-container would widen the
 # blast radius of any compromised runner or hostile repository content (#365).
@@ -46,6 +46,8 @@ RUN set -eux; \
     chmod 700 /home/aiops/.ssh
 ENV HOME=/home/aiops
 COPY --from=build /out/worker /usr/local/bin/worker
+COPY deploy/aiops-secret-entrypoint.sh /usr/local/bin/aiops-secret-entrypoint
+RUN chmod 0755 /usr/local/bin/aiops-secret-entrypoint
 WORKDIR /app
 USER ${AIOPS_UID}:${AIOPS_GID}
 # Default to the worker so `docker run <image>` is useful out of the box (#370).
@@ -53,3 +55,28 @@ USER ${AIOPS_UID}:${AIOPS_GID}
 # duplication in Compose.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez" >/dev/null 2>&1 || exit 1
 CMD ["worker"]
+
+FROM worker AS codex-worker
+ARG AIOPS_UID=1000
+ARG AIOPS_GID=1000
+USER root
+ARG CODEX_CLI_VERSION=0.133.0
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) codex_arch="x86_64-unknown-linux-musl"; codex_sha="cad5f38b92247186a532157111ea43edca77d3427eb6127e603b7887db484473" ;; \
+      arm64) codex_arch="aarch64-unknown-linux-musl"; codex_sha="7a77d416f9ce16f18e09fdc57622a15aab6ad131c34e078ab9d55a13bb3d9b05" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}; supported: amd64, arm64" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/openai/codex/releases/download/rust-v${CODEX_CLI_VERSION}/codex-package-${codex_arch}.tar.gz"; \
+    wget -qO /tmp/codex.tar.gz "${url}"; \
+    echo "${codex_sha}  /tmp/codex.tar.gz" | sha256sum -c -; \
+    mkdir -p /opt/codex; \
+    tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
+    ln -sf /opt/codex/bin/codex /usr/local/bin/codex; \
+    rm -f /tmp/codex.tar.gz; \
+    codex --version
+USER ${AIOPS_UID}:${AIOPS_GID}
+
+# Keep `docker build .` on the baseline worker image; codex-worker is opt-in.
+FROM worker AS default

@@ -17,6 +17,7 @@ dist/
 !cmd/worker/dashboard/dist/
 !cmd/worker/dashboard/dist/**
 logs/
+docs/validation/smoke/
 tmp/
 *.log
 *.out

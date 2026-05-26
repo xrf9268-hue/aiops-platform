@@ -406,6 +406,10 @@ release flow, and local pre-push checks.
 For production-style Docker runs that execute real `codex app-server` inside
 the worker image, see the
 [Codex app-server Docker runbook](docs/runbooks/codex-app-server-docker.md).
+For a clean first install, start with the
+[Docker + Linear + Codex first-run runbook](docs/runbooks/first-run-docker-linear-codex.md);
+it covers the support matrix, Docker secret mounts, `worker --doctor`, and the
+todo smoke script.
 
 ## AI agent rules
 

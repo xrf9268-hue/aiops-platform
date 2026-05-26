@@ -1,0 +1,44 @@
+# Opt-in Codex + secret-backed first-run overlay.
+#
+# Usage:
+#
+#   docker compose --env-file .env \
+#     -f deploy/docker-compose.yml \
+#     -f deploy/docker-compose.codex.yml \
+#     up --build worker
+#
+# The overlay builds the `codex-worker` Dockerfile target and feeds sensitive
+# values through Docker-supported secret files where possible. Codex auth/config
+# are mounted as a read-only host directory because Codex expects a CODEX_HOME
+# directory rather than one secret file.
+services:
+  worker:
+    build:
+      target: codex-worker
+    environment:
+      AIOPS_WORKFLOW_PATH: /app/WORKFLOW.md
+      CODEX_HOME: /home/aiops/.codex
+      # Clear plain-env tokens inherited from the base local-dev compose file;
+      # this production-style overlay feeds them through service secrets below.
+      AIOPS_STATE_API_TOKEN: ""
+      GITEA_TOKEN: ""
+      LINEAR_API_KEY: ""
+    entrypoint:
+      - /usr/local/bin/aiops-secret-entrypoint
+    command:
+      - worker
+    volumes:
+      - ${AIOPS_WORKFLOW_PATH:?set AIOPS_WORKFLOW_PATH to a workflow file}:/app/WORKFLOW.md:ro
+      - ${AIOPS_CODEX_HOME_PATH:?set AIOPS_CODEX_HOME_PATH to a Codex home directory}:/home/aiops/.codex:ro
+    secrets:
+      - linear_api_key
+      - gitea_token
+      - aiops_state_api_token
+
+secrets:
+  linear_api_key:
+    file: ${LINEAR_API_KEY_FILE:?set LINEAR_API_KEY_FILE to a file containing the Linear API key}
+  gitea_token:
+    file: ${GITEA_TOKEN_FILE:-/dev/null}
+  aiops_state_api_token:
+    file: ${AIOPS_STATE_API_TOKEN_FILE:?set AIOPS_STATE_API_TOKEN_FILE to a file containing the state API token}

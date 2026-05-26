@@ -51,12 +51,48 @@ func TestDockerfileAppliesRuntimeSecurityUpdatesBeforeInstallingTools(t *testing
 	if upgrade < 0 {
 		t.Fatal("runtime stage must apply Debian security updates before installing tools")
 	}
-	install := strings.Index(df[runtimeStage:], "apt-get install -y --no-install-recommends ca-certificates git openssh-client wget")
+	install := strings.Index(df[runtimeStage:], "apt-get install -y --no-install-recommends ca-certificates git openssh-client ripgrep wget")
 	if install < 0 {
 		t.Fatal("runtime stage missing expected tool installation command")
 	}
 	if upgrade > install {
 		t.Fatalf("runtime apt-get upgrade must precede tool installation: upgrade=%d install=%d", upgrade, install)
+	}
+}
+
+func TestDockerfileDefinesCodexWorkerTarget(t *testing.T) {
+	df := dockerfileContents(t)
+
+	for _, want := range []string{
+		"FROM worker AS codex-worker",
+		"ARG CODEX_CLI_VERSION=0.133.0",
+		"x86_64-unknown-linux-musl",
+		"aarch64-unknown-linux-musl",
+		"sha256sum -c -",
+		"codex --version",
+	} {
+		if !strings.Contains(df, want) {
+			t.Fatalf("Dockerfile codex-worker target missing %q", want)
+		}
+	}
+}
+
+func TestDockerfileKeepsWorkerAsDefaultTarget(t *testing.T) {
+	df := dockerfileContents(t)
+
+	codexTarget := strings.Index(df, "FROM worker AS codex-worker")
+	if codexTarget < 0 {
+		t.Fatal("Dockerfile missing codex-worker target")
+	}
+	defaultTarget := strings.LastIndex(df, "FROM worker AS default")
+	if defaultTarget < 0 {
+		t.Fatal("Dockerfile must end with a worker default target so `docker build .` does not install Codex")
+	}
+	if defaultTarget < codexTarget {
+		t.Fatalf("Dockerfile default target must follow codex-worker: default=%d codex=%d", defaultTarget, codexTarget)
+	}
+	if strings.TrimSpace(df[defaultTarget:]) != "FROM worker AS default" {
+		t.Fatalf("Dockerfile final target must be the worker default alias; got trailing content %q", strings.TrimSpace(df[defaultTarget:]))
 	}
 }
 
