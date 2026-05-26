@@ -240,6 +240,8 @@ The CI gate is the authoritative checklist — match it locally before pushing:
 ```bash
 gofmt -l $(git ls-files '*.go')         # must be empty
 go mod tidy && git diff --exit-code -- go.mod go.sum
+go vet ./...
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
 go test -race -covermode=atomic ./...
 go build ./cmd/worker
 ```
@@ -302,10 +304,52 @@ failure per the "Earned rules" principle above.
    by:** PR #342 audit (LOW) noted the back-compat test asserted `last_codex_at`
    presence but not its absence after removal.
 
+7. **Function and file size budgets.** New code must keep single functions at
+   or below 80 lines and single files at or below 800 lines, excluding test
+   files and generated code. When porting from Elixir, split oversized upstream
+   modules on the Go side instead of preserving a monolith. The current
+   `golangci-lint` gate reports `funlen` and `gocognit` findings without
+   blocking while the baseline is burned down; do not add new violations.
+   **Earned by:** #410 found `RunTask` at 244 lines, `validateConfig` at 186
+   lines, and `actor.go` at 2138 lines; PR #342 showed that one concept rename
+   had to touch four files partly because large files hid the domain boundary.
+
+8. **Errors are wrapped and classified, not string-matched.** Wrap underlying
+   errors with `%w`, classify them with `errors.Is` / `errors.As`, and keep
+   sentinel errors in the package that owns the failure mode. Error strings
+   are lowercase unless they begin with a proper noun or acronym. Never compare
+   error text with `strings.Contains`. **Earned by:** mixed `%w` / `%s` /
+   `errors.New` styles made review-time reasoning about `errors.Is` /
+   `errors.As` unreliable.
+
+9. **Test failures must print the input, actual value, and expected value.**
+   Prefer the Go review-comment shape `Foo(%q) = %v; want %v` over
+   assertion-only text like `"expected X"`. A regression test whose failure
+   message omits the actual state slows down every future investigation.
+   **Earned by:** repository tests using `t.Errorf("expected ...")` without the
+   actual value left reviewers guessing which state transition regressed.
+
 ## Conventions
 
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing. A PostToolUse hook (`.claude/scripts/format-go.sh`) auto-runs `gofmt -w` on `.go` files edited via the Edit/Write tools; files changed through Bash (e.g. `sed`, heredocs) are not covered, so always verify with `gofmt -l` before pushing — CI's `gofmt -l` gate is the backstop.
 - **`go mod tidy` must leave `go.mod`/`go.sum` clean**: don't add deps you don't use.
+- **All external I/O is timeout-bounded**: every function that talks to a
+  tracker, repository service, agent runner, subprocess, or network API must
+  enforce a per-request deadline with `context.WithTimeout`, even if the
+  underlying client claims to honor `ctx`. This applies to new code, not only
+  Elixir ports. **Earned by:** #287 retry-fire fetch had no timeout on an
+  Elixir-port path, and #405 found the same failure class in the non-port Gitea
+  tracker client.
+- **Goroutine lifetimes are explicit**: every `go func` / `time.AfterFunc`
+  outside of `package main` boot code must use `safeGo` or install
+  `defer recoverPanic("site")`, and the code must make the exit condition
+  obvious. `package main` boot goroutines that intentionally share process
+  lifetime are exempt, but the call site must say so. Direct async launch
+  without panic recovery or a clear stop condition is a stuck-state bug, not
+  style drift. **Earned by:** PR #304 retrofitted panic recovery after one path
+  could crash the worker; #413's audit found most production goroutine launch
+  sites still lacked that guard, so this needs a machine-checkable follow-up
+  rather than reviewer memory.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.

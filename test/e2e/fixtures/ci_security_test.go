@@ -35,6 +35,36 @@ func TestCIRunsSecurityScanning(t *testing.T) {
 	}
 }
 
+// TestCIRunsReportOnlyGoLint guards #413's rollout model: newly earned Go
+// engineering rules need a machine-visible golangci-lint gate, but the initial
+// baseline must be report-only so existing violations can be burned down in
+// follow-up PRs.
+func TestCIRunsReportOnlyGoLint(t *testing.T) {
+	ci := readCIWorkflow(t)
+	const stepName = "      - name: Run golangci-lint (report only)"
+	stepStart := strings.Index(ci, stepName)
+	if stepStart < 0 {
+		t.Fatalf("ci.yml is missing %q", stepName)
+	}
+	step := ci[stepStart:]
+	if next := strings.Index(step[len(stepName):], "\n      - name:"); next >= 0 {
+		step = step[:len(stepName)+next]
+	}
+	for _, want := range []string{
+		"golangci/golangci-lint-action@",
+		"version: v2.",
+		"--config=.golangci.yml",
+		"--issues-exit-code=0",
+	} {
+		if !strings.Contains(step, want) {
+			t.Errorf("golangci-lint step is missing report-only marker %q", want)
+		}
+	}
+	if strings.Contains(step, "continue-on-error") {
+		t.Errorf("golangci-lint step must not mask configuration or action failures with continue-on-error")
+	}
+}
+
 // TestCIActionsArePinnedToSHA guards supply-chain hardening (#372): every
 // third-party action `uses:` must reference a 40-hex commit SHA, not a movable
 // tag like @v6. A reverted pin re-introduces the mutable-tag risk and fails.

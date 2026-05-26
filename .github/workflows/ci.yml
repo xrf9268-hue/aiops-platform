@@ -97,6 +97,12 @@ jobs:
             exit 1
           fi
 
+      - name: Run golangci-lint (report only)
+        uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
+        with:
+          version: v2.12.2
+          args: --config=.golangci.yml --issues-exit-code=0
+
       - name: Verify Dockerfile Go version matches go.mod
         shell: bash
         run: |

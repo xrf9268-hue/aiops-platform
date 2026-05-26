@@ -25,6 +25,7 @@ Checks:
 - setup Go from `go.mod`
 - Go module download
 - `gofmt` check
+- report-only `golangci-lint` baseline for earned Go engineering rules
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
 - build `worker`
@@ -43,6 +44,13 @@ gate fails on a package inherited from the Debian base image, first rebuild with
 only if the rebuilt image still contains a fixed finding. Do not add a
 `.trivyignore` entry for a vulnerability that the package manager can already
 fix.
+
+The `golangci-lint` step is intentionally report-only for lint findings during
+the initial baseline. It runs with `--issues-exit-code=0` so CI surfaces
+`errorlint`, `contextcheck`, `funlen`, `gocognit`, and related findings without
+blocking existing debt. Configuration, action, or runtime failures still fail
+the workflow. New PRs should avoid adding reported violations; follow-up cleanup
+PRs can later tighten the gate once the baseline is below the agreed threshold.
 
 ### Release
 
@@ -80,6 +88,7 @@ Run:
 ```bash
 go mod tidy
 gofmt -w cmd internal
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
 go test ./...
 docker build --pull --tag aiops-platform:local .
 ```
