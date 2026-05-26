@@ -177,7 +177,9 @@ Under Docker Compose the default loopback bind is unreachable from the host
 opt-in overlay to reach the dashboard from the host:
 
 ```bash
-export AIOPS_STATE_API_TOKEN=$(openssl rand -hex 24)
+mkdir -p .aiops/secrets
+openssl rand -hex 24 > .aiops/secrets/state_api_token
+AIOPS_STATE_API_TOKEN_FILE=$PWD/.aiops/secrets/state_api_token \
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.yml up worker
 ```
 
@@ -185,7 +187,7 @@ The overlay sets `AIOPS_SERVER_HOST=0.0.0.0` (bind all interfaces *inside* the
 container) but publishes only to host loopback (`127.0.0.1:4000:4000`), so the
 host trust boundary stays the loopback. Docker port publishing reaches the
 container from a bridge peer rather than container loopback, so the overlay
-requires `AIOPS_STATE_API_TOKEN`; browsers will receive a Basic-auth challenge
+requires `AIOPS_STATE_API_TOKEN_FILE`; browsers will receive a Basic-auth challenge
 and should use username `aiops` plus that token. Open the plain dashboard URL
 (`http://127.0.0.1:4000/`) and let the browser prompt for credentials; avoid
 sharing or bookmarking URLs with embedded credentials. The dashboard strips URL

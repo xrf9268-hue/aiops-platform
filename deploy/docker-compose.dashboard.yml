@@ -11,7 +11,7 @@
 # published port reaches it, while the port mapping publishes ONLY to host
 # loopback (127.0.0.1). The effective host trust boundary therefore stays the
 # loopback (SPEC §15.3). Docker forwards from a bridge peer rather than
-# container loopback, so the overlay also requires AIOPS_STATE_API_TOKEN; use
+# container loopback, so the overlay also requires a state API token secret; use
 # HTTP Basic user `aiops` and that token as the browser password.
 #
 # Because a 0.0.0.0 bind is reachable by any sibling container on the same
@@ -23,13 +23,16 @@
 # unless they should be able to use the token-protected status surface.
 services:
   worker:
+    entrypoint:
+      - /usr/local/bin/aiops-secret-entrypoint
     environment:
       AIOPS_SERVER_HOST: 0.0.0.0
-      AIOPS_STATE_API_TOKEN: ${AIOPS_STATE_API_TOKEN:?set AIOPS_STATE_API_TOKEN for the dashboard overlay}
     ports:
       - "127.0.0.1:4000:4000"
     networks:
       - dashboard
+    secrets:
+      - aiops_state_api_token
 
 # No explicit `name:` — Compose scopes the network to the project
 # (<project>_dashboard). A fixed global name would be shared across separate
@@ -37,3 +40,7 @@ services:
 # worker:4000, which would defeat the sibling isolation above.
 networks:
   dashboard: {}
+
+secrets:
+  aiops_state_api_token:
+    file: ${AIOPS_STATE_API_TOKEN_FILE:?set AIOPS_STATE_API_TOKEN_FILE to a file containing the state API token}

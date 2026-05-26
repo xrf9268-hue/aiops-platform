@@ -54,8 +54,27 @@ func TestDashboardOverlayBindsContainerWide(t *testing.T) {
 	if got := env["AIOPS_SERVER_HOST"]; got != "0.0.0.0" {
 		t.Fatalf("AIOPS_SERVER_HOST = %v, want 0.0.0.0", got)
 	}
-	if got := env["AIOPS_STATE_API_TOKEN"]; got != "${AIOPS_STATE_API_TOKEN:?set AIOPS_STATE_API_TOKEN for the dashboard overlay}" {
-		t.Fatalf("AIOPS_STATE_API_TOKEN = %v, want required Compose interpolation", got)
+	if _, ok := env["AIOPS_STATE_API_TOKEN"]; ok {
+		t.Fatalf("AIOPS_STATE_API_TOKEN is set in environment; want secret-file backed token")
+	}
+	entrypoint, ok := worker["entrypoint"].([]any)
+	if !ok || len(entrypoint) != 1 || entrypoint[0] != "/usr/local/bin/aiops-secret-entrypoint" {
+		t.Fatalf("worker.entrypoint = %#v, want aiops-secret-entrypoint", worker["entrypoint"])
+	}
+	secrets, ok := worker["secrets"].([]any)
+	if !ok || !sliceContainsString(secrets, "aiops_state_api_token") {
+		t.Fatalf("worker.secrets = %#v, want aiops_state_api_token", worker["secrets"])
+	}
+	declared, ok := readDashboardOverlay(t)["secrets"].(map[string]any)
+	if !ok {
+		t.Fatal("dashboard overlay missing top-level secrets")
+	}
+	secret, ok := declared["aiops_state_api_token"].(map[string]any)
+	if !ok {
+		t.Fatalf("aiops_state_api_token secret = %#v, want map", declared["aiops_state_api_token"])
+	}
+	if got := secret["file"]; got != "${AIOPS_STATE_API_TOKEN_FILE:?set AIOPS_STATE_API_TOKEN_FILE to a file containing the state API token}" {
+		t.Fatalf("aiops_state_api_token file = %v, want required file interpolation", got)
 	}
 }
 

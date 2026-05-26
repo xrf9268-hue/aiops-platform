@@ -139,6 +139,31 @@ func TestFirstRunRunbookWritesAbsoluteComposePaths(t *testing.T) {
 	}
 }
 
+func TestFirstRunRunbookIncludesDashboardExposureSmoke(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "runbooks", "first-run-docker-linear-codex.md"))
+	if err != nil {
+		t.Fatalf("read first-run runbook: %v", err)
+	}
+	text := string(body)
+	for _, want := range []string{
+		"AIOPS_STATE_API_TOKEN_FILE=$PWD/.aiops/secrets/state_api_token",
+		"-f deploy/docker-compose.dashboard.yml",
+		"curl --fail --silent --show-error --config \"$curl_cfg\"",
+		"http://127.0.0.1:4000/api/v1/state >/tmp/aiops-state.json",
+		"timeout 15s env AIOPS_STATE_API_TOKEN=\"$(cat .aiops/secrets/state_api_token)\"",
+		"go run ./cmd/tui --url http://127.0.0.1:4000/ --raw >/tmp/aiops-tui.txt",
+		"test \"$?\" -eq 124",
+		"TCP-LISTEN:4000,bind=127.0.0.1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("first-run runbook missing dashboard exposure smoke text %q", want)
+		}
+	}
+	if strings.Contains(text, "http://aiops:") {
+		t.Fatalf("first-run runbook embeds dashboard credentials in a URL")
+	}
+}
+
 func sliceContainsString(values []any, want string) bool {
 	for _, value := range values {
 		if strings.Contains(fmt.Sprint(value), want) {
