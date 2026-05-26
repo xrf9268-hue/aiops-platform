@@ -43,9 +43,40 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cmd/worker/dashboard/package-lock.json
 
       - name: Run GitHub script tests
         run: node --test .github/scripts/capture-unresolved-reviews.test.mjs
+
+      - name: Install dashboard dependencies
+        working-directory: cmd/worker/dashboard
+        run: npm ci
+
+      - name: Test dashboard
+        working-directory: cmd/worker/dashboard
+        run: npm test
+
+      - name: Build dashboard
+        working-directory: cmd/worker/dashboard
+        run: npm run build
+
+      - name: Verify dashboard dist is committed
+        run: |
+          if ! git diff --exit-code -- cmd/worker/dashboard/dist; then
+            echo "dashboard dist/ is out of sync with src/. Run 'npm run build' and commit dist."
+            exit 1
+          fi
+          visible_untracked="$(git ls-files --others --exclude-standard -- cmd/worker/dashboard/dist)"
+          ignored_untracked="$(git ls-files --others --ignored --exclude-standard -- cmd/worker/dashboard/dist)"
+          untracked="$(printf "%s\n%s\n" "$visible_untracked" "$ignored_untracked" | sed '/^$/d')"
+          if [ -n "$untracked" ]; then
+            echo "dashboard dist/ contains untracked generated files:"
+            echo "$untracked"
+            echo "Run 'npm run build' and commit the generated dist files."
+            exit 1
+          fi
 
       - name: Download dependencies
         run: go mod download
