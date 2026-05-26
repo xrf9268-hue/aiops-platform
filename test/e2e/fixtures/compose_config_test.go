@@ -83,6 +83,12 @@ func TestCodexComposeOverlayUsesSecrets(t *testing.T) {
 	if !sliceContainsString(volumes, "/app/WORKFLOW.md:ro") {
 		t.Fatalf("codex overlay volumes = %#v, want mounted workflow file", volumes)
 	}
+	if !sliceContainsString(volumes, "/home/aiops/.codex") {
+		t.Fatalf("codex overlay volumes = %#v, want CODEX_HOME mounted", volumes)
+	}
+	if sliceContainsString(volumes, "/home/aiops/.codex:ro") {
+		t.Fatalf("codex overlay volumes = %#v, CODEX_HOME must be writable for Codex CLI 0.133", volumes)
+	}
 	declared, ok := compose["secrets"].(map[string]any)
 	if !ok {
 		t.Fatal("codex overlay missing top-level secrets")

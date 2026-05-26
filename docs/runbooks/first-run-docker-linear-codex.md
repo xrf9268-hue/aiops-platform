@@ -10,7 +10,7 @@ aiops-platform with Docker, Linear, and `codex app-server`.
 | macOS host development | Run `go run ./cmd/worker --doctor --mode=mock` and `agent.default: mock` from source. | Use host Codex CLI for local `codex` / `codex-app-server` workflows after `codex --login`. | Host binary mounts into Linux containers are not supported; install Codex in the image. |
 | Linux amd64 Docker worker | Build `Dockerfile` target `codex-worker`; Codex CLI `0.133.0` is installed from a pinned release artifact and checksum. | Use base `worker` target for mock-only validation. | Online installer is not the promoted Docker path until Linux ARM64 checksum behavior is reliable. |
 | Linux arm64 Docker worker | Build `codex-worker`; uses the pinned `aarch64-unknown-linux-musl` release artifact and checksum. | Same as above. | `curl https://chatgpt.com/codex/install.sh \| sh` failed on 2026-05-26 because the installer could not find the ARM64 package checksum. |
-| Codex auth | Mount a read-only `CODEX_HOME` directory into `/home/aiops/.codex` for smoke validation; verify with `worker --doctor --mode=real`. | Local host development can use the normal host `~/.codex`; long-lived ChatGPT-login deployments should use a restricted writable Codex home so token refresh can persist. | Passing raw bearer tokens on command lines or in logs is not supported. |
+| Codex auth | Mount a restricted writable `CODEX_HOME` directory into `/home/aiops/.codex` for Codex CLI 0.133; verify with `worker --doctor --mode=real`. | Local host development can use the normal host `~/.codex`; read-only copies are only suitable for archival inspection or future no-write smoke modes. | Passing raw bearer tokens on command lines or in logs is not supported. |
 | Linear auth | Personal API key in a Docker Compose secret file. Linear expects `Authorization: <API_KEY>` for personal keys. | Local development may use `LINEAR_API_KEY` in `.env`; do not use this for production-style examples. | OAuth app-actor is documented by Linear and is the intended future service-account path, but aiops-platform still accepts a single `tracker.api_key` string today. |
 | Sandbox | Mock mode works under the base hardened container. Real Codex Docker validation uses a Docker-isolated profile and explicit `codex.thread_sandbox: danger-full-access` only inside that container boundary. | Enable kernel/user namespace support and keep Codex `workspace-write` if your container profile permits it. | Do not copy `danger-full-access` to a shared host run. |
 
@@ -78,8 +78,10 @@ EOF
 ```
 
 The Codex overlay reads Linear, optional Gitea, and dashboard tokens from Docker
-secret files. The Codex home is a read-only bind because Codex expects a
-directory.
+secret files. The Codex home is a writable bind because Codex CLI 0.133 writes
+while loading configuration and may persist refreshed auth state. Keep this
+directory restricted to the worker UID/GID and do not point it at a shared host
+home unless that is your intended trust boundary.
 
 ## 3. Run preflight
 

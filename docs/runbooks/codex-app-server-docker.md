@@ -98,7 +98,7 @@ cp ~/.codex/auth.json /tmp/aiops-codex-home/.codex/auth.json
 cp ~/.codex/config.toml /tmp/aiops-codex-home/.codex/config.toml
 ```
 
-Mount that directory read-only or from a secret store at `/home/aiops/.codex`
+For Codex CLI 0.133, mount that directory writable at `/home/aiops/.codex`
 for the default non-root worker image, and set:
 
 ```text
@@ -117,6 +117,13 @@ should remain running on stdio until the worker speaks JSON-RPC to it.
 `worker --doctor --mode=real` performs that stdio probe by keeping stdin open,
 sending `initialize`, and waiting for a JSON-RPC response. A probe that only
 starts the process and closes stdin is not a valid app-server check.
+
+The supported Compose overlay uses a writable bind for `CODEX_HOME` because
+Codex 0.133 writes while loading configuration and may refresh auth state.
+Use a restricted directory owned by the worker UID/GID. A read-only copy is
+only suitable for archival inspection or a future Codex version that documents
+a no-write startup mode; it is not a valid `worker --doctor --mode=real`
+preflight mount for 0.133.
 
 ## Sandbox note
 
