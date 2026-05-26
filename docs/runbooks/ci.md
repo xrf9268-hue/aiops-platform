@@ -115,8 +115,10 @@ Dependabot is configured for:
 
 - Go modules
 - GitHub Actions
+- dashboard npm dependencies in `cmd/worker/dashboard`
 
-It runs weekly and groups Go dependency updates to reduce pull request noise.
+It runs weekly and groups Go and dashboard npm dependency updates to reduce
+pull request noise.
 
 ## Security posture
 

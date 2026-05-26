@@ -32,3 +32,21 @@ updates:
       - github-actions
     commit-message:
       prefix: deps
+
+  - package-ecosystem: npm
+    directory: "/cmd/worker/dashboard"
+    schedule:
+      interval: weekly
+      day: friday
+      time: "09:30"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - area:observability
+    commit-message:
+      prefix: deps
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
