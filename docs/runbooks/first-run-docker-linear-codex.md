@@ -116,7 +116,77 @@ host Docker CLI check and validates live Linear auth/project visibility, Codex
 CLI version, Codex login status, and a minimal `codex app-server` JSON-RPC
 probe.
 
-## 4. Run a todo smoke
+## 4. Start the long-lived worker
+
+Start production-style workers with the dashboard overlay from the first
+long-lived `up`. The base Compose service binds the worker HTTP listener to
+container loopback, and Docker cannot add a new published port to an already
+running container without recreating it. The overlay binds all interfaces inside
+the worker container, publishes only to host loopback, and keeps the state API
+token loaded from the secret file configured above.
+
+```bash
+docker compose --env-file .env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.codex.yml \
+  -f deploy/docker-compose.dashboard.yml \
+  up -d --build worker
+```
+
+After the worker is healthy, smoke-check host reachability without printing the
+state API token:
+
+```bash
+docker compose --env-file .env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.codex.yml \
+  -f deploy/docker-compose.dashboard.yml \
+  ps worker
+
+curl_cfg="$(mktemp)"
+chmod 600 "$curl_cfg"
+printf 'header = "Authorization: Bearer %s"\n' \
+  "$(cat .aiops/secrets/state_api_token)" > "$curl_cfg"
+curl --fail --silent --show-error --config "$curl_cfg" \
+  http://127.0.0.1:4000/ >/tmp/aiops-dashboard.html
+curl --fail --silent --show-error --config "$curl_cfg" \
+  http://127.0.0.1:4000/api/v1/state >/tmp/aiops-state.json
+rm -f "$curl_cfg"
+
+timeout 15s env AIOPS_STATE_API_TOKEN="$(cat .aiops/secrets/state_api_token)" \
+  go run ./cmd/tui --url http://127.0.0.1:4000/ --raw >/tmp/aiops-tui.txt \
+  || test "$?" -eq 124
+```
+
+`cmd/tui` keeps polling until interrupted; the `timeout` command is expected to
+stop it after a frame has been written.
+
+Open `http://127.0.0.1:4000/` in a browser and let the Basic-auth prompt ask
+for credentials. Use username `aiops` and the contents of
+`.aiops/secrets/state_api_token` as the password. Do not put credentials in the
+URL.
+
+If a worker is already running without the dashboard overlay and cannot be
+recreated yet, use a host-local tunnel as a low-downtime bridge until the next
+planned restart. This keeps the host listener on loopback and preserves the
+worker's existing state API authentication; it requires `socat` on the host and
+`bash` in the worker image.
+
+```bash
+worker_container="$(docker compose --env-file .env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.codex.yml \
+  ps -q worker)"
+
+socat TCP-LISTEN:4000,bind=127.0.0.1,reuseaddr,fork \
+  EXEC:"docker exec -i $worker_container bash -lc 'exec 3<>/dev/tcp/127.0.0.1/4000; cat <&0 >&3 & cat <&3 >&1; wait'",nofork
+```
+
+Run the same `curl` and `cmd/tui --raw` smoke checks through the tunnel. Treat
+the tunnel as temporary operational access; keep the dashboard overlay in the
+normal long-lived Compose command so future restarts do not need it.
+
+## 5. Run a todo smoke
 
 Prepare or select one disposable Linear issue in an active state. For the first
 pass, keep `agent.default: mock`:
