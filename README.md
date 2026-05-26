@@ -186,10 +186,14 @@ container) but publishes only to host loopback (`127.0.0.1:4000:4000`), so the
 host trust boundary stays the loopback. Docker port publishing reaches the
 container from a bridge peer rather than container loopback, so the overlay
 requires `AIOPS_STATE_API_TOKEN`; browsers will receive a Basic-auth challenge
-and should use username `aiops` plus that token. The overlay also moves the
-worker onto a dedicated `dashboard` bridge network. Do **not** publish on a
-routable host interface or attach untrusted containers to the dashboard network
-unless they should be able to use the token-protected status surface.
+and should use username `aiops` plus that token. Open the plain dashboard URL
+(`http://127.0.0.1:4000/`) and let the browser prompt for credentials; avoid
+sharing or bookmarking URLs with embedded credentials. The dashboard strips URL
+credentials from its own state API fetches, but the plain challenge flow avoids
+leaking the token through browser history or screenshots. The overlay also
+moves the worker onto a dedicated `dashboard` bridge network. Do **not** publish
+on a routable host interface or attach untrusted containers to the dashboard
+network unless they should be able to use the token-protected status surface.
 
 **Treat the status surface as live agent text even though it binds to loopback.**
 Per SPEC §15.3, each running row's `last_message` is a passthrough of the most
@@ -388,8 +392,8 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 - **`go`** — Node-based GitHub script tests
   (`capture-unresolved-reviews.test.mjs`), `gofmt` check on all tracked Go files,
   a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness,
-  `go test -race -covermode=atomic ./...`, a `go build` of `worker`, and an
-  upload of that Linux binary as a build artifact.
+  `go test -race -covermode=atomic ./...`, `go build` for `worker` and `tui`,
+  and an upload of those Linux binaries as build artifacts.
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
   against a real `gitea` container.
 - **`docker`** — a Docker image build of the repository `Dockerfile` (depends on
@@ -398,6 +402,10 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
 release flow, and local pre-push checks.
+
+For production-style Docker runs that execute real `codex app-server` inside
+the worker image, see the
+[Codex app-server Docker runbook](docs/runbooks/codex-app-server-docker.md).
 
 ## AI agent rules
 

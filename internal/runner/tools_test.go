@@ -86,8 +86,8 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	}
 
 	auth, body, _ := server.recorded()
-	if auth != "Bearer "+token {
-		t.Fatalf("Authorization = %q, want Bearer token matching tracker client auth", auth)
+	if auth != token {
+		t.Fatalf("Authorization = %q, want raw Linear API key matching tracker client auth", auth)
 	}
 	if strings.Contains(body, token) {
 		t.Fatalf("GraphQL request body leaked token to agent-controlled payload: %s", body)
@@ -101,6 +101,12 @@ func TestDynamicToolsExposeLinearGraphQLWithTokenIsolation(t *testing.T) {
 	}
 	if payload.Query == "" || payload.Variables["id"] != "issue-1" {
 		t.Fatalf("unexpected GraphQL payload: %#v", payload)
+	}
+}
+
+func TestLinearAuthorizationHeaderUsesLinearAPIKeyFormat(t *testing.T) {
+	if got := linearAuthorizationHeader("  lin_api_secret  "); got != "lin_api_secret" {
+		t.Fatalf("linearAuthorizationHeader(raw key) = %q, want raw trimmed key", got)
 	}
 }
 

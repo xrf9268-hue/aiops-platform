@@ -14,16 +14,16 @@ workspaces/
 
 # Build outputs and runtime artifacts
 dist/
+!cmd/worker/dashboard/dist/
+!cmd/worker/dashboard/dist/**
 logs/
 tmp/
 *.log
 *.out
 *.pid
 *.tmp
-# Go binaries built at repo root (e.g. `go build ./cmd/worker/`)
+# Go binaries built at repo root (for example `go build ./cmd/worker ./cmd/tui`)
 /worker
-/linear-poller
-/gitea-poller
 /tui
 /tui.exe
 

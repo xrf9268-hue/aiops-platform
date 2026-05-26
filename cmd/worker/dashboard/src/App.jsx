@@ -32,6 +32,12 @@ function jsonDetailsPath(row) {
   return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
 }
 
+export function stateAPIURL(locationLike = window.location) {
+  const origin = locationLike?.origin;
+  if (!origin || origin === 'null') return '/api/v1/state';
+  return new URL('/api/v1/state', origin).toString();
+}
+
 // compactSession mirrors the TUI's compact_session_id: long IDs render as 4…6.
 function compactSession(id) {
   if (!id) return 'n/a';
@@ -370,7 +376,7 @@ export default function App() {
     let cancelled = false;
     async function loadState() {
       try {
-        const response = await fetch('/api/v1/state', { headers: { Accept: 'application/json' } });
+        const response = await fetch(stateAPIURL(), { headers: { Accept: 'application/json' } });
         if (!response.ok) throw new Error(`GET /api/v1/state returned ${response.status}`);
         const payload = await response.json();
         if (!cancelled) {

@@ -28,7 +28,7 @@ Checks:
 - report-only `golangci-lint` baseline for earned Go engineering rules
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
-- build `worker`
+- build `worker` and `tui`
 - upload short-lived CI binaries
 - govulncheck
 - e2e Gitea mock loop
@@ -67,10 +67,10 @@ Triggers:
 
 Outputs:
 
-- Linux amd64
-- Linux arm64
-- macOS amd64
-- macOS arm64
+- Linux amd64 `worker` and `tui`
+- Linux arm64 `worker` and `tui`
+- macOS amd64 `worker` and `tui`
+- macOS arm64 `worker` and `tui`
 - CycloneDX SBOM attached to the release
 - GitHub artifact attestations for release artifacts
 
@@ -90,6 +90,7 @@ go mod tidy
 gofmt -w cmd internal
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
 go test ./...
+go build ./cmd/worker ./cmd/tui
 docker build --pull --tag aiops-platform:local .
 ```
 

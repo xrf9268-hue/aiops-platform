@@ -243,7 +243,7 @@ go mod tidy && git diff --exit-code -- go.mod go.sum
 go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
 go test -race -covermode=atomic ./...
-go build ./cmd/worker
+go build ./cmd/worker ./cmd/tui
 ```
 
 E2E (requires Docker, pulls `gitea/gitea:1.26.1-rootless`):
@@ -377,6 +377,7 @@ searched or reported as normal shadow sources.
 
 - `README.md` — user-facing quick start and current component overview
 - `docs/runbooks/local-dev.md` — local dev loop
+- `docs/runbooks/codex-app-server-docker.md` — production-style Docker notes for real `codex app-server`
 - `docs/runbooks/ci.md` — CI behavior, release flow, pre-push checks
 - `docs/runbooks/secret-scanning.md` — opt-in pre-push leak scan
 - `docs/runbooks/workspace-cache.md` — workspace lifecycle and cleanup

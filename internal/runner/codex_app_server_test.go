@@ -868,8 +868,8 @@ for line in sys.stdin:
 	if requests != 1 {
 		t.Fatalf("Linear GraphQL requests = %d, want 1", requests)
 	}
-	if auth != "Bearer "+secret {
-		t.Fatalf("Authorization = %q, want orchestrator-held Linear token", auth)
+	if auth != secret {
+		t.Fatalf("Authorization = %q, want orchestrator-held Linear API key", auth)
 	}
 	if strings.Contains(body, secret) {
 		t.Fatalf("GraphQL request body leaked token to agent-controlled payload: %s", body)

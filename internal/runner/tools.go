@@ -425,11 +425,7 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 }
 
 func linearAuthorizationHeader(apiKey string) string {
-	apiKey = strings.TrimSpace(apiKey)
-	if strings.HasPrefix(strings.ToLower(apiKey), "bearer ") {
-		return apiKey
-	}
-	return "Bearer " + apiKey
+	return strings.TrimSpace(apiKey)
 }
 
 // parseLinearGraphQLOperation inspects the agent-supplied query string and

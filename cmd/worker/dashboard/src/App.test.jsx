@@ -1,6 +1,6 @@
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import App from './App';
+import App, { stateAPIURL } from './App';
 
 const sampleState = {
   generated_at: '2026-05-24T00:00:00.000Z',
@@ -38,6 +38,16 @@ beforeEach(() => {
 });
 
 describe('Operations Dashboard', () => {
+  it('builds state API requests without URL credentials', () => {
+    const url = stateAPIURL({
+      origin: 'http://127.0.0.1:4000',
+      href: 'http://aiops:state-token@127.0.0.1:4000/',
+    });
+
+    expect(url).toBe('http://127.0.0.1:4000/api/v1/state');
+    expect(url).not.toContain('aiops:state-token@');
+  });
+
   it('formats rate limits as cards instead of dumping raw JSON', async () => {
     const { container } = render(<App />);
     await screen.findByText('pro-tier');

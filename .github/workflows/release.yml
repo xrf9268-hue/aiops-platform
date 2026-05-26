@@ -89,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          binaries=(worker)
+          binaries=(worker tui)
           targets=(
             "linux amd64"
             "linux arm64"

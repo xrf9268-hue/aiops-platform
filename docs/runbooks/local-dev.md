@@ -167,8 +167,10 @@ docker compose -f deploy/docker-compose.yml \
 
 See README "Operator surfaces" for the trust-boundary caveats; the
 overlay requires auth on every request. The browser Basic-auth username is
-`aiops` and the password is `$AIOPS_STATE_API_TOKEN`; `cmd/tui` reads the same
-env var and sends it as a bearer token when polling the overlay.
+`aiops` and the password is `$AIOPS_STATE_API_TOKEN`. Open
+`http://127.0.0.1:4000/` and let the browser show its Basic-auth prompt instead
+of embedding credentials in the URL. `cmd/tui` reads the same env var and sends
+it as a bearer token when polling the overlay.
 
 > **Upgrading from a root-running worker image.** The worker now runs as the
 > unprivileged `aiops` user (#365). A `workspaces` named volume created by an
