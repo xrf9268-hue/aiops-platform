@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -336,15 +337,10 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 	cfg.Workflow = wf
+	readiness := &stateHTTPReadiness{}
 
 	trackerClient, err := trackerClientForWorkflow(wf.Config)
 	if err != nil {
-		return err
-	}
-	reconcileCfg := startupReconcileConfigForWorkflow(wf.Config, trackerClient)
-	reconcileCfg.WorkspaceRoot = worker.EffectiveWorkspaceRoot(cfg, wf.Config)
-	if err := worker.ReconcileStartup(ctx, reconcileCfg); err != nil {
-		worker.LogReconcileError(err)
 		return err
 	}
 
@@ -384,6 +380,21 @@ func run(ctx context.Context, args []string) error {
 	if err := orch.WaitStarted(ctx); err != nil {
 		return err
 	}
+	// Start the listener before startup reconciliation so /readyz can report
+	// 503 while reconciliation is still running; the poll loop below still
+	// starts only after ReconcileStartup succeeds.
+	go func() {
+		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh, Readiness: readiness.Status, PortOverride: portOverride, HostOverride: serverHostOverrideFromEnv()}); err != nil && ctx.Err() == nil {
+			log.Printf("state HTTP server loop exited: %v", err)
+		}
+	}()
+	reconcileCfg := startupReconcileConfigForWorkflow(wf.Config, trackerClient)
+	reconcileCfg.WorkspaceRoot = worker.EffectiveWorkspaceRoot(cfg, wf.Config)
+	if err := worker.ReconcileStartup(ctx, reconcileCfg); err != nil {
+		worker.LogReconcileError(err)
+		return err
+	}
+	readiness.MarkReady()
 	poller, err := orchestrator.NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (orchestrator.IssueStateLister, error) {
 		return trackerClientForWorkflow(cfg)
 	}, orch, runtime, cfg, worker.LogEventEmitter{})
@@ -407,17 +418,28 @@ func run(ctx context.Context, args []string) error {
 			log.Printf("workflow reload loop exited: %v", err)
 		}
 	}()
-	go func() {
-		if err := runStateHTTPServerLoop(ctx, runtime, orch.Snapshot, stateHTTPServerLoopOptions{Refresh: orch.RequestRefresh, PortOverride: portOverride, HostOverride: serverHostOverrideFromEnv()}); err != nil && ctx.Err() == nil {
-			log.Printf("state HTTP server loop exited: %v", err)
-		}
-	}()
 	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
 }
 
+type stateHTTPReadiness struct {
+	ready atomic.Bool
+}
+
+func (r *stateHTTPReadiness) MarkReady() {
+	r.ready.Store(true)
+}
+
+func (r *stateHTTPReadiness) Status() (bool, string) {
+	if r.ready.Load() {
+		return true, ""
+	}
+	return false, "startup reconciliation has not completed"
+}
+
 type stateHTTPServerController struct {
-	snapshot stateSnapshotFunc
-	refresh  stateRefreshFunc
+	snapshot  stateSnapshotFunc
+	refresh   stateRefreshFunc
+	readiness stateReadinessFunc
 
 	desiredSet  bool
 	desiredHost string
@@ -428,7 +450,7 @@ type stateHTTPServerController struct {
 }
 
 func newStateHTTPServerController(snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *stateHTTPServerController {
-	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh)}
+	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh), readiness: stateHTTPAlwaysReady}
 }
 
 func (c *stateHTTPServerController) apply(ctx context.Context, host string, port int) error {
@@ -445,7 +467,7 @@ func (c *stateHTTPServerController) apply(ctx context.Context, host string, port
 		return nil
 	}
 	serverCtx, cancel := context.WithCancel(ctx)
-	handle, err := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.refresh)
+	handle, err := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.readiness, c.refresh)
 	if err != nil {
 		cancel()
 		return err
@@ -504,6 +526,7 @@ type stateHTTPServerLoopOptions struct {
 	Sleep           func(context.Context, time.Duration) error
 	StopAfterChecks int
 	Refresh         stateRefreshFunc
+	Readiness       stateReadinessFunc
 	// PortOverride, when non-nil, replaces the workflow snapshot's
 	// `server.port` for every tick of the loop. SPEC §13.7 defines this
 	// as the CLI `--port` precedence rule. -1 disables the HTTP server,
@@ -521,6 +544,9 @@ func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowR
 		return errors.New("state HTTP server loop requires workflow runtime")
 	}
 	controller := newStateHTTPServerController(snapshot, opts.Refresh)
+	if opts.Readiness != nil {
+		controller.readiness = opts.Readiness
+	}
 	defer controller.stop()
 	sleep := opts.Sleep
 	if sleep == nil {
@@ -568,12 +594,12 @@ type stateHTTPServerHandle struct {
 	Done <-chan struct{}
 }
 
-func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
+func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
 	if port < 0 {
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil, nil
 	}
-	server := newStateHTTPServerWithAuthToken(host, port, os.Getenv(stateHTTPAuthTokenEnv), snapshot, refresh...)
+	server := newStateHTTPServerWithAuthTokenAndReadiness(host, port, os.Getenv(stateHTTPAuthTokenEnv), readiness, snapshot, refresh...)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
@@ -619,6 +645,10 @@ func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refre
 }
 
 func newStateHTTPServerWithAuthToken(host string, port int, authToken string, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
+	return newStateHTTPServerWithAuthTokenAndReadiness(host, port, authToken, stateHTTPAlwaysReady, snapshot, refresh...)
+}
+
+func newStateHTTPServerWithAuthTokenAndReadiness(host string, port int, authToken string, readiness stateReadinessFunc, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
 	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
@@ -632,9 +662,13 @@ func newStateHTTPServerWithAuthToken(host string, port int, authToken string, sn
 		dashboardHTMLHandler().ServeHTTP(w, r)
 	})
 	guard := stateHTTPAccessGuard{authToken: strings.TrimSpace(authToken)}
+	root := http.NewServeMux()
+	root.Handle("/livez", livenessHTTPHandler())
+	root.Handle("/readyz", readinessHTTPHandler(readiness))
+	root.Handle("/", guard.wrap(mux))
 	return &http.Server{
 		Addr:              net.JoinHostPort(normalizeServerHost(host), strconv.Itoa(port)),
-		Handler:           guard.wrap(mux),
+		Handler:           root,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -647,6 +681,56 @@ func newStateHTTPServerWithAuthToken(host string, port int, authToken string, sn
 		// value when computing the actual reject threshold.
 		MaxHeaderBytes: 64 << 10,
 	}
+}
+
+type stateReadinessFunc func() (bool, string)
+
+func stateHTTPAlwaysReady() (bool, string) {
+	return true, ""
+}
+
+func livenessHTTPHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		if _, err := io.WriteString(w, "ok\n"); err != nil {
+			log.Printf("write /livez response: %v", err)
+		}
+	})
+}
+
+func readinessHTTPHandler(readiness stateReadinessFunc) http.Handler {
+	if readiness == nil {
+		readiness = stateHTTPAlwaysReady
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		ready, reason := readiness()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		if !ready {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if reason == "" {
+				reason = "not ready"
+			}
+			if _, err := io.WriteString(w, reason+"\n"); err != nil {
+				log.Printf("write /readyz unavailable response: %v", err)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		if _, err := io.WriteString(w, "ok\n"); err != nil {
+			log.Printf("write /readyz response: %v", err)
+		}
+	})
 }
 
 type stateHTTPAccessGuard struct {

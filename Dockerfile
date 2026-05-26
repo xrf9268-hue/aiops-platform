@@ -12,7 +12,7 @@ RUN go build -o /out/linear-poller ./cmd/linear-poller
 RUN go build -o /out/gitea-poller ./cmd/gitea-poller
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client wget && rm -rf /var/lib/apt/lists/*
 # Run as a dedicated unprivileged user. The worker prepares git workspaces and
 # runs agent/hook/verify/git commands, so root-in-container would widen the
 # blast radius of any compromised runner or hostile repository content (#365).
@@ -56,4 +56,7 @@ USER ${AIOPS_UID}:${AIOPS_GID}
 # CMD (not ENTRYPOINT) keeps it overridable: Compose's `command: ["worker"]`
 # and the poller services' `command: ["linear-poller", ...]` replace it without
 # argument duplication, and `docker run <image> linear-poller ...` still works.
+# The image healthcheck probes only when PID 1 is worker; poller command
+# overrides no-op here, and adding an init wrapper requires revisiting this.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD cmd="$(tr '\0' '\n' </proc/1/cmdline | head -n1)"; case "$cmd" in */worker|worker) wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez" >/dev/null 2>&1 || exit 1 ;; *) exit 0 ;; esac
 CMD ["worker"]

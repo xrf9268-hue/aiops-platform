@@ -164,6 +164,8 @@ web dashboard:
 | `GET /api/v1/{issue}` | Per-issue debug snapshot — see the [task debugging API runbook](docs/runbooks/task-api.md). |
 | `GET /` | The embedded web dashboard (HTML). |
 | `GET /assets/…` | Static dashboard assets. |
+| `GET /livez` | Unauthenticated liveness probe. Returns `ok` when the HTTP listener can serve requests. |
+| `GET /readyz` | Unauthenticated readiness probe. Returns `ok` once the worker has loaded workflow config, constructed the tracker client, and completed startup reconciliation. |
 
 When `AIOPS_STATE_API_TOKEN` is set, every request must authenticate with either
 `Authorization: Bearer <token>` or HTTP Basic auth user `aiops` and the token as
@@ -173,6 +175,14 @@ fail closed. Set `server.port: -1` to disable the listener entirely (e.g. when
 you provide your own state bridge). If the configured listener cannot start, the
 worker logs the failure, continues without the HTTP surface, and retries on
 later workflow-reload checks until the bind succeeds or `server.port` changes.
+The `/livez` and `/readyz` probes intentionally bypass this auth guard and
+return no runtime state or agent text, so Docker and Compose can use them
+without a dashboard token. `/readyz` returns `503` until startup readiness has
+been marked after workflow load, tracker client construction, and startup
+reconciliation. The default container health check probes `/livez`; use
+`/readyz` for orchestrators that distinguish startup/readiness from liveness.
+If you change the worker port in Compose, set `AIOPS_HEALTHCHECK_PORT` to match;
+if you set `server.port: -1`, disable the container health check as well.
 
 Under Docker Compose the default loopback bind is unreachable from the host
 (Docker publishes ports to the container interface, not its loopback). Merge the

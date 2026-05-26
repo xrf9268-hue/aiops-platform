@@ -57,6 +57,54 @@ func TestGiteaPollerComposeUsesGiteaWorkflowFixture(t *testing.T) {
 	}
 }
 
+func TestWorkerComposeDefinesHealthcheck(t *testing.T) {
+	compose := readCompose(t)
+	worker := service(t, compose, "worker")
+	environment, ok := worker["environment"].(map[string]any)
+	if !ok {
+		t.Fatal("worker service missing environment map")
+	}
+	if got := environment["AIOPS_HEALTHCHECK_PORT"]; got != "${AIOPS_HEALTHCHECK_PORT:-4000}" {
+		t.Fatalf("worker AIOPS_HEALTHCHECK_PORT = %#v, want defaulted environment override", got)
+	}
+	workflowPath, ok := environment["AIOPS_WORKFLOW_PATH"].(string)
+	if !ok {
+		t.Fatalf("worker AIOPS_WORKFLOW_PATH = %#v, want string", environment["AIOPS_WORKFLOW_PATH"])
+	}
+	workflow := loadYAML(t, filepath.Join("..", "..", "..", strings.TrimPrefix(workflowPath, "/app/")))
+	server, ok := workflow["server"].(map[string]any)
+	if !ok || server["port"] != 4000 {
+		t.Fatalf("%s server.port = %#v, want 4000", workflowPath, server["port"])
+	}
+	healthcheck, ok := worker["healthcheck"].(map[string]any)
+	if !ok {
+		t.Fatal("worker service missing healthcheck")
+	}
+	testCommand, ok := healthcheck["test"].([]any)
+	if !ok || len(testCommand) != 2 {
+		t.Fatalf("worker healthcheck test = %#v, want CMD-SHELL command", healthcheck["test"])
+	}
+	if testCommand[0] != "CMD-SHELL" {
+		t.Fatalf("worker healthcheck test[0] = %#v, want CMD-SHELL", testCommand[0])
+	}
+	command, ok := testCommand[1].(string)
+	if !ok || !strings.Contains(command, "wget -qO- http://127.0.0.1:$${AIOPS_HEALTHCHECK_PORT:-4000}/livez") {
+		t.Fatalf("worker healthcheck command = %#v, want /livez wget probe", testCommand[1])
+	}
+	for key, want := range map[string]string{
+		"interval":     "30s",
+		"timeout":      "5s",
+		"start_period": "20s",
+	} {
+		if got := healthcheck[key]; got != want {
+			t.Fatalf("worker healthcheck %s = %#v, want %q", key, got, want)
+		}
+	}
+	if got := healthcheck["retries"]; got != 3 {
+		t.Fatalf("worker healthcheck retries = %#v, want 3", got)
+	}
+}
+
 func readCompose(t *testing.T) map[string]any {
 	t.Helper()
 	return loadYAML(t, filepath.Join("..", "..", "..", "deploy", "docker-compose.yml"))

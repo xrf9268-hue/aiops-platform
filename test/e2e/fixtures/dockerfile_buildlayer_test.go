@@ -51,11 +51,25 @@ func TestDockerfileAppliesRuntimeSecurityUpdatesBeforeInstallingTools(t *testing
 	if upgrade < 0 {
 		t.Fatal("runtime stage must apply Debian security updates before installing tools")
 	}
-	install := strings.Index(df[runtimeStage:], "apt-get install -y --no-install-recommends ca-certificates git openssh-client")
+	install := strings.Index(df[runtimeStage:], "apt-get install -y --no-install-recommends ca-certificates git openssh-client wget")
 	if install < 0 {
 		t.Fatal("runtime stage missing expected tool installation command")
 	}
 	if upgrade > install {
 		t.Fatalf("runtime apt-get upgrade must precede tool installation: upgrade=%d install=%d", upgrade, install)
+	}
+}
+
+func TestDockerfileDefinesWorkerHealthcheck(t *testing.T) {
+	df := dockerfileContents(t)
+
+	if !strings.Contains(df, "HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3") {
+		t.Fatal("Dockerfile missing worker healthcheck timing")
+	}
+	if !strings.Contains(df, "</proc/1/cmdline") || !strings.Contains(df, "*/worker|worker)") {
+		t.Fatal("Dockerfile healthcheck must only probe when PID 1 is the worker command")
+	}
+	if !strings.Contains(df, `wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez"`) {
+		t.Fatal("Dockerfile healthcheck must probe the unauthenticated /livez endpoint on the configured healthcheck port")
 	}
 }
