@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -18,6 +19,10 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+// The fake app-server is a Python subprocess; 15s keeps local load from
+// masquerading as an initialize protocol regression in package-wide runs.
+const codexAppServerTestReadTimeoutMs = 15000
 
 func appServerInput(workdir string) RunInput {
 	return RunInput{
@@ -36,7 +41,7 @@ func appServerInput(workdir string) RunInput {
 					"CODEX_STARTED_LOG",
 				},
 				TurnTimeoutMs:  3000,
-				ReadTimeoutMs:  3000,
+				ReadTimeoutMs:  codexAppServerTestReadTimeoutMs,
 				StallTimeoutMs: 3000,
 			},
 		}},
@@ -54,6 +59,8 @@ import os, sys
 with open(os.environ['CODEX_ARGV_LOG'], 'w') as f:
     f.write('\n'.join(sys.argv[1:]))
     f.write('\n')
+with open(os.environ['CODEX_STARTED_LOG'], 'w') as f:
+    f.write('started\n')
 `
 	if err := os.WriteFile(scriptPath, []byte(header+body), 0o755); err != nil {
 		t.Fatal(err)
@@ -63,7 +70,46 @@ with open(os.environ['CODEX_ARGV_LOG'], 'w') as f:
 	useAgentLoginPATH(t, path)
 	t.Setenv("CODEX_ARGV_LOG", filepath.Join(dir, "argv.txt"))
 	t.Setenv("CODEX_STDIN_LOG", filepath.Join(dir, "stdin.txt"))
+	t.Setenv("CODEX_STARTED_LOG", filepath.Join(dir, "started.txt"))
 	return dir
+}
+
+func runCodexAppServerForTest(t *testing.T, in RunInput) (Result, error) {
+	t.Helper()
+	return runCodexAppServerWithDiagnostics(context.Background(), in, t.Logf)
+}
+
+func runCodexAppServerWithDiagnostics(ctx context.Context, in RunInput, logf func(format string, args ...any)) (Result, error) {
+	res, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		logf("codex app-server diagnostics:\n%s", codexAppServerDiagnostics(in.Workdir))
+	}
+	return res, err
+}
+
+func codexAppServerDiagnostics(workdir string) string {
+	var b strings.Builder
+	appendFileDiagnostic(&b, "started log", os.Getenv("CODEX_STARTED_LOG"))
+	appendFileDiagnostic(&b, "stdin log", os.Getenv("CODEX_STDIN_LOG"))
+	appendFileDiagnostic(&b, "captured output", filepath.Join(workdir, codexAppServerOutputPath))
+	return b.String()
+}
+
+func appendFileDiagnostic(b *strings.Builder, label, path string) {
+	if path == "" {
+		b.WriteString(label + ": <unset>\n")
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		b.WriteString(label + " " + path + ": " + err.Error() + "\n")
+		return
+	}
+	b.WriteString(label + " " + path + ":\n")
+	b.Write(data)
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		b.WriteByte('\n')
+	}
 }
 
 func codexAppServerEnvStubScript(t *testing.T, body string) string {
@@ -146,7 +192,7 @@ for line in sys.stdin:
 		t.Fatal(err)
 	}
 
-	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	res, err := runCodexAppServerForTest(t, appServerInput(wd))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1041,7 +1087,7 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 3
 
-	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
+	res, err := runCodexAppServerForTest(t, in)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1167,7 +1213,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 
-	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	res, err := runCodexAppServerForTest(t, appServerInput(wd))
 	if err == nil || !strings.Contains(err.Error(), "turn/completed failed") || !strings.Contains(err.Error(), "tool crashed") {
 		t.Fatalf("Run error = %v, want failed turn/completed error with reason", err)
 	}
@@ -1229,6 +1275,38 @@ for line in sys.stdin:
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
 	if err == nil || !strings.Contains(err.Error(), "read timeout") {
 		t.Fatalf("Run error = %v, want app-server read timeout", err)
+	}
+}
+
+func TestCodexAppServerInitializeTimeoutDiagnostics(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+time.sleep(2)
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 25
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	var logs []string
+	_, err := runCodexAppServerWithDiagnostics(ctx, in, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "codex app-server initialize") || !strings.Contains(err.Error(), "read timeout") {
+		t.Fatalf("Run error = %v, want initialize read timeout", err)
+	}
+	diagnostics := strings.Join(logs, "\n")
+	if !strings.Contains(diagnostics, "started log") || !strings.Contains(diagnostics, "started\n") {
+		t.Fatalf("diagnostics missing started log; diagnostics=\n%s", diagnostics)
+	}
+	if !strings.Contains(diagnostics, "stdin log") {
+		t.Fatalf("diagnostics missing stdin log status; diagnostics=\n%s", diagnostics)
 	}
 }
 
