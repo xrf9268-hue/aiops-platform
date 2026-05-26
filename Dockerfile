@@ -12,7 +12,7 @@ RUN go build -o /out/linear-poller ./cmd/linear-poller
 RUN go build -o /out/gitea-poller ./cmd/gitea-poller
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client && rm -rf /var/lib/apt/lists/*
 # Run as a dedicated unprivileged user. The worker prepares git workspaces and
 # runs agent/hook/verify/git commands, so root-in-container would widen the
 # blast radius of any compromised runner or hostile repository content (#365).

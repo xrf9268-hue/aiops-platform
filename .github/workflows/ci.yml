@@ -223,10 +223,7 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           vuln-type: os,library
-          # Report-only for now (incremental rollout, #372): findings surface in
-          # the job log without blocking. Tighten exit-code once the image
-          # baseline is clean and the team agrees to gate on it.
-          exit-code: "0"
+          exit-code: "1"
 
       - name: Generate SBOM (Trivy, CycloneDX)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0

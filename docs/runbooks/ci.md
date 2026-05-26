@@ -32,7 +32,17 @@ Checks:
 - govulncheck
 - e2e Gitea mock loop
 - Docker image build validation
-- Trivy image scan and CycloneDX SBOM upload
+- blocking Trivy image scan for fixed CRITICAL/HIGH vulnerabilities
+- CycloneDX SBOM upload
+
+The Trivy image scan uses `ignore-unfixed: true` and `exit-code: "1"`, so it
+blocks only CRITICAL/HIGH findings that already have an upstream fix. If this
+gate fails on a package inherited from the Debian base image, first rebuild with
+`docker build --pull --no-cache --tag aiops-platform:local .` to force a fresh
+`apt-get update && apt-get upgrade` layer. Update the Dockerfile or base image
+only if the rebuilt image still contains a fixed finding. Do not add a
+`.trivyignore` entry for a vulnerability that the package manager can already
+fix.
 
 ### Release
 
