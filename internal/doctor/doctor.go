@@ -30,6 +30,12 @@ const (
 	Fail Status = "FAIL"
 )
 
+const (
+	aiopsModulePath       = "github.com/xrf9268-hue/aiops-platform"
+	defaultCommandTimeout = 10 * time.Second
+	goTestProbeTimeout    = 2 * time.Minute
+)
+
 type Check struct {
 	Status Status
 	Name   string
@@ -41,6 +47,7 @@ type Options struct {
 	WorkflowPath string
 	Mode         string
 	DashboardURL string
+	GoTestDir    string
 	GitHubIssue  int
 	GitHubRepo   string
 	Stdout       io.Writer
@@ -72,6 +79,7 @@ func BuildReport(ctx context.Context, opts Options) Report {
 	r.normalize()
 	wf, path := r.checkWorkflow()
 	r.checkHostBinaries(wf)
+	r.checkProjectToolchain(ctx)
 	r.checkDockerCompose(ctx)
 	if wf != nil {
 		r.checkLinear(ctx, wf.Config)
@@ -151,6 +159,101 @@ func (r *reportBuilder) checkHostBinaries(wf *workflow.Workflow) {
 	} else {
 		r.pass("rg", "found on PATH")
 	}
+}
+
+func (r *reportBuilder) checkProjectToolchain(ctx context.Context) {
+	if !r.realMode() {
+		return
+	}
+	modulePath, goModVersion := r.goModule()
+	moduleRoot := strings.TrimSpace(r.opts.GoTestDir)
+	out, err := r.run(ctx, "go", []string{"version"})
+	if err != nil {
+		r.fail("Go version", trimOutput(out, err), "Install the Go toolchain required by go.mod in the worker image.")
+	} else if version := strings.TrimSpace(string(out)); goModVersion != "" && !goVersionCompatible(version, goModVersion) {
+		r.fail("Go version", version, "Install a Go toolchain compatible with go.mod version "+goModVersion+".")
+	} else {
+		if goModVersion != "" {
+			version += "; go.mod requires " + goModVersion
+		}
+		r.pass("Go version", version)
+	}
+	gofmtProbe, err := writeGofmtProbe()
+	if err != nil {
+		r.fail("gofmt", err.Error(), "Create a writable temp directory for doctor preflight probes.")
+	} else if gofmtPath, out, err := r.gofmtPath(ctx); err != nil {
+		r.fail("gofmt", trimOutput(out, err), "Install the Go toolchain with gofmt in the worker image.")
+	} else if out, err := r.run(ctx, gofmtPath, []string{"-l", gofmtProbe}); err != nil {
+		r.fail("gofmt", trimOutput(out, err), "Install gofmt in the worker image.")
+	} else {
+		r.pass("gofmt", "found at "+gofmtPath)
+	}
+	if gofmtProbe != "" {
+		_ = os.Remove(gofmtProbe)
+	}
+	if moduleRoot == "" {
+		r.warn("Go test", "not checked; no --go-test-dir supplied", "Pass --go-test-dir pointing at the repository module root for dogfood image preflight.")
+		return
+	}
+	if modulePath != aiopsModulePath || goModVersion == "" {
+		r.fail("Go test", goModuleFailureDetail(modulePath, goModVersion), "Pass --go-test-dir pointing at the aiops-platform checkout root.")
+		return
+	}
+	if !fileExists(filepath.Join(moduleRoot, "internal", "doctor")) {
+		r.fail("Go test", "targeted package internal/doctor not found under --go-test-dir", "Pass --go-test-dir pointing at the aiops-platform checkout root.")
+		return
+	}
+	if out, err := r.runWithTimeout(ctx, goTestProbeTimeout, "go", []string{"test", "-C", moduleRoot, "./internal/doctor", "-run", "TestDoctorGoToolchainProbe", "-count=1"}); err != nil {
+		r.fail("Go test", trimOutput(out, err), "Fix the project Go test prerequisites in the worker image or checkout.")
+		return
+	}
+	r.pass("Go test", "go test ./internal/doctor -run TestDoctorGoToolchainProbe -count=1")
+}
+
+func (r *reportBuilder) goModule() (string, string) {
+	start := strings.TrimSpace(r.opts.GoTestDir)
+	if start == "" {
+		return "", ""
+	}
+	return readGoMod(filepath.Join(start, "go.mod"))
+}
+
+func (r *reportBuilder) gofmtPath(ctx context.Context) (string, []byte, error) {
+	out, err := r.run(ctx, "go", []string{"env", "GOROOT"})
+	if err != nil {
+		return "", out, err
+	}
+	goRoot := strings.TrimSpace(string(out))
+	if goRoot == "" {
+		return "", out, errors.New("go env GOROOT returned empty output")
+	}
+	return filepath.Join(goRoot, "bin", "gofmt"), out, nil
+}
+
+func goModuleFailureDetail(modulePath, version string) string {
+	switch {
+	case modulePath == "":
+		return "no go.mod found for targeted project verification"
+	case modulePath != aiopsModulePath:
+		return fmt.Sprintf("go.mod module %q is not %s", modulePath, aiopsModulePath)
+	case version == "":
+		return "go.mod is missing a go version"
+	default:
+		return "go.mod is not usable for targeted project verification"
+	}
+}
+
+func writeGofmtProbe() (string, error) {
+	f, err := os.CreateTemp("", "aiops-doctor-gofmt-*.go")
+	if err != nil {
+		return "", err
+	}
+	defer closeBody(f)
+	if _, err := io.WriteString(f, "package main\n"); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func (r *reportBuilder) checkDockerCompose(ctx context.Context) {
@@ -468,7 +571,11 @@ func (r *reportBuilder) realMode() bool {
 }
 
 func (r *reportBuilder) run(ctx context.Context, name string, args []string) ([]byte, error) {
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	return r.runWithTimeout(ctx, defaultCommandTimeout, name, args)
+}
+
+func (r *reportBuilder) runWithTimeout(ctx context.Context, timeout time.Duration, name string, args []string) ([]byte, error) {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return r.opts.Runner(runCtx, name, args, nil, nil)
 }
@@ -727,6 +834,49 @@ func safeCommandFailure(command string, out []byte, err error) string {
 		return command + " failed"
 	}
 	return command + " failed: " + detail
+}
+
+func readGoMod(path string) (string, string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", ""
+	}
+	var modulePath, version string
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 {
+			switch fields[0] {
+			case "module":
+				modulePath = fields[1]
+			case "go":
+				version = fields[1]
+			}
+		}
+	}
+	return modulePath, version
+}
+
+func goVersionCompatible(output, goModVersion string) bool {
+	gotMajor, gotMinor, gotOK := goMajorMinor(output)
+	wantMajor, wantMinor, wantOK := majorMinor(goModVersion)
+	return gotOK && wantOK && (gotMajor > wantMajor || gotMajor == wantMajor && gotMinor >= wantMinor)
+}
+
+func goMajorMinor(output string) (int, int, bool) {
+	for _, field := range strings.Fields(output) {
+		if strings.HasPrefix(field, "go1.") {
+			return majorMinor(strings.TrimPrefix(field, "go"))
+		}
+	}
+	return 0, 0, false
+}
+
+func majorMinor(version string) (int, int, bool) {
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
+		return 0, 0, false
+	}
+	return major, minor, true
 }
 
 func firstLine(out []byte) string {

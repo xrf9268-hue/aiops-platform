@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -162,6 +164,90 @@ func TestBuildReportRealModeSkipsCodexForMockAgent(t *testing.T) {
 	}
 }
 
+func TestBuildReportRealModeChecksGoToolchain(t *testing.T) {
+	installFakeGitOnly(t)
+	moduleRoot := writeGoModule(t, "1.24.0")
+	var goTestArgs []string
+	var goTestDeadline time.Duration
+	var gofmtCommand string
+	report := BuildReport(context.Background(), Options{
+		WorkflowPath: writeWorkflow(t, "gitea", "token"),
+		Mode:         "real",
+		GoTestDir:    moduleRoot,
+		Runner: func(ctx context.Context, name string, args []string, env []string, stdin io.Reader) ([]byte, error) {
+			if filepath.Base(name) == "gofmt" {
+				gofmtCommand = name
+			}
+			if name == "go" && len(args) > 0 && args[0] == "test" {
+				goTestArgs = append([]string(nil), args...)
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatalf("go test context has no deadline")
+				}
+				goTestDeadline = time.Until(deadline)
+			}
+			return fakeRealRunner(ctx, name, args, env, stdin)
+		},
+	})
+
+	if got := findCheck(t, report, "Go version"); got.Status != Pass || !strings.Contains(got.Detail, "go.mod requires 1.24.0") {
+		t.Fatalf("Go version check = %+v; want PASS with go.mod compatibility detail", got)
+	}
+	if got := findCheck(t, report, "gofmt").Status; got != Pass {
+		t.Fatalf("gofmt status = %s; want PASS", got)
+	}
+	if got, want := gofmtCommand, filepath.Join("/usr/local/go", "bin", "gofmt"); got != want {
+		t.Fatalf("gofmt command = %q; want %q", got, want)
+	}
+	if got := findCheck(t, report, "Go test").Status; got != Pass {
+		t.Fatalf("Go test status = %s; want PASS", got)
+	}
+	if got, want := strings.Join(goTestArgs, " "), "test -C "+moduleRoot+" ./internal/doctor -run TestDoctorGoToolchainProbe -count=1"; got != want {
+		t.Fatalf("go test args = %q; want %q", got, want)
+	}
+	if goTestDeadline < time.Minute {
+		t.Fatalf("go test deadline = %s; want at least 1m to avoid cold-cache false negatives", goTestDeadline)
+	}
+}
+
+func TestBuildReportRealModeFailsWithoutGoModuleForTargetedTest(t *testing.T) {
+	installFakeGitOnly(t)
+	report := BuildReport(context.Background(), Options{
+		WorkflowPath: writeWorkflow(t, "gitea", "token"),
+		Mode:         "real",
+		GoTestDir:    t.TempDir(),
+		Runner:       fakeRealRunner,
+	})
+
+	check := findCheck(t, report, "Go test")
+	if check.Status != Fail {
+		t.Fatalf("Go test status = %s; want FAIL", check.Status)
+	}
+	if !strings.Contains(check.Fix, "--go-test-dir") {
+		t.Fatalf("Go test fix = %q; want --go-test-dir guidance", check.Fix)
+	}
+}
+
+func TestBuildReportRealModeWarnsWithoutExplicitGoTestDir(t *testing.T) {
+	installFakeGitOnly(t)
+	report := BuildReport(context.Background(), Options{
+		WorkflowPath: writeWorkflow(t, "gitea", "token"),
+		Mode:         "real",
+		Runner:       fakeRealRunner,
+	})
+
+	check := findCheck(t, report, "Go test")
+	if check.Status != Warn {
+		t.Fatalf("Go test status = %s; want WARN", check.Status)
+	}
+	if !strings.Contains(check.Fix, "--go-test-dir") {
+		t.Fatalf("Go test fix = %q; want --go-test-dir guidance", check.Fix)
+	}
+	if report.HasFailures() {
+		t.Fatalf("report.HasFailures() = true; want false when only targeted Go test dir is omitted")
+	}
+}
+
 func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "worker-token-must-not-leak")
 	path := writeGitHubWorkflow(t, "codex")
@@ -170,6 +256,16 @@ func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 		switch name {
 		case "docker":
 			return []byte("ok\n"), nil
+		case "go":
+			if len(args) > 0 && args[0] == "version" {
+				return []byte("go version go1.25.0 linux/amd64\n"), nil
+			}
+			if len(args) > 1 && args[0] == "env" && args[1] == "GOROOT" {
+				return []byte("/usr/local/go\n"), nil
+			}
+			return nil, errors.New("unexpected go command")
+		case "gofmt", filepath.Join("/usr/local/go", "bin", "gofmt"):
+			return []byte(""), nil
 		case "codex":
 			if len(args) > 0 && args[0] == "--version" {
 				return []byte("codex-cli 0.133.0\n"), nil
@@ -622,13 +718,48 @@ prompt
 	return path
 }
 
+func writeGoModule(t *testing.T, version string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module "+aiopsModulePath+"\n\ngo "+version+"\n"), 0o600); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "internal", "doctor"), 0o700); err != nil {
+		t.Fatalf("create internal/doctor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "internal", "doctor", "doctor_test.go"), []byte("package doctor\n"), 0o600); err != nil {
+		t.Fatalf("write doctor test package: %v", err)
+	}
+	return dir
+}
+
+func TestDoctorGoToolchainProbe(t *testing.T) {}
+
 func passingRunner(context.Context, string, []string, []string, io.Reader) ([]byte, error) {
 	return []byte("ok\n"), nil
 }
 
 func fakeRealRunner(_ context.Context, name string, args []string, _ []string, _ io.Reader) ([]byte, error) {
-	if name != "docker" && name != "codex" {
+	if name != "docker" && name != "codex" && name != "go" && filepath.Base(name) != "gofmt" {
 		return nil, errors.New("unexpected command")
+	}
+	if filepath.Base(name) == "gofmt" {
+		return []byte(""), nil
+	}
+	if name == "go" && len(args) > 0 && args[0] == "version" {
+		return []byte("go version go1.25.0 linux/amd64\n"), nil
+	}
+	if name == "go" && len(args) > 1 && args[0] == "env" && args[1] == "GOROOT" {
+		return []byte("/usr/local/go\n"), nil
+	}
+	if name == "go" && len(args) > 0 && args[0] == "test" {
+		if len(args) < 4 || args[1] != "-C" || args[3] != "./internal/doctor" {
+			return nil, fmt.Errorf("unexpected go test args: %v", args)
+		}
+		if !fileExists(filepath.Join(args[2], "internal", "doctor", "doctor_test.go")) {
+			return nil, errors.New("missing targeted doctor test package")
+		}
+		return []byte("ok\n"), nil
 	}
 	if name == "codex" && len(args) > 0 && args[0] == "login" {
 		return []byte("Logged in\n"), nil
@@ -639,9 +770,18 @@ func fakeRealRunner(_ context.Context, name string, args []string, _ []string, _
 	return []byte("ok\n"), nil
 }
 
-func dockerOnlyRunner(_ context.Context, name string, _ []string, _ []string, _ io.Reader) ([]byte, error) {
-	if name != "docker" {
+func dockerOnlyRunner(_ context.Context, name string, args []string, _ []string, _ io.Reader) ([]byte, error) {
+	if name != "docker" && name != "go" && filepath.Base(name) != "gofmt" {
 		return nil, errors.New("unexpected command")
+	}
+	if filepath.Base(name) == "gofmt" {
+		return []byte(""), nil
+	}
+	if name == "go" && len(args) > 0 && args[0] == "version" {
+		return []byte("go version go1.25.0 linux/amd64\n"), nil
+	}
+	if name == "go" && len(args) > 1 && args[0] == "env" && args[1] == "GOROOT" {
+		return []byte("/usr/local/go\n"), nil
 	}
 	return []byte("ok\n"), nil
 }
