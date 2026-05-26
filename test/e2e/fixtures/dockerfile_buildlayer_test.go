@@ -66,10 +66,12 @@ func TestDockerfileDefinesWorkerHealthcheck(t *testing.T) {
 	if !strings.Contains(df, "HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3") {
 		t.Fatal("Dockerfile missing worker healthcheck timing")
 	}
-	if !strings.Contains(df, "</proc/1/cmdline") || !strings.Contains(df, "*/worker|worker)") {
-		t.Fatal("Dockerfile healthcheck must only probe when PID 1 is the worker command")
-	}
 	if !strings.Contains(df, `wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez"`) {
 		t.Fatal("Dockerfile healthcheck must probe the unauthenticated /livez endpoint on the configured healthcheck port")
+	}
+	for _, removed := range []string{"linear-poller", "gitea-poller"} {
+		if strings.Contains(df, removed) {
+			t.Fatalf("Dockerfile still references removed binary %q", removed)
+		}
 	}
 }

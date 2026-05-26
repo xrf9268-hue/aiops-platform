@@ -27,7 +27,7 @@ Checks:
 - `gofmt` check
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
-- build `worker`, `linear-poller`, and `gitea-poller`
+- build `worker`
 - upload short-lived CI binaries
 - govulncheck
 - e2e Gitea mock loop

@@ -25,7 +25,7 @@ Linear or Gitea tracker poll
 
 | Symphony concept | aiops-platform module |
 |---|---|
-| Issue tracker | `internal/tracker`, `cmd/linear-poller`, and `cmd/gitea-poller` |
+| Issue tracker | `internal/tracker` |
 | Workflow contract | `internal/workflow` and `WORKFLOW.md` |
 | Workspace manager | `internal/workspace` |
 | Agent runner | `internal/runner` |
@@ -56,7 +56,8 @@ Implemented:
 
 - Gitea label polling trigger
 - Linear polling trigger
-- Postgres task queue
+- GitHub issue polling trigger (`tracker.kind: github`, wired through
+  `cmd/worker` and `internal/tracker/github.go`)
 - repo-owned `WORKFLOW.md` in the service/repository root (single canonical path; see `DEVIATIONS.md` D4 closure)
 - mock, codex, and claude runner abstraction
 - deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout

@@ -3,8 +3,7 @@ package orchestrator
 import "time"
 
 // RuntimeEventKind is the SPEC-aligned runtime event vocabulary used by the
-// lightweight status surface. It describes orchestrator runtime state, not rows
-// in the transitional queue.
+// lightweight status surface. It describes orchestrator runtime state.
 type RuntimeEventKind string
 
 const (

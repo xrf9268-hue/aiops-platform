@@ -8,8 +8,6 @@ COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
 RUN go build -o /out/worker ./cmd/worker
-RUN go build -o /out/linear-poller ./cmd/linear-poller
-RUN go build -o /out/gitea-poller ./cmd/gitea-poller
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client wget && rm -rf /var/lib/apt/lists/*
@@ -48,15 +46,10 @@ RUN set -eux; \
     chmod 700 /home/aiops/.ssh
 ENV HOME=/home/aiops
 COPY --from=build /out/worker /usr/local/bin/worker
-COPY --from=build /out/linear-poller /usr/local/bin/linear-poller
-COPY --from=build /out/gitea-poller /usr/local/bin/gitea-poller
 WORKDIR /app
 USER ${AIOPS_UID}:${AIOPS_GID}
 # Default to the worker so `docker run <image>` is useful out of the box (#370).
-# CMD (not ENTRYPOINT) keeps it overridable: Compose's `command: ["worker"]`
-# and the poller services' `command: ["linear-poller", ...]` replace it without
-# argument duplication, and `docker run <image> linear-poller ...` still works.
-# The image healthcheck probes only when PID 1 is worker; poller command
-# overrides no-op here, and adding an init wrapper requires revisiting this.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD cmd="$(tr '\0' '\n' </proc/1/cmdline | head -n1)"; case "$cmd" in */worker|worker) wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez" >/dev/null 2>&1 || exit 1 ;; *) exit 0 ;; esac
+# CMD (not ENTRYPOINT) keeps it overridable for diagnostics without argument
+# duplication in Compose.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -qO- "http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez" >/dev/null 2>&1 || exit 1
 CMD ["worker"]

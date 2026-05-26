@@ -42,10 +42,6 @@ aiops-platform is licensed under the [Apache License 2.0](LICENSE).
 - **`cmd/tui`** — terminal status dashboard. Polls the worker's
   `/api/v1/state` and redraws each tick, mirroring the upstream Elixir
   `SymphonyElixir.StatusDashboard`.
-- **`cmd/linear-poller`** — transitional Linear-to-queue poller, retained under
-  the legacy queue profile. The worker now owns the SPEC-aligned poll tick.
-- **`cmd/gitea-poller`** — transitional Gitea-to-queue poller for `aiops/*`
-  label state. The worker can read Gitea issues directly via `tracker.kind: gitea`.
 
 ### Web dashboard (`cmd/worker/dashboard`)
 
@@ -74,8 +70,6 @@ brand/UX rationale.
 - `internal/policy` — change-size and mode policy checks (`analysis_only`,
   `draft_pr`, …).
 - `internal/task` — task model and shared types.
-- `internal/queue` — legacy PostgreSQL-backed task queue, used only by the
-  transitional poller binaries, not by `cmd/worker`.
 
 ## Quick start: worker-owned tracker polling path
 
@@ -112,22 +106,20 @@ creates and reconciles task workspaces under that path. `AIOPS_WORKSPACE_ROOT`
 (legacy alias: `WORKSPACE_ROOT`) is only the fallback for workflows that omit
 `workspace.root`.
 
-No `DATABASE_URL` or Postgres service is required for `cmd/worker`. Restart
-recovery follows SPEC §14.3: the worker starts with fresh runtime state, cleans
-terminal workspaces from tracker state, and re-dispatches eligible active issues
-on the next poll rather than restoring queue rows, retry timers, or running
-sessions from a database.
+No `DATABASE_URL` or Postgres service is required. Restart recovery follows
+SPEC §14.3: the worker starts with fresh runtime state, cleans terminal
+workspaces from tracker state, and re-dispatches eligible active issues on the
+next poll rather than restoring queue rows, retry timers, or running sessions
+from a database.
 
-The default Compose service starts only `worker` unless a legacy profile is
-requested:
+The default Compose service starts `worker`:
 
 ```bash
 docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
 ```
 
 The image defaults to the worker (`CMD ["worker"]`), so a plain `docker run`
-starts it; override the command to run a poller instead. The runtime image
-ships only the binaries, so mount your workflow file in (as Compose does):
+starts it. Mount your workflow file in (as Compose does):
 
 ```bash
 docker build -t aiops-platform .
@@ -138,16 +130,12 @@ docker run --rm --env-file .env \
   -e AIOPS_WORKFLOW_PATH=/app/examples/WORKFLOW.md \
   aiops-platform
 
-# Poller (overrides the default CMD with its own binary + workflow path):
-docker run --rm --env-file .env \
-  -v "$PWD/examples:/app/examples:ro" \
-  aiops-platform linear-poller /app/examples/WORKFLOW.md
 ```
 
 For an operator walkthrough — workflow file layout, the `/api/v1/state` and
-`--print-config` smoke checks, and the legacy queue-driven pollers — see the
-[local development runbook](docs/runbooks/local-dev.md). If the runbook and this
-README ever diverge, **this README is canonical**.
+`--print-config` smoke checks — see the [local development
+runbook](docs/runbooks/local-dev.md). If the runbook and this README ever
+diverge, **this README is canonical**.
 
 ## Operator surfaces
 
@@ -161,7 +149,7 @@ web dashboard:
 |------|---------|
 | `GET /api/v1/state` | SPEC §13.7 state snapshot (the canonical data source). |
 | `POST /api/v1/refresh` | Forces a state refresh where the runtime supports it. Requires the `X-AIOPS-Refresh: true` header; non-POST methods get `405`. |
-| `GET /api/v1/{issue}` | Per-issue debug snapshot — see the [task debugging API runbook](docs/runbooks/task-api.md). |
+| `GET /api/v1/{issue}` | Per-issue debug snapshot — see the [runtime debugging API runbook](docs/runbooks/task-api.md). |
 | `GET /` | The embedded web dashboard (HTML). |
 | `GET /assets/…` | Static dashboard assets. |
 | `GET /livez` | Unauthenticated liveness probe. Returns `ok` when the HTTP listener can serve requests. |
@@ -199,9 +187,7 @@ host trust boundary stays the loopback. Docker port publishing reaches the
 container from a bridge peer rather than container loopback, so the overlay
 requires `AIOPS_STATE_API_TOKEN`; browsers will receive a Basic-auth challenge
 and should use username `aiops` plus that token. The overlay also moves the
-worker onto a dedicated `dashboard` bridge network — off the project default
-network — so sibling containers (e.g. the legacy-queue services) cannot reach
-`worker:4000` and attempt to spoof loopback access. Do **not** publish on a
+worker onto a dedicated `dashboard` bridge network. Do **not** publish on a
 routable host interface or attach untrusted containers to the dashboard network
 unless they should be able to use the token-protected status surface.
 
@@ -375,19 +361,7 @@ policy:
   mode: draft_pr
 ```
 
-## Legacy queue polling paths
-
-These transitional binaries predate the worker-owned poll tick and are retained
-only until D7 cleanup. The SPEC-aligned worker no longer drains Postgres queue
-rows, so do not run them as a working stack — prefer `cmd/worker` directly.
-
-### Linear
-
-`cmd/linear-poller` is queue-ingress only. For active Linear issue execution,
-configure `tracker.kind: linear` in `WORKFLOW.md` and run the worker-owned path
-above.
-
-### Gitea
+## Gitea issue-state labels
 
 For SPEC-aligned Gitea polling, encode issue state as exactly one `aiops/*`
 label:
@@ -405,17 +379,6 @@ polling and per-tick reconciliation. If a running issue is moved to `aiops/done`
 or `aiops/canceled`, the next poll refreshes that issue by ID and stops the
 in-flight run.
 
-To run the legacy poller from source:
-
-```bash
-export GITEA_BASE_URL=https://gitea.example.com
-export GITEA_TOKEN=your-gitea-bot-token
-go run ./cmd/gitea-poller examples/gitea-WORKFLOW.md
-```
-
-It reads issues whose labels map to configured active states and enqueues them
-for the transitional queue path.
-
 ## Continuous integration
 
 Every push to `main` and every pull request targeting `main` runs
@@ -425,11 +388,10 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 - **`go`** — Node-based GitHub script tests
   (`capture-unresolved-reviews.test.mjs`), `gofmt` check on all tracked Go files,
   a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness,
-  `go test -race -covermode=atomic ./...`, a `go build` of `worker`,
-  `linear-poller`, and `gitea-poller`, and an upload of those Linux binaries as a
-  build artifact.
+  `go test -race -covermode=atomic ./...`, a `go build` of `worker`, and an
+  upload of that Linux binary as a build artifact.
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
-  against real `postgres:16` and `gitea` containers.
+  against a real `gitea` container.
 - **`docker`** — a Docker image build of the repository `Dockerfile` (depends on
   `go`), plus a blocking Trivy scan for fixed CRITICAL/HIGH image
   vulnerabilities.
@@ -456,7 +418,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
 - [Local development runbook](docs/runbooks/local-dev.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
-- [Task debugging API](docs/runbooks/task-api.md)
+- [Runtime debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [Pre-push secret scanning](docs/runbooks/secret-scanning.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)

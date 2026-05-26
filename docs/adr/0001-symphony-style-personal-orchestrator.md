@@ -21,6 +21,10 @@ Gitea issue comment
   -> pull request
 ```
 
+That early pipeline is historical. Current runtime behavior is tracker polling
+owned by `cmd/worker`, with scheduler state held in memory and branch/PR
+handoff performed by the agent.
+
 The original enterprise-oriented design included many concerns such as team governance, RBAC, audit, multi-repo policy, and enterprise deployment.
 
 The product goal has since been narrowed:
@@ -47,12 +51,13 @@ The core loop for `aiops-platform` is:
 
 ```text
 Linear or Gitea task
-  -> task queue
+  -> worker poll tick
+  -> in-memory orchestrator state
   -> deterministic workspace
   -> WORKFLOW.md
-  -> runner
+  -> agent runner
   -> verification
-  -> pull request handoff
+  -> agent-side pull request handoff
 ```
 
 ## Consequences
@@ -77,9 +82,8 @@ Linear or Gitea task
 
 In scope now:
 
-- Gitea issue-comment trigger
-- Linear polling trigger
-- Postgres task queue
+- Gitea, GitHub, and Linear tracker polling
+- in-memory orchestrator runtime state
 - repo-owned `WORKFLOW.md`
 - deterministic workspace creation
 - mock runner

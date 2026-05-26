@@ -172,8 +172,8 @@ type Task struct {
 	// §12.1 requires the full normalized field set to be visible to the
 	// template; §5.4 fails rendering on unknown variables, so a workflow
 	// referencing `issue.priority` or `{% for label in issue.labels %}`
-	// would crash without this. Excluded from JSON/Postgres persistence
-	// because it is reconstructed per dispatch.
+	// would crash without this. Excluded from JSON because it is
+	// reconstructed per dispatch.
 	IssueRender map[string]any `json:"-"`
 }
 

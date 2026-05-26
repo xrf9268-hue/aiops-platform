@@ -1,16 +1,16 @@
 # Secret scanning runbook
 
-This runbook covers the optional pre-push secret scan hook the worker runs
-between the `verify` phase and `git push`. Its goal is to catch obvious
-credential leaks before an AI-generated branch reaches the remote.
+This runbook covers the optional secret scan hook the worker runs after
+verification and before marking the task complete. Its goal is to catch obvious
+credential leaks before the orchestrator records a successful run.
 
 The hook is **off by default** so existing workflows are unchanged.
 Operators opt in by adding a `verify.secret_scan` block to `WORKFLOW.md`.
 
 ## How it fits in the worker flow
 
-```
-runner -> policy enforce -> verify commands -> secret scan -> git push -> PR
+```text
+runner -> policy enforce -> verify commands -> secret scan -> task completion
                                                ^^^^^^^^^^^
                                                this runbook
 ```
@@ -19,15 +19,15 @@ When the scan reports findings, the worker:
 
 1. Emits a `secret_scan_violation` task event with the captured stdout,
    stderr, exit code, and duration in the payload.
-2. Returns an error from `runTask`, which the queue records via the
-   existing `failed_attempt` path.
-3. **Skips `git push` and PR creation entirely.** No remote artifact is
-   created until the leak is removed and the task is retried.
+2. Returns an error from `runTask`, which emits the normal failed-attempt
+   event path and prevents the run from being recorded as successful.
+3. **Blocks task completion.** The issue remains eligible for a later retry
+   once the leak is removed.
 
 When the scanner cannot be executed at all (binary missing, permission
-denied), the worker emits `secret_scan_error` and also blocks the push,
-regardless of `fail_on_finding`. This is intentional: a misconfigured
-scanner should fail closed, not silently allow pushes.
+denied), the worker emits `secret_scan_error` and also blocks task completion,
+regardless of `fail_on_finding`. This is intentional: a misconfigured scanner
+should fail closed.
 
 ## Configuration schema
 
@@ -55,7 +55,7 @@ Fields:
   No shell is involved, so quoting/expansion does not happen — pass each
   flag as its own list item.
 - `fail_on_finding` (bool, default `true`): when false, the worker still
-  emits `secret_scan_violation` events but does **not** block the push.
+  emits `secret_scan_violation` events but does **not** block completion.
   Useful while tuning rules to avoid false-positive churn. Operators
   should treat this as a temporary state, not a steady-state setting.
 
@@ -167,7 +167,7 @@ visibly. A minimal GitHub Actions step:
 ```
 
 Run this in the same job that runs `go test`, before any deploy steps.
-The worker's pre-push hook is a fast feedback loop; CI is the safety
+The worker's secret-scan hook is a fast feedback loop; CI is the safety
 net.
 
 ## Handling false positives
@@ -191,17 +191,18 @@ False positives are inevitable. Resolve them in this order:
 
 ## Task events
 
-Operators can inspect scan outcomes via the task events API
-(`docs/runbooks/task-api.md`). Event kinds emitted by this hook:
+Operators can inspect scan outcomes via worker logs, runtime events, and the
+workspace artifacts described in `docs/runbooks/task-api.md`. Event kinds
+emitted by this hook:
 
 | Event kind              | Meaning                                                   |
 | ----------------------- | --------------------------------------------------------- |
 | `secret_scan_start`     | Scanner is about to run; payload includes the argv.       |
 | `secret_scan_clean`     | Scanner exited zero. No findings.                         |
-| `secret_scan_violation` | Scanner exited non-zero. Push was blocked unless          |
+| `secret_scan_violation` | Scanner exited non-zero. Completion was blocked unless    |
 |                         | `fail_on_finding: false`. Payload has stdout/stderr.      |
 | `secret_scan_error`     | Scanner could not be executed (binary missing, etc).     |
-|                         | Push is always blocked. Fix the worker host configuration.|
+|                         | Completion is always blocked. Fix the worker host config. |
 
 All payloads include `command`, `exit_code`, `duration_ms`, and the
 captured `stdout`/`stderr` truncated to 1 MiB to bound event size.

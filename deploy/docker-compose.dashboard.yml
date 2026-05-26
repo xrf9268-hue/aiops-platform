@@ -16,14 +16,11 @@
 #
 # Because a 0.0.0.0 bind is reachable by any sibling container on the same
 # Compose network (which can spoof Host: localhost past the in-process guard),
-# the overlay also moves the worker onto a dedicated `dashboard` network. This
-# removes it from the project default network, so the legacy-queue services
-# (postgres / pollers) — or any other co-located container — cannot reach
-# worker:4000. The network is a normal bridge (not `internal`), so the worker
-# keeps outbound egress for git/tracker traffic. Do NOT widen the host side of
-# the mapping to a routable address or attach untrusted containers to the
-# dashboard network unless they should be able to use the token-protected status
-# surface.
+# the overlay also moves the worker onto a dedicated `dashboard` network. The
+# network is a normal bridge (not `internal`), so the worker keeps outbound
+# egress for git/tracker traffic. Do NOT widen the host side of the mapping to a
+# routable address or attach untrusted containers to the dashboard network
+# unless they should be able to use the token-protected status surface.
 services:
   worker:
     environment:

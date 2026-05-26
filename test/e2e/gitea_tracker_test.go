@@ -15,13 +15,13 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-func TestGiteaPollerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T) {
-	owner, repo := bed.gitea.botUser, "demo-gitea-poller"
+func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T) {
+	owner, repo := bed.gitea.botUser, "demo-gitea-tracker"
 	cloneURL, err := bed.gitea.createRepo(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
 	}
-	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-poller.md"), "add workflow"); err != nil {
+	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
 		t.Fatalf("put workflow: %v", err)
 	}
 	issueNumber, err := bed.gitea.createIssue(context.Background(), owner, repo, "poll me", "dispatch through polling")
@@ -76,12 +76,12 @@ func TestGiteaPollerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T) 
 	}
 }
 
-func TestGiteaPollerIgnoresBacklogAndTerminalIssues(t *testing.T) {
-	owner, repo := bed.gitea.botUser, "demo-gitea-poller-filter"
+func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
+	owner, repo := bed.gitea.botUser, "demo-gitea-tracker-filter"
 	if _, err := bed.gitea.createRepo(context.Background(), repo); err != nil {
 		t.Fatalf("create repo: %v", err)
 	}
-	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-poller.md"), "add workflow"); err != nil {
+	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
 		t.Fatalf("put workflow: %v", err)
 	}
 	backlogIssue, err := bed.gitea.createIssue(context.Background(), owner, repo, "backlog", "must not dispatch")

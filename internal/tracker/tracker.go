@@ -53,8 +53,8 @@ type BlockerRef struct {
 	State      string
 }
 
-// TimeString returns the canonical string form used by legacy queue and
-// workspace keys for a tracker timestamp.
+// TimeString returns the canonical string form used by workspace keys for a
+// tracker timestamp.
 func TimeString(t time.Time) string {
 	if t.IsZero() {
 		return ""
@@ -77,12 +77,10 @@ type IssueStateRefresher interface {
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
 }
 
-// Transitioner is the subset of a tracker client used by the worker to
-// drive the linked issue through its lifecycle. The worker calls these
-// methods at task claim, PR handoff, and failure so the tracker view
-// stays in sync with the queue. Implementations must be safe to call
-// from a single goroutine (the worker loop) and should use the supplied
-// context for both deadlines and cancellation.
+// Transitioner is the subset of a tracker client that can move an issue or
+// add a human-visible comment. Tool adapters may expose these operations to
+// agents while keeping token handling inside the harness. Implementations must
+// use the supplied context for both deadlines and cancellation.
 type Transitioner interface {
 	// MoveIssueToState updates the issue identified by issueID so its
 	// workflow state matches stateName. The state name is matched as

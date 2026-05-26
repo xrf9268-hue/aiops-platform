@@ -89,7 +89,7 @@ If a future change introduces auto-merge, it must be opt-in per repository, must
 
 Every worker-authored pull request must be reviewed by a human before merge. Reviewers are expected to:
 
-1. **Read the run summary**: confirm the linked task ID, the source event (Gitea issue, Linear issue, or manual enqueue), the model used, and the workflow that produced the change.
+1. **Read the run summary**: confirm the linked task ID, the source event (Gitea, GitHub, or Linear issue), the model used, and the workflow that produced the change.
 2. **Verify diff scope**:
    - Confirm only files relevant to the task were changed.
    - Confirm no denied paths from `WORKFLOW.md` policy were modified.
@@ -108,8 +108,8 @@ Gitea issue discovery is poll-based. Do not configure repository webhooks for
 aiops-platform; the retired trigger API and HMAC webhook secret are not part of
 the SPEC-aligned runtime. Operational requirements:
 
-- Scope `GITEA_TOKEN` to the repositories the poller and agent tools actually need.
-- Keep tracker state in `aiops/*` labels so the poller can select active issues without receiving webhooks.
+- Scope `GITEA_TOKEN` to the repositories the worker and agent tools actually need.
+- Keep tracker state in `aiops/*` labels so the worker can select active issues without receiving webhooks.
 - Treat issue titles, bodies, labels, and comments as user-authored content; avoid logging more than the minimal diagnostics needed to identify a task.
 
 ## Incident response checklist

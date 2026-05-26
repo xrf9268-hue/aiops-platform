@@ -4,18 +4,17 @@ package e2e
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
-	"github.com/xrf9268-hue/aiops-platform/internal/queue"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
@@ -23,21 +22,14 @@ import (
 )
 
 func TestGiteaMockLoop_HappyPath(t *testing.T) {
-	testStart := time.Now()
-	t.Cleanup(func() { bed.resetState(t, testStart) })
-
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	taskID, owner, repo := runGiteaPollerWorkerTask(t, ctx, "demo-happy", "first task", "Make a tiny change.", "mock-happy.md")
+	taskID, owner, repo, events := runGiteaWorkerTask(t, ctx, "demo-happy", "first task", "Make a tiny change.", "mock-happy.md")
 
-	events, err := queue.New(bed.pg.pool).TaskEvents(ctx, taskID)
-	if err != nil {
-		t.Fatalf("TaskEvents: %v", err)
-	}
 	seen := map[string]bool{}
-	for _, ev := range events {
-		seen[ev.EventType] = true
+	for _, ev := range events.byTask(taskID) {
+		seen[ev.Kind] = true
 	}
 	for _, want := range []string{task.EventWorkflowResolved, task.EventRunnerStart, task.EventRunnerEnd} {
 		if !seen[want] {
@@ -45,12 +37,9 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 		}
 	}
 
-	var workBranch string
-	if err := bed.pg.pool.QueryRow(ctx, `SELECT work_branch FROM tasks WHERE id=$1`, taskID).Scan(&workBranch); err != nil {
-		t.Fatalf("query work_branch: %v", err)
-	}
+	workBranch := events.task(taskID).WorkBranch
 	if !regexp.MustCompile(`^ai/[0-9]+$`).MatchString(workBranch) {
-		t.Fatalf("unexpected poller work branch %q", workBranch)
+		t.Fatalf("unexpected worker task branch %q", workBranch)
 	}
 	branchExists, err := bed.gitea.getBranch(ctx, owner, repo, workBranch)
 	if err != nil {
@@ -69,9 +58,6 @@ func TestGiteaMockLoop_HappyPath(t *testing.T) {
 }
 
 func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
-	testStart := time.Now()
-	t.Cleanup(func() { bed.resetState(t, testStart) })
-
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
@@ -174,7 +160,7 @@ func (d *giteaReconcileBlockingDispatcher) Spawn(ctx context.Context, issue trac
 	return ch
 }
 
-func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fixture string) (taskID, owner, repoName string) {
+func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fixture string) (taskID, owner, repoName string, events *e2eEventRecorder) {
 	t.Helper()
 
 	owner = bed.gitea.botUser
@@ -212,25 +198,22 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
 
-	store := queue.New(bed.pg.pool)
+	events = &e2eEventRecorder{}
 	dispatcher := orchestrator.WorkerTaskDispatcher{
-		BuildRecordedTask: func(issue tracker.Issue) (orchestrator.BuiltTask, error) {
+		BuildTask: func(issue tracker.Issue) (task.Task, error) {
 			tk, err := orchestrator.TaskFromIssue(issue, cfg)
 			if err != nil {
-				return orchestrator.BuiltTask{}, err
+				return task.Task{}, err
 			}
-			recorded, _, err := store.Enqueue(ctx, tk)
-			if err != nil {
-				return orchestrator.BuiltTask{}, fmt.Errorf("record task row: %w", err)
-			}
-			return orchestrator.BuiltTask{Task: tk, RecordedQueueID: recorded.ID}, nil
+			events.recordTask(tk)
+			return tk, nil
 		},
 		Config: worker.Config{
 			WorkspaceRoot: tmpDir(),
 			MirrorRoot:    tmpDir(),
 			Workflow:      serviceWorkflow,
 		},
-		Emitter: store,
+		Emitter: events,
 	}
 	orch := orchestrator.New(orchestrator.NewOrchestratorState(15000, 1), orchestrator.Deps{
 		Dispatcher: dispatcher,
@@ -248,24 +231,143 @@ func runGiteaPollerWorkerTask(t *testing.T, ctx context.Context, repo, title, bo
 	}
 
 	pollUntil(t, 90*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
-		row := bed.pg.pool.QueryRow(ctx, `SELECT id, status FROM tasks WHERE source_type=$1 AND source_event_id=$2`, "gitea_issue", fmt.Sprintf("#%d", issueNum))
-		var id, status string
-		if err := row.Scan(&id, &status); err != nil {
-			if err == sql.ErrNoRows {
-				return false, nil
-			}
-			return false, err
-		}
-		if status != string(task.StatusSucceeded) {
+		tk, ok := events.taskBySource("gitea_issue", fmt.Sprintf("#%d", issueNum))
+		if !ok {
 			return false, nil
 		}
-		taskID = id
+		succeeded, err := events.taskSucceeded(tk.ID)
+		if err != nil {
+			return false, err
+		}
+		if !succeeded {
+			return false, nil
+		}
+		taskID = tk.ID
 		return true, nil
 	})
 	if taskID == "" {
-		t.Fatalf("poller worker task did not complete")
+		t.Fatalf("worker task did not complete")
 	}
-	return taskID, owner, repo
+	return taskID, owner, repo, events
+}
+
+type e2eRecordedEvent struct {
+	TaskID  string
+	Kind    string
+	Message string
+	Payload any
+}
+
+type e2eEventRecorder struct {
+	mu     sync.Mutex
+	tasks  map[string]task.Task
+	events []e2eRecordedEvent
+}
+
+func (r *e2eEventRecorder) recordTask(tk task.Task) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.tasks == nil {
+		r.tasks = map[string]task.Task{}
+	}
+	r.tasks[tk.ID] = tk
+}
+
+func (r *e2eEventRecorder) task(id string) task.Task {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tasks[id]
+}
+
+func (r *e2eEventRecorder) taskBySource(sourceType, sourceEventID string) (task.Task, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, tk := range r.tasks {
+		if tk.SourceType == sourceType && tk.SourceEventID == sourceEventID {
+			return tk, true
+		}
+	}
+	return task.Task{}, false
+}
+
+func (r *e2eEventRecorder) byTask(taskID string) []e2eRecordedEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []e2eRecordedEvent
+	for _, ev := range r.events {
+		if ev.TaskID == taskID {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+func (r *e2eEventRecorder) taskSucceeded(taskID string) (bool, error) {
+	var sawSucceededPhase, sawRunnerEndOK bool
+	for _, ev := range r.byTask(taskID) {
+		switch ev.Kind {
+		case task.EventRunPhaseTransition:
+			to, ok := payloadString(ev.Payload, "to")
+			if !ok {
+				return false, fmt.Errorf("run phase transition missing string to payload: %#v", ev.Payload)
+			}
+			if to == string(task.PhaseSucceeded) {
+				sawSucceededPhase = true
+			}
+		case task.EventRunnerEnd:
+			okValue, ok := payloadBool(ev.Payload, "ok")
+			if !ok {
+				return false, fmt.Errorf("runner_end missing bool ok payload: %#v", ev.Payload)
+			}
+			if okValue {
+				sawRunnerEndOK = true
+			}
+		}
+	}
+	return sawSucceededPhase && sawRunnerEndOK, nil
+}
+
+func payloadString(payload any, key string) (string, bool) {
+	switch p := payload.(type) {
+	case map[string]any:
+		if v, ok := p[key].(string); ok {
+			return v, true
+		}
+	case map[string]string:
+		v, ok := p[key]
+		return v, ok
+	case task.PhaseTransition:
+		if key == "to" {
+			return string(p.To), p.To != ""
+		}
+		if key == "from" {
+			return string(p.From), p.From != ""
+		}
+	}
+	return "", false
+}
+
+func payloadBool(payload any, key string) (bool, bool) {
+	if p, ok := payload.(map[string]any); ok {
+		if v, ok := p[key].(bool); ok {
+			return v, true
+		}
+	}
+	return false, false
+}
+
+func (r *e2eEventRecorder) AddEvent(_ context.Context, taskID, kind, msg string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e2eRecordedEvent{TaskID: taskID, Kind: kind, Message: msg})
+	return nil
+}
+
+func (r *e2eEventRecorder) AddEventWithPayload(_ context.Context, taskID, kind, msg string, payload any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, e2eRecordedEvent{TaskID: taskID, Kind: kind, Message: msg, Payload: payload})
+	return nil
 }
 
 func writeE2EServiceWorkflow(t *testing.T, body, cloneURL string) string {

@@ -94,7 +94,7 @@ verify:
     - test -z "$(gofmt -l $(git ls-files '*.go'))"
     - go mod tidy && git diff --exit-code -- go.mod go.sum
     - go test -race -covermode=atomic ./...
-    - go build ./cmd/worker ./cmd/linear-poller ./cmd/gitea-poller
+    - go build ./cmd/worker
 
 pr:
   draft: true

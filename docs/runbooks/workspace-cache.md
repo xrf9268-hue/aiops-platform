@@ -223,11 +223,9 @@ vintage that may have written to disk
    lowercased the workspace key and collapsed non-letter/digit runes
    into a single `-` separator. This matches dirs named e.g.
    `linear_issue/issue-3-rework-2026-05-16t10-00-00z` produced by an
-   older worker for an active Linear Rework issue. The poller composes
-   the Rework workspace key from `issue.ID` (see
-   `cmd/linear-poller/main.go`'s `sourceEventID`), not
-   `issue.Identifier`, so the base of the dir name is the issue ID
-   (`issue-3`) rather than the human-facing identifier (`LIN-123`).
+   older worker for an active Linear Rework issue, where the base of
+   the dir name was the issue ID (`issue-3`) rather than the
+   human-facing identifier (`LIN-123`).
 
 Plain (non-rework) per-issue dirs created under the old sanitizer are
 not back-compat-matched and will be reconciled away.
