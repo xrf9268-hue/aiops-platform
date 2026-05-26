@@ -37,17 +37,6 @@ func newLoopbackRequest(method, target string, body io.Reader) *http.Request {
 	return req
 }
 
-func samePath(a, b string) bool {
-	eval := func(path string) string {
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return path
-		}
-		return resolved
-	}
-	return eval(a) == eval(b)
-}
-
 func (f fakeReconcileTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
 	want := map[string]struct{}{}
 	for _, state := range states {

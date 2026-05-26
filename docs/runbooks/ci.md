@@ -25,7 +25,10 @@ Checks:
 - setup Go from `go.mod`
 - Go module download
 - `gofmt` check
-- report-only `golangci-lint` baseline for earned Go engineering rules
+- blocking `golangci-lint` correctness gate for `errorlint`, `ineffassign`,
+  and `unused`
+- report-only `golangci-lint` baseline for the remaining earned Go engineering
+  rules
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
 - build `worker` and `tui`
@@ -45,12 +48,13 @@ only if the rebuilt image still contains a fixed finding. Do not add a
 `.trivyignore` entry for a vulnerability that the package manager can already
 fix.
 
-The `golangci-lint` step is intentionally report-only for lint findings during
-the initial baseline. It runs with `--issues-exit-code=0` so CI surfaces
-`errorlint`, `contextcheck`, `funlen`, `gocognit`, and related findings without
-blocking existing debt. Configuration, action, or runtime failures still fail
-the workflow. New PRs should avoid adding reported violations; follow-up cleanup
-PRs can later tighten the gate once the baseline is below the agreed threshold.
+The `golangci-lint` gate runs in two phases. The first phase blocks on the
+clean low-risk linters (`errorlint`, `ineffassign`, and `unused`) so
+regressions in those classes fail CI. The second phase keeps the full
+earned-rule baseline visible with `--issues-exit-code=0` while the remaining
+classes (`contextcheck`, `errcheck`, `funlen`, `gocognit`, `gocritic`,
+`staticcheck`, and `unparam`) are burned down in follow-up cleanup.
+Configuration, action, or runtime failures still fail the workflow.
 
 ### Release
 
@@ -88,6 +92,7 @@ Run:
 ```bash
 go mod tidy
 gofmt -w cmd internal
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=errorlint,ineffassign,unused
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
 go test ./...
 go build ./cmd/worker ./cmd/tui

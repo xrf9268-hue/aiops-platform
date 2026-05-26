@@ -35,34 +35,54 @@ func TestCIRunsSecurityScanning(t *testing.T) {
 	}
 }
 
-// TestCIRunsReportOnlyGoLint guards #413's rollout model: newly earned Go
-// engineering rules need a machine-visible golangci-lint gate, but the initial
-// baseline must be report-only so existing violations can be burned down in
-// follow-up PRs.
-func TestCIRunsReportOnlyGoLint(t *testing.T) {
+// TestCIRunsTwoPhaseGoLint guards #413/#433's rollout model: clean low-risk
+// linters block CI, while the remaining baseline stays visible as report-only.
+func TestCIRunsTwoPhaseGoLint(t *testing.T) {
 	ci := readCIWorkflow(t)
-	const stepName = "      - name: Run golangci-lint (report only)"
-	stepStart := strings.Index(ci, stepName)
-	if stepStart < 0 {
-		t.Fatalf("ci.yml is missing %q", stepName)
+
+	blocking := workflowStep(t, ci, "Run golangci-lint blocking correctness gate")
+	for _, want := range []string{
+		"golangci/golangci-lint-action@",
+		"version: v2.",
+		"--config=.golangci.yml",
+		"--enable-only=errorlint,ineffassign,unused",
+	} {
+		if !strings.Contains(blocking, want) {
+			t.Errorf("blocking golangci-lint step = %q, want marker %q", blocking, want)
+		}
 	}
-	step := ci[stepStart:]
-	if next := strings.Index(step[len(stepName):], "\n      - name:"); next >= 0 {
-		step = step[:len(stepName)+next]
+	if strings.Contains(blocking, "--issues-exit-code=0") {
+		t.Errorf("blocking golangci-lint step = %q, want no report-only marker", blocking)
 	}
+
+	reportOnly := workflowStep(t, ci, "Run golangci-lint report-only baseline")
 	for _, want := range []string{
 		"golangci/golangci-lint-action@",
 		"version: v2.",
 		"--config=.golangci.yml",
 		"--issues-exit-code=0",
 	} {
-		if !strings.Contains(step, want) {
-			t.Errorf("golangci-lint step is missing report-only marker %q", want)
+		if !strings.Contains(reportOnly, want) {
+			t.Errorf("report-only golangci-lint step = %q, want marker %q", reportOnly, want)
 		}
 	}
-	if strings.Contains(step, "continue-on-error") {
-		t.Errorf("golangci-lint step must not mask configuration or action failures with continue-on-error")
+	if strings.Contains(reportOnly, "continue-on-error") {
+		t.Errorf("report-only golangci-lint step = %q, want no continue-on-error", reportOnly)
 	}
+}
+
+func workflowStep(t *testing.T, workflow, name string) string {
+	t.Helper()
+	stepName := "      - name: " + name
+	stepStart := strings.Index(workflow, stepName)
+	if stepStart < 0 {
+		t.Fatalf("ci.yml is missing step %q", name)
+	}
+	step := workflow[stepStart:]
+	if next := strings.Index(step[len(stepName):], "\n      - name:"); next >= 0 {
+		step = step[:len(stepName)+next]
+	}
+	return step
 }
 
 // TestCIActionsArePinnedToSHA guards supply-chain hardening (#372): every

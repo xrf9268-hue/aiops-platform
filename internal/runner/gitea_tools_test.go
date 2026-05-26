@@ -110,7 +110,7 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 		t.Fatalf("tool result leaked Gitea token: %q", result)
 	}
 
-	auth, _, _, body, requests := server.recorded()
+	auth, _, _, _, requests := server.recorded()
 	if requests != 3 {
 		t.Fatalf("requests = %d, want GET, DELETE, POST", requests)
 	}
@@ -124,7 +124,7 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	if paths[1] != "/api/v1/repos/owner/repo/issues/7/labels" || paths[2] != "/api/v1/repos/owner/repo/issues/7/labels/101" {
 		t.Fatalf("paths = %#v", paths)
 	}
-	body = bodies[1]
+	body := bodies[1]
 	if strings.Contains(body, token) || !strings.Contains(body, "aiops/in-progress") {
 		t.Fatalf("unexpected request body: %s", body)
 	}

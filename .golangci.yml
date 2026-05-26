@@ -1,5 +1,7 @@
 version: "2"
 
+# Full lint surface. CI runs the clean low-risk subset as blocking, then runs
+# this full set report-only while follow-up cleanup continues.
 run:
   timeout: 5m
 

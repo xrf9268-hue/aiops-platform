@@ -347,16 +347,6 @@ func nonEmptyStateList(states []string) []string {
 	return out
 }
 
-func issueIDSet(issues []tracker.Issue) map[string]struct{} {
-	out := make(map[string]struct{}, len(issues))
-	for _, issue := range issues {
-		if issue.ID != "" {
-			out[issue.ID] = struct{}{}
-		}
-	}
-	return out
-}
-
 func issueMapIDSet(issues map[string]tracker.Issue) map[string]struct{} {
 	out := make(map[string]struct{}, len(issues))
 	for id := range issues {

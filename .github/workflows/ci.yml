@@ -97,7 +97,13 @@ jobs:
             exit 1
           fi
 
-      - name: Run golangci-lint (report only)
+      - name: Run golangci-lint blocking correctness gate
+        uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
+        with:
+          version: v2.12.2
+          args: --config=.golangci.yml --enable-only=errorlint,ineffassign,unused
+
+      - name: Run golangci-lint report-only baseline
         uses: golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c # v9.2.1
         with:
           version: v2.12.2

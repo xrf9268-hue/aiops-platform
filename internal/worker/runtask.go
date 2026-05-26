@@ -317,7 +317,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		recordPolicyViolation(ctx, ev, t.ID, t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
 		WriteFailureArtifacts(ctx, workdir, nil, "policy check failed: "+ErrSummary(err))
 		if feedbackErr != nil {
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %v", feedbackErr, err), NonRetryable: true}
+			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %w", feedbackErr, err), NonRetryable: true}
 		}
 		if !willRetry {
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("repeated policy violation after %d attempts: %w", feedback.Count, err), NonRetryable: true}
