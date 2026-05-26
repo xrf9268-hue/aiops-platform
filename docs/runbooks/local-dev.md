@@ -150,6 +150,13 @@ container against your own workflow:
 The default Compose service starts only `worker` unless a legacy
 profile is explicitly requested (see
 [Section 4](#4-legacy-queue-driven-pollers-d6d7d8)).
+The worker image and Compose service include a health check against
+`http://127.0.0.1:${AIOPS_HEALTHCHECK_PORT:-4000}/livez` from inside the
+container. Use `/readyz` when a local orchestrator needs the startup-readiness
+signal instead of the liveness signal; both probes are unauthenticated, and
+`/readyz` returns `503` until startup reconciliation finishes. If you change the
+worker HTTP port, set `AIOPS_HEALTHCHECK_PORT` to match; if you disable the HTTP
+listener with `server.port: -1`, disable the container health check too.
 
 The worker's loopback dashboard is not reachable from the host under the
 base Compose file. To reach it, merge the opt-in overlay, which binds

@@ -20,7 +20,14 @@ services:
       GITEA_TOKEN: ${GITEA_TOKEN}
       AIOPS_WORKSPACE_ROOT: /workspaces
       AIOPS_WORKFLOW_PATH: /app/examples/WORKFLOW.md
+      AIOPS_HEALTHCHECK_PORT: ${AIOPS_HEALTHCHECK_PORT:-4000}
       LINEAR_API_KEY: ${LINEAR_API_KEY}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${AIOPS_HEALTHCHECK_PORT:-4000}/livez >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     volumes:
       - workspaces:/workspaces
       - ../examples:/app/examples:ro

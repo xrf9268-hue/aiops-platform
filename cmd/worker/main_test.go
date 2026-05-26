@@ -424,6 +424,46 @@ func TestRootDashboardRejectsUnsafeMethodsWithHeadInAllow(t *testing.T) {
 	}
 }
 
+func TestHealthProbeEndpointsBypassStateHTTPAccessGuard(t *testing.T) {
+	called := false
+	server := newStateHTTPServerWithAuthToken("0.0.0.0", 0, "state-token", func(context.Context) (orchestrator.StateView, error) {
+		called = true
+		return orchestrator.StateView{}, nil
+	})
+
+	for _, path := range []string{"/livez", "/readyz"} {
+		req := httptest.NewRequest(http.MethodGet, "http://worker.example:4000"+path, nil)
+		req.RemoteAddr = "172.18.0.1:54321"
+		w := httptest.NewRecorder()
+		server.Handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status code = %d, want %d; body=%s", path, w.Code, http.StatusOK, w.Body.String())
+		}
+		if got := w.Body.String(); got != "ok\n" {
+			t.Fatalf("%s body = %q, want ok newline", path, got)
+		}
+	}
+	if called {
+		t.Fatal("snapshot function should not be called for health probes")
+	}
+}
+
+func TestHealthProbeEndpointsRejectUnsafeMethods(t *testing.T) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
+		t.Fatal("snapshot function should not be called for health probes")
+		return orchestrator.StateView{}, nil
+	})
+	for _, path := range []string{"/livez", "/readyz"} {
+		req := newLoopbackRequest(http.MethodPost, "http://127.0.0.1:4000"+path, nil)
+		w := httptest.NewRecorder()
+		server.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != http.MethodGet {
+			t.Fatalf("POST %s status/Allow = %d/%q, want 405/GET; body=%s", path, w.Code, w.Header().Get("Allow"), w.Body.String())
+		}
+	}
+}
+
 func TestStateHTTPHandlerPropagatesRequestCancellation(t *testing.T) {
 	requestErr := context.Canceled
 	handler := stateHTTPHandler(func(context.Context) (orchestrator.StateView, error) {
@@ -1088,7 +1128,7 @@ func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
 	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", -1, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("disabled state server must not evaluate snapshot")
 		return orchestrator.StateView{}, nil
-	})
+	}, stateHTTPAlwaysReady)
 	if err != nil {
 		t.Fatalf("startStateHTTPServer disabled: %v", err)
 	}
@@ -1107,7 +1147,7 @@ func TestStartStateHTTPServerDoesNotFailWorkerWhenPortInUse(t *testing.T) {
 
 	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", port, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
-	})
+	}, stateHTTPAlwaysReady)
 	if err != nil {
 		t.Fatalf("startStateHTTPServer occupied port: %v", err)
 	}
@@ -1122,7 +1162,7 @@ func TestStartStateHTTPServerBindsPrivateLoopback(t *testing.T) {
 
 	handle, err := startStateHTTPServer(ctx, "127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
-	})
+	}, stateHTTPAlwaysReady)
 	if err != nil {
 		t.Fatalf("startStateHTTPServer: %v", err)
 	}
@@ -1159,6 +1199,53 @@ func TestStateHTTPServerControllerStopsOnDisabledReload(t *testing.T) {
 	}
 	if controller.cancel != nil || controller.addr != nil {
 		t.Fatalf("controller after disable = cancel:%v addr:%v, want stopped server", controller.cancel, controller.addr)
+	}
+}
+
+func TestStateHTTPServerControllerServesReadyzBeforeReadiness(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := &stateHTTPReadiness{}
+	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	controller.readiness = ready.Status
+
+	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
+		t.Fatalf("start state HTTP server: %v", err)
+	}
+	defer controller.stop()
+	if controller.addr == nil {
+		t.Fatal("controller addr = nil, want running server")
+	}
+	client := http.Client{Timeout: 2 * time.Second}
+	url := "http://" + controller.addr.String() + "/readyz"
+
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatalf("GET /readyz before readiness: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read /readyz before readiness: %v", err)
+	}
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("GET /readyz before readiness status = %d, want %d; body=%s", resp.StatusCode, http.StatusServiceUnavailable, string(body))
+	}
+
+	ready.MarkReady()
+	resp, err = client.Get(url)
+	if err != nil {
+		t.Fatalf("GET /readyz after readiness: %v", err)
+	}
+	body, err = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read /readyz after readiness: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK || string(body) != "ok\n" {
+		t.Fatalf("GET /readyz after readiness status/body = %d/%q, want 200/ok", resp.StatusCode, string(body))
 	}
 }
 
@@ -2468,7 +2555,7 @@ func TestStartStateHTTPServerHonorsWiderBind(t *testing.T) {
 	defer cancel()
 	handle, err := startStateHTTPServer(ctx, "0.0.0.0", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
-	})
+	}, stateHTTPAlwaysReady)
 	if err != nil {
 		t.Fatalf("startStateHTTPServer: %v", err)
 	}

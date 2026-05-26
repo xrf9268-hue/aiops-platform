@@ -51,6 +51,13 @@ user `aiops` with the token as the password. Without a token, unauthenticated
 requests must have both a loopback Host header and a loopback TCP peer;
 non-loopback peers fail closed.
 
+`GET /livez` and `GET /readyz` are the only unauthenticated endpoints on this
+listener. They bypass the state API guard and return only `ok`, with no runtime
+state or agent text, so container probes can use them without
+`AIOPS_STATE_API_TOKEN`. `/livez` proves the HTTP listener is serving requests.
+`/readyz` returns `503` until startup has loaded the workflow, constructed the
+tracker client, and completed startup reconciliation.
+
 The effective port is resolved in this order, per SPEC §13.7:
 
 1. The CLI flag `--port` if provided. `--port -1` disables the server,
