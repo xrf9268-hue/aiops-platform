@@ -9,8 +9,8 @@
 #
 # The overlay builds the `codex-worker` Dockerfile target and feeds sensitive
 # values through Docker-supported secret files where possible. Codex auth/config
-# are mounted as a read-only host directory because Codex expects a CODEX_HOME
-# directory rather than one secret file.
+# live in a CODEX_HOME directory, which Codex CLI 0.133 writes while loading
+# configuration and refreshing auth state.
 services:
   worker:
     build:
@@ -29,7 +29,7 @@ services:
       - worker
     volumes:
       - ${AIOPS_WORKFLOW_PATH:?set AIOPS_WORKFLOW_PATH to a workflow file}:/app/WORKFLOW.md:ro
-      - ${AIOPS_CODEX_HOME_PATH:?set AIOPS_CODEX_HOME_PATH to a Codex home directory}:/home/aiops/.codex:ro
+      - ${AIOPS_CODEX_HOME_PATH:?set AIOPS_CODEX_HOME_PATH to a Codex home directory}:/home/aiops/.codex
     secrets:
       - linear_api_key
       - gitea_token
