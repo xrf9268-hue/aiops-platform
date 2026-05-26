@@ -375,15 +375,14 @@ type CommandConfig struct {
 	// nothing.
 	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
 	// App-server runtime settings mirror the Symphony/Codex app-server
-	// protocol fields. They are pass-through values for the Codex runtime,
-	// so the loader validates only presence/timeout bounds rather than
-	// maintaining Codex-owned enums.
-	ApprovalPolicy    any            `yaml:"approval_policy,omitempty" json:"approval_policy,omitempty"`
-	ThreadSandbox     string         `yaml:"thread_sandbox,omitempty" json:"thread_sandbox,omitempty"`
-	TurnSandboxPolicy map[string]any `yaml:"turn_sandbox_policy,omitempty" json:"turn_sandbox_policy,omitempty"`
-	TurnTimeoutMs     int            `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
-	ReadTimeoutMs     int            `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
-	StallTimeoutMs    int            `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
+	// protocol fields. Keep Codex-owned wire shapes typed here so schema
+	// drift fails at workflow load or runner tests instead of in a live run.
+	ApprovalPolicy    any                `yaml:"approval_policy,omitempty" json:"approval_policy,omitempty"`
+	ThreadSandbox     string             `yaml:"thread_sandbox,omitempty" json:"thread_sandbox,omitempty"`
+	TurnSandboxPolicy CodexSandboxPolicy `yaml:"turn_sandbox_policy,omitempty" json:"turn_sandbox_policy,omitempty"`
+	TurnTimeoutMs     int                `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
+	ReadTimeoutMs     int                `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
+	StallTimeoutMs    int                `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
 	// LinearGraphQL narrows the agent-visible linear_graphql client-side tool
 	// (SPEC §15.5 harness hardening). The field lives on the shared
 	// CommandConfig type for the same pragmatic reason as Profile above; the
@@ -587,10 +586,11 @@ func DefaultConfig() Config {
 				"request_permissions": false,
 				"mcp_elicitations":    false,
 			}},
-			ThreadSandbox:  "workspace-write",
-			TurnTimeoutMs:  3600000,
-			ReadTimeoutMs:  5000,
-			StallTimeoutMs: 300000,
+			ThreadSandbox:     "workspace-write",
+			TurnSandboxPolicy: DefaultCodexSandboxPolicy(),
+			TurnTimeoutMs:     3600000,
+			ReadTimeoutMs:     5000,
+			StallTimeoutMs:    300000,
 		},
 		Claude:  CommandConfig{Command: "claude"},
 		Policy:  PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},

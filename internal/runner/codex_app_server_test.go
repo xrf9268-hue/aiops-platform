@@ -26,12 +26,10 @@ func appServerInput(workdir string) RunInput {
 			Agent:     workflow.AgentConfig{MaxTurns: 8},
 			Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
 			Codex: workflow.CommandConfig{
-				Command:        "codex app-server",
-				ApprovalPolicy: "never",
-				ThreadSandbox:  "workspace-write",
-				TurnSandboxPolicy: map[string]any{
-					"mode": "workspace-write",
-				},
+				Command:           "codex app-server",
+				ApprovalPolicy:    "never",
+				ThreadSandbox:     "workspace-write",
+				TurnSandboxPolicy: workflow.DefaultCodexSandboxPolicy(),
 				EnvPassthrough: []string{
 					"CODEX_ARGV_LOG",
 					"CODEX_STDIN_LOG",
@@ -198,12 +196,90 @@ for line in sys.stdin:
 	}
 	turnParams := messages[3]["params"].(map[string]any)
 	input := turnParams["input"].([]any)[0].(map[string]any)
+	if input["type"] != "text" {
+		t.Fatalf("turn input type = %#v, want text", input["type"])
+	}
 	if input["text"] != "app-server prompt canary" {
 		t.Fatalf("turn prompt text = %#v, want prompt file contents", input["text"])
+	}
+	if textElements, ok := input["text_elements"].([]any); !ok || len(textElements) != 0 {
+		t.Fatalf("turn input text_elements = %#v, want empty array", input["text_elements"])
 	}
 	if turnParams["title"] != "AIOPS-64: Wire Codex app-server" {
 		t.Fatalf("turn title = %#v", turnParams["title"])
 	}
+	sandboxPolicy := turnParams["sandboxPolicy"].(map[string]any)
+	if sandboxPolicy["type"] != "workspaceWrite" {
+		t.Fatalf("sandboxPolicy.type = %#v, want workspaceWrite", sandboxPolicy["type"])
+	}
+	if writableRoots, ok := sandboxPolicy["writableRoots"].([]any); !ok || len(writableRoots) != 0 {
+		t.Fatalf("sandboxPolicy.writableRoots = %#v, want empty array", sandboxPolicy["writableRoots"])
+	}
+	if sandboxPolicy["networkAccess"] != false {
+		t.Fatalf("sandboxPolicy.networkAccess = %#v, want false", sandboxPolicy["networkAccess"])
+	}
+	for _, forbidden := range []string{"mode", "access", "readOnlyAccess"} {
+		if _, ok := sandboxPolicy[forbidden]; ok {
+			t.Fatalf("sandboxPolicy contains legacy field %q: %#v", forbidden, sandboxPolicy)
+		}
+	}
+}
+
+func TestCodexAppServerTurnStartPayloadMatchesSchemaSnapshot(t *testing.T) {
+	snapshotBytes, err := os.ReadFile(filepath.Join("testdata", "codex_app_server_v0_133_turn_start_schema.json"))
+	if err != nil {
+		t.Fatalf("read schema snapshot: %v", err)
+	}
+	var snapshot struct {
+		UserInputTextRequired []string `json:"user_input_text_required"`
+		SandboxPolicyTypes    []string `json:"sandbox_policy_types"`
+		ForbiddenLegacyFields []string `json:"forbidden_legacy_fields"`
+	}
+	if err := json.Unmarshal(snapshotBytes, &snapshot); err != nil {
+		t.Fatalf("decode schema snapshot: %v", err)
+	}
+
+	payload := codexAppServerTurnStartParams{
+		ThreadID: "thread-1",
+		Input: []codexAppServerTextInput{{
+			Type:         "text",
+			Text:         "hello",
+			TextElements: []any{},
+		}},
+		SandboxPolicy: workflow.DefaultCodexSandboxPolicy(),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal turn/start payload: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode turn/start payload: %v", err)
+	}
+	input := decoded["input"].([]any)[0].(map[string]any)
+	for _, key := range snapshot.UserInputTextRequired {
+		if _, ok := input[key]; !ok {
+			t.Fatalf("turn/start text input missing schema-required key %q: %s", key, raw)
+		}
+	}
+	sandboxPolicy := decoded["sandboxPolicy"].(map[string]any)
+	if !containsString(snapshot.SandboxPolicyTypes, sandboxPolicy["type"].(string)) {
+		t.Fatalf("sandboxPolicy.type = %#v, want one of %#v", sandboxPolicy["type"], snapshot.SandboxPolicyTypes)
+	}
+	for _, key := range snapshot.ForbiddenLegacyFields {
+		if _, ok := sandboxPolicy[key]; ok {
+			t.Fatalf("turn/start sandboxPolicy contains legacy key %q: %s", key, raw)
+		}
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCodexAppServerRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {

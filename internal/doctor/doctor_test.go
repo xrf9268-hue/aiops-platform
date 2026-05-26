@@ -184,6 +184,34 @@ exit 1
 	}
 }
 
+func TestBuildReportRealModeKeepsCodexAppServerProbeStdinOpen(t *testing.T) {
+	wrapper := installFakeCodexWrapperBody(t, `#!/usr/bin/env python3
+import json, select, sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "app-server":
+    _ = sys.stdin.readline()
+    ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+    if ready and sys.stdin.readline() == "":
+        print(json.dumps({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"stdin closed during probe"}}), flush=True)
+        sys.exit(0)
+    print(json.dumps({"jsonrpc":"2.0","id":1,"result":{"ok":True}}), flush=True)
+    sys.exit(0)
+
+sys.exit(1)
+`)
+	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
+	report := BuildReport(context.Background(), Options{
+		WorkflowPath: path,
+		Mode:         "real",
+		Runner:       dockerOnlyRunner,
+	})
+
+	check := findCheck(t, report, "Codex app-server")
+	if check.Status != Pass {
+		t.Fatalf("Codex app-server check = %+v; want PASS with stdin held open", check)
+	}
+}
+
 func TestBuildReportRealModeSkipsAppServerProbeForCodexExec(t *testing.T) {
 	installFakeCodexWithoutAppServer(t)
 	path := writeWorkflowWithAgent(t, "codex")

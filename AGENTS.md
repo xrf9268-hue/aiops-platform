@@ -173,7 +173,20 @@ specific observed failure per the "Earned rules" principle.
    PR #304 had to retrofit `recoverPanic` across actor + timer
    goroutines after a panic in one path crashed the whole worker.
 
-3. **Run an adversarial pass on your own diff before asking a human
+3. **Treat generated downstream protocol schemas as separate authorities.**
+   Symphony's Elixir config schema is the reference for workflow/config shape,
+   but it is not the authority for every downstream agent wire protocol. When
+   touching `internal/runner` paths that speak to `codex app-server`, validate
+   the request structs against the current OpenAI Codex app-server protocol
+   schema for that Codex version. Do not hand-build `turn/start` payloads with
+   free `map[string]any`, do not translate legacy sandbox shapes such as
+   `mode: workspace-write`, and keep local schema contract tests in step with
+   any Codex CLI upgrade. **Earned by:** Codex CLI 0.133 rejected the old
+   aiops-platform `turn/start` payload because `UserInput.Text` required
+   `text_elements` and `SandboxPolicy` required typed variants such as
+   `type: workspaceWrite`.
+
+4. **Run an adversarial pass on your own diff before asking a human
    to look.** `@codex review` reads SPEC + the Elixir reference +
    this file, and surfaces precisely the gaps that human review
    tends to miss. Trigger it on the head commit before marking the

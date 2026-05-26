@@ -338,6 +338,21 @@ type appServerClient struct {
 	lastTerminal      time.Time
 }
 
+type codexAppServerTextInput struct {
+	Type         string `json:"type"`
+	Text         string `json:"text"`
+	TextElements []any  `json:"text_elements"`
+}
+
+type codexAppServerTurnStartParams struct {
+	ThreadID       string                      `json:"threadId"`
+	Input          []codexAppServerTextInput   `json:"input"`
+	CWD            string                      `json:"cwd,omitempty"`
+	Title          string                      `json:"title,omitempty"`
+	ApprovalPolicy any                         `json:"approvalPolicy,omitempty"`
+	SandboxPolicy  workflow.CodexSandboxPolicy `json:"sandboxPolicy"`
+}
+
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
 	c.runtimeEventSink = in.RuntimeEventSink
 	c.phaseTransitionSink = in.PhaseTransitionSink
@@ -395,23 +410,25 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		maxTurns = 20
 	}
 	for turn := 1; turn <= maxTurns; turn++ {
-		input := []map[string]any{{
-			"type": "text",
-			"text": appServerContinuationPrompt(in, turn),
+		input := []codexAppServerTextInput{{
+			Type:         "text",
+			Text:         appServerContinuationPrompt(in, turn),
+			TextElements: []any{},
 		}}
 		if turn == 1 {
-			input = []map[string]any{{
-				"type": "text",
-				"text": prompt,
+			input = []codexAppServerTextInput{{
+				Type:         "text",
+				Text:         prompt,
+				TextElements: []any{},
 			}}
 		}
-		turnResult, err := c.request(ctx, "turn/start", map[string]any{
-			"threadId":       threadID,
-			"input":          input,
-			"cwd":            in.Workdir,
-			"title":          appServerTurnTitle(in),
-			"approvalPolicy": c.approvalPolicy,
-			"sandboxPolicy":  in.Workflow.Config.Codex.TurnSandboxPolicy,
+		turnResult, err := c.request(ctx, "turn/start", codexAppServerTurnStartParams{
+			ThreadID:       threadID,
+			Input:          input,
+			CWD:            in.Workdir,
+			Title:          appServerTurnTitle(in),
+			ApprovalPolicy: c.approvalPolicy,
+			SandboxPolicy:  in.Workflow.Config.Codex.TurnSandboxPolicy,
 		})
 		if err != nil {
 			if turn == 1 {
@@ -483,7 +500,7 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
 }
 
-func (c *appServerClient) request(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+func (c *appServerClient) request(ctx context.Context, method string, params any) (map[string]any, error) {
 	id := c.nextID
 	c.nextID++
 	if err := c.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {

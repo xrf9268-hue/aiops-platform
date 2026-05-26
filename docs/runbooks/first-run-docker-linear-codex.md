@@ -154,6 +154,27 @@ AIOPS_SMOKE_WORKER_BIN=/tmp/aiops-worker \
 Verify the report, Linear comment, final Linear state, and workspace cleanup
 before considering the install validated.
 
+When validating writeback behavior, the disposable issue must exercise the real
+agent-side tracker tool path. A validation-only prompt can prove that
+`codex app-server` accepts the schema, but it does not prove the full Symphony
+contract where the agent performs tracker writes through advertised tools.
+
+For a production-style writeback check, use a fresh disposable issue and require
+the agent to:
+
+- write `.aiops/PLAN.md` and `.aiops/RUN_SUMMARY.md`;
+- call the advertised `linear_graphql` tool for `commentCreate`;
+- call the advertised `linear_graphql` tool for `issueUpdate` to move the issue
+  to a terminal state;
+- avoid shell `curl`, source edits, pushes, and pull requests.
+
+After the run, verify Linear independently with the API or UI: the expected
+comment must exist, the issue must be in the expected terminal state, the worker
+must report `runner_end ok:true` and `verify_end status:ok`, and the issue
+workspace should be cleaned up on the next reconciliation. If you rerun the same
+disposable issue id, clean the previous temporary worktree first; workspace
+branch names are derived from issue ids and can collide.
+
 ## Troubleshooting
 
 | Symptom | Next action |

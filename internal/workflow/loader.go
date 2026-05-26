@@ -440,6 +440,9 @@ func validateConfig(path string, cfg Config) error {
 	if cfg.Server.Port < -1 || cfg.Server.Port == 0 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("%s: server.port must be -1 to disable the local state server or between 1 and 65535", path)
 	}
+	if err := cfg.Codex.TurnSandboxPolicy.Validate("codex.turn_sandbox_policy"); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
 	if strings.TrimSpace(cfg.Claude.Profile) != "" {
 		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
@@ -755,6 +758,9 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	}
 	if cfg.Codex.ThreadSandbox == "" {
 		cfg.Codex.ThreadSandbox = "workspace-write"
+	}
+	if cfg.Codex.TurnSandboxPolicy.IsZero() {
+		cfg.Codex.TurnSandboxPolicy = DefaultCodexSandboxPolicy()
 	}
 	if cfg.Codex.ApprovalPolicy == nil {
 		// Default mirrors codex's `granular` policy with every flag set to
