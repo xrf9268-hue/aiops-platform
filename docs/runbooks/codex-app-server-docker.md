@@ -118,6 +118,48 @@ should remain running on stdio until the worker speaks JSON-RPC to it.
 sending `initialize`, and waiting for a JSON-RPC response. A probe that only
 starts the process and closes stdin is not a valid app-server check.
 
+## GitHub agent credentials
+
+Dogfood workflows that expect the agent shell to run `gh` or push GitHub
+branches need credentials visible from the agent environment. Worker process
+variables such as `GH_TOKEN` and `GITHUB_TOKEN` are stripped before Codex
+subprocesses start, so they are not a supported credential contract.
+
+The Docker overlay supports file-backed `gh` auth for the unprivileged `aiops`
+user:
+
+```bash
+printf '%s' 'replace-with-least-privilege-github-token' > .aiops/secrets/github_token
+chmod 600 .aiops/secrets/github_token
+```
+
+```text
+GITHUB_TOKEN_FILE=$PWD/.aiops/secrets/github_token
+```
+
+The entrypoint writes `/home/aiops/.config/gh/hosts.yml` with `0600`
+permissions, clears plain GitHub token env, and runs `gh auth setup-git` when
+`gh` is installed. Keep the token least-privilege and never commit
+`.aiops/secrets`, `hosts.yml`, or copied credential files. For deploy-key
+installs, mount the dedicated key and `known_hosts` from `deploy/ssh/README.md`
+and use an SSH `repo.clone_url`.
+
+Validate the exact agent environment before moving real issues into an active
+state:
+
+```bash
+docker compose --env-file .env \
+  -f deploy/docker-compose.yml \
+  -f deploy/docker-compose.codex.yml \
+  run --rm worker --doctor --mode=real --github-issue 451 \
+    --github-repo xrf9268-hue/aiops-platform
+```
+
+With `--github-issue`, doctor runs `gh issue view` and `git push --dry-run`
+using the Codex agent environment. Omit `--github-repo` only when the workflow
+configures one GitHub repo. A failure is a deployment blocker; fix the
+credential path before starting the worker.
+
 The supported Compose overlay uses a writable bind for `CODEX_HOME` because
 Codex 0.133 writes while loading configuration and may refresh auth state.
 Use a restricted directory owned by the worker UID/GID. A read-only copy is

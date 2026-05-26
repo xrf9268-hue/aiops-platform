@@ -62,6 +62,8 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
 	mode := fs.String("mode", "mock", "preflight depth: mock or real")
 	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
+	githubIssue := fs.Int("github-issue", 0, "optional GitHub issue number for agent-environment gh and git push preflight")
+	githubRepo := fs.String("github-repo", "", "optional owner/name repo for --github-issue when a workflow configures multiple GitHub repos")
 	if err := fs.Parse(reorderDoctorFlags(args)); err != nil {
 		return doctor.Options{}, err
 	}
@@ -75,7 +77,7 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	if fs.NArg() == 1 {
 		path = fs.Arg(0)
 	}
-	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, Stdout: os.Stdout, Stderr: os.Stderr}, nil
+	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
 }
 
 func reorderDoctorFlags(args []string) []string {
@@ -86,7 +88,7 @@ func reorderDoctorFlags(args []string) []string {
 		case a == "--":
 			positional = append(positional, append([]string{"--"}, args[i+1:]...)...)
 			i = len(args)
-		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url":
+		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url" || a == "--github-issue" || a == "-github-issue" || a == "--github-repo" || a == "-github-repo":
 			flags = append(flags, a)
 			if i+1 < len(args) {
 				flags = append(flags, args[i+1])
