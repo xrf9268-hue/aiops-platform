@@ -63,12 +63,19 @@ api_curl() {
   curl "${args[@]}" "$@"
 }
 
+state_array_contains_issue() {
+  local field="$1"
+  local issue_id="$2"
+  local file="$3"
+  grep -q "\"$field\":[[:space:]]*\[[^]]*\"$issue_id\"" "$file"
+}
+
 mkdir -p "$report_dir"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report="$report_dir/${stamp}-todo-${mode}.md"
 workspace_root="${AIOPS_SMOKE_WORKSPACE_ROOT:-$(mktemp -d "${TMPDIR:-/tmp}/aiops-smoke-workspaces.XXXXXX")}"
-log_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-worker.XXXXXX.log")"
-state_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-state.XXXXXX.json")"
+log_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-worker.log.XXXXXX")"
+state_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-state.json.XXXXXX")"
 
 cleanup() {
   if [ "${worker_pid:-}" ]; then
@@ -80,12 +87,12 @@ trap cleanup EXIT
 
 {
   printf '# aiops todo smoke report\n\n'
-  printf '- timestamp: `%s`\n' "$stamp"
-  printf '- mode: `%s`\n' "$mode"
-  printf '- workflow: `%s`\n' "$workflow"
-  printf '- dashboard_url: `%s`\n' "$dashboard_url"
-  printf '- issue: `%s`\n' "${issue:-not specified}"
-  printf '- workspace_root: `%s`\n\n' "$workspace_root"
+  printf -- '- timestamp: `%s`\n' "$stamp"
+  printf -- '- mode: `%s`\n' "$mode"
+  printf -- '- workflow: `%s`\n' "$workflow"
+  printf -- '- dashboard_url: `%s`\n' "$dashboard_url"
+  printf -- '- issue: `%s`\n' "${issue:-not specified}"
+  printf -- '- workspace_root: `%s`\n\n' "$workspace_root"
 } >"$report"
 
 "$worker_bin" --doctor --mode="$mode" "$workflow" >>"$report"
@@ -133,7 +140,7 @@ failed_before="${failed_before:-0}"
 while [ "$(date +%s)" -lt "$deadline" ]; do
   api_curl "$dashboard_url/api/v1/state" >"$state_file"
   if [ -n "$issue" ] && [ "$selected_observed" = "false" ]; then
-    issue_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-issue.XXXXXX.json")"
+    issue_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-issue.json.XXXXXX")"
     if api_curl "$dashboard_url/api/v1/$issue" >"$issue_file"; then
       selected_observed="true"
       selected_issue_id="$(sed -n 's/.*"issue_id":[[:space:]]*"\([^"]*\)".*/\1/p' "$issue_file" | head -1)"
@@ -144,13 +151,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   failed_now="$(sed -n 's/.*"failed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
   completed_now="${completed_now:-0}"
   failed_now="${failed_now:-0}"
-  if [ -n "$selected_issue_id" ] && grep -q "\"completed\":[^]]*\"$selected_issue_id\"" "$state_file"; then
+  if [ -n "$selected_issue_id" ] && state_array_contains_issue completed "$selected_issue_id" "$state_file"; then
     printf '\n## result\n\nPASS selected issue `%s` completed.\n\n' "$issue" >>"$report"
     printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
     printf '%s\n' "$report"
     exit 0
   fi
-  if [ -n "$selected_issue_id" ] && grep -q "\"failed\":[^]]*\"$selected_issue_id\"" "$state_file"; then
+  if [ -n "$selected_issue_id" ] && state_array_contains_issue failed "$selected_issue_id" "$state_file"; then
     printf '\n## result\n\nFAIL selected issue `%s` failed.\n\n' "$issue" >>"$report"
     printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
     exit 1

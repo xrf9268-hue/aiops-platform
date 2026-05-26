@@ -2388,7 +2388,11 @@ codex:
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
-    mode: workspace-write
+    type: workspaceWrite
+    writableRoots: []
+    networkAccess: false
+    excludeTmpdirEnvVar: false
+    excludeSlashTmp: false
   turn_timeout_ms: 120000
   read_timeout_ms: 250
   stall_timeout_ms: 0
@@ -2411,11 +2415,109 @@ prompt
 	if wf.Config.Codex.ThreadSandbox != "workspace-write" {
 		t.Fatalf("Codex.ThreadSandbox = %q, want workspace-write", wf.Config.Codex.ThreadSandbox)
 	}
-	if got := wf.Config.Codex.TurnSandboxPolicy["mode"]; got != "workspace-write" {
-		t.Fatalf("Codex.TurnSandboxPolicy[mode] = %#v, want workspace-write", got)
+	if got := wf.Config.Codex.TurnSandboxPolicy.Type; got != CodexSandboxWorkspaceWrite {
+		t.Fatalf("Codex.TurnSandboxPolicy.Type = %#v, want workspaceWrite", got)
 	}
 	if wf.Config.Codex.TurnTimeoutMs != 120000 || wf.Config.Codex.ReadTimeoutMs != 250 || wf.Config.Codex.StallTimeoutMs != 0 {
 		t.Fatalf("Codex timeouts = turn %d read %d stall %d, want 120000/250/0", wf.Config.Codex.TurnTimeoutMs, wf.Config.Codex.ReadTimeoutMs, wf.Config.Codex.StallTimeoutMs)
+	}
+}
+
+func TestLoadRejectsLegacyCodexTurnSandboxPolicyFields(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "mode",
+			body: "mode: workspace-write",
+			want: "codex.turn_sandbox_policy.mode",
+		},
+		{
+			name: "read_only_access",
+			body: "type: workspaceWrite\n    readOnlyAccess: restricted",
+			want: "codex.turn_sandbox_policy.readOnlyAccess",
+		},
+		{
+			name: "access",
+			body: "type: readOnly\n    access: restricted",
+			want: "codex.turn_sandbox_policy.access",
+		},
+		{
+			name: "unknown_field",
+			body: "type: workspaceWrite\n    writableRoots: []\n    networkAccess: false\n    excludeTmpdirEnvVar: false\n    excludeSlashTmp: false\n    extra: nope",
+			want: "unsupported field",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+  project_slug: platform
+agent:
+  default: codex-app-server
+codex:
+  turn_sandbox_policy:
+    `+tc.body+`
+---
+prompt
+`)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load(%q) succeeded; want codex.turn_sandbox_policy rejection", path)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load(%q) error = %q; want %q", path, err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsTypedCodexWorkspaceWriteSandboxPolicy(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+  project_slug: platform
+agent:
+  default: codex-app-server
+codex:
+  turn_sandbox_policy:
+    type: workspaceWrite
+    writableRoots:
+      - /tmp/aiops-workspace
+    networkAccess: false
+    excludeTmpdirEnvVar: true
+    excludeSlashTmp: false
+---
+prompt
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", path, err)
+	}
+	policy := wf.Config.Codex.TurnSandboxPolicy
+	if policy.Type != CodexSandboxWorkspaceWrite {
+		t.Fatalf("Codex.TurnSandboxPolicy.Type = %#v, want workspaceWrite", policy.Type)
+	}
+	if got, want := policy.WritableRoots, []string{"/tmp/aiops-workspace"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("Codex.TurnSandboxPolicy.WritableRoots = %#v, want %#v", got, want)
+	}
+	if policy.NetworkAccess != false {
+		t.Fatalf("Codex.TurnSandboxPolicy.NetworkAccess = %#v, want false", policy.NetworkAccess)
+	}
+	if policy.ExcludeTmpdirEnvVar != true {
+		t.Fatalf("Codex.TurnSandboxPolicy.ExcludeTmpdirEnvVar = %#v, want true", policy.ExcludeTmpdirEnvVar)
+	}
+	if policy.ExcludeSlashTmp != false {
+		t.Fatalf("Codex.TurnSandboxPolicy.ExcludeSlashTmp = %#v, want false", policy.ExcludeSlashTmp)
 	}
 }
 

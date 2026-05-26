@@ -61,6 +61,32 @@ codex-cli 0.133.0
 Keep the version and checksum together in any derived Dockerfile so future
 upgrades are reviewable.
 
+## Protocol schema upgrades
+
+`codex app-server` has its own versioned wire protocol. The Symphony Elixir
+config schema is useful for organizing workflow settings, but it is not the
+authority for the Codex `turn/start` JSON shape. For each Codex CLI upgrade,
+refresh the local minimal schema snapshot from the matching upstream Codex
+app-server protocol schema before running live Linear validation.
+
+The runner-side contract currently covers the fields aiops-platform emits:
+
+- `TurnStartParams.sandboxPolicy`
+- `UserInput.Text` with `text_elements`
+- `SandboxPolicy` variants such as `workspaceWrite`
+
+Run the schema contract tests before any real issue run:
+
+```bash
+go test ./internal/workflow -run 'Codex.*Sandbox|Schema' -count=1
+go test ./internal/runner -run 'CodexAppServer.*TurnStart|Schema' -count=1
+```
+
+If either test fails after a Codex upgrade, update the typed Go structs and the
+schema snapshot first. Do not add fallback translation for old sandbox fields
+such as `mode`, `access`, or `readOnlyAccess`; this project is pre-release and
+should fail fast on stale workflow shape.
+
 ## Authentication mount
 
 `codex app-server` must be authenticated before the worker starts it. For a
@@ -88,6 +114,9 @@ codex app-server
 
 `codex login status` should report a logged-in account, and `codex app-server`
 should remain running on stdio until the worker speaks JSON-RPC to it.
+`worker --doctor --mode=real` performs that stdio probe by keeping stdin open,
+sending `initialize`, and waiting for a JSON-RPC response. A probe that only
+starts the process and closes stdin is not a valid app-server check.
 
 ## Sandbox note
 

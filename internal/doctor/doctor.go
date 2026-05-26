@@ -346,7 +346,7 @@ func (r *reportBuilder) probeCodexAppServer(ctx context.Context, cfg workflow.Co
 	if _, err := io.WriteString(stdin, probe); err != nil {
 		return err
 	}
-	_ = stdin.Close()
+	defer closeBody(stdin)
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for sc.Scan() {
