@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -250,6 +251,71 @@ func TestSelectGitHubRepoRequiresExplicitTargetForMultiRepoWorkflow(t *testing.T
 	}
 	if repo.fullName() != "owner/service" {
 		t.Fatalf("selected repo = %q; want owner/service", repo.fullName())
+	}
+}
+
+func TestSelectGitHubRepoDeduplicatesIdenticalRepoEntries(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "primary",
+			CloneURL: "https://github.com/owner/primary.git",
+		},
+		Services: []workflow.ServiceConfig{
+			{
+				Repo: workflow.RepoConfig{
+					Owner:    "Owner",
+					Name:     "Primary",
+					CloneURL: "https://github.com/Owner/Primary.git",
+				},
+			},
+			{
+				Repo: workflow.RepoConfig{
+					Owner:    "owner",
+					Name:     "primary",
+					CloneURL: "https://github.com/owner/primary.git",
+				},
+			},
+		},
+	}
+
+	repo, err := selectGitHubRepo(cfg, "")
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, \"\") = %v; want single repo after dedup", err)
+	}
+	if repo.fullName() != "owner/primary" {
+		t.Fatalf("selectGitHubRepo full name = %q; want owner/primary", repo.fullName())
+	}
+}
+
+func TestDefaultRunnerResolvesBinaryAgainstSuppliedEnvPATH(t *testing.T) {
+	envDir := t.TempDir()
+	envBin := filepath.Join(envDir, "agentonly")
+	if err := os.WriteFile(envBin, []byte("#!/bin/sh\necho from-env\n"), 0o700); err != nil {
+		t.Fatalf("write env-only binary: %v", err)
+	}
+
+	workerDir := t.TempDir()
+	workerBin := filepath.Join(workerDir, "workeronly")
+	if err := os.WriteFile(workerBin, []byte("#!/bin/sh\necho from-worker\n"), 0o700); err != nil {
+		t.Fatalf("write worker-only binary: %v", err)
+	}
+	t.Setenv("PATH", workerDir)
+
+	out, err := defaultRunner(context.Background(), "agentonly", nil, []string{"PATH=" + envDir}, nil)
+	if err != nil {
+		t.Fatalf("defaultRunner(agentonly) = %v; want success using env PATH", err)
+	}
+	if strings.TrimSpace(string(out)) != "from-env" {
+		t.Fatalf("defaultRunner(agentonly) stdout = %q; want from-env", string(out))
+	}
+
+	_, err = defaultRunner(context.Background(), "workeronly", nil, []string{"PATH=" + envDir}, nil)
+	if err == nil {
+		t.Fatalf("defaultRunner(workeronly) err = nil; want not-found because env PATH excludes worker binary")
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("defaultRunner(workeronly) err = %v; want exec.ErrNotFound (worker PATH must not leak)", err)
 	}
 }
 

@@ -501,6 +501,18 @@ func defaultRunner(ctx context.Context, name string, args []string, env []string
 		cmd.Env = os.Environ()
 	} else {
 		cmd.Env = env
+		// exec.CommandContext resolves a bare name against the worker's PATH.
+		// For the GitHub agent preflight to be authoritative, re-resolve the
+		// lookup against the PATH that the agent will actually see in cmd.Env,
+		// and overwrite both cmd.Path and cmd.Err (set by the worker-PATH probe).
+		if !strings.ContainsRune(name, os.PathSeparator) {
+			resolved, lookErr := lookPathInEnv(name, env)
+			if lookErr != nil {
+				return nil, lookErr
+			}
+			cmd.Path = resolved
+			cmd.Err = nil
+		}
 	}
 	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
@@ -508,6 +520,34 @@ func defaultRunner(ctx context.Context, name string, args []string, env []string
 		return out, ctx.Err()
 	}
 	return out, err
+}
+
+// lookPathInEnv resolves name against the PATH entry in env, mirroring
+// exec.LookPath's executable-bit check on Unix without touching process state.
+func lookPathInEnv(name string, env []string) (string, error) {
+	var pathVal string
+	for _, kv := range env {
+		if rest, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathVal = rest
+		}
+	}
+	if pathVal == "" {
+		return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
+	}
+	for _, dir := range filepath.SplitList(pathVal) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
 }
 
 func requiresCodex(cfg workflow.Config) bool {
@@ -591,12 +631,21 @@ func selectGitHubRepo(cfg workflow.Config, target string) (githubRepo, error) {
 
 func githubRepos(cfg workflow.Config) []githubRepo {
 	repos := make([]githubRepo, 0, 1+len(cfg.Services))
-	if repo, ok := githubRepoFromConfig(cfg.Repo); ok {
+	seen := make(map[string]bool, 1+len(cfg.Services))
+	add := func(repo githubRepo) {
+		key := strings.ToLower(repo.fullName())
+		if seen[key] {
+			return
+		}
+		seen[key] = true
 		repos = append(repos, repo)
+	}
+	if repo, ok := githubRepoFromConfig(cfg.Repo); ok {
+		add(repo)
 	}
 	for _, service := range cfg.Services {
 		if repo, ok := githubRepoFromConfig(service.Repo); ok {
-			repos = append(repos, repo)
+			add(repo)
 		}
 	}
 	return repos
