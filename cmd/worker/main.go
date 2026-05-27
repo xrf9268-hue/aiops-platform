@@ -62,6 +62,7 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
 	mode := fs.String("mode", "mock", "preflight depth: mock or real")
 	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
+	goTestDir := fs.String("go-test-dir", "", "repository module root for real-mode targeted go test")
 	githubIssue := fs.Int("github-issue", 0, "optional GitHub issue number for agent-environment gh and git push preflight")
 	githubRepo := fs.String("github-repo", "", "optional owner/name repo for --github-issue when a workflow configures multiple GitHub repos")
 	if err := fs.Parse(reorderDoctorFlags(args)); err != nil {
@@ -71,13 +72,13 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 		return doctor.Options{}, fmt.Errorf("--mode must be mock or real")
 	}
 	if fs.NArg() > 1 {
-		return doctor.Options{}, fmt.Errorf("usage: worker --doctor [--mode=mock|real] [--dashboard-url=http://127.0.0.1:4000] [path-to-WORKFLOW.md]")
+		return doctor.Options{}, fmt.Errorf("usage: worker --doctor [--mode=mock|real] [--dashboard-url=http://127.0.0.1:4000] [--go-test-dir=/repo-module] [--github-issue=N] [--github-repo=owner/name] [path-to-WORKFLOW.md]")
 	}
 	var path string
 	if fs.NArg() == 1 {
 		path = fs.Arg(0)
 	}
-	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
+	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, GoTestDir: *goTestDir, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
 }
 
 func reorderDoctorFlags(args []string) []string {
@@ -88,7 +89,7 @@ func reorderDoctorFlags(args []string) []string {
 		case a == "--":
 			positional = append(positional, append([]string{"--"}, args[i+1:]...)...)
 			i = len(args)
-		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url" || a == "--github-issue" || a == "-github-issue" || a == "--github-repo" || a == "-github-repo":
+		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url" || a == "--go-test-dir" || a == "-go-test-dir" || a == "--github-issue" || a == "-github-issue" || a == "--github-repo" || a == "-github-repo":
 			flags = append(flags, a)
 			if i+1 < len(args) {
 				flags = append(flags, args[i+1])

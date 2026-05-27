@@ -155,14 +155,17 @@ state:
 docker compose --env-file .env \
   -f deploy/docker-compose.yml \
   -f deploy/docker-compose.codex.yml \
-  run --rm worker --doctor --mode=real --github-issue 451 \
+  run --rm -v "$PWD:/repo:ro" worker \
+    --doctor --mode=real --go-test-dir=/repo --github-issue 451 \
     --github-repo xrf9268-hue/aiops-platform
 ```
 
+With `--go-test-dir`, doctor verifies this repo's Go toolchain by running
+`go version`, `gofmt`, and a targeted `go test` from the mounted module root.
 With `--github-issue`, doctor runs `gh issue view` and `git push --dry-run`
 using the Codex agent environment. Omit `--github-repo` only when the workflow
 configures one GitHub repo. A failure is a deployment blocker; fix the
-credential path before starting the worker.
+toolchain or credential path before starting the worker.
 
 The supported Compose overlay uses a writable bind for `CODEX_HOME` because
 Codex 0.133 writes while loading configuration and may refresh auth state.

@@ -2360,11 +2360,11 @@ func TestParseRunArgs_HelpReturnsFlagErrHelp(t *testing.T) {
 }
 
 func TestParseDoctorArgs_AllowsTrailingFlags(t *testing.T) {
-	opts, err := parseDoctorArgs([]string{"/wf.md", "--mode", "real", "--dashboard-url", "http://127.0.0.1:4000"})
+	opts, err := parseDoctorArgs([]string{"/wf.md", "--mode", "real", "--dashboard-url", "http://127.0.0.1:4000", "--go-test-dir", "/repo"})
 	if err != nil {
 		t.Fatalf("parseDoctorArgs returned error: %v", err)
 	}
-	if opts.WorkflowPath != "/wf.md" || opts.Mode != "real" || opts.DashboardURL != "http://127.0.0.1:4000" {
+	if opts.WorkflowPath != "/wf.md" || opts.Mode != "real" || opts.DashboardURL != "http://127.0.0.1:4000" || opts.GoTestDir != "/repo" {
 		t.Fatalf("parseDoctorArgs = %+v", opts)
 	}
 }

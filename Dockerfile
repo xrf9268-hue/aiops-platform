@@ -60,6 +60,8 @@ FROM worker AS codex-worker
 ARG AIOPS_UID=1000
 ARG AIOPS_GID=1000
 USER root
+COPY --from=build /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 ARG CODEX_CLI_VERSION=0.133.0
 ARG TARGETARCH
 RUN set -eux; \
@@ -75,6 +77,8 @@ RUN set -eux; \
     tar -xzf /tmp/codex.tar.gz -C /opt/codex; \
     ln -sf /opt/codex/bin/codex /usr/local/bin/codex; \
     rm -f /tmp/codex.tar.gz; \
+    go version; \
+    command -v gofmt; \
     codex --version
 # gh CLI is required by the codex-worker image so the documented
 # `aiops-secret-entrypoint` path can wire `/run/secrets/github_token` into
