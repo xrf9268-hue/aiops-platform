@@ -8,9 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 func TestBuildReportMockModeCatchesMissingLinearKeyDuringWorkflowLoad(t *testing.T) {
@@ -159,6 +162,163 @@ func TestBuildReportRealModeSkipsCodexForMockAgent(t *testing.T) {
 	}
 }
 
+func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "worker-token-must-not-leak")
+	path := writeGitHubWorkflow(t, "codex")
+	var checked []string
+	runner := func(_ context.Context, name string, args []string, env []string, _ io.Reader) ([]byte, error) {
+		switch name {
+		case "docker":
+			return []byte("ok\n"), nil
+		case "codex":
+			if len(args) > 0 && args[0] == "--version" {
+				return []byte("codex-cli 0.133.0\n"), nil
+			}
+			if len(args) > 1 && args[0] == "login" && args[1] == "status" {
+				return []byte("Logged in\n"), nil
+			}
+			return nil, errors.New("unexpected codex command")
+		case "gh", "git":
+			joinedEnv := strings.Join(env, "\n")
+			if strings.Contains(joinedEnv, "GITHUB_TOKEN=") || strings.Contains(joinedEnv, "GH_TOKEN=") {
+				t.Fatalf("%s env leaked worker GitHub token:\n%s", name, joinedEnv)
+			}
+			if !strings.Contains(joinedEnv, "HOME=") || !strings.Contains(joinedEnv, "PATH=") {
+				t.Fatalf("%s env = %q; want agent baseline HOME and PATH", name, joinedEnv)
+			}
+			checked = append(checked, name+" "+strings.Join(args, " "))
+			return []byte("ok\n"), nil
+		default:
+			return nil, errors.New("unexpected command")
+		}
+	}
+
+	report := BuildReport(context.Background(), Options{
+		WorkflowPath: path,
+		Mode:         "real",
+		GitHubIssue:  451,
+		Runner:       runner,
+	})
+
+	for _, name := range []string{"GitHub agent gh auth", "GitHub agent git push"} {
+		if got := findCheck(t, report, name).Status; got != Pass {
+			t.Fatalf("%s status = %s; want PASS", name, got)
+		}
+	}
+	if len(checked) != 6 {
+		t.Fatalf("checked commands = %#v; want gh plus five git probe commands", checked)
+	}
+	if checked[0] != "gh issue view 451 --repo xrf9268-hue/aiops-platform --json number,title,url" {
+		t.Fatalf("first checked command = %q; want gh issue view", checked[0])
+	}
+	if !strings.Contains(checked[5], " push --dry-run https://github.com/xrf9268-hue/aiops-platform.git HEAD:refs/heads/aiops-doctor-preflight") {
+		t.Fatalf("final checked command = %q; want git push dry-run", checked[5])
+	}
+}
+
+func TestSafeCommandFailureOmitsCommandOutput(t *testing.T) {
+	detail := safeCommandFailure("git push --dry-run", []byte("fatal: https://secret@github.com/o/r.git\n"), errors.New("exit status 128"))
+	if strings.Contains(detail, "secret") || strings.Contains(detail, "github.com/o/r") {
+		t.Fatalf("safeCommandFailure leaked command output: %q", detail)
+	}
+	if !strings.Contains(detail, "git push --dry-run failed") {
+		t.Fatalf("safeCommandFailure = %q; want command failure detail", detail)
+	}
+}
+
+func TestSelectGitHubRepoRequiresExplicitTargetForMultiRepoWorkflow(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "primary",
+			CloneURL: "https://github.com/owner/primary.git",
+		},
+		Services: []workflow.ServiceConfig{{
+			Repo: workflow.RepoConfig{
+				Owner:    "owner",
+				Name:     "service",
+				CloneURL: "https://github.com/owner/service.git",
+			},
+		}},
+	}
+
+	if _, err := selectGitHubRepo(cfg, ""); err == nil || !strings.Contains(err.Error(), "multiple GitHub repos") {
+		t.Fatalf("selectGitHubRepo without target error = %v; want multiple repo error", err)
+	}
+	repo, err := selectGitHubRepo(cfg, "owner/service")
+	if err != nil {
+		t.Fatalf("selectGitHubRepo explicit target: %v", err)
+	}
+	if repo.fullName() != "owner/service" {
+		t.Fatalf("selected repo = %q; want owner/service", repo.fullName())
+	}
+}
+
+func TestSelectGitHubRepoDeduplicatesIdenticalRepoEntries(t *testing.T) {
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "primary",
+			CloneURL: "https://github.com/owner/primary.git",
+		},
+		Services: []workflow.ServiceConfig{
+			{
+				Repo: workflow.RepoConfig{
+					Owner:    "Owner",
+					Name:     "Primary",
+					CloneURL: "https://github.com/Owner/Primary.git",
+				},
+			},
+			{
+				Repo: workflow.RepoConfig{
+					Owner:    "owner",
+					Name:     "primary",
+					CloneURL: "https://github.com/owner/primary.git",
+				},
+			},
+		},
+	}
+
+	repo, err := selectGitHubRepo(cfg, "")
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, \"\") = %v; want single repo after dedup", err)
+	}
+	if repo.fullName() != "owner/primary" {
+		t.Fatalf("selectGitHubRepo full name = %q; want owner/primary", repo.fullName())
+	}
+}
+
+func TestDefaultRunnerResolvesBinaryAgainstSuppliedEnvPATH(t *testing.T) {
+	envDir := t.TempDir()
+	envBin := filepath.Join(envDir, "agentonly")
+	if err := os.WriteFile(envBin, []byte("#!/bin/sh\necho from-env\n"), 0o700); err != nil {
+		t.Fatalf("write env-only binary: %v", err)
+	}
+
+	workerDir := t.TempDir()
+	workerBin := filepath.Join(workerDir, "workeronly")
+	if err := os.WriteFile(workerBin, []byte("#!/bin/sh\necho from-worker\n"), 0o700); err != nil {
+		t.Fatalf("write worker-only binary: %v", err)
+	}
+	t.Setenv("PATH", workerDir)
+
+	out, err := defaultRunner(context.Background(), "agentonly", nil, []string{"PATH=" + envDir}, nil)
+	if err != nil {
+		t.Fatalf("defaultRunner(agentonly) = %v; want success using env PATH", err)
+	}
+	if strings.TrimSpace(string(out)) != "from-env" {
+		t.Fatalf("defaultRunner(agentonly) stdout = %q; want from-env", string(out))
+	}
+
+	_, err = defaultRunner(context.Background(), "workeronly", nil, []string{"PATH=" + envDir}, nil)
+	if err == nil {
+		t.Fatalf("defaultRunner(workeronly) err = nil; want not-found because env PATH excludes worker binary")
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("defaultRunner(workeronly) err = %v; want exec.ErrNotFound (worker PATH must not leak)", err)
+	}
+}
+
 func TestBuildReportFailsCodexAppServerErrorResponse(t *testing.T) {
 	wrapper := installFakeCodexWrapperBody(t, `#!/bin/sh
 if [ "$1" = "app-server" ]; then
@@ -185,19 +345,20 @@ exit 1
 }
 
 func TestBuildReportRealModeKeepsCodexAppServerProbeStdinOpen(t *testing.T) {
-	wrapper := installFakeCodexWrapperBody(t, `#!/usr/bin/env python3
-import json, select, sys
-
-if len(sys.argv) > 1 and sys.argv[1] == "app-server":
-    _ = sys.stdin.readline()
-    ready, _, _ = select.select([sys.stdin], [], [], 0.2)
-    if ready and sys.stdin.readline() == "":
-        print(json.dumps({"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"stdin closed during probe"}}), flush=True)
-        sys.exit(0)
-    print(json.dumps({"jsonrpc":"2.0","id":1,"result":{"ok":True}}), flush=True)
-    sys.exit(0)
-
-sys.exit(1)
+	wrapper := installFakeCodexWrapperBody(t, `#!/bin/sh
+if [ "$1" = "app-server" ]; then
+  read line
+  tmp="$(mktemp)"
+  if timeout 0.2 cat >"$tmp"; then
+    rm -f "$tmp"
+    echo '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"stdin closed during probe"}}'
+    exit 0
+  fi
+  rm -f "$tmp"
+  echo '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'
+  exit 0
+fi
+exit 1
 `)
 	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
 	report := BuildReport(context.Background(), Options{
@@ -404,6 +565,30 @@ agent:
   default: codex-app-server
 codex:
   command: ` + command + `
+---
+prompt
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	return path
+}
+
+func writeGitHubWorkflow(t *testing.T, agent string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: xrf9268-hue
+  name: aiops-platform
+  clone_url: https://github.com/xrf9268-hue/aiops-platform.git
+tracker:
+  kind: gitea
+  api_key: token
+  project_slug: platform
+agent:
+  default: ` + agent + `
 ---
 prompt
 `

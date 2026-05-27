@@ -74,7 +74,7 @@ func TestCodexComposeOverlayUsesSecrets(t *testing.T) {
 	if got := environment["AIOPS_WORKFLOW_PATH"]; got != "/app/WORKFLOW.md" {
 		t.Fatalf("codex overlay AIOPS_WORKFLOW_PATH = %#v, want /app/WORKFLOW.md", got)
 	}
-	for _, name := range []string{"AIOPS_STATE_API_TOKEN", "GITEA_TOKEN", "LINEAR_API_KEY"} {
+	for _, name := range []string{"AIOPS_STATE_API_TOKEN", "GH_TOKEN", "GITEA_TOKEN", "GITHUB_TOKEN", "LINEAR_API_KEY"} {
 		if got := environment[name]; got != "" {
 			t.Fatalf("codex overlay %s = %#v, want blank because secret files feed production tokens", name, got)
 		}
@@ -93,7 +93,7 @@ func TestCodexComposeOverlayUsesSecrets(t *testing.T) {
 	if !ok {
 		t.Fatal("codex overlay missing top-level secrets")
 	}
-	for _, name := range []string{"linear_api_key", "gitea_token", "aiops_state_api_token"} {
+	for _, name := range []string{"linear_api_key", "gitea_token", "github_token", "aiops_state_api_token"} {
 		if _, ok := declared[name]; !ok {
 			t.Fatalf("codex overlay missing secret %s", name)
 		}
@@ -116,6 +116,12 @@ func TestCodexComposeOverlayUsesSecrets(t *testing.T) {
 	if !strings.Contains(string(entrypointFile), "/run/secrets/gitea_token") {
 		t.Fatalf("secret entrypoint does not read optional Gitea token from /run/secrets")
 	}
+	if !strings.Contains(string(entrypointFile), "/run/secrets/github_token") {
+		t.Fatalf("secret entrypoint does not read GitHub token from /run/secrets")
+	}
+	if !strings.Contains(string(entrypointFile), ".config/gh/hosts.yml") {
+		t.Fatalf("secret entrypoint does not create file-backed gh auth")
+	}
 	if !strings.Contains(string(entrypointFile), "set -- worker \"$@\"") {
 		t.Fatalf("secret entrypoint does not prepend worker for flag-only docker compose run commands")
 	}
@@ -131,6 +137,7 @@ func TestFirstRunRunbookWritesAbsoluteComposePaths(t *testing.T) {
 		"AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md",
 		"AIOPS_CODEX_HOME_PATH=$PWD/.aiops/codex-home",
 		"LINEAR_API_KEY_FILE=$PWD/.aiops/secrets/linear_api_key",
+		"GITHUB_TOKEN_FILE=$PWD/.aiops/secrets/github_token",
 		"AIOPS_STATE_API_TOKEN_FILE=$PWD/.aiops/secrets/state_api_token",
 	} {
 		if !strings.Contains(text, want) {

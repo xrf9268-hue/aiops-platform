@@ -21,7 +21,9 @@ services:
       # Clear plain-env tokens inherited from the base local-dev compose file;
       # this production-style overlay feeds them through service secrets below.
       AIOPS_STATE_API_TOKEN: ""
+      GH_TOKEN: ""
       GITEA_TOKEN: ""
+      GITHUB_TOKEN: ""
       LINEAR_API_KEY: ""
     entrypoint:
       - /usr/local/bin/aiops-secret-entrypoint
@@ -33,6 +35,7 @@ services:
     secrets:
       - linear_api_key
       - gitea_token
+      - github_token
       - aiops_state_api_token
 
 secrets:
@@ -40,5 +43,7 @@ secrets:
     file: ${LINEAR_API_KEY_FILE:?set LINEAR_API_KEY_FILE to a file containing the Linear API key}
   gitea_token:
     file: ${GITEA_TOKEN_FILE:-/dev/null}
+  github_token:
+    file: ${GITHUB_TOKEN_FILE:-/dev/null}
   aiops_state_api_token:
     file: ${AIOPS_STATE_API_TOKEN_FILE:?set AIOPS_STATE_API_TOKEN_FILE to a file containing the state API token}

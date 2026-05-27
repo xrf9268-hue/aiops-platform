@@ -25,6 +25,20 @@ func agentEnv(passthrough []string, cfg workflow.Config) []string {
 	return agentEnvWithLookup(passthrough, cfg, os.LookupEnv, agentLoginPATH)
 }
 
+// AgentEnvForPreflight returns the same sanitized environment used by the
+// selected agent runner so operator preflights cannot pass on worker-only
+// credentials that the agent subprocess will never inherit.
+func AgentEnvForPreflight(agent string, cfg workflow.Config) []string {
+	switch agent {
+	case "codex", NameCodexAppServer:
+		return agentEnv(cfg.Codex.EnvPassthrough, cfg)
+	case "claude":
+		return agentEnv(cfg.Claude.EnvPassthrough, cfg)
+	default:
+		return agentEnv(nil, cfg)
+	}
+}
+
 func agentEnvWithLookup(passthrough []string, cfg workflow.Config, lookup func(string) (string, bool), loginPath func() string) []string {
 	seen := make(map[string]struct{}, len(baselineAgentEnvAllowlist)+len(passthrough))
 	env := make([]string, 0, len(baselineAgentEnvAllowlist)+len(passthrough))

@@ -77,6 +77,38 @@ func TestDockerfileDefinesCodexWorkerTarget(t *testing.T) {
 	}
 }
 
+// TestDockerfileCodexWorkerInstallsGhCLI pins the codex-worker image's gh CLI
+// install. Without gh on PATH the documented aiops-secret-entrypoint silently
+// skips `gh auth setup-git`, leaving git push without GitHub credentials and
+// breaking `worker --doctor --github-issue` inside the container.
+func TestDockerfileCodexWorkerInstallsGhCLI(t *testing.T) {
+	df := dockerfileContents(t)
+
+	codexStart := strings.Index(df, "FROM worker AS codex-worker")
+	if codexStart < 0 {
+		t.Fatal("Dockerfile missing codex-worker target")
+	}
+	nextStage := strings.Index(df[codexStart+1:], "\nFROM ")
+	end := len(df)
+	if nextStage >= 0 {
+		end = codexStart + 1 + nextStage
+	}
+	stage := df[codexStart:end]
+
+	for _, want := range []string{
+		"ARG GH_CLI_VERSION=",
+		"github.com/cli/cli/releases/download/",
+		"gh_${GH_CLI_VERSION}_${gh_arch}.tar.gz",
+		"sha256sum -c -",
+		"install -m 0755",
+		"gh --version",
+	} {
+		if !strings.Contains(stage, want) {
+			t.Fatalf("Dockerfile codex-worker gh install missing %q", want)
+		}
+	}
+}
+
 func TestDockerfileKeepsWorkerAsDefaultTarget(t *testing.T) {
 	df := dockerfileContents(t)
 

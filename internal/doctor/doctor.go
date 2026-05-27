@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -40,6 +41,8 @@ type Options struct {
 	WorkflowPath string
 	Mode         string
 	DashboardURL string
+	GitHubIssue  int
+	GitHubRepo   string
 	Stdout       io.Writer
 	Stderr       io.Writer
 	Runner       CommandRunner
@@ -73,6 +76,7 @@ func BuildReport(ctx context.Context, opts Options) Report {
 	if wf != nil {
 		r.checkLinear(ctx, wf.Config)
 		r.checkCodex(ctx, wf.Config)
+		r.checkGitHubAgent(ctx, wf.Config)
 		r.checkSandbox(wf.Config)
 	}
 	r.checkDashboard(ctx)
@@ -235,6 +239,59 @@ func (r *reportBuilder) checkSandbox(cfg workflow.Config) {
 		return
 	}
 	r.pass("Codex sandbox", "selected profile is compatible with this preflight")
+}
+
+func (r *reportBuilder) checkGitHubAgent(ctx context.Context, cfg workflow.Config) {
+	if r.opts.GitHubIssue == 0 {
+		return
+	}
+	if !requiresCodex(cfg) {
+		r.warn("GitHub agent credentials", "not checked because the selected agent is not Codex", "Use --github-issue only with a Codex workflow that expects agent-side GitHub access.")
+		return
+	}
+	repo, err := selectGitHubRepo(cfg, r.opts.GitHubRepo)
+	if err != nil {
+		r.fail("GitHub agent credentials", err.Error(), "Set repo.owner, repo.name, and repo.clone_url, or pass --github-repo owner/name for the GitHub repository the agent will access.")
+		return
+	}
+	env := runner.AgentEnvForPreflight(cfg.Agent.Default, cfg)
+	if out, err := r.runEnv(ctx, "gh", []string{"issue", "view", strconv.Itoa(r.opts.GitHubIssue), "--repo", repo.fullName(), "--json", "number,title,url"}, env); err != nil {
+		r.fail("GitHub agent gh auth", safeCommandFailure("gh issue view", out, err), "Create file-backed gh auth for the aiops user; do not rely on GH_TOKEN/GITHUB_TOKEN in the worker environment.")
+		return
+	}
+	r.pass("GitHub agent gh auth", fmt.Sprintf("agent env can read %s#%d", repo.fullName(), r.opts.GitHubIssue))
+	probeDir, cleanup, err := r.prepareGitPushProbe(ctx, env)
+	if err != nil {
+		r.fail("GitHub agent git push", err.Error(), "Create a writable temporary directory for the doctor git probe.")
+		return
+	}
+	defer cleanup()
+	if out, err := r.runEnv(ctx, "git", []string{"-C", probeDir, "push", "--dry-run", repo.CloneURL, "HEAD:refs/heads/aiops-doctor-preflight"}, env); err != nil {
+		r.fail("GitHub agent git push", safeCommandFailure("git push --dry-run", out, err), "Configure deploy-key or gh git credential-helper access for the aiops user, then rerun worker --doctor --mode=real --github-issue.")
+		return
+	}
+	r.pass("GitHub agent git push", "agent env passed git push --dry-run")
+}
+
+func (r *reportBuilder) prepareGitPushProbe(ctx context.Context, env []string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "aiops-doctor-git-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	steps := [][]string{
+		{"-C", dir, "init", "-q"},
+		{"-C", dir, "config", "user.email", "aiops-doctor@example.invalid"},
+		{"-C", dir, "config", "user.name", "aiops doctor"},
+		{"-C", dir, "commit", "--allow-empty", "-m", "aiops doctor preflight", "-q"},
+	}
+	for _, args := range steps {
+		if out, err := r.runEnv(ctx, "git", args, env); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("%s", safeCommandFailure("git "+strings.Join(args, " "), out, err))
+		}
+	}
+	return dir, cleanup, nil
 }
 
 func (r *reportBuilder) checkDashboard(ctx context.Context) {
@@ -416,6 +473,12 @@ func (r *reportBuilder) run(ctx context.Context, name string, args []string) ([]
 	return r.opts.Runner(runCtx, name, args, nil, nil)
 }
 
+func (r *reportBuilder) runEnv(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return r.opts.Runner(runCtx, name, args, env, nil)
+}
+
 func (r *reportBuilder) pass(name, detail string) {
 	r.add(Pass, name, detail, "")
 }
@@ -434,13 +497,57 @@ func (r *reportBuilder) add(status Status, name, detail, fix string) {
 
 func defaultRunner(ctx context.Context, name string, args []string, env []string, stdin io.Reader) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(os.Environ(), env...)
+	if env == nil {
+		cmd.Env = os.Environ()
+	} else {
+		cmd.Env = env
+		// exec.CommandContext resolves a bare name against the worker's PATH.
+		// For the GitHub agent preflight to be authoritative, re-resolve the
+		// lookup against the PATH that the agent will actually see in cmd.Env,
+		// and overwrite both cmd.Path and cmd.Err (set by the worker-PATH probe).
+		if !strings.ContainsRune(name, os.PathSeparator) {
+			resolved, lookErr := lookPathInEnv(name, env)
+			if lookErr != nil {
+				return nil, lookErr
+			}
+			cmd.Path = resolved
+			cmd.Err = nil
+		}
+	}
 	cmd.Stdin = stdin
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return out, ctx.Err()
 	}
 	return out, err
+}
+
+// lookPathInEnv resolves name against the PATH entry in env, mirroring
+// exec.LookPath's executable-bit check on Unix without touching process state.
+func lookPathInEnv(name string, env []string) (string, error) {
+	var pathVal string
+	for _, kv := range env {
+		if rest, ok := strings.CutPrefix(kv, "PATH="); ok {
+			pathVal = rest
+		}
+	}
+	if pathVal == "" {
+		return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
+	}
+	for _, dir := range filepath.SplitList(pathVal) {
+		if dir == "" {
+			dir = "."
+		}
+		candidate := filepath.Join(dir, name)
+		info, err := os.Stat(candidate)
+		if err != nil {
+			continue
+		}
+		if info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", &exec.Error{Name: name, Err: exec.ErrNotFound}
 }
 
 func requiresCodex(cfg workflow.Config) bool {
@@ -492,6 +599,81 @@ func workflowCloneURLs(cfg workflow.Config) []string {
 	return urls
 }
 
+type githubRepo struct {
+	Owner    string
+	Name     string
+	CloneURL string
+}
+
+func (r githubRepo) fullName() string {
+	return r.Owner + "/" + r.Name
+}
+
+func selectGitHubRepo(cfg workflow.Config, target string) (githubRepo, error) {
+	repos := githubRepos(cfg)
+	target = strings.TrimSpace(target)
+	if target != "" {
+		for _, repo := range repos {
+			if strings.EqualFold(repo.fullName(), target) {
+				return repo, nil
+			}
+		}
+		return githubRepo{}, fmt.Errorf("github repo %q not found in workflow", target)
+	}
+	if len(repos) == 0 {
+		return githubRepo{}, fmt.Errorf("no GitHub repo owner/name and clone_url found in workflow")
+	}
+	if len(repos) > 1 {
+		return githubRepo{}, fmt.Errorf("multiple GitHub repos configured; pass --github-repo owner/name")
+	}
+	return repos[0], nil
+}
+
+func githubRepos(cfg workflow.Config) []githubRepo {
+	repos := make([]githubRepo, 0, 1+len(cfg.Services))
+	seen := make(map[string]bool, 1+len(cfg.Services))
+	add := func(repo githubRepo) {
+		key := strings.ToLower(repo.fullName())
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		repos = append(repos, repo)
+	}
+	if repo, ok := githubRepoFromConfig(cfg.Repo); ok {
+		add(repo)
+	}
+	for _, service := range cfg.Services {
+		if repo, ok := githubRepoFromConfig(service.Repo); ok {
+			add(repo)
+		}
+	}
+	return repos
+}
+
+func githubRepoFromConfig(repo workflow.RepoConfig) (githubRepo, bool) {
+	owner := strings.TrimSpace(repo.Owner)
+	name := strings.TrimSpace(repo.Name)
+	cloneURL := strings.TrimSpace(repo.CloneURL)
+	if owner == "" || name == "" || cloneURL == "" || !isGitHubCloneURL(cloneURL) {
+		return githubRepo{}, false
+	}
+	return githubRepo{Owner: owner, Name: name, CloneURL: cloneURL}, true
+}
+
+func isGitHubCloneURL(raw string) bool {
+	cloneURL := strings.TrimSpace(raw)
+	if strings.Contains(cloneURL, "://") {
+		u, err := url.Parse(cloneURL)
+		if err != nil || !strings.EqualFold(u.Hostname(), "github.com") {
+			return false
+		}
+		scheme := strings.ToLower(u.Scheme)
+		return scheme == "https" || scheme == "ssh" || scheme == "git+ssh"
+	}
+	return strings.HasPrefix(strings.ToLower(cloneURL), "git@github.com:")
+}
+
 func cloneURLNeedsSSH(raw string) bool {
 	cloneURL := strings.TrimSpace(raw)
 	if cloneURL == "" {
@@ -533,6 +715,18 @@ func trimOutput(out []byte, err error) string {
 		msg = err.Error()
 	}
 	return msg
+}
+
+func safeCommandFailure(command string, out []byte, err error) string {
+	_ = out
+	var detail string
+	if err != nil {
+		detail = err.Error()
+	}
+	if detail == "" {
+		return command + " failed"
+	}
+	return command + " failed: " + detail
 }
 
 func firstLine(out []byte) string {
