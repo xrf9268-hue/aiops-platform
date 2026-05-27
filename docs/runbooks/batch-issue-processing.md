@@ -12,9 +12,11 @@ runs:
   separate follow-up, issue #375 — which is why the PR numbers skip it).
 - **2026-05 ten-issue automated batch** (issues #384–#393). This run added the
   quality-over-throughput lessons: post-commit dual local review before push,
-  fresh `@codex review` trigger tracking, thread-aware review closure,
-  size-gated PR sign-off, pause/resume state recovery, and follow-up capture for
-  late unresolved review threads.
+  fresh `@codex review` trigger tracking, thread-aware review closure, the
+  three-state size-gate classification (`within budget` /
+  `size-gated: justified overage` / `size-gated: split recommended`) with
+  explicit sign-off paths, pause/resume state recovery, and follow-up capture
+  for late unresolved review threads.
 
 Per the "Earned rules" principle in [`AGENTS.md`](../../AGENTS.md), do not
 generalize beyond what those runs actually taught.
@@ -59,15 +61,38 @@ ordering dependency.
    is the practical one. Do not open more parallel work than you can drive to
    mergeable without letting reviews rot.
 4. **Respect the size budget per PR regardless of parallelism**
-   (`policy.max_changed_files: 12`, `policy.max_changed_loc: 300`). Parallelism
-   is about more small PRs, never bigger ones.
+   (`policy.max_changed_files: 12`, `policy.max_changed_loc: 300`).
+   Parallelism is about more small PRs, never bigger ones — but the budget
+   is a *gate* to be classified and disclosed, not a ceiling that forces
+   LOC cuts at the expense of quality. See "Size gate semantics" below.
 
-Size budget is an auto-merge eligibility gate, not a quality throttle. If
-HIGH/MEDIUM review feedback exposes a real correctness, safety, or security
-gap, fix it even when that pushes the PR over the default budget. Mark that PR
-`size-gated`, keep it out of auto-merge, and provide a human sign-off bundle:
-why the extra scope is necessary, the final head SHA, local verification, CI
-state, bot review state, unresolved-thread state, and residual risk.
+### Size gate semantics
+
+Size budget is an auto-merge eligibility gate, not a quality throttle nor an
+LOC-reduction mandate. **Quality, correctness, performance, and necessary
+regression coverage take precedence over LOC compliance**: if HIGH/MEDIUM
+review feedback exposes a real correctness, safety, performance, or coverage
+gap, fix it even when that pushes the PR over the default budget. Never
+delete meaningful tests, weaken state-machine coverage, drop race coverage,
+or prefer compact code over clear reliable code solely to satisfy the
+budget.
+
+Classify every PR into exactly one of three states and call it out in the PR
+body:
+
+- `within budget` — diff fits the effective budget; standard auto-merge path.
+- `size-gated: justified overage` — over the budget because the extra LOC
+  pays for correctness, regression coverage, race/state-machine safety, or
+  other best-practice hardening that cannot be split without losing
+  atomicity. Keep it out of auto-merge and provide a human sign-off bundle:
+  why the extra scope is necessary, the final head SHA, local verification,
+  CI state, bot review state, unresolved-thread state, and residual risk.
+- `size-gated: split recommended` — over the budget because of scope creep,
+  unrelated cleanup, or genuinely separable concerns. Stop and split into
+  smaller PRs; do not ask for size-gate sign-off in lieu of splitting.
+
+Only reduce LOC when the code is genuinely redundant, over-abstracted,
+duplicated without purpose, or outside scope.
 
 ## Review the committed diff before every push
 
@@ -132,7 +157,8 @@ transition:
 ```text
 issue → branch/worktree → PR → head → state
 (triaged | in-progress | draft | CI green | bot-review-pending | review clean |
- threads-resolved | size-gated | mergeable | merged | merged-by-user |
+ threads-resolved | within budget | size-gated: justified overage |
+ size-gated: split recommended | mergeable | merged | merged-by-user |
  deferred→#NNN | skipped)
 ```
 
@@ -146,7 +172,8 @@ For each PR, also track:
 - CI conclusion and run id
 - `@codex review` trigger comment id and reaction state
 - unresolved review thread ids, including whether each is outdated
-- size-budget result
+- size-budget classification (`within budget` / `size-gated: justified overage`
+  / `size-gated: split recommended`) and, if over budget, the rationale
 - deferral/follow-up issue links
 
 Treat the PR body as the public ledger for the same facts. Update it after each
@@ -218,12 +245,14 @@ these hold:
    thread-aware GraphQL state is clean.
 3. **Every acceptance criterion is met, or each gap is deferred to a tracked,
    linked issue** (per the deferral protocol above).
-4. **The PR is within this repo's effective size budget and changes no
+4. **The PR is classified `within budget` and changes no
    `policy.deny_paths`.** Read both from the repo's `WORKFLOW.md`; do not trust
    a hardcoded list — workflows differ (defaults are 12 files / 300 LOC and
    deny `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but e.g. the
-   `github-local` example uses 20 / 600). A quality-driven size breach may be
-   valid work, but it is `size-gated` and requires human sign-off before merge.
+   `github-local` example uses 20 / 600). `size-gated: justified overage`
+   requires explicit human size-gate sign-off before merge and is never
+   auto-mergeable; `size-gated: split recommended` is a hard stop — split the
+   PR instead of asking for sign-off.
 5. **Branch protection's required reviews are satisfied.**
 6. **The merge uses the agreed method** (default: squash) into the agreed base.
 
@@ -244,8 +273,10 @@ Hard stops — **always require human sign-off even under an auto-merge grant:**
 
 - Force-pushing or merging into `main` out of band, or any history rewrite.
 - Editing `go.mod`'s `go` directive opportunistically, or touching `policy.deny_paths`.
-- A PR that breached its scope (size budget, unrelated refactors) — flag, don't
-  merge without explicit human size-gate sign-off.
+- A PR classified `size-gated: justified overage` — flag, don't merge without
+  explicit human size-gate sign-off (acceptable to merge once given). A PR
+  classified `size-gated: split recommended` — flag and split; do not seek
+  sign-off as a substitute for splitting.
 - Anything the human's instructions for this batch put off-limits. When a PR
   sits at the edge of the grant, use `AskUserQuestion` rather than assuming the
   grant covers it.

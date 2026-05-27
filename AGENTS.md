@@ -366,7 +366,30 @@ failure per the "Earned rules" principle above.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.
-- **PRs from the worker are draft + labeled by default**; respect `policy.max_changed_files` (12) and `policy.max_changed_loc` (300) defaults when shaping changes.
+- **`policy.max_changed_files` (12) and `policy.max_changed_loc` (300) are a
+  size gate, not an LOC-reduction mandate.** Worker PRs are draft + labeled by
+  default; shape them small when you can, but the budget exists to catch scope
+  creep and force explicit handling — not to incentivize deleting necessary
+  tests, weakening state-machine coverage, skipping race coverage, or
+  preferring compact code over clear reliable code when review feedback
+  exposes a real correctness, safety, performance, or coverage gap. Classify
+  every PR into exactly one of three states and surface it in the PR body:
+  - `within budget` — diff fits the effective budget.
+  - `size-gated: justified overage` — over the budget because the extra LOC
+    pays for correctness, regression coverage, race/state-machine safety, or
+    other best-practice hardening that cannot be split without losing
+    atomicity. Requires explicit human size-gate sign-off before merge.
+  - `size-gated: split recommended` — over the budget because of scope creep,
+    unrelated cleanup, or genuinely separable concerns. Stop and split into
+    smaller PRs instead of asking for sign-off.
+
+  Only reduce LOC when the code is genuinely redundant, over-abstracted,
+  duplicated without purpose, or outside scope. Never delete meaningful tests
+  or safety checks solely to satisfy the budget. **Earned by:** PR #455
+  exceeded the default 300 LOC after multiple valid Codex review findings
+  required additional race/state-machine coverage; the prevailing workflow
+  language nudged the agent toward compressing tests to fit the threshold,
+  which is backwards when the extra lines are paying for correctness.
 - **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is the only post-merge line of defense for shipped-past bot feedback, not a required merge check; agents should still handle actionable review feedback before merging. After merging a PR with non-trivial bot review activity, sanity-check the next-day `Capture unresolved reviews` Actions history so workflow regressions do not age silently.
 
 ## WORKFLOW.md discovery (worker side)
