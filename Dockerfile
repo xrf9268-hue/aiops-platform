@@ -76,6 +76,24 @@ RUN set -eux; \
     ln -sf /opt/codex/bin/codex /usr/local/bin/codex; \
     rm -f /tmp/codex.tar.gz; \
     codex --version
+# gh CLI is required by the codex-worker image so the documented
+# `aiops-secret-entrypoint` path can wire `/run/secrets/github_token` into
+# `gh auth setup-git` and `worker --doctor --github-issue` can run inside the
+# container. The plain `worker` target does not need it.
+ARG GH_CLI_VERSION=2.92.0
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) gh_arch="linux_amd64"; gh_sha="b57848131bdf0c229cd35e1f2a51aa718199858b2e728410b37e89a428943ec4" ;; \
+      arm64) gh_arch="linux_arm64"; gh_sha="c2248526dd0160c08d3fccca2332c3c1a07c15a78b23978e77735f1b5a18cfee" ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH}; supported: amd64, arm64" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/cli/cli/releases/download/v${GH_CLI_VERSION}/gh_${GH_CLI_VERSION}_${gh_arch}.tar.gz"; \
+    wget -qO /tmp/gh.tar.gz "${url}"; \
+    echo "${gh_sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_CLI_VERSION}_${gh_arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_CLI_VERSION}_${gh_arch}"; \
+    gh --version
 USER ${AIOPS_UID}:${AIOPS_GID}
 
 # Keep `docker build .` on the baseline worker image; codex-worker is opt-in.

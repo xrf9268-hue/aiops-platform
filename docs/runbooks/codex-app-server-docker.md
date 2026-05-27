@@ -138,11 +138,15 @@ GITHUB_TOKEN_FILE=$PWD/.aiops/secrets/github_token
 ```
 
 The entrypoint writes `/home/aiops/.config/gh/hosts.yml` with `0600`
-permissions, clears plain GitHub token env, and runs `gh auth setup-git` when
-`gh` is installed. Keep the token least-privilege and never commit
-`.aiops/secrets`, `hosts.yml`, or copied credential files. For deploy-key
-installs, mount the dedicated key and `known_hosts` from `deploy/ssh/README.md`
-and use an SSH `repo.clone_url`.
+permissions, clears plain GitHub token env, and runs `gh auth setup-git`. The
+`codex-worker` Dockerfile target installs the GitHub CLI alongside Codex so
+`worker --doctor --github-issue` and runtime `git push` can both use the
+file-backed credential; under that image the `command -v gh` guard in the
+entrypoint always passes. The plain `worker` target does not ship `gh` and
+that guard stays a no-op there, by design. Keep the token least-privilege
+and never commit `.aiops/secrets`, `hosts.yml`, or copied credential files.
+For deploy-key installs, mount the dedicated key and `known_hosts` from
+`deploy/ssh/README.md` and use an SSH `repo.clone_url`.
 
 Validate the exact agent environment before moving real issues into an active
 state:
