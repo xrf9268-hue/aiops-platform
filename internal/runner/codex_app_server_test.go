@@ -1706,6 +1706,39 @@ func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchang
 	}
 }
 
+// TestNewCodexAppServerCommandKeepsCodexPrefixedCommandCrossPlatform pins the
+// #471 contract at the exported boundary that preflight callers share: a
+// codex-prefixed custom codex.command must exec the codex binary directly,
+// never the `sh -c` wrapper that PR #414 regressed onto Windows deployments.
+// TestBuildCodexAppServerCmdPreservesQuotedCustomCodexCommand covers the same
+// guard through the unexported wrapper and the quoting edge; this case pins the
+// exported symbol with a distinct multi-flag command (no quoting) so neither is
+// a copy of the other.
+func TestNewCodexAppServerCommandKeepsCodexPrefixedCommandCrossPlatform(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appServerInput(codexWorkdir(t, "x")).Workflow.Config
+	cfg.Codex.Command = "codex app-server --config profile=ci --cd /srv/work"
+
+	cmd, directExec, err := NewCodexAppServerCommand(context.Background(), cfg, []string{"PATH=" + binDir})
+	if err != nil {
+		t.Fatalf("NewCodexAppServerCommand(%q) error = %v; want nil", cfg.Codex.Command, err)
+	}
+	if !directExec {
+		t.Fatalf("NewCodexAppServerCommand(%q) directExec = false; want true (direct codex exec, no shell)", cfg.Codex.Command)
+	}
+	if cmd.Path != codex {
+		t.Fatalf("NewCodexAppServerCommand(%q) cmd.Path = %q; want codex binary %q (never sh)", cfg.Codex.Command, cmd.Path, codex)
+	}
+	want := []string{codex, "app-server", "--config", "profile=ci", "--cd", "/srv/work"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("NewCodexAppServerCommand(%q) cmd.Args = %#v; want %#v", cfg.Codex.Command, cmd.Args, want)
+	}
+}
+
 func TestBuildCodexAppServerCmdResolvesCodexFromAgentEnvPATH(t *testing.T) {
 	rawPathDir := t.TempDir()
 	t.Setenv("PATH", rawPathDir)
