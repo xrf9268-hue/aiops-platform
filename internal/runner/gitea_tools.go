@@ -177,7 +177,7 @@ func (p giteaIssueLabelsProxy) doGiteaRequest(ctx context.Context, client *http.
 		})
 		return 0, nil, failure
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var respBody bytes.Buffer
 	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
 	if readErr != nil {

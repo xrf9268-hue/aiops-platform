@@ -120,10 +120,10 @@ func (f *fakeDispatcher) attemptValueAt(i int) *int {
 	return &attempt
 }
 
-func (f *fakeDispatcher) contextAt(i int) context.Context {
+func (f *fakeDispatcher) context() context.Context {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.contexts[i]
+	return f.contexts[0]
 }
 
 // finishAt completes the i-th spawned worker with the given result.
@@ -351,7 +351,7 @@ func TestReconcileStalledRunsCancelsWorkerPastTimeout(t *testing.T) {
 	}
 
 	select {
-	case <-disp.contextAt(0).Done():
+	case <-disp.context().Done():
 	case <-time.After(time.Second):
 		t.Fatal("stalled worker context was not cancelled by ReconcileStalledRuns")
 	}
@@ -380,7 +380,7 @@ func TestReconcileStalledRunsLeavesActiveRunsAlone(t *testing.T) {
 	}
 
 	select {
-	case <-disp.contextAt(0).Done():
+	case <-disp.context().Done():
 		t.Fatal("active worker context was cancelled even though LastEventAt is recent")
 	case <-time.After(100 * time.Millisecond):
 		// Expected — context still live.
@@ -409,7 +409,7 @@ func TestReconcileStalledRunsSkipsWhenTimeoutDisabled(t *testing.T) {
 		t.Fatalf("ReconcileStalledRuns: %v", err)
 	}
 	select {
-	case <-disp.contextAt(0).Done():
+	case <-disp.context().Done():
 		t.Fatal("stall_timeout_ms=0 should disable detection but the worker was cancelled")
 	case <-time.After(50 * time.Millisecond):
 	}
@@ -1979,7 +1979,7 @@ func TestReconcileTerminalRunAfterTurnCompletedCancelsWorkerButRecordsSuccess(t 
 		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
 	}
 	select {
-	case <-disp.contextAt(0).Done():
+	case <-disp.context().Done():
 	case <-time.After(time.Second):
 		t.Fatal("worker context was not canceled after terminal reconciliation")
 	}
@@ -3271,7 +3271,7 @@ func TestSpawn_FinalizeSubmitFailureClosesWorkerDone(t *testing.T) {
 	// outer select and committed to the finalize-submit path — replacing the
 	// earlier (broken) `len(o.ops)` check, since `o.ops` is unbuffered and its
 	// length is always 0.
-	workerCtx := disp.contextAt(0)
+	workerCtx := disp.context()
 
 	// Deliver the worker result while the actor is paused. The spawn goroutine
 	// receives it and attempts to submit finalizeRunOp; that submit blocks on

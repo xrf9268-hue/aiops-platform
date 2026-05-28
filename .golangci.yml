@@ -1,7 +1,8 @@
 version: "2"
 
-# Full lint surface. CI runs the clean low-risk subset as blocking, then runs
-# this full set report-only while follow-up cleanup continues.
+# Full lint surface. CI runs the clean correctness/mechanical-safety subset as
+# blocking, then keeps funlen/gocognit report-only while #410 burns down the
+# structural complexity baseline.
 run:
   timeout: 5m
 

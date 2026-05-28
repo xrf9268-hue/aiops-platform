@@ -820,7 +820,7 @@ func TestPrepareGitWorkspaceProtectsSensitiveAiopsArtifacts(t *testing.T) {
 			t.Fatalf("write %s: %v", rel, err)
 		}
 	}
-	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+	if err := runGitQuiet(ctx, dir, "add", "."); err != nil {
 		t.Fatalf("git add .: %v", err)
 	}
 	cmd := exec.Command("git", "diff", "--cached", "--name-only", "-z", "--")
@@ -840,7 +840,7 @@ func TestPrepareGitWorkspaceProtectsSensitiveAiopsArtifacts(t *testing.T) {
 	if err := configureGitIdentity(dir); err != nil {
 		t.Fatalf("configure identity: %v", err)
 	}
-	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+	if err := runGitQuiet(ctx, dir, "add", "."); err != nil {
 		t.Fatalf("git add allowlist: %v", err)
 	}
 	if out, err := exec.Command("git", "-C", dir, "commit", "-m", "allowed handoff artifacts").CombinedOutput(); err != nil {
@@ -853,7 +853,7 @@ func TestPrepareGitWorkspaceProtectsSensitiveAiopsArtifacts(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".aiops", "logs", "runner.log"), []byte("log\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runQuiet(ctx, dir, "git", "add", "."); err != nil {
+	if err := runGitQuiet(ctx, dir, "add", "."); err != nil {
 		t.Fatalf("git add ignored log artifact: %v", err)
 	}
 	cmd = exec.Command("git", "diff", "--cached", "--name-only", "--", ".aiops/logs/runner.log")
@@ -865,7 +865,7 @@ func TestPrepareGitWorkspaceProtectsSensitiveAiopsArtifacts(t *testing.T) {
 	if len(staged) != 0 {
 		t.Fatalf("ignored log artifact was staged: %q", staged)
 	}
-	if err := runQuiet(ctx, dir, "git", "add", "-f", ".aiops/PROMPT.md", ".aiops/logs/runner.log"); err != nil {
+	if err := runGitQuiet(ctx, dir, "add", "-f", ".aiops/PROMPT.md", ".aiops/logs/runner.log"); err != nil {
 		t.Fatalf("force-add sensitive artifact: %v", err)
 	}
 	commitCmd := exec.Command("git", "commit", "-m", "blocked")

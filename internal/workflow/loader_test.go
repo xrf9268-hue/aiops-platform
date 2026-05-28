@@ -411,7 +411,9 @@ Prompt body
 }
 
 func TestLoadRejectsMissingExplicitEnvironmentReferenceNonTrackerField(t *testing.T) {
-	os.Unsetenv("AIOPS_TEST_UNSET_CODEX_COMMAND")
+	if err := os.Unsetenv("AIOPS_TEST_UNSET_CODEX_COMMAND"); err != nil {
+		t.Fatalf("Unsetenv(%q) = %v; want nil", "AIOPS_TEST_UNSET_CODEX_COMMAND", err)
+	}
 	path := writeTempWorkflow(t, `---
 repo:
   owner: o

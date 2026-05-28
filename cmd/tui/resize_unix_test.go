@@ -39,17 +39,18 @@ func TestRun_RedrawsOnSIGWINCH(t *testing.T) {
 	scr := newScreen(lb, true /* isTTY */, false /* raw */)
 
 	var fetches int32
-	fetch := func(context.Context) (*stateResponse, error) {
+	fetch := func(context.Context) *stateResponse {
 		atomic.AddInt32(&fetches, 1)
-		return &stateResponse{MaxConcurrentAgents: 3}, nil
+		return &stateResponse{MaxConcurrentAgents: 3}
 	}
+	fetchState := func(ctx context.Context) (*stateResponse, error) { return fetch(ctx), ctx.Err() }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		// A long interval keeps the ticker silent: the only frames are the
 		// initial poll and the SIGWINCH-driven redraw.
-		run(ctx, scr, fetch, time.Hour, "http://example")
+		run(ctx, scr, fetchState, time.Hour, "http://example")
 		close(done)
 	}()
 

@@ -27,8 +27,12 @@ func TestCappedWriter_KeepsUpToCapDropsRest(t *testing.T) {
 func TestCappedWriter_MultipleWritesAccumulate(t *testing.T) {
 	t.Parallel()
 	w := &cappedWriter{Cap: 10}
-	w.Write([]byte("hello "))
-	w.Write([]byte("world!!"))
+	if n, err := w.Write([]byte("hello ")); err != nil || n != 6 {
+		t.Fatalf("Write(%q) = (%d, %v); want (6, nil)", "hello ", n, err)
+	}
+	if n, err := w.Write([]byte("world!!")); err != nil || n != 7 {
+		t.Fatalf("Write(%q) = (%d, %v); want (7, nil)", "world!!", n, err)
+	}
 	if got := w.Bytes(); string(got) != "hello worl" {
 		t.Fatalf("Bytes()=%q, want %q", got, "hello worl")
 	}
@@ -40,7 +44,9 @@ func TestCappedWriter_MultipleWritesAccumulate(t *testing.T) {
 func TestCappedWriter_ZeroCapDropsEverything(t *testing.T) {
 	t.Parallel()
 	w := &cappedWriter{Cap: 0}
-	w.Write([]byte("anything"))
+	if n, err := w.Write([]byte("anything")); err != nil || n != 8 {
+		t.Fatalf("Write(%q) = (%d, %v); want (8, nil)", "anything", n, err)
+	}
 	if len(w.Bytes()) != 0 {
 		t.Fatalf("Bytes() not empty: %q", w.Bytes())
 	}
@@ -52,7 +58,7 @@ func TestCappedWriter_ZeroCapDropsEverything(t *testing.T) {
 func TestHeadTail_BelowCapReturnsHeadOnly(t *testing.T) {
 	t.Parallel()
 	body := []byte(strings.Repeat("x", 100))
-	head, tail := headTail(body, 4096)
+	head, tail := headTail(body)
 	if string(head) != string(body) {
 		t.Fatalf("head should equal body when len < cap")
 	}
@@ -64,7 +70,7 @@ func TestHeadTail_BelowCapReturnsHeadOnly(t *testing.T) {
 func TestHeadTail_AboveCapSplits(t *testing.T) {
 	t.Parallel()
 	body := []byte(strings.Repeat("a", 4000) + strings.Repeat("b", 4000) + strings.Repeat("c", 4000))
-	head, tail := headTail(body, 4096)
+	head, tail := headTail(body)
 	if len(head) != 4096 {
 		t.Fatalf("head len=%d, want 4096", len(head))
 	}

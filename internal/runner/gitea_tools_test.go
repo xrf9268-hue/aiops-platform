@@ -47,20 +47,14 @@ func (f *fakeGiteaLabelServer) handler() http.Handler {
 	})
 }
 
-func (f *fakeGiteaLabelServer) recorded() (string, string, string, string, int) {
+func (f *fakeGiteaLabelServer) recorded() (string, string, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	method, path, body := "", "", ""
-	if len(f.methods) > 0 {
-		method = f.methods[len(f.methods)-1]
-	}
+	path := ""
 	if len(f.paths) > 0 {
 		path = f.paths[len(f.paths)-1]
 	}
-	if len(f.bodies) > 0 {
-		body = f.bodies[len(f.bodies)-1]
-	}
-	return f.authHeader, method, path, body, f.requests
+	return f.authHeader, path, f.requests
 }
 
 func (f *fakeGiteaLabelServer) recordedSequence() ([]string, []string, []string) {
@@ -110,7 +104,7 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 		t.Fatalf("tool result leaked Gitea token: %q", result)
 	}
 
-	auth, _, _, _, requests := server.recorded()
+	auth, _, requests := server.recorded()
 	if requests != 3 {
 		t.Fatalf("requests = %d, want GET, DELETE, POST", requests)
 	}
@@ -157,7 +151,7 @@ func TestDynamicToolsUseGiteaEndpointBeforeProjectSlugAndEnvBaseURL(t *testing.T
 	if !strings.Contains(result, `"success":true`) {
 		t.Fatalf("result = %q, want success from endpoint-backed Gitea server", result)
 	}
-	_, _, path, _, requests := server.recorded()
+	_, path, requests := server.recorded()
 	if requests != 3 {
 		t.Fatalf("requests = %d, want endpoint server to receive GET, POST, DELETE", requests)
 	}
@@ -499,7 +493,7 @@ func TestGiteaIssueLabelsRejectsMultipleAIOpsStateLabelsWithoutHTTPRequest(t *te
 	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
 		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress", "aiops/done"}})
 	assertStructuredFailure(t, result, err, "gitea_issue_labels labels must contain exactly one aiops/* state label")
-	_, _, _, _, requests := server.recorded()
+	_, _, requests := server.recorded()
 	if requests != 0 {
 		t.Fatalf("server received %d requests, want 0", requests)
 	}
@@ -513,7 +507,7 @@ func TestGiteaIssueLabelsRejectsUnknownAIOpsStateLabelWithoutHTTPRequest(t *test
 	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
 		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/inprogress"}})
 	assertStructuredFailure(t, result, err, "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo")
-	_, _, _, _, requests := server.recorded()
+	_, _, requests := server.recorded()
 	if requests != 0 {
 		t.Fatalf("server received %d requests, want 0", requests)
 	}
@@ -527,7 +521,7 @@ func TestGiteaIssueLabelsRejectsMissingIssueNumberWithoutHTTPRequest(t *testing.
 	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
 		call(context.Background(), ToolCall{Labels: []string{"aiops/in-progress"}})
 	assertStructuredFailure(t, result, err, "gitea_issue_labels issue_number is required")
-	_, _, _, _, requests := server.recorded()
+	_, _, requests := server.recorded()
 	if requests != 0 {
 		t.Fatalf("server received %d requests, want 0", requests)
 	}

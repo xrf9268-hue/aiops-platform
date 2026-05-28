@@ -368,7 +368,7 @@ func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (
 	if err != nil {
 		return Issue{}, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusNotFound {
 		return Issue{}, false, nil
 	}
@@ -427,7 +427,7 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 	if err != nil {
 		return nil, false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, false, fmt.Errorf("list Gitea issues failed: %s", resp.Status)
 	}

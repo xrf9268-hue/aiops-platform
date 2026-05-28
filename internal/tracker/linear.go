@@ -565,7 +565,7 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	if err != nil {
 		return NewError(CategoryLinearAPIRequest, "send Linear GraphQL request", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: %s", resp.Status), nil)
 	}

@@ -25,10 +25,10 @@ Checks:
 - setup Go from `go.mod`
 - Go module download
 - `gofmt` check
-- blocking `golangci-lint` correctness gate for `errorlint`, `ineffassign`,
-  and `unused`
-- report-only `golangci-lint` baseline for the remaining earned Go engineering
-  rules
+- blocking `golangci-lint` correctness gate for `contextcheck`, `errcheck`,
+  `errorlint`, `gocritic`, `govet`, `ineffassign`, `revive`, `staticcheck`,
+  `unparam`, and `unused`
+- report-only `golangci-lint` complexity baseline for `funlen` and `gocognit`
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
 - build `worker` and `tui`
@@ -49,12 +49,23 @@ only if the rebuilt image still contains a fixed finding. Do not add a
 fix.
 
 The `golangci-lint` gate runs in two phases. The first phase blocks on the
-clean low-risk linters (`errorlint`, `ineffassign`, and `unused`) so
-regressions in those classes fail CI. The second phase keeps the full
-earned-rule baseline visible with `--issues-exit-code=0` while the remaining
-classes (`contextcheck`, `errcheck`, `funlen`, `gocognit`, `gocritic`,
-`staticcheck`, and `unparam`) are burned down in follow-up cleanup.
-Configuration, action, or runtime failures still fail the workflow.
+clean correctness and mechanical-safety linters (`contextcheck`, `errcheck`,
+`errorlint`, `gocritic`, `govet`, `ineffassign`, `revive`, `staticcheck`,
+`unparam`, and `unused`) so regressions in those classes fail CI. The second
+phase keeps the remaining complexity baseline visible with
+`--enable-only=funlen,gocognit --issues-exit-code=0` while #410 tracks the
+larger structural refactors. Configuration, action, or runtime failures still
+fail the workflow.
+
+When comparing local lint output to CI, use an isolated cache if multiple
+worktrees for this repository are open under the same parent directory:
+
+```bash
+GOLANGCI_LINT_CACHE=$(mktemp -d) go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
+```
+
+This prevents stale package-analysis entries from sibling worktrees from
+appearing as false report-only findings.
 
 ### Release
 
@@ -92,8 +103,8 @@ Run:
 ```bash
 go mod tidy
 gofmt -w cmd internal
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=errorlint,ineffassign,unused
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=funlen,gocognit --issues-exit-code=0
 go test ./...
 go build ./cmd/worker ./cmd/tui
 docker build --pull --tag aiops-platform:local .

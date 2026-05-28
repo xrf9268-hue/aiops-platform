@@ -145,12 +145,12 @@ func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestI
 			} `json:"head"`
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			cancel()
 			return nil, fmt.Errorf("list pull requests failed: %s", resp.Status)
 		}
 		err = json.NewDecoder(resp.Body).Decode(&batch)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		cancel()
 		if err != nil {
 			return nil, err
@@ -199,7 +199,7 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("create pull request failed: %s", resp.Status)
 	}

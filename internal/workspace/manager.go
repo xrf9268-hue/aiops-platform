@@ -216,7 +216,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// falling back to the bare name covers `file://` test fixtures where
 	// the upstream is the same on-disk repo.
 	startRef := "origin/" + t.BaseBranch
-	if err := runQuiet(ctx, mirror, "git", "rev-parse", "--verify", startRef); err != nil {
+	if err := runGitQuiet(ctx, mirror, "rev-parse", "--verify", startRef); err != nil {
 		startRef = t.BaseBranch
 	}
 
@@ -255,7 +255,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	if workdirExists {
 		lstatInfo, lstatErr := os.Lstat(workdir)
 		if lstatErr == nil && lstatInfo.Mode()&os.ModeSymlink == 0 {
-			if err := runQuiet(ctx, workdir, "git", "rev-parse", "--git-dir"); err == nil {
+			if err := runGitQuiet(ctx, workdir, "rev-parse", "--git-dir"); err == nil {
 				// Silence the probe's stderr: on a broken-but-existing
 				// `.git` (mid-corruption, partial `worktree add` crash,
 				// race with `os.RemoveAll`) git prints `fatal: not a git
@@ -301,10 +301,10 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 		//     --no-track`), and `-B` makes the rebase idempotent.
 		// Untracked files (cached deps, build outputs, .aiops policy
 		// feedback) survive intact.
-		if err := runQuiet(ctx, workdir, "git", "reset", "--quiet", "HEAD", "--", "."); err != nil {
+		if err := runGitQuiet(ctx, workdir, "reset", "--quiet", "HEAD", "--", "."); err != nil {
 			return "", false, fmt.Errorf("worktree index reset: %w", err)
 		}
-		if err := run(ctx, workdir, "git", "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
+		if err := runGit(ctx, workdir, "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
 			return "", false, fmt.Errorf("worktree checkout: %w", err)
 		}
 		if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
@@ -323,15 +323,15 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// `git worktree list` and a latent collision risk if the same
 	// workspace path is ever re-targeted to the old mirror.
 	if foreignCommonDir != "" {
-		_ = runQuiet(ctx, foreignCommonDir, "git", "worktree", "prune")
+		_ = runGitQuiet(ctx, foreignCommonDir, "worktree", "prune")
 	}
 	// Drop any stale worktree entry the mirror still tracks for this path
 	// before asking it to add a new one. Failures are ignored and stderr
 	// silenced because the common case ("no such worktree") prints a scary
 	// fatal line that obscures real worker logs.
-	_ = runQuiet(ctx, mirror, "git", "worktree", "remove", "--force", workdir)
+	_ = runGitQuiet(ctx, mirror, "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
-	if err := runQuiet(ctx, mirror, "git", "worktree", "prune"); err != nil {
+	if err := runGitQuiet(ctx, mirror, "worktree", "prune"); err != nil {
 		return "", false, fmt.Errorf("worktree prune: %w", err)
 	}
 	// Using -B makes the operation idempotent if a previous attempt left
@@ -341,7 +341,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	// we deliberately do not re-`git remote set-url` from inside the
 	// worktree because there is no per-worktree config and the write would
 	// land back in the shared mirror config redundantly.
-	if err := run(ctx, mirror, "git", "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
+	if err := runGit(ctx, mirror, "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
 		return "", false, fmt.Errorf("worktree add: %w", err)
 	}
 	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
@@ -741,7 +741,7 @@ func Diffstat(ctx context.Context, workdir string) (policy.Diffstat, error) {
 	// Mark untracked files so they appear in `git diff` without actually
 	// staging their content. This is reversible and idempotent; the
 	// subsequent `git add .` in CommitAndPush will fully stage them.
-	if err := run(ctx, workdir, "git", "add", "--intent-to-add", "--all"); err != nil {
+	if err := runGit(ctx, workdir, "add", "--intent-to-add", "--all"); err != nil {
 		return policy.Diffstat{}, fmt.Errorf("git add --intent-to-add: %w", err)
 	}
 	cmd := exec.CommandContext(ctx, "git", "diff", "--numstat", "-z", "HEAD")
@@ -841,7 +841,7 @@ func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
 // worktree) should use this instead of AllChangedFiles.
 func ResolveBaseBranchRef(ctx context.Context, workdir, baseBranch string) (string, error) {
 	baseRef := "origin/" + strings.TrimSpace(baseBranch)
-	if strings.TrimSpace(baseBranch) == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+	if strings.TrimSpace(baseBranch) == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
 		baseRef = strings.TrimSpace(baseBranch)
 	}
 	if baseRef == "" {
@@ -861,7 +861,7 @@ func AllChangedFilesSinceRef(ctx context.Context, workdir, baseRef string) ([]st
 	if err != nil {
 		return nil, err
 	}
-	if baseRef == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+	if baseRef == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
 		baseRef = "@{upstream}"
 	}
 	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "-z", baseRef+"...HEAD")
@@ -892,7 +892,7 @@ func AllChangedFilesSinceUpstream(ctx context.Context, workdir string) ([]string
 }
 
 func HasCommitsSinceRef(ctx context.Context, workdir, baseRef string) (bool, error) {
-	if baseRef == "" || runQuiet(ctx, workdir, "git", "rev-parse", "--verify", baseRef) != nil {
+	if baseRef == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
 		baseRef = "@{upstream}"
 	}
 	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", baseRef+"..HEAD")
@@ -974,13 +974,13 @@ func CommitAndPush(ctx context.Context, workdir string, title string, branch str
 	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
 		return fmt.Errorf("install sensitive artifact excludes: %w", err)
 	}
-	if err := run(ctx, workdir, "git", "add", "."); err != nil {
+	if err := runGit(ctx, workdir, "add", "."); err != nil {
 		return err
 	}
-	if err := run(ctx, workdir, "git", "diff", "--cached", "--quiet"); err == nil {
+	if err := runGit(ctx, workdir, "diff", "--cached", "--quiet"); err == nil {
 		return fmt.Errorf("no changes to commit")
 	}
-	if err := run(ctx, workdir, "git",
+	if err := runGit(ctx, workdir,
 		"-c", "user.email="+CommitIdentEmail,
 		"-c", "user.name="+CommitIdentName,
 		"commit", "-m", "chore(ai): "+title,
@@ -992,13 +992,13 @@ func CommitAndPush(ctx context.Context, workdir string, title string, branch str
 		return fmt.Errorf("probe remote branch %q: %w", branch, err)
 	}
 	if exists {
-		if err := run(ctx, workdir, "git", "fetch", "origin", branch); err != nil {
+		if err := runGit(ctx, workdir, "fetch", "origin", branch); err != nil {
 			return fmt.Errorf("fetch origin/%s: %w", branch, err)
 		}
-		return run(ctx, workdir, "git", "push", "--force-with-lease", "origin", branch)
+		return runGit(ctx, workdir, "push", "--force-with-lease", "origin", branch)
 	}
-	_ = runQuiet(ctx, workdir, "git", "update-ref", "-d", "refs/remotes/origin/"+branch)
-	return run(ctx, workdir, "git", "push", "origin", branch)
+	_ = runGitQuiet(ctx, workdir, "update-ref", "-d", "refs/remotes/origin/"+branch)
+	return runGit(ctx, workdir, "push", "origin", branch)
 }
 
 // remoteBranchExists reports whether `origin/<branch>` exists upstream by
@@ -1053,8 +1053,8 @@ func sameRealPath(commonDir, workdir, want string) bool {
 	return commonReal == wantReal
 }
 
-func run(ctx context.Context, dir string, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+func runGit(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -1064,8 +1064,8 @@ func run(ctx context.Context, dir string, name string, args ...string) error {
 // runQuiet runs a command without forwarding stdout/stderr. We use it for
 // probe operations like `git rev-parse --verify` whose stderr is expected
 // noise on the unhappy path.
-func runQuiet(ctx context.Context, dir string, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+func runGitQuiet(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	return cmd.Run()
 }

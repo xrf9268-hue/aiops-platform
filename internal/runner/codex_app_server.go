@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -131,7 +130,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		OutputBytes:   int64(len(buf.Bytes())),
 		OutputDropped: buf.Dropped(),
 	}
-	head, tail := headTail(buf.Bytes(), CodexEventOutputCap)
+	head, tail := headTail(buf.Bytes())
 	if len(head) > 0 {
 		res.OutputHead = string(head)
 	}
@@ -220,14 +219,15 @@ func splitAppServerCommand(command string) ([]string, error) {
 		r := runes[i]
 		switch {
 		case quote != 0:
-			if r == quote {
+			switch {
+			case r == quote:
 				quote = 0
 				tokenStarted = true
-			} else if quote == '"' && r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]) {
+			case quote == '"' && r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]):
 				i++
 				current.WriteRune(runes[i])
 				tokenStarted = true
-			} else {
+			default:
 				current.WriteRune(r)
 				tokenStarted = true
 			}
@@ -630,7 +630,7 @@ func deadlineDuration(ctx context.Context) (time.Duration, bool) {
 	if remaining <= 0 {
 		return 0, true
 	}
-	return time.Duration(math.Ceil(float64(remaining))), true
+	return remaining, true
 }
 
 func isAppServerReadTimeout(err error) bool {
@@ -1304,7 +1304,11 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 	if tool, ok := c.tools.Lookup(name); ok {
 		call := ToolCall{}
 		if err := json.Unmarshal(arguments, &call); err != nil {
-			result, err = dynamicToolFailure(err.Error())
+			failure, failureErr := dynamicToolFailure(err.Error())
+			if failureErr != nil {
+				return failureErr
+			}
+			result = failure
 		} else {
 			// Install the audit sink for any tool that may route
 			// through the Linear GraphQL proxy. linear_ai_workpad
@@ -1323,11 +1327,12 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 			})
 			result, err = tool.Call(toolCtx, call)
 			if err != nil {
-				result, err = dynamicToolFailure(err.Error())
+				failure, failureErr := dynamicToolFailure(err.Error())
+				if failureErr != nil {
+					return failureErr
+				}
+				result = failure
 			}
-		}
-		if err != nil {
-			return err
 		}
 	} else {
 		// SPEC §10.4 unsupported_tool_call: the wire still carries the

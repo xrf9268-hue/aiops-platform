@@ -306,7 +306,7 @@ func maskCloneURL(raw string) string {
 func printConfig(workdir string, portOverride *int, stdout, stderr io.Writer) int {
 	wf, res, err := workflow.Resolve(workdir)
 	if err != nil {
-		fmt.Fprintln(stderr, err.Error())
+		_, _ = fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
 	out := printConfigOutput{
@@ -324,7 +324,7 @@ func printConfig(workdir string, portOverride *int, stdout, stderr io.Writer) in
 	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(out); err != nil {
-		fmt.Fprintln(stderr, err.Error())
+		_, _ = fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
 	return 0

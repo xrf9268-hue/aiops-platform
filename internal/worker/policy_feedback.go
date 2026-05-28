@@ -114,12 +114,12 @@ func appendPolicyViolationFeedback(prompt string, feedback *policyViolationFeedb
 	b.WriteString("\n\n---\n\n")
 	b.WriteString("### Previous worker policy violation\n\n")
 	b.WriteString("A previous attempt for this same issue was rejected by the worker policy. Keep the retry tightly scoped and do not repeat the broad diff.\n\n")
-	b.WriteString(fmt.Sprintf("- Violation count: %d\n", feedback.Count))
+	fmt.Fprintf(&b, "- Violation count: %d\n", feedback.Count)
 	if cfg.Policy.MaxChangedFiles > 0 {
-		b.WriteString(fmt.Sprintf("- max_changed_files: %d\n", cfg.Policy.MaxChangedFiles))
+		fmt.Fprintf(&b, "- max_changed_files: %d\n", cfg.Policy.MaxChangedFiles)
 	}
 	if limit := cfg.Policy.LineLimit(); limit > 0 {
-		b.WriteString(fmt.Sprintf("- max_changed_lines: %d\n", limit))
+		fmt.Fprintf(&b, "- max_changed_lines: %d\n", limit)
 	}
 	if len(feedback.Violations) > 0 {
 		b.WriteString("- Previous violations:\n")
@@ -153,7 +153,7 @@ func appendPolicyViolationFeedback(prompt string, feedback *policyViolationFeedb
 	case feedback.Count+1 >= budget:
 		b.WriteString("- Next repeated policy violation will stop without another retry.\n")
 	default:
-		b.WriteString(fmt.Sprintf("- Policy violation budget %d/%d already consumed; the run stops non-retryably once the count reaches %d.\n", feedback.Count, budget, budget))
+		fmt.Fprintf(&b, "- Policy violation budget %d/%d already consumed; the run stops non-retryably once the count reaches %d.\n", feedback.Count, budget, budget)
 	}
 	return b.String()
 }

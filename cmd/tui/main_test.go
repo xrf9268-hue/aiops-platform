@@ -408,17 +408,18 @@ func TestRun_CancelDuringFetchAbortsAndRestores(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	fetchStarted := make(chan struct{})
 
-	fetch := func(fctx context.Context) (*stateResponse, error) {
+	fetch := func(fctx context.Context) error {
 		close(fetchStarted)
 		// Block until the loop's context is cancelled (the fetchCtx derives
 		// from it), mimicking a slow/hung poll interrupted by Ctrl-C.
 		<-fctx.Done()
-		return nil, fctx.Err()
+		return fctx.Err()
 	}
+	fetchState := func(fctx context.Context) (*stateResponse, error) { return &stateResponse{}, fetch(fctx) }
 
 	done := make(chan struct{})
 	go func() {
-		run(ctx, scr, fetch, time.Hour, "http://example")
+		run(ctx, scr, fetchState, time.Hour, "http://example")
 		close(done)
 	}()
 

@@ -52,10 +52,12 @@ func main() {
 		os.Exit(doctor.Run(context.Background(), opts))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	if err := normalizeRunError(run(ctx, os.Args[1:]), ctx.Err()); err != nil {
-		log.Fatal(err)
+		stop()
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
+	stop()
 }
 
 func parseDoctorArgs(args []string) (doctor.Options, error) {
@@ -511,10 +513,10 @@ func newStateHTTPServerController(snapshot stateSnapshotFunc, refresh ...stateRe
 	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh), readiness: stateHTTPAlwaysReady}
 }
 
-func (c *stateHTTPServerController) apply(ctx context.Context, host string, port int) error {
+func (c *stateHTTPServerController) apply(ctx context.Context, host string, port int) {
 	c.refreshStopped()
 	if c.desiredSet && c.desiredHost == host && c.desiredPort == port {
-		return nil
+		return
 	}
 	c.stop()
 	if port < 0 {
@@ -522,17 +524,13 @@ func (c *stateHTTPServerController) apply(ctx context.Context, host string, port
 		c.desiredHost = host
 		c.desiredPort = port
 		log.Printf("state HTTP server disabled by server.port=%d", port)
-		return nil
+		return
 	}
 	serverCtx, cancel := context.WithCancel(ctx)
-	handle, err := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.readiness, c.refresh)
-	if err != nil {
-		cancel()
-		return err
-	}
+	handle := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.readiness, c.refresh)
 	if handle == nil {
 		cancel()
-		return nil
+		return
 	}
 	c.desiredSet = true
 	c.desiredHost = host
@@ -540,7 +538,6 @@ func (c *stateHTTPServerController) apply(ctx context.Context, host string, port
 	c.cancel = cancel
 	c.addr = handle.Addr
 	c.serverDone = handle.Done
-	return nil
 }
 
 func (c *stateHTTPServerController) refreshStopped() {
@@ -622,9 +619,7 @@ func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowR
 		}
 		host := desiredHostForLoop(opts, wf)
 		port := desiredPortForLoop(opts, wf)
-		if err := controller.apply(ctx, host, port); err != nil {
-			return err
-		}
+		controller.apply(ctx, host, port)
 		checks++
 		if opts.StopAfterChecks > 0 && checks >= opts.StopAfterChecks {
 			return nil
@@ -652,23 +647,23 @@ type stateHTTPServerHandle struct {
 	Done <-chan struct{}
 }
 
-func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) (*stateHTTPServerHandle, error) {
+func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) *stateHTTPServerHandle {
 	if port < 0 {
 		log.Printf("state HTTP server disabled by server.port=%d", port)
-		return nil, nil
+		return nil
 	}
 	server := newStateHTTPServerWithAuthTokenAndReadiness(host, port, os.Getenv(stateHTTPAuthTokenEnv), readiness, snapshot, refresh...)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
-		return nil, nil
+		return nil
 	}
 	log.Printf("state HTTP server listening on http://%s", listener.Addr().String())
 	done := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 			defer cancel()
 			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("state HTTP server shutdown error: %v", err)
@@ -685,7 +680,7 @@ func startStateHTTPServer(ctx context.Context, host string, port int, snapshot s
 			}
 		}
 	}()
-	return &stateHTTPServerHandle{Addr: listener.Addr(), Done: done}, nil
+	return &stateHTTPServerHandle{Addr: listener.Addr(), Done: done}
 }
 
 // normalizeServerHost maps an empty bind host to the loopback default so a

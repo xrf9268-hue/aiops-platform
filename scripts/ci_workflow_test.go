@@ -48,7 +48,7 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 	for _, want := range []string{
 		"golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c",
 		"version: v2.12.2",
-		"args: --config=.golangci.yml --enable-only=errorlint,ineffassign,unused",
+		"args: --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
 	} {
 		if !strings.Contains(blockingStep, want) {
 			t.Fatalf("blocking golangci-lint step missing %q:\n%s", want, blockingStep)
@@ -62,7 +62,7 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 	if reportStep == "" {
 		t.Fatal("CI workflow missing report-only golangci-lint baseline step")
 	}
-	if !strings.Contains(reportStep, "args: --config=.golangci.yml --issues-exit-code=0") {
+	if !strings.Contains(reportStep, "args: --config=.golangci.yml --enable-only=funlen,gocognit --issues-exit-code=0") {
 		t.Fatalf("report-only golangci-lint step missing issues-exit-code=0:\n%s", reportStep)
 	}
 }

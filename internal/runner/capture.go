@@ -63,18 +63,17 @@ func (c *cappedWriter) Dropped() int64 {
 	return c.dropped
 }
 
-// headTail returns the first headCap bytes and (when body is longer than
-// headCap) the last headCap bytes. tail is empty when the entire body
-// fits in head, so callers do not duplicate content. headCap is applied
-// to each side independently — total payload size is bounded by 2*headCap.
-func headTail(body []byte, headCap int) (head []byte, tail string) {
-	if headCap <= 0 || len(body) == 0 {
+// headTail returns the first CodexEventOutputCap bytes and (when body is
+// longer) the last CodexEventOutputCap bytes. tail is empty when the entire
+// body fits in head, so callers do not duplicate content.
+func headTail(body []byte) (head []byte, tail string) {
+	if CodexEventOutputCap <= 0 || len(body) == 0 {
 		return nil, ""
 	}
-	if len(body) <= headCap {
+	if len(body) <= CodexEventOutputCap {
 		return body, ""
 	}
-	head = body[:headCap]
-	tail = string(body[len(body)-headCap:])
+	head = body[:CodexEventOutputCap]
+	tail = string(body[len(body)-CodexEventOutputCap:])
 	return head, tail
 }

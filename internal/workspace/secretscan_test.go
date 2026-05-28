@@ -214,7 +214,7 @@ func killedExitError(t *testing.T) *exec.ExitError {
 	if !errors.As(err, &ee) {
 		t.Fatalf("expected *exec.ExitError after SIGKILL, got %T: %v", err, err)
 	}
-	if ws, ok := ee.ProcessState.Sys().(syscall.WaitStatus); ok && !ws.Signaled() {
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok && !ws.Signaled() {
 		t.Fatalf("expected WaitStatus.Signaled()==true; ws=%#v", ws)
 	}
 	return ee
@@ -224,7 +224,7 @@ func TestRunSecretScan_SignalKilledIsExecError(t *testing.T) {
 	cfg := workflow.SecretScanConfig{Enabled: true, Command: []string{"gitleaks"}}
 	ee := killedExitError(t)
 	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
-		return nil, nil, ee.ProcessState.ExitCode(), ee
+		return nil, nil, ee.ExitCode(), ee
 	}
 	res := runSecretScanWith(context.Background(), t.TempDir(), cfg, stub)
 	if res.Status != SecretScanError {
@@ -248,7 +248,7 @@ func TestRunSecretScan_ContextCanceledIsExecError(t *testing.T) {
 	// at ctx.Err() first and route this to SecretScanError, not Violation.
 	ee := killedExitError(t)
 	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
-		return nil, nil, ee.ProcessState.ExitCode(), ee
+		return nil, nil, ee.ExitCode(), ee
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
@@ -272,7 +272,7 @@ func TestRunSecretScan_ContextDeadlineExceededIsExecError(t *testing.T) {
 	stub := func(ctx context.Context, dir string, argv []string) ([]byte, []byte, int, error) {
 		// Simulate the deadline elapsing during the run.
 		<-ctx.Done()
-		return nil, nil, ee.ProcessState.ExitCode(), ee
+		return nil, nil, ee.ExitCode(), ee
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
 	defer cancel()

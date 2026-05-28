@@ -176,7 +176,7 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 		tkLocal := tk
 		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
 		t.Cleanup(func() {
-			os.RemoveAll(filepath.Join(yamlRoot, tkLocal.RepoOwner))
+			_ = os.RemoveAll(filepath.Join(yamlRoot, tkLocal.RepoOwner))
 		})
 
 		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
@@ -202,7 +202,7 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 		tkLocal := tk
 		tkLocal.RepoOwner = uniqueRepoOwnerForTest(t)
 		t.Cleanup(func() {
-			os.RemoveAll(filepath.Join(specDefault, tkLocal.RepoOwner))
+			_ = os.RemoveAll(filepath.Join(specDefault, tkLocal.RepoOwner))
 		})
 
 		if rterr := worker.RunTaskForTest(context.Background(), ev, tkLocal, cfg); rterr != nil {
@@ -937,23 +937,23 @@ func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
 }
 
 func TestAnalysisOnlyRunRejectsSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files")
 }
 
 func TestAnalysisOnlyRunRejectsCommittedSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files")
 }
 
 func TestAnalysisOnlyRunRejectsCommittedSourceChangesEvenIfRunnerMutatesBaseConfig(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files")
 }
 
 func TestAnalysisOnlyRunRejectsCommittedArtifacts(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits")
 }
 
 func TestAnalysisOnlyRunRequiresPlanArtifact(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md")
 }
 
 func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
@@ -1008,10 +1008,10 @@ func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
 }
 
 func TestAnalysisOnlyRunRejectsRepoOwnedAiopsChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files", task.EventAnalysisOnlyViolation)
+	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files")
 }
 
-func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr, wantEvent string) {
+func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr string) {
 	t.Helper()
 	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: "+runnerName+"\npolicy:\n  mode: analysis_only", 1)
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
@@ -1030,8 +1030,8 @@ func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr, wantEvent st
 	if !strings.Contains(rterr.Err.Error(), wantErr) {
 		t.Fatalf("error = %v, want %q", rterr.Err, wantErr)
 	}
-	if got := len(ev.byKind(wantEvent)); got != 1 {
-		t.Fatalf("%s events = %d, want 1; events=%#v", wantEvent, got, ev.events)
+	if got := len(ev.byKind(task.EventAnalysisOnlyViolation)); got != 1 {
+		t.Fatalf("%s events = %d, want 1; events=%#v", task.EventAnalysisOnlyViolation, got, ev.events)
 	}
 }
 
