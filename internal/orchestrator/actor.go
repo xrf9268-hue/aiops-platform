@@ -1785,6 +1785,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 					o:        o,
 					id:       id,
 					attempt:  attempt,
+					kind:     kind,
 					fetchErr: fetchErr,
 				})
 				return
@@ -1852,20 +1853,24 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 		// reschedule through the configured backoff with attempt+1 and a
 		// typed "no available orchestrator slots" error instead of arming a
 		// short 100ms re-fire timer.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Workspace, o)
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
 	}
 	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Same
 		// upstream-aligned reschedule shape as the global-cap branch.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Workspace, o)
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
 	// would let a concurrent tick race in.
 	delete(st.RetryAttempts, id)
 	return func() {
-		a := attempt
-		o.spawn(id, issue, &a, 0)
+		var retryAttempt *int
+		if entry.Kind != RetryKindQuotaBackoff || attempt > 0 {
+			a := attempt
+			retryAttempt = &a
+		}
+		o.spawn(id, issue, retryAttempt, 0)
 	}
 }
 
@@ -1879,7 +1884,7 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 // 100ms re-fire loop bypassed the backoff formula, left the attempt
 // counter frozen across thousands of re-fires, and produced no runtime
 // event for the cap-pressure case.
-func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, workspace Workspace, o *Orchestrator) func() {
+func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, kind RetryKind, workspace Workspace, o *Orchestrator) func() {
 	if o.runCtx.Err() != nil {
 		// Mirror retryPollFailedOp's shutdown guard (actor.go above):
 		// the followup's ScheduleRetry would fail submit anyway, so
@@ -1889,6 +1894,9 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 	}
 	const runErr = "no available orchestrator slots"
 	nextAttempt := attempt + 1
+	if kind == RetryKindQuotaBackoff {
+		nextAttempt = attempt
+	}
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventFailed,
 		IssueID:    id,
@@ -1898,6 +1906,10 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 	return func() {
 		// Carry the workspace across the reschedule so the §18.1 terminal
 		// cleanup gate still has a path on a later attempt (#341).
+		if kind == RetryKindQuotaBackoff {
+			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			return
+		}
 		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
 	}
 }
@@ -1920,6 +1932,7 @@ type retryPollFailedOp struct {
 	o        *Orchestrator
 	id       IssueID
 	attempt  int
+	kind     RetryKind
 	fetchErr error
 }
 
@@ -1929,7 +1942,7 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 		// Reconciliation released the claim between fetch and apply.
 		return nil
 	}
-	if entry.Attempt != r.attempt || entry.Kind != RetryKindFailure {
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
 		// Replaced by a newer ScheduleRetry; the newer entry owns the
 		// re-dispatch.
 		return nil
@@ -1950,6 +1963,9 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	// gate still has a path on a later attempt (#341).
 	workspace := entry.Workspace
 	nextAttempt := r.attempt + 1
+	if r.kind == RetryKindQuotaBackoff {
+		nextAttempt = r.attempt
+	}
 	runErr := "retry poll failed"
 	if r.fetchErr != nil {
 		runErr = "retry poll failed: " + r.fetchErr.Error()
@@ -1961,6 +1977,10 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 		Message:    runErr,
 	})
 	return func() {
+		if r.kind == RetryKindQuotaBackoff {
+			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			return
+		}
 		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
 	}
 }
@@ -2237,7 +2257,7 @@ func (f *finalizeRunOp) applyQuotaBackoff(st *OrchestratorState, elapsed time.Du
 	if !errors.As(f.result.Err, &quota) {
 		return nil, false
 	}
-	attempt := 1
+	attempt := 0
 	if f.attempt != nil && *f.attempt > 0 {
 		attempt = *f.attempt
 	}
