@@ -235,6 +235,7 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			IssueIdentifier string `json:"issue_identifier"`
 			Attempt         int    `json:"attempt"`
 			Error           string `json:"error"`
+			Kind            string `json:"kind"`
 		} `json:"retrying"`
 		Completed   []string `json:"completed"`
 		Failed      []string `json:"failed"`
@@ -275,6 +276,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 	if len(payload.Retrying) != 2 || payload.Retrying[0].IssueID != "issue-1" || payload.Retrying[1].IssueID != "issue-2" {
 		t.Fatalf("retrying = %+v, want sorted issue-1 then issue-2", payload.Retrying)
+	}
+	if payload.Retrying[0].Kind != "" || payload.Retrying[1].Kind != "" {
+		t.Fatalf("retrying kinds = %q/%q, want omitted empty values", payload.Retrying[0].Kind, payload.Retrying[1].Kind)
 	}
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
@@ -348,6 +352,27 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 	if rawRateLimits != nil {
 		t.Fatalf("rate_limits = %#v, want null when no rate-limit event observed", rawRateLimits)
+	}
+}
+
+func TestApiRetryFromViewSurfacesQuotaBackoffKind(t *testing.T) {
+	row := apiRetryFromView(orchestrator.RetryView{
+		IssueID:    "issue-1",
+		Identifier: "ENG-1",
+		Attempt:    1,
+		Error:      "quota backoff",
+		Kind:       orchestrator.RetryKindQuotaBackoff,
+	})
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["kind"] != "quota_backoff" {
+		t.Fatalf("retry kind = %#v, want quota_backoff; raw=%s", got["kind"], raw)
 	}
 }
 

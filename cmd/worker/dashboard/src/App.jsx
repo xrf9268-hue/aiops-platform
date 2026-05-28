@@ -541,6 +541,10 @@ export default function App() {
         </span>
       ),
     },
+    {
+      header: 'Kind',
+      cell: (row) => <StateBadge value={row.kind || 'failure'} type={row.kind === 'quota_backoff' ? 'warning' : 'default'} />,
+    },
     { header: 'Due at', cell: (row) => <span className="text-muted">{formatDate(row.due_at)}</span> },
     {
       header: 'Error',

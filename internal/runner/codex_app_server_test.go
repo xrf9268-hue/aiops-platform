@@ -1226,6 +1226,124 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerClassifiesUsageLimitAsQuotaBackoff(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "codex_app_server_v2_usage_limit_turn_completed.json"))
+	if err != nil {
+		t.Fatalf("read v2 usage-limit fixture: %v", err)
+	}
+	codexAppServerStubScript(t, `
+import json
+usage_limit = json.loads("""`+string(fixture)+`""")
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps(usage_limit), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+
+	res, err := runCodexAppServerForTest(t, appServerInput(wd))
+	var quota *QuotaBackoffError
+	if !errors.As(err, &quota) {
+		t.Fatalf("Run error = %T %[1]v, want QuotaBackoffError", err)
+	}
+	if quota.RetryAfter != 90*time.Second {
+		t.Fatalf("RetryAfter = %s, want 90s", quota.RetryAfter)
+	}
+	if strings.Contains(err.Error(), "codex_error_info") {
+		t.Fatalf("Run error = %q, want sanitized message without raw protocol key", err.Error())
+	}
+	if strings.Contains(err.Error(), "additionalDetails") || strings.Contains(err.Error(), "quota reset is temporary") {
+		t.Fatalf("Run error = %q, want sanitized message without arbitrary protocol details", err.Error())
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventTurnEndedWithError)
+	if len(events) != 1 {
+		t.Fatalf("turn_ended_with_error events = %d, want 1; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "codex_error_info"); got != "usageLimitExceeded" {
+		t.Fatalf("codex_error_info = %#v, want usageLimitExceeded; payload=%#v", got, events[0].Payload)
+	}
+}
+
+func TestCodexAppServerRunnerIgnoresLegacyFlatUsageLimitShape(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+legacy_usage_limit = {
+  'method': 'turn/completed',
+  'params': {
+    'status': 'failed',
+    'codex_error_info': 'usageLimitExceeded',
+    'message': "You've hit your usage limit. Please try again in 90 seconds."
+  },
+}
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps(legacy_usage_limit), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+
+	_, err := runCodexAppServerForTest(t, appServerInput(wd))
+	var quota *QuotaBackoffError
+	if errors.As(err, &quota) {
+		t.Fatalf("Run error = %T %[1]v, want ordinary turn failure for legacy flat shape", err)
+	}
+	if !errors.Is(err, ErrTurnFailed) {
+		t.Fatalf("Run error = %T %[1]v, want ErrTurnFailed", err)
+	}
+}
+
+func TestQuotaBackoffFromTurnParamsRequiresOfficialV2CodexErrorInfo(t *testing.T) {
+	cases := []struct {
+		name string
+		info any
+	}{
+		{
+			name: "object",
+			info: map[string]any{"code": "usageLimitExceeded"},
+		},
+		{
+			name: "snake case",
+			info: "usage_limit_exceeded",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params := map[string]any{
+				"turn": map[string]any{
+					"status": "failed",
+					"error": map[string]any{
+						"message":        "Please try again in 90 seconds.",
+						"codexErrorInfo": tc.info,
+					},
+				},
+			}
+			if got := quotaBackoffFromTurnParams(params); got != nil {
+				t.Fatalf("quotaBackoffFromTurnParams(%#v) = %#v, want nil for non-v2 codexErrorInfo", tc.info, got)
+			}
+		})
+	}
+}
+
+func TestParseRetryAfterTextAcceptsAbsoluteClockTime(t *testing.T) {
+	now := time.Date(2026, 5, 27, 18, 0, 0, 0, time.Local)
+	got := parseRetryAfterText("You've hit your usage limit. Please try again at 6:20 PM.", now)
+	if got != 20*time.Minute {
+		t.Fatalf("parseRetryAfterText absolute retry = %s, want 20m", got)
+	}
+}
+
 func TestCodexAppServerRunnerTreatsInterruptedTurnCompletedAsSuccess(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json

@@ -769,6 +769,7 @@ type RetryView struct {
 	Attempt    int
 	DueAt      time.Time
 	Error      string
+	Kind       RetryKind
 }
 
 // Snapshot returns a read-only view of the orchestrator state. The
@@ -873,6 +874,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 			Attempt:    r.Attempt,
 			DueAt:      r.DueAt,
 			Error:      r.Error,
+			Kind:       r.Kind,
 		})
 	}
 	// Iterate the FIFO order slices, not the map. The map's iteration

@@ -25,6 +25,8 @@ import (
 //   - Error — the abnormal-exit message that caused the retry, surfaced
 //     through SPEC §13.3's retrying view so operators can see why an
 //     issue is in backoff.
+//   - Kind — whether the retry is ordinary failure backoff, continuation, or
+//     a quota/rate-limit backoff surfaced from the coding-agent protocol.
 type RetryEntry struct {
 	Issue      tracker.Issue
 	IssueID    IssueID

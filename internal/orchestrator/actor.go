@@ -108,14 +108,16 @@ type RetryKind string
 const (
 	RetryKindFailure      RetryKind = "failure"
 	RetryKindContinuation RetryKind = "continuation"
+	RetryKindQuotaBackoff RetryKind = "quota_backoff"
 )
 
 // RetryRequest describes the retry being scheduled. Attempt is the 1-based
 // failure retry attempt for RetryKindFailure. Continuation retries ignore it
 // and always use the short SPEC §16.6 delay.
 type RetryRequest struct {
-	Kind    RetryKind
-	Attempt int
+	Kind          RetryKind
+	Attempt       int
+	DelayOverride time.Duration
 }
 
 // RetryScheduler implements the SPEC retry delays: clean continuation retries
@@ -148,6 +150,9 @@ var terminalCleanupStateRetryDelay = continuationRetryDelay
 
 // NextDelay implements Scheduler.
 func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
+	if req.DelayOverride > 0 {
+		return req.DelayOverride
+	}
 	if req.Kind == RetryKindContinuation {
 		return continuationRetryDelay
 	}
@@ -1045,6 +1050,10 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 // survives across attempts.
 func (o *Orchestrator) scheduleFailureRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, workspace Workspace) error {
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace)
+}
+
+func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, retryAfter time.Duration, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace)
 }
 
 // scheduleContinuationRetry queues the short SPEC §16.6 wake after a clean
@@ -2146,6 +2155,9 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		close(f.done)
 		return nil
 	}
+	if cleanup, ok := f.applyQuotaBackoff(st, elapsed); ok {
+		return cleanup
+	}
 	if f.entry.ReconcileCancel {
 		// Capture the cleanup followup before FinishRunReconciledCancelled
 		// drops the entry from state: the worker has now exited, so the
@@ -2218,6 +2230,33 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	return func() {
 		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
 	}
+}
+
+func (f *finalizeRunOp) applyQuotaBackoff(st *OrchestratorState, elapsed time.Duration) (func(), bool) {
+	var quota *runner.QuotaBackoffError
+	if !errors.As(f.result.Err, &quota) {
+		return nil, false
+	}
+	attempt := 1
+	if f.attempt != nil && *f.attempt > 0 {
+		attempt = *f.attempt
+	}
+	runErr := quota.Error()
+	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
+		close(f.done)
+		return nil, true
+	}
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: runErr})
+	issue := f.entry.Issue
+	workspace := f.entry.Workspace
+	st.Claimed[f.id] = struct{}{}
+	st.ClaimedIssues[f.id] = issue
+	close(f.done)
+	o := f.o
+	identifier := f.identifier
+	return func() {
+		_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, attempt, runErr, quota.RetryAfter, workspace)
+	}, true
 }
 
 // spawn asks the dispatcher for a worker, records the Running entry

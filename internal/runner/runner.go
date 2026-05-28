@@ -126,6 +126,34 @@ func EnforcesMaxTurnsInternally(name string) bool {
 	}
 }
 
+// QuotaBackoffError marks a recoverable coding-agent quota/rate-limit
+// condition. It is distinct from ordinary turn failures so orchestrators can
+// hold the issue in retry/backoff without consuming the workflow's normal
+// failure retry budget.
+type QuotaBackoffError struct {
+	Message    string
+	RetryAfter time.Duration
+}
+
+func (e *QuotaBackoffError) Error() string {
+	if e == nil {
+		return ""
+	}
+	msg := e.Message
+	if msg == "" {
+		msg = "coding-agent quota exceeded"
+	}
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("quota backoff: %s; retry after %s", msg, e.RetryAfter)
+	}
+	return "quota backoff: " + msg
+}
+
+func IsQuotaBackoff(err error) bool {
+	var quota *QuotaBackoffError
+	return errors.As(err, &quota)
+}
+
 type RunnerErrorCategory string
 
 const (

@@ -111,6 +111,7 @@ type retryEntry struct {
 	Attempt    int        `json:"attempt"`
 	DueAt      *time.Time `json:"due_at"`
 	Error      string     `json:"error"`
+	Kind       string     `json:"kind"`
 }
 
 type codexTotals struct {
@@ -593,11 +594,16 @@ func formatRetryRow(r retryEntry) string {
 		}
 		errorPart = " " + colorize("error="+errStr, ansiDim)
 	}
+	kindPart := ""
+	if r.Kind != "" {
+		kindPart = colorize(" "+r.Kind, ansiDim)
+	}
 
 	return "│  " +
 		colorize("↻", ansiYellow) + " " +
 		colorize(id, ansiRed) + " " +
 		colorize("attempt="+attempt, ansiYellow) +
+		kindPart +
 		colorize(" in ", ansiDim) +
 		colorize(dueIn, ansiCyan) +
 		errorPart

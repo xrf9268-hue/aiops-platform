@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1171,6 +1173,9 @@ func completedTurnError(msg map[string]any) error {
 	if status == "" || status == "completed" || status == "succeeded" || status == "success" || status == "interrupted" {
 		return nil
 	}
+	if quota := quotaBackoffFromTurnParams(params); quota != nil {
+		return quota
+	}
 	return NewError(CategoryTurnFailed, fmt.Sprintf("turn/completed failed with status %q: %s", status, safeTurnReason(params)), nil)
 }
 
@@ -1250,6 +1255,12 @@ func safeTurnFailurePayload(params map[string]any) map[string]any {
 			out["turn"] = nested
 		}
 	}
+	if info, ok := codexErrorInfoValue(params); ok {
+		out["codex_error_info"] = info
+	}
+	if retryAfter := quotaRetryAfterFromParams(params, time.Now()); retryAfter > 0 {
+		out["retry_after_seconds"] = int64(retryAfter.Round(time.Second) / time.Second)
+	}
 	if _, ok := out["reason"]; !ok {
 		out["reason"] = safeTurnReason(params)
 	}
@@ -1282,6 +1293,96 @@ func copyAllowlistedReasonFields(src, dst map[string]any) {
 			}
 		}
 	}
+}
+
+func quotaBackoffFromTurnParams(params map[string]any) *QuotaBackoffError {
+	info, ok := codexErrorInfoValue(params)
+	if !ok || !isUsageLimitExceeded(info) {
+		return nil
+	}
+	return &QuotaBackoffError{
+		Message:    safeTurnReason(params),
+		RetryAfter: quotaRetryAfterFromParams(params, time.Now()),
+	}
+}
+
+func codexErrorInfoValue(params map[string]any) (string, bool) {
+	turn, _ := params["turn"].(map[string]any)
+	if turn == nil {
+		return "", false
+	}
+	errorPayload, _ := turn["error"].(map[string]any)
+	if errorPayload == nil {
+		return "", false
+	}
+	info, _ := errorPayload["codexErrorInfo"].(string)
+	info = strings.TrimSpace(info)
+	return info, info != ""
+}
+
+func isUsageLimitExceeded(info string) bool {
+	return info == "usageLimitExceeded"
+}
+
+func quotaRetryAfterFromParams(params map[string]any, now time.Time) time.Duration {
+	turn, _ := params["turn"].(map[string]any)
+	errorPayload, _ := turn["error"].(map[string]any)
+	for _, key := range []string{"message", "additionalDetails"} {
+		if s, _ := errorPayload[key].(string); strings.TrimSpace(s) != "" {
+			if d := parseRetryAfterText(s, now); d > 0 {
+				return d
+			}
+		}
+	}
+	return 0
+}
+
+var (
+	retryInPattern = regexp.MustCompile(`(?i)(?:try again|retry)[^.]*?\bin\s+(\d+(?:\.\d+)?)\s*(second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs)\b`)
+	retryAtPattern = regexp.MustCompile(`(?i)(?:try again|retry)[^.]*?\bat\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)`)
+)
+
+func parseRetryAfterText(message string, now time.Time) time.Duration {
+	if match := retryInPattern.FindStringSubmatch(message); len(match) == 3 {
+		n, err := strconv.ParseFloat(match[1], 64)
+		if err != nil || n <= 0 {
+			return 0
+		}
+		switch strings.ToLower(match[2]) {
+		case "second", "seconds", "sec", "secs":
+			return time.Duration(n * float64(time.Second))
+		case "minute", "minutes", "min", "mins":
+			return time.Duration(n * float64(time.Minute))
+		case "hour", "hours", "hr", "hrs":
+			return time.Duration(n * float64(time.Hour))
+		}
+	}
+	if match := retryAtPattern.FindStringSubmatch(message); len(match) == 4 {
+		hour, err := strconv.Atoi(match[1])
+		if err != nil || hour < 1 || hour > 12 {
+			return 0
+		}
+		minute := 0
+		if match[2] != "" {
+			minute, err = strconv.Atoi(match[2])
+			if err != nil || minute > 59 {
+				return 0
+			}
+		}
+		meridiem := strings.ToLower(strings.ReplaceAll(match[3], ".", ""))
+		if meridiem == "pm" && hour != 12 {
+			hour += 12
+		}
+		if meridiem == "am" && hour == 12 {
+			hour = 0
+		}
+		retryAt := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+		if !retryAt.After(now) {
+			retryAt = retryAt.Add(24 * time.Hour)
+		}
+		return retryAt.Sub(now)
+	}
+	return 0
 }
 
 func (c *appServerClient) recordSafeTurnFailure(event string, params map[string]any) {

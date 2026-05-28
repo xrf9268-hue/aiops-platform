@@ -25,7 +25,16 @@ const sampleState = {
     },
   ],
   blocked: [],
-  retrying: [],
+  retrying: [
+    {
+      issue_id: 'ENG-124',
+      issue_identifier: 'ENG-124',
+      attempt: 1,
+      kind: 'quota_backoff',
+      due_at: '2026-05-24T00:01:30.000Z',
+      error: 'quota backoff',
+    },
+  ],
 };
 
 beforeEach(() => {
@@ -71,6 +80,15 @@ describe('Operations Dashboard', () => {
     const failedCard = screen.getByText('Failed').closest('article');
     const value = within(failedCard).getByText('3');
     expect(value.className).toContain('text-danger');
+  });
+
+  it('shows quota backoff kind in the retry queue', async () => {
+    render(<App />);
+    const kinds = await screen.findAllByText('quota_backoff');
+
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ENG-124').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('quota backoff').length).toBeGreaterThan(0);
   });
 
   it('tones the Completed metric as good', async () => {

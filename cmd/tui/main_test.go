@@ -154,6 +154,19 @@ func TestCell_PadsShortStrings(t *testing.T) {
 	}
 }
 
+func TestFormatRetryRowIncludesQuotaBackoffKind(t *testing.T) {
+	got := formatRetryRow(retryEntry{
+		IssueID:    "issue-1",
+		Identifier: "ENG-1",
+		Attempt:    1,
+		Kind:       "quota_backoff",
+		Error:      "quota backoff",
+	})
+	if !strings.Contains(got, "quota_backoff") {
+		t.Fatalf("formatRetryRow missing quota_backoff kind: %q", got)
+	}
+}
+
 // ── formatRuntimeSecs ─────────────────────────────────────────────────────────
 
 func TestFormatRuntimeSecs(t *testing.T) {

@@ -988,11 +988,12 @@ type apiStateBlocked struct {
 }
 
 type apiStateRetry struct {
-	IssueID    orchestrator.IssueID `json:"issue_id"`
-	Identifier string               `json:"issue_identifier,omitempty"`
-	Attempt    int                  `json:"attempt"`
-	DueAt      *time.Time           `json:"due_at,omitempty"`
-	Error      string               `json:"error,omitempty"`
+	IssueID    orchestrator.IssueID   `json:"issue_id"`
+	Identifier string                 `json:"issue_identifier,omitempty"`
+	Attempt    int                    `json:"attempt"`
+	DueAt      *time.Time             `json:"due_at,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	Kind       orchestrator.RetryKind `json:"kind,omitempty"`
 }
 
 type apiIssueResponse struct {
@@ -1348,6 +1349,7 @@ func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
 		Attempt:    row.Attempt,
 		DueAt:      dueAt,
 		Error:      row.Error,
+		Kind:       row.Kind,
 	}
 }
 
@@ -1381,13 +1383,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	if generatedAt.IsZero() {
 		generatedAt = time.Now().UTC()
 	}
-	running := make([]apiStateRunning, 0, len(view.Running))
-	for _, row := range view.Running {
-		running = append(running, apiRunningFromView(row))
-	}
-	sort.Slice(running, func(i, j int) bool {
-		return running[i].IssueID < running[j].IssueID
-	})
+	running := sortedAPIRunningRows(view.Running)
 	blocked := make([]apiStateBlocked, 0, len(view.Blocked))
 	for _, row := range view.Blocked {
 		var blockedAt *time.Time
@@ -1416,13 +1412,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(blocked, func(i, j int) bool {
 		return blocked[i].IssueID < blocked[j].IssueID
 	})
-	retrying := make([]apiStateRetry, 0, len(view.Retrying))
-	for _, row := range view.Retrying {
-		retrying = append(retrying, apiRetryFromView(row))
-	}
-	sort.Slice(retrying, func(i, j int) bool {
-		return retrying[i].IssueID < retrying[j].IssueID
-	})
+	retrying := sortedAPIRetryRows(view.Retrying)
 	completed := append([]orchestrator.IssueID(nil), view.Completed...)
 	sort.Slice(completed, func(i, j int) bool {
 		return completed[i] < completed[j]
@@ -1463,6 +1453,28 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		},
 		RateLimits: rateLimits,
 	}
+}
+
+func sortedAPIRunningRows(rows []orchestrator.RunningView) []apiStateRunning {
+	running := make([]apiStateRunning, 0, len(rows))
+	for _, row := range rows {
+		running = append(running, apiRunningFromView(row))
+	}
+	sort.Slice(running, func(i, j int) bool {
+		return running[i].IssueID < running[j].IssueID
+	})
+	return running
+}
+
+func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
+	retrying := make([]apiStateRetry, 0, len(rows))
+	for _, row := range rows {
+		retrying = append(retrying, apiRetryFromView(row))
+	}
+	sort.Slice(retrying, func(i, j int) bool {
+		return retrying[i].IssueID < retrying[j].IssueID
+	})
+	return retrying
 }
 
 func copyConcurrencyLimits(src map[string]int) map[string]int {
