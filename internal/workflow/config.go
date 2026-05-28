@@ -2,12 +2,31 @@ package workflow
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// MaskCloneURL strips embedded basic-auth from a clone URL so it is safe to log
+// or display. URLs that do not parse as net/url (notably the SSH-style
+// git@host:path form) return unchanged, since that form does not carry
+// userinfo. A bare username with no password is also stripped: by convention an
+// embedded user in an HTTPS clone URL is a token alias (e.g. "oauth2",
+// "x-access-token", or the token itself), not a real account name.
+func MaskCloneURL(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
+}
 
 // defaultWorkspaceRoot resolves SPEC §6.4's `<system-temp>/symphony_workspaces`
 // default at call time so it tracks the running process's TMPDIR (Elixir uses

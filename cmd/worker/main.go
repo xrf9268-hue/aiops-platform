@@ -66,7 +66,7 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
 	goTestDir := fs.String("go-test-dir", "", "repository module root for real-mode targeted go test")
 	githubIssue := fs.Int("github-issue", 0, "optional GitHub issue number for agent-environment gh and git push preflight")
-	githubRepo := fs.String("github-repo", "", "optional owner/name repo for --github-issue when a workflow configures multiple GitHub repos")
+	githubRepo := fs.String("github-repo", "", "optional owner/name or clone_url repo for --github-issue when a workflow configures multiple GitHub repos (use clone_url to disambiguate one owner/name routed to multiple clone URLs)")
 	if err := fs.Parse(reorderDoctorFlags(args)); err != nil {
 		return doctor.Options{}, err
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -267,7 +266,7 @@ func maskSecrets(cfg workflow.Config) workflow.Config {
 	if cfg.Tracker.APIKey != "" {
 		cfg.Tracker.APIKey = maskedSecret
 	}
-	cfg.Repo.CloneURL = maskCloneURL(cfg.Repo.CloneURL)
+	cfg.Repo.CloneURL = workflow.MaskCloneURL(cfg.Repo.CloneURL)
 	if n := len(cfg.Sandbox.CredentialFiles); n > 0 {
 		masked := make([]string, n)
 		for i := range masked {
@@ -276,24 +275,6 @@ func maskSecrets(cfg workflow.Config) workflow.Config {
 		cfg.Sandbox.CredentialFiles = masked
 	}
 	return cfg
-}
-
-// maskCloneURL strips embedded basic-auth from a clone URL. URLs that
-// do not parse as net/url (notably the SSH-style git@host:path form)
-// return unchanged, since that form does not carry userinfo. A bare
-// username with no password is also stripped: by convention an embedded
-// user in an HTTPS clone URL is a token alias (e.g. "oauth2",
-// "x-access-token", or the token itself), not a real account name.
-func maskCloneURL(raw string) string {
-	if raw == "" {
-		return raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
-		return raw
-	}
-	u.User = nil
-	return u.String()
 }
 
 // printConfig writes the effective workflow for workdir as JSON to

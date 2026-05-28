@@ -384,6 +384,140 @@ func TestSelectGitHubRepoDeduplicatesIdenticalRepoEntries(t *testing.T) {
 	}
 }
 
+func TestSelectGitHubRepoDisambiguatesSameOwnerNameByCloneURL(t *testing.T) {
+	const (
+		httpsURL = "https://github.com/owner/repo.git"
+		sshURL   = "git@github.com:owner/repo.git"
+	)
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "repo",
+			CloneURL: httpsURL,
+		},
+		Services: []workflow.ServiceConfig{{
+			Repo: workflow.RepoConfig{
+				Owner:    "owner",
+				Name:     "repo",
+				CloneURL: sshURL,
+			},
+		}},
+	}
+
+	// Distinct clone URLs for one owner/name must survive dedup; collapsing
+	// them would hide the URL TaskFromIssue swaps in for service-routed work.
+	if repos := githubRepos(cfg); len(repos) != 2 {
+		t.Fatalf("githubRepos(...) kept %d repos; want 2 (distinct clone URLs)", len(repos))
+	}
+
+	_, err := selectGitHubRepo(cfg, "owner/repo")
+	if err == nil || !strings.Contains(err.Error(), "multiple clone URLs") {
+		t.Fatalf("selectGitHubRepo(cfg, %q) error = %v; want ambiguous clone URL error", "owner/repo", err)
+	}
+	if !strings.Contains(err.Error(), httpsURL) || !strings.Contains(err.Error(), sshURL) {
+		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; want both clone URLs listed", "owner/repo", err)
+	}
+
+	repo, err := selectGitHubRepo(cfg, sshURL)
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want SSH service repo", sshURL, err)
+	}
+	if repo.CloneURL != sshURL {
+		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", sshURL, repo.CloneURL, sshURL)
+	}
+
+	repo, err = selectGitHubRepo(cfg, httpsURL)
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want HTTPS fallback repo", httpsURL, err)
+	}
+	if repo.CloneURL != httpsURL {
+		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", httpsURL, repo.CloneURL, httpsURL)
+	}
+}
+
+func TestSelectGitHubRepoAmbiguityErrorMasksCloneURLCredentials(t *testing.T) {
+	const secret = "ghp_supersecrettoken"
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "repo",
+			CloneURL: "https://x-access-token:" + secret + "@github.com/owner/repo.git",
+		},
+		Services: []workflow.ServiceConfig{{
+			Repo: workflow.RepoConfig{
+				Owner:    "owner",
+				Name:     "repo",
+				CloneURL: "https://oauth2:" + secret + "@github.com/owner/repo.git",
+			},
+		}},
+	}
+
+	_, err := selectGitHubRepo(cfg, "owner/repo")
+	if err == nil {
+		t.Fatalf("selectGitHubRepo(cfg, %q) error = nil; want ambiguity error", "owner/repo")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; must not leak clone_url credentials", "owner/repo", err)
+	}
+	if !strings.Contains(err.Error(), "github.com/owner/repo.git") {
+		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; want masked clone URLs listed", "owner/repo", err)
+	}
+}
+
+func TestSelectGitHubRepoAcceptsMaskedCloneURLForSelection(t *testing.T) {
+	const secret = "ghp_supersecrettoken"
+	credURL := "https://x-access-token:" + secret + "@github.com/owner/repo.git"
+	maskedURL := "https://github.com/owner/repo.git"
+	sshURL := "git@github.com:owner/repo.git"
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo", CloneURL: credURL},
+		Services: []workflow.ServiceConfig{{
+			Repo: workflow.RepoConfig{Owner: "owner", Name: "repo", CloneURL: sshURL},
+		}},
+	}
+
+	// The masked URL is what the ambiguity error shows the operator; selecting
+	// the credentialed HTTPS path with it must work without retyping the token.
+	repo, err := selectGitHubRepo(cfg, maskedURL)
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want the credentialed HTTPS repo", maskedURL, err)
+	}
+	if repo.CloneURL != credURL {
+		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", maskedURL, repo.CloneURL, credURL)
+	}
+
+	// The SSH path is still selectable by its own (already credential-free) form.
+	repo, err = selectGitHubRepo(cfg, sshURL)
+	if err != nil {
+		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want the SSH repo", sshURL, err)
+	}
+	if repo.CloneURL != sshURL {
+		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", sshURL, repo.CloneURL, sshURL)
+	}
+}
+
+func TestSelectGitHubRepoNotFoundErrorMasksCloneURLCredentials(t *testing.T) {
+	const secret = "ghp_supersecrettoken"
+	cfg := workflow.Config{
+		Repo: workflow.RepoConfig{
+			Owner:    "owner",
+			Name:     "repo",
+			CloneURL: "https://github.com/owner/repo.git",
+		},
+	}
+	// An operator may pass a clone_url to --github-repo (the new disambiguation
+	// path); a non-matching one must not echo its embedded token into the report.
+	target := "https://x-access-token:" + secret + "@github.com/other/repo.git"
+
+	_, err := selectGitHubRepo(cfg, target)
+	if err == nil {
+		t.Fatalf("selectGitHubRepo(cfg, <clone_url>) error = nil; want not-found error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("selectGitHubRepo(cfg, <clone_url>) error = %q; must not leak clone_url credentials", err)
+	}
+}
+
 func TestDefaultRunnerResolvesBinaryAgainstSuppliedEnvPATH(t *testing.T) {
 	envDir := t.TempDir()
 	envBin := filepath.Join(envDir, "agentonly")
