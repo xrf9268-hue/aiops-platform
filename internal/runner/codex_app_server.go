@@ -199,6 +199,12 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 	if command == "" || command == "codex exec" {
 		command = "codex app-server"
 	}
+	// A codex-prefixed command with no shell syntax execs the codex binary
+	// directly. This keeps the common case (including args like
+	// `codex app-server --config "..."`) off any shell, so it stays
+	// cross-platform: PR #414 briefly routed every non-default command through
+	// `sh -c` and regressed Windows deployments that set a codex-prefixed
+	// codex.command (#417 restored this direct path; #471 pins it).
 	args, err := splitAppServerCommand(command)
 	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "app-server" && !hasShellSyntax(command) {
 		codexPath, err := lookPathInEnv("codex", env)
@@ -207,6 +213,12 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 		}
 		return exec.CommandContext(ctx, codexPath, args[1:]...), true, nil
 	}
+	// Commands that need a shell (wrappers, pipelines, globs) fall back to
+	// `sh -c`. This is intentionally Unix-only: it matches the linux/darwin
+	// release matrix and upstream Symphony, which spawns `bash -lc <command>`
+	// unconditionally (elixir/lib/symphony_elixir/codex/app_server.ex). Windows
+	// is not a supported deployment target; codex-prefixed commands take the
+	// cross-platform direct path above.
 	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
 }
 
