@@ -4,6 +4,15 @@ How an agent should run a batch of issues (a `/goal` over a set of tracker
 issues) so the work stays reviewable, parallel where it can be, and safe to
 merge.
 
+> **The per-PR review & merge gates are shared.** Dual diff-only reviewers,
+> `@codex review` convergence, GraphQL review-thread closure, the size-gate
+> three states, the merge / authorized-auto-merge gate list, and regression +
+> mutation test discipline live once in
+> [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md). This runbook
+> covers only the **batch-orchestration delta** — parallelism, the live ledger,
+> deferral timing, pause/resume, and the *opt-in* authorization wrapper around
+> the shared merge gate.
+
 Every rule below is earned by a specific failure or friction observed in batch
 runs:
 
@@ -11,12 +20,11 @@ runs:
   #374, #376–#381; the one acceptance-criterion deferral was filed as a
   separate follow-up, issue #375 — which is why the PR numbers skip it).
 - **2026-05 ten-issue automated batch** (issues #384–#393). This run added the
-  quality-over-throughput lessons: post-commit dual local review before push,
-  fresh `@codex review` trigger tracking, thread-aware review closure, the
-  three-state size-gate classification (`within budget` /
-  `size-gated: justified overage` / `size-gated: split recommended`) with
-  explicit sign-off paths, pause/resume state recovery, and follow-up capture
-  for late unresolved review threads.
+  quality-over-throughput lessons now in the shared protocol (post-commit dual
+  local review before push, fresh `@codex review` trigger tracking,
+  thread-aware review closure, the three-state size-gate classification with
+  explicit sign-off paths) plus the batch-level pause/resume state recovery and
+  follow-up capture for late unresolved review threads.
 
 Per the "Earned rules" principle in [`AGENTS.md`](../../AGENTS.md), do not
 generalize beyond what those runs actually taught.
@@ -29,14 +37,14 @@ generalize beyond what those runs actually taught.
    and a revert touches exactly one concern. **Earned by:** the eight-issue
    batch shipped as eight independent PRs and every one was reviewable in
    isolation; the value was in the isolation, not the volume.
-2. **Each PR is self-contained and self-verifying.** It includes the fix plus
-   regression tests, and the test must fail when the production code is broken
-   (mutation or negative assertion — see "Clean code" rule 6 in `AGENTS.md`). A
-   PR whose tests would pass with the fix reverted does not count as done.
-3. **Run the local CI gate and dual local review before pushing**, then confirm
-   CI green and run the adversarial pass (`@codex review`) on the pushed head
-   commit. Resolve or explicitly defer every finding before marking ready. This
-   is the cross-cutting checklist in `AGENTS.md`, applied per PR.
+2. **Each PR is self-contained and self-verifying** — fix plus regression tests,
+   mutation-verified per the protocol's test discipline
+   ([protocol §1](pr-review-merge-protocol.md#1-test-discipline-regression--mutation-verification)).
+   A PR whose tests would pass with the fix reverted does not count as done.
+3. **Run the full per-PR gate for each PR** — local CI gate, dual local review
+   before push, CI green, and `@codex review` on the pushed head — exactly as
+   the shared protocol specifies. This runbook does not change those gates; it
+   only governs how many run in parallel.
 
 ## Parallelize independent issues by default
 
@@ -60,78 +68,10 @@ ordering dependency.
    worker's per-state capacity caps are the hard ceiling; your review bandwidth
    is the practical one. Do not open more parallel work than you can drive to
    mergeable without letting reviews rot.
-4. **Respect the size budget per PR regardless of parallelism**
-   (`policy.max_changed_files: 12`, `policy.max_changed_loc: 300`).
-   Parallelism is about more small PRs, never bigger ones — but the budget
-   is a *gate* to be classified and disclosed, not a ceiling that forces
-   LOC cuts at the expense of quality. See "Size gate semantics" below.
-
-### Size gate semantics
-
-Size budget is an auto-merge eligibility gate, not a quality throttle nor an
-LOC-reduction mandate. **Quality, correctness, performance, and necessary
-regression coverage take precedence over LOC compliance**: if HIGH/MEDIUM
-review feedback exposes a real correctness, safety, performance, or coverage
-gap, fix it even when that pushes the PR over the default budget. Never
-delete meaningful tests, weaken state-machine coverage, drop race coverage,
-or prefer compact code over clear reliable code solely to satisfy the
-budget.
-
-Classify every PR into exactly one of three states and call it out in the PR
-body:
-
-- `within budget` — diff fits the effective budget; standard auto-merge path.
-- `size-gated: justified overage` — over the budget because the extra LOC
-  pays for correctness, regression coverage, race/state-machine safety, or
-  other best-practice hardening that cannot be split without losing
-  atomicity. Keep it out of auto-merge and provide a human sign-off bundle:
-  why the extra scope is necessary, the final head SHA, local verification,
-  CI state, bot review state, unresolved-thread state, and residual risk.
-- `size-gated: split recommended` — over the budget because of scope creep,
-  unrelated cleanup, or genuinely separable concerns. Stop and split into
-  smaller PRs; do not ask for size-gate sign-off in lieu of splitting.
-
-Only reduce LOC when the code is genuinely redundant, over-abstracted,
-duplicated without purpose, or outside scope.
-
-## Review the committed diff before every push
-
-The 2026-05 ten-issue batch showed that review before commit is too easy to
-invalidate with an amend. Make the commit object the review artifact:
-
-1. **Refresh `origin/main`, then commit or amend first**, with only explicit
-   paths staged.
-2. **Before every push**, dispatch two independent diff-only reviewers against
-   the exact committed range (`origin/main...HEAD`):
-   - a Codex reviewer (subagent or `codex exec`)
-   - a Claude Code reviewer (subagent or hardened `claude -p`)
-
-   Bare `claude -p` is shorthand for a diff-only invocation that receives the
-   diff on stdin, disables tool use, and avoids session carryover, for example
-   `claude -p '<review prompt>' --permission-mode bypassPermissions
-   --no-session-persistence --tools "" --max-turns 2`.
-3. **Do not feed either reviewer your conclusions.** Provide the issue/PR
-   intent, head SHA, changed files, relevant SPEC/upstream pointers, and the
-   diff. Ask for severity-tagged findings and a final verdict.
-4. **HIGH/MEDIUM/Critical findings block the push.** Fix them, amend, and rerun
-   both reviewers unless the human explicitly signs off on accepting that risk
-   before push. LOW/P3 findings should be fixed when they are small, localized,
-   and regression-like; otherwise record the decision in review notes and the
-   PR body.
-5. **A failed reviewer run is not approval.** Retry with a bounded diff-only
-   prompt. If one reviewer family remains unavailable, use an equivalent
-   successful diff-only review from the same family or get explicit human
-   sign-off before pushing. Record the fallback/sign-off in local review notes
-   before a first push, then copy it into the PR body when the PR exists. Do not
-   push with only one local reviewer verdict. The pushed PR still needs the
-   GitHub `@codex review` gate.
-
-This local review gate is in addition to the GitHub bot review. It catches
-pre-push defects; it does not replace the post-push, thread-aware gate. Two
-reviewers are the minimum for a pushed head; the blast radius controls how many
-rounds you run after that. A pure documentation change may need only one clean
-dual-review round, while destructive or concurrent code paths need repeated
-rounds until the findings stop.
+4. **Parallelism means more small PRs, never bigger ones.** The size budget
+   still applies per PR and is classified/disclosed per
+   [protocol §6](pr-review-merge-protocol.md#6-size-gate-is-a-merge-gate-not-an-loc-reduction-mandate)
+   — it is a gate, not a ceiling that forces LOC cuts at the expense of quality.
 
 ## Surface deferrals at the moment you defer, not at the end
 
@@ -182,35 +122,12 @@ issue → branch/worktree → PR → head → state
 This mirrors the per-event status-checklist discipline the harness expects when
 watching PR activity; apply it to the batch as a whole.
 
-For each PR, also track:
-
-- current head SHA
-- validation commands run locally
-- CI conclusion and run id
-- `@codex review` trigger comment id and reaction state
-- unresolved review thread ids, including whether each is outdated
-- size-budget classification (`within budget` / `size-gated: justified overage`
-  / `size-gated: split recommended`) and, if over budget, the rationale
-- deferral/follow-up issue links
-
-Treat the PR body as the public ledger for the same facts. Update it after each
-material push instead of leaving stale validation or review status in place.
-
-## Treat bot review and review threads as live gates
-
-`@codex review` is not a normal check run and `latestReviews` can lag the fresh
-trigger. For every pushed head:
-
-1. Comment `@codex review` and record that issue-comment id.
-2. Wait for the trigger's 👀 reaction to appear, then disappear, and require a
-   positive completion signal: Codex posted a review/comment for that head or
-   reacted 👍 to the trigger.
-3. Query review threads with GraphQL. Flat review comments are not enough.
-4. Resolve addressed or outdated threads only after the fresh trigger completes
-   and a thread-aware recheck shows no non-outdated actionable threads.
-5. If a PR is merged with non-trivial bot review activity, sanity-check the next
-   `Capture unresolved reviews` workflow run or linked follow-up issues. That
-   workflow is a backstop, not a merge substitute.
+For each PR, also track the per-PR ledger facts the protocol already requires
+([protocol §7](pr-review-merge-protocol.md#7-pr-body-is-a-living-ledger)) —
+current head SHA, local validation commands, CI conclusion/run id,
+`@codex review` trigger id + reaction state, unresolved review-thread ids (and
+whether each is outdated), size-gate classification, and deferral/follow-up
+links — and keep the PR body in sync as the public copy of the same facts.
 
 ## Pause, resume, and external merges
 
@@ -223,8 +140,8 @@ On resume, do not trust the paused snapshot. Re-fetch `origin/main`, refresh
 each live issue/PR with `gh`, and reclassify externally changed work:
 
 - If the human merged a PR, mark it `merged-by-user` and move on.
-- If the head changed, restart local verification and review gates for that
-  head.
+- If the head changed, restart local verification and the review gates for that
+  head (protocol §3–§5).
 - If a trigger comment is still active, wait for that exact trigger or start a
   fresh review on the current head.
 - If unresolved review follow-up issues were created after merge, link them in
@@ -244,58 +161,20 @@ its own `/goal` at the end (the Stop hook released only after the human ran
    and clearing the goal. Plan for PRs to queue waiting for a human; that is
    expected, not a stall.
 
-## Authorized auto-merge flow (opt-in, scope-bounded)
+## Authorized auto-merge (opt-in, scope-bounded)
 
 The default above (human merges) stands unless the human grants explicit,
-scope-bounded authorization for the agent to merge. Authorization is per-batch
-and per-scope — "you may merge the PRs for issues #365–#372 once they pass the
-gate" — never a standing grant. Approving one merge does not authorize the
-next.
+scope-bounded authorization for the agent to merge — "you may merge the PRs for
+issues #365–#372 once they pass the gate" — never a standing grant. Approving
+one merge does not authorize the next.
 
-When auto-merge **is** authorized, a PR may be merged only when **all** of
-these hold:
-
-1. **CI is green** on the head commit (not a stale run).
-2. **`@codex review` is clean** — no unresolved HIGH/MEDIUM findings — and
-   there are **zero unresolved, non-outdated review threads**. The review must
-   be fresh for the current head: trigger-comment reactions have converged and
-   thread-aware GraphQL state is clean.
-3. **Every acceptance criterion is met, or each gap is deferred to a tracked,
-   linked issue** (per the deferral protocol above).
-4. **The PR is classified `within budget` and changes no
-   `policy.deny_paths`.** Read both from the repo's `WORKFLOW.md`; do not trust
-   a hardcoded list — workflows differ (defaults are 12 files / 300 LOC and
-   deny `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but e.g. the
-   `github-local` example uses 20 / 600). `size-gated: justified overage`
-   requires explicit human size-gate sign-off before merge and is never
-   auto-mergeable; `size-gated: split recommended` is a hard stop — split the
-   PR instead of asking for sign-off.
-5. **Branch protection's required reviews are satisfied.**
-6. **The merge uses the agreed method** (default: squash) into the agreed base.
-
-**Native auto-merge enforces only required status checks (CI) and branch
-protection's required reviews — not gates 2–4.** `gh pr merge --auto` merges the
-instant required CI passes, regardless of an open `@codex` finding, an
-unresolved review thread, an unmet acceptance criterion, or a size-budget
-breach. So:
-
-- Confirm gates 2–4 **yourself, immediately before** enabling auto-merge.
-- A new commit re-opens them — any push restarts the `@codex` round, so
-  re-confirm before re-enabling.
-- Prefer native auto-merge over an immediate merge only after the non-check
-  gates are already confirmed, and only to win the CI race — not as a
-  substitute for checking the policy gates.
-
-Hard stops — **always require human sign-off even under an auto-merge grant:**
-
-- Force-pushing or merging into `main` out of band, or any history rewrite.
-- Editing `go.mod`'s `go` directive opportunistically, or touching `policy.deny_paths`.
-- A PR classified `size-gated: justified overage` — flag, don't merge without
-  explicit human size-gate sign-off (acceptable to merge once given). A PR
-  classified `size-gated: split recommended` — flag and split; do not seek
-  sign-off as a substitute for splitting.
-- Anything the human's instructions for this batch put off-limits. When a PR
-  sits at the edge of the grant, use `AskUserQuestion` rather than assuming the
-  grant covers it.
+When auto-merge **is** authorized, apply the full merge gate and hard-stop list
+in [protocol §8](pr-review-merge-protocol.md#8-merge): CI green on the head,
+fresh `@codex review` clean with zero unresolved non-outdated threads, every
+acceptance criterion met or deferred to a tracked issue, classified
+`within budget` and changing no `policy.deny_paths`, required reviews
+satisfied, agreed squash method. Native auto-merge enforces only CI + required
+reviews, so confirm the non-check gates yourself immediately before enabling it,
+and re-confirm after any push (a new commit re-opens the `@codex` round).
 
 Stop the moment the human revokes the grant or asks you to stop.

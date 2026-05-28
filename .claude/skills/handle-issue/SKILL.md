@@ -10,7 +10,10 @@ metadata:
 
 # Handle Issue #$ARGUMENTS
 
-本仓库是 OpenAI Symphony SPEC 的 Go 端口，SPEC 对齐是硬要求。本 skill 覆盖 **issue → 开 PR** 阶段；PR 之后交给 `handle-pr`（SPEC 对齐审查轮）+ `gh-pr-follow-through`（盯到 merge-ready）。处理 issue #$ARGUMENTS（xrf9268-hue/aiops-platform）按下面流程。
+本仓库是 OpenAI Symphony SPEC 的 Go 端口，SPEC 对齐是硬要求。本 skill 覆盖 **issue → 开 PR** 阶段；PR 之后交给 `handle-pr`（SPEC 对齐审查轮）+ `gh-pr-follow-through`（盯到 merge-ready）。
+
+> **审查 / 合并协议是共享的。** pre-push 双 reviewer、`@codex review` 收敛、GraphQL review threads、size-gate 三态、合并门槛、回归+变异测试纪律统一在
+> [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md)。本 skill 只写 **issue→PR 阶段差异**，到 push/审查/合并步骤直接照那份协议执行，不在此复述。
 
 ## 何时用 / 不该用
 - **用**：要开始处理本仓库一个已建的 GitHub issue（"处理下一个 issue"、"修 #N"、"实现这个 issue"）。
@@ -38,13 +41,9 @@ metadata:
 - 从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
 - **显式补上 Elixir 隐式的 BEAM 保证**（checklist item 2）：followup goroutine 包 `context.WithTimeout`；每个 `go func`/`time.AfterFunc` 上 `defer recoverPanic` 或走 `safeGo`；重置 timer 前先 `Timer.Stop()`。
 - 算法对齐 upstream 分支（如终态清理仅在 terminal 转换、引用 `orchestrator.ex` 行号）。
+- 测试纪律（回归 + 变异 + fire-and-forget 的确定性 barrier + `-race`）见协议 §1；**别把"本地变绿"当成验证了发布物**。
 
-### 4. 测试纪律
-- **每个修复配回归测试 + 变异测试**：删掉新代码关键行 → 新测试必须 FAIL；恢复 → PASS。安慰剂测试是最隐蔽的陷阱。
-- fire-and-forget followup 的负向断言要有**确定性 barrier**（如再放一个仍处终态的 sibling 让「未发生」可观测）；别把概率性 barrier 写成「race-free」。
-- 并发改动跑 `go test -race`。
-
-### 5. 本地门禁（必须，CI 主门禁 + go vet）
+### 4. 本地门禁（必须，CI 主门禁 + go vet）
 ```bash
 gofmt -l $(git ls-files '*.go')          # 必须为空
 go mod tidy && git diff --exit-code -- go.mod go.sum
@@ -54,23 +53,16 @@ go build ./cmd/worker ./cmd/tui
 ```
 **暂存只 add 明确路径，绝不 `git add -A` / `git add .`**（会把 `.codex/` 等本地未跟踪文件卷入 PR）。commit 前 `git status --short` 核对只暂存了预期文件。
 
-### 6. 提交 + pre-push 双审 + 开 PR（关键）
-1. 先 `git fetch origin main`，再 commit/amend 候选改动；每次 push 前审的对象必须是稳定 head SHA，不审半成品工作区，也不审陈旧 base。
-2. **每次 push 前派两个独立 reviewer**：Codex reviewer + Claude Code reviewer，均只看 `git diff origin/main...HEAD`，prompt 带 issue/PR 意图、head SHA、相关 SPEC/upstream 路径、AGENTS.md 政策，不透露你的结论。要求 severity + verdict（`MERGE-READY` / `NEEDS-CHANGES` / `BLOCKED`）。
-   - **Codex reviewer**：主 agent 是 Claude Code 时，**首选** [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) 提供的 `codex:codex-rescue` subagent（`Agent` 工具 `subagent_type: "codex:codex-rescue"`，prompt 里完整给出 PR head SHA / 改动文件 / SPEC/upstream 引用 / AGENTS.md 政策 / 验收项），它封装了 `codex exec review` 的 CLI flag 互斥（`--base`/`--commit`/`PROMPT` 三者两两互斥，详见 `codex exec review --help`）并通过 `codex:codex-result-handling` 结构化输出。**仅当**主 agent 是 codex 自身或插件不可用时，回退到 bash `codex exec review --base origin/main --title "..."` — review 子命令不接受自定义 PROMPT，跑的是 codex 默认 review heuristic（generic 审查），repo-specific 上下文（issue 意图、SPEC 引用、验收项）丢失。若 fallback 仍需传 repo-specific prompt，改用普通 `codex exec` 子命令（自由 PROMPT，diff 作 `<stdin>` 块），代价是失去 review 子命令的内置 review 结构。
-   - **Claude Code reviewer**：首选 `Agent` 工具 `subagent_type: "feature-dev:code-reviewer"`；受限环境用 hardened `claude -p`，必须接收 stdin diff，加 `--permission-mode bypassPermissions --no-session-persistence --tools "" --max-turns 2` 等约束，避免读取可变工作区或继承会话。
-3. HIGH/MEDIUM/Critical finding 先修复、amend、重跑本地门禁和两路 reviewer；只有用户在 push 前明确签核接受风险时才可保留未修复项。LOW/P3 若是小而真实的回归类问题就顺手修，否则先记在 review notes，PR 创建后写入 PR body。reviewer 执行失败不算通过，先改用更小的 diff-only prompt 重试；若某一路 reviewer 持续不可用，必须拿到同族等价 diff-only 审查通过或 push 前人工签核，并先记在 review notes，PR 创建后写入 PR body，不能只靠单 reviewer push。
-4. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral。治理/文档类改动**单开 PR**，不要塞进 fix PR。PR body 是活账本，每次重大 push 后更新 head/验证/review/size-gate 状态。
-5. **每次 push 都 `@codex review` 并等它收敛**——不是每个 PR 一次，是每个 commit。`gh pr comment <pr> --body "@codex review"`，记下该 trigger comment 的 id → **轮询**它自带的 reactions 计数摘要：`gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`（issue-comment 对象本身就含 `.reactions` 计数摘要，要的是 👀 的计数，不必用单独的 `/reactions` 列举端点）。Codex review 不是 check run，reactions 也没有 watch/订阅 API（REST 仅 GET/POST/DELETE），所以只能轮询；**CI 绿**则用原生 `gh pr checks <pr> --watch --fail-fast`（阻塞到 checks 完成），别 sleep 轮询。**只 `eyes==0` 不算完成**（也可能是还没开始 👀）：必须等到先出现 👀、再消失，**且**有正向完成信号——Codex 在该 head 贴了 review/comment，或 trigger comment 拿到 👍。然后用 GraphQL 查 `reviewThreads` 有无新的未解决 actionable thread，不能只看 flat comments 或 `latestReviews`。本地审查**不能替代**它（GitHub Codex bot 与 stop-time Codex gate 抓到本地 Claude reviewer 漏掉的缺陷类）。
-6. 每条 finding 归入 ≥1 类（算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试），然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。**Size budget 是 gate 不是 LOC 削减强制**：把 PR 明确归入三态 `within budget` / `size-gated: justified overage` / `size-gated: split recommended`，并写进 PR body。review finding 若暴露真实 correctness/safety/performance/coverage 问题且无法原子拆分，可超出预算 → `size-gated: justified overage`，禁自动合并，body 写超限原因+签核证据，等人工签核。若超限是 scope creep/无关清理 → `size-gated: split recommended`，hard stop 拆 PR。**严禁为压 LOC 删测试、弱化覆盖或绕过缺陷**。
-7. **审查深度匹配 blast radius**：双 reviewer 是每个 pushed head 的最低门槛；破坏性/并发路径要穷尽多轮对抗式审查，纯增量或文档改动一轮双审即可。
-8. 收敛后交给 `gh-pr-follow-through`（来自私有 `xrf9268-hue/yy-skills`；本地开发机已装，**云端容器通常没装**）盯 CI + 线程到 merge-ready。**该 skill 不可用时（如当前云端环境）就地内联这步**：`gh pr checks <pr> --watch --fail-fast` 等 CI 收敛 → 查 `reviewThreads` 解决所有未决 actionable thread → 直到 merge-ready，别因为缺 skill 而跳过这步。follow-through 期间若推了修复，按 step 2/5 对新 head 重跑 pre-push 双审和 `@codex review` 环（新 push 会重开审查轮）。
+### 5. 提交 → 双审 → 开 PR
+1. 按协议 §2–§3 commit-first + pre-push 双 reviewer，§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
+2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §7）。
+3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
+4. **Deferred 偏差必须开 issue**（AGENTS.md rule 2）：决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
+5. **Scope 分离**：治理/文档类改动从 main 开新分支**单独 PR**，不要塞进 fix PR。
+6. 收敛后交给 `gh-pr-follow-through`（私有 `xrf9268-hue/yy-skills`；云端容器通常没装）盯 CI + 线程到 merge-ready。**该 skill 不可用时就地内联**：`gh pr checks <pr> --watch --fail-fast` 等 CI → GraphQL `reviewThreads` 解决所有未决 actionable thread → merge-ready。期间推了修复就对新 head 重跑协议 §3–§5。
 
-### 7. 合并
-- **必须等用户明确许可**再合并。
-- 例外：用户给了**按批次、按 scope 的显式授权**时，可走 `docs/runbooks/batch-issue-processing.md` 的 opt-in 自动合并流程（全部放行门槛 + hard stops；优先 GitHub 原生 auto-merge）。授权不是长期的，批次外/scope 外仍要重新确认。
-- squash + 删分支；commit message 写**最终状态**，不要按轮次罗列。
-- 强推统一 `--force-with-lease=<branch>:<known-sha>`。
+### 6. 合并
+按协议 §8：**必须等用户明确许可**；squash + 删分支，commit message 写最终状态；`--force-with-lease=<branch>:<known-sha>`。批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
 
 ## 反模式备忘（踩过的坑）
 - **pre-release 别加 back-compat**：别名 / 双发同一数据 / 保留旧 wire 名都是技术债，要单独清理 PR（#338 双发 `last_codex_at`+`last_event_at` → 清理 #342）。SPEC 重命名就全量原子改名，内部 Go 标识符也对齐 SPEC 词汇，注释只解释 why（AGENTS.md「These rules apply to every PR」§1–§5）。仓库内消费者用旧名就在同一 PR 改掉。
@@ -82,21 +74,19 @@ go build ./cmd/worker ./cmd/tui
 - 一个契约在姊妹路径上只兑现一半（running vs blocked；reconcile-poll vs §16.5 self-stop）。
 
 ## 示例（两条真实路径）
-**看似简单实则有坑 — #328（PR #338）**：`/api/v1/state` 缺 SPEC §13.7.2 的 `rate_limits` + `last_event_at`。一个 commit、一轮 review 就合了——但它**双发** `last_codex_at`（旧名）+ `last_event_at`（spec 名）当 back-compat，违反本仓库 pre-release 的「无 back-compat shim / 一个概念一个真相源 / 名字对齐 domain」规则（AGENTS.md「These rules apply to every PR」§1–§4），结果要靠清理 PR #342 删掉别名。→ 教训：pre-release 没有外部消费者，SPEC 重命名就**全量原子改名**（struct 字段 + JSON tag + dashboard + runbook + test 一次改完），别加别名/双发；小改动也逃不过这些规则。`rate_limits` 去 `omitempty` 让键恒在那部分是干净的 spec 对齐。
+**看似简单实则有坑 — #328（PR #338）**：`/api/v1/state` 缺 SPEC §13.7.2 的 `rate_limits` + `last_event_at`。一个 commit、一轮 review 就合了——但它**双发** `last_codex_at`（旧名）+ `last_event_at`（spec 名）当 back-compat，违反 pre-release「无 back-compat shim / 一个概念一个真相源 / 名字对齐 domain」规则，结果要靠清理 PR #342 删掉别名。→ 教训：SPEC 重命名就**全量原子改名**（struct 字段 + JSON tag + dashboard + runbook + test 一次改完），小改动也逃不过这些规则。
 
 **硬路径 — #331（PR #339，多轮级联）**：running issue mid-run 转终态时未清理 workspace（§18.1）。破坏性 + 并发路径，经历 P1 数据丢失竞态 → P2 超时耦合（前一个修复引入的）→ P2 陈旧标志 → TOCTOU → P2 root 不匹配 的级联，每轮 `@codex review` 抓到新缺陷（含修复引入的）。每个修复配回归 + 变异测试；路由模式与 §16.5 self-stop 两处缺口延后到 #340/#341。→ 破坏性/并发路径要穷尽对抗式审查，且**每个 push 都重新 @codex review**。
 
 ## 验证（完成判定）
-- 本地门禁全绿：`gofmt -l $(git ls-files '*.go')` 为空、`go mod tidy` 后 `go.mod`/`go.sum` 无改动、`go vet ./...`、`go test -race -covermode=atomic ./...`、`go build ./cmd/worker ./cmd/tui`。
-- 新测试经变异验证（删关键行 FAIL / 恢复 PASS）。
-- 每个已 push 的 head 都先经过提交后、push 前的 Codex + Claude Code 双 reviewer，或有明确人工签核的等价 fallback；HIGH/MEDIUM/Critical 已修复，未修复项必须有 push 前人工签核并在 PR body 记录风险。
+- 本地门禁全绿（§4）；新测试经变异验证（协议 §1）。
+- 每个已 push 的 head 过了 pre-push 双 reviewer + fresh `@codex review` 收敛 + GraphQL threads 无未决 actionable thread（协议 §3–§5）。
 - CI 全绿：`gh pr checks <pr> --watch --fail-fast` 阻塞到完成。
-- PR 最新 head 上 `@codex review` 收敛：👀 出现后消失、**且**有正向完成信号（Codex 在该 head 贴了 review/comment 或 👍），GraphQL reviewThreads 无新的未解决 actionable thread。仅 `eyes==0` 或陈旧 `latestReviews` 不足以判定完成。
 - issue 的每条 Acceptance criteria 满足或显式延后到 tracked issue。
-- 用户明确许可后才合并。
+- 用户明确许可后才合并（协议 §8）。
 
 ## 默认行为
 - 中文回复，简洁；每次只汇报变化，不复述。
 - worker 永不 push/合并 PR 或写 tracker 状态（D8/#76）。
 - Go 版本由 go.mod 锁定，别顺手改 `go` 指令。
-- **批处理多个 issue 时**（`/goal` over a set）：独立 issue **默认并行**开分支推进，只在有真实依赖（共享文件 / migration 顺序 / 后者消费前者的 API）时串行；决定某条 acceptance criterion 延后时**当场**告知用户并立即开 follow-up issue，别留到收尾汇报。完整批处理纪律见 `docs/runbooks/batch-issue-processing.md`。
+- **批处理多个 issue 时**（`/goal` over a set）：独立 issue **默认并行**开分支推进，只在有真实依赖（共享文件 / migration 顺序 / 后者消费前者的 API）时串行；决定某条 acceptance criterion 延后时**当场**告知用户并立即开 follow-up issue。完整批处理纪律见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
