@@ -353,7 +353,7 @@ func (s *OrchestratorState) ReleaseFailedIfIssueChanged(issue tracker.Issue) boo
 	if !ok {
 		return false
 	}
-	if failed.State == issue.State && failed.UpdatedAt == issue.UpdatedAt {
+	if failed.State == issue.State && failed.UpdatedAt.Equal(issue.UpdatedAt) {
 		return false
 	}
 	s.removeFailed(id)

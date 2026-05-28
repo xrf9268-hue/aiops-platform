@@ -168,10 +168,10 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 	}
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
 		// Existing mirror: refresh remote-tracking refs only.
-		if err := run(ctx, mirror, "git", "fetch", "--prune", "--tags", "origin"); err != nil {
+		if err := runGit(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
 			return "", fmt.Errorf("refresh mirror %s: %w", mirror, err)
 		}
-		if err := run(ctx, mirror, "git", "config", "extensions.worktreeConfig", "true"); err != nil {
+		if err := runGit(ctx, mirror, "config", "extensions.worktreeConfig", "true"); err != nil {
 			return "", fmt.Errorf("enable worktree config: %w", err)
 		}
 		return mirror, nil
@@ -179,19 +179,19 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 	// First-time clone. Remove any partial directory left over from a prior
 	// failed attempt so `git clone` does not refuse to overwrite it.
 	_ = os.RemoveAll(mirror)
-	if err := run(ctx, filepath.Dir(mirror), "git", "clone", "--bare", cloneURL, mirror); err != nil {
+	if err := runGit(ctx, filepath.Dir(mirror), "clone", "--bare", cloneURL, mirror); err != nil {
 		return "", fmt.Errorf("clone mirror %s: %w", cloneURL, err)
 	}
 	// `git clone --bare` defaults to a "do nothing" fetch refspec; rewrite
 	// it to the standard remote-tracking layout so subsequent fetches and
 	// `origin/<branch>` lookups behave like a regular clone.
-	if err := run(ctx, mirror, "git", "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	if err := runGit(ctx, mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return "", fmt.Errorf("configure fetch refspec: %w", err)
 	}
-	if err := run(ctx, mirror, "git", "fetch", "--prune", "--tags", "origin"); err != nil {
+	if err := runGit(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
 		return "", fmt.Errorf("initial fetch: %w", err)
 	}
-	if err := run(ctx, mirror, "git", "config", "extensions.worktreeConfig", "true"); err != nil {
+	if err := runGit(ctx, mirror, "config", "extensions.worktreeConfig", "true"); err != nil {
 		return "", fmt.Errorf("enable worktree config: %w", err)
 	}
 	return mirror, nil
@@ -272,7 +272,7 @@ func cleanupWorktree(ctx context.Context, taskDir string, cutoff time.Time, maxA
 func removeWorktree(ctx context.Context, taskDir string) bool {
 	// The worktree's gitdir file points at <mirror>/worktrees/<id>; we ask
 	// git itself to clean both sides via the worktree itself.
-	_ = run(ctx, taskDir, "git", "worktree", "remove", "--force", ".")
+	_ = runGit(ctx, taskDir, "worktree", "remove", "--force", ".")
 	if _, err := os.Stat(taskDir); err == nil {
 		if err := os.RemoveAll(taskDir); err != nil {
 			return false

@@ -55,7 +55,7 @@ func (e *recordingWorkflowReloadEmitter) count(kind string) int {
 }
 
 func TestWorkflowRuntimeReloadSuccessAtomicallySwapsConfigAndEmitsEvent(t *testing.T) {
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -91,7 +91,7 @@ func TestWorkflowRuntimeReloadSuccessAtomicallySwapsConfigAndEmitsEvent(t *testi
 }
 
 func TestWorkflowRuntimeReloadUnchangedFileDoesNotEmitRepeatedSuccessEvents(t *testing.T) {
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -123,7 +123,7 @@ func TestWorkflowRuntimeReloadUnchangedFileDoesNotEmitRepeatedSuccessEvents(t *t
 
 func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -170,7 +170,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -214,7 +214,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready", withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"AI Ready": 1}))
+	path := writeWorkflowForReloadTest(t, "linear", 30000, withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"AI Ready": 1}))
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -259,7 +259,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready", withReloadTestMaxRetryBackoffMs(1000))
+	path := writeWorkflowForReloadTest(t, "linear", 30000, withReloadTestMaxRetryBackoffMs(1000))
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -296,7 +296,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 			return false
 		}
 		for _, retry := range view.Retrying {
-			if retry.IssueID == "issue-1" && retry.DueAt.Sub(time.Now()) <= 200*time.Millisecond {
+			if retry.IssueID == "issue-1" && time.Until(retry.DueAt) <= 200*time.Millisecond {
 				return true
 			}
 		}
@@ -306,7 +306,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 
 func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -358,7 +358,7 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 
 func TestRuntimePollerFetchesLinearIssuesFromEachServiceProject(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -401,7 +401,7 @@ func TestRuntimePollerFetchesLinearIssuesFromEachServiceProject(t *testing.T) {
 
 func TestRuntimePollerDispatchesHealthyServiceProjectWhenAnotherProjectPollFails(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -445,7 +445,7 @@ func TestRuntimePollerDispatchesHealthyServiceProjectWhenAnotherProjectPollFails
 
 func TestRuntimePollerKeepsRunningFailedProjectIssueWhenDispatchingHealthyPartialPoll(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -500,7 +500,7 @@ func TestRuntimePollerKeepsRunningFailedProjectIssueWhenDispatchingHealthyPartia
 
 func TestRuntimePollerCancelsHealthyProjectIssueDuringPartialPoll(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -584,7 +584,7 @@ func TestRuntimePollerDoesNotFanOutServiceProjectsForGitea(t *testing.T) {
 
 func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "gitea", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -623,7 +623,7 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 		t.Fatalf("gitea issue service = %q, want no Linear service routing", got.ServiceName)
 	}
 
-	linearPath := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	linearPath := writeWorkflowForReloadTest(t, "linear", 30000)
 	linearWorkflow, err := workflow.Load(linearPath)
 	if err != nil {
 		t.Fatalf("load linear workflow: %v", err)
@@ -655,7 +655,7 @@ func TestRuntimePollerOnlyAppliesRoutingToLinearServiceWorkflows(t *testing.T) {
 // the routing-branch test below would still pass.
 func TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "gitea", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "gitea", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -720,7 +720,7 @@ func TestRuntimePollerRetryListerWrapsEligibilityFilterWithoutServiceRouting(t *
 // rule earned by #287; this test pins it.
 func TestRuntimePollerRetryListerMirrorsPollLoopFilters(t *testing.T) {
 	ctx := context.Background()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load workflow: %v", err)
@@ -813,7 +813,7 @@ func TestRuntimePollerRetryListerMirrorsPollLoopFilters(t *testing.T) {
 }
 
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -864,7 +864,7 @@ func TestWorkflowFileFingerprintDoesNotMarkNonMissingReadErrorsAsMissing(t *test
 func TestRunWorkflowReloadLoopPollFallbackReloadsChangedWorkflow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -896,7 +896,7 @@ func TestRunWorkflowReloadLoopPollFallbackReloadsChangedWorkflow(t *testing.T) {
 func TestRunPollLoopWithRuntimeUsesReloadedPollingCadence(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	path := writeWorkflowForReloadTest(t, "linear", 25, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 25)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -923,7 +923,7 @@ func TestRunPollLoopWithRuntimeUsesReloadedPollingCadence(t *testing.T) {
 func TestRunPollLoopWithRuntimePollerHonorsInjectedSleep(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	path := writeWorkflowForReloadTest(t, "linear", 60000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 60000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -1041,10 +1041,10 @@ func (s *reloadLoopTestSleeper) sleep(_ context.Context, _ time.Duration) error 
 	return nil
 }
 
-func writeWorkflowForReloadTest(t *testing.T, trackerKind string, pollIntervalMs int, activeState string, opts ...reloadWorkflowTestOption) string {
+func writeWorkflowForReloadTest(t *testing.T, trackerKind string, pollIntervalMs int, opts ...reloadWorkflowTestOption) string {
 	t.Helper()
 	path := t.TempDir() + "/WORKFLOW.md"
-	writeWorkflowForReloadTestAt(t, path, trackerKind, pollIntervalMs, activeState, opts...)
+	writeWorkflowForReloadTestAt(t, path, trackerKind, pollIntervalMs, "AI Ready", opts...)
 	return path
 }
 
@@ -1133,7 +1133,7 @@ func itoaForReloadTest(v int) string {
 
 func TestWorkflowRuntimeReloadOnceDedupesIdenticalFailures(t *testing.T) {
 	emitter := &recordingWorkflowReloadEmitter{}
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -1189,7 +1189,7 @@ func TestWorkflowRuntimeReloadOnceDedupesIdenticalFailures(t *testing.T) {
 
 func TestWorkflowRuntimeReloadOnceDedupesMissingFile(t *testing.T) {
 	emitter := &recordingWorkflowReloadEmitter{}
-	path := writeWorkflowForReloadTest(t, "linear", 30000, "AI Ready")
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)

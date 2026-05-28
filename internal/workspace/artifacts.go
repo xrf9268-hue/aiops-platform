@@ -92,7 +92,10 @@ func WriteSensitiveArtifact(path string, body []byte) error {
 		_ = f.Close()
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close sensitive artifact %s: %w", path, err)
+	}
+	return nil
 }
 
 func ReadSensitiveArtifact(path string) ([]byte, error) {
@@ -100,7 +103,7 @@ func ReadSensitiveArtifact(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if info, err := f.Stat(); err != nil {
 		return nil, err
 	} else if links, ok := linkCount(info); ok && links > 1 {
@@ -147,7 +150,12 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		closeFile := true
+		defer func() {
+			if closeFile {
+				_ = f.Close()
+			}
+		}()
 		if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
 			if _, err := f.WriteString("\n"); err != nil {
 				return err
@@ -155,6 +163,10 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 		}
 		if _, err := f.WriteString(strings.Join(add, "\n") + "\n"); err != nil {
 			return err
+		}
+		closeFile = false
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("close git exclude %s: %w", excludePath, err)
 		}
 	}
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--absolute-git-dir")
@@ -167,10 +179,10 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 	if err := os.MkdirAll(hookDir, 0o755); err != nil {
 		return err
 	}
-	if err := runQuiet(ctx, workdir, "git", "config", "--worktree", "core.bare", "false"); err != nil {
+	if err := runGitQuiet(ctx, workdir, "config", "--worktree", "core.bare", "false"); err != nil {
 		return err
 	}
-	if err := runQuiet(ctx, workdir, "git", "config", "--worktree", "core.hooksPath", hookDir); err != nil {
+	if err := runGitQuiet(ctx, workdir, "config", "--worktree", "core.hooksPath", hookDir); err != nil {
 		return err
 	}
 	hookPath := filepath.Join(hookDir, "pre-commit")

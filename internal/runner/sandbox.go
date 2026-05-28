@@ -216,7 +216,7 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 		cleanupOnError = true
 		defer func() {
 			if cleanupOnError {
-				removeFiles(cleanupFiles)
+				_ = removeFiles(cleanupFiles)
 			}
 		}()
 		netArg, err := firejailAllowlistNetArg(cfg)
@@ -313,9 +313,12 @@ func writeFirejailNetfilter(cidrs []string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("create firejail netfilter allowlist: %w", err)
 	}
-	defer f.Close()
 	if _, err := f.WriteString(b.String()); err != nil {
+		_ = f.Close()
 		return "", fmt.Errorf("write firejail netfilter allowlist: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("close firejail netfilter allowlist: %w", err)
 	}
 	return f.Name(), nil
 }

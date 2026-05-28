@@ -1137,13 +1137,10 @@ func TestIsLoopbackHTTPHost(t *testing.T) {
 }
 
 func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
-	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", -1, func(context.Context) (orchestrator.StateView, error) {
+	handle := startStateHTTPServer(context.Background(), "127.0.0.1", -1, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("disabled state server must not evaluate snapshot")
 		return orchestrator.StateView{}, nil
 	}, stateHTTPAlwaysReady)
-	if err != nil {
-		t.Fatalf("startStateHTTPServer disabled: %v", err)
-	}
 	if handle != nil {
 		t.Fatalf("disabled state server handle = %v, want nil", handle)
 	}
@@ -1154,15 +1151,12 @@ func TestStartStateHTTPServerDoesNotFailWorkerWhenPortInUse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reserve port: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	port := listener.Addr().(*net.TCPAddr).Port
 
-	handle, err := startStateHTTPServer(context.Background(), "127.0.0.1", port, func(context.Context) (orchestrator.StateView, error) {
+	handle := startStateHTTPServer(context.Background(), "127.0.0.1", port, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, stateHTTPAlwaysReady)
-	if err != nil {
-		t.Fatalf("startStateHTTPServer occupied port: %v", err)
-	}
 	if handle != nil {
 		t.Fatalf("occupied port state server handle = %v, want nil", handle)
 	}
@@ -1172,12 +1166,9 @@ func TestStartStateHTTPServerBindsPrivateLoopback(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	handle, err := startStateHTTPServer(ctx, "127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
+	handle := startStateHTTPServer(ctx, "127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, stateHTTPAlwaysReady)
-	if err != nil {
-		t.Fatalf("startStateHTTPServer: %v", err)
-	}
 	tcpAddr, ok := handle.Addr.(*net.TCPAddr)
 	if !ok {
 		t.Fatalf("state server addr = %T %v, want TCP address", handle.Addr, handle.Addr)
@@ -1200,15 +1191,11 @@ func TestStateHTTPServerControllerStopsOnDisabledReload(t *testing.T) {
 		return orchestrator.StateView{}, nil
 	})
 
-	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
-		t.Fatalf("start state HTTP server: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", 0)
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
-	if err := controller.apply(ctx, "127.0.0.1", -1); err != nil {
-		t.Fatalf("disable state HTTP server: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", -1)
 	if controller.cancel != nil || controller.addr != nil {
 		t.Fatalf("controller after disable = cancel:%v addr:%v, want stopped server", controller.cancel, controller.addr)
 	}
@@ -1223,9 +1210,7 @@ func TestStateHTTPServerControllerServesReadyzBeforeReadiness(t *testing.T) {
 	})
 	controller.readiness = ready.Status
 
-	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
-		t.Fatalf("start state HTTP server: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", 0)
 	defer controller.stop()
 	if controller.addr == nil {
 		t.Fatal("controller addr = nil, want running server")
@@ -1238,7 +1223,9 @@ func TestStateHTTPServerControllerServesReadyzBeforeReadiness(t *testing.T) {
 		t.Fatalf("GET /readyz before readiness: %v", err)
 	}
 	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close /readyz before readiness body: %v", closeErr)
+	}
 	if err != nil {
 		t.Fatalf("read /readyz before readiness: %v", err)
 	}
@@ -1252,7 +1239,9 @@ func TestStateHTTPServerControllerServesReadyzBeforeReadiness(t *testing.T) {
 		t.Fatalf("GET /readyz after readiness: %v", err)
 	}
 	body, err = io.ReadAll(resp.Body)
-	resp.Body.Close()
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close /readyz after readiness body: %v", closeErr)
+	}
 	if err != nil {
 		t.Fatalf("read /readyz after readiness: %v", err)
 	}
@@ -1273,18 +1262,14 @@ func TestStateHTTPServerControllerRetriesSamePortAfterListenFailure(t *testing.T
 	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
-	if err := controller.apply(ctx, "127.0.0.1", port); err != nil {
-		t.Fatalf("apply occupied port: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", port)
 	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
 		t.Fatalf("controller after failed listen = cancel:%v addr:%v desiredSet:%v, want retryable idle state", controller.cancel, controller.addr, controller.desiredSet)
 	}
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release port: %v", err)
 	}
-	if err := controller.apply(ctx, "127.0.0.1", port); err != nil {
-		t.Fatalf("retry freed port: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", port)
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after retry = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
@@ -1299,27 +1284,21 @@ func TestStateHTTPServerControllerRestartsPreviousPortAfterFailedReload(t *testi
 	if err != nil {
 		t.Fatalf("reserve blocked port: %v", err)
 	}
-	defer blockedListener.Close()
+	defer func() { _ = blockedListener.Close() }()
 	blockedPort := blockedListener.Addr().(*net.TCPAddr).Port
 
 	controller := newStateHTTPServerController(func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	})
-	if err := controller.apply(ctx, "127.0.0.1", oldPort); err != nil {
-		t.Fatalf("start old port: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", oldPort)
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after old port start = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
-	if err := controller.apply(ctx, "127.0.0.1", blockedPort); err != nil {
-		t.Fatalf("apply blocked port: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", blockedPort)
 	if controller.cancel != nil || controller.addr != nil || controller.desiredSet {
 		t.Fatalf("controller after blocked reload = cancel:%v addr:%v desiredSet:%v, want retryable idle state", controller.cancel, controller.addr, controller.desiredSet)
 	}
-	if err := controller.apply(ctx, "127.0.0.1", oldPort); err != nil {
-		t.Fatalf("restart old port: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", oldPort)
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after old port restart = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
@@ -1340,9 +1319,7 @@ func TestStateHTTPServerControllerRestartsAfterServerExit(t *testing.T) {
 	controller.addr = &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 65535}
 	controller.serverDone = done
 
-	if err := controller.apply(ctx, "127.0.0.1", 0); err != nil {
-		t.Fatalf("restart after server exit: %v", err)
-	}
+	controller.apply(ctx, "127.0.0.1", 0)
 	if controller.cancel == nil || controller.addr == nil {
 		t.Fatalf("controller after restart = cancel:%v addr:%v, want running server", controller.cancel, controller.addr)
 	}
@@ -2134,16 +2111,16 @@ func TestNewStateHTTPServer_RejectsOversizedHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
+	defer func() { _ = server.Close() }()
 
 	addr := listener.Addr().String()
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
 	}
@@ -2552,7 +2529,9 @@ func TestServerHostOverrideFromEnv(t *testing.T) {
 // workflow value (nil), distinct from the set-but-empty force-loopback case.
 func TestServerHostOverrideUnsetYieldsNil(t *testing.T) {
 	t.Setenv("AIOPS_SERVER_HOST", "x")
-	os.Unsetenv("AIOPS_SERVER_HOST")
+	if err := os.Unsetenv("AIOPS_SERVER_HOST"); err != nil {
+		t.Fatalf("Unsetenv(%q) = %v; want nil", "AIOPS_SERVER_HOST", err)
+	}
 	if got := serverHostOverrideFromEnv(); got != nil {
 		t.Fatalf("serverHostOverrideFromEnv() unset = %v, want nil", got)
 	}
@@ -2585,12 +2564,9 @@ func TestNewStateHTTPServerBindsConfiguredHost(t *testing.T) {
 func TestStartStateHTTPServerHonorsWiderBind(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	handle, err := startStateHTTPServer(ctx, "0.0.0.0", 0, func(context.Context) (orchestrator.StateView, error) {
+	handle := startStateHTTPServer(ctx, "0.0.0.0", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
 	}, stateHTTPAlwaysReady)
-	if err != nil {
-		t.Fatalf("startStateHTTPServer: %v", err)
-	}
 	if handle == nil {
 		t.Fatal("handle = nil, want running server bound to 0.0.0.0")
 	}

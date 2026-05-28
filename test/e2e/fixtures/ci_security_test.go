@@ -35,8 +35,8 @@ func TestCIRunsSecurityScanning(t *testing.T) {
 	}
 }
 
-// TestCIRunsTwoPhaseGoLint guards #413/#433's rollout model: clean low-risk
-// linters block CI, while the remaining baseline stays visible as report-only.
+// TestCIRunsTwoPhaseGoLint guards #413/#433/#459's rollout model: clean
+// mechanical linters block CI, while the complexity baseline stays report-only.
 func TestCIRunsTwoPhaseGoLint(t *testing.T) {
 	ci := readCIWorkflow(t)
 
@@ -45,7 +45,7 @@ func TestCIRunsTwoPhaseGoLint(t *testing.T) {
 		"golangci/golangci-lint-action@",
 		"version: v2.",
 		"--config=.golangci.yml",
-		"--enable-only=errorlint,ineffassign,unused",
+		"--enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
 	} {
 		if !strings.Contains(blocking, want) {
 			t.Errorf("blocking golangci-lint step = %q, want marker %q", blocking, want)
@@ -60,6 +60,7 @@ func TestCIRunsTwoPhaseGoLint(t *testing.T) {
 		"golangci/golangci-lint-action@",
 		"version: v2.",
 		"--config=.golangci.yml",
+		"--enable-only=funlen,gocognit",
 		"--issues-exit-code=0",
 	} {
 		if !strings.Contains(reportOnly, want) {

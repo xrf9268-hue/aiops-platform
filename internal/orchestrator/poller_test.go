@@ -356,7 +356,7 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToCancelled(t *testing.T) {
 		t.Fatalf("cancelled poll once: %v", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceUsesNarrowStateRefreshForRunningIssue(t *testing.T) {
@@ -398,7 +398,7 @@ func TestPollOnceUsesNarrowStateRefreshForRunningIssue(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByRefs refs = %#v, want issue-1 with identifier LIN-1", got)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestMultiIssueStateListerFansOutIssueStateRefs(t *testing.T) {
@@ -460,7 +460,7 @@ func TestPollOnceCancelsRunningIssueWhenTrackerMovesToBacklog(t *testing.T) {
 		t.Fatalf("backlog poll once: %v", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceRoutingCancelsRunningIssueWhenNarrowRefreshLeavesActiveStates(t *testing.T) {
@@ -501,7 +501,7 @@ func TestPollOnceRoutingCancelsRunningIssueWhenNarrowRefreshLeavesActiveStates(t
 		t.Fatalf("FetchIssueStatesByRefs calls = %d, want 1", len(got))
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceCancelsRunningIssueWhenActiveIssueNoLongerMatchesRoute(t *testing.T) {
@@ -537,7 +537,7 @@ func TestPollOnceCancelsRunningIssueWhenActiveIssueNoLongerMatchesRoute(t *testi
 		t.Fatalf("unrouted poll once: %v", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceReconcilesRoutedIssuesWhenAnotherIssueHasAmbiguousRoute(t *testing.T) {
@@ -579,7 +579,7 @@ func TestPollOnceReconcilesRoutedIssuesWhenAnotherIssueHasAmbiguousRoute(t *test
 		t.Fatalf("ambiguous poll error = %v, want ambiguity reported", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
@@ -661,7 +661,7 @@ func TestPollOnceCancelsTerminalIssueBeforeReturningLaterInactiveFetchError(t *t
 		t.Fatalf("terminal poll once error = %v, want inactive fetch error", err)
 	}
 	waitForContextCanceled(t, dispatcher.contextAt(0))
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 }
 
 func TestPollOnceDoesNotCancelRunningIssueStillInActiveTrackerListing(t *testing.T) {
@@ -1812,12 +1812,12 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("second poll once: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 	if got := dispatcher.count(); got != 1 {
 		t.Fatalf("deterministic build failure dispatched %d times, want 1", got)
 	}
@@ -1842,13 +1842,13 @@ func TestPollOnceReleasesNonRetryableFailureAfterTrackerStateChanges(t *testing.
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 
 	trackerClient.issues = []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Rework", UpdatedAt: mustTime("2026-05-17T00:05:00Z")}}
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once after tracker state changed: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch, "issue-1")
+	waitForNoRunningOrRetrying(t, ctx, orch)
 	if got := dispatcher.count(); got != 2 {
 		t.Fatalf("changed tracker issue dispatched %d times, want retry after state change", got)
 	}
@@ -2066,7 +2066,8 @@ func waitForRetryDue(t *testing.T, ctx context.Context, orch *Orchestrator, id I
 	t.Fatalf("issue %s retry did not become due: retrying=%v", id, view.Retrying)
 }
 
-func waitForNoRunningOrRetrying(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+func waitForNoRunningOrRetrying(t *testing.T, ctx context.Context, orch *Orchestrator) {
+	id := IssueID("issue-1")
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {

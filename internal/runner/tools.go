@@ -387,7 +387,7 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			},
 		})
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var respBody bytes.Buffer
 	n, err := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
 	if err != nil {

@@ -61,7 +61,7 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("open %s: %w", PromptPath, err)
 	}
-	defer stdin.Close()
+	defer func() { _ = stdin.Close() }()
 	cmd.Stdin = stdin
 
 	buf := &cappedWriter{Cap: CodexOutputCap}
@@ -79,7 +79,7 @@ func (CodexRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 		OutputBytes:   int64(len(buf.Bytes())),
 		OutputDropped: buf.Dropped(),
 	}
-	head, tail := headTail(buf.Bytes(), CodexEventOutputCap)
+	head, tail := headTail(buf.Bytes())
 	if len(head) > 0 {
 		res.OutputHead = string(head)
 	}

@@ -346,14 +346,14 @@ func newScreen(w io.Writer, isTTY, raw bool) *screen {
 // enter switches to the alternate screen buffer and hides the cursor.
 func (s *screen) enter() {
 	if s.lifecycle {
-		io.WriteString(s.w, ansiAltScreenEnter+ansiHideCursor)
+		_, _ = io.WriteString(s.w, ansiAltScreenEnter+ansiHideCursor)
 	}
 }
 
 // restore reverses enter: show cursor, reset attributes, leave alt-screen.
 func (s *screen) restore() {
 	if s.lifecycle {
-		io.WriteString(s.w, ansiShowCursor+ansiReset+ansiAltScreenLeave)
+		_, _ = io.WriteString(s.w, ansiShowCursor+ansiReset+ansiAltScreenLeave)
 	}
 }
 
@@ -362,9 +362,9 @@ func (s *screen) restore() {
 // plain, appendable text.
 func (s *screen) draw(content string) {
 	if s.isTTY {
-		io.WriteString(s.w, ansiClear+content+"\n")
+		_, _ = io.WriteString(s.w, ansiClear+content+"\n")
 	} else {
-		io.WriteString(s.w, content+"\n")
+		_, _ = io.WriteString(s.w, content+"\n")
 	}
 }
 
@@ -399,7 +399,7 @@ func fetchStateWithAuth(ctx context.Context, client *http.Client, url string, au
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

@@ -900,7 +900,9 @@ func TestRunVerifyDoesNotSourceUserLoginProfile(t *testing.T) {
 
 func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
 	t.Setenv("DEFINITELY_SET_227", "v1")
-	os.Unsetenv("DEFINITELY_UNSET_227")
+	if err := os.Unsetenv("DEFINITELY_UNSET_227"); err != nil {
+		t.Fatalf("Unsetenv(%q) = %v; want nil", "DEFINITELY_UNSET_227", err)
+	}
 
 	env := subprocessEnv([]string{"DEFINITELY_SET_227", "DEFINITELY_UNSET_227", "DEFINITELY_SET_227"})
 

@@ -653,11 +653,11 @@ func countVerifyFailures(results []workspace.VerifyResult) int {
 // When the scan is disabled or unconfigured, no events are emitted; this
 // preserves the worker's previous behavior for repos that have not opted
 // in.
-func runSecretScan(ctx context.Context, ev EventEmitter, taskID, identifier string, workdir string, cfg workflow.Config) error {
-	return runSecretScanWith(ctx, ev, taskID, identifier, workdir, cfg, workspace.RunSecretScan)
+func runSecretScan(ctx context.Context, ev EventEmitter, taskID, _ string, workdir string, cfg workflow.Config) error {
+	return runSecretScanWith(ctx, ev, taskID, workdir, cfg, workspace.RunSecretScan)
 }
 
-func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID, identifier string, workdir string, cfg workflow.Config, scan secretScanFn) error {
+func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, workdir string, cfg workflow.Config, scan secretScanFn) error {
 	scfg := cfg.Verify.SecretScan
 	if !scfg.Enabled || len(scfg.Command) == 0 {
 		return nil
@@ -707,7 +707,7 @@ func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID, identifier 
 // `agent.policy_violation_budget` (resolved via PolicyViolationBudgetValue),
 // emitted alongside the running count so dashboards can render "violation N
 // of M (final attempt)".
-func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID, identifier string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
+func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID, _ string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
 	if ev == nil {
 		return
 	}

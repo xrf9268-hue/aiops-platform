@@ -153,7 +153,7 @@ func isSignaled(ee *exec.ExitError) bool {
 	if ee == nil || ee.ProcessState == nil {
 		return false
 	}
-	if ws, ok := ee.ProcessState.Sys().(syscall.WaitStatus); ok {
+	if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
 		if ws.Signaled() {
 			return true
 		}
@@ -161,7 +161,7 @@ func isSignaled(ee *exec.ExitError) bool {
 	// Defensive fallback: ExitCode() returns -1 when the process did not
 	// exit normally (e.g. killed by signal, or platforms without
 	// WaitStatus). Treat any negative code as "not a real exit".
-	if ee.ProcessState.ExitCode() < 0 {
+	if ee.ExitCode() < 0 {
 		return true
 	}
 	return false

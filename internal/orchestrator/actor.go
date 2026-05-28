@@ -1823,14 +1823,14 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 			})
 		}
 	}
-	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.kind, o)
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, o)
 }
 
 // retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
 // honor global + per-state capacity gates, then either spawn or reschedule
 // via the configured backoff. Shared between the legacy direct-dispatch
 // path (no CandidateLister) and the SPEC §16.6 post-fetch path.
-func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, kind RetryKind, o *Orchestrator) func() {
+func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, o *Orchestrator) func() {
 	// Use entry.Issue rather than any timer-captured snapshot: reconciliation
 	// (and the SPEC §16.6 candidate fetch) may have refreshed the tracker
 	// state, and both the per-state capacity gate and the spawned worker
@@ -2031,7 +2031,7 @@ func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
 	if id := strings.TrimSpace(r.found.Identifier); id != "" {
 		entry.Identifier = id
 	}
-	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.kind, r.o)
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.o)
 }
 
 // finalizeRunOp is the actor-side handler for a worker exit. Result.Err
