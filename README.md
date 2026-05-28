@@ -178,7 +178,9 @@ opt-in overlay to reach the dashboard from the host:
 
 ```bash
 mkdir -p .aiops/secrets
-openssl rand -hex 24 > .aiops/secrets/state_api_token
+# Create the token with 0600 so co-tenant users/processes cannot read it; the
+# subshell scopes umask 077 to this write and never exposes a 0644 window.
+( umask 077; openssl rand -hex 24 > .aiops/secrets/state_api_token )
 AIOPS_STATE_API_TOKEN_FILE=$PWD/.aiops/secrets/state_api_token \
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.dashboard.yml up worker
 ```
