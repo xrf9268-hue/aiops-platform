@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="aiops-platform runtime state dashboard backed by /api/v1/state" />
+    <title>aiops-platform dashboard</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f5f2;
+        color: #161616;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+      }
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 32px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin: 24px 0;
+      }
+      .tile {
+        border: 1px solid #d6d1c8;
+        border-radius: 8px;
+        padding: 16px;
+        background: #fffdf8;
+      }
+      .label {
+        color: #6f675c;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .value {
+        display: block;
+        margin-top: 8px;
+        font-size: 28px;
+        font-weight: 700;
+      }
+      pre {
+        overflow: auto;
+        border: 1px solid #d6d1c8;
+        border-radius: 8px;
+        padding: 16px;
+        background: #fffdf8;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #171717;
+          color: #f4f0e8;
+        }
+        .tile,
+        pre {
+          background: #22211f;
+          border-color: #49443d;
+        }
+        .label {
+          color: #bcb3a5;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <main>
+        <h1>Operations Dashboard</h1>
+        <p>Runtime state from <code>/api/v1/state</code>.</p>
+        <section class="grid" aria-label="runtime counts">
+          <div class="tile"><span class="label">Running</span><span class="value" id="running">-</span></div>
+          <div class="tile"><span class="label">Retrying</span><span class="value" id="retrying">-</span></div>
+          <div class="tile"><span class="label">Blocked</span><span class="value" id="blocked">-</span></div>
+          <div class="tile"><span class="label">Completed</span><span class="value" id="completed">-</span></div>
+        </section>
+        <pre id="state">Loading...</pre>
+      </main>
+    </div>
+    <script>
+      fetch('/api/v1/state')
+        .then(function (res) { return res.json(); })
+        .then(function (state) {
+          var counts = state.counts || {};
+          document.getElementById('running').textContent = counts.running ?? 0;
+          document.getElementById('retrying').textContent = counts.retrying ?? 0;
+          document.getElementById('blocked').textContent = counts.blocked ?? 0;
+          document.getElementById('completed').textContent = counts.completed ?? 0;
+          document.getElementById('state').textContent = JSON.stringify(state, null, 2);
+        })
+        .catch(function (err) {
+          document.getElementById('state').textContent = String(err);
+        });
+    </script>
+  </body>
+</html>

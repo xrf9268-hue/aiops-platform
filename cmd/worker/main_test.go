@@ -277,8 +277,8 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if len(payload.Retrying) != 2 || payload.Retrying[0].IssueID != "issue-1" || payload.Retrying[1].IssueID != "issue-2" {
 		t.Fatalf("retrying = %+v, want sorted issue-1 then issue-2", payload.Retrying)
 	}
-	if payload.Retrying[0].Kind != "" || payload.Retrying[1].Kind != "" {
-		t.Fatalf("retrying kinds = %q/%q, want omitted empty values", payload.Retrying[0].Kind, payload.Retrying[1].Kind)
+	if payload.Retrying[0].Kind != string(orchestrator.RetryKindFailure) || payload.Retrying[1].Kind != string(orchestrator.RetryKindFailure) {
+		t.Fatalf("retrying kinds = %q/%q, want failure defaults", payload.Retrying[0].Kind, payload.Retrying[1].Kind)
 	}
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
@@ -376,6 +376,25 @@ func TestApiRetryFromViewSurfacesQuotaBackoffKind(t *testing.T) {
 	}
 }
 
+func TestApiRetryFromViewAlwaysEmitsKind(t *testing.T) {
+	row := apiRetryFromView(orchestrator.RetryView{
+		IssueID:    "issue-1",
+		Identifier: "ENG-1",
+		Attempt:    1,
+	})
+	raw, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["kind"] != "failure" {
+		t.Fatalf("retry kind = %v; want failure; raw=%s", got["kind"], raw)
+	}
+}
+
 func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
@@ -400,30 +419,33 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 	if strings.Contains(html, "Runtime state: <a href=\"/api/v1/state\">") {
 		t.Fatalf("dashboard is still the old API-link stub: %s", html)
 	}
-
-	assetPath := firstScriptAssetPath(t, html)
-	assetReq := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)
-	assetW := httptest.NewRecorder()
-	server.Handler.ServeHTTP(assetW, assetReq)
-	if assetW.Code != http.StatusOK {
-		t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
+	if strings.Contains(html, "/src/main.jsx") {
+		t.Fatalf("dashboard fallback references unserved Vite source: %s", html)
 	}
-	asset := assetW.Body.String()
-	for _, want := range []string{"/api/v1/state", "Running sessions", "Retry queue", "Blocked sessions", "Total tokens", "Rate limits"} {
-		if !strings.Contains(asset, want) {
-			t.Fatalf("dashboard asset missing state surface label %q", want)
+
+	if assetPath, ok := firstScriptAssetPath(html); ok && strings.HasPrefix(assetPath, "/assets/") {
+		assetReq := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)
+		assetW := httptest.NewRecorder()
+		server.Handler.ServeHTTP(assetW, assetReq)
+		if assetW.Code != http.StatusOK {
+			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
+		}
+		asset := assetW.Body.String()
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retry queue", "Blocked sessions", "Total tokens", "Rate limits"} {
+			if !strings.Contains(asset, want) {
+				t.Fatalf("dashboard asset missing state surface label %q", want)
+			}
 		}
 	}
 }
 
-func firstScriptAssetPath(t *testing.T, html string) string {
-	t.Helper()
+func firstScriptAssetPath(html string) (string, bool) {
 	re := regexp.MustCompile(`<script[^>]+src="([^"]+)"`)
 	match := re.FindStringSubmatch(html)
 	if len(match) != 2 {
-		t.Fatalf("dashboard HTML has no script asset: %s", html)
+		return "", false
 	}
-	return match[1]
+	return match[1], true
 }
 
 func TestRootDashboardAllowsHeadProbes(t *testing.T) {

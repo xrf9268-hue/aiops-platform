@@ -69,21 +69,10 @@ jobs:
         working-directory: cmd/worker/dashboard
         run: npm run build
 
-      - name: Verify dashboard dist is committed
+      - name: Verify dashboard dist is generated for embed
         run: |
-          if ! git diff --exit-code -- cmd/worker/dashboard/dist; then
-            echo "dashboard dist/ is out of sync with src/. Run 'npm run build' and commit dist."
-            exit 1
-          fi
-          visible_untracked="$(git ls-files --others --exclude-standard -- cmd/worker/dashboard/dist)"
-          ignored_untracked="$(git ls-files --others --ignored --exclude-standard -- cmd/worker/dashboard/dist)"
-          untracked="$(printf "%s\n%s\n" "$visible_untracked" "$ignored_untracked" | sed '/^$/d')"
-          if [ -n "$untracked" ]; then
-            echo "dashboard dist/ contains untracked generated files:"
-            echo "$untracked"
-            echo "Run 'npm run build' and commit the generated dist files."
-            exit 1
-          fi
+          test -f cmd/worker/dashboard/dist/index.html
+          test -n "$(find cmd/worker/dashboard/dist/assets -name '*.js' -print -quit)"
 
       - name: Download dependencies
         run: go mod download

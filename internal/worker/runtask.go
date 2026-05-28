@@ -33,9 +33,11 @@ type secretScanFn func(ctx context.Context, workdir string, cfg workflow.SecretS
 // RunTaskError bundles the resolved workflow Config alongside the error so
 // callers can classify failures without re-resolving the workflow.
 type RunTaskError struct {
-	Cfg          workflow.Config
-	Err          error
-	NonRetryable bool
+	Cfg             workflow.Config
+	Err             error
+	NonRetryable    bool
+	ExternalBlocked bool
+	Blocker         BlockerArtifact
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -273,6 +275,9 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if err := workspace.ResetRunSummary(workdir); err != nil {
 		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
 	}
+	if err := ResetBlockerArtifact(workdir); err != nil {
+		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
 	if wcfg.Policy.Mode == "analysis_only" {
 		if err := os.Remove(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
@@ -332,6 +337,25 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if err := enforceAnalysisOnlyChanges(ctx, ev, t.ID, t.SourceEventID, workdir, workspaceBase, wcfg); err != nil {
 		WriteFailureArtifacts(ctx, workdir, nil, ErrSummary(err))
 		return &RunTaskError{Cfg: wcfg, Err: err}
+	}
+
+	blocker, blockerErr := ConsumeBlockerArtifact(workdir)
+	if blockerErr == nil {
+		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventExternalBlocker, "external dependency blocker recorded", map[string]any{
+			"path":                BlockerArtifactPath,
+			"reason":              blocker.Reason,
+			"retry_after_seconds": blocker.RetryAfterSeconds,
+		})
+		emitTaskPhase(task.PhaseFinishing, task.PhaseSucceeded)
+		return &RunTaskError{
+			Cfg:             wcfg,
+			Err:             &ExternalBlockerError{Artifact: blocker},
+			ExternalBlocked: true,
+			Blocker:         blocker,
+		}
+	}
+	if !errors.Is(blockerErr, ErrBlockerArtifactMissing) {
+		return &RunTaskError{Cfg: wcfg, Err: blockerErr}
 	}
 
 	// Gate: the runner is required to write .aiops/RUN_SUMMARY.md describing
@@ -807,6 +831,11 @@ const runSummaryDirective = "\n\n---\n\n" +
 	"describing what you changed, why, and how it was verified. The task will " +
 	"fail if this file is missing, empty, or contains only a placeholder."
 
+const blockerDirective = "\n\nIf you are blocked only by an external dependency and cannot make progress in this run, " +
+	"write `.aiops/BLOCKED.json` with exactly this JSON shape before exiting: " +
+	"`{\"version\":1,\"kind\":\"external_dependency\",\"reason\":\"<specific dependency>\",\"retry_after_seconds\":3600}`. " +
+	"`retry_after_seconds` must be between 60 and 86400. Do not write this file for ordinary failures or completed work."
+
 const analysisOnlyDirective = "\n\n---\n\n" +
 	"**Analysis-only mode:** do not edit source files, commit, push, open PRs, " +
 	"or post tracker comments on the worker's behalf. Produce your assessment " +
@@ -863,10 +892,13 @@ func analysisOnlyArtifactAllowed(path string) bool {
 // AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
 // prompt unless the full directive is already present.
 func AppendRunSummaryDirective(prompt string) string {
-	if strings.Contains(prompt, strings.TrimSpace(runSummaryDirective)) {
-		return prompt
+	if !strings.Contains(prompt, strings.TrimSpace(runSummaryDirective)) {
+		prompt += runSummaryDirective
 	}
-	return prompt + runSummaryDirective
+	if !strings.Contains(prompt, strings.TrimSpace(blockerDirective)) {
+		prompt += blockerDirective
+	}
+	return prompt
 }
 
 // AppendAnalysisOnlyDirective adds the plan-artifact/no-handoff contract for

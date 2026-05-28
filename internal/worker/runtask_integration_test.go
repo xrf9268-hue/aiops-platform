@@ -1088,6 +1088,49 @@ func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	}
 }
 
+func TestRunTaskExternalBlockerArtifactReturnsBlockedResult(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Verify.Commands = []string{
+		`mkdir -p .aiops && printf '{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}' > .aiops/BLOCKED.json`,
+	}
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("RunTaskForTest() error = nil; want external blocker result")
+	}
+	var blockerErr *worker.ExternalBlockerError
+	if !errors.As(rterr.Err, &blockerErr) {
+		t.Fatalf("RunTaskForTest() error = %T %[1]v; want ExternalBlockerError", rterr.Err)
+	}
+	if !rterr.ExternalBlocked {
+		t.Fatalf("RunTaskForTest() ExternalBlocked = false; want true")
+	}
+	if got := rterr.Blocker.RetryAfterSeconds; got != 3600 {
+		t.Fatalf("Blocker.RetryAfterSeconds = %d; want 3600", got)
+	}
+	if got := len(ev.byKind(task.EventExternalBlocker)); got != 1 {
+		t.Fatalf("external_blocker events = %d; want 1", got)
+	}
+	blockedAt := indexOfEvent(ev, task.EventExternalBlocker)
+	if blockedAt < 0 {
+		t.Fatal("external_blocker event missing")
+	}
+	if succeededAt := indexOfEvent(ev, task.EventSucceeded); succeededAt >= 0 && succeededAt < blockedAt {
+		t.Fatalf("succeeded event at %d before external_blocker at %d; events=%#v", succeededAt, blockedAt, ev.events)
+	}
+	if got := len(ev.byKind(task.EventSucceeded)); got != 0 {
+		t.Fatalf("succeeded events = %d; want 0 for blocked handoff", got)
+	}
+	workdir := workspace.New(worker.EffectiveWorkspaceRoot(cfg, cfg.Workflow.Config)).PathFor(tk)
+	if _, err := os.Stat(filepath.Join(workdir, worker.BlockerArtifactPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("consumed blocker artifact stat error = %v; want not exist", err)
+	}
+}
+
 // indexOfEvent returns the position of the first recorded event with the
 // given kind, or -1 if none exists. The events slice is read under the
 // emitter's lock to stay race-free with concurrent writers (in practice

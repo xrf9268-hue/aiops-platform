@@ -993,7 +993,7 @@ type apiStateRetry struct {
 	Attempt    int                    `json:"attempt"`
 	DueAt      *time.Time             `json:"due_at,omitempty"`
 	Error      string                 `json:"error,omitempty"`
-	Kind       orchestrator.RetryKind `json:"kind,omitempty"`
+	Kind       orchestrator.RetryKind `json:"kind"`
 }
 
 type apiIssueResponse struct {
@@ -1349,8 +1349,15 @@ func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
 		Attempt:    row.Attempt,
 		DueAt:      dueAt,
 		Error:      row.Error,
-		Kind:       row.Kind,
+		Kind:       retryKindOrFailure(row.Kind),
 	}
+}
+
+func retryKindOrFailure(kind orchestrator.RetryKind) orchestrator.RetryKind {
+	if kind == "" {
+		return orchestrator.RetryKindFailure
+	}
+	return kind
 }
 
 func copyIntPointer(in *int) *int {
@@ -1421,37 +1428,24 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(failed, func(i, j int) bool {
 		return failed[i] < failed[j]
 	})
-	var rateLimits *orchestrator.RateLimitSnapshot
-	if view.CodexRateLimits != nil {
-		copied := *view.CodexRateLimits
-		rateLimits = &copied
-	}
 	return apiStateResponse{
 		GeneratedAt:                generatedAt,
 		PollIntervalMs:             view.PollIntervalMs,
 		MaxConcurrentAgents:        view.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyConcurrencyLimits(view.MaxConcurrentAgentsByState),
-		Counts: apiStateCounts{
-			Running:        len(view.Running),
-			Blocked:        len(view.Blocked),
-			Retrying:       len(view.Retrying),
-			Completed:      len(view.Completed),
-			Failed:         view.FailedSuppressedCount,
-			CompletedTotal: view.CumulativeCompletedTotal,
-			FailedTotal:    view.CumulativeFailedTotal,
-		},
-		Running:   running,
-		Blocked:   blocked,
-		Retrying:  retrying,
-		Completed: completed,
-		Failed:    failed,
+		Counts:                     apiCountsFromView(view),
+		Running:                    running,
+		Blocked:                    blocked,
+		Retrying:                   retrying,
+		Completed:                  completed,
+		Failed:                     failed,
 		CodexTotals: apiCodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
 			TotalTokens:    view.CodexTotals.TotalTokens,
 			SecondsRunning: view.CodexTotals.SecondsRunning,
 		},
-		RateLimits: rateLimits,
+		RateLimits: copyRateLimitsForAPI(view.CodexRateLimits),
 	}
 }
 
@@ -1475,6 +1469,26 @@ func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
 		return retrying[i].IssueID < retrying[j].IssueID
 	})
 	return retrying
+}
+
+func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
+	return apiStateCounts{
+		Running:        len(view.Running),
+		Blocked:        len(view.Blocked),
+		Retrying:       len(view.Retrying),
+		Completed:      len(view.Completed),
+		Failed:         view.FailedSuppressedCount,
+		CompletedTotal: view.CumulativeCompletedTotal,
+		FailedTotal:    view.CumulativeFailedTotal,
+	}
+}
+
+func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {
+	if src == nil {
+		return nil
+	}
+	copied := *src
+	return &copied
 }
 
 func copyConcurrencyLimits(src map[string]int) map[string]int {

@@ -182,6 +182,9 @@ func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	if !strings.Contains(out, "RUN_SUMMARY.md") {
 		t.Fatalf("directive not appended: %q", out)
 	}
+	if !strings.Contains(out, "BLOCKED.json") {
+		t.Fatalf("blocker artifact directive not appended: %q", out)
+	}
 	if strings.Contains(out, "Do not push branches or open pull requests") {
 		t.Fatalf("directive must not forbid in-run publication without a post-gate handoff: %q", out)
 	}
@@ -193,6 +196,9 @@ func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	got := worker.AppendRunSummaryDirective(mentionsSummary)
 	if got == mentionsSummary {
 		t.Fatalf("expected full directive even when summary is mentioned, got %q", got)
+	}
+	if !strings.Contains(got, "BLOCKED.json") {
+		t.Fatalf("expected blocker artifact directive when summary is mentioned, got %q", got)
 	}
 
 	// Idempotent once the full directive is already present.
@@ -216,6 +222,9 @@ func TestAppendRunSummaryDirectiveDoesNotSuppressOnPartialLegacyPhrases(t *testi
 			}
 			if !strings.Contains(got, "RUN_SUMMARY.md") {
 				t.Fatalf("directive missing RUN_SUMMARY.md: %q", got)
+			}
+			if !strings.Contains(got, "BLOCKED.json") {
+				t.Fatalf("directive missing BLOCKED.json: %q", got)
 			}
 		})
 	}

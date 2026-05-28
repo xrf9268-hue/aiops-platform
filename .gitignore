@@ -14,8 +14,8 @@ workspaces/
 
 # Build outputs and runtime artifacts
 dist/
-!cmd/worker/dashboard/dist/
-!cmd/worker/dashboard/dist/**
+cmd/worker/dashboard/dist/
+!cmd/worker/dashboard/dist/README.txt
 logs/
 docs/validation/smoke/
 tmp/

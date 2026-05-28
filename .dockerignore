@@ -1,0 +1,6 @@
+cmd/worker/dashboard/node_modules
+cmd/worker/dashboard/dist
+dist
+.git
+.codex
+.claude

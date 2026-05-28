@@ -11,7 +11,7 @@ import (
 // surface. Keep /api/v1/state as the canonical data source; the dashboard is
 // an operator-facing client for that API, per SPEC §13.7.1.
 //
-//go:embed dashboard/dist
+//go:embed dashboard/dist dashboard/fallback.html
 var dashboardDist embed.FS
 
 func dashboardHTMLHandler() http.Handler {
@@ -22,8 +22,16 @@ func dashboardHTMLHandler() http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		http.ServeFileFS(w, r, dashboardDist, "dashboard/dist/index.html")
+		http.ServeFileFS(w, r, dashboardDist, dashboardIndexPath())
 	})
+}
+
+func dashboardIndexPath() string {
+	if f, err := dashboardDist.Open("dashboard/dist/index.html"); err == nil {
+		_ = f.Close()
+		return "dashboard/dist/index.html"
+	}
+	return "dashboard/fallback.html"
 }
 
 func dashboardAssetHandler() http.Handler {

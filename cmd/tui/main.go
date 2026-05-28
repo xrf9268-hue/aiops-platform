@@ -574,6 +574,10 @@ func formatRunningRow(r runningEntry, now time.Time, eventWidth int) string {
 func formatRetryRow(r retryEntry) string {
 	id := issueLabel(r.Identifier, r.IssueID)
 	attempt := strconv.Itoa(r.Attempt)
+	kind := r.Kind
+	if kind == "" {
+		kind = "failure"
+	}
 
 	dueIn := "n/a"
 	if r.DueAt != nil {
@@ -594,16 +598,11 @@ func formatRetryRow(r retryEntry) string {
 		}
 		errorPart = " " + colorize("error="+errStr, ansiDim)
 	}
-	kindPart := ""
-	if r.Kind != "" {
-		kindPart = colorize(" "+r.Kind, ansiDim)
-	}
-
 	return "│  " +
 		colorize("↻", ansiYellow) + " " +
 		colorize(id, ansiRed) + " " +
+		colorize("kind="+kind, ansiYellow) + " " +
 		colorize("attempt="+attempt, ansiYellow) +
-		kindPart +
 		colorize(" in ", ansiDim) +
 		colorize(dueIn, ansiCyan) +
 		errorPart

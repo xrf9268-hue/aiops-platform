@@ -113,6 +113,14 @@ jobs:
             go.mod
             go.sum
 
+      - name: Set up Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cmd/worker/dashboard/package-lock.json
+
       - name: Verify tag exists
         shell: bash
         env:
@@ -127,6 +135,12 @@ jobs:
             echo "Release tag $RELEASE_TAG moved from $RELEASE_COMMIT_SHA to $resolved_sha"
             exit 1
           fi
+
+      - name: Build dashboard
+        working-directory: cmd/worker/dashboard
+        run: |
+          npm ci
+          npm run build
 
       - name: Build release binaries
         shell: bash

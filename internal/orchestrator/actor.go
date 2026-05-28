@@ -45,10 +45,13 @@ import (
 // configuration/task-build failures do not spin forever. Elapsed is folded
 // into CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
-	Err           error
-	NonRetryable  bool
-	InputRequired bool
-	Elapsed       time.Duration
+	Err               error
+	NonRetryable      bool
+	InputRequired     bool
+	ExternalBlocked   bool
+	BlockerReason     string
+	BlockerRetryAfter time.Duration
+	Elapsed           time.Duration
 }
 
 // Dispatcher is the seam through which the actor spawns a per-issue
@@ -101,14 +104,14 @@ type WorkspaceCleaner interface {
 // package var so tests can shrink it.
 var reconcileWorkspaceCleanupTimeout = 60 * time.Second
 
-// RetryKind identifies whether the retry follows a failed worker run or a
-// clean continuation turn.
+// RetryKind identifies why an issue is waiting in the retry queue.
 type RetryKind string
 
 const (
-	RetryKindFailure      RetryKind = "failure"
-	RetryKindContinuation RetryKind = "continuation"
-	RetryKindQuotaBackoff RetryKind = "quota_backoff"
+	RetryKindFailure         RetryKind = "failure"
+	RetryKindContinuation    RetryKind = "continuation"
+	RetryKindQuotaBackoff    RetryKind = "quota_backoff"
+	RetryKindExternalBlocker RetryKind = "external_blocker"
 )
 
 // RetryRequest describes the retry being scheduled. Attempt is the 1-based
@@ -1064,6 +1067,13 @@ func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue trac
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace)
 }
 
+func (o *Orchestrator) scheduleExternalBlockerRetry(ctx context.Context, issue tracker.Issue, identifier, reason string, delay time.Duration, workspace Workspace) error {
+	if delay <= 0 {
+		delay = time.Hour
+	}
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindExternalBlocker, DelayOverride: delay}, 0, reason, workspace)
+}
+
 func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace) error {
 	op := &scheduleRetryOp{
 		o:          o,
@@ -1600,7 +1610,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	var consumedContinuation *RetryEntry
 	if d.trackerRechecked {
 		if entry, ok := st.RetryAttempts[id]; ok {
-			if entry.Kind != RetryKindContinuation {
+			if entry.Kind != RetryKindContinuation && entry.Kind != RetryKindExternalBlocker {
 				d.result <- ErrNotDispatched
 				return nil
 			}
@@ -1608,10 +1618,13 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 				d.result <- ErrNotDispatched
 				return nil
 			}
-			// Tracker-rechecked dispatch only consumes continuation retries.
-			// Failure retries stay claimed until retryFireOp carries their
-			// scheduled attempt into a retry dispatch.
-			continuationAttempt = entry.Attempt
+			// Tracker-rechecked dispatch consumes clean continuation and
+			// external-blocker cooldown entries. Failure retries stay claimed
+			// until retryFireOp carries their scheduled attempt into a retry
+			// dispatch.
+			if entry.Kind == RetryKindContinuation {
+				continuationAttempt = entry.Attempt
+			}
 			consumedContinuation = entry
 		} else if st.IsClaimed(id) {
 			d.result <- ErrNotDispatched
@@ -1737,14 +1750,12 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 		// re-dispatch on its own timer.
 		return nil
 	}
-	if entry.Kind == RetryKindContinuation {
-		// Continuation retries are only a short wake-up signal after a clean
-		// worker exit. They must not spawn from the cached issue snapshot or
-		// carry failure retry accounting: a poll has to observe the issue still
+	if entry.Kind == RetryKindContinuation || entry.Kind == RetryKindExternalBlocker {
+		// Continuation and external-blocker cooldown retries are wake-up
+		// signals. They must not spawn from the cached issue snapshot or carry
+		// failure retry accounting: a poll has to observe the issue still
 		// active and call RequestDispatchAfterTrackerRecheck, which consumes
-		// this entry before spawning the next normal turn. Wake the poll loop
-		// now so the one-second continuation delay is honored instead of
-		// waiting for the next regular tracker poll interval.
+		// the entry before spawning the next normal turn.
 		entry.Timer = nil
 		o := r.o
 		return func() { o.wakeRetryPollLoop() }
@@ -2095,6 +2106,29 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventInputBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
 		close(f.done)
 		return nil
+	}
+	if f.result.ExternalBlocked {
+		reason := strings.TrimSpace(f.result.BlockerReason)
+		if reason == "" && f.result.Err != nil {
+			reason = f.result.Err.Error()
+		}
+		if reason == "" {
+			reason = "external dependency blocked run"
+		}
+		if !st.FinishRunExternalBlocked(f.id, f.entry, elapsed) {
+			close(f.done)
+			return nil
+		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidateBlocked, IssueID: f.id, Identifier: f.identifier, Message: reason})
+		issue := f.entry.Issue
+		workspace := f.entry.Workspace
+		close(f.done)
+		o := f.o
+		identifier := f.identifier
+		delay := f.result.BlockerRetryAfter
+		return func() {
+			_ = o.scheduleExternalBlockerRetry(o.runCtx, issue, identifier, reason, delay, workspace)
+		}
 	}
 	if f.result.Err == nil {
 		nextContinuationAttempt := f.entry.ContinuationAttempt + 1

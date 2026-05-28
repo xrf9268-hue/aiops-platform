@@ -48,9 +48,9 @@ aiops-platform is licensed under the [Apache License 2.0](LICENSE).
 A React 19 + Vite + Tailwind v4 single-page app, served by the worker at `/`
 (and assets under `/assets/`) on the same loopback listener as the state API.
 It is a read-only operator client for `/api/v1/state` (SPEC §13.7.1) with
-light/dark themes and Anthropic brand styling. The built output lives in
-`cmd/worker/dashboard/dist`, is committed, and is compiled into the worker via
-`//go:embed` — so running the worker needs no Node toolchain. See
+light/dark themes and Anthropic brand styling. The built output is generated in
+`cmd/worker/dashboard/dist` before compiling the worker and is embedded via
+`//go:embed` — so the shipped worker binary needs no Node toolchain. See
 [the dashboard design note](docs/design/dashboard-brand-redesign.md) for the
 brand/UX rationale.
 
@@ -218,7 +218,7 @@ To rebuild the dashboard after changing its source (requires Node):
 ```bash
 cd cmd/worker/dashboard
 npm install
-npm run build     # writes dashboard/dist, which is committed and embedded
+npm run build     # writes ignored dashboard/dist for Go embed
 npm test          # vitest
 ```
 

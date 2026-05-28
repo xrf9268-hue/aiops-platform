@@ -165,6 +165,16 @@ func TestFormatRetryRowIncludesQuotaBackoffKind(t *testing.T) {
 	if !strings.Contains(got, "quota_backoff") {
 		t.Fatalf("formatRetryRow missing quota_backoff kind: %q", got)
 	}
+	if strings.Count(got, "quota_backoff") != 1 {
+		t.Fatalf("formatRetryRow duplicated quota_backoff kind: %q", got)
+	}
+}
+
+func TestFormatRetryRowDefaultsKindToFailure(t *testing.T) {
+	got := formatRetryRow(retryEntry{IssueID: "issue-1", Identifier: "ENG-1", Attempt: 1})
+	if !strings.Contains(got, "kind=failure") {
+		t.Fatalf("formatRetryRow missing default failure kind: %q", got)
+	}
 }
 
 // ── formatRuntimeSecs ─────────────────────────────────────────────────────────

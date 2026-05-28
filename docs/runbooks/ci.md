@@ -105,6 +105,7 @@ go mod tidy
 gofmt -w cmd internal
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=funlen,gocognit --issues-exit-code=0
+cd cmd/worker/dashboard && npm ci && npm test && npm run build && cd -
 go test ./...
 go build ./cmd/worker ./cmd/tui
 docker build --pull --tag aiops-platform:local .

@@ -89,6 +89,7 @@ const (
 	EventPolicyViolation         = "policy_violation"
 	EventPolicyFeedbackLoaded    = "policy_feedback_loaded"
 	EventPolicyFeedbackReadError = "policy_feedback_read_error"
+	EventExternalBlocker         = "external_blocker"
 	EventVerifyStart             = "verify_start"
 	EventVerifyEnd               = "verify_end"
 	EventPush                    = "push"

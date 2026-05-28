@@ -1711,6 +1711,86 @@ func TestFinalize_NormalExitAfterInputRequiredBlocksInsteadOfContinuationRetry(t
 	}, time.Second)
 }
 
+func TestFinalize_ExternalBlockedExitSchedulesCooldownRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-EXT-BLOCK", Identifier: "ENG-EXT-BLOCK", State: "In Progress", Title: "blocked externally"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{
+		Err:               errors.New("external dependency blocked run: PR #455 remains open"),
+		ExternalBlocked:   true,
+		BlockerReason:     "PR #455 remains open",
+		BlockerRetryAfter: time.Hour,
+		Elapsed:           50 * time.Millisecond,
+	})
+
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0 && len(view.Retrying) == 1 && view.Retrying[0].Kind == RetryKindExternalBlocker
+	}, time.Second)
+	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("cooldown issue dispatch err = %v; want ErrNotDispatched", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := view.Retrying[0].Error; got != "PR #455 remains open" {
+		t.Fatalf("external blocker retry error = %q; want blocker reason", got)
+	}
+	if len(view.Completed) != 0 {
+		t.Fatalf("completed entries after external blocker = %+v; want none", view.Completed)
+	}
+	if view.CumulativeCompletedTotal != 0 {
+		t.Fatalf("completed total after external blocker = %d; want 0", view.CumulativeCompletedTotal)
+	}
+	if view.Retrying[0].DueAt.Before(time.Now().Add(59 * time.Minute)) {
+		t.Fatalf("external blocker due_at = %v; want roughly one hour from now", view.Retrying[0].DueAt)
+	}
+}
+
+func TestDispatchAfterTrackerRecheckConsumesDueExternalBlockerCooldown(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-EXT-READY", Identifier: "ENG-EXT-READY", State: "In Progress", Title: "blocked externally"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	disp.finishAt(0, WorkerResult{
+		ExternalBlocked:   true,
+		BlockerReason:     "dependency has not merged",
+		BlockerRetryAfter: time.Millisecond,
+		Elapsed:           time.Millisecond,
+	})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Retrying) == 1 && view.Retrying[0].Kind == RetryKindExternalBlocker && !time.Now().Before(view.Retrying[0].DueAt)
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if got := disp.attemptValueAt(1); got != nil {
+		t.Fatalf("external blocker redispatch attempt = %v; want nil normal dispatch", *got)
+	}
+}
+
 func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}

@@ -17,6 +17,16 @@ func dockerfileContents(t *testing.T) string {
 	return string(data)
 }
 
+func dockerignoreContents(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", ".dockerignore")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
 // TestDockerfileCopiesGoSumBeforeDownload guards the reproducible dependency
 // layer (#369): go.sum must be copied alongside go.mod before `go mod
 // download`, so module checksums are verifiable and the cache layer is keyed on
@@ -37,6 +47,45 @@ func TestDockerfileCopiesGoSumBeforeDownload(t *testing.T) {
 	}
 	if copyAll := strings.Index(df, "COPY . ."); copyAll >= 0 && download > copyAll {
 		t.Errorf("`go mod download` (at %d) must run before `COPY . .` (at %d) to keep the cached dependency layer", download, copyAll)
+	}
+}
+
+func TestDockerfileBuildsDashboardBeforeWorker(t *testing.T) {
+	df := dockerfileContents(t)
+
+	dashboardStage := strings.Index(df, "FROM node:22-bookworm AS dashboard")
+	buildStage := strings.Index(df, "FROM golang:${GO_VERSION}-bookworm AS build")
+	copyDashboard := strings.Index(df, "COPY --from=dashboard /src/cmd/worker/dashboard/dist ./cmd/worker/dashboard/dist")
+	buildWorker := strings.Index(df, "RUN go build -o /out/worker ./cmd/worker")
+	for name, idx := range map[string]int{
+		"dashboard stage": dashboardStage,
+		"go build stage":  buildStage,
+		"dashboard copy":  copyDashboard,
+		"worker build":    buildWorker,
+	} {
+		if idx < 0 {
+			t.Fatalf("Dockerfile missing %s", name)
+		}
+	}
+	if dashboardStage > buildStage || buildStage > copyDashboard || copyDashboard > buildWorker {
+		t.Fatalf("Dockerfile must generate dashboard dist before building worker: dashboard=%d build=%d copy=%d worker=%d", dashboardStage, buildStage, copyDashboard, buildWorker)
+	}
+	for _, want := range []string{"RUN npm ci", "RUN npm run build"} {
+		if !strings.Contains(df, want) {
+			t.Fatalf("Dockerfile dashboard stage missing %q", want)
+		}
+	}
+}
+
+func TestDockerignoreExcludesLocalDashboardBuildArtifacts(t *testing.T) {
+	body := dockerignoreContents(t)
+	for _, want := range []string{
+		"cmd/worker/dashboard/node_modules",
+		"cmd/worker/dashboard/dist",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf(".dockerignore missing %q", want)
+		}
 	}
 }
 

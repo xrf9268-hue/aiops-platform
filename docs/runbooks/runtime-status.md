@@ -35,6 +35,19 @@ workflow/prompt so the agent no longer needs unavailable input. The read-only
 `counts.blocked` value so input-blocked sessions are visible from the HTTP
 state surface.
 
+An agent blocked by an external dependency must report it with the strict
+`.aiops/BLOCKED.json` artifact instead of relying on free-text summary parsing:
+
+```json
+{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}
+```
+
+The worker treats this as an `external_blocker` retry cooldown. The issue
+remains claimed until the cooldown expires, appears in `retrying` with
+`kind: "external_blocker"`, and is rechecked through the normal tracker poll
+before any redispatch. Unknown or legacy fields are rejected. The schema is
+versioned in [`docs/protocols/blocked-artifact.schema.json`](../protocols/blocked-artifact.schema.json).
+
 ## Branches and pull requests
 
 `branch` and `pr_url` fields are optional. The status surface may display them
@@ -161,6 +174,7 @@ the shape here without updating the handler — or vice versa — fails the buil
       "issue_id": "issue-3",
       "issue_identifier": "ENG-3",
       "attempt": 2,
+      "kind": "failure",
       "due_at": "2026-05-21T09:11:00Z",
       "error": "retry soon"
     }

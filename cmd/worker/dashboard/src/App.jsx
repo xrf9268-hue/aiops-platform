@@ -533,6 +533,14 @@ export default function App() {
       ),
     },
     {
+      header: 'Kind',
+      cell: (row) => {
+        const kind = row.kind || 'failure';
+        const tone = kind === 'external_blocker' || kind === 'quota_backoff' ? 'warning' : 'default';
+        return <StateBadge value={kind} type={tone} />;
+      },
+    },
+    {
       header: 'Attempt',
       align: 'right',
       cell: (row) => (
@@ -540,10 +548,6 @@ export default function App() {
           <span className="w-1.5 h-1.5 rounded-full bg-warn" aria-hidden="true" />#{formatCount(row.attempt)}
         </span>
       ),
-    },
-    {
-      header: 'Kind',
-      cell: (row) => <StateBadge value={row.kind || 'failure'} type={row.kind === 'quota_backoff' ? 'warning' : 'default'} />,
     },
     { header: 'Due at', cell: (row) => <span className="text-muted">{formatDate(row.due_at)}</span> },
     {

@@ -1,4 +1,11 @@
 ARG GO_VERSION=1.25
+FROM node:22-bookworm AS dashboard
+WORKDIR /src/cmd/worker/dashboard
+COPY cmd/worker/dashboard/package.json cmd/worker/dashboard/package-lock.json ./
+RUN npm ci
+COPY cmd/worker/dashboard/ ./
+RUN npm run build
+
 FROM golang:${GO_VERSION}-bookworm AS build
 WORKDIR /src
 # Copy go.sum alongside go.mod so `go mod download` can verify module
@@ -7,6 +14,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
+COPY --from=dashboard /src/cmd/worker/dashboard/dist ./cmd/worker/dashboard/dist
 RUN go build -o /out/worker ./cmd/worker
 
 FROM debian:bookworm-slim AS worker

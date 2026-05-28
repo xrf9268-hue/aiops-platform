@@ -66,3 +66,30 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 		t.Fatalf("report-only golangci-lint step missing issues-exit-code=0:\n%s", reportStep)
 	}
 }
+
+func TestCIDashboardBuildFeedsGoEmbedWithoutCommittedDist(t *testing.T) {
+	body, err := os.ReadFile("../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("ReadFile(ci.yml): %v", err)
+	}
+
+	text := string(body)
+	for _, want := range []string{
+		"- name: Install dashboard dependencies",
+		"- name: Test dashboard",
+		"- name: Build dashboard",
+		"- name: Verify dashboard dist is generated for embed",
+		"go test -race -covermode=atomic ./...",
+		"go build -trimpath -ldflags=\"-s -w\" -o dist/worker ./cmd/worker",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("CI workflow missing %q", want)
+		}
+	}
+	if strings.Contains(text, "Verify dashboard dist is committed") {
+		t.Fatal("CI workflow still requires committing dashboard dist")
+	}
+	if strings.Contains(text, "git diff --exit-code -- cmd/worker/dashboard/dist") {
+		t.Fatal("CI workflow still diffs generated dashboard dist against git")
+	}
+}
