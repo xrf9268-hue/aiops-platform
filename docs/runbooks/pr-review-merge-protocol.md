@@ -13,15 +13,15 @@ generalize beyond the evidence.
 
 ## 1. Test discipline (regression + mutation verification)
 
+The canonical rule lives in [`AGENTS.md`](../../AGENTS.md) clean-code rule 6
+(regression test + mutation against the committed artifact); this section is the
+operational procedure.
+
 1. **Every fix ships a regression test.** A test that would still pass with the
    production fix reverted is a placebo and does not count as done.
 2. **Mutation-verify against the committed artifact, not the working tree.** A
    green local test only proves the working tree passes; it does **not** verify
-   the artifact you push unless the tree equals the pushed HEAD. **Earned by:**
-   a #469/PR #483 session where an uncommitted masking fix was silently lost to
-   a `cp`/`git checkout` backup-restore — local tests stayed green (the working
-   tree transiently held the fix) while the commit did not, and CI caught the
-   regression, not local review.
+   the artifact you push unless the tree equals the pushed HEAD.
 3. **Correct mutation procedure — commit first, then mutate:**
    1. Commit (or amend) the fix so it is in HEAD.
    2. Break the key production line (edit/`sed`/`perl`).
@@ -126,30 +126,27 @@ workflow is a backstop, not a merge substitute.
 
 ## 6. Size gate is a merge gate, not an LOC-reduction mandate
 
-Classify every PR into exactly one state and disclose it in the body.
-Correctness, safety, performance, and necessary regression coverage take
-precedence over LOC compliance. **Never delete meaningful tests, weaken
-state-machine coverage, drop race coverage, or prefer compact code over clear
-reliable code to satisfy the budget.** Only reduce LOC when the code is
-genuinely redundant, over-abstracted, duplicated without purpose, or out of
-scope.
+The size-gate rule — the three states (`within budget` /
+`size-gated: justified overage` / `size-gated: split recommended`) and the
+principle that correctness/coverage/safety take precedence over LOC compliance
+— is canonical in [`AGENTS.md`](../../AGENTS.md) (the `policy.max_changed_files`
+/ `policy.max_changed_loc` bullet). Classify every PR into exactly one state and
+disclose it in the body; never delete meaningful tests or weaken coverage to
+fit the budget.
 
-- `within budget` — diff fits the effective `policy.max_changed_files` /
-  `policy.max_changed_loc`. Standard auto-merge path.
-- `size-gated: justified overage` — over budget because the extra LOC pays for
-  correctness, regression coverage, race/state-machine safety, or other
-  hardening that cannot be split without losing atomicity. **Not
-  auto-mergeable**; provide a human sign-off bundle (why the scope is
-  necessary, head SHA, local verification, CI state, bot-review state,
-  unresolved-thread state, residual risk).
-- `size-gated: split recommended` — over budget because of scope creep,
-  unrelated cleanup, or separable concerns. **Hard stop — split into smaller
-  PRs**; do not seek sign-off in lieu of splitting.
+Merge-flow application of those states:
 
-Read the effective budget and `policy.deny_paths` from the repo's
-`WORKFLOW.md`; do not trust a hardcoded list (defaults are 12 files / 300 LOC
-and deny `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but
-workflows differ — e.g. the `github-local` example uses 20 / 600).
+- `within budget` — standard auto-merge path.
+- `size-gated: justified overage` — **not auto-mergeable**; provide a human
+  sign-off bundle (why the scope is necessary, head SHA, local verification, CI
+  state, bot-review state, unresolved-thread state, residual risk).
+- `size-gated: split recommended` — **hard stop, split into smaller PRs**; do
+  not seek sign-off in lieu of splitting.
+
+Read the effective budget and `policy.deny_paths` from the repo's `WORKFLOW.md`;
+do not trust a hardcoded list (defaults are 12 files / 300 LOC and deny
+`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but workflows differ
+— e.g. the `github-local` example uses 20 / 600).
 
 ## 7. PR body is a living ledger
 

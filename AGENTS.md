@@ -313,9 +313,15 @@ failure per the "Earned rules" principle above.
 
 6. **Tests must assert the new code path.** A test that would pass even if the
    feature were deleted is a placebo. After writing a test, verify it fails
-   when the production code is broken (mutation or negative assertion). **Earned
-   by:** PR #342 audit (LOW) noted the back-compat test asserted `last_codex_at`
-   presence but not its absence after removal.
+   when the production code is broken (mutation or negative assertion). Run that
+   mutation against the committed artifact, not the working tree — commit the
+   fix first, then break it, restore with `git checkout`, and confirm the tree
+   matches HEAD; a passing local test is not proof of the shipped commit when
+   the working tree and HEAD have diverged. **Earned by:** PR #342 audit (LOW)
+   noted the back-compat test asserted `last_codex_at` presence but not its
+   absence after removal; and a #469/PR #483 session where a backup/restore during
+   mutation testing silently reverted the fix, so local tests stayed green while
+   the commit lacked it and only CI caught the regression.
 
 7. **Function and file size budgets.** New code must keep single functions at
    or below 80 lines and single files at or below 800 lines, excluding test
@@ -365,7 +371,7 @@ failure per the "Earned rules" principle above.
   rather than reviewer memory.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
-- **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template.
+- **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template. Secret-bearing values that arrive via config or CLI (e.g. `clone_url` basic-auth userinfo) must be masked before they reach any log, error string, or state output — env-var-only redaction does not cover them. Mask clone URLs with `workflow.MaskCloneURL`. **Earned by:** #469/PR #483, where a doctor ambiguity/not-found error echoed a credentialed `clone_url` because `redact()` only scrubbed env-var values.
 - **`policy.max_changed_files` (12) and `policy.max_changed_loc` (300) are a
   size gate, not an LOC-reduction mandate.** Worker PRs are draft + labeled by
   default; shape them small when you can, but the budget exists to catch scope
