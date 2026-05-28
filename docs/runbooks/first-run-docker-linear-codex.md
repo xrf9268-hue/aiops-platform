@@ -257,6 +257,60 @@ workspace should be cleaned up on the next reconciliation. If you rerun the same
 disposable issue id, clean the previous temporary worktree first; workspace
 branch names are derived from issue ids and can collide.
 
+## 6. Run a GitHub issue-to-PR smoke
+
+Use this only with a disposable GitHub issue and a disposable Linear mirror.
+The goal is to validate the dogfood path that this repo's batch workflow needs:
+the agent reads a GitHub issue with `gh`, implements in an isolated workspace,
+pushes a branch, and opens a draft PR that closes the GitHub issue.
+
+Prepare one throwaway GitHub issue in the target repository:
+
+```bash
+gh_issue_url="$(gh issue create \
+  --repo xrf9268-hue/aiops-platform \
+  --title "Docker dogfood PR smoke $(date -u +%Y%m%dT%H%M%SZ)" \
+  --body "Disposable validation issue. The agent should make a tiny docs-only change, open a draft PR, and leave this issue to be closed by the PR.")"
+gh_issue="${gh_issue_url##*/}"
+```
+
+Mirror that issue into a fresh Linear issue in the configured project. The
+Linear issue title/body must include the GitHub issue number and URL, and the
+workflow prompt must instruct the agent to read the GitHub issue with a
+supported explicit-field command such as:
+
+```bash
+gh issue view "$gh_issue" \
+  --repo xrf9268-hue/aiops-platform \
+  --json number,title,state,labels,body,url,comments
+```
+
+Run the smoke script against the Linear identifier for that mirror:
+
+```bash
+AIOPS_SMOKE_WORKER_BIN=/tmp/aiops-worker \
+  scripts/aiops-todo-smoke.sh \
+  --mode real \
+  --workflow WORKFLOW.md \
+  --issue AIS-125 \
+  --github-repo xrf9268-hue/aiops-platform \
+  --github-issue "$gh_issue" \
+  --expect-draft-pr
+```
+
+The script first runs `worker --doctor --mode=real --github-issue` so `gh issue
+view` and `git push --dry-run` are checked from the sanitized Codex agent
+environment. After the selected Linear issue completes, it verifies that an
+open draft PR in the target GitHub repo has a `closingIssuesReferences` link to
+the disposable GitHub issue. If no draft PR exists, the smoke fails and writes
+the state snapshot plus worker log paths into `docs/validation/smoke/`.
+For slow GitHub PR visibility or long-running handoff paths, tune
+`AIOPS_SMOKE_PR_POLL_ATTEMPTS` and `AIOPS_SMOKE_PR_POLL_INTERVAL_SECONDS`.
+
+After a successful smoke, close or merge the disposable draft PR according to
+the normal PR follow-through gate, then close any intentionally disposable
+GitHub/Linear test issue that is not closed by the PR.
+
 ## Troubleshooting
 
 | Symptom | Next action |
@@ -267,5 +321,6 @@ branch names are derived from issue ids and can collide.
 | `FAIL Codex auth` | Run `codex --login` for the same `CODEX_HOME` and container user context. |
 | `FAIL GitHub agent gh auth` | Set `GITHUB_TOKEN_FILE` to a least-privilege token file or mount a deploy key; do not rely on `GH_TOKEN`/`GITHUB_TOKEN` in the worker environment. |
 | `FAIL GitHub agent git push` | Run the documented doctor command from the container and fix `gh auth setup-git` or deploy-key write access for the target repo. |
+| `FAIL no new open draft PR ... closes GitHub issue` | Confirm the mirrored Linear issue tells the agent to open a draft PR with `Closes #<n>`, and that the GitHub credential has repo write access. |
 | `WARN Codex sandbox` | Either use the documented Docker-isolated profile for real smoke validation or enable the kernel/user namespace support required by Codex `workspace-write`. |
 | smoke timeout | Confirm a disposable issue is in an active state, `/readyz` is healthy, and `tracker.active_states` matches the Linear board. |
