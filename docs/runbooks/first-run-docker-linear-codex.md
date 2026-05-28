@@ -276,14 +276,25 @@ gh_issue="${gh_issue_url##*/}"
 
 Mirror that issue into a fresh Linear issue in the configured project. The
 Linear issue title/body must include the GitHub issue number and URL, and the
-workflow prompt must instruct the agent to read the GitHub issue with a
-supported explicit-field command such as:
+workflow prompt must instruct the agent to read the GitHub issue with
+explicit fields, then read comments through the REST comments endpoint:
 
 ```bash
 gh issue view "$gh_issue" \
   --repo xrf9268-hue/aiops-platform \
-  --json number,title,state,labels,body,url,comments
+  --json number,title,state,labels,body,url
+
+gh api --paginate \
+  "repos/xrf9268-hue/aiops-platform/issues/${gh_issue}/comments?per_page=100"
 ```
+
+Do not use `gh issue view --comments` in the dogfood workflow. Older GitHub CLI
+versions query the deprecated Projects Classic `projectCards` field for that
+shape, and GitHub returns a GraphQL deprecation error before the agent reads the
+issue. Treat that exact `repository.issue.projectCards` failure as a GitHub CLI
+query-shape issue, not an authentication failure. Also avoid unsupported
+`gh issue view --json` fields such as `closedBy`; use `closed` and `closedAt`
+only if the installed `gh issue view --json` help lists them.
 
 Run the smoke script against the Linear identifier for that mirror:
 
