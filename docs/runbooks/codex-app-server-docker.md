@@ -189,6 +189,13 @@ inside the Docker-isolated worker container. Do not copy that setting onto a
 shared host. If the worker runs directly on a host instead of inside a container,
 prefer Codex's normal sandbox and approval policy.
 
+When `codex.turn_sandbox_policy` is left unset, the per-turn `sandboxPolicy` is
+derived from `thread_sandbox` (`danger-full-access` → `dangerFullAccess`,
+`read-only` → `readOnly`, otherwise `workspaceWrite`), so the container setting
+above governs every turn — you no longer have to restate it under
+`turn_sandbox_policy`. Setting `turn_sandbox_policy` explicitly still overrides
+the derived value for callers that need a different per-turn policy (#472).
+
 ## Validation reference
 
 See `docs/validation/2026-05-26-docker-linear-e2e.md` for the live Linear todo

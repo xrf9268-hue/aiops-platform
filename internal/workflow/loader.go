@@ -156,6 +156,7 @@ func Load(path string) (*Workflow, error) {
 		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		workspaceRootSet := hasNestedKey(frontBytes, "workspace", "root")
 		serverPortSet := hasNestedKey(frontBytes, "server", "port")
+		turnSandboxPolicySet := hasNestedKey(frontBytes, "codex", "turn_sandbox_policy")
 		if err := yaml.Unmarshal(frontBytes, &cfg); err != nil {
 			return nil, &Error{Category: CategoryWorkflowParseError, Path: path, Message: "parse workflow front matter", Err: err}
 		}
@@ -163,6 +164,7 @@ func Load(path string) (*Workflow, error) {
 		cfg.Workspace.hookFields = legacyHookFields
 		cfg.Workspace.rootSet = workspaceRootSet
 		cfg.Server.portSet = serverPortSet
+		cfg.Codex.turnSandboxPolicySet = turnSandboxPolicySet
 		if hookFields.TimeoutMs {
 			cfg.hooksTimeoutDefaulted = false
 		}
@@ -759,8 +761,14 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
 	if cfg.Codex.ThreadSandbox == "" {
 		cfg.Codex.ThreadSandbox = "workspace-write"
 	}
-	if cfg.Codex.TurnSandboxPolicy.IsZero() {
-		cfg.Codex.TurnSandboxPolicy = DefaultCodexSandboxPolicy()
+	// Derive the per-turn sandbox policy from thread_sandbox unless the
+	// operator set codex.turn_sandbox_policy explicitly. ThreadSandbox is
+	// defaulted just above, so this sees the resolved thread sandbox. Deriving
+	// here (rather than pinning workspace-write in DefaultConfig) keeps
+	// thread_sandbox as the single knob governing effective turn permissions
+	// (#472; DEVIATIONS D32).
+	if shouldDeriveTurnSandboxPolicy(cfg.Codex) {
+		cfg.Codex.TurnSandboxPolicy = defaultTurnSandboxPolicyForThread(cfg.Codex.ThreadSandbox)
 	}
 	if cfg.Codex.ApprovalPolicy == nil {
 		// Default mirrors codex's `granular` policy with every flag set to

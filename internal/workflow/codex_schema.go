@@ -35,6 +35,38 @@ func DefaultCodexSandboxPolicy() CodexSandboxPolicy {
 	}
 }
 
+// defaultTurnSandboxPolicyForThread derives the per-turn sandboxPolicy that
+// turn/start sends when codex.turn_sandbox_policy is not set explicitly. It
+// maps the thread-level codex.thread_sandbox onto the typed turn policy so a
+// single thread_sandbox knob governs effective turn permissions: without this,
+// the per-turn override silently re-imposed workspace-write even when an
+// operator selected danger-full-access (e.g. the Docker-isolated profile the
+// doctor recommends), defeating that selection on every turn (PR #446 review,
+// #472; DEVIATIONS D32). An explicit turn_sandbox_policy still overrides.
+//
+// thread_sandbox is the codex thread/start `sandbox` string; the three values
+// codex accepts map onto typed turn policies, and any other value falls back
+// to the workspace-write default rather than failing the run.
+func defaultTurnSandboxPolicyForThread(threadSandbox string) CodexSandboxPolicy {
+	switch threadSandbox {
+	case "danger-full-access":
+		return CodexSandboxPolicy{Type: CodexSandboxDangerFullAccess}
+	case "read-only":
+		return CodexSandboxPolicy{Type: CodexSandboxReadOnly, NetworkAccess: false}
+	default:
+		return DefaultCodexSandboxPolicy()
+	}
+}
+
+// shouldDeriveTurnSandboxPolicy reports whether the loader should replace
+// codex.turn_sandbox_policy with the thread_sandbox-derived default. It returns
+// true when the field was absent from front matter (DefaultConfig() pre-fills
+// it, so the "absent" signal lives on turnSandboxPolicySet, not on the zero
+// value) or when it was set to an explicit null/empty policy.
+func shouldDeriveTurnSandboxPolicy(c CommandConfig) bool {
+	return !c.turnSandboxPolicySet || c.TurnSandboxPolicy.IsZero()
+}
+
 func (p CodexSandboxPolicy) IsZero() bool {
 	return p.Type == "" &&
 		len(p.WritableRoots) == 0 &&

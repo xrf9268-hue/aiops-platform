@@ -2521,6 +2521,82 @@ prompt
 	}
 }
 
+// TestLoadDerivesTurnSandboxPolicyFromThreadSandbox pins the #472 fix: when an
+// operator sets codex.thread_sandbox but not codex.turn_sandbox_policy, the
+// per-turn policy is derived from thread_sandbox instead of silently forcing
+// workspace-write on every turn. Each case asserts the derived type so a
+// regression that re-pins workspace-write (the pre-fix behavior) fails CI.
+func TestLoadDerivesTurnSandboxPolicyFromThreadSandbox(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name          string
+		threadSandbox string
+		wantType      string
+	}{
+		{name: "danger_full_access", threadSandbox: "danger-full-access", wantType: CodexSandboxDangerFullAccess},
+		{name: "read_only", threadSandbox: "read-only", wantType: CodexSandboxReadOnly},
+		{name: "workspace_write", threadSandbox: "workspace-write", wantType: CodexSandboxWorkspaceWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+  project_slug: platform
+agent:
+  default: codex-app-server
+codex:
+  thread_sandbox: `+tc.threadSandbox+`
+---
+prompt
+`)
+			wf, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load(%q): %v", path, err)
+			}
+			if got := wf.Config.Codex.TurnSandboxPolicy.Type; got != tc.wantType {
+				t.Fatalf("thread_sandbox=%q: TurnSandboxPolicy.Type = %q; want %q", tc.threadSandbox, got, tc.wantType)
+			}
+		})
+	}
+}
+
+// TestLoadExplicitTurnSandboxPolicyOverridesThreadSandbox guards the override
+// contract: even when thread_sandbox would derive a different type, an
+// explicit turn_sandbox_policy wins. Without the turnSandboxPolicySet signal a
+// naive IsZero()-only check would still derive dangerFullAccess here.
+func TestLoadExplicitTurnSandboxPolicyOverridesThreadSandbox(t *testing.T) {
+	t.Parallel()
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: file:///tmp/repo
+tracker:
+  kind: linear
+  project_slug: platform
+agent:
+  default: codex-app-server
+codex:
+  thread_sandbox: danger-full-access
+  turn_sandbox_policy:
+    type: workspaceWrite
+    writableRoots: []
+    networkAccess: false
+    excludeTmpdirEnvVar: false
+    excludeSlashTmp: false
+---
+prompt
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load(%q): %v", path, err)
+	}
+	if got := wf.Config.Codex.TurnSandboxPolicy.Type; got != CodexSandboxWorkspaceWrite {
+		t.Fatalf("explicit turn_sandbox_policy with thread_sandbox=danger-full-access: TurnSandboxPolicy.Type = %q; want %q (explicit must override)", got, CodexSandboxWorkspaceWrite)
+	}
+}
+
 // TestDefaultConfig_AlignsToSPEC_6_4 pins every SPEC §6.4 default
 // `DefaultConfig()` is responsible for. Each field gets its own
 // assertion so a regression on any one of them surfaces in CI rather

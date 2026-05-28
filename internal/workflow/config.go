@@ -399,9 +399,17 @@ type CommandConfig struct {
 	ApprovalPolicy    any                `yaml:"approval_policy,omitempty" json:"approval_policy,omitempty"`
 	ThreadSandbox     string             `yaml:"thread_sandbox,omitempty" json:"thread_sandbox,omitempty"`
 	TurnSandboxPolicy CodexSandboxPolicy `yaml:"turn_sandbox_policy,omitempty" json:"turn_sandbox_policy,omitempty"`
-	TurnTimeoutMs     int                `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
-	ReadTimeoutMs     int                `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
-	StallTimeoutMs    int                `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
+	// turnSandboxPolicySet records whether codex.turn_sandbox_policy was
+	// explicitly present in the front matter. DefaultConfig() pre-fills
+	// TurnSandboxPolicy, so it cannot carry the "absent" signal through a YAML
+	// overlay (unlike Agent.MaxRetryAttempts, which is a nil pointer). The
+	// loader needs that signal to decide whether to derive the per-turn policy
+	// from thread_sandbox; an operator who set turn_sandbox_policy explicitly
+	// keeps full control.
+	turnSandboxPolicySet bool
+	TurnTimeoutMs        int `yaml:"turn_timeout_ms,omitempty" json:"turn_timeout_ms,omitempty"`
+	ReadTimeoutMs        int `yaml:"read_timeout_ms,omitempty" json:"read_timeout_ms,omitempty"`
+	StallTimeoutMs       int `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
 	// LinearGraphQL narrows the agent-visible linear_graphql client-side tool
 	// (SPEC §15.5 harness hardening). The field lives on the shared
 	// CommandConfig type for the same pragmatic reason as Profile above; the
@@ -605,7 +613,15 @@ func DefaultConfig() Config {
 				"request_permissions": false,
 				"mcp_elicitations":    false,
 			}},
-			ThreadSandbox:     "workspace-write",
+			ThreadSandbox: "workspace-write",
+			// TurnSandboxPolicy pre-fills the workspace-write default so
+			// callers that build a Config from DefaultConfig() without running
+			// the loader (e.g. the worker's no-WORKFLOW.md startup path) still
+			// send a valid turn sandbox. When a WORKFLOW.md is loaded and the
+			// operator did NOT set codex.turn_sandbox_policy, the loader
+			// re-derives this from codex.thread_sandbox so a single
+			// thread_sandbox knob governs effective turn permissions
+			// (DEVIATIONS D32); an explicit turn_sandbox_policy overrides.
 			TurnSandboxPolicy: DefaultCodexSandboxPolicy(),
 			TurnTimeoutMs:     3600000,
 			ReadTimeoutMs:     5000,
