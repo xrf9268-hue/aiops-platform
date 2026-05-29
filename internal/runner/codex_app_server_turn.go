@@ -255,6 +255,17 @@ func safeTurnReason(params map[string]any) string {
 	return fallback
 }
 
+// reasonFieldKeys is the top-level allow-list of params keys that may carry a
+// human-readable failure reason; nestedReasonFieldKeys is the allow-list applied
+// inside a structured `error` object. They are the single source of truth shared
+// by extractReasonFields (first non-empty) and copyAllowlistedReasonFields
+// (scrubbed copy); both must scan the same keys in the same precedence order, so
+// the lists live in one place rather than being duplicated per function.
+var (
+	reasonFieldKeys       = []string{"reason", "error", "message", "error_code"}
+	nestedReasonFieldKeys = []string{"message", "reason", "error_code", "code"}
+)
+
 // extractReasonFields walks the allow-listed reason keys in a single map and
 // returns the first non-empty string. `error` is special: Codex may serialize
 // it as a string or as a nested object like
@@ -262,22 +273,27 @@ func safeTurnReason(params map[string]any) string {
 // supported; nested object lookup only allows the same allow-listed scalar
 // fields.
 func extractReasonFields(source map[string]any) string {
-	for _, key := range []string{"reason", "error", "message", "error_code"} {
-		raw, ok := source[key]
-		if !ok {
-			continue
-		}
-		switch v := raw.(type) {
+	for _, key := range reasonFieldKeys {
+		switch v := source[key].(type) {
 		case string:
 			if s := strings.TrimSpace(v); s != "" {
 				return s
 			}
 		case map[string]any:
-			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
-				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
-					return strings.TrimSpace(s)
-				}
+			if s := firstNestedReasonString(v); s != "" {
+				return s
 			}
+		}
+	}
+	return ""
+}
+
+// firstNestedReasonString returns the first non-empty, trimmed allow-listed
+// scalar inside a structured `error` object, in nestedReasonFieldKeys order.
+func firstNestedReasonString(errObj map[string]any) string {
+	for _, key := range nestedReasonFieldKeys {
+		if s, _ := errObj[key].(string); strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
 		}
 	}
 	return ""
@@ -323,28 +339,31 @@ func safeTurnFailurePayload(params map[string]any) map[string]any {
 // dst. String values are trimmed; structured `error` objects are flattened to a
 // fresh allow-listed sub-map so non-allow-listed siblings are never persisted.
 func copyAllowlistedReasonFields(src, dst map[string]any) {
-	for _, key := range []string{"reason", "error", "message", "error_code"} {
-		raw, ok := src[key]
-		if !ok {
-			continue
-		}
-		switch v := raw.(type) {
+	for _, key := range reasonFieldKeys {
+		switch v := src[key].(type) {
 		case string:
 			if s := strings.TrimSpace(v); s != "" {
 				dst[key] = s
 			}
 		case map[string]any:
-			scrubbed := map[string]any{}
-			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
-				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
-					scrubbed[nestedKey] = strings.TrimSpace(s)
-				}
-			}
-			if len(scrubbed) > 0 {
+			if scrubbed := scrubbedNestedReason(v); len(scrubbed) > 0 {
 				dst[key] = scrubbed
 			}
 		}
 	}
+}
+
+// scrubbedNestedReason returns a fresh map of the non-empty, trimmed
+// allow-listed scalars inside a structured `error` object, dropping every
+// non-allow-listed sibling so it is never persisted.
+func scrubbedNestedReason(errObj map[string]any) map[string]any {
+	scrubbed := map[string]any{}
+	for _, key := range nestedReasonFieldKeys {
+		if s, _ := errObj[key].(string); strings.TrimSpace(s) != "" {
+			scrubbed[key] = strings.TrimSpace(s)
+		}
+	}
+	return scrubbed
 }
 func quotaBackoffFromTurnParams(params map[string]any) *QuotaBackoffError {
 	info, ok := codexErrorInfoValue(params)
