@@ -123,6 +123,11 @@ jobs:
       - name: Run tests
         run: go test -race -covermode=atomic ./...
 
+      - name: Run fuzz smoke (short)
+        run: |
+          go test -run='^$' -fuzz='^FuzzRender$' -fuzztime=30s ./internal/workflow
+          go test -run='^$' -fuzz='^FuzzParseLinearGraphQLOperation$' -fuzztime=30s ./internal/runner
+
       - name: Build binaries
         run: |
           mkdir -p dist
