@@ -83,32 +83,8 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		return nil
 	}
 	st.ReleaseFailedIfIssueChanged(d.issue)
-	attempt := d.attempt
-	continuationAttempt := 0
-	var consumedContinuation *RetryEntry
-	if d.trackerRechecked {
-		if entry, ok := st.RetryAttempts[id]; ok {
-			if entry.Kind != RetryKindContinuation && entry.Kind != RetryKindExternalBlocker {
-				d.result <- ErrNotDispatched
-				return nil
-			}
-			if !entry.IsDue(time.Now()) {
-				d.result <- ErrNotDispatched
-				return nil
-			}
-			// Tracker-rechecked dispatch consumes clean continuation and
-			// external-blocker cooldown entries. Failure retries stay claimed
-			// until retryFireOp carries their scheduled attempt into a retry
-			// dispatch.
-			if entry.Kind == RetryKindContinuation {
-				continuationAttempt = entry.Attempt
-			}
-			consumedContinuation = entry
-		} else if st.IsClaimed(id) {
-			d.result <- ErrNotDispatched
-			return nil
-		}
-	} else if st.IsClaimed(id) {
+	consumedContinuation, continuationAttempt, deny := resolveDispatchClaim(st, id, d.trackerRechecked)
+	if deny {
 		d.result <- ErrNotDispatched
 		return nil
 	}
@@ -144,11 +120,44 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	st.ClaimedIssues[id] = d.issue
 	o := d.o
 	issue := d.issue
+	attempt := d.attempt
 	result := d.result
 	return func() {
 		o.spawn(id, issue, attempt, continuationAttempt)
 		result <- nil
 	}
+}
+
+// resolveDispatchClaim decides whether a dispatchOp may proceed past the claim
+// gate, and (for a tracker-rechecked dispatch) which queued retry entry it
+// consumes. A fresh dispatch is denied only when the issue is already claimed.
+// A tracker-rechecked dispatch consumes a DUE continuation or external-blocker
+// cooldown entry (returned so the caller can clear it, with continuationAttempt
+// carried forward only for continuations); it is denied when the queued entry is
+// any other kind (e.g. a failure retry, which stays claimed until retryFireOp
+// re-dispatches it) or not yet due, and — when no such entry exists — when the
+// issue is already claimed. deny is true on every rejection path.
+func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bool) (consumed *RetryEntry, continuationAttempt int, deny bool) {
+	if !trackerRechecked {
+		return nil, 0, st.IsClaimed(id)
+	}
+	entry, ok := st.RetryAttempts[id]
+	if !ok {
+		return nil, 0, st.IsClaimed(id)
+	}
+	if entry.Kind != RetryKindContinuation && entry.Kind != RetryKindExternalBlocker {
+		return nil, 0, true
+	}
+	if !entry.IsDue(time.Now()) {
+		return nil, 0, true
+	}
+	// Only a continuation carries a turn count forward; an external-blocker
+	// cooldown is a wake signal, so continuationAttempt stays 0 and the resumed
+	// turn does not inherit a stale count.
+	if entry.Kind == RetryKindContinuation {
+		continuationAttempt = entry.Attempt
+	}
+	return entry, continuationAttempt, false
 }
 
 // spawn asks the dispatcher for a worker, records the Running entry
