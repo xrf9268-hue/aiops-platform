@@ -2616,6 +2616,72 @@ func TestReconcileInactiveContinuationRetryKeepsWorkspace(t *testing.T) {
 	}
 }
 
+// TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation is
+// the regression for PR #455's unresolved review thread (actor.go:1383): when a
+// queued continuation retry is observed terminal by the inactive reconcile pass
+// but the deletion-time recheck (verifyReconciledWorkspaceStillTerminal) finds
+// the issue active again, the retry-cleanup path must resume the continuation —
+// preserving the queued attempt and max-turn budget — instead of only waking
+// polling. Before the fix the retry cleanup recheck carried a nil continuation,
+// so ReleaseClaim dropped the entry and the next poll dispatched a fresh run
+// with ContinuationAttempt reset to 0. Mirrors the running-entry recheck path
+// (TestReconcileWorkspaceCleanupRechecksStateUnderReservation) for the retry
+// branch.
+func TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		// Two short delays: one for the original continuation scheduled at
+		// finalize, one for the continuation the recheck reschedules.
+		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Millisecond}},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-CRR1", Identifier: "ENG-CRR1", State: "In Progress", Title: "self-stop"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-CRR1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+
+	// Clean §16.5 self-stop → finalize schedules a continuation retry (attempt 1)
+	// carrying the finalized run's workspace.
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Running) == 0 && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+
+	// The recheck resolver reports the issue active again (not in the terminal
+	// set), so the deletion-time recheck must skip removal and resume the
+	// continuation rather than delete the workspace or reset the attempt.
+	o.SetRetryTerminalStateResolver(staticStateRefresher{issue.ID: "In Progress"}, []string{"Done"})
+
+	// The continuation is still queued when the inactive pass observes terminal.
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+
+	// Continuation resumed with the queued attempt preserved (not reset to 0).
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+	// Re-claimed by the resumed continuation, so a plain poll dispatch is denied;
+	// only a tracker-rechecked dispatch consumes it and carries the budget.
+	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("RequestDispatch after recheck-active continuation = %v, want ErrNotDispatched while continuation retry is claimed", err)
+	}
+	waitFor(t, func() bool {
+		return o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil) == nil
+	}, time.Second)
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
+	}
+}
+
 // TestReconcileWorkspaceCleanupLockDeniesDispatch backs the Codex stop-time
 // finding: the re-claim guard must be race-free. While a terminal workspace
 // cleanup is in flight (reserved on the actor), dispatch onto the same issue —

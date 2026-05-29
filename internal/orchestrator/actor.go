@@ -991,6 +991,27 @@ type continuationAfterSkippedCleanup struct {
 	workspace  Workspace
 }
 
+// continuationForRetry returns the continuation to resume when a queued
+// continuation retry's terminal-cleanup recheck (verifyReconciledWorkspaceStillTerminal)
+// finds the issue active again. Only RetryKindContinuation entries carry a
+// continuation attempt and max-turn budget worth preserving; for every other
+// retry kind it returns nil so the recheck falls back to a plain poll wake
+// (their re-dispatch does not depend on a preserved ContinuationAttempt). The
+// reconcile pass builds this before ReleaseClaim drops the entry so the
+// off-actor cleanup can reschedule the same attempt + workspace instead of
+// resetting ContinuationAttempt to 0 on the next poll (Codex review, PR #455).
+func continuationForRetry(retry *RetryEntry) *continuationAfterSkippedCleanup {
+	if retry == nil || retry.Kind != RetryKindContinuation {
+		return nil
+	}
+	return &continuationAfterSkippedCleanup{
+		issue:      retry.Issue,
+		identifier: retry.Identifier,
+		attempt:    retry.Attempt,
+		workspace:  retry.Workspace,
+	}
+}
+
 type continuationBudgetExhaustedOp struct {
 	o          *Orchestrator
 	id         IssueID
@@ -1231,7 +1252,7 @@ type reconcileTrackerIssuesOp struct {
 
 func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	var blockedCleanups []ReconciledWorkspace
+	var blockedCleanups []reconciledCleanup
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if ok && isActiveTrackerState(issue.State, r.activeStates) && sameServiceRoute(run.Issue, issue) {
@@ -1266,7 +1287,7 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			continue
 		}
 		if w, okw := r.terminalBlockedCleanup(id, blocked); okw {
-			blockedCleanups = append(blockedCleanups, w)
+			blockedCleanups = append(blockedCleanups, reconciledCleanup{workspace: w})
 		}
 		st.ReleaseClaim(id)
 	}
@@ -1330,8 +1351,10 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	// same WorkspaceCleaner so before_remove fires and a reconcile_workspace
 	// event is emitted — mirroring upstream reconcile_blocked_issue_state and
 	// handle_retry_issue_lookup, which clean the workspace only on a terminal
-	// transition.
-	var terminalCleanups []ReconciledWorkspace
+	// transition. A continuation retry also carries its continuation so the
+	// deletion-time recheck can resume it (preserving the queued attempt and
+	// max-turn budget) if the issue flips back active before removal.
+	var terminalCleanups []reconciledCleanup
 	for id, run := range st.Running {
 		issue, ok := r.issuesByID[string(id)]
 		if !ok {
@@ -1363,10 +1386,14 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		// a merely-inactive (non-terminal) one releases only, keeping the
 		// directory for possible reuse. The continuation retry carries the
 		// finalized run's workspace (#341); a failure retry without one yields
-		// no path and is released only.
+		// no path and is released only. continuationForRetry threads the queued
+		// continuation attempt + workspace through the cleanup so a terminal
+		// observation the deletion-time recheck finds active again resumes the
+		// continuation instead of resetting ContinuationAttempt to 0 on the next
+		// poll (Codex review, PR #455).
 		if isTerminalTrackerState(issue.State, r.terminalStates) {
 			if w, okw := terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, issue.State); okw {
-				terminalCleanups = append(terminalCleanups, w)
+				terminalCleanups = append(terminalCleanups, reconciledCleanup{workspace: w, continuation: continuationForRetry(retry)})
 			}
 		}
 		st.ReleaseClaim(id)
@@ -1378,7 +1405,7 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 		}
 		if isTerminalTrackerState(issue.State, r.terminalStates) {
 			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State); okw {
-				terminalCleanups = append(terminalCleanups, w)
+				terminalCleanups = append(terminalCleanups, reconciledCleanup{workspace: w})
 			}
 		}
 		st.ReleaseClaim(id)
@@ -1386,20 +1413,34 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	return r.o.reconcileCancelFollowup(cancelEntries, terminalCleanups, r.result)
 }
 
+// reconciledCleanup pairs a terminal-transition workspace removal with the
+// optional continuation to resume when the deletion-time recheck finds the
+// issue active again. Blocked and failure/quota/external-blocker retry cleanups
+// carry a nil continuation — they have no queued continuation attempt to
+// preserve; a continuation retry carries its attempt + workspace so a terminal
+// blip that flips back active reschedules the continuation rather than losing
+// the attempt and max-turn budget (Codex review, PR #455).
+type reconciledCleanup struct {
+	workspace    ReconciledWorkspace
+	continuation *continuationAfterSkippedCleanup
+}
+
 // reconcileCancelFollowup builds the off-actor followup both reconcile passes
-// return: cancel each worker, then run any terminal blocked-workspace cleanups
-// through the WorkspaceCleaner (before_remove + reconcile_workspace event),
-// then deliver the cancelled entries to the waiting caller. Cleanup runs here,
-// off the actor loop, so a slow before_remove hook cannot block state mutation.
-func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, blockedCleanups []ReconciledWorkspace, result chan<- []*RunningEntry) func() {
+// return: cancel each worker, then run any terminal workspace cleanups through
+// the WorkspaceCleaner (before_remove + reconcile_workspace event), then deliver
+// the cancelled entries to the waiting caller. Cleanup runs here, off the actor
+// loop, so a slow before_remove hook cannot block state mutation. A cleanup
+// carrying a continuation resumes it when the deletion-time recheck finds the
+// issue active again instead of removing the workspace.
+func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, cleanups []reconciledCleanup, result chan<- []*RunningEntry) func() {
 	return func() {
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
 				entry.CancelWorker()
 			}
 		}
-		for _, w := range blockedCleanups {
-			o.runReconciledWorkspaceCleanup(w, nil)
+		for _, c := range cleanups {
+			o.runReconciledWorkspaceCleanup(c.workspace, c.continuation)
 		}
 		if result != nil {
 			result <- cancelEntries
