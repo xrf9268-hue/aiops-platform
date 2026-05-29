@@ -3313,6 +3313,146 @@ func TestRetryFire_DropsStaleFailureFireAfterContinuationReplacement(t *testing.
 	}
 }
 
+// TestRetryFire_DropsFireWhenEntryAlreadyConsumed pins the entry-absent guard of
+// (*retryFireOp).apply (the upstream pop_retry_attempt_state :missing case,
+// orchestrator.ex:1057-1058). A retry timer can fire after reconciliation's
+// ReleaseClaim, or an earlier fire of the same retry, already removed the entry;
+// the late fire must be a no-op rather than dispatching from the stale snapshot.
+func TestRetryFire_DropsFireWhenEntryAlreadyConsumed(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	o := New(st, Deps{Dispatcher: disp})
+
+	issueID := IssueID("ENG-GONE")
+	followup := (&retryFireOp{
+		o:       o,
+		id:      issueID,
+		issue:   tracker.Issue{ID: string(issueID), Identifier: "ENG-GONE", State: "Needs Fix"},
+		attempt: 1,
+		kind:    RetryKindFailure,
+	}).apply(st)
+	if followup != nil {
+		t.Fatal("fire for already-consumed entry returned a followup, want nil no-op")
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want 0 for absent retry entry", got)
+	}
+	if len(st.Running) != 0 {
+		t.Fatalf("running after absent-entry fire = %+v, want none", st.Running)
+	}
+	if _, ok := st.RetryAttempts[issueID]; ok {
+		t.Fatal("absent-entry fire created a retry entry, want none")
+	}
+}
+
+// TestRetryFire_DropsStaleFireAfterAttemptBumpReplacement pins the attempt arm of
+// the stale-fire guard (entry.Attempt != r.attempt). The existing stale-fire
+// tests only vary Kind; this one keeps Kind constant and varies the attempt, so
+// the (Attempt,Kind) identity check that catches a Stop()-missed late timer is
+// pinned on both arms of the OR (mirrors upstream's make_ref token mismatch,
+// orchestrator.ex:1047).
+func TestRetryFire_DropsStaleFireAfterAttemptBumpReplacement(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	o := New(st, Deps{Dispatcher: disp})
+
+	issueID := IssueID("ENG-ATT")
+	issue := tracker.Issue{ID: string(issueID), Identifier: "ENG-ATT", State: "Needs Fix", Title: "bumped"}
+	// Live entry is attempt 3 (a newer ScheduleRetry bumped it); the late timer
+	// fires for attempt 2 of the same kind.
+	st.ScheduleRetry(&RetryEntry{
+		Issue:      issue,
+		IssueID:    issueID,
+		Identifier: issue.Identifier,
+		Attempt:    3,
+		Kind:       RetryKindFailure,
+	})
+
+	followup := (&retryFireOp{
+		o:       o,
+		id:      issueID,
+		issue:   issue,
+		attempt: 2,
+		kind:    RetryKindFailure,
+	}).apply(st)
+	if followup != nil {
+		t.Fatal("stale attempt fire returned a followup, want it dropped before side effects")
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("stale attempt fire spawned %d workers, want 0", got)
+	}
+	entry, ok := st.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("stale attempt fire consumed the replacement retry")
+	}
+	if entry.Attempt != 3 {
+		t.Fatalf("replacement retry attempt = %d, want 3 preserved", entry.Attempt)
+	}
+	if !st.IsClaimed(issueID) {
+		t.Fatal("stale attempt fire released claim for replacement retry")
+	}
+}
+
+// TestRetryFire_ExternalBlockerFireWakesPollLoopWithoutDispatch pins the
+// external-blocker arm of the wake-only branch of (*retryFireOp).apply. Until
+// now only the continuation arm of that shared OR condition was exercised
+// (TestContinuationRetryTimerRequiresTrackerRecheckedDispatch), and that test
+// drives the eventual dispatch via an explicit RequestDispatchAfterTrackerRecheck
+// — so deleting the wake-emission call would not fail it. This test fires an
+// external-blocker timer straight into apply and asserts (a) the entry is
+// retained for the tracker recheck, (b) its timer is cleared, (c) nothing
+// dispatches from the cached snapshot, and (d) the followup actually queues a
+// poll wake (closing the placebo gap for both wake arms).
+func TestRetryFire_ExternalBlockerFireWakesPollLoopWithoutDispatch(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 10)
+	o := New(st, Deps{Dispatcher: disp})
+
+	issueID := IssueID("ENG-BLOCK")
+	issue := tracker.Issue{ID: string(issueID), Identifier: "ENG-BLOCK", State: "Blocked", Title: "external blocker"}
+	timer := time.AfterFunc(time.Hour, func() {})
+	defer timer.Stop()
+	st.ScheduleRetry(&RetryEntry{
+		Issue:      issue,
+		IssueID:    issueID,
+		Identifier: issue.Identifier,
+		Attempt:    0,
+		Timer:      timer,
+		Kind:       RetryKindExternalBlocker,
+	})
+
+	followup := (&retryFireOp{
+		o:       o,
+		id:      issueID,
+		issue:   issue,
+		attempt: 0,
+		kind:    RetryKindExternalBlocker,
+	}).apply(st)
+	if followup == nil {
+		t.Fatal("external-blocker fire returned nil, want a poll-wake followup")
+	}
+
+	entry, ok := st.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("external-blocker fire consumed the retry entry, want it retained for tracker recheck")
+	}
+	if entry.Timer != nil {
+		t.Fatal("external-blocker fire left entry.Timer set, want it cleared after firing")
+	}
+	if got := disp.count(); got != 0 {
+		t.Fatalf("external-blocker fire spawned %d workers, want 0 (must re-observe via poll)", got)
+	}
+
+	// The followup must actually wake the poll loop; otherwise the cooldown
+	// retry would never be re-observed and the issue would stall in the queue.
+	followup()
+	select {
+	case <-o.retryWakeCh():
+	default:
+		t.Fatal("external-blocker fire followup did not queue a poll wake")
+	}
+}
+
 func TestRetryFire_RespectsPerStateCapacityBeforeSpawning(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)
