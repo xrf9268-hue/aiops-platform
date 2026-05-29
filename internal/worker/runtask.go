@@ -105,14 +105,6 @@ func logWorkflowResolved(taskID, identifier string, res *workflow.Resolution) {
 	LogTaskIDEventf(taskID, identifier, "workflow_resolved", "%s", strings.Join(parts, " "))
 }
 
-// runTask executes a single task end-to-end and returns a *RunTaskError when
-// the task fails. Returns nil on success.
-//
-// Per SPEC §1, push, PR creation, and tracker state writes are the agent's
-// responsibility. The worker's role is: claim, prepare workspace, resolve
-// workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
-// emit events, and clean up.
-
 func emitHookResults(ctx context.Context, ev EventEmitter, taskID, identifier string, results []workspace.HookResult) {
 	for _, res := range results {
 		Emit(ctx, ev, taskID, identifier, task.EventWorkspaceHookEnd, string(res.Name)+" hook completed", map[string]any{
@@ -150,42 +142,101 @@ func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID,
 	}
 }
 
+// runState threads one task's lifecycle state across RunTask's phase helpers
+// so each phase stays a single-responsibility function under the funlen
+// budget. A fresh value is built per RunTask call and never shared across
+// tasks, so its fields need no synchronization.
+type runState struct {
+	ctx context.Context
+	ev  EventEmitter
+	t   task.Task
+	cfg Config
+
+	wf             *workflow.Workflow
+	wcfg           workflow.Config
+	workflowSource string
+	hooks          workflow.WorkspaceHooks
+	workspaceRoot  string
+	workdir        string
+	workspaceBase  string
+	prompt         string
+	res            runner.Result
+	sessionID      string
+
+	currentPhase  task.RunAttemptPhase
+	phaseTerminal bool
+}
+
+// emitPhase emits a run-attempt phase transition and records the new phase so
+// RunTask's deferred guard knows whether a terminal phase was already reached.
+func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
+	EmitPhaseTransition(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, from, to)
+	rs.currentPhase = to
+	rs.phaseTerminal = isTerminalPhase(to)
+}
+
 // RunTask executes a single in-memory task. The orchestrator-backed worker path
 // uses this directly after claiming a tracker issue in runtime state.
+//
+// Per SPEC §1, push, PR creation, and tracker state writes are the agent's
+// responsibility. The worker's role is: claim, prepare workspace, resolve
+// workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
+// emit events, and clean up. The lifecycle is split across runState phase
+// helpers; RunTask only sequences them and stamps PhaseFailed on the way out
+// of any non-terminal error path.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
-	currentPhase := task.RunAttemptPhase("")
-	phaseTerminal := false
-	emitTaskPhase := func(from, to task.RunAttemptPhase) {
-		EmitPhaseTransition(ctx, ev, t.ID, t.SourceEventID, from, to)
-		currentPhase = to
-		phaseTerminal = isTerminalPhase(to)
-	}
+	rs := &runState{ctx: ctx, ev: ev, t: t, cfg: cfg}
 	defer func() {
-		if ret != nil && currentPhase != "" && !phaseTerminal {
-			emitTaskPhase(currentPhase, task.PhaseFailed)
+		if ret != nil && rs.currentPhase != "" && !rs.phaseTerminal {
+			rs.emitPhase(rs.currentPhase, task.PhaseFailed)
 		}
 	}()
 
-	emitTaskPhase("", task.PhasePreparingWorkspace)
-	wf, workflowSource, err := ResolveWorkflow(ctx, ev, t.ID, t.SourceEventID, cfg.Workflow)
+	if rtErr := rs.prepareWorkspace(); rtErr != nil {
+		return rtErr
+	}
+	if rtErr := rs.buildPrompt(); rtErr != nil {
+		return rtErr
+	}
+	if rtErr := rs.runAgent(); rtErr != nil {
+		return rtErr
+	}
+	if rtErr := rs.enforcePostRunPolicy(); rtErr != nil {
+		return rtErr
+	}
+	if rtErr := rs.runPostRunGates(); rtErr != nil {
+		return rtErr
+	}
+	rs.finalize()
+	return nil
+}
+
+// prepareWorkspace resolves the service workflow, prepares the deterministic
+// git workspace, runs the after_create hook on first creation, and defaults
+// the task model. It corresponds to the PreparingWorkspace phase.
+func (rs *runState) prepareWorkspace() *RunTaskError {
+	rs.emitPhase("", task.PhasePreparingWorkspace)
+	wf, workflowSource, err := ResolveWorkflow(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.cfg.Workflow)
 	if err != nil {
 		return &RunTaskError{Err: err}
 	}
-	wcfg := wf.Config
-	hooks := wcfg.WorkspaceHooks()
+	rs.wf = wf
+	rs.workflowSource = workflowSource
+	rs.wcfg = wf.Config
+	rs.hooks = rs.wcfg.WorkspaceHooks()
 
-	workspaceRoot := EffectiveWorkspaceRoot(cfg, wcfg)
-	mgr := workspace.New(workspaceRoot)
-	mgr.MirrorRoot = cfg.MirrorRoot
-	workdir, createdNow, err := mgr.PrepareGitWorkspace(ctx, t)
+	rs.workspaceRoot = EffectiveWorkspaceRoot(rs.cfg, rs.wcfg)
+	mgr := workspace.New(rs.workspaceRoot)
+	mgr.MirrorRoot = rs.cfg.MirrorRoot
+	workdir, createdNow, err := mgr.PrepareGitWorkspace(rs.ctx, rs.t)
 	if err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
-	workspaceBase := ""
-	if wcfg.Policy.Mode == "analysis_only" {
-		workspaceBase, err = workspace.ResolveBaseBranchRef(ctx, workdir, t.BaseBranch)
+	rs.workdir = workdir
+	if rs.wcfg.Policy.Mode == "analysis_only" {
+		rs.workspaceBase, err = workspace.ResolveBaseBranchRef(rs.ctx, workdir, rs.t.BaseBranch)
 		if err != nil {
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
+			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
 		}
 	}
 	if createdNow {
@@ -193,19 +244,33 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		// is newly created. Reuses skip it so bootstrap commands
 		// (`npm ci`, `pip install`, …) remain the one-time init they're
 		// documented as.
-		if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterCreate, hooks.AfterCreate, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-			removeWorkdirAfterHookFailure(ctx, ev, t.ID, t.SourceEventID, workspaceRoot, workdir, hooks.BeforeRemove, hooks.TimeoutMs, hooks.EnvPassthrough, "after_create")
-			return &RunTaskError{Cfg: wcfg, Err: err}
+		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, workdir, workspace.HookAfterCreate, rs.hooks.AfterCreate, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+			removeWorkdirAfterHookFailure(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workspaceRoot, workdir, rs.hooks.BeforeRemove, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, "after_create")
+			return &RunTaskError{Cfg: rs.wcfg, Err: err}
 		}
 	}
 
-	if t.Model == "" || t.Model == "mock" {
-		t.Model = wcfg.Agent.Default
-		if t.Model == "" {
-			t.Model = "mock"
+	rs.applyDefaultModel()
+	return nil
+}
+
+// applyDefaultModel resolves the task model from the workflow default when the
+// task did not pin one (or pinned the mock sentinel), falling back to "mock".
+func (rs *runState) applyDefaultModel() {
+	if rs.t.Model == "" || rs.t.Model == "mock" {
+		rs.t.Model = rs.wcfg.Agent.Default
+		if rs.t.Model == "" {
+			rs.t.Model = "mock"
 		}
 	}
+}
 
+// buildPrompt assembles the prompt template variables (including any prior
+// policy-violation feedback and its retry budget), renders the prompt, appends
+// the standing directives, and writes the task files. It transitions
+// PreparingWorkspace → BuildingPrompt.
+func (rs *runState) buildPrompt() *RunTaskError {
+	t := rs.t
 	renderVars := map[string]any{
 		"task": map[string]any{
 			"id":          t.ID,
@@ -224,199 +289,236 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if t.Attempts > 0 {
 		renderVars["attempt"] = t.Attempts
 	}
-	policyFeedback, policyFeedbackPath, feedbackErr := readPolicyViolationFeedback(workspaceRoot, t)
+	policyFeedback, policyFeedbackPath, feedbackErr := readPolicyViolationFeedback(rs.workspaceRoot, t)
 	if feedbackErr != nil {
-		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
+		Emit(rs.ctx, rs.ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
 			"path":  policyFeedbackPath,
 			"error": ErrSummary(feedbackErr),
 		})
-		WriteFailureArtifacts(ctx, workdir, nil, "policy feedback read failed: "+ErrSummary(feedbackErr))
-		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy feedback read failed: "+ErrSummary(feedbackErr))
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
 	} else if policyFeedback != nil {
-		policyBudget := wcfg.Agent.PolicyViolationBudgetValue()
-		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
+		policyBudget := rs.wcfg.Agent.PolicyViolationBudgetValue()
+		Emit(rs.ctx, rs.ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
 			"path":            policyFeedbackPath,
 			"violation_count": policyFeedback.Count,
 			"summary":         policyFeedback.Summary,
 			"budget":          policyBudget,
 		})
 		if policyBudget > 0 && policyFeedback.Count >= policyBudget {
-			WriteFailureArtifacts(ctx, workdir, nil, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
+			WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
+			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
 		}
 	}
-	emitTaskPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
-	prompt, err := workflow.Render(wf.PromptTemplate, renderVars)
+	rs.emitPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
+	prompt, err := workflow.Render(rs.wf.PromptTemplate, renderVars)
 	if err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err, NonRetryable: true}
+		return &RunTaskError{Cfg: rs.wcfg, Err: err, NonRetryable: true}
 	}
-	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, wcfg)
-	prompt = AppendAnalysisOnlyDirective(prompt, wcfg.Policy.Mode)
+	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, rs.wcfg)
+	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)
-	if err := writeTaskFiles(workdir, t, prompt); err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
+	if err := writeTaskFiles(rs.workdir, t, prompt); err != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
+	rs.prompt = prompt
+	return nil
+}
 
-	r, err := runner.New(t.Model)
+// runAgent resets stale post-run artifacts so the gates cannot pass on leftover
+// files, runs the before_run hook, invokes the runner under its timeout, and
+// runs the after_run hook on both the success and failure paths.
+func (rs *runState) runAgent() *RunTaskError {
+	r, err := runner.New(rs.t.Model)
 	if err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
-	// Make sure post-runner artifact gates cannot pass on stale files
-	// from a previous run or from the base branch. PrepareGitWorkspace
-	// resets tracked files to origin/<base> on every prepare (fresh
-	// checkout on first touch, `checkout --force -B` on reuse per
-	// SPEC §9.1), but RUN_SUMMARY.md / .aiops/PLAN.md may also be
-	// committed on the base branch itself (left over from a prior PR
-	// or seeded by hand), and on reuse any untracked artifact written
-	// by the previous run still lingers in the workdir. Deleting them
-	// here means the gates can only succeed when the runner produced
-	// artifacts during this invocation.
-	if err := workspace.ResetRunSummary(workdir); err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
-	}
-	if err := ResetBlockerArtifact(workdir); err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
-	}
-	if wcfg.Policy.Mode == "analysis_only" {
-		if err := os.Remove(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
-		}
+	if rtErr := rs.resetStaleArtifacts(); rtErr != nil {
+		return rtErr
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookBeforeRun, hooks.BeforeRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		WriteFailureArtifacts(ctx, workdir, nil, "before_run hook failed: "+ErrSummary(err))
-		return &RunTaskError{Cfg: wcfg, Err: err}
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookBeforeRun, rs.hooks.BeforeRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "before_run hook failed: "+ErrSummary(err))
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
 	var refreshIssueState runner.IssueStateRefresher
-	if cfg.IssueStateRefresher != nil {
-		refreshIssueState = cfg.IssueStateRefresher(t, wcfg)
+	if rs.cfg.IssueStateRefresher != nil {
+		refreshIssueState = rs.cfg.IssueStateRefresher(rs.t, rs.wcfg)
 	}
-	res, runErr := RunRunnerWithTimeout(ctx, ev, r, runner.RunInput{Task: t, Workflow: *wf, Workdir: workdir, WorkspaceRoot: workspaceRoot, Prompt: prompt, RefreshIssueState: refreshIssueState, PhaseTransitionSink: func(from, to task.RunAttemptPhase) {
-		emitTaskPhase(from, to)
-	}}, wcfg.Agent.Timeout, workflowSource)
-	sessionID := sessionIDFromRuntimeEvents(res.RuntimeEvents)
+	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
+	rs.res = res
+	rs.sessionID = sessionIDFromRuntimeEvents(res.RuntimeEvents)
 	if runErr != nil {
-		if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-			LogIssueSessionEventf(t, sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
+		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+			LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 		}
-		WriteFailureArtifacts(ctx, workdir, nil, "runner failed: "+ErrSummary(runErr))
-		return &RunTaskError{Cfg: wcfg, Err: runErr}
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
+		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 	}
 
-	if err := runWorkspaceHook(ctx, ev, t.ID, t.SourceEventID, workdir, workspace.HookAfterRun, hooks.AfterRun, hooks.TimeoutMs, hooks.EnvPassthrough); err != nil {
-		LogIssueSessionEventf(t, sessionID, "after_run_hook_failed", "error=%q", err)
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "error=%q", err)
+	}
+	return nil
+}
+
+// resetStaleArtifacts deletes RUN_SUMMARY.md, the blocker artifact, and (in
+// analysis_only mode) .aiops/PLAN.md before the runner starts so the post-run
+// gates cannot pass on stale files from a previous run or from the base branch.
+// PrepareGitWorkspace resets tracked files to origin/<base> on every prepare
+// (fresh checkout on first touch, `checkout --force -B` on reuse per SPEC §9.1),
+// but those artifacts may also be committed on the base branch itself (left over
+// from a prior PR or seeded by hand), and on reuse any untracked artifact written
+// by the previous run still lingers in the workdir. Deleting them here means the
+// gates can only succeed when the runner produced artifacts during this run.
+func (rs *runState) resetStaleArtifacts() *RunTaskError {
+	if err := workspace.ResetRunSummary(rs.workdir); err != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
+	}
+	if err := ResetBlockerArtifact(rs.workdir); err != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
+	}
+	if rs.wcfg.Policy.Mode == "analysis_only" {
+		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
+		}
+	}
+	return nil
+}
+
+// enforcePostRunPolicy runs the workspace policy check and, on violation,
+// records retry feedback and classifies whether the failure is retryable.
+func (rs *runState) enforcePostRunPolicy() *RunTaskError {
+	err := workspace.EnforcePolicy(rs.ctx, rs.workdir, rs.wcfg)
+	if err == nil {
+		return nil
+	}
+	feedback, feedbackPath, feedbackErr := writePolicyViolationFeedback(rs.workspaceRoot, rs.t, err)
+	willRetry := feedbackErr == nil
+	policyBudget := rs.wcfg.Agent.PolicyViolationBudgetValue()
+	if feedback != nil && policyBudget > 0 && feedback.Count >= policyBudget {
+		willRetry = false
+	}
+	recordPolicyViolation(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
+	WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy check failed: "+ErrSummary(err))
+	if feedbackErr != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %w", feedbackErr, err), NonRetryable: true}
+	}
+	if !willRetry {
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("repeated policy violation after %d attempts: %w", feedback.Count, err), NonRetryable: true}
+	}
+	return &RunTaskError{Cfg: rs.wcfg, Err: err}
+}
+
+// runPostRunGates runs the post-run verification, analysis-only diff check,
+// external-blocker handoff, RUN_SUMMARY gate, and secret scan. A recorded
+// external blocker is a success path: it returns a *RunTaskError with
+// ExternalBlocked set after stamping PhaseSucceeded.
+func (rs *runState) runPostRunGates() *RunTaskError {
+	if _, err := RunVerifyPhase(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.wcfg); err != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
-	if err := workspace.EnforcePolicy(ctx, workdir, wcfg); err != nil {
-		feedback, feedbackPath, feedbackErr := writePolicyViolationFeedback(workspaceRoot, t, err)
-		willRetry := true
-		if feedbackErr != nil {
-			willRetry = false
-		}
-		policyBudget := wcfg.Agent.PolicyViolationBudgetValue()
-		if feedback != nil && policyBudget > 0 && feedback.Count >= policyBudget {
-			willRetry = false
-		}
-		recordPolicyViolation(ctx, ev, t.ID, t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
-		WriteFailureArtifacts(ctx, workdir, nil, "policy check failed: "+ErrSummary(err))
-		if feedbackErr != nil {
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %w", feedbackErr, err), NonRetryable: true}
-		}
-		if !willRetry {
-			return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("repeated policy violation after %d attempts: %w", feedback.Count, err), NonRetryable: true}
-		}
-		return &RunTaskError{Cfg: wcfg, Err: err}
+	if err := enforceAnalysisOnlyChanges(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.workspaceBase, rs.wcfg); err != nil {
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, ErrSummary(err))
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
-	if _, err := RunVerifyPhase(ctx, ev, t.ID, t.SourceEventID, workdir, wcfg); err != nil {
-		return &RunTaskError{Cfg: wcfg, Err: err}
-	}
-
-	if err := enforceAnalysisOnlyChanges(ctx, ev, t.ID, t.SourceEventID, workdir, workspaceBase, wcfg); err != nil {
-		WriteFailureArtifacts(ctx, workdir, nil, ErrSummary(err))
-		return &RunTaskError{Cfg: wcfg, Err: err}
-	}
-
-	blocker, blockerErr := ConsumeBlockerArtifact(workdir)
+	blocker, blockerErr := ConsumeBlockerArtifact(rs.workdir)
 	if blockerErr == nil {
-		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventExternalBlocker, "external dependency blocker recorded", map[string]any{
+		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventExternalBlocker, "external dependency blocker recorded", map[string]any{
 			"path":                BlockerArtifactPath,
 			"reason":              blocker.Reason,
 			"retry_after_seconds": blocker.RetryAfterSeconds,
 		})
-		emitTaskPhase(task.PhaseFinishing, task.PhaseSucceeded)
+		rs.emitPhase(task.PhaseFinishing, task.PhaseSucceeded)
 		return &RunTaskError{
-			Cfg:             wcfg,
+			Cfg:             rs.wcfg,
 			Err:             &ExternalBlockerError{Artifact: blocker},
 			ExternalBlocked: true,
 			Blocker:         blocker,
 		}
 	}
 	if !errors.Is(blockerErr, ErrBlockerArtifactMissing) {
-		return &RunTaskError{Cfg: wcfg, Err: blockerErr}
+		return &RunTaskError{Cfg: rs.wcfg, Err: blockerErr}
 	}
 
-	// Gate: the runner is required to write .aiops/RUN_SUMMARY.md describing
-	// the change. If it is missing/empty/a placeholder we refuse to record
-	// success and emit `summary_missing` + `failed_attempt` events so the
-	// human can see exactly why the task did not progress. We do NOT fall
-	// back to a worker-generated summary here on purpose: the artifact must
-	// come from the runner so it reflects intent, not a synthesized recap.
-	//
-	// This gate runs BEFORE the secret scanner: a run with no real summary
-	// is not allowed to proceed regardless of scanner outcome, and skipping
-	// the scanner on this path keeps the failure attribution unambiguous.
-	_, status, checkErr := workspace.CheckSummary(workdir)
-	if checkErr != nil {
-		Emit(ctx, ev, t.ID, t.SourceEventID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
-			"path":  workspace.SummaryPath,
-			"error": ErrSummary(checkErr),
-		})
-		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
-			"reason": "summary_unreadable",
-			"path":   workspace.SummaryPath,
-		})
-		WriteFailureArtifacts(ctx, workdir, nil, "RUN_SUMMARY.md unreadable: "+ErrSummary(checkErr))
-		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)}
-	}
-	if status != workspace.SummaryOK {
-		Emit(ctx, ev, t.ID, t.SourceEventID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
-			"path":   workspace.SummaryPath,
-			"status": string(status),
-		})
-		Emit(ctx, ev, t.ID, t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
-			"reason": "summary_" + string(status),
-			"path":   workspace.SummaryPath,
-		})
-		WriteFailureArtifacts(ctx, workdir, nil, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
-		return &RunTaskError{Cfg: wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
+	if rtErr := rs.checkRunSummary(); rtErr != nil {
+		return rtErr
 	}
 
 	// Run the optional secret scanner. The scanner runs even
 	// though push is now the agent's responsibility — it acts as a final
 	// gate that fails the task before the orchestrator records success, so
 	// a branch carrying credential leaks is never considered complete.
-	if err := runSecretScan(ctx, ev, t.ID, t.SourceEventID, workdir, wf.Config); err != nil {
-		WriteFailureArtifacts(ctx, workdir, nil, "secret scan blocked: "+ErrSummary(err))
-		return &RunTaskError{Cfg: wcfg, Err: err}
+	if err := runSecretScan(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.wf.Config); err != nil {
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "secret scan blocked: "+ErrSummary(err))
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
+	return nil
+}
 
+// checkRunSummary enforces the RUN_SUMMARY.md gate: the runner must write
+// .aiops/RUN_SUMMARY.md describing the change. If it is missing/empty/a
+// placeholder we refuse to record success and emit `summary_missing` +
+// `failed_attempt` events so the human can see exactly why the task did not
+// progress. We do NOT fall back to a worker-generated summary here on purpose:
+// the artifact must come from the runner so it reflects intent, not a
+// synthesized recap.
+//
+// This gate runs BEFORE the secret scanner: a run with no real summary is not
+// allowed to proceed regardless of scanner outcome, and skipping the scanner on
+// this path keeps the failure attribution unambiguous.
+func (rs *runState) checkRunSummary() *RunTaskError {
+	_, status, checkErr := workspace.CheckSummary(rs.workdir)
+	if checkErr != nil {
+		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
+			"path":  workspace.SummaryPath,
+			"error": ErrSummary(checkErr),
+		})
+		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+			"reason": "summary_unreadable",
+			"path":   workspace.SummaryPath,
+		})
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "RUN_SUMMARY.md unreadable: "+ErrSummary(checkErr))
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)}
+	}
+	if status != workspace.SummaryOK {
+		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
+			"path":   workspace.SummaryPath,
+			"status": string(status),
+		})
+		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
+			"reason": "summary_" + string(status),
+			"path":   workspace.SummaryPath,
+		})
+		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
+	}
+	return nil
+}
+
+// finalize snapshots the changed-file list for post-run inspection, clears any
+// policy-violation feedback now that the run succeeded, and stamps the terminal
+// success phase. Its file-snapshot steps are best-effort (failures are logged,
+// not fatal), so it has no error to return. It does not push; that is the
+// agent's job.
+func (rs *runState) finalize() {
 	// Snapshot the changed files after all gates have passed so
 	// CHANGED_FILES.txt is available as a workspace artifact for post-run
-	// inspection. This does not push anything; that is the agent's job.
-	if err := workspace.WriteChangedFiles(workdir, nil); err != nil {
-		LogIssueEventf(t, "changed_files_seed_failed", "error=%q", err)
+	// inspection.
+	if err := workspace.WriteChangedFiles(rs.workdir, nil); err != nil {
+		LogIssueEventf(rs.t, "changed_files_seed_failed", "error=%q", err)
 	}
-	changed, _ := workspace.AllChangedFiles(ctx, workdir)
-	if err := workspace.WriteChangedFiles(workdir, changed); err != nil {
-		LogIssueEventf(t, "changed_files_write_failed", "error=%q", err)
+	changed, _ := workspace.AllChangedFiles(rs.ctx, rs.workdir)
+	if err := workspace.WriteChangedFiles(rs.workdir, changed); err != nil {
+		LogIssueEventf(rs.t, "changed_files_write_failed", "error=%q", err)
 	}
-	clearPolicyViolationFeedback(workspaceRoot, t)
+	clearPolicyViolationFeedback(rs.workspaceRoot, rs.t)
 
-	emitTaskPhase(task.PhaseFinishing, task.PhaseSucceeded)
-	return nil
+	rs.emitPhase(task.PhaseFinishing, task.PhaseSucceeded)
 }
 
 func isTerminalPhase(phase task.RunAttemptPhase) bool {
