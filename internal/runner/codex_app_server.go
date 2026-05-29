@@ -8,10 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -165,7 +162,6 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	}
 	return res, nil
 }
-
 func validateAppServerWorkdir(workdir string) error {
 	if strings.TrimSpace(workdir) == "" {
 		return NewError(CategoryInvalidWorkspaceCWD, "codex app-server workspace cwd is empty", nil)
@@ -178,148 +174,6 @@ func validateAppServerWorkdir(workdir string) error {
 		return NewError(CategoryInvalidWorkspaceCWD, "codex app-server workspace cwd is not a directory", nil)
 	}
 	return nil
-}
-
-// buildCodexAppServerCmd returns the codex app-server *exec.Cmd plus a
-// directCodexExec flag. The flag is true only when the command launches the
-// `codex app-server` binary directly (so `cmd.Process.Pid` after Start() is
-// the actual app-server pid). Custom wrapper commands route through
-// `sh -c <command>`, in which case `cmd.Process.Pid` is the shell wrapper, not
-// codex — see codex_app_server.go's session_started emit for the resulting
-// PID-emission guard.
-func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*exec.Cmd, bool, error) {
-	return NewCodexAppServerCommand(ctx, in.Workflow.Config, env)
-}
-
-// NewCodexAppServerCommand returns the configured Codex app-server command plus
-// whether it directly execs the codex binary. Callers that preflight or run the
-// app-server must share this path so codex.command overrides behave identically.
-func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []string) (*exec.Cmd, bool, error) {
-	command := strings.TrimSpace(cfg.Codex.Command)
-	if command == "" || command == "codex exec" {
-		command = "codex app-server"
-	}
-	// A codex-prefixed command with no shell syntax execs the codex binary
-	// directly. This keeps the common case (including args like
-	// `codex app-server --config "..."`) off any shell, so it stays
-	// cross-platform: PR #414 briefly routed every non-default command through
-	// `sh -c` and regressed Windows deployments that set a codex-prefixed
-	// codex.command (#417 restored this direct path; #471 pins it).
-	args, err := splitAppServerCommand(command)
-	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "app-server" && !hasShellSyntax(command) {
-		codexPath, err := lookPathInEnv("codex", env)
-		if err != nil {
-			return nil, false, NewError(CategoryCodexNotFound, "codex binary not found in PATH; install codex CLI or set agent.default to claude/mock", err)
-		}
-		return exec.CommandContext(ctx, codexPath, args[1:]...), true, nil
-	}
-	// Commands that need a shell (wrappers, pipelines, globs) fall back to
-	// `sh -c`. This is intentionally Unix-only: it matches the linux/darwin
-	// release matrix and upstream Symphony, which spawns `bash -lc <command>`
-	// unconditionally (elixir/lib/symphony_elixir/codex/app_server.ex). Windows
-	// is not a supported deployment target; codex-prefixed commands take the
-	// cross-platform direct path above.
-	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
-}
-
-func splitAppServerCommand(command string) ([]string, error) {
-	var args []string
-	var current strings.Builder
-	var quote rune
-	tokenStarted := false
-	runes := []rune(command)
-
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		switch {
-		case quote != 0:
-			switch {
-			case r == quote:
-				quote = 0
-				tokenStarted = true
-			case quote == '"' && r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]):
-				i++
-				current.WriteRune(runes[i])
-				tokenStarted = true
-			default:
-				current.WriteRune(r)
-				tokenStarted = true
-			}
-		case r == '\\':
-			current.WriteRune(r)
-			tokenStarted = true
-		case r == '\'' || r == '"':
-			quote = r
-			tokenStarted = true
-		case isCommandSpace(r):
-			if tokenStarted {
-				args = append(args, current.String())
-				current.Reset()
-				tokenStarted = false
-			}
-		default:
-			current.WriteRune(r)
-			tokenStarted = true
-		}
-	}
-	if quote != 0 {
-		return nil, fmt.Errorf("parse codex.command")
-	}
-	if tokenStarted {
-		args = append(args, current.String())
-	}
-	return args, nil
-}
-
-func hasShellSyntax(command string) bool {
-	var quote rune
-	tokenBoundary := true
-	runes := []rune(command)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		switch {
-		case quote == '\'':
-			if r == '\'' {
-				quote = 0
-			}
-		case quote == '"':
-			switch r {
-			case '"':
-				quote = 0
-			case '$', '`', '\n':
-				return true
-			case '\\':
-				if i+1 < len(runes) && runes[i+1] == '\n' {
-					return true
-				}
-				i++
-			}
-		case r == '\'' || r == '"':
-			quote = r
-			tokenBoundary = false
-		case r == '\n' || r == '\r':
-			return true
-		case r == '#':
-			if tokenBoundary {
-				return true
-			}
-			tokenBoundary = false
-		case isCommandSpace(r):
-			tokenBoundary = true
-			continue
-		case r == '\\':
-			return true
-		case strings.ContainsRune("|&;<>$()`{}[]*?~", r):
-			return true
-		default:
-			tokenBoundary = false
-		}
-	}
-	return quote != 0
-}
-
-func isCommandSpace(r rune) bool {
-	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
 }
 
 type appServerClient struct {
@@ -351,13 +205,11 @@ type appServerClient struct {
 	approvalPolicy    any
 	lastTerminal      time.Time
 }
-
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
 	Text         string `json:"text"`
 	TextElements []any  `json:"text_elements"`
 }
-
 type codexAppServerTurnStartParams struct {
 	ThreadID       string                      `json:"threadId"`
 	Input          []codexAppServerTextInput   `json:"input"`
@@ -513,7 +365,6 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	}
 	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
 }
-
 func (c *appServerClient) request(ctx context.Context, method string, params any) (map[string]any, error) {
 	id := c.nextID
 	c.nextID++
@@ -538,11 +389,9 @@ func (c *appServerClient) request(ctx context.Context, method string, params any
 		c.handleNotification(msg)
 	}
 }
-
 func (c *appServerClient) notify(method string, params map[string]any) error {
 	return c.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
-
 func (c *appServerClient) send(msg map[string]any) error {
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -552,7 +401,6 @@ func (c *appServerClient) send(msg map[string]any) error {
 	_, err = c.stdin.Write(b)
 	return err
 }
-
 func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, error) {
 	msg, raw, err := c.readProtocolMessage(ctx)
 	if err != nil {
@@ -563,7 +411,6 @@ func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, erro
 	}
 	return msg, nil
 }
-
 func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]any, []byte, error) {
 	select {
 	case <-ctx.Done():
@@ -617,7 +464,6 @@ func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
 	}
 	return c.readLineOnce(ctx, ch, time.After(readTimeout))
 }
-
 func (c *appServerClient) readLineOnce(ctx context.Context, ch <-chan readResult, timeout <-chan time.Time) ([]byte, error) {
 	select {
 	case <-ctx.Done():
@@ -634,7 +480,6 @@ func (c *appServerClient) readLineOnce(ctx context.Context, ch <-chan readResult
 		return res.line, nil
 	}
 }
-
 func deadlineDuration(ctx context.Context) (time.Duration, bool) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
@@ -646,852 +491,21 @@ func deadlineDuration(ctx context.Context) (time.Duration, bool) {
 	}
 	return remaining, true
 }
-
 func isAppServerReadTimeout(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "codex app-server read timeout")
 }
-
 func protocolMessageCandidate(raw []byte) bool {
 	return strings.HasPrefix(strings.TrimLeft(string(raw), " \t\r\n"), "{")
 }
-
 func trimProtocolLine(raw []byte) string {
 	return strings.TrimRight(string(raw), "\r\n")
 }
-
-func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
-	c.lastTerminal = time.Now()
-	for {
-		readCtx := ctx
-		var cancel context.CancelFunc
-		var stallBudget time.Duration
-		if c.stallTimeoutMs > 0 {
-			stallBudget = time.Duration(c.stallTimeoutMs) * time.Millisecond
-			remaining := stallBudget - time.Since(c.lastTerminal)
-			if remaining <= 0 {
-				return &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal)}
-			}
-			readCtx, cancel = context.WithTimeout(ctx, remaining)
-		}
-		readTimeoutMs := c.readTimeoutMs
-		if stallBudget > 0 {
-			// During turn streaming, inactivity is governed by stall_timeout_ms.
-			// read_timeout_ms remains the per-read transport budget for request/
-			// response setup and for configurations without stall detection, but it
-			// must not preempt the longer event-inactivity watchdog and bypass the
-			// stalled/runner_timeout retry path.
-			c.readTimeoutMs = 0
-		}
-		msg, raw, err := c.readProtocolMessage(readCtx)
-		c.readTimeoutMs = readTimeoutMs
-		if cancel != nil {
-			cancel()
-		}
-		if err != nil {
-			if raw != nil {
-				if !protocolMessageCandidate(raw) {
-					return fmt.Errorf("decode codex app-server message: %w", err)
-				}
-				c.recordMalformedRuntimeLine(raw, err)
-				c.lastTerminal = time.Now()
-				continue
-			}
-			elapsed := time.Since(c.lastTerminal)
-			if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
-				if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
-					return &StallError{Timeout: stallBudget, Elapsed: elapsed, Cause: err}
-				}
-			}
-			return err
-		}
-		if method, _ := msg["method"].(string); method != "" {
-			switch method {
-			case "turn/completed":
-				if err := completedTurnError(msg); err != nil {
-					params, _ := msg["params"].(map[string]any)
-					c.recordSafeTurnFailure(task.EventTurnEndedWithError, params)
-					return err
-				}
-				c.handleNotification(msg)
-				c.recordRuntimeMessage(task.EventTurnCompleted, msg)
-				return nil
-			case "turn/failed", "turn/cancelled":
-				params, _ := msg["params"].(map[string]any)
-				reason := safeTurnReason(params)
-				if method == "turn/failed" {
-					c.recordSafeTurnFailure(task.EventTurnFailed, params)
-					return NewError(CategoryTurnFailed, fmt.Sprintf("%s: %s", method, reason), nil)
-				}
-				c.recordSafeTurnFailure(task.EventTurnCancelled, params)
-				return NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %s", method, reason), nil)
-			case "item/tool/call":
-				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
-					return err
-				}
-				c.lastTerminal = time.Now()
-			default:
-				if _, ok := msg["id"]; ok {
-					if err := c.replyServerRequest(msg); err != nil {
-						return err
-					}
-					if inputRequiredServerRequest(method) {
-						c.recordInputRequiredMessage(method, msg)
-						return &InputRequiredError{Method: method}
-					}
-					// SPEC §10.4 turn_input_required also fires for an
-					// approval request that is not auto-approved — the
-					// runner's wire response is a decline / empty
-					// permissions / deny per protocolServerRequestResult,
-					// which is itself a signal that the operator must
-					// act. Without the event the orchestrator cannot
-					// distinguish this from a transient turn failure.
-					if approvalDeclinedServerRequest(method, c.approvalPolicy) {
-						c.recordInputRequiredMessage(method, msg)
-						return &InputRequiredError{Method: method}
-					}
-					c.lastTerminal = time.Now()
-					continue
-				}
-				if inputRequiredNotification(method, msg) {
-					c.recordInputRequiredMessage(method, msg)
-					return &InputRequiredError{Method: method}
-				}
-				if c.stallTimeoutMs > 0 {
-					elapsed := time.Since(c.lastTerminal)
-					if elapsed > time.Duration(c.stallTimeoutMs)*time.Millisecond {
-						return &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed}
-					}
-				}
-				c.lastTerminal = time.Now()
-				c.handleNotification(msg)
-				c.recordRuntimeMessage(task.EventNotification, msg)
-			}
-		} else {
-			c.lastTerminal = time.Now()
-			c.recordOtherRuntimeMessage(msg, raw)
-		}
-	}
-}
-
-func (c *appServerClient) recordRuntimeMessage(event string, msg map[string]any) {
-	params, _ := msg["params"].(map[string]any)
-	payload := normalizeRuntimePayload(params)
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	c.recordRuntimeEvent(event, c.withRuntimeContext(payload))
-}
-
-func (c *appServerClient) recordOtherRuntimeMessage(msg map[string]any, raw []byte) {
-	payload := normalizeRuntimePayload(msg)
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload["raw"] = trimProtocolLine(raw)
-	c.recordRuntimeEvent(task.EventOtherMessage, c.withRuntimeContext(payload))
-}
-
-func (c *appServerClient) recordMalformedRuntimeLine(raw []byte, err error) {
-	if !protocolMessageCandidate(raw) {
-		return
-	}
-	payload := map[string]any{
-		"raw":   trimProtocolLine(raw),
-		"error": err.Error(),
-	}
-	c.recordRuntimeEvent(task.EventMalformed, c.withRuntimeContext(payload))
-}
-
-func (c *appServerClient) withRuntimeContext(payload map[string]any) map[string]any {
-	if _, ok := payload["thread_id"]; !ok && c.threadID != "" {
-		payload["thread_id"] = c.threadID
-	}
-	if _, ok := payload["turn_id"]; !ok && c.turnID != "" {
-		payload["turn_id"] = c.turnID
-	}
-	return payload
-}
-
-func (c *appServerClient) recordInputRequiredMessage(method string, msg map[string]any) {
-	payload := map[string]any{"method": method}
-	if params, _ := msg["params"].(map[string]any); params != nil {
-		payload["params"] = normalizeRuntimePayload(params)
-	}
-	if c.threadID != "" {
-		payload["thread_id"] = c.threadID
-	}
-	if c.turnID != "" {
-		payload["turn_id"] = c.turnID
-		if c.threadID != "" {
-			payload["session_id"] = c.threadID + "-" + c.turnID
-		}
-	}
-	c.recordRuntimeEvent(task.EventTurnInputRequired, payload)
-}
-
-func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]any) {
-	runtimeEvent := task.RuntimeEvent{Event: event, Payload: payload}
-	c.runtimeEvents = append(c.runtimeEvents, runtimeEvent)
-	if c.runtimeEventSink != nil {
-		c.runtimeEventSink(runtimeEvent)
-	}
-}
-
-// recordUnsupportedToolCall emits task.EventUnsupportedToolCall (SPEC §10.4)
-// with the tool name and the (already JSON-marshaled) arguments slice the
-// agent supplied. Arguments come from codex over JSON-RPC, so we surface them
-// verbatim — they were never going to be a secret-leak surface since the
-// agent chose them.
-func (c *appServerClient) recordUnsupportedToolCall(name string, arguments json.RawMessage) {
-	payload := map[string]any{"tool": name}
-	if len(arguments) > 0 {
-		var parsed any
-		if err := json.Unmarshal(arguments, &parsed); err == nil {
-			payload["arguments"] = parsed
-		} else {
-			payload["arguments_raw"] = string(arguments)
-		}
-	}
-	c.recordRuntimeEvent(task.EventUnsupportedToolCall, c.withRuntimeContext(payload))
-}
-
-// recordStartupFailed emits task.EventStartupFailed (SPEC §10.4) tagged with
-// the startup phase (initialize / initialized / thread/start / turn/start)
-// that just failed. The payload `error` carries the Go error's Error()
-// string; the upstream errors come from JSON-RPC framing or extractString,
-// neither of which echoes user-controlled params, so it is safe to surface
-// without the safeTurnReason redaction pass.
-func (c *appServerClient) recordStartupFailed(phase string, err error) {
-	payload := map[string]any{"phase": phase}
-	if err != nil {
-		payload["error"] = err.Error()
-	}
-	c.recordRuntimeEvent(task.EventStartupFailed, c.withRuntimeContext(payload))
-}
-
-func (c *appServerClient) recordPhaseTransition(from, to task.RunAttemptPhase) {
-	if c.phaseTransitionSink != nil {
-		c.phaseTransitionSink(from, to)
-	}
-}
-
-func normalizeRuntimePayload(params map[string]any) map[string]any {
-	if params == nil {
-		return nil
-	}
-	out := make(map[string]any, len(params))
-	for k, v := range params {
-		out[toSnakeCase(k)] = normalizeRuntimeValue(v)
-	}
-	return out
-}
-
-func normalizeRuntimeValue(v any) any {
-	switch typed := v.(type) {
-	case map[string]any:
-		return normalizeRuntimePayload(typed)
-	case []any:
-		out := make([]any, len(typed))
-		for i, item := range typed {
-			out[i] = normalizeRuntimeValue(item)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-func toSnakeCase(s string) string {
-	var b strings.Builder
-	var prev rune
-	for i, r := range s {
-		nextIsLower := false
-		if i+1 < len(s) {
-			next := rune(s[i+1])
-			nextIsLower = next >= 'a' && next <= 'z'
-		}
-		if r >= 'A' && r <= 'Z' {
-			prevIsLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
-			prevIsUpper := prev >= 'A' && prev <= 'Z'
-			if i > 0 && (prevIsLowerOrDigit || (prevIsUpper && nextIsLower)) {
-				b.WriteByte('_')
-			}
-			r += 'a' - 'A'
-		}
-		b.WriteRune(r)
-		prev = rune(s[i])
-	}
-	return b.String()
-}
-
-func (c *appServerClient) replyServerRequest(msg map[string]any) error {
-	method, _ := msg["method"].(string)
-	if result, ok := protocolServerRequestResult(method, msg, c.approvalPolicy); ok {
-		if err := c.send(map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": result}); err != nil {
-			return err
-		}
-		if protocolServerRequestAutoApproved(method, c.approvalPolicy) {
-			c.recordApprovalAutoApproved(method, msg, result)
-		}
-		return nil
-	}
-	return c.sendJSONRPCError(msg["id"], -32601, "Method not found: "+method)
-}
-
-func (c *appServerClient) recordApprovalAutoApproved(method string, msg map[string]any, result map[string]any) {
-	params, _ := msg["params"].(map[string]any)
-	payload := normalizeRuntimePayload(params)
-	if payload == nil {
-		payload = map[string]any{}
-	}
-	payload["method"] = method
-	payload["result"] = normalizeRuntimeValue(result)
-	c.recordRuntimeEvent(task.EventApprovalAutoApproved, c.withRuntimeContext(payload))
-}
-
-func (c *appServerClient) sendJSONRPCError(id any, code int, message string) error {
-	return c.send(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      id,
-		"error": map[string]any{
-			"code":    code,
-			"message": message,
-		},
-	})
-}
-
-func inputRequiredServerRequest(method string) bool {
-	switch method {
-	case "item/tool/requestUserInput", "mcpServer/elicitation/request":
-		return true
-	default:
-		return false
-	}
-}
-
-// approvalDeclinedServerRequest reports whether a server request method goes
-// through the decline / deny / empty-permissions branch in
-// protocolServerRequestResult under the current approval policy. SPEC §10.4
-// treats a declined approval as operator-required input.
-func approvalDeclinedServerRequest(method string, approvalPolicy any) bool {
-	switch method {
-	case "item/commandExecution/requestApproval",
-		"item/fileChange/requestApproval",
-		"item/permissions/requestApproval",
-		"execCommandApproval",
-		"applyPatchApproval":
-		return !autoApproveRequest(method, approvalPolicy)
-	default:
-		return false
-	}
-}
-
-func inputRequiredNotification(method string, msg map[string]any) bool {
-	if method == "mcpServer/elicitation/request" {
-		return true
-	}
-	if !strings.HasPrefix(method, "turn/") {
-		return false
-	}
-	switch method {
-	case "turn/input_required", "turn/needs_input", "turn/need_input", "turn/request_input", "turn/request_response", "turn/provide_input", "turn/approval_required":
-		return true
-	}
-	params, _ := msg["params"].(map[string]any)
-	return inputRequiredField(msg) || inputRequiredField(params)
-}
-
-func inputRequiredField(payload map[string]any) bool {
-	if payload == nil {
-		return false
-	}
-	return payload["requiresInput"] == true ||
-		payload["needsInput"] == true ||
-		payload["input_required"] == true ||
-		payload["inputRequired"] == true ||
-		payload["type"] == "input_required" ||
-		payload["type"] == "needs_input"
-}
-
-func protocolServerRequestResult(method string, msg map[string]any, approvalPolicy any) (map[string]any, bool) {
-	switch method {
-	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
-		if autoApproveRequest(method, approvalPolicy) {
-			return map[string]any{"decision": "acceptForSession"}, true
-		}
-		return map[string]any{"decision": "decline"}, true
-	case "item/permissions/requestApproval":
-		if autoApproveRequest(method, approvalPolicy) {
-			params, _ := msg["params"].(map[string]any)
-			return map[string]any{"permissions": params["permissions"]}, true
-		}
-		return map[string]any{"permissions": map[string]any{}}, true
-	case "execCommandApproval", "applyPatchApproval":
-		if autoApproveRequest(method, approvalPolicy) {
-			return map[string]any{"decision": "allow"}, true
-		}
-		return map[string]any{"decision": "deny"}, true
-	case "item/tool/requestUserInput":
-		return protocolUserInputResult(msg), true
-	case "mcpServer/elicitation/request":
-		return map[string]any{"action": "decline", "content": nil}, true
-	default:
-		return nil, false
-	}
-}
-
-func protocolServerRequestAutoApproved(method string, approvalPolicy any) bool {
-	switch method {
-	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval", "item/permissions/requestApproval", "execCommandApproval", "applyPatchApproval":
-		return autoApproveRequest(method, approvalPolicy)
-	default:
-		return false
-	}
-}
-
-// autoApproveRequest reports whether protocolServerRequestResult should
-// auto-approve a server-side approval prompt that codex sent the harness.
-// The decision tracks codex's own `AskForApproval` semantics (codex-rs
-// protocol/src/protocol.rs):
-//
-//   - "never"                     — codex never asks; if a prompt still
-//     surfaces, auto-approve it (matches codex's "failures returned to the
-//     model" intent).
-//   - "on-failure"                — codex asks only on failure; the harness
-//     auto-approves to keep the unattended loop moving.
-//   - "untrusted" / "on-request"  — operator-supervised modes; decline.
-//   - {"granular": {...}}         — per-method bool flags where TRUE means
-//     ALLOW (codex semantics since #14516, b7dba72db, 2026-03-12).
-func autoApproveRequest(method string, approvalPolicy any) bool {
-	if policy, ok := approvalPolicy.(string); ok {
-		switch strings.ToLower(strings.TrimSpace(policy)) {
-		case "never", "on-failure":
-			return true
-		default:
-			return false
-		}
-	}
-	policy, ok := approvalPolicy.(map[string]any)
-	if !ok {
-		return false
-	}
-	if granular, ok := policy["granular"].(map[string]any); ok {
-		return approvalRuleAllowsRequest(granular, method)
-	}
-	return false
-}
-
-func approvalRuleAllowsRequest(rules map[string]any, method string) bool {
-	if method == "item/permissions/requestApproval" {
-		return approvalRuleEnabled(rules, "request_permissions")
-	}
-	return approvalRuleEnabled(rules, "sandbox_approval") || approvalRuleEnabled(rules, "rules")
-}
-
-func approvalRuleEnabled(rules map[string]any, key string) bool {
-	enabled, _ := rules[key].(bool)
-	return enabled
-}
-
-// codexWireApprovalPolicy maps aiops-platform's ApprovalPolicy value to the
-// codex app-server JSON-RPC wire format. Codex's `AskForApproval` enum
-// (codex-rs/protocol/src/protocol.rs and
-// codex-rs/app-server-protocol/src/protocol/v2/shared.rs) accepts exactly
-// {"untrusted", "on-failure", "on-request", "granular": {...}, "never"}.
-// Sending anything else makes thread/start return JSON-RPC -32600
-// `Invalid request: unknown variant ...` and breaks startup (#329).
-//
-// The obsolete `{"reject": {...}}` shape — which used to be valid in codex
-// up to PR #14516 (commit b7dba72db, renamed to `granular` and field
-// polarity inverted on 2026-03-12) — is translated here for back-compat
-// with WORKFLOW.md files written against the old protocol. The polarity
-// flip (`reject.sandbox_approval=true` meant "reject"; the new
-// `granular.sandbox_approval=true` means "allow") is preserved so the
-// translated payload retains the operator's original intent.
-//
-// All codex-recognized values (`"untrusted"`/`"on-failure"`/`"on-request"`/
-// `"never"` strings, and the `{"granular": {...}}` map) pass through
-// unchanged. Unrecognized shapes also pass through so codex's own
-// validation error reaches the operator verbatim rather than getting
-// masked behind a translator silently rewriting their payload.
-func codexWireApprovalPolicy(internal any) any {
-	policy, ok := internal.(map[string]any)
-	if !ok {
-		return internal
-	}
-	rejectShape, hasReject := policy["reject"].(map[string]any)
-	if !hasReject {
-		return internal
-	}
-	// Translate obsolete reject:{flag:true} → granular:{flag:false} per the
-	// codex #14516 polarity flip. Pass through any extra keys verbatim so a
-	// future codex addition doesn't get lost.
-	granular := make(map[string]any, len(rejectShape))
-	for k, v := range rejectShape {
-		if b, ok := v.(bool); ok {
-			granular[k] = !b
-			continue
-		}
-		granular[k] = v
-	}
-	translated := make(map[string]any, len(policy))
-	for k, v := range policy {
-		if k == "reject" {
-			continue
-		}
-		translated[k] = v
-	}
-	translated["granular"] = granular
-	return translated
-}
-
-func protocolUserInputResult(msg map[string]any) map[string]any {
-	params, _ := msg["params"].(map[string]any)
-	questions, _ := params["questions"].([]any)
-	answers := make(map[string]any)
-	for _, question := range questions {
-		q, _ := question.(map[string]any)
-		id, _ := q["id"].(string)
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		answers[id] = map[string]any{"answers": []string{nonInteractiveInputReply}}
-	}
-	return map[string]any{"answers": answers}
-}
-
-func (c *appServerClient) handleNotification(msg map[string]any) {
-	params, _ := msg["params"].(map[string]any)
-	if v, ok := params["continue"].(bool); ok {
-		c.continueRun = v
-	}
-	for _, key := range []string{"lastAssistantMessage", "last_message", "message", "summary"} {
-		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
-			c.lastMessage = strings.TrimSpace(v)
-			return
-		}
-	}
-}
-
-func completedTurnError(msg map[string]any) error {
-	params, _ := msg["params"].(map[string]any)
-	status, _ := params["status"].(string)
-	if status == "" {
-		turn, _ := params["turn"].(map[string]any)
-		status, _ = turn["status"].(string)
-	}
-	status = strings.ToLower(strings.TrimSpace(status))
-	if status == "" || status == "completed" || status == "succeeded" || status == "success" || status == "interrupted" {
-		return nil
-	}
-	if quota := quotaBackoffFromTurnParams(params); quota != nil {
-		return quota
-	}
-	return NewError(CategoryTurnFailed, fmt.Sprintf("turn/completed failed with status %q: %s", status, safeTurnReason(params)), nil)
-}
-
-// safeTurnReason extracts a human-readable reason string from a Codex
-// `turn/failed`, `turn/cancelled`, or failed `turn/completed` params payload,
-// pulling only from an explicit allow-list of fields. Returns
-// `"reason unavailable"` when none are populated. This is a defense-in-depth
-// guard so that arbitrary protocol fields (which may carry tool output,
-// elicitation snippets, or secrets) never end up in returned error strings or
-// the structured log/event surface. See docs/security-posture.md.
-func safeTurnReason(params map[string]any) string {
-	const fallback = "reason unavailable"
-	if params == nil {
-		return fallback
-	}
-	sources := []map[string]any{params}
-	if turn, _ := params["turn"].(map[string]any); turn != nil {
-		sources = append(sources, turn)
-	}
-	for _, source := range sources {
-		if v := extractReasonFields(source); v != "" {
-			return v
-		}
-	}
-	return fallback
-}
-
-// extractReasonFields walks the allow-listed reason keys in a single map and
-// returns the first non-empty string. `error` is special: Codex may serialize
-// it as a string or as a nested object like
-// `{"message": "...", "code": "...", "error_code": "..."}`. Both shapes are
-// supported; nested object lookup only allows the same allow-listed scalar
-// fields.
-func extractReasonFields(source map[string]any) string {
-	for _, key := range []string{"reason", "error", "message", "error_code"} {
-		raw, ok := source[key]
-		if !ok {
-			continue
-		}
-		switch v := raw.(type) {
-		case string:
-			if s := strings.TrimSpace(v); s != "" {
-				return s
-			}
-		case map[string]any:
-			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
-				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
-					return strings.TrimSpace(s)
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// safeTurnFailurePayload returns a runtime-event payload built from only the
-// allow-listed status/reason fields of a Codex failure params map. Mirrors the
-// redaction discipline of safeTurnReason so the JSON event surface
-// (`/api/v1/state`, runtime event log) never persists the raw protocol payload.
-func safeTurnFailurePayload(params map[string]any) map[string]any {
-	out := map[string]any{}
-	if params == nil {
-		out["reason"] = "reason unavailable"
-		return out
-	}
-	if v, _ := params["status"].(string); strings.TrimSpace(v) != "" {
-		out["status"] = strings.TrimSpace(v)
-	}
-	copyAllowlistedReasonFields(params, out)
-	if turn, _ := params["turn"].(map[string]any); turn != nil {
-		nested := map[string]any{}
-		if v, _ := turn["status"].(string); strings.TrimSpace(v) != "" {
-			nested["status"] = strings.TrimSpace(v)
-		}
-		copyAllowlistedReasonFields(turn, nested)
-		if len(nested) > 0 {
-			out["turn"] = nested
-		}
-	}
-	if info, ok := codexErrorInfoValue(params); ok {
-		out["codex_error_info"] = info
-	}
-	if retryAfter := quotaRetryAfterFromParams(params, time.Now()); retryAfter > 0 {
-		out["retry_after_seconds"] = int64(retryAfter.Round(time.Second) / time.Second)
-	}
-	if _, ok := out["reason"]; !ok {
-		out["reason"] = safeTurnReason(params)
-	}
-	return out
-}
-
-// copyAllowlistedReasonFields copies allow-listed reason fields from src to
-// dst. String values are trimmed; structured `error` objects are flattened to a
-// fresh allow-listed sub-map so non-allow-listed siblings are never persisted.
-func copyAllowlistedReasonFields(src, dst map[string]any) {
-	for _, key := range []string{"reason", "error", "message", "error_code"} {
-		raw, ok := src[key]
-		if !ok {
-			continue
-		}
-		switch v := raw.(type) {
-		case string:
-			if s := strings.TrimSpace(v); s != "" {
-				dst[key] = s
-			}
-		case map[string]any:
-			scrubbed := map[string]any{}
-			for _, nestedKey := range []string{"message", "reason", "error_code", "code"} {
-				if s, _ := v[nestedKey].(string); strings.TrimSpace(s) != "" {
-					scrubbed[nestedKey] = strings.TrimSpace(s)
-				}
-			}
-			if len(scrubbed) > 0 {
-				dst[key] = scrubbed
-			}
-		}
-	}
-}
-
-func quotaBackoffFromTurnParams(params map[string]any) *QuotaBackoffError {
-	info, ok := codexErrorInfoValue(params)
-	if !ok || !isUsageLimitExceeded(info) {
-		return nil
-	}
-	return &QuotaBackoffError{
-		Message:    safeTurnReason(params),
-		RetryAfter: quotaRetryAfterFromParams(params, time.Now()),
-	}
-}
-
-func codexErrorInfoValue(params map[string]any) (string, bool) {
-	turn, _ := params["turn"].(map[string]any)
-	if turn == nil {
-		return "", false
-	}
-	errorPayload, _ := turn["error"].(map[string]any)
-	if errorPayload == nil {
-		return "", false
-	}
-	info, _ := errorPayload["codexErrorInfo"].(string)
-	info = strings.TrimSpace(info)
-	return info, info != ""
-}
-
-func isUsageLimitExceeded(info string) bool {
-	return info == "usageLimitExceeded"
-}
-
-func quotaRetryAfterFromParams(params map[string]any, now time.Time) time.Duration {
-	turn, _ := params["turn"].(map[string]any)
-	errorPayload, _ := turn["error"].(map[string]any)
-	for _, key := range []string{"message", "additionalDetails"} {
-		if s, _ := errorPayload[key].(string); strings.TrimSpace(s) != "" {
-			if d := parseRetryAfterText(s, now); d > 0 {
-				return d
-			}
-		}
-	}
-	return 0
-}
-
-var (
-	retryInPattern = regexp.MustCompile(`(?i)(?:try again|retry)[^.]*?\bin\s+(\d+(?:\.\d+)?)\s*(second|seconds|sec|secs|minute|minutes|min|mins|hour|hours|hr|hrs)\b`)
-	retryAtPattern = regexp.MustCompile(`(?i)(?:try again|retry)[^.]*?\bat\s+(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)`)
-)
-
-func parseRetryAfterText(message string, now time.Time) time.Duration {
-	if match := retryInPattern.FindStringSubmatch(message); len(match) == 3 {
-		n, err := strconv.ParseFloat(match[1], 64)
-		if err != nil || n <= 0 {
-			return 0
-		}
-		switch strings.ToLower(match[2]) {
-		case "second", "seconds", "sec", "secs":
-			return time.Duration(n * float64(time.Second))
-		case "minute", "minutes", "min", "mins":
-			return time.Duration(n * float64(time.Minute))
-		case "hour", "hours", "hr", "hrs":
-			return time.Duration(n * float64(time.Hour))
-		}
-	}
-	if match := retryAtPattern.FindStringSubmatch(message); len(match) == 4 {
-		hour, err := strconv.Atoi(match[1])
-		if err != nil || hour < 1 || hour > 12 {
-			return 0
-		}
-		minute := 0
-		if match[2] != "" {
-			minute, err = strconv.Atoi(match[2])
-			if err != nil || minute > 59 {
-				return 0
-			}
-		}
-		meridiem := strings.ToLower(strings.ReplaceAll(match[3], ".", ""))
-		if meridiem == "pm" && hour != 12 {
-			hour += 12
-		}
-		if meridiem == "am" && hour == 12 {
-			hour = 0
-		}
-		retryAt := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-		if !retryAt.After(now) {
-			retryAt = retryAt.Add(24 * time.Hour)
-		}
-		return retryAt.Sub(now)
-	}
-	return 0
-}
-
-func (c *appServerClient) recordSafeTurnFailure(event string, params map[string]any) {
-	c.recordRuntimeEvent(event, c.withRuntimeContext(safeTurnFailurePayload(params)))
-}
-
-func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[string]any) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-	params, _ := msg["params"].(map[string]any)
-	name := appServerToolCallName(params)
-	arguments := appServerToolCallArguments(params)
-	result, err := dynamicToolResult(false, "unsupported dynamic tool: "+name)
-	if err != nil {
-		return err
-	}
-	if tool, ok := c.tools.Lookup(name); ok {
-		call := ToolCall{}
-		if err := json.Unmarshal(arguments, &call); err != nil {
-			failure, failureErr := dynamicToolFailure(err.Error())
-			if failureErr != nil {
-				return failureErr
-			}
-			result = failure
-		} else {
-			// Install the audit sink for any tool that may route
-			// through the Linear GraphQL proxy. linear_ai_workpad
-			// composes deterministic commentCreate/commentUpdate
-			// mutations through the same token-isolated transport
-			// (via callRaw); operators need the runtime event for
-			// those harness-attributable writes too. Only the
-			// proxy itself fires the sink, so installing it on
-			// unrelated tools is a no-op.
-			toolCtx := WithLinearGraphQLMutationSink(ctx, func(operationField string) {
-				payload := map[string]any{"tool": name}
-				if operationField != "" {
-					payload["operation_field"] = operationField
-				}
-				c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
-			})
-			result, err = tool.Call(toolCtx, call)
-			if err != nil {
-				failure, failureErr := dynamicToolFailure(err.Error())
-				if failureErr != nil {
-					return failureErr
-				}
-				result = failure
-			}
-		}
-	} else {
-		// SPEC §10.4 unsupported_tool_call: the wire still carries the
-		// structured failure result, but the orchestrator/state surface
-		// needs a typed event to distinguish "agent invoked an
-		// unadvertised tool" from "advertised tool failed". The structured
-		// failure path above already emits its own error; this branch is
-		// reached only when the tool name is not in c.tools.
-		c.recordUnsupportedToolCall(name, arguments)
-	}
-	var payload any
-	if err := json.Unmarshal([]byte(result), &payload); err != nil {
-		payload = map[string]any{"success": false, "output": result}
-	}
-	if id, ok := msg["id"]; ok {
-		return c.send(map[string]any{"jsonrpc": "2.0", "id": id, "result": payload})
-	}
-	return c.notify("item/tool/call/output", map[string]any{"call_id": params["call_id"], "output": payload})
-}
-
-func appServerToolCallName(params map[string]any) string {
-	for _, key := range []string{"tool", "name"} {
-		if v, _ := params[key].(string); strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
-func appServerToolCallArguments(params map[string]any) json.RawMessage {
-	if raw, ok := params["arguments"]; ok && raw != nil {
-		b, err := json.Marshal(raw)
-		if err == nil {
-			return b
-		}
-	}
-	return json.RawMessage(`{}`)
-}
-
 func (c *appServerClient) summary() string {
 	if strings.TrimSpace(c.lastMessage) != "" {
 		return strings.TrimSpace(c.lastMessage)
 	}
 	return "codex app-server completed"
 }
-
 func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 	toolSet := DynamicToolsForWorkflow(workflow.Workflow{Config: cfg})
 	names := toolSet.Names()
@@ -1531,7 +545,6 @@ func appServerTurnTitle(in RunInput) string {
 		return in.Task.ID
 	}
 }
-
 func appServerContinuationPrompt(in RunInput, turn int) string {
 	subject := appServerTurnTitle(in)
 	if strings.TrimSpace(subject) == "" {
@@ -1539,7 +552,6 @@ func appServerContinuationPrompt(in RunInput, turn int) string {
 	}
 	return fmt.Sprintf("Continue working on %s. This is continuation turn %d; use the existing thread context, address any remaining requirements, and finish only when the task is complete.", subject, turn)
 }
-
 func extractString(m map[string]any, outer, inner string) (string, error) {
 	o, _ := m[outer].(map[string]any)
 	if o == nil {
@@ -1551,7 +563,6 @@ func extractString(m map[string]any, outer, inner string) (string, error) {
 	}
 	return v, nil
 }
-
 func numberID(v any) (int, bool) {
 	switch x := v.(type) {
 	case float64:
@@ -1562,7 +573,6 @@ func numberID(v any) (int, bool) {
 		return 0, false
 	}
 }
-
 func writeAppServerArtifact(workdir string, buf *cappedWriter) {
 	dir := filepath.Join(workdir, ".aiops")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
