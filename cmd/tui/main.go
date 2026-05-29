@@ -374,11 +374,11 @@ func (s *screen) draw(content string) {
 func safeRenderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) (out string) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = strings.Join([]string{
+			out = clipFrame([]string{
 				colorize("╭─ AIOPS STATUS", ansiBold),
 				colorize(fmt.Sprintf("│ Render error: %v", r), ansiRed),
 				colorize("╰─", ansiBold),
-			}, "\n")
+			})
 		}
 	}()
 	return renderFrame(state, fetchErr, now, tps, baseURL, interval)
@@ -421,14 +421,14 @@ func stateAPIAuthTokenFromEnv() string {
 
 func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) string {
 	if fetchErr != nil {
-		return strings.Join([]string{
+		return clipFrame([]string{
 			colorize("╭─ AIOPS STATUS", ansiBold),
 			colorize("│ Orchestrator snapshot unavailable: ", ansiRed) + colorize(fetchErr.Error(), ansiRed),
 			colorize("│ Throughput: ", ansiBold) + colorize(formatTPS(tps)+" tps", ansiCyan),
 			colorize("│ Dashboard:  ", ansiBold) + colorize(baseURL+"/", ansiCyan),
 			colorize("│ Next refresh: ", ansiBold) + colorize(strconv.Itoa(int(interval.Seconds()))+"s", ansiCyan),
 			colorize("╰─", ansiBold),
-		}, "\n")
+		})
 	}
 
 	cols := terminalColumns()
@@ -502,7 +502,7 @@ func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float6
 		}
 	}
 	lines = append(lines, colorize("╰─", ansiBold))
-	return strings.Join(lines, "\n")
+	return clipFrame(lines)
 }
 
 // runningTableHeader mirrors running_table_header_row/1.
@@ -545,7 +545,9 @@ func formatRunningRow(r runningEntry, now time.Time, eventWidth int) string {
 		runtimeSecs = now.Sub(*r.StartedAt).Seconds()
 	}
 	age := cell(formatRuntimeAndTurns(runtimeSecs, r.TurnCount), colAge)
-	tokens := padLeft(formatCount(r.Tokens.TotalTokens), colTokens)
+	// Right-aligned *and* truncated (mirrors format_cell(.., :right)); a long
+	// token count must not widen the row and push EVENT out of alignment (#466).
+	tokens := cellRight(formatCount(r.Tokens.TotalTokens), colTokens)
 	session := cell(compactSession(r.SessionID), colSession)
 
 	eventText := r.LastMessage
@@ -615,7 +617,10 @@ func formatRateLimits(rl map[string]interface{}) string {
 	if rl == nil {
 		return colorize("unavailable", ansiGray)
 	}
-	limitID := strMapGet(rl, "limit_id", "limit_name", "")
+	// limit_id is the one free-form API string on this line; sanitize it so an
+	// embedded newline/control byte can't split or corrupt the row (#466). The
+	// numeric bucket/credit fields are formatted from typed values below.
+	limitID := sanitize(strMapGet(rl, "limit_id", "limit_name", ""))
 	if limitID == "" {
 		limitID = "unknown"
 	}
@@ -638,7 +643,7 @@ func formatRateLimitBucket(v interface{}) string {
 	}
 	m, ok := v.(map[string]interface{})
 	if !ok {
-		return fmt.Sprintf("%v", v)
+		return sanitize(fmt.Sprintf("%v", v))
 	}
 	remaining := intVal(m, "remaining")
 	limit := intVal(m, "limit")
@@ -711,18 +716,11 @@ func compactSession(id string) string {
 	return id
 }
 
-// cell left-pads to width, truncating with "…" when needed.
-// Mirrors format_cell/3 in status_dashboard.ex.
+// cell left-aligns to width, truncating with "..." when needed.
+// Mirrors format_cell/3 in status_dashboard.ex; cellRight (layout.go) is the
+// right-aligned counterpart and they share truncateCell.
 func cell(s string, width int) string {
-	s = sanitize(s)
-	runes := []rune(s)
-	if len(runes) > width {
-		if width <= 3 {
-			return string(runes[:width])
-		}
-		s = string(runes[:width-3]) + "..."
-	}
-	return fmt.Sprintf("%-*s", width, s)
+	return fmt.Sprintf("%-*s", width, truncateCell(sanitize(s), width))
 }
 
 func padLeft(s string, width int) string  { return fmt.Sprintf("%*s", width, s) }
@@ -840,9 +838,9 @@ func formatResetValue(v interface{}) string {
 	case int:
 		return strconv.Itoa(x) + "s"
 	case string:
-		return x
+		return sanitize(x)
 	default:
-		return fmt.Sprintf("%v", v)
+		return sanitize(fmt.Sprintf("%v", v))
 	}
 }
 
