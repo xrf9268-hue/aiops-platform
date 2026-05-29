@@ -2,23 +2,14 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -59,7 +50,6 @@ func main() {
 	}
 	stop()
 }
-
 func parseDoctorArgs(args []string) (doctor.Options, error) {
 	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
 	mode := fs.String("mode", "mock", "preflight depth: mock or real")
@@ -82,7 +72,6 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	}
 	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, GoTestDir: *goTestDir, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
 }
-
 func reorderDoctorFlags(args []string) []string {
 	flags, positional := make([]string, 0, len(args)), make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -105,7 +94,6 @@ func reorderDoctorFlags(args []string) []string {
 	}
 	return append(flags, positional...)
 }
-
 func normalizeRunError(err error, runCtxErr error) error {
 	if runCtxErr != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return nil
@@ -237,34 +225,6 @@ func reorderForFlagParse(args []string) []string {
 	return append(flags, positional...)
 }
 
-// desiredPortForLoop selects the effective state-server port for one
-// tick of runStateHTTPServerLoop. CLI override wins per SPEC §13.7;
-// otherwise the workflow snapshot's `server.port` is used; absent a
-// snapshot, the loop stays disabled (-1).
-func desiredPortForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) int {
-	if opts.PortOverride != nil {
-		return *opts.PortOverride
-	}
-	if wf != nil {
-		return wf.Config.Server.Port
-	}
-	return -1
-}
-
-// desiredHostForLoop selects the effective state-server bind host for one tick.
-// The AIOPS_SERVER_HOST env override wins, then the workflow snapshot's
-// `server.host`, then the loopback default. The empty string is returned as-is
-// and normalized to 127.0.0.1 at bind time (normalizeServerHost).
-func desiredHostForLoop(opts stateHTTPServerLoopOptions, wf *workflow.Workflow) string {
-	if opts.HostOverride != nil {
-		return *opts.HostOverride
-	}
-	if wf != nil {
-		return wf.Config.Server.Host
-	}
-	return ""
-}
-
 // serverHostOverrideFromEnv returns the AIOPS_SERVER_HOST override, or nil when
 // the variable is unset so the workflow `server.host` (then the loopback
 // default) still applies. A set-but-empty value is an explicit override:
@@ -277,7 +237,6 @@ func serverHostOverrideFromEnv() *string {
 	}
 	return &host
 }
-
 func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 	wf, resolution, err := resolveStartupWorkflow(nil)
 	if err != nil {
@@ -286,7 +245,6 @@ func loadWorkflowForStartupReconcile() (*workflow.Workflow, error) {
 	logStartupReconcileWorkflow(resolution, wf)
 	return wf, nil
 }
-
 func resolveStartupWorkflow(args []string) (*workflow.Workflow, *workflow.Resolution, error) {
 	path, err := startupWorkflowPath(args)
 	if err != nil {
@@ -310,7 +268,6 @@ func resolveStartupWorkflow(args []string) (*workflow.Workflow, *workflow.Resolu
 	}
 	return wf, &workflow.Resolution{Source: source, Path: path}, nil
 }
-
 func startupWorkflowPath(args []string) (string, error) {
 	if len(args) > 1 {
 		return "", fmt.Errorf("usage: worker [--port=N] [path-to-WORKFLOW.md]")
@@ -334,7 +291,6 @@ func startupWorkflowPath(args []string) (string, error) {
 	}
 	return path, nil
 }
-
 func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.Workflow) {
 	if resolution.Source == workflow.SourceDefault {
 		log.Printf("startup reconciliation: workflow source=%s tracker.kind=%s", resolution.Source, wf.Config.Tracker.Kind)
@@ -342,7 +298,6 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 	}
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
-
 func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
 	if cfg.Repo.CloneURL == "" && len(cfg.Services) == 0 {
 		if source == workflow.SourceDefault {
@@ -357,7 +312,6 @@ func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflo
 	}
 	return nil
 }
-
 func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
 	hooks := cfg.WorkspaceHooks()
 	return worker.ReconcileConfig{
@@ -374,7 +328,6 @@ func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker
 		ActiveWorkspaceKeys: worker.ActiveWorkspaceKeysForWorkflow(cfg),
 	}
 }
-
 func run(ctx context.Context, args []string) error {
 	workflowPath, portOverride, err := parseRunArgs(args)
 	if err != nil {
@@ -480,1028 +433,6 @@ func run(ctx context.Context, args []string) error {
 	}()
 	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
 }
-
-type stateHTTPReadiness struct {
-	ready atomic.Bool
-}
-
-func (r *stateHTTPReadiness) MarkReady() {
-	r.ready.Store(true)
-}
-
-func (r *stateHTTPReadiness) Status() (bool, string) {
-	if r.ready.Load() {
-		return true, ""
-	}
-	return false, "startup reconciliation has not completed"
-}
-
-type stateHTTPServerController struct {
-	snapshot  stateSnapshotFunc
-	refresh   stateRefreshFunc
-	readiness stateReadinessFunc
-
-	desiredSet  bool
-	desiredHost string
-	desiredPort int
-	cancel      context.CancelFunc
-	addr        net.Addr
-	serverDone  <-chan struct{}
-}
-
-func newStateHTTPServerController(snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *stateHTTPServerController {
-	return &stateHTTPServerController{snapshot: snapshot, refresh: optionalStateRefreshFunc(refresh), readiness: stateHTTPAlwaysReady}
-}
-
-func (c *stateHTTPServerController) apply(ctx context.Context, host string, port int) {
-	c.refreshStopped()
-	if c.desiredSet && c.desiredHost == host && c.desiredPort == port {
-		return
-	}
-	c.stop()
-	if port < 0 {
-		c.desiredSet = true
-		c.desiredHost = host
-		c.desiredPort = port
-		log.Printf("state HTTP server disabled by server.port=%d", port)
-		return
-	}
-	serverCtx, cancel := context.WithCancel(ctx)
-	handle := startStateHTTPServer(serverCtx, host, port, c.snapshot, c.readiness, c.refresh)
-	if handle == nil {
-		cancel()
-		return
-	}
-	c.desiredSet = true
-	c.desiredHost = host
-	c.desiredPort = port
-	c.cancel = cancel
-	c.addr = handle.Addr
-	c.serverDone = handle.Done
-}
-
-func (c *stateHTTPServerController) refreshStopped() {
-	if c.serverDone == nil {
-		return
-	}
-	select {
-	case <-c.serverDone:
-		if c.cancel != nil {
-			c.cancel()
-		}
-		c.clear()
-	default:
-	}
-}
-
-func (c *stateHTTPServerController) stop() {
-	if c.cancel != nil {
-		c.cancel()
-	}
-	if c.serverDone != nil {
-		select {
-		case <-c.serverDone:
-		case <-time.After(stateHTTPServerShutdownTimeout):
-			log.Printf("state HTTP server did not stop within %s", stateHTTPServerShutdownTimeout)
-		}
-	}
-	c.clear()
-}
-
-func (c *stateHTTPServerController) clear() {
-	c.desiredSet = false
-	c.desiredHost = ""
-	c.desiredPort = 0
-	c.cancel = nil
-	c.addr = nil
-	c.serverDone = nil
-}
-
-type stateHTTPServerLoopOptions struct {
-	Sleep           func(context.Context, time.Duration) error
-	StopAfterChecks int
-	Refresh         stateRefreshFunc
-	Readiness       stateReadinessFunc
-	// PortOverride, when non-nil, replaces the workflow snapshot's
-	// `server.port` for every tick of the loop. SPEC §13.7 defines this
-	// as the CLI `--port` precedence rule. -1 disables the HTTP server,
-	// 0 binds an ephemeral port, 1..65535 binds explicitly.
-	PortOverride *int
-	// HostOverride, when non-nil, replaces the workflow snapshot's
-	// `server.host` for every tick of the loop. It carries the
-	// AIOPS_SERVER_HOST env override, mirroring PortOverride's role for the
-	// CLI --port flag. An empty string normalizes to the loopback default.
-	HostOverride *string
-}
-
-func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error {
-	if runtime == nil {
-		return errors.New("state HTTP server loop requires workflow runtime")
-	}
-	controller := newStateHTTPServerController(snapshot, opts.Refresh)
-	if opts.Readiness != nil {
-		controller.readiness = opts.Readiness
-	}
-	defer controller.stop()
-	sleep := opts.Sleep
-	if sleep == nil {
-		sleep = sleepContext
-	}
-	interval := runtime.ReloadInterval()
-	if interval <= 0 {
-		interval = time.Second
-	}
-	checks := 0
-	for {
-		var wf *workflow.Workflow
-		if snap := runtime.Current(); snap.Workflow != nil {
-			wf = snap.Workflow
-		}
-		host := desiredHostForLoop(opts, wf)
-		port := desiredPortForLoop(opts, wf)
-		controller.apply(ctx, host, port)
-		checks++
-		if opts.StopAfterChecks > 0 && checks >= opts.StopAfterChecks {
-			return nil
-		}
-		if err := sleep(ctx, interval); err != nil {
-			return err
-		}
-	}
-}
-
-func sleepContext(ctx context.Context, d time.Duration) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(d):
-		return nil
-	}
-}
-
-const stateHTTPServerShutdownTimeout = 10 * time.Second
-const stateHTTPAuthTokenEnv = "AIOPS_STATE_API_TOKEN"
-
-type stateHTTPServerHandle struct {
-	Addr net.Addr
-	Done <-chan struct{}
-}
-
-func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) *stateHTTPServerHandle {
-	if port < 0 {
-		log.Printf("state HTTP server disabled by server.port=%d", port)
-		return nil
-	}
-	server := newStateHTTPServerWithAuthTokenAndReadiness(host, port, os.Getenv(stateHTTPAuthTokenEnv), readiness, snapshot, refresh...)
-	listener, err := net.Listen("tcp", server.Addr)
-	if err != nil {
-		log.Printf("state HTTP server disabled because listen on %s failed: %v", server.Addr, err)
-		return nil
-	}
-	log.Printf("state HTTP server listening on http://%s", listener.Addr().String())
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-			defer cancel()
-			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Printf("state HTTP server shutdown error: %v", err)
-			}
-		case <-done:
-			return
-		}
-	}()
-	go func() {
-		defer close(done)
-		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			if ctx.Err() == nil {
-				log.Printf("state HTTP server exited: %v", err)
-			}
-		}
-	}()
-	return &stateHTTPServerHandle{Addr: listener.Addr(), Done: done}
-}
-
-// normalizeServerHost maps an empty bind host to the loopback default so a
-// blank server.host / AIOPS_SERVER_HOST never resolves to net.Listen's
-// bind-all wildcard (SPEC §15.3 loopback-only trust boundary).
-func normalizeServerHost(host string) string {
-	if host == "" {
-		return "127.0.0.1"
-	}
-	return host
-}
-
-func newStateHTTPServer(host string, port int, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
-	return newStateHTTPServerWithAuthToken(host, port, "", snapshot, refresh...)
-}
-
-func newStateHTTPServerWithAuthToken(host string, port int, authToken string, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
-	return newStateHTTPServerWithAuthTokenAndReadiness(host, port, authToken, stateHTTPAlwaysReady, snapshot, refresh...)
-}
-
-func newStateHTTPServerWithAuthTokenAndReadiness(host string, port int, authToken string, readiness stateReadinessFunc, snapshot stateSnapshotFunc, refresh ...stateRefreshFunc) *http.Server {
-	mux := http.NewServeMux()
-	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
-	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
-	mux.Handle("/api/v1/", issueHTTPHandler(snapshot))
-	mux.Handle("/assets/", dashboardAssetHandler())
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
-			return
-		}
-		dashboardHTMLHandler().ServeHTTP(w, r)
-	})
-	guard := stateHTTPAccessGuard{authToken: strings.TrimSpace(authToken)}
-	root := http.NewServeMux()
-	root.Handle("/livez", livenessHTTPHandler())
-	root.Handle("/readyz", readinessHTTPHandler(readiness))
-	root.Handle("/", guard.wrap(mux))
-	return &http.Server{
-		Addr:              net.JoinHostPort(normalizeServerHost(host), strconv.Itoa(port)),
-		Handler:           root,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		// Cap header size well below Go's 1 MiB default. The state and
-		// refresh endpoints only exchange ~kilobytes of cookies and
-		// headers; an unbounded header read would let a misbehaving
-		// or hostile client wedge a connection until ReadHeaderTimeout
-		// fires. Go internally adds a 4 KiB bufio slop on top of this
-		// value when computing the actual reject threshold.
-		MaxHeaderBytes: 64 << 10,
-	}
-}
-
-type stateReadinessFunc func() (bool, string)
-
-func stateHTTPAlwaysReady() (bool, string) {
-	return true, ""
-}
-
-func livenessHTTPHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		if _, err := io.WriteString(w, "ok\n"); err != nil {
-			log.Printf("write /livez response: %v", err)
-		}
-	})
-}
-
-func readinessHTTPHandler(readiness stateReadinessFunc) http.Handler {
-	if readiness == nil {
-		readiness = stateHTTPAlwaysReady
-	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		ready, reason := readiness()
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		if !ready {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			if reason == "" {
-				reason = "not ready"
-			}
-			if _, err := io.WriteString(w, reason+"\n"); err != nil {
-				log.Printf("write /readyz unavailable response: %v", err)
-			}
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-		if _, err := io.WriteString(w, "ok\n"); err != nil {
-			log.Printf("write /readyz response: %v", err)
-		}
-	})
-}
-
-type stateHTTPAccessGuard struct {
-	authToken string
-}
-
-func (g stateHTTPAccessGuard) wrap(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if g.authToken != "" {
-			if stateHTTPAuthorized(r, g.authToken) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			requireStateHTTPAuth(w)
-			return
-		}
-		if isLoopbackHTTPHost(r.Host) && isLoopbackHTTPRemoteAddr(r.RemoteAddr) {
-			next.ServeHTTP(w, r)
-			return
-		}
-		if !isLoopbackHTTPHost(r.Host) {
-			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
-			return
-		}
-		http.Error(w, "forbidden", http.StatusForbidden)
-	})
-}
-
-func requireStateHTTPAuth(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="aiops state API", charset="UTF-8"`)
-	http.Error(w, "authentication required", http.StatusUnauthorized)
-}
-
-func stateHTTPAuthorized(r *http.Request, token string) bool {
-	if user, password, ok := r.BasicAuth(); ok && user == "aiops" && stateHTTPTokenMatches(password, token) {
-		return true
-	}
-	scheme, credentials, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-	if ok && strings.EqualFold(scheme, "Bearer") && stateHTTPTokenMatches(strings.TrimSpace(credentials), token) {
-		return true
-	}
-	return false
-}
-
-func stateHTTPTokenMatches(got, want string) bool {
-	if got == "" || want == "" || len(got) != len(want) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
-}
-
-func isLoopbackHTTPHost(hostport string) bool {
-	if hostport == "" {
-		return false
-	}
-	host := hostport
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		host = h
-	} else if strings.Contains(hostport, ":") && !strings.HasPrefix(hostport, "[") {
-		// "host:port" without IPv6 brackets that failed to split — malformed.
-		return false
-	}
-	// Strip IPv6 brackets only when the host is properly bracketed (e.g. "[::1]").
-	// Reject unpaired brackets — "[::1" or "::1]" are malformed Host values.
-	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
-		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
-			return false
-		}
-		host = host[1 : len(host)-1]
-	}
-	if host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
-	}
-	return false
-}
-
-func isLoopbackHTTPRemoteAddr(remoteAddr string) bool {
-	host, _, err := net.SplitHostPort(remoteAddr)
-	if err != nil {
-		return false
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
-type stateSnapshotFunc func(context.Context) (orchestrator.StateView, error)
-type stateRefreshFunc func(context.Context) (orchestrator.RefreshRequestResult, error)
-
-const (
-	refreshRequestHeader      = "X-AIOPS-Refresh"
-	refreshRequestHeaderValue = "true"
-	refreshBodyLimitBytes     = 1 << 20
-)
-
-var errRefreshBodyTooLarge = errors.New("refresh request body exceeds 1 MiB")
-
-func optionalStateRefreshFunc(refresh []stateRefreshFunc) stateRefreshFunc {
-	if len(refresh) == 0 {
-		return nil
-	}
-	return refresh[0]
-}
-
-type apiStateResponse struct {
-	GeneratedAt                time.Time              `json:"generated_at"`
-	PollIntervalMs             int64                  `json:"poll_interval_ms"`
-	MaxConcurrentAgents        int                    `json:"max_concurrent_agents"`
-	MaxConcurrentAgentsByState map[string]int         `json:"max_concurrent_agents_by_state,omitempty"`
-	Counts                     apiStateCounts         `json:"counts"`
-	Running                    []apiStateRunning      `json:"running"`
-	Blocked                    []apiStateBlocked      `json:"blocked"`
-	Retrying                   []apiStateRetry        `json:"retrying"`
-	Completed                  []orchestrator.IssueID `json:"completed"`
-	Failed                     []orchestrator.IssueID `json:"failed"`
-	CodexTotals                apiCodexTotals         `json:"codex_totals"`
-	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
-	// is emitted unconditionally — `null` until a `rate_limit_updated`
-	// notification is observed — so operators can rely on the key always
-	// being present (upstream parity, #328). A nil snapshot marshals to
-	// JSON null, not an omitted key.
-	RateLimits *orchestrator.RateLimitSnapshot `json:"rate_limits"`
-}
-
-type apiCodexTotals struct {
-	InputTokens    int64   `json:"input_tokens"`
-	OutputTokens   int64   `json:"output_tokens"`
-	TotalTokens    int64   `json:"total_tokens"`
-	SecondsRunning float64 `json:"seconds_running"`
-}
-
-type apiStateCounts struct {
-	Running int `json:"running"`
-	Blocked int `json:"blocked"`
-	// Retrying is the current retry-backoff queue depth.
-	Retrying int `json:"retrying"`
-	// Completed is the size of the FIFO-bounded recent-completed set
-	// (the same set published as `state.completed`). For lifetime
-	// totals across worker restarts and FIFO evictions, use
-	// completed_total. SPEC §13.7 §4.1.8.
-	Completed int `json:"completed"`
-	// Failed is the size of the dispatch-suppression set the
-	// orchestrator currently holds — i.e. the count of issues whose
-	// non-retryable failure still blocks redispatch. Unlike
-	// `completed`, this is NOT bounded by the recent-FIFO cap: the
-	// suppression set must keep entries until ReleaseFailedIfIssueChanged
-	// observes a tracker state/updated_at change, or the entry would
-	// spin every poll cycle. For the recent N IDs that /api/v1/state
-	// publishes under `failed`, see that array. For the lifetime
-	// monotonic counter, see `failed_total`.
-	Failed int `json:"failed"`
-	// CompletedTotal / FailedTotal are monotonic counters that count
-	// every observed Succeeded / NonRetryableFailed transition since
-	// process start, independent of FIFO eviction or release. Added
-	// for #234 so long-running deployments still expose a true
-	// lifetime number when the bounded sets have rotated.
-	CompletedTotal int64 `json:"completed_total"`
-	FailedTotal    int64 `json:"failed_total"`
-}
-
-type apiStateRunning struct {
-	IssueID    orchestrator.IssueID `json:"issue_id"`
-	Identifier string               `json:"issue_identifier,omitempty"`
-	// State / SessionID / TurnCount / LastEvent / LastMessage are part of
-	// the SPEC §13.7.2 running-row contract — the sample literally shows
-	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
-	// run with zero/empty values must still emit the keys. omitempty would
-	// let consumers confuse "known zero/empty" with "field missing".
-	State             string           `json:"state"`
-	SessionID         string           `json:"session_id"`
-	TurnCount         int              `json:"turn_count"`
-	LastEvent         string           `json:"last_event"`
-	LastMessage       string           `json:"last_message"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	LastEventAt       *time.Time       `json:"last_event_at,omitempty"`
-	RetryAttempt      *int             `json:"retry_attempt,omitempty"`
-	WorkspacePath     string           `json:"workspace_path,omitempty"`
-	Tokens            apiRunningTokens `json:"tokens"`
-	CodexAppServerPID int              `json:"codex_app_server_pid,omitempty"`
-}
-
-// apiRunningTokens mirrors SPEC §13.7.2's per-running-row `tokens` object.
-type apiRunningTokens struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
-}
-
-type apiStateBlocked struct {
-	IssueID           orchestrator.IssueID `json:"issue_id"`
-	Identifier        string               `json:"issue_identifier,omitempty"`
-	State             string               `json:"state,omitempty"`
-	BlockedAt         *time.Time           `json:"blocked_at,omitempty"`
-	WorkspacePath     string               `json:"workspace_path,omitempty"`
-	SessionID         string               `json:"session_id,omitempty"`
-	LastEventAt       *time.Time           `json:"last_event_at,omitempty"`
-	Method            string               `json:"method,omitempty"`
-	Error             string               `json:"error,omitempty"`
-	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
-}
-
-type apiStateRetry struct {
-	IssueID    orchestrator.IssueID   `json:"issue_id"`
-	Identifier string                 `json:"issue_identifier,omitempty"`
-	Attempt    int                    `json:"attempt"`
-	DueAt      *time.Time             `json:"due_at,omitempty"`
-	Error      string                 `json:"error,omitempty"`
-	Kind       orchestrator.RetryKind `json:"kind"`
-}
-
-type apiIssueResponse struct {
-	IssueIdentifier string               `json:"issue_identifier"`
-	IssueID         orchestrator.IssueID `json:"issue_id"`
-	Status          string               `json:"status"`
-	Workspace       struct {
-		Path string `json:"path,omitempty"`
-	} `json:"workspace"`
-	Attempts struct {
-		RestartCount        int  `json:"restart_count"`
-		CurrentRetryAttempt *int `json:"current_retry_attempt"`
-	} `json:"attempts"`
-	Running      *apiStateRunning `json:"running"`
-	Retry        *apiStateRetry   `json:"retry"`
-	RecentEvents []map[string]any `json:"recent_events"`
-	LastError    *string          `json:"last_error"`
-	Tracked      map[string]any   `json:"tracked"`
-}
-
-type apiErrorResponse struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-			return
-		}
-		view, err := snapshot(r.Context())
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				log.Printf("state snapshot cancelled: %v", err)
-				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", "request cancelled before snapshot completed")
-				return
-			}
-			log.Printf("state snapshot error: %v", err)
-			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), "snapshot temporarily unavailable")
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(apiStateFromView(view)); err != nil {
-			log.Printf("encode /api/v1/state response: %v", err)
-		}
-	})
-}
-
-func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-			return
-		}
-		identifier, err := issueIdentifierFromPath(r.URL.Path)
-		if err != nil {
-			writeAPIError(w, http.StatusNotFound, "issue_not_found", err.Error())
-			return
-		}
-		view, err := snapshot(r.Context())
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				log.Printf("issue snapshot cancelled: %v", err)
-				writeAPIError(w, http.StatusServiceUnavailable, "request_cancelled", "request cancelled before snapshot completed")
-				return
-			}
-			log.Printf("issue snapshot error: %v", err)
-			writeAPIError(w, http.StatusInternalServerError, apiErrorCode(err), "snapshot temporarily unavailable")
-			return
-		}
-		payload, ok := apiIssueFromView(view, identifier)
-		if !ok {
-			writeAPIError(w, http.StatusNotFound, "issue_not_found", fmt.Sprintf("issue %q was not found in the current runtime state", identifier))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if err := json.NewEncoder(w).Encode(payload); err != nil {
-			log.Printf("encode /api/v1/%s response: %v", identifier, err)
-		}
-	})
-}
-
-func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.Header().Set("Allow", http.MethodPost)
-			writeAPIError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-			return
-		}
-		if err := validateRefreshBody(r); err != nil {
-			if errors.Is(err, errRefreshBodyTooLarge) {
-				writeAPIError(w, http.StatusRequestEntityTooLarge, "refresh_body_too_large", err.Error())
-				return
-			}
-			writeAPIError(w, http.StatusBadRequest, "invalid_refresh_body", err.Error())
-			return
-		}
-		if !validRefreshHeader(r) {
-			writeAPIError(w, http.StatusForbidden, "refresh_header_required", fmt.Sprintf("%s: %s header is required", refreshRequestHeader, refreshRequestHeaderValue))
-			return
-		}
-		if refresh == nil {
-			writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", "refresh trigger is not configured")
-			return
-		}
-		result, err := refresh(r.Context())
-		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-				log.Printf("refresh cancelled: %v", err)
-				writeAPIError(w, http.StatusServiceUnavailable, "refresh_unavailable", "request cancelled before refresh completed")
-				return
-			}
-			log.Printf("refresh error: %v", err)
-			writeAPIError(w, http.StatusInternalServerError, "refresh_failed", "refresh trigger temporarily unavailable")
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		if err := json.NewEncoder(w).Encode(result); err != nil {
-			log.Printf("encode /api/v1/refresh response: %v", err)
-		}
-	})
-}
-
-func validRefreshHeader(r *http.Request) bool {
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get(refreshRequestHeader)), refreshRequestHeaderValue)
-}
-
-func issueIdentifierFromPath(path string) (string, error) {
-	raw := strings.TrimPrefix(path, "/api/v1/")
-	raw = strings.Trim(raw, "/")
-	if raw == "" {
-		return "", errors.New("missing issue identifier")
-	}
-	identifier, err := url.PathUnescape(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid issue identifier %q", raw)
-	}
-	identifier = strings.TrimSpace(identifier)
-	if identifier == "" {
-		return "", errors.New("missing issue identifier")
-	}
-	return identifier, nil
-}
-
-func validateRefreshBody(r *http.Request) error {
-	if r.Body == nil {
-		return nil
-	}
-	if r.ContentLength > refreshBodyLimitBytes {
-		return errRefreshBodyTooLarge
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, refreshBodyLimitBytes+1))
-	if err != nil {
-		return err
-	}
-	if len(body) > refreshBodyLimitBytes {
-		return errRefreshBodyTooLarge
-	}
-	bodyText := strings.TrimSpace(string(body))
-	if bodyText == "" {
-		return nil
-	}
-	if bodyText[0] != '{' {
-		return fmt.Errorf("refresh request body must be empty or {}")
-	}
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(bodyText), &object); err != nil {
-		return fmt.Errorf("refresh request body must be empty or {}")
-	}
-	if len(object) != 0 {
-		return fmt.Errorf("refresh request body must be empty or {}")
-	}
-	return nil
-}
-
-func writeAPIError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(apiErrorResponse{Error: apiError{Code: code, Message: message}}); err != nil {
-		log.Printf("encode API error response: %v", err)
-	}
-}
-
-func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueResponse, bool) {
-	want := normalizeIssueLookup(identifier)
-	base := func(issueID orchestrator.IssueID, identifier, status string) apiIssueResponse {
-		return apiIssueResponse{
-			IssueIdentifier: identifier,
-			IssueID:         issueID,
-			Status:          status,
-			RecentEvents:    []map[string]any{},
-			Tracked:         map[string]any{},
-		}
-	}
-	for _, row := range view.Running {
-		if !matchesIssueLookup(row.IssueID, row.Identifier, want) {
-			continue
-		}
-		running := apiRunningFromView(row)
-		payload := base(row.IssueID, row.Identifier, "running")
-		payload.Workspace.Path = row.WorkspacePath
-		payload.Attempts.CurrentRetryAttempt = copyIntPointer(row.RetryAttempt)
-		payload.Attempts.RestartCount = restartCountFromRetryAttempt(row.RetryAttempt)
-		payload.Running = &running
-		return payload, true
-	}
-	for _, row := range view.Retrying {
-		if !matchesIssueLookup(row.IssueID, row.Identifier, want) {
-			continue
-		}
-		retry := apiRetryFromView(row)
-		payload := base(row.IssueID, row.Identifier, "retrying")
-		payload.Attempts.CurrentRetryAttempt = &retry.Attempt
-		payload.Attempts.RestartCount = restartCountFromRetryAttempt(&retry.Attempt)
-		payload.Retry = &retry
-		payload.LastError = stringPointerIfNotEmpty(row.Error)
-		return payload, true
-	}
-	if payload, ok := apiTerminalIssueFromView(view, want); ok {
-		return payload, true
-	}
-	return apiIssueResponse{}, false
-}
-
-func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string) (apiIssueResponse, bool) {
-	base := func(issueID orchestrator.IssueID, identifier, status string) apiIssueResponse {
-		return apiIssueResponse{
-			IssueIdentifier: identifier,
-			IssueID:         issueID,
-			Status:          status,
-			RecentEvents:    []map[string]any{},
-			Tracked:         map[string]any{},
-		}
-	}
-	for i := len(view.RecentEvents) - 1; i >= 0; i-- {
-		ev := view.RecentEvents[i]
-		if ev.Kind != orchestrator.RuntimeEventCompleted && ev.Kind != orchestrator.RuntimeEventFailed {
-			continue
-		}
-		if !matchesIssueLookup(ev.IssueID, ev.Identifier, normalizedWant) {
-			continue
-		}
-		payload := base(ev.IssueID, ev.Identifier, string(ev.Kind))
-		payload.RecentEvents = []map[string]any{apiRuntimeEventFromView(ev)}
-		if ev.Kind == orchestrator.RuntimeEventFailed {
-			payload.LastError = stringPointerIfNotEmpty(ev.Message)
-		}
-		return payload, true
-	}
-	for _, issueID := range view.Completed {
-		if matchesIssueLookup(issueID, "", normalizedWant) {
-			return base(issueID, string(issueID), "completed"), true
-		}
-	}
-	for _, issueID := range view.Failed {
-		if matchesIssueLookup(issueID, "", normalizedWant) {
-			return base(issueID, string(issueID), "failed"), true
-		}
-	}
-	return apiIssueResponse{}, false
-}
-
-func apiRuntimeEventFromView(ev orchestrator.RuntimeEvent) map[string]any {
-	out := map[string]any{
-		"kind":       ev.Kind,
-		"issue_id":   ev.IssueID,
-		"identifier": ev.Identifier,
-		"message":    ev.Message,
-		"at":         ev.At,
-	}
-	if ev.Branch != "" {
-		out["branch"] = ev.Branch
-	}
-	if ev.PRURL != "" {
-		out["pr_url"] = ev.PRURL
-	}
-	return out
-}
-
-// restartCountFromRetryAttempt mirrors the Symphony Elixir reference
-// (lib/symphony_elixir_web/presenter.ex: `max(retry_attempt - 1, 0)`), and
-// matches the SPEC §13.7.2 example payload where restart_count=1 corresponds
-// to current_retry_attempt=2 (i.e. one prior restart triggered the second
-// attempt). nil retry attempt means the issue has not been retried, so the
-// restart count is zero.
-func restartCountFromRetryAttempt(retryAttempt *int) int {
-	if retryAttempt == nil {
-		return 0
-	}
-	if *retryAttempt <= 0 {
-		return 0
-	}
-	return *retryAttempt - 1
-}
-
-func matchesIssueLookup(issueID orchestrator.IssueID, identifier, normalizedWant string) bool {
-	return normalizeIssueLookup(identifier) == normalizedWant || normalizeIssueLookup(string(issueID)) == normalizedWant
-}
-
-func normalizeIssueLookup(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
-}
-
-func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
-	var startedAt *time.Time
-	if !row.StartedAt.IsZero() {
-		v := row.StartedAt
-		startedAt = &v
-	}
-	var lastEventAt *time.Time
-	if !row.LastEventAt.IsZero() {
-		v := row.LastEventAt
-		lastEventAt = &v
-	}
-	return apiStateRunning{
-		IssueID:       row.IssueID,
-		Identifier:    row.Identifier,
-		State:         row.State,
-		SessionID:     row.SessionID,
-		TurnCount:     row.TurnCount,
-		LastEvent:     row.LastEvent,
-		LastMessage:   redactStateAPILastMessage(row.LastMessage),
-		StartedAt:     startedAt,
-		LastEventAt:   lastEventAt,
-		RetryAttempt:  copyIntPointer(row.RetryAttempt),
-		WorkspacePath: row.WorkspacePath,
-		Tokens: apiRunningTokens{
-			InputTokens:  row.Tokens.InputTokens,
-			OutputTokens: row.Tokens.OutputTokens,
-			TotalTokens:  row.Tokens.TotalTokens,
-		},
-		CodexAppServerPID: row.CodexAppServerPID,
-	}
-}
-
-func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
-	var dueAt *time.Time
-	if !row.DueAt.IsZero() {
-		v := row.DueAt
-		dueAt = &v
-	}
-	return apiStateRetry{
-		IssueID:    row.IssueID,
-		Identifier: row.Identifier,
-		Attempt:    row.Attempt,
-		DueAt:      dueAt,
-		Error:      row.Error,
-		Kind:       retryKindOrFailure(row.Kind),
-	}
-}
-
-func retryKindOrFailure(kind orchestrator.RetryKind) orchestrator.RetryKind {
-	if kind == "" {
-		return orchestrator.RetryKindFailure
-	}
-	return kind
-}
-
-func copyIntPointer(in *int) *int {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
-}
-
-func stringPointerIfNotEmpty(value string) *string {
-	if value == "" {
-		return nil
-	}
-	return &value
-}
-
-func apiErrorCode(err error) string {
-	if category, ok := workflow.ErrorCategory(err); ok {
-		return string(category)
-	}
-	if category, ok := tracker.ErrorCategory(err); ok {
-		return string(category)
-	}
-	return "internal_error"
-}
-
-func apiStateFromView(view orchestrator.StateView) apiStateResponse {
-	generatedAt := view.GeneratedAt
-	if generatedAt.IsZero() {
-		generatedAt = time.Now().UTC()
-	}
-	running := sortedAPIRunningRows(view.Running)
-	blocked := make([]apiStateBlocked, 0, len(view.Blocked))
-	for _, row := range view.Blocked {
-		var blockedAt *time.Time
-		if !row.BlockedAt.IsZero() {
-			v := row.BlockedAt
-			blockedAt = &v
-		}
-		var lastEventAt *time.Time
-		if !row.LastEventAt.IsZero() {
-			v := row.LastEventAt
-			lastEventAt = &v
-		}
-		blocked = append(blocked, apiStateBlocked{
-			IssueID:           row.IssueID,
-			Identifier:        row.Identifier,
-			State:             row.State,
-			BlockedAt:         blockedAt,
-			WorkspacePath:     row.WorkspacePath,
-			SessionID:         row.SessionID,
-			LastEventAt:       lastEventAt,
-			Method:            row.Method,
-			Error:             row.Error,
-			CodexAppServerPID: row.CodexAppServerPID,
-		})
-	}
-	sort.Slice(blocked, func(i, j int) bool {
-		return blocked[i].IssueID < blocked[j].IssueID
-	})
-	retrying := sortedAPIRetryRows(view.Retrying)
-	completed := append([]orchestrator.IssueID(nil), view.Completed...)
-	sort.Slice(completed, func(i, j int) bool {
-		return completed[i] < completed[j]
-	})
-	failed := append([]orchestrator.IssueID(nil), view.Failed...)
-	sort.Slice(failed, func(i, j int) bool {
-		return failed[i] < failed[j]
-	})
-	return apiStateResponse{
-		GeneratedAt:                generatedAt,
-		PollIntervalMs:             view.PollIntervalMs,
-		MaxConcurrentAgents:        view.MaxConcurrentAgents,
-		MaxConcurrentAgentsByState: copyConcurrencyLimits(view.MaxConcurrentAgentsByState),
-		Counts:                     apiCountsFromView(view),
-		Running:                    running,
-		Blocked:                    blocked,
-		Retrying:                   retrying,
-		Completed:                  completed,
-		Failed:                     failed,
-		CodexTotals: apiCodexTotals{
-			InputTokens:    view.CodexTotals.InputTokens,
-			OutputTokens:   view.CodexTotals.OutputTokens,
-			TotalTokens:    view.CodexTotals.TotalTokens,
-			SecondsRunning: view.CodexTotals.SecondsRunning,
-		},
-		RateLimits: copyRateLimitsForAPI(view.CodexRateLimits),
-	}
-}
-
-func sortedAPIRunningRows(rows []orchestrator.RunningView) []apiStateRunning {
-	running := make([]apiStateRunning, 0, len(rows))
-	for _, row := range rows {
-		running = append(running, apiRunningFromView(row))
-	}
-	sort.Slice(running, func(i, j int) bool {
-		return running[i].IssueID < running[j].IssueID
-	})
-	return running
-}
-
-func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
-	retrying := make([]apiStateRetry, 0, len(rows))
-	for _, row := range rows {
-		retrying = append(retrying, apiRetryFromView(row))
-	}
-	sort.Slice(retrying, func(i, j int) bool {
-		return retrying[i].IssueID < retrying[j].IssueID
-	})
-	return retrying
-}
-
-func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
-	return apiStateCounts{
-		Running:        len(view.Running),
-		Blocked:        len(view.Blocked),
-		Retrying:       len(view.Retrying),
-		Completed:      len(view.Completed),
-		Failed:         view.FailedSuppressedCount,
-		CompletedTotal: view.CumulativeCompletedTotal,
-		FailedTotal:    view.CumulativeFailedTotal,
-	}
-}
-
-func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {
-	if src == nil {
-		return nil
-	}
-	copied := *src
-	return &copied
-}
-
-func copyConcurrencyLimits(src map[string]int) map[string]int {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
-}
-
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {
 	return orchestrator.ReconciliationConfig{
 		ActiveStates:      cfg.Tracker.ActiveStates,
@@ -1511,7 +442,6 @@ func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.Reconcili
 		StallTimeoutMs:    cfg.Codex.StallTimeoutMs,
 	}
 }
-
 func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
 	candidates := cfg.InactiveStates
 	if len(candidates) == 0 {
@@ -1540,7 +470,6 @@ func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
 	}
 	return out
 }
-
 func defaultInactiveStateCandidates(kind string) []string {
 	switch normalizeState(kind) {
 	case "github":
@@ -1551,7 +480,6 @@ func defaultInactiveStateCandidates(kind string) []string {
 		return []string{"Backlog", "Human Review"}
 	}
 }
-
 func stateSet(states []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(states))
 	for _, state := range states {
@@ -1561,7 +489,6 @@ func stateSet(states []string) map[string]struct{} {
 	}
 	return out
 }
-
 func normalizeState(state string) string {
 	return strings.ToLower(strings.TrimSpace(state))
 }
@@ -1618,7 +545,6 @@ func (c multiTrackerRuntimeClient) ListActiveIssues(ctx context.Context) ([]trac
 	}
 	return issues, errOut
 }
-
 func (c multiTrackerRuntimeClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
 	var issues []tracker.Issue
 	var errOut error
@@ -1632,11 +558,9 @@ func (c multiTrackerRuntimeClient) ListIssuesByStates(ctx context.Context, state
 	}
 	return issues, errOut
 }
-
 func (c multiTrackerRuntimeClient) Trackers() []trackerRuntimeClient {
 	return append([]trackerRuntimeClient(nil), c.trackers...)
 }
-
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
