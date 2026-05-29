@@ -24,6 +24,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
@@ -192,8 +193,11 @@ func TestAwaitTurnCompletion_MalformedProtocolLineRecordedThenContinues(t *testi
 func TestAwaitTurnCompletion_NonProtocolLineReturnsDecodeError(t *testing.T) {
 	c, _ := newTurnLoopClient([]string{`plain text not json`})
 	err := c.awaitTurnCompletion(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "decode codex app-server message") {
-		t.Fatalf("awaitTurnCompletion() = %v; want decode error", err)
+	// A line that is not even a JSON object is a hard decode failure surfaced
+	// as a CategoryResponseError (classify by category, not by message text —
+	// AGENTS.md rule 8), not a recorded-and-skipped malformed line.
+	if cat, ok := ErrorCategory(err); !ok || cat != CategoryResponseError {
+		t.Fatalf("awaitTurnCompletion() error category = %q,%v; want %q,true", cat, ok, CategoryResponseError)
 	}
 	if got := runtimeEventNames(c); len(got) != 0 {
 		t.Errorf("runtime events = %v; want none (non-protocol garbage is a hard decode failure)", got)
@@ -282,6 +286,55 @@ func TestAwaitTurnCompletion_UnsupportedToolCallRecordedThenContinues(t *testing
 	}
 	if reply := stdin.String(); !strings.Contains(reply, "unsupported dynamic tool") {
 		t.Errorf("tool-call reply = %q; want it to carry the unsupported-tool failure", reply)
+	}
+}
+
+func TestReadTurnMessage_PreReadBudgetExhaustedReturnsStall(t *testing.T) {
+	// When the stall budget is already spent at the top of an iteration,
+	// readTurnMessage returns a *StallError WITHOUT reading — distinct from the
+	// in-read timeout, which carries a non-nil Cause. The live loop resets
+	// lastTerminal every iteration so this guard is defensive; drive the helper
+	// directly to pin both the Cause==nil discriminator and the no-read
+	// short-circuit (awaitTurnCompletion resets lastTerminal on entry, so the
+	// branch is unreachable through the full loop).
+	c, _ := newTurnLoopClient([]string{`{"method":"turn/completed","params":{}}`},
+		func(c *appServerClient) { c.stallTimeoutMs = 10 })
+	c.lastTerminal = time.Now().Add(-time.Second) // budget already exhausted
+	msg, raw, stallBudget, err := c.readTurnMessage(context.Background())
+	var stall *StallError
+	if !errors.As(err, &stall) {
+		t.Fatalf("readTurnMessage() err = %v; want *StallError on an already-spent budget", err)
+	}
+	if stall.Cause != nil {
+		t.Errorf("StallError.Cause = %v; want nil (pre-read exhaustion has no underlying read error)", stall.Cause)
+	}
+	if msg != nil || raw != nil {
+		t.Errorf("readTurnMessage() msg=%v raw=%v; want nil,nil (no read performed)", msg, raw)
+	}
+	if got, want := stallBudget, 10*time.Millisecond; got != want {
+		t.Errorf("readTurnMessage() stallBudget = %v; want %v", got, want)
+	}
+	// The scanner is untouched: the unread turn/completed line is still there,
+	// proving readTurnMessage short-circuited before reading.
+	if line, lerr := c.readLine(context.Background()); lerr != nil || !strings.Contains(string(line), "turn/completed") {
+		t.Errorf("next line after pre-read stall = %q (err %v); want the unconsumed turn/completed line", line, lerr)
+	}
+}
+
+func TestHandleTurnNotification_LateNotificationSurfacesStall(t *testing.T) {
+	// A notification dispatched after the stall budget has already elapsed ends
+	// the turn with a *StallError. In the live loop the read deadline is tied to
+	// the same budget, so the read-budget stall (classifyTurnReadError) normally
+	// fires first and this notification-path branch is defensive; drive the
+	// extracted handler directly to pin it without relying on read timing.
+	c := &appServerClient{out: io.Discard, stallTimeoutMs: 10}
+	c.lastTerminal = time.Now().Add(-time.Second) // already past the 10ms budget
+	done, err := c.handleTurnNotification(map[string]any{"method": "item/agentMessage"}, "item/agentMessage")
+	if !done {
+		t.Fatalf("handleTurnNotification() done = false; want true when the stall budget is already spent")
+	}
+	if !IsStall(err) {
+		t.Fatalf("handleTurnNotification() err = %v; want *StallError", err)
 	}
 }
 

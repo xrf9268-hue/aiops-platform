@@ -17,118 +17,190 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
 
+// awaitTurnCompletion streams a single Codex turn to its terminal outcome. It
+// reads the next protocol message (under the stall budget), classifies read
+// failures, and dispatches decoded messages until one ends the turn. The
+// read → classify → dispatch split mirrors upstream's receive_loop →
+// handle_incoming → handle_turn_method (elixir codex/app_server.ex).
 func (c *appServerClient) awaitTurnCompletion(ctx context.Context) error {
 	c.lastTerminal = time.Now()
 	for {
-		readCtx := ctx
-		var cancel context.CancelFunc
-		var stallBudget time.Duration
-		if c.stallTimeoutMs > 0 {
-			stallBudget = time.Duration(c.stallTimeoutMs) * time.Millisecond
-			remaining := stallBudget - time.Since(c.lastTerminal)
-			if remaining <= 0 {
-				return &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal)}
-			}
-			readCtx, cancel = context.WithTimeout(ctx, remaining)
-		}
-		readTimeoutMs := c.readTimeoutMs
-		if stallBudget > 0 {
-			// During turn streaming, inactivity is governed by stall_timeout_ms.
-			// read_timeout_ms remains the per-read transport budget for request/
-			// response setup and for configurations without stall detection, but it
-			// must not preempt the longer event-inactivity watchdog and bypass the
-			// stalled/runner_timeout retry path.
-			c.readTimeoutMs = 0
-		}
-		msg, raw, err := c.readProtocolMessage(readCtx)
-		c.readTimeoutMs = readTimeoutMs
-		if cancel != nil {
-			cancel()
-		}
+		msg, raw, stallBudget, err := c.readTurnMessage(ctx)
 		if err != nil {
-			if raw != nil {
-				if !protocolMessageCandidate(raw) {
-					return fmt.Errorf("decode codex app-server message: %w", err)
-				}
-				c.recordMalformedRuntimeLine(raw, err)
-				c.lastTerminal = time.Now()
+			retErr, retry := c.classifyTurnReadError(ctx, err, raw, stallBudget)
+			if retry {
 				continue
 			}
-			elapsed := time.Since(c.lastTerminal)
-			if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
-				if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
-					return &StallError{Timeout: stallBudget, Elapsed: elapsed, Cause: err}
-				}
-			}
-			return err
+			return retErr
 		}
-		if method, _ := msg["method"].(string); method != "" {
-			switch method {
-			case "turn/completed":
-				if err := completedTurnError(msg); err != nil {
-					params, _ := msg["params"].(map[string]any)
-					c.recordSafeTurnFailure(task.EventTurnEndedWithError, params)
-					return err
-				}
-				c.handleNotification(msg)
-				c.recordRuntimeMessage(task.EventTurnCompleted, msg)
-				return nil
-			case "turn/failed", "turn/cancelled":
-				params, _ := msg["params"].(map[string]any)
-				reason := safeTurnReason(params)
-				if method == "turn/failed" {
-					c.recordSafeTurnFailure(task.EventTurnFailed, params)
-					return NewError(CategoryTurnFailed, fmt.Sprintf("%s: %s", method, reason), nil)
-				}
-				c.recordSafeTurnFailure(task.EventTurnCancelled, params)
-				return NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %s", method, reason), nil)
-			case "item/tool/call":
-				if err := c.handleDynamicToolCall(ctx, msg); err != nil {
-					return err
-				}
-				c.lastTerminal = time.Now()
-			default:
-				if _, ok := msg["id"]; ok {
-					if err := c.replyServerRequest(msg); err != nil {
-						return err
-					}
-					if inputRequiredServerRequest(method) {
-						c.recordInputRequiredMessage(method, msg)
-						return &InputRequiredError{Method: method}
-					}
-					// SPEC §10.4 turn_input_required also fires for an
-					// approval request that is not auto-approved — the
-					// runner's wire response is a decline / empty
-					// permissions / deny per protocolServerRequestResult,
-					// which is itself a signal that the operator must
-					// act. Without the event the orchestrator cannot
-					// distinguish this from a transient turn failure.
-					if approvalDeclinedServerRequest(method, c.approvalPolicy) {
-						c.recordInputRequiredMessage(method, msg)
-						return &InputRequiredError{Method: method}
-					}
-					c.lastTerminal = time.Now()
-					continue
-				}
-				if inputRequiredNotification(method, msg) {
-					c.recordInputRequiredMessage(method, msg)
-					return &InputRequiredError{Method: method}
-				}
-				if c.stallTimeoutMs > 0 {
-					elapsed := time.Since(c.lastTerminal)
-					if elapsed > time.Duration(c.stallTimeoutMs)*time.Millisecond {
-						return &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed}
-					}
-				}
-				c.lastTerminal = time.Now()
-				c.handleNotification(msg)
-				c.recordRuntimeMessage(task.EventNotification, msg)
-			}
-		} else {
-			c.lastTerminal = time.Now()
-			c.recordOtherRuntimeMessage(msg, raw)
+		if done, derr := c.dispatchTurnMessage(ctx, msg, raw); done {
+			return derr
 		}
 	}
+}
+
+// readTurnMessage performs one stall-budget-aware read of the next protocol
+// message. With stall detection enabled it derives a per-read deadline from the
+// remaining stall budget — returning a *StallError without reading once the
+// budget is already spent — and suspends read_timeout_ms for the duration of
+// the read: during turn streaming inactivity is governed by stall_timeout_ms,
+// while read_timeout_ms stays the per-read transport budget for request/
+// response setup and for configurations without stall detection, so it must not
+// preempt the longer event-inactivity watchdog and bypass the stalled/
+// runner_timeout retry path. The returned stallBudget is 0 when stall detection
+// is off.
+func (c *appServerClient) readTurnMessage(ctx context.Context) (map[string]any, []byte, time.Duration, error) {
+	readCtx := ctx
+	var cancel context.CancelFunc
+	var stallBudget time.Duration
+	if c.stallTimeoutMs > 0 {
+		stallBudget = time.Duration(c.stallTimeoutMs) * time.Millisecond
+		remaining := stallBudget - time.Since(c.lastTerminal)
+		if remaining <= 0 {
+			return nil, nil, stallBudget, &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal)}
+		}
+		readCtx, cancel = context.WithTimeout(ctx, remaining)
+	}
+	readTimeoutMs := c.readTimeoutMs
+	if stallBudget > 0 {
+		c.readTimeoutMs = 0
+	}
+	msg, raw, err := c.readProtocolMessage(readCtx)
+	c.readTimeoutMs = readTimeoutMs
+	if cancel != nil {
+		cancel()
+	}
+	return msg, raw, stallBudget, err
+}
+
+// classifyTurnReadError decides what a failed read means. A protocol-like line
+// that failed to decode is recorded and skipped (retry=true); a line that is
+// not even a JSON object is a hard decode failure. When stall detection is
+// active and the read deadline elapsed without the outer context being
+// cancelled, the timeout is reclassified as a *StallError so the stalled/
+// runner_timeout retry path fires instead of a bare deadline error.
+//
+// ctx must be the outer loop context, not the per-read deadline context that
+// readTurnMessage builds: a fired per-read stall deadline leaves the outer ctx
+// uncancelled, and that `ctx.Err() == nil` is exactly what distinguishes a
+// stall from a caller-driven cancellation. The pre-read budget-exhausted
+// *StallError readTurnMessage returns (raw==nil, Cause==nil) is neither
+// DeadlineExceeded nor a read timeout, so it falls through the reclassification
+// guard and propagates unchanged.
+func (c *appServerClient) classifyTurnReadError(ctx context.Context, err error, raw []byte, stallBudget time.Duration) (error, bool) {
+	if raw != nil {
+		if !protocolMessageCandidate(raw) {
+			return fmt.Errorf("decode codex app-server message: %w", err), false
+		}
+		c.recordMalformedRuntimeLine(raw, err)
+		c.lastTerminal = time.Now()
+		return nil, true
+	}
+	elapsed := time.Since(c.lastTerminal)
+	if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
+		if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
+			return &StallError{Timeout: stallBudget, Elapsed: elapsed, Cause: err}, false
+		}
+	}
+	return err, false
+}
+
+// dispatchTurnMessage routes one decoded protocol message. It returns done=true
+// with the turn's terminal error (nil on success) when the turn ends, and
+// done=false to keep streaming. Mirrors upstream handle_incoming.
+func (c *appServerClient) dispatchTurnMessage(ctx context.Context, msg map[string]any, raw []byte) (bool, error) {
+	method, _ := msg["method"].(string)
+	if method == "" {
+		c.lastTerminal = time.Now()
+		c.recordOtherRuntimeMessage(msg, raw)
+		return false, nil
+	}
+	switch method {
+	case "turn/completed":
+		if err := completedTurnError(msg); err != nil {
+			params, _ := msg["params"].(map[string]any)
+			c.recordSafeTurnFailure(task.EventTurnEndedWithError, params)
+			return true, err
+		}
+		c.handleNotification(msg)
+		c.recordRuntimeMessage(task.EventTurnCompleted, msg)
+		return true, nil
+	case "turn/failed", "turn/cancelled":
+		params, _ := msg["params"].(map[string]any)
+		reason := safeTurnReason(params)
+		if method == "turn/failed" {
+			c.recordSafeTurnFailure(task.EventTurnFailed, params)
+			return true, NewError(CategoryTurnFailed, fmt.Sprintf("%s: %s", method, reason), nil)
+		}
+		c.recordSafeTurnFailure(task.EventTurnCancelled, params)
+		return true, NewError(CategoryTurnCancelled, fmt.Sprintf("%s: %s", method, reason), nil)
+	case "item/tool/call":
+		if err := c.handleDynamicToolCall(ctx, msg); err != nil {
+			return true, err
+		}
+		c.lastTerminal = time.Now()
+		return false, nil
+	default:
+		return c.handleTurnMethod(msg, method)
+	}
+}
+
+// handleTurnMethod handles a non-terminal method message: a server->client
+// request (carries an id) is answered through handleServerRequest, anything
+// else is an agent-driven notification. Mirrors upstream handle_turn_method.
+// Returns done=true with the terminal error when the message ends the turn,
+// done=false to keep streaming.
+func (c *appServerClient) handleTurnMethod(msg map[string]any, method string) (bool, error) {
+	if _, ok := msg["id"]; ok {
+		return c.handleServerRequest(msg, method)
+	}
+	return c.handleTurnNotification(msg, method)
+}
+
+// handleServerRequest answers a server->client request and surfaces a declined
+// approval or explicit input request as operator-required input. Mirrors
+// upstream maybe_handle_approval_request.
+func (c *appServerClient) handleServerRequest(msg map[string]any, method string) (bool, error) {
+	if err := c.replyServerRequest(msg); err != nil {
+		return true, err
+	}
+	if inputRequiredServerRequest(method) {
+		c.recordInputRequiredMessage(method, msg)
+		return true, &InputRequiredError{Method: method}
+	}
+	// SPEC §10.4 turn_input_required also fires for an approval request that is
+	// not auto-approved — the runner's wire response is a decline / empty
+	// permissions / deny per protocolServerRequestResult, which is itself a
+	// signal that the operator must act. Without the event the orchestrator
+	// cannot distinguish this from a transient turn failure.
+	if approvalDeclinedServerRequest(method, c.approvalPolicy) {
+		c.recordInputRequiredMessage(method, msg)
+		return true, &InputRequiredError{Method: method}
+	}
+	c.lastTerminal = time.Now()
+	return false, nil
+}
+
+// handleTurnNotification handles an agent-driven notification (no request id):
+// an explicit input request ends the turn, a notification arriving after the
+// stall budget has elapsed surfaces a *StallError, otherwise the message
+// refreshes the stall clock and is recorded. Mirrors upstream
+// handle_turn_method's :unhandled branch.
+func (c *appServerClient) handleTurnNotification(msg map[string]any, method string) (bool, error) {
+	if inputRequiredNotification(method, msg) {
+		c.recordInputRequiredMessage(method, msg)
+		return true, &InputRequiredError{Method: method}
+	}
+	if c.stallTimeoutMs > 0 {
+		elapsed := time.Since(c.lastTerminal)
+		if elapsed > time.Duration(c.stallTimeoutMs)*time.Millisecond {
+			return true, &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed}
+		}
+	}
+	c.lastTerminal = time.Now()
+	c.handleNotification(msg)
+	c.recordRuntimeMessage(task.EventNotification, msg)
+	return false, nil
 }
 func (c *appServerClient) handleNotification(msg map[string]any) {
 	params, _ := msg["params"].(map[string]any)
