@@ -331,6 +331,72 @@ func (r *reportBuilder) checkCodex(ctx context.Context, cfg workflow.Config) {
 	} else {
 		r.pass("Codex app-server", "started and answered a JSON-RPC probe")
 	}
+	r.checkCodexAuthModel(cfg)
+}
+
+// checkCodexAuthModel reports the production auth mode and model configuration
+// the app-server worker will use, so a preflight distinguishes a missing model
+// API key from an expired ChatGPT login and surfaces model selection instead of
+// leaving it hidden in a copied host config.toml (#465). Secrets are never
+// printed: API-key presence is checked without echoing the value, and only the
+// non-secret model/provider/effort keys are read from config.toml.
+func (r *reportBuilder) checkCodexAuthModel(cfg workflow.Config) {
+	home := codexHomeDir()
+	if codexAPIKeyAuthSelected(cfg) {
+		r.checkCodexAPIKeyAuth()
+	} else {
+		r.checkCodexLoginAuth(home)
+	}
+	r.checkCodexModelConfig(home)
+}
+
+func (r *reportBuilder) checkCodexAPIKeyAuth() {
+	if strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != "" {
+		r.pass("Codex auth mode", "API key via OPENAI_API_KEY passthrough")
+		return
+	}
+	status := Warn
+	if r.realMode() {
+		status = Fail
+	}
+	r.add(status, "Codex auth mode", "OPENAI_API_KEY is in codex.env_passthrough but resolved empty",
+		"Mount the model API key from a Docker secret into OPENAI_API_KEY; never pass it on a command line.")
+}
+
+func (r *reportBuilder) checkCodexLoginAuth(home string) {
+	detail := "ChatGPT/Codex login"
+	if home != "" {
+		detail += " (auth.json under " + home + ")"
+	}
+	r.pass("Codex auth mode", detail)
+	if !r.realMode() || home == "" {
+		return
+	}
+	if err := codexHomeWritable(home); err != nil {
+		r.warn("Codex auth refresh", "CODEX_HOME is not writable: "+err.Error(),
+			"Mount CODEX_HOME as a restricted writable volume so ChatGPT-login token refresh can persist for long-lived workers.")
+	}
+}
+
+func (r *reportBuilder) checkCodexModelConfig(home string) {
+	if home == "" {
+		return
+	}
+	configPath := filepath.Join(home, "config.toml")
+	model, provider, effort, ok := readCodexModelConfig(configPath)
+	if !ok {
+		r.warn("Codex model config", "no model declared in "+configPath,
+			"Declare model (and optional model_provider/model_reasoning_effort) in a tracked, non-secret config.toml so model selection is auditable instead of relying on a copied host config.")
+		return
+	}
+	detail := "model=" + model
+	if provider != "" {
+		detail += ", provider=" + provider
+	}
+	if effort != "" {
+		detail += ", reasoning_effort=" + effort
+	}
+	r.pass("Codex model config", detail)
 }
 
 func (r *reportBuilder) checkSandbox(cfg workflow.Config) {
@@ -659,6 +725,98 @@ func lookPathInEnv(name string, env []string) (string, error) {
 
 func requiresCodex(cfg workflow.Config) bool {
 	return cfg.Agent.Default == "codex" || cfg.Agent.Default == runner.NameCodexAppServer
+}
+
+// codexAPIKeyAuthSelected reports whether the workflow opts the agent into
+// model API-key auth by passing OPENAI_API_KEY through to the Codex
+// subprocess. Without the passthrough the key never reaches the agent and the
+// app-server falls back to the ChatGPT/Codex login in CODEX_HOME.
+func codexAPIKeyAuthSelected(cfg workflow.Config) bool {
+	for _, name := range cfg.Codex.EnvPassthrough {
+		if strings.EqualFold(strings.TrimSpace(name), "OPENAI_API_KEY") {
+			return true
+		}
+	}
+	return false
+}
+
+// codexHomeDir resolves the directory Codex reads auth and config from, the
+// same way the CLI does: CODEX_HOME wins, otherwise $HOME/.codex.
+func codexHomeDir() string {
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return home
+	}
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return filepath.Join(home, ".codex")
+	}
+	return ""
+}
+
+// codexHomeWritable confirms the worker can create files in CODEX_HOME, which
+// a long-lived ChatGPT-login deployment needs so Codex can persist refreshed
+// tokens. The probe file is removed before returning.
+func codexHomeWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".aiops-doctor-write-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	closeBody(f)
+	_ = os.Remove(name)
+	return nil
+}
+
+// readCodexModelConfig extracts the non-secret top-level model selection keys
+// from a Codex config.toml. It deliberately ignores every `[table]` section so
+// provider blocks (which may name secret env keys) are never surfaced. ok is
+// true only when a model is declared.
+func readCodexModelConfig(path string) (model, provider, effort string, ok bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", "", false
+	}
+	values := topLevelTOMLScalars(string(data))
+	model = values["model"]
+	return model, values["model_provider"], values["model_reasoning_effort"], model != ""
+}
+
+// topLevelTOMLScalars returns the bare top-level `key = value` scalars in a
+// TOML document, skipping every `[table]` section so nested provider blocks
+// (which can name secret env keys) are never surfaced.
+func topLevelTOMLScalars(data string) map[string]string {
+	values := map[string]string{}
+	inTable := false
+	for _, raw := range strings.Split(data, "\n") {
+		line := strings.TrimSpace(raw)
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "["):
+			inTable = true
+		case inTable:
+		default:
+			if key, val, found := strings.Cut(line, "="); found {
+				values[strings.TrimSpace(key)] = tomlScalarString(val)
+			}
+		}
+	}
+	return values
+}
+
+// tomlScalarString reads a quoted or bare TOML scalar, dropping a trailing
+// inline comment on bare values. It is intentionally minimal: doctor only
+// surfaces the value for display, so full TOML parsing is not warranted.
+func tomlScalarString(v string) string {
+	v = strings.TrimSpace(v)
+	if len(v) > 0 && (v[0] == '"' || v[0] == '\'') {
+		if j := strings.IndexByte(v[1:], v[0]); j >= 0 {
+			return v[1 : 1+j]
+		}
+		return strings.Trim(v, string(v[0]))
+	}
+	if i := strings.IndexByte(v, '#'); i >= 0 {
+		v = v[:i]
+	}
+	return strings.TrimSpace(v)
 }
 
 func linearProjectSlugs(cfg workflow.Config) []string {

@@ -31,7 +31,16 @@ services:
       - worker
     volumes:
       - ${AIOPS_WORKFLOW_PATH:?set AIOPS_WORKFLOW_PATH to a workflow file}:/app/WORKFLOW.md:ro
+      # CODEX_HOME is a restricted writable volume: Codex CLI 0.133 writes while
+      # loading config and persists refreshed ChatGPT-login tokens here. Keep it
+      # owned by the worker UID/GID and out of git; auth.json is a secret.
       - ${AIOPS_CODEX_HOME_PATH:?set AIOPS_CODEX_HOME_PATH to a Codex home directory}:/home/aiops/.codex
+      # Optional, recommended (#465): mount a version-controlled, NON-SECRET
+      # config.toml read-only OVER the writable home so model/provider/reasoning
+      # selection is declarative and auditable instead of copied from an opaque
+      # host config. Uncomment and set AIOPS_CODEX_CONFIG_FILE to an absolute path
+      # (e.g. $PWD/deploy/codex/config.toml). Leave auth out of this file.
+      # - ${AIOPS_CODEX_CONFIG_FILE:?set AIOPS_CODEX_CONFIG_FILE to a tracked config.toml}:/home/aiops/.codex/config.toml:ro
     secrets:
       - linear_api_key
       - gitea_token

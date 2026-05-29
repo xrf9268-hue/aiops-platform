@@ -712,6 +712,97 @@ func TestRunReturnsFailureWhenReportHasFailures(t *testing.T) {
 	}
 }
 
+func TestCheckCodexAuthModelAPIKeyMissingFailsInRealMode(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "")
+	cfg := workflow.Config{}
+	cfg.Codex.EnvPassthrough = []string{"OPENAI_API_KEY"}
+	r := &reportBuilder{opts: Options{Mode: "real"}}
+	r.checkCodexAuthModel(cfg)
+
+	check := findCheck(t, Report{Checks: r.checks}, "Codex auth mode")
+	if check.Status != Fail {
+		t.Fatalf("checkCodexAuthModel(api-key, OPENAI_API_KEY unset) status = %s; want %s", check.Status, Fail)
+	}
+}
+
+func TestCheckCodexAuthModelAPIKeyPresentPasses(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("OPENAI_API_KEY", "sk-doctor-test")
+	cfg := workflow.Config{}
+	cfg.Codex.EnvPassthrough = []string{"OPENAI_API_KEY"}
+	r := &reportBuilder{opts: Options{Mode: "real"}}
+	r.checkCodexAuthModel(cfg)
+
+	check := findCheck(t, Report{Checks: r.checks}, "Codex auth mode")
+	if check.Status != Pass {
+		t.Fatalf("checkCodexAuthModel(api-key, OPENAI_API_KEY set) status = %s; want %s", check.Status, Pass)
+	}
+	if strings.Contains(check.Detail, "sk-doctor-test") {
+		t.Fatalf("Codex auth mode detail = %q; must not echo the API key", check.Detail)
+	}
+}
+
+func TestCheckCodexAuthModelChatGPTLoginReportsModelConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+	writeFile(t, filepath.Join(home, "config.toml"), "model = \"gpt-5-codex\"\nmodel_provider = \"openai\"\nmodel_reasoning_effort = \"high\"\n")
+	cfg := workflow.Config{}
+	r := &reportBuilder{opts: Options{Mode: "real"}}
+	r.checkCodexAuthModel(cfg)
+
+	mode := findCheck(t, Report{Checks: r.checks}, "Codex auth mode")
+	if mode.Status != Pass || !strings.Contains(mode.Detail, "ChatGPT/Codex login") {
+		t.Fatalf("Codex auth mode = %+v; want PASS ChatGPT/Codex login", mode)
+	}
+	model := findCheck(t, Report{Checks: r.checks}, "Codex model config")
+	if model.Status != Pass {
+		t.Fatalf("Codex model config status = %s; want %s", model.Status, Pass)
+	}
+	for _, want := range []string{"model=gpt-5-codex", "provider=openai", "reasoning_effort=high"} {
+		if !strings.Contains(model.Detail, want) {
+			t.Fatalf("Codex model config detail = %q; want it to contain %q", model.Detail, want)
+		}
+	}
+}
+
+func TestCheckCodexModelConfigWarnsWhenModelMissing(t *testing.T) {
+	home := t.TempDir()
+	r := &reportBuilder{opts: Options{Mode: "real"}}
+	r.checkCodexModelConfig(home)
+
+	check := findCheck(t, Report{Checks: r.checks}, "Codex model config")
+	if check.Status != Warn {
+		t.Fatalf("checkCodexModelConfig(no config.toml) status = %s; want %s", check.Status, Warn)
+	}
+}
+
+func TestReadCodexModelConfigIgnoresTableSections(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "config.toml")
+	writeFile(t, path, `# top-level model selection
+model = "gpt-5-codex" # inline comment
+[model_providers.custom]
+model_provider = "leaked-provider"
+model_reasoning_effort = "leaked-effort"
+env_key = "SECRET_PROVIDER_KEY"
+`)
+	model, provider, effort, ok := readCodexModelConfig(path)
+	if !ok || model != "gpt-5-codex" {
+		t.Fatalf("readCodexModelConfig model = %q, ok = %v; want %q, true", model, ok, "gpt-5-codex")
+	}
+	if provider != "" || effort != "" {
+		t.Fatalf("readCodexModelConfig leaked table keys: provider = %q, effort = %q; want both empty", provider, effort)
+	}
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func writeWorkflow(t *testing.T, trackerKind, apiKey string) string {
 	t.Helper()
 	return writeWorkflowBody(t, trackerKind, apiKey, "mock", "")

@@ -87,25 +87,108 @@ schema snapshot first. Do not add fallback translation for old sandbox fields
 such as `mode`, `access`, or `readOnlyAccess`; this project is pre-release and
 should fail fast on stale workflow shape.
 
-## Authentication mount
+## Production auth and model configuration
 
-`codex app-server` must be authenticated before the worker starts it. For a
-local validation image, mount a temporary Codex home copied from a host session:
+`codex app-server` must be authenticated before the worker starts it. This
+section is the production operator contract for **identity** and **model
+configuration** (#465). The separate skills/MCP/toolchain bundle is #464; see
+"Composition with #464" below for the boundary.
 
-```bash
-mkdir -p /tmp/aiops-codex-home/.codex
-cp ~/.codex/auth.json /tmp/aiops-codex-home/.codex/auth.json
-cp ~/.codex/config.toml /tmp/aiops-codex-home/.codex/config.toml
-```
+### Supported auth modes
 
-For Codex CLI 0.133, mount that directory writable at `/home/aiops/.codex`
-for the default non-root worker image, and set:
+Two modes are supported. Pick one per deployment; do not mix them.
+
+1. **ChatGPT/Codex login (default).** Codex stores the login in
+   `$CODEX_HOME/auth.json`. This file is a secret and is **writable at runtime**
+   because Codex 0.133 refreshes tokens in place. Set it up once with
+   `codex --login` in the same container user / `CODEX_HOME` context, then keep
+   `CODEX_HOME` on a restricted writable volume so refreshed tokens persist
+   across restarts. A read-only `CODEX_HOME` silently breaks long-lived workers
+   the first time a token needs refreshing.
+
+2. **Model API key.** Codex authenticates with `OPENAI_API_KEY` (or the
+   `env_key` named by a custom `[model_providers.*]` block). The worker does
+   **not** pass model-runtime credentials to the agent subprocess unless the
+   workflow opts in: add `OPENAI_API_KEY` to `codex.env_passthrough` in
+   `WORKFLOW.md`. Source the value from a Docker secret / secret file and let the
+   entrypoint export it; never put it on a command line or in a git-tracked file.
+   Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`, …) stay denied from
+   passthrough by policy — only the model key is opt-in.
+
+`worker --doctor --mode=real` reports the active mode as `Codex auth mode`:
+`API key via OPENAI_API_KEY passthrough` when the passthrough is configured (and
+fails if the key resolves empty), otherwise `ChatGPT/Codex login` plus a
+`Codex auth refresh` warning if `CODEX_HOME` is not writable.
+
+### CODEX_HOME volume layout
+
+Treat `CODEX_HOME` as three concerns with different trust levels:
+
+| Path | Trust | Mount |
+| --- | --- | --- |
+| `auth.json` | secret, mutable | inside the **writable** `CODEX_HOME` volume; never commit |
+| `config.toml` | non-secret, declarative | **read-only** bind from a version-controlled file (see below) |
+| `sessions/`, `log/`, cache | ephemeral | writable; safe to discard between runs |
+
+For Codex CLI 0.133, mount the writable home at `/home/aiops/.codex` for the
+default non-root worker image, owned by the worker UID/GID, and set:
 
 ```text
 CODEX_HOME=/home/aiops/.codex
 ```
 
-Validate inside the container before processing issues:
+Codex resolves its home from `CODEX_HOME` if set, otherwise `$HOME/.codex`. The
+worker passes `HOME` to the agent subprocess but **not** `CODEX_HOME`; if you
+point `CODEX_HOME` somewhere other than `$HOME/.codex`, also add `CODEX_HOME` to
+`codex.env_passthrough` so the agent sees the same home the preflight checked.
+
+### Declarative model configuration
+
+Do not copy an opaque host `config.toml` into the image or the writable home.
+Instead keep a small, non-secret, version-controlled config and mount it
+read-only over `$CODEX_HOME/config.toml`. The repo ships
+[`deploy/codex/config.toml`](../../deploy/codex/config.toml) as the example:
+
+```toml
+model = "gpt-5-codex"
+model_provider = "openai"
+model_reasoning_effort = "high"
+```
+
+Enable it by uncommenting the optional bind in
+`deploy/docker-compose.codex.yml` and pointing `AIOPS_CODEX_CONFIG_FILE` at an
+absolute path:
+
+```text
+AIOPS_CODEX_CONFIG_FILE=$PWD/deploy/codex/config.toml
+```
+
+`worker --doctor --mode=real` reads the three top-level model keys (and nothing
+from `[model_providers.*]` tables, which may name secret env keys) and reports
+them as `Codex model config: model=…, provider=…, reasoning_effort=…`. If no
+`model` is declared it warns rather than silently inheriting Codex's built-in
+default, so model selection is always explicit and auditable in review.
+
+Provider, profile, service tier, reasoning effort, and feature flags all belong
+in this tracked file or in `WORKFLOW.md` front matter (`codex.profile`,
+`codex.thread_sandbox`, `codex.approval_policy`, the `codex.*_timeout_ms`
+fields), never in operator-local state baked into the image.
+
+### Rotation, refresh, and revocation
+
+- **ChatGPT login refresh** happens automatically as long as `CODEX_HOME` is
+  writable; no operator action is needed mid-deployment.
+- **Re-login / rotation:** run `codex --login` again in the container user /
+  `CODEX_HOME` context (or re-provision the `auth.json` on the writable volume),
+  then re-run `worker --doctor --mode=real`. No image rebuild is required.
+- **API-key rotation:** replace the Docker secret file contents and recreate the
+  worker so the entrypoint re-exports the new value; nothing is committed.
+- **Revocation:** revoke the ChatGPT session or API key at the provider, then
+  delete `auth.json` (or clear the secret) on the volume. `codex login status`
+  and `worker --doctor --mode=real` will then fail closed with an actionable
+  `Codex auth` failure instead of running with stale credentials.
+
+### Validate before processing issues
 
 ```bash
 codex login status
@@ -117,6 +200,28 @@ should remain running on stdio until the worker speaks JSON-RPC to it.
 `worker --doctor --mode=real` performs that stdio probe by keeping stdin open,
 sending `initialize`, and waiting for a JSON-RPC response. A probe that only
 starts the process and closes stdin is not a valid app-server check.
+
+### Doctor remediation reference
+
+| Doctor line | Meaning | Remediation |
+| --- | --- | --- |
+| `FAIL Codex auth` | `codex login status` failed or returned not-logged-in | Run `codex --login` (or re-provision `auth.json`) in the same `CODEX_HOME`/container user context. |
+| `FAIL Codex auth mode` | `OPENAI_API_KEY` is in `codex.env_passthrough` but resolves empty | Mount the model API key from a Docker secret into `OPENAI_API_KEY`; never pass it on a command line. |
+| `WARN Codex auth refresh` | ChatGPT-login mode but `CODEX_HOME` is not writable | Mount `CODEX_HOME` as a restricted writable volume so token refresh can persist. |
+| `WARN Codex model config` | no `model` declared in `$CODEX_HOME/config.toml` | Declare `model` (and optional `model_provider`/`model_reasoning_effort`) in the tracked `config.toml`. |
+| `PASS Codex model config` | resolved model selection | none; verify the reported `model`/`provider`/`reasoning_effort` match intent. |
+| `FAIL Codex app-server` | app-server did not answer the JSON-RPC `initialize` probe | Check `CODEX_HOME`, `codex.command`, and app-server support in the installed Codex version. |
+
+### Composition with #464
+
+This issue covers credentials and model configuration only. The agent's
+**toolchain** — repo/Codex skills, plugins, MCP servers, and the `gh`/Go
+command surface — is the separate #464 contract. Both share the same principle:
+secrets stay in Docker secrets / secret files and writable volumes, while
+reproducible, non-secret assets (this `config.toml`, the #464 skills/MCP
+manifest) are version-controlled and verified by `worker --doctor`. The auth
+modes here do not install skills or MCP servers; do not rely on a host `~/.codex`
+to supply them.
 
 ## GitHub agent credentials
 
@@ -167,12 +272,9 @@ using the Codex agent environment. Omit `--github-repo` only when the workflow
 configures one GitHub repo. A failure is a deployment blocker; fix the
 toolchain or credential path before starting the worker.
 
-The supported Compose overlay uses a writable bind for `CODEX_HOME` because
-Codex 0.133 writes while loading configuration and may refresh auth state.
-Use a restricted directory owned by the worker UID/GID. A read-only copy is
-only suitable for archival inspection or a future Codex version that documents
-a no-write startup mode; it is not a valid `worker --doctor --mode=real`
-preflight mount for 0.133.
+The `CODEX_HOME` volume trust layout (writable home, read-only declarative
+`config.toml`, ephemeral cache) is covered under "Production auth and model
+configuration" above.
 
 ## Sandbox note
 

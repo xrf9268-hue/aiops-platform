@@ -1,0 +1,23 @@
+# Declarative, version-controlled Codex model configuration for the
+# production-style Docker worker (#465).
+#
+# This file is intentionally NON-SECRET and safe to commit. It carries only
+# model/provider/reasoning selection so the model the worker runs is auditable
+# in review and in `worker --doctor`, instead of hidden in a copied host
+# `config.toml`. Mount it read-only over `$CODEX_HOME/config.toml`; keep the
+# secret `auth.json` (ChatGPT login) or `OPENAI_API_KEY` (API-key mode) out of
+# this file and out of git. See docs/runbooks/codex-app-server-docker.md.
+
+# Model selection. `worker --doctor --mode=real` surfaces these three keys as
+# "Codex model config" so the choice is explicit and reviewable.
+model = "gpt-5-codex"
+model_provider = "openai"
+model_reasoning_effort = "high"
+
+# Optional: a non-default provider endpoint. The provider's credential is named
+# here only by env var (`env_key`); the value still arrives through a Docker
+# secret / env passthrough, never inline in this file.
+# [model_providers.openai]
+# name = "OpenAI"
+# base_url = "https://api.openai.com/v1"
+# env_key = "OPENAI_API_KEY"
