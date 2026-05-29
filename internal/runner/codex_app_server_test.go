@@ -52,8 +52,6 @@ func appServerInput(workdir string) RunInput {
 
 func codexAppServerStubScript(t *testing.T, body string) string {
 	t.Helper()
-	dir := t.TempDir()
-	scriptPath := filepath.Join(dir, "codex")
 	header := `#!/usr/bin/env python3
 import os, sys
 with open(os.environ['CODEX_ARGV_LOG'], 'w') as f:
@@ -62,7 +60,19 @@ with open(os.environ['CODEX_ARGV_LOG'], 'w') as f:
 with open(os.environ['CODEX_STARTED_LOG'], 'w') as f:
     f.write('started\n')
 `
-	if err := os.WriteFile(scriptPath, []byte(header+body), 0o755); err != nil {
+	return installCodexStub(t, header+body)
+}
+
+// installCodexStub installs `script` as an executable `codex` on PATH and
+// exports the CODEX_*_LOG paths the app-server stubs read. `script` must carry
+// its own interpreter shebang so callers can install non-Python stubs (e.g. the
+// shell stub the initialize-timeout diagnostics test uses to write its
+// started-log evidence without paying the Python startup cost).
+func installCodexStub(t *testing.T, script string) string {
+	t.Helper()
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "codex")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	path := dir + string(os.PathListSeparator) + os.Getenv("PATH")
@@ -1397,18 +1407,27 @@ for line in sys.stdin:
 }
 
 func TestCodexAppServerInitializeTimeoutDiagnostics(t *testing.T) {
-	codexAppServerStubScript(t, `
-import json, time
-time.sleep(2)
-for line in sys.stdin:
-    msg=json.loads(line)
-    if msg.get('method') == 'initialize':
-        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+	// Route the started-log evidence and a JSON-RPC handshake through a fast
+	// shell preamble instead of the Python interpreter's startup. The runner
+	// reads the handshake line — which the stub prints only after it has
+	// written the started-log to disk — so by the time the next read hits the
+	// initialize read timeout, the started-log is guaranteed present. And even
+	// if the handshake read itself were to time out, the shell has already
+	// written the started-log within a few milliseconds of exec, so the
+	// process-start evidence holds either way. This removes the race where a
+	// tight read timeout fired before Python startup wrote the file (#476); the
+	// runtime read-timeout behavior is unchanged — the stub simply never answers
+	// initialize, so the initialize request still times out.
+	installCodexStub(t, `#!/bin/sh
+printf 'started\n' > "$CODEX_STARTED_LOG"
+printf '%s\n' '{"jsonrpc":"2.0","method":"session/started"}'
+# Stay initialized-but-silent so the runner's next read hits the read timeout.
+cat > /dev/null
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Codex.ReadTimeoutMs = 25
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 200
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	var logs []string
@@ -1417,14 +1436,14 @@ for line in sys.stdin:
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "codex app-server initialize") || !strings.Contains(err.Error(), "read timeout") {
-		t.Fatalf("Run error = %v, want initialize read timeout", err)
+		t.Fatalf("Run() error = %v; want initialize read timeout", err)
 	}
 	diagnostics := strings.Join(logs, "\n")
 	if !strings.Contains(diagnostics, "started log") || !strings.Contains(diagnostics, "started\n") {
-		t.Fatalf("diagnostics missing started log; diagnostics=\n%s", diagnostics)
+		t.Fatalf("Run() diagnostics = %q; want started-log process-start evidence", diagnostics)
 	}
 	if !strings.Contains(diagnostics, "stdin log") {
-		t.Fatalf("diagnostics missing stdin log status; diagnostics=\n%s", diagnostics)
+		t.Fatalf("Run() diagnostics = %q; want stdin-log status line", diagnostics)
 	}
 }
 
