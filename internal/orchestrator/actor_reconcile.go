@@ -195,35 +195,47 @@ type refreshActiveTrackerIssuesOp struct {
 
 func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	for id, run := range st.Running {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(run.Issue, issue) {
-			continue
+		if issue, ok := r.activeMatch(st, id, run.Issue); ok {
+			refreshRunningIssue(run, issue)
 		}
-		refreshRunningIssue(run, issue)
-		st.ClaimedIssues[id] = issue
 	}
 	for id, retry := range st.RetryAttempts {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(retry.Issue, issue) {
-			continue
+		if issue, ok := r.activeMatch(st, id, retry.Issue); ok {
+			retry.Issue = issue
 		}
-		retry.Issue = issue
-		st.ClaimedIssues[id] = issue
 	}
 	for id, blocked := range st.Blocked {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(blocked.Issue, issue) {
-			continue
+		if issue, ok := r.activeMatch(st, id, blocked.Issue); ok {
+			blocked.Issue = issue
 		}
-		blocked.Issue = issue
-		st.ClaimedIssues[id] = issue
 	}
+	return r.doneFollowup()
+}
+
+// doneFollowup returns the no-op off-actor followup that signals completion by
+// closing the reply channel (the refresh pass cancels nothing).
+func (r *refreshActiveTrackerIssuesOp) doneFollowup() func() {
 	done := r.done
 	return func() {
 		if done != nil {
 			close(done)
 		}
 	}
+}
+
+// activeMatch reports whether id's entry is still observed in the active listing
+// on the same service route as prev. On a match it refreshes the ClaimedIssues
+// snapshot (so per-state capacity gates see the latest state) and returns the
+// fresh issue for the caller to store on the entry; a miss (absent / non-active
+// / route-changed) leaves the entry untouched — absence from a possibly-partial
+// listing is "no information," not "now inactive."
+func (r *refreshActiveTrackerIssuesOp) activeMatch(st *OrchestratorState, id IssueID, prev tracker.Issue) (tracker.Issue, bool) {
+	issue, ok := r.issuesByID[string(id)]
+	if !ok || !isActiveTrackerState(issue.State, r.activeStates) || !sameServiceRoute(prev, issue) {
+		return tracker.Issue{}, false
+	}
+	st.ClaimedIssues[id] = issue
+	return issue, true
 }
 
 // reconcileStalledRunsOp is the actor-side handler for SPEC §8.5 Part A.
@@ -242,22 +254,34 @@ type reconcileStalledRunsOp struct {
 func (r *reconcileStalledRunsOp) apply(st *OrchestratorState) func() {
 	var canceled []*RunningEntry
 	for id, run := range st.Running {
-		ref := run.LastEventAt
-		if ref.IsZero() {
-			ref = run.StartedAt
-		}
-		if ref.IsZero() {
-			// Fresh dispatch without a StartedAt is exceedingly rare (a
-			// test fixture). Skip rather than treat the Unix epoch as a
-			// stall reference, which would cancel every such entry.
-			continue
-		}
-		if r.now.Sub(ref) <= r.timeout {
+		if !r.isStalled(run) {
 			continue
 		}
 		canceled = append(canceled, run)
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: id, Identifier: run.Identifier, Message: "stalled"})
 	}
+	return r.cancelStalledFollowup(canceled)
+}
+
+// isStalled reports whether run has gone longer than the stall budget since its
+// last observed runtime event, falling back to StartedAt before any event has
+// been seen. A run with neither timestamp is treated as not-stalled rather than
+// anchoring the stall window at the zero time, which would cancel every such
+// (test-fixture) entry.
+func (r *reconcileStalledRunsOp) isStalled(run *RunningEntry) bool {
+	ref := run.LastEventAt
+	if ref.IsZero() {
+		ref = run.StartedAt
+	}
+	if ref.IsZero() {
+		return false
+	}
+	return r.now.Sub(ref) > r.timeout
+}
+
+// cancelStalledFollowup returns the off-actor followup that cancels each stalled
+// worker and publishes the canceled set to the reply channel.
+func (r *reconcileStalledRunsOp) cancelStalledFollowup(canceled []*RunningEntry) func() {
 	return func() {
 		for _, entry := range canceled {
 			if entry.CancelWorker != nil {
