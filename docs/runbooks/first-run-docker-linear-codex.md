@@ -10,7 +10,8 @@ aiops-platform with Docker, Linear, and `codex app-server`.
 | macOS host development | Run `go run ./cmd/worker --doctor --mode=mock` and `agent.default: mock` from source. | Use host Codex CLI for local `codex` / `codex-app-server` workflows after `codex --login`. | Host binary mounts into Linux containers are not supported; install Codex in the image. |
 | Linux amd64 Docker worker | Build `Dockerfile` target `codex-worker`; Codex CLI `0.133.0` is installed from a pinned release artifact and checksum. | Use base `worker` target for mock-only validation. | Online installer is not the promoted Docker path until Linux ARM64 checksum behavior is reliable. |
 | Linux arm64 Docker worker | Build `codex-worker`; uses the pinned `aarch64-unknown-linux-musl` release artifact and checksum. | Same as above. | `curl https://chatgpt.com/codex/install.sh \| sh` failed on 2026-05-26 because the installer could not find the ARM64 package checksum. |
-| Codex auth | Mount a restricted writable `CODEX_HOME` directory into `/home/aiops/.codex` for Codex CLI 0.133; verify with `worker --doctor --mode=real`. | Local host development can use the normal host `~/.codex`; read-only copies are only suitable for archival inspection or future no-write smoke modes. | Passing raw bearer tokens on command lines or in logs is not supported. |
+| Codex auth | ChatGPT/Codex login in a restricted writable `CODEX_HOME` (`/home/aiops/.codex`) so token refresh persists, **or** model API key via `OPENAI_API_KEY` added to `codex.env_passthrough` and sourced from a Docker secret; verify with `worker --doctor --mode=real`. See [`codex-app-server-docker.md`](codex-app-server-docker.md) for the full auth/model lifecycle (setup, rotation, revocation). | Local host development can use the normal host `~/.codex`. | Passing raw bearer/API tokens on command lines or in logs is not supported; tracker/repo tokens are never passed through to the agent. |
+| Codex model config | Declarative, version-controlled `config.toml` (model/provider/reasoning) mounted read-only over `$CODEX_HOME/config.toml`; doctor reports the resolved selection. | `WORKFLOW.md` `codex.*` front matter for profile/sandbox/approval/timeouts. | Copying an opaque host `config.toml` into the image or writable home is discouraged — model selection must be auditable. |
 | GitHub agent auth | File-backed `gh` auth from a Docker secret, or a dedicated SSH deploy key, visible to the `aiops` user and verified with `worker --doctor --mode=real --github-issue <n>`. | Read-only issue-only tokens are enough for analysis-only smoke tests; branch push validation needs write-capable repo credentials. | `GH_TOKEN`/`GITHUB_TOKEN` in the worker environment are stripped from agent subprocesses and are not a valid dogfood credential contract. |
 | Linear auth | Personal API key in a Docker Compose secret file. Linear expects `Authorization: <API_KEY>` for personal keys. | Local development may use `LINEAR_API_KEY` in `.env`; do not use this for production-style examples. | OAuth app-actor is documented by Linear and is the intended future service-account path, but aiops-platform still accepts a single `tracker.api_key` string today. |
 | Sandbox | Mock mode works under the base hardened container. Real Codex Docker validation uses a Docker-isolated profile and explicit `codex.thread_sandbox: danger-full-access` only inside that container boundary. | Enable kernel/user namespace support and keep Codex `workspace-write` if your container profile permits it. | Do not copy `danger-full-access` to a shared host run. |
@@ -46,14 +47,20 @@ cp examples/WORKFLOW.md .aiops/WORKFLOW.md
 )
 ```
 
-Run `codex --login` on the host, then copy or provision the Codex home you
-want the container to read:
+Run `codex --login` on the host, then provision the Codex home the container
+will read. Copy only the secret `auth.json`; keep model selection in the
+tracked, non-secret `deploy/codex/config.toml` rather than copying an opaque
+host `config.toml` (see
+[`codex-app-server-docker.md`](codex-app-server-docker.md)):
 
 ```bash
 cp ~/.codex/auth.json .aiops/codex-home/auth.json
-cp ~/.codex/config.toml .aiops/codex-home/config.toml
-chmod 600 .aiops/secrets/* .aiops/codex-home/*
+chmod 600 .aiops/secrets/* .aiops/codex-home/auth.json
 ```
+
+For API-key auth instead of ChatGPT login, skip `auth.json`, write the key to a
+secret file (`.aiops/secrets/openai_api_key`), and add `OPENAI_API_KEY` to
+`codex.env_passthrough` in the workflow.
 
 Edit `.aiops/WORKFLOW.md`:
 
@@ -74,6 +81,9 @@ bind/secret paths avoid project-directory ambiguity.
 cat > .env <<EOF
 AIOPS_WORKFLOW_PATH=$PWD/.aiops/WORKFLOW.md
 AIOPS_CODEX_HOME_PATH=$PWD/.aiops/codex-home
+# Declarative, non-secret Codex model config mounted read-only over the home;
+# uncomment the matching volume in deploy/docker-compose.codex.yml to enable.
+AIOPS_CODEX_CONFIG_FILE=$PWD/deploy/codex/config.toml
 LINEAR_API_KEY_FILE=$PWD/.aiops/secrets/linear_api_key
 GITHUB_TOKEN_FILE=$PWD/.aiops/secrets/github_token
 # Optional: only if this deployment still needs a Gitea API token.
@@ -334,6 +344,9 @@ GitHub/Linear test issue that is not closed by the PR.
 | `FAIL Linear auth` | Personal keys must be sent raw, not as `Bearer`; confirm the token can see `tracker.project_slug`. |
 | `FAIL Codex CLI` | Build the `codex-worker` target or install Codex on the host. |
 | `FAIL Codex auth` | Run `codex --login` for the same `CODEX_HOME` and container user context. |
+| `FAIL Codex auth mode` | `OPENAI_API_KEY` is in `codex.env_passthrough` but empty; mount it from a Docker secret. |
+| `WARN Codex auth refresh` | Mount `CODEX_HOME` as a restricted writable volume so ChatGPT-login token refresh persists. |
+| `WARN Codex model config` | Declare `model` in the tracked `deploy/codex/config.toml`; see `codex-app-server-docker.md`. |
 | `FAIL GitHub agent gh auth` | Set `GITHUB_TOKEN_FILE` to a least-privilege token file or mount a deploy key; do not rely on `GH_TOKEN`/`GITHUB_TOKEN` in the worker environment. |
 | `FAIL GitHub agent git push` | Run the documented doctor command from the container and fix `gh auth setup-git` or deploy-key write access for the target repo. |
 | `FAIL no new open draft PR ... closes GitHub issue` | Confirm the mirrored Linear issue tells the agent to open a draft PR with `Closes #<n>`, and that the GitHub credential has repo write access. |
