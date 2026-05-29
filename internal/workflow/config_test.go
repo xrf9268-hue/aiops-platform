@@ -738,6 +738,40 @@ prompt body
 	}
 }
 
+// TestLoadRejectsLinearServiceCustomFields pins the #326 guard: Linear's
+// GraphQL schema exposes no Issue custom-field data, so a service route
+// carrying custom_fields can never match a polled issue and must be
+// rejected at load time rather than silently dropping work. This branch is
+// otherwise uncovered, so it characterizes validateConfig before the #410
+// split moves it into a per-section validator.
+func TestLoadRejectsLinearServiceCustomFields(t *testing.T) {
+	body := `---
+tracker:
+  kind: linear
+  project_slug: platform
+services:
+  - name: api
+    repo:
+      owner: acme
+      name: api
+      clone_url: git@example.com:acme/api.git
+    tracker:
+      project_slug: api-platform
+      custom_fields:
+        Runtime: go
+---
+prompt body
+`
+
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load returned nil error, want Linear custom_fields rejection (#326)")
+	}
+	if !strings.Contains(err.Error(), "services[0].tracker.custom_fields") || !strings.Contains(err.Error(), "#326") {
+		t.Fatalf("Load error = %q, want services[0].tracker.custom_fields rejection citing #326", err)
+	}
+}
+
 func TestLoadRejectsGiteaServiceOnlyWorkflowWithoutFallbackRepo(t *testing.T) {
 	body := `---
 tracker:
@@ -2475,6 +2509,38 @@ prompt
 				t.Fatalf("Load(%q) error = %q; want %q", path, err.Error(), tc.want)
 			}
 		})
+	}
+}
+
+// TestValidateConfigRejectsUnsupportedTurnSandboxPolicyType pins the
+// defensive validateConfig guard for codex.turn_sandbox_policy. The YAML
+// loader's UnmarshalYAML rejects unknown policy types before validateConfig
+// runs, so this branch only fires for a programmatically constructed Config.
+// The direct call keeps the guard covered across the #410 validateConfig
+// split, which relocates it into a per-section validator.
+func TestValidateConfigRejectsUnsupportedTurnSandboxPolicyType(t *testing.T) {
+	t.Parallel()
+	wf, err := Load(writeTempWorkflow(t, `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+tracker:
+  kind: gitea
+---
+prompt
+`))
+	if err != nil {
+		t.Fatalf("Load valid config: unexpected error %v", err)
+	}
+	cfg := wf.Config
+	cfg.Codex.TurnSandboxPolicy = CodexSandboxPolicy{Type: "bogus"}
+	err = validateConfig("WORKFLOW.md", cfg)
+	if err == nil {
+		t.Fatal("validateConfig(turn_sandbox_policy.type=bogus) = nil; want unsupported type rejection")
+	}
+	if !strings.Contains(err.Error(), "codex.turn_sandbox_policy.type") || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("validateConfig error = %q; want codex.turn_sandbox_policy.type unsupported rejection", err)
 	}
 }
 
