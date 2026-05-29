@@ -55,53 +55,82 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 	// cross-platform direct path above.
 	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
 }
-func splitAppServerCommand(command string) ([]string, error) {
-	var args []string
-	var current strings.Builder
-	var quote rune
-	tokenStarted := false
-	runes := []rune(command)
 
+// commandTokenizer carries splitAppServerCommand's token-builder state across
+// the rune scan so the per-quote-state helpers can advance it in place.
+type commandTokenizer struct {
+	args         []string
+	current      strings.Builder
+	quote        rune
+	tokenStarted bool
+}
+
+func splitAppServerCommand(command string) ([]string, error) {
+	var t commandTokenizer
+	runes := []rune(command)
 	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		switch {
-		case quote != 0:
-			switch {
-			case r == quote:
-				quote = 0
-				tokenStarted = true
-			case quote == '"' && r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]):
-				i++
-				current.WriteRune(runes[i])
-				tokenStarted = true
-			default:
-				current.WriteRune(r)
-				tokenStarted = true
-			}
-		case r == '\\':
-			current.WriteRune(r)
-			tokenStarted = true
-		case r == '\'' || r == '"':
-			quote = r
-			tokenStarted = true
-		case isCommandSpace(r):
-			if tokenStarted {
-				args = append(args, current.String())
-				current.Reset()
-				tokenStarted = false
-			}
-		default:
-			current.WriteRune(r)
-			tokenStarted = true
+		if t.quote != 0 {
+			i += t.consumeQuoted(runes, i)
+			continue
 		}
+		t.consumeUnquoted(runes[i])
 	}
-	if quote != 0 {
+	if t.quote != 0 {
 		return nil, fmt.Errorf("parse codex.command")
 	}
-	if tokenStarted {
-		args = append(args, current.String())
+	t.flush()
+	return t.args, nil
+}
+
+// consumeQuoted handles runes[i] inside a quoted span and returns how many extra
+// runes to skip (1 for a consumed double-quote backslash escape). The matching
+// quote closes the span; inside double quotes a backslash escapes only the
+// allow-listed runes ($ ` " \ newline) — a backslash before anything else (or at
+// end of input) stays literal, as does every other rune.
+func (t *commandTokenizer) consumeQuoted(runes []rune, i int) int {
+	r := runes[i]
+	switch {
+	case r == t.quote:
+		t.quote = 0
+		t.tokenStarted = true
+	case t.quote == '"' && r == '\\' && i+1 < len(runes) && strings.ContainsRune("$`\"\\\n", runes[i+1]):
+		t.current.WriteRune(runes[i+1])
+		t.tokenStarted = true
+		return 1
+	default:
+		t.current.WriteRune(r)
+		t.tokenStarted = true
 	}
-	return args, nil
+	return 0
+}
+
+// consumeUnquoted handles one rune outside any quote: an unquoted backslash is a
+// literal (quotes, not backslashes, group tokens here), a quote opens a span,
+// whitespace flushes the current token, and any other rune extends it.
+func (t *commandTokenizer) consumeUnquoted(r rune) {
+	switch {
+	case r == '\\':
+		t.current.WriteRune(r)
+		t.tokenStarted = true
+	case r == '\'' || r == '"':
+		t.quote = r
+		t.tokenStarted = true
+	case isCommandSpace(r):
+		t.flush()
+	default:
+		t.current.WriteRune(r)
+		t.tokenStarted = true
+	}
+}
+
+// flush appends the current token (including an empty quoted one, since
+// tokenStarted is set on quote-open) and resets the builder for the next token.
+func (t *commandTokenizer) flush() {
+	if t.tokenStarted {
+		t.args = append(t.args, t.current.String())
+		t.current.Reset()
+		t.tokenStarted = false
+	}
 }
 
 // shellSyntaxScan carries hasShellSyntax's quote and token-boundary state across
