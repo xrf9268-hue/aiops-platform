@@ -1,0 +1,597 @@
+package orchestrator
+
+// actor_retry.go holds the retry subsystem: the RetryScheduler seam (SPEC
+// §8.4 backoff / §16.6 continuation), the Orchestrator schedule* entry
+// points, and the retry stateOps that fire and re-defer retries. See
+// actor.go for the actor's mutation discipline.
+
+import (
+	"context"
+	"log"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+)
+
+// RetryKind identifies why an issue is waiting in the retry queue.
+type RetryKind string
+
+const (
+	RetryKindFailure         RetryKind = "failure"
+	RetryKindContinuation    RetryKind = "continuation"
+	RetryKindQuotaBackoff    RetryKind = "quota_backoff"
+	RetryKindExternalBlocker RetryKind = "external_blocker"
+)
+
+// RetryRequest describes the retry being scheduled. Attempt is the 1-based
+// failure retry attempt for RetryKindFailure. Continuation retries ignore it
+// and always use the short SPEC §16.6 delay.
+type RetryRequest struct {
+	Kind          RetryKind
+	Attempt       int
+	DelayOverride time.Duration
+}
+
+// RetryScheduler implements the SPEC retry delays: clean continuation retries
+// use one second; failure retries use delay=min(10s*2^(attempt-1), MaxBackoff).
+type RetryScheduler struct {
+	MaxBackoff time.Duration
+}
+
+const continuationRetryDelay = time.Second
+
+// retryFetchTimeout caps the SPEC §16.6 candidate-fetch call a fired
+// failure-retry timer makes. Tracker clients enforce per-request
+// network timeouts on their own (Linear / Gitea / GitHub all 30s per
+// PR #303), but a defensive ceiling here means the orchestrator does
+// not depend on every adapter to do so: if a future tracker client
+// (or a transport bug) silently drops cancellation, the fetch still
+// returns within this bound and the SPEC's "retry poll failed"
+// reschedule path takes over instead of leaving the issue stuck in
+// Claimed/RetryAttempts forever. The value is comfortably larger
+// than any adapter's own deadline so an honest slow tracker is not
+// punished. A package-level var (not const) so tests can shrink the
+// bound; runtime callers must not mutate it.
+var retryFetchTimeout = 45 * time.Second
+
+// NextDelay implements Scheduler.
+func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
+	if req.DelayOverride > 0 {
+		return req.DelayOverride
+	}
+	if req.Kind == RetryKindContinuation {
+		return continuationRetryDelay
+	}
+	if req.Attempt < 1 {
+		req.Attempt = 1
+	}
+	maxBackoff := s.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = 5 * time.Minute
+	}
+	delay := 10 * time.Second
+	for i := 1; i < req.Attempt; i++ {
+		if delay >= maxBackoff/2 {
+			return maxBackoff
+		}
+		delay *= 2
+	}
+	if delay > maxBackoff {
+		return maxBackoff
+	}
+	return delay
+}
+
+// UnboundedFailureRetries is the maxFailureRetries sentinel that disables
+// the failure-retry cap. SPEC §8.4 / §16.6 / §4.1.8 do not budget retry
+// attempts, so this value is what an orchestrator constructed without an
+// explicit MaxFailureRetries override sees. The check at finalizeRunOp
+// skips the cap branch whenever maxFailureRetries is negative; any caller
+// that wants the harness-hardening cap (SPEC §15.5) must pass a
+// non-negative value through workflow.AgentConfig.MaxRetryAttempts or
+// orchestrator.Deps.MaxFailureRetries.
+//
+// This sentinel mirrors workflow.UnboundedRetryBudget; both equal -1
+// today and are interoperable via the `< 0` predicate that all
+// consumers use. Future renumbering must keep the predicate, not the
+// literal value.
+const UnboundedFailureRetries = -1
+
+type continuationAfterSkippedCleanup struct {
+	issue      tracker.Issue
+	identifier string
+	attempt    int
+	workspace  Workspace
+}
+
+// continuationForRetry returns the continuation to resume when a queued
+// continuation retry's terminal-cleanup recheck (verifyReconciledWorkspaceStillTerminal)
+// finds the issue active again. Only RetryKindContinuation entries carry a
+// continuation attempt and max-turn budget worth preserving; for every other
+// retry kind it returns nil so the recheck falls back to a plain poll wake
+// (their re-dispatch does not depend on a preserved ContinuationAttempt). The
+// reconcile pass builds this before ReleaseClaim drops the entry so the
+// off-actor cleanup can reschedule the same attempt + workspace instead of
+// resetting ContinuationAttempt to 0 on the next poll (Codex review, PR #455).
+func continuationForRetry(retry *RetryEntry) *continuationAfterSkippedCleanup {
+	if retry == nil || retry.Kind != RetryKindContinuation {
+		return nil
+	}
+	return &continuationAfterSkippedCleanup{
+		issue:      retry.Issue,
+		identifier: retry.Identifier,
+		attempt:    retry.Attempt,
+		workspace:  retry.Workspace,
+	}
+}
+
+type continuationBudgetExhaustedOp struct {
+	o          *Orchestrator
+	id         IssueID
+	issue      tracker.Issue
+	identifier string
+}
+
+func (c *continuationBudgetExhaustedOp) apply(st *OrchestratorState) func() {
+	st.ReleaseClaim(c.id)
+	st.recordFailed(c.id, FailedEntry{State: c.issue.State, UpdatedAt: c.issue.UpdatedAt})
+	msg := "clean continuation budget exhausted after " + strconv.Itoa(c.o.maxTurns) + " turns while tracker issue remained active"
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: c.id, Identifier: c.identifier, Message: msg})
+	log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=continuation_budget_exhausted budget=%d", c.id, c.identifier, c.o.maxTurns)
+	return nil
+}
+
+// ScheduleRetry enters the SPEC §7.1 retry-queued substate for issue.
+// The orchestrator picks a delay via Scheduler.NextDelay(attempt),
+// stores a RetryEntry under RetryAttempts, holds the Claimed slot so
+// concurrent ticks cannot dispatch the issue, and starts a timer that
+// re-dispatches through the actor when it fires.
+//
+// The 1-based attempt counter is the attempt number this retry will
+// run as (i.e. the prior run was attempt-1, or 0 for first-run).
+func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string) error {
+	return o.scheduleFailureRetry(ctx, issue, identifier, attempt, runErr, Workspace{})
+}
+
+// scheduleFailureRetry is the internal failure-retry entry point that also
+// carries the prior run's workspace forward. A failure retry whose issue is
+// later observed terminal (by the reconcile pass or the SPEC §16.6 retry-fire
+// resolution) cleans this directory through the §18.1 seam rather than leaking
+// it until the next startup sweep (#341). The reschedule paths (capacity defer,
+// retry-poll-failed) thread the existing entry's workspace through so it
+// survives across attempts.
+func (o *Orchestrator) scheduleFailureRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace)
+}
+func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, retryAfter time.Duration, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace)
+}
+
+// scheduleContinuationRetry queues the short SPEC §16.6 wake after a clean
+// turn. workspace carries the finalized run's directory so a continuation
+// whose issue is later seen terminal can be cleaned through the §18.1 seam
+// (#341); pass the finalized RunningEntry.Workspace.
+func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace)
+}
+func (o *Orchestrator) scheduleExternalBlockerRetry(ctx context.Context, issue tracker.Issue, identifier, reason string, delay time.Duration, workspace Workspace) error {
+	if delay <= 0 {
+		delay = time.Hour
+	}
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindExternalBlocker, DelayOverride: delay}, 0, reason, workspace)
+}
+func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace) error {
+	op := &scheduleRetryOp{
+		o:          o,
+		issue:      issue,
+		identifier: identifier,
+		attempt:    attempt,
+		runErr:     runErr,
+		kind:       req.Kind,
+		req:        req,
+		workspace:  workspace,
+	}
+	return o.submit(ctx, op)
+}
+
+// scheduleRetryOp is the actor-side half of ScheduleRetry: it stores
+// the RetryEntry through OrchestratorState.ScheduleRetry (which stops
+// any prior timer for the same id) and starts a new timer whose
+// callback submits a retryFireOp.
+type scheduleRetryOp struct {
+	o          *Orchestrator
+	issue      tracker.Issue
+	identifier string
+	attempt    int
+	runErr     string
+	kind       RetryKind
+	req        RetryRequest
+	workspace  Workspace
+}
+
+func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
+	id := IssueID(s.issue.ID)
+	o := s.o
+	issue := s.issue
+	attempt := s.attempt
+	kind := s.kind
+	delay := o.scheduler.NextDelay(s.req)
+	// time.AfterFunc schedules immediately and is cheap (no goroutine
+	// until fire), so we can safely create the timer on the actor
+	// without blocking. ScheduleRetry needs the Timer set on the entry
+	// before storing so a stale prior timer is stopped atomically.
+	entry := &RetryEntry{
+		Issue:      s.issue,
+		IssueID:    id,
+		Identifier: s.identifier,
+		Attempt:    attempt,
+		DueAt:      time.Now().Add(delay),
+		Error:      s.runErr,
+		Kind:       s.kind,
+		Workspace:  s.workspace,
+	}
+	entry.Timer = time.AfterFunc(delay, func() {
+		defer recoverPanic("orchestrator.retry_timer")
+		_ = o.submit(o.runCtx, &retryFireOp{
+			o:       o,
+			id:      id,
+			issue:   issue,
+			attempt: attempt,
+			kind:    kind,
+		})
+	})
+	st.ScheduleRetry(entry)
+	return nil
+}
+
+// retryFireOp is the actor-side handler for a fired retry timer. The
+// SPEC §16.6 retry path is "if the entry is still queued, re-dispatch;
+// otherwise drop the fire." Two timers may race here in pathological
+// cases (a ScheduleRetry replace where the prior timer's Stop missed
+// because the callback was already queued); the attempt/kind equality
+// guard makes the stale fire a no-op.
+type retryFireOp struct {
+	o       *Orchestrator
+	id      IssueID
+	issue   tracker.Issue
+	attempt int
+	kind    RetryKind
+}
+
+func (r *retryFireOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.RetryAttempts[r.id]
+	if !ok {
+		// Already consumed by reconciliation (ReleaseClaim) or by an
+		// earlier fire of the same retry. Either is correct.
+		return nil
+	}
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
+		// A newer ScheduleRetry replaced this entry; the older timer
+		// fired late. Drop the stale fire — the newer entry will
+		// re-dispatch on its own timer.
+		return nil
+	}
+	if entry.Kind == RetryKindContinuation || entry.Kind == RetryKindExternalBlocker {
+		// Continuation and external-blocker cooldown retries are wake-up
+		// signals. They must not spawn from the cached issue snapshot or carry
+		// failure retry accounting: a poll has to observe the issue still
+		// active and call RequestDispatchAfterTrackerRecheck, which consumes
+		// the entry before spawning the next normal turn.
+		entry.Timer = nil
+		o := r.o
+		return func() { o.wakeRetryPollLoop() }
+	}
+	// SPEC §16.6 on_retry_timer: the fired failure-retry timer must (1)
+	// fetch active candidates, (2) re-schedule with "retry poll failed"
+	// on fetch error, (3) release the claim if the issue is absent, and
+	// only then (4/5) dispatch from the refreshed tracker state. When a
+	// CandidateLister is wired (production via RuntimePoller) we defer
+	// the I/O to a followup; without one we fall back to direct dispatch
+	// from the cached entry.Issue so existing unit tests keep working.
+	o := r.o
+	if lister := o.currentCandidateLister(); lister != nil {
+		entry.Timer = nil
+		id := r.id
+		attempt := r.attempt
+		kind := r.kind
+		return func() {
+			// Per-fetch timeout. The followup runs on a fresh goroutine
+			// outside the actor, and o.runCtx has no deadline of its own.
+			// A tracker client that ignores ctx cancellation would otherwise
+			// pin this goroutine indefinitely — entry.Timer is already
+			// cleared and no retryFireOp would be resubmitted, leaving the
+			// issue stuck in Claimed/RetryAttempts forever. Surfacing the
+			// timeout as a "retry poll failed" reschedule keeps the SPEC
+			// §16.6 backoff window the only source of forward progress.
+			fetchCtx, cancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+			defer cancel()
+			issues, fetchErr := lister.ListActiveIssues(fetchCtx)
+			found := findIssueByID(issues, id)
+			if fetchErr != nil && found == nil {
+				// Either the whole fetch failed (including timeout), or a
+				// multi-tracker partial failure happened on the tracker that
+				// owns this issue. We can't tell "absent" from "tracker down"
+				// — treat as fetch failure per SPEC §16.6 and reschedule
+				// with the typed error.
+				_ = o.submit(o.runCtx, &retryPollFailedOp{
+					o:        o,
+					id:       id,
+					attempt:  attempt,
+					kind:     kind,
+					fetchErr: fetchErr,
+				})
+				return
+			}
+			// found==nil means the issue is not in the active candidate set:
+			// terminal, merely-inactive, or deleted. The active-only fetch
+			// cannot tell them apart, so resolve the actual state (the way the
+			// reconcile pass does) to recover upstream handle_retry_issue_lookup's
+			// terminal branch — terminal → clean the workspace + release, every
+			// other absence → release only (#341). Resolver errors / unknown
+			// states leave terminal=false, preserving the release-only default.
+			terminal := false
+			terminalState := ""
+			if found == nil {
+				if resolver, terminalStates := o.currentRetryTerminalResolver(); resolver != nil && len(terminalStates) > 0 {
+					// Give the terminal-state lookup its own timeout budget rather
+					// than the already-consumed fetchCtx: a slow-but-successful
+					// ListActiveIssues near the deadline would otherwise leave this
+					// call to fail immediately with context-deadline-exceeded,
+					// dropping a terminal issue onto the release-only path and
+					// leaking its workspace — the exact leak this resolves (Codex
+					// P2). Derived from runCtx so actor shutdown still cancels it.
+					resolveCtx, resolveCancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+					statesByID, rerr := fetchIssueStates(resolveCtx, resolver, []tracker.IssueRef{{
+						ID:         string(id),
+						Identifier: entry.Identifier,
+					}})
+					resolveCancel()
+					if rerr == nil {
+						if s := strings.TrimSpace(statesByID[string(id)]); s != "" && isTerminalTrackerState(s, terminalStates) {
+							terminal = true
+							terminalState = s
+						}
+					}
+				}
+			}
+			_ = o.submit(o.runCtx, &retryFireAfterFetchOp{
+				o:             o,
+				id:            id,
+				attempt:       attempt,
+				kind:          kind,
+				found:         found,
+				terminal:      terminal,
+				terminalState: terminalState,
+			})
+		}
+	}
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, o)
+}
+
+// retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
+// honor global + per-state capacity gates, then either spawn or reschedule
+// via the configured backoff. Shared between the legacy direct-dispatch
+// path (no CandidateLister) and the SPEC §16.6 post-fetch path.
+func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID, attempt int, o *Orchestrator) func() {
+	// Use entry.Issue rather than any timer-captured snapshot: reconciliation
+	// (and the SPEC §16.6 candidate fetch) may have refreshed the tracker
+	// state, and both the per-state capacity gate and the spawned worker
+	// must see the live state.
+	issue := entry.Issue
+	identifier := entry.Identifier
+	if st.RunningCount() >= st.MaxConcurrentAgents {
+		// Retry timers must obey the same capacity gate as fresh dispatch.
+		// Mirror upstream handle_active_retry (orchestrator.ex:1142-1161):
+		// reschedule through the configured backoff with attempt+1 and a
+		// typed "no available orchestrator slots" error instead of arming a
+		// short 100ms re-fire timer.
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
+	}
+	if st.StateCapacityFull(issue.State) {
+		// Retry timers must also obey per-state capacity gates. Same
+		// upstream-aligned reschedule shape as the global-cap branch.
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
+	}
+	// Consume the retry entry but keep Claimed: the re-dispatch
+	// immediately re-adds Running, and dropping Claimed in between
+	// would let a concurrent tick race in.
+	delete(st.RetryAttempts, id)
+	return func() {
+		var retryAttempt *int
+		if entry.Kind != RetryKindQuotaBackoff || attempt > 0 {
+			a := attempt
+			retryAttempt = &a
+		}
+		o.spawn(id, issue, retryAttempt, 0)
+	}
+}
+
+// capacityDeferRetry mirrors upstream handle_active_retry's no-slots
+// branch (elixir/lib/symphony_elixir/orchestrator.ex:1142-1161): when a
+// fired failure-retry observes a full global or per-state capacity gate,
+// reschedule the retry through the configured backoff (SPEC §8.4), bump
+// the attempt counter, and stamp the entry with the upstream-canonical
+// "no available orchestrator slots" error so operators can observe
+// sustained capacity pressure in the runtime event stream. The prior
+// 100ms re-fire loop bypassed the backoff formula, left the attempt
+// counter frozen across thousands of re-fires, and produced no runtime
+// event for the cap-pressure case.
+func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, kind RetryKind, workspace Workspace, o *Orchestrator) func() {
+	if o.runCtx.Err() != nil {
+		// Mirror retryPollFailedOp's shutdown guard (actor.go above):
+		// the followup's ScheduleRetry would fail submit anyway, so
+		// recording a cap-pressure event during shutdown would only
+		// leak a misleading line into shutdown logs.
+		return nil
+	}
+	const runErr = "no available orchestrator slots"
+	nextAttempt := attempt + 1
+	if kind == RetryKindQuotaBackoff {
+		nextAttempt = attempt
+	}
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    id,
+		Identifier: identifier,
+		Message:    runErr,
+	})
+	return func() {
+		// Carry the workspace across the reschedule so the §18.1 terminal
+		// cleanup gate still has a path on a later attempt (#341).
+		if kind == RetryKindQuotaBackoff {
+			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			return
+		}
+		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
+	}
+}
+func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {
+	for i := range issues {
+		if IssueID(issues[i].ID) == id {
+			out := issues[i]
+			return &out
+		}
+	}
+	return nil
+}
+
+// retryPollFailedOp implements SPEC §16.6 step 1 alt: when a fired
+// failure-retry timer's candidate fetch fails, reschedule the same
+// retry (attempt+1) with a typed "retry poll failed" error so the
+// next backoff window can try the fetch again.
+type retryPollFailedOp struct {
+	o        *Orchestrator
+	id       IssueID
+	attempt  int
+	kind     RetryKind
+	fetchErr error
+}
+
+func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.RetryAttempts[r.id]
+	if !ok {
+		// Reconciliation released the claim between fetch and apply.
+		return nil
+	}
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
+		// Replaced by a newer ScheduleRetry; the newer entry owns the
+		// re-dispatch.
+		return nil
+	}
+	o := r.o
+	if o.runCtx.Err() != nil {
+		// Orchestrator is shutting down between the fetch and this apply.
+		// The followup's ScheduleRetry would fail anyway; recording the
+		// event and then dropping the followup would only leak a
+		// "retry poll failed" line into shutdown logs while the entry
+		// goes nowhere. Drop silently and let process exit reclaim the
+		// entry along with everything else.
+		return nil
+	}
+	issue := entry.Issue
+	identifier := entry.Identifier
+	// Carry the workspace across the reschedule so the §18.1 terminal cleanup
+	// gate still has a path on a later attempt (#341).
+	workspace := entry.Workspace
+	nextAttempt := r.attempt + 1
+	if r.kind == RetryKindQuotaBackoff {
+		nextAttempt = r.attempt
+	}
+	runErr := "retry poll failed"
+	if r.fetchErr != nil {
+		runErr = "retry poll failed: " + r.fetchErr.Error()
+	}
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    r.id,
+		Identifier: identifier,
+		Message:    runErr,
+	})
+	return func() {
+		if r.kind == RetryKindQuotaBackoff {
+			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			return
+		}
+		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
+	}
+}
+
+// retryFireAfterFetchOp implements SPEC §16.6 steps 3-5 after the
+// candidate fetch completes. found == nil means the issue is absent
+// from the active candidate set (step 3 / step 5: release the claim);
+// otherwise refresh entry.Issue with the live tracker state and proceed
+// to capacity check + dispatch.
+//
+// terminal/terminalState are resolved by the followup only when found == nil:
+// they recover upstream handle_retry_issue_lookup's terminal branch that the
+// active-only candidate fetch collapses into plain absence, so a terminal
+// issue's workspace is cleaned through the §18.1 seam rather than leaked (#341).
+type retryFireAfterFetchOp struct {
+	o             *Orchestrator
+	id            IssueID
+	attempt       int
+	kind          RetryKind
+	found         *tracker.Issue
+	terminal      bool
+	terminalState string
+}
+
+func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.RetryAttempts[r.id]
+	if !ok {
+		return nil
+	}
+	if entry.Attempt != r.attempt || entry.Kind != r.kind {
+		return nil
+	}
+	if r.found == nil {
+		// SPEC §16.6 steps 3 + 5: issue no longer in the active candidate
+		// set (either absent or moved to a non-active state). Drop the
+		// retry and release the claim.
+		identifier := entry.Identifier
+		if r.terminal {
+			// Upstream handle_retry_issue_lookup's terminal branch
+			// (orchestrator.ex:1082-1090): a retry whose issue went terminal
+			// cleans its workspace + releases. The worker already exited before
+			// the retry was scheduled, so no live worker holds the directory —
+			// route the removal through the same WorkspaceCleaner seam the
+			// running/blocked terminal paths use (#341). The actor-serialized
+			// re-claim guard inside runReconciledWorkspaceCleanup prevents a
+			// re-dispatch from racing the removal onto the same path.
+			if w, okw := terminalWorkspaceForCleanup(r.id, identifier, entry.Workspace.Path, entry.Workspace.Root, r.terminalState); okw {
+				st.ReleaseClaim(r.id)
+				st.RecordEvent(RuntimeEvent{
+					Kind:       RuntimeEventFailed,
+					IssueID:    r.id,
+					Identifier: identifier,
+					Message:    "retry released: issue terminal, removing workspace",
+				})
+				o := r.o
+				return func() { o.runReconciledWorkspaceCleanup(w, nil) }
+			}
+		}
+		st.ReleaseClaim(r.id)
+		st.RecordEvent(RuntimeEvent{
+			Kind:       RuntimeEventFailed,
+			IssueID:    r.id,
+			Identifier: identifier,
+			Message:    "retry released: issue absent from active candidates",
+		})
+		return nil
+	}
+	// SPEC §16.6 step 4: refresh entry.Issue from the live tracker state
+	// before proceeding to capacity check + dispatch. The per-state cap
+	// must see the latest state, not the dispatch-time snapshot. Upstream
+	// handle_active_retry (orchestrator.ex:1142-1161) uses issue.identifier
+	// from the refreshed issue on every subsequent reschedule, so a
+	// Linear identifier rename between schedule and fire would otherwise
+	// leave runtime events stamped with the stale identifier.
+	entry.Issue = *r.found
+	st.ClaimedIssues[r.id] = *r.found
+	if id := strings.TrimSpace(r.found.Identifier); id != "" {
+		entry.Identifier = id
+	}
+	return retryFireDispatchTail(st, entry, r.id, r.attempt, r.o)
+}
