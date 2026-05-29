@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,35 +49,13 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		return Result{}, fmt.Errorf("read %s: %w", PromptPath, err)
 	}
 
-	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
-	cmd, directCodexExec, err := buildCodexAppServerCmd(ctx, in, env)
+	cmd, directCodexExec, sandboxEnabled, err := setupAppServerCommand(ctx, in)
 	if err != nil {
 		return Result{}, err
 	}
-	cmd.Dir = in.Workdir
-	cmd.Env = env
-	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
-		return Result{}, err
-	}
-	sandboxEnabled := in.Workflow.Config.Sandbox.Enabled && in.Workflow.Config.Sandbox.Backend != "" && in.Workflow.Config.Sandbox.Backend != "none"
-	cmd, err = applySandbox(ctx, in, cmd)
+	stdin, stdout, stderr, err := openAppServerPipes(cmd)
 	if err != nil {
 		return Result{}, err
-	}
-	configurePlatformKill(cmd)
-	cmd.WaitDelay = killGrace
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return Result{}, fmt.Errorf("open codex app-server stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return Result{}, fmt.Errorf("open codex app-server stdout: %w", err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return Result{}, fmt.Errorf("open codex app-server stderr: %w", err)
 	}
 
 	buf := &cappedWriter{Cap: CodexOutputCap}
@@ -96,22 +75,11 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	// so passing maxAppServerLineBytes+1 as the cap allows tokens up to (and
 	// including) maxAppServerLineBytes and rejects anything strictly larger.
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
-	// Only emit codex_app_server_pid when we can guarantee cmd.Process.Pid is
-	// the actual codex process: the command must launch the codex binary
-	// directly (no shell wrapper from a custom codex.command), and the
-	// sandbox must not have wrapped cmd in firejail/bwrap. In any wrapper
-	// scenario the PID belongs to the wrapper, which would mislead operators
-	// trying to map `/api/v1/state` rows to a host process. omitempty makes
-	// the JSON field absent in those cases.
-	pid := 0
-	if directCodexExec && !sandboxEnabled && cmd.Process != nil {
-		pid = cmd.Process.Pid
-	}
 	client := &appServerClient{
 		stdin:             stdin,
 		scanner:           sc,
 		out:               buf,
-		codexAppServerPID: pid,
+		codexAppServerPID: appServerProcessPID(cmd, directCodexExec, sandboxEnabled),
 	}
 	runErr := client.run(ctx, in, string(prompt))
 	if runErr != nil && ctx.Err() == nil {
@@ -134,33 +102,111 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		res.OutputHead = string(head)
 	}
 	res.OutputTail = tail
+	return classifyAppServerOutcome(ctx, res, runErr, waitErr, client.readTimeoutMs, start, elapsed)
+}
 
-	if runErr != nil {
-		var stall *StallError
-		if errors.As(runErr, &stall) {
-			return res, runErr
-		}
-		if isAppServerReadTimeout(runErr) {
-			return res, &ReadTimeoutError{Timeout: time.Duration(client.readTimeoutMs) * time.Millisecond, Cause: runErr}
-		}
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: runErr}
-		}
-		if _, ok := ErrorCategory(runErr); ok {
-			return res, runErr
-		}
-		if waitErr != nil {
-			return res, NewError(CategoryPortExit, "codex app-server process exited", errors.Join(runErr, waitErr))
-		}
+// setupAppServerCommand builds the `codex app-server` *exec.Cmd ready to start:
+// it resolves the agent env, constructs the command, pins its workdir/env,
+// validates the command's workdir, applies the sandbox wrapper, and configures
+// the platform kill + WaitDelay. directCodexExec reports whether the command
+// launches codex directly (vs a shell wrapper) and sandboxEnabled whether the
+// sandbox wraps it — both feed appServerProcessPID's PID-emission guard.
+func setupAppServerCommand(ctx context.Context, in RunInput) (cmd *exec.Cmd, directCodexExec, sandboxEnabled bool, err error) {
+	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
+	cmd, directCodexExec, err = buildCodexAppServerCmd(ctx, in, env)
+	if err != nil {
+		return nil, false, false, err
+	}
+	cmd.Dir = in.Workdir
+	cmd.Env = env
+	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
+		return nil, false, false, err
+	}
+	sandboxEnabled = in.Workflow.Config.Sandbox.Enabled && in.Workflow.Config.Sandbox.Backend != "" && in.Workflow.Config.Sandbox.Backend != "none"
+	cmd, err = applySandbox(ctx, in, cmd)
+	if err != nil {
+		return nil, false, false, err
+	}
+	configurePlatformKill(cmd)
+	cmd.WaitDelay = killGrace
+	return cmd, directCodexExec, sandboxEnabled, nil
+}
+
+// openAppServerPipes wires the subprocess's stdio. Each pipe error carries the
+// stream name so a setup failure is attributable; callers return the wrapped
+// error verbatim.
+func openAppServerPipes(cmd *exec.Cmd) (stdin io.WriteCloser, stdout, stderr io.ReadCloser, err error) {
+	stdin, err = cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open codex app-server stdin: %w", err)
+	}
+	stdout, err = cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open codex app-server stdout: %w", err)
+	}
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("open codex app-server stderr: %w", err)
+	}
+	return stdin, stdout, stderr, nil
+}
+
+// appServerProcessPID returns cmd.Process.Pid only when it is guaranteed to be
+// the actual codex process: the command must launch the codex binary directly
+// (no shell wrapper from a custom codex.command) and the sandbox must not have
+// wrapped cmd in firejail/bwrap. In any wrapper scenario the PID belongs to the
+// wrapper, which would mislead operators trying to map `/api/v1/state` rows to a
+// host process; returning 0 makes the omitempty JSON field absent. Call after
+// cmd.Start() so cmd.Process is populated.
+func appServerProcessPID(cmd *exec.Cmd, directCodexExec, sandboxEnabled bool) int {
+	if directCodexExec && !sandboxEnabled && cmd.Process != nil {
+		return cmd.Process.Pid
+	}
+	return 0
+}
+
+// classifyAppServerOutcome maps a completed app-server run to the (Result, error)
+// the worker finalize path consumes. The precedence is load-bearing: the worker
+// (internal/worker/runtask.go) switches on the error TYPE to pick the terminal
+// phase (stall, read/run timeout, port exit, generic failure), so a run-loop
+// error is classified StallError → read-timeout → outer-deadline TimeoutError →
+// already-categorized error → process-exit PortExit → bare runErr, in that order.
+// res is returned on every path so output telemetry survives the error.
+func classifyAppServerOutcome(ctx context.Context, res Result, runErr, waitErr error, readTimeoutMs int, start time.Time, elapsed time.Duration) (Result, error) {
+	if runErr == nil {
+		return classifyAppServerProcessExit(ctx, res, waitErr, start, elapsed)
+	}
+	var stall *StallError
+	if errors.As(runErr, &stall) {
+		return res, runErr
+	}
+	if isAppServerReadTimeout(runErr) {
+		return res, &ReadTimeoutError{Timeout: time.Duration(readTimeoutMs) * time.Millisecond, Cause: runErr}
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: runErr}
+	}
+	if _, ok := ErrorCategory(runErr); ok {
 		return res, runErr
 	}
 	if waitErr != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: waitErr}
-		}
-		return res, NewError(CategoryPortExit, "codex app-server process exited", waitErr)
+		return res, NewError(CategoryPortExit, "codex app-server process exited", errors.Join(runErr, waitErr))
 	}
-	return res, nil
+	return res, runErr
+}
+
+// classifyAppServerProcessExit handles the runErr==nil tail of
+// classifyAppServerOutcome: a clean run loop whose subprocess still exited
+// non-zero is an outer-deadline TimeoutError (if the run ctx deadline fired) or
+// a PortExit, and an exitless clean run is success.
+func classifyAppServerProcessExit(ctx context.Context, res Result, waitErr error, start time.Time, elapsed time.Duration) (Result, error) {
+	if waitErr == nil {
+		return res, nil
+	}
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: waitErr}
+	}
+	return res, NewError(CategoryPortExit, "codex app-server process exited", waitErr)
 }
 func validateAppServerWorkdir(workdir string) error {
 	if strings.TrimSpace(workdir) == "" {
