@@ -2043,6 +2043,163 @@ func TestReconcileRoutingNonTerminalBlockedKeepsWorkspace(t *testing.T) {
 	}
 }
 
+// TestReconcileRoutingTerminalContinuationRetryFiresWorkspaceCleanup is the
+// routing-mode half of the #341 retry-cleanup contract: the routing-aware pass
+// runs before the terminal-aware inactive pass and releases the retry, so a
+// queued continuation retry whose issue went terminal must clean its workspace
+// HERE through the WorkspaceCleaner (before_remove + reconcile_workspace
+// reason=terminal). Pre-fix the routing pass released terminal retries with no
+// §18.1 cleanup, leaking the directory until the next startup sweep.
+func TestReconcileRoutingTerminalContinuationRetryFiresWorkspaceCleanup(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-RCR1", Identifier: "ENG-RCR1", State: "In Progress", Title: "self-stop"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RCR1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+
+	// Clean §16.5 self-stop → continuation retry carrying the run's workspace.
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+
+	// Routing pass: the issue is absent from the active set (it went terminal);
+	// refreshedByID carries its terminal state so the retry cleanup fires here.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"in progress": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"}},
+		0); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	got := cleaner.snapshot()[0]
+	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
+	}
+	if got.Root != testWorkspaceRoot {
+		t.Fatalf("cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
+	}
+	view, _ := o.Snapshot(context.Background())
+	if len(view.Retrying) != 0 {
+		t.Fatalf("retry not released after routing terminal reconcile: %+v", view.Retrying)
+	}
+}
+
+// TestReconcileRoutingNonTerminalContinuationRetryKeepsWorkspace is the routing
+// retry negative (mirrors TestReconcileRoutingNonTerminalBlockedKeepsWorkspace):
+// a continuation retry released because its issue moved to a non-terminal
+// inactive state must keep its workspace. A terminal sibling cleaned in the same
+// pass is the progress barrier that makes the single-call assertion a real
+// negative; a reverted terminal gate would clean both and push the count to 2.
+func TestReconcileRoutingNonTerminalContinuationRetryKeepsWorkspace(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	kept := tracker.Issue{ID: "ENG-NCR1", Identifier: "ENG-NCR1", State: "In Progress", Title: "kept self-stop"}
+	barrier := tracker.Issue{ID: "ENG-NCR2", Identifier: "ENG-NCR2", State: "In Progress", Title: "terminal self-stop"}
+	const keptPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-NCR1"
+	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-NCR2"
+	dispatchRunningIssue(t, o, disp, kept, keptPath, 1)
+	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 2
+	}, time.Second)
+
+	// kept → Backlog (non-terminal inactive) keeps its workspace; barrier → Done
+	// is cleaned, proving the pass released both retries.
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"in progress": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{
+			kept.ID:    {ID: kept.ID, Identifier: kept.Identifier, State: "Backlog"},
+			barrier.ID: {ID: barrier.ID, Identifier: barrier.Identifier, State: "Done"},
+		},
+		0); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+
+	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
+	calls := cleaner.snapshot()
+	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
+		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
+	}
+}
+
+// TestReconcileRoutingTerminalContinuationRetryActiveRecheckPreservesContinuation
+// is the routing-mode counterpart of
+// TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation: when
+// the routing pass collects a terminal continuation retry but the deletion-time
+// recheck finds the issue active again, the continuation must be resumed
+// (attempt + budget preserved), not dropped to a bare poll wake. Pins that the
+// routing pass carries continuationForRetry through its retry cleanup too.
+func TestReconcileRoutingTerminalContinuationRetryActiveRecheckPreservesContinuation(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-RCR3", Identifier: "ENG-RCR3", State: "In Progress", Title: "self-stop"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RCR3"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+
+	// The recheck resolver reports the issue active again, so the deletion-time
+	// recheck must skip removal and resume the continuation.
+	o.SetRetryTerminalStateResolver(staticStateRefresher{issue.ID: "In Progress"}, []string{"Done"})
+
+	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
+		map[string]tracker.Issue{},
+		map[string]struct{}{"in progress": {}},
+		map[string]struct{}{"done": {}},
+		map[string]tracker.Issue{issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"}},
+		0); err != nil {
+		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	}
+
+	// Continuation resumed with the queued attempt preserved (not reset to 0).
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+	}, time.Second)
+	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("RequestDispatch after recheck-active continuation = %v, want ErrNotDispatched while continuation retry is claimed", err)
+	}
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
+	}
+}
+
 // TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap is a
 // regression for the gap that Codex flagged on PR #102: finalizeRunOp's
 // apply ran FinishRunFailed (which dropped Claimed[id]) and then

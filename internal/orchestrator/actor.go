@@ -1238,13 +1238,14 @@ type reconcileTrackerIssuesOp struct {
 	issuesByID   map[string]tracker.Issue
 	activeStates map[string]struct{}
 	// terminalStates + refreshedByID let this routing-aware pass terminal-gate
-	// the SPEC §18.1 active-transition workspace cleanup for the runs it cancels.
-	// Upstream is single-project and reaches terminate_running_issue (with
-	// cleanup) in one pass; the aiops routing extension cancels (and waits for) a
-	// routed terminal run here, before the terminal-aware inactive pass would see
-	// it, so the cleanup signal must be computed in this pass. refreshedByID
-	// carries the refreshed post-transition state that issuesByID (the active
-	// listing) no longer contains for a now-inactive/terminal issue (#340).
+	// the SPEC §18.1 active-transition workspace cleanup for the run, blocked, and
+	// retry entries it releases. Upstream is single-project and reaches
+	// terminate_running_issue (with cleanup) in one pass; the aiops routing
+	// extension cancels (and waits for) a routed terminal entry here, before the
+	// terminal-aware inactive pass would see it, so the cleanup signal must be
+	// computed in this pass. refreshedByID carries the refreshed post-transition
+	// state that issuesByID (the active listing) no longer contains for a
+	// now-inactive/terminal issue (#340).
 	terminalStates map[string]struct{}
 	refreshedByID  map[string]tracker.Issue
 	result         chan<- []*RunningEntry
@@ -1276,6 +1277,15 @@ func (r *reconcileTrackerIssuesOp) apply(st *OrchestratorState) func() {
 			retry.Issue = issue
 			st.ClaimedIssues[id] = issue
 			continue
+		}
+		// A routed terminal retry must clean its workspace through the §18.1 seam
+		// here — this pass releases it before the terminal-aware inactive pass
+		// (reconcileInactiveTrackerIssuesOp) would see it, so deferring the
+		// cleanup leaks the directory until the next startup sweep. continuationForRetry
+		// carries the queued continuation so the deletion-time recheck resumes it
+		// if the issue flips back active, matching the inactive pass.
+		if w, okw := r.terminalRetryCleanup(id, retry); okw {
+			blockedCleanups = append(blockedCleanups, reconciledCleanup{workspace: w, continuation: continuationForRetry(retry)})
 		}
 		st.ReleaseClaim(id)
 	}
@@ -1328,6 +1338,25 @@ func (r *reconcileTrackerIssuesOp) terminalBlockedCleanup(id IssueID, blocked *B
 		return ReconciledWorkspace{}, false
 	}
 	return terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, refreshed.State)
+}
+
+// terminalRetryCleanup builds the WorkspaceCleaner removal for a routed retry
+// this pass is releasing, but only when its refreshed state is terminal — so a
+// terminal continuation/failure retry fires before_remove + reconcile_workspace
+// reason=terminal (mirroring reconcileInactiveTrackerIssuesOp's retry loop and
+// upstream handle_retry_issue_lookup) while a route-change or non-terminal
+// inactive transition keeps the directory for reuse (#341). Without it the
+// routing pass released terminal retries with no §18.1 cleanup, leaking the
+// workspace until the next startup sweep.
+func (r *reconcileTrackerIssuesOp) terminalRetryCleanup(id IssueID, retry *RetryEntry) (ReconciledWorkspace, bool) {
+	if retry == nil {
+		return ReconciledWorkspace{}, false
+	}
+	refreshed, ok := r.refreshedByID[string(id)]
+	if !ok || !isTerminalTrackerState(refreshed.State, r.terminalStates) {
+		return ReconciledWorkspace{}, false
+	}
+	return terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, refreshed.State)
 }
 
 func sameServiceRoute(previous, current tracker.Issue) bool {
