@@ -219,7 +219,35 @@ type codexAppServerTurnStartParams struct {
 	SandboxPolicy  workflow.CodexSandboxPolicy `json:"sandboxPolicy"`
 }
 
+// run drives a full app-server session: cache the per-run config, complete the
+// SPEC §10.1 handshake, then loop turns until one stops the run (clean exit /
+// §16.5 self-stop) or the continuation cap is hit. The init → startThread →
+// per-turn split mirrors upstream start_session / run_turn.
 func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) error {
+	c.initSession(in)
+	threadID, err := c.startThread(ctx, in)
+	if err != nil {
+		return err
+	}
+	maxTurns := in.Workflow.Config.Agent.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 20
+	}
+	for turn := 1; turn <= maxTurns; turn++ {
+		keepGoing, err := c.runSingleTurn(ctx, in, threadID, prompt, turn)
+		if err != nil {
+			return err
+		}
+		if !keepGoing {
+			return nil
+		}
+	}
+	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
+}
+
+// initSession records the run's sinks and caches the per-run codex config off
+// RunInput before any protocol traffic.
+func (c *appServerClient) initSession(in RunInput) {
 	c.runtimeEventSink = in.RuntimeEventSink
 	c.phaseTransitionSink = in.PhaseTransitionSink
 	c.nextID = 1
@@ -237,6 +265,12 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	// emits approval prompts) but autoApproveRequest, which no longer handles
 	// reject:, would decline them unconditionally and flip behavior (#335).
 	c.approvalPolicy = codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+}
+
+// startThread runs the SPEC §10.1 handshake — initialize, initialized,
+// thread/start — and returns the started thread id. Mirrors upstream
+// start_session.
+func (c *appServerClient) startThread(ctx context.Context, in RunInput) (string, error) {
 	if _, err := c.request(ctx, "initialize", map[string]any{
 		"capabilities": map[string]any{"experimentalApi": true},
 		"clientInfo": map[string]any{
@@ -246,13 +280,12 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 		},
 	}); err != nil {
 		c.recordStartupFailed("initialize", err)
-		return fmt.Errorf("codex app-server initialize: %w", err)
+		return "", fmt.Errorf("codex app-server initialize: %w", err)
 	}
 	if err := c.notify("initialized", map[string]any{}); err != nil {
 		c.recordStartupFailed("initialized", err)
-		return err
+		return "", err
 	}
-
 	threadResult, err := c.request(ctx, "thread/start", map[string]any{
 		"approvalPolicy": c.approvalPolicy,
 		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
@@ -261,109 +294,133 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	})
 	if err != nil {
 		c.recordStartupFailed("thread/start", err)
-		return fmt.Errorf("codex app-server thread/start: %w", err)
+		return "", fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	threadID, err := extractString(threadResult, "thread", "id")
 	if err != nil {
 		c.recordStartupFailed("thread/start", err)
-		return fmt.Errorf("codex app-server thread/start: %w", err)
+		return "", fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	c.threadID = threadID
 	c.recordPhaseTransition(task.PhaseLaunchingAgentProcess, task.PhaseInitializingSession)
+	return threadID, nil
+}
 
-	maxTurns := in.Workflow.Config.Agent.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 20
+// runSingleTurn starts one turn, awaits its completion, and reports whether the
+// loop should continue. Mirrors upstream run_turn: keepGoing=false stops the run
+// (a clean turn with continue=false, or a SPEC §16.5 self-stop), a non-nil error
+// aborts it.
+func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, threadID, prompt string, turn int) (bool, error) {
+	turnID, err := c.startTurn(ctx, in, threadID, prompt, turn)
+	if err != nil {
+		return false, err
 	}
-	for turn := 1; turn <= maxTurns; turn++ {
-		input := []codexAppServerTextInput{{
-			Type:         "text",
-			Text:         appServerContinuationPrompt(in, turn),
-			TextElements: []any{},
-		}}
-		if turn == 1 {
-			input = []codexAppServerTextInput{{
-				Type:         "text",
-				Text:         prompt,
-				TextElements: []any{},
-			}}
-		}
-		turnResult, err := c.request(ctx, "turn/start", codexAppServerTurnStartParams{
-			ThreadID:       threadID,
-			Input:          input,
-			CWD:            in.Workdir,
-			Title:          appServerTurnTitle(in),
-			ApprovalPolicy: c.approvalPolicy,
-			SandboxPolicy:  in.Workflow.Config.Codex.TurnSandboxPolicy,
-		})
+	c.turnID = turnID
+	if turn == 1 {
+		c.recordFirstTurnStarted(threadID, turnID)
+	}
+	c.continueRun = false
+	turnCtx := ctx
+	var cancel context.CancelFunc
+	if c.turnTimeoutMs > 0 {
+		turnCtx, cancel = context.WithTimeout(ctx, time.Duration(c.turnTimeoutMs)*time.Millisecond)
+	}
+	turnStarted := time.Now()
+	err = c.awaitTurnCompletion(turnCtx)
+	if cancel != nil {
+		cancel()
+	}
+	if err != nil {
+		return false, c.classifyTurnError(ctx, err, turnStarted)
+	}
+	// SPEC §16.5: refresh tracker state between turns so an operator who
+	// cancelled the issue mid-run sees the worker exit after the current turn
+	// rather than at the next orchestrator poll tick. Errors here are surfaced
+	// verbatim per SPEC ("if refreshed_issue failed: fail"); a nil refresher
+	// keeps the legacy continueRun-only path for callers (mock runner, tests)
+	// with no tracker hook.
+	if c.refreshIssueState != nil {
+		active, err := c.refreshIssueState(ctx)
 		if err != nil {
-			if turn == 1 {
-				c.recordStartupFailed("turn/start", err)
-			}
-			return fmt.Errorf("codex app-server turn/start: %w", err)
+			return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
 		}
-		turnID, err := extractString(turnResult, "turn", "id")
-		if err != nil {
-			if turn == 1 {
-				c.recordStartupFailed("turn/start", err)
-			}
-			return fmt.Errorf("codex app-server turn/start: %w", err)
-		}
-		c.turnID = turnID
-		if turn == 1 {
-			payload := map[string]any{
-				"session_id": threadID + "-" + turnID,
-				"thread_id":  threadID,
-				"turn_id":    turnID,
-			}
-			if c.codexAppServerPID > 0 {
-				payload["codex_app_server_pid"] = c.codexAppServerPID
-			}
-			c.recordRuntimeEvent(task.EventSessionStarted, payload)
-			c.recordPhaseTransition(task.PhaseInitializingSession, task.PhaseStreamingTurn)
-		}
-		c.continueRun = false
-		turnCtx := ctx
-		var cancel context.CancelFunc
-		if c.turnTimeoutMs > 0 {
-			turnCtx, cancel = context.WithTimeout(ctx, time.Duration(c.turnTimeoutMs)*time.Millisecond)
-		}
-		turnStarted := time.Now()
-		err = c.awaitTurnCompletion(turnCtx)
-		if cancel != nil {
-			cancel()
-		}
-		if err != nil {
-			var stall *StallError
-			if errors.As(err, &stall) {
-				return err
-			}
-			if c.turnTimeoutMs > 0 && errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return &TurnTimeoutError{Timeout: time.Duration(c.turnTimeoutMs) * time.Millisecond, Elapsed: time.Since(turnStarted), Cause: err}
-			}
-			return err
-		}
-		// SPEC §16.5: refresh tracker state between turns so an
-		// operator who cancelled the issue mid-run sees the worker
-		// exit after the current turn rather than at the next
-		// orchestrator poll tick. Errors here are surfaced verbatim per
-		// SPEC ("if refreshed_issue failed: fail"); a nil refresher
-		// keeps the legacy continueRun-only path for callers (mock
-		// runner, tests) with no tracker hook.
-		if c.refreshIssueState != nil {
-			active, err := c.refreshIssueState(ctx)
-			if err != nil {
-				return fmt.Errorf("codex app-server refresh issue state: %w", err)
-			}
-			if !active {
-				return nil
-			}
-		}
-		if !c.continueRun {
-			return nil
+		if !active {
+			return false, nil
 		}
 	}
-	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
+	return c.continueRun, nil
+}
+
+// startTurn issues turn/start and resolves the turn id. A failure on the first
+// turn is also recorded as a startup failure (the session never produced a
+// turn). Mirrors upstream start_turn.
+func (c *appServerClient) startTurn(ctx context.Context, in RunInput, threadID, prompt string, turn int) (string, error) {
+	turnResult, err := c.request(ctx, "turn/start", codexAppServerTurnStartParams{
+		ThreadID:       threadID,
+		Input:          turnInput(in, prompt, turn),
+		CWD:            in.Workdir,
+		Title:          appServerTurnTitle(in),
+		ApprovalPolicy: c.approvalPolicy,
+		SandboxPolicy:  in.Workflow.Config.Codex.TurnSandboxPolicy,
+	})
+	if err != nil {
+		if turn == 1 {
+			c.recordStartupFailed("turn/start", err)
+		}
+		return "", fmt.Errorf("codex app-server turn/start: %w", err)
+	}
+	turnID, err := extractString(turnResult, "turn", "id")
+	if err != nil {
+		if turn == 1 {
+			c.recordStartupFailed("turn/start", err)
+		}
+		return "", fmt.Errorf("codex app-server turn/start: %w", err)
+	}
+	return turnID, nil
+}
+
+// turnInput builds the turn/start input: the full prompt on the first turn, a
+// continuation nudge thereafter.
+func turnInput(in RunInput, prompt string, turn int) []codexAppServerTextInput {
+	text := prompt
+	if turn > 1 {
+		text = appServerContinuationPrompt(in, turn)
+	}
+	return []codexAppServerTextInput{{
+		Type:         "text",
+		Text:         text,
+		TextElements: []any{},
+	}}
+}
+
+// recordFirstTurnStarted emits the SPEC §10.4 session_started event and the
+// initializing→streaming phase transition, once, on the first turn.
+func (c *appServerClient) recordFirstTurnStarted(threadID, turnID string) {
+	payload := map[string]any{
+		"session_id": threadID + "-" + turnID,
+		"thread_id":  threadID,
+		"turn_id":    turnID,
+	}
+	if c.codexAppServerPID > 0 {
+		payload["codex_app_server_pid"] = c.codexAppServerPID
+	}
+	c.recordRuntimeEvent(task.EventSessionStarted, payload)
+	c.recordPhaseTransition(task.PhaseInitializingSession, task.PhaseStreamingTurn)
+}
+
+// classifyTurnError maps an awaitTurnCompletion failure to the run's returned
+// error: a *StallError and a generic error pass through unchanged; a per-turn
+// deadline that fired while the outer run context is still alive becomes a
+// *TurnTimeoutError.
+func (c *appServerClient) classifyTurnError(ctx context.Context, err error, turnStarted time.Time) error {
+	var stall *StallError
+	if errors.As(err, &stall) {
+		return err
+	}
+	if c.turnTimeoutMs > 0 && errors.Is(err, context.DeadlineExceeded) && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &TurnTimeoutError{Timeout: time.Duration(c.turnTimeoutMs) * time.Millisecond, Elapsed: time.Since(turnStarted), Cause: err}
+	}
+	return err
 }
 func (c *appServerClient) request(ctx context.Context, method string, params any) (map[string]any, error) {
 	id := c.nextID
