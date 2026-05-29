@@ -392,45 +392,70 @@ var (
 
 func parseRetryAfterText(message string, now time.Time) time.Duration {
 	if match := retryInPattern.FindStringSubmatch(message); len(match) == 3 {
-		n, err := strconv.ParseFloat(match[1], 64)
-		if err != nil || n <= 0 {
-			return 0
-		}
-		switch strings.ToLower(match[2]) {
-		case "second", "seconds", "sec", "secs":
-			return time.Duration(n * float64(time.Second))
-		case "minute", "minutes", "min", "mins":
-			return time.Duration(n * float64(time.Minute))
-		case "hour", "hours", "hr", "hrs":
-			return time.Duration(n * float64(time.Hour))
-		}
+		return parseRelativeRetryDelay(match)
 	}
 	if match := retryAtPattern.FindStringSubmatch(message); len(match) == 4 {
-		hour, err := strconv.Atoi(match[1])
-		if err != nil || hour < 1 || hour > 12 {
-			return 0
-		}
-		minute := 0
-		if match[2] != "" {
-			minute, err = strconv.Atoi(match[2])
-			if err != nil || minute > 59 {
-				return 0
-			}
-		}
-		meridiem := strings.ToLower(strings.ReplaceAll(match[3], ".", ""))
-		if meridiem == "pm" && hour != 12 {
-			hour += 12
-		}
-		if meridiem == "am" && hour == 12 {
-			hour = 0
-		}
-		retryAt := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
-		if !retryAt.After(now) {
-			retryAt = retryAt.Add(24 * time.Hour)
-		}
-		return retryAt.Sub(now)
+		return parseAbsoluteRetryDelay(match, now)
 	}
 	return 0
+}
+
+// parseRelativeRetryDelay converts a retryInPattern submatch ("in N <unit>")
+// into a delay. N is regex-constrained to a non-negative decimal, and the unit
+// group is exhaustive over the switch cases, so the only non-positive result is
+// an explicit N<=0 (treated as "no usable hint").
+func parseRelativeRetryDelay(match []string) time.Duration {
+	n, err := strconv.ParseFloat(match[1], 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	switch strings.ToLower(match[2]) {
+	case "second", "seconds", "sec", "secs":
+		return time.Duration(n * float64(time.Second))
+	case "minute", "minutes", "min", "mins":
+		return time.Duration(n * float64(time.Minute))
+	case "hour", "hours", "hr", "hrs":
+		return time.Duration(n * float64(time.Hour))
+	}
+	return 0
+}
+
+// parseAbsoluteRetryDelay converts a retryAtPattern submatch ("at H[:MM] am/pm")
+// into the delay until that clock time relative to now, rolling to the next day
+// when the time has already passed today. An out-of-range hour (>12) or minute
+// (>59) yields 0.
+func parseAbsoluteRetryDelay(match []string, now time.Time) time.Duration {
+	hour, err := strconv.Atoi(match[1])
+	if err != nil || hour < 1 || hour > 12 {
+		return 0
+	}
+	minute := 0
+	if match[2] != "" {
+		minute, err = strconv.Atoi(match[2])
+		if err != nil || minute > 59 {
+			return 0
+		}
+	}
+	meridiem := strings.ToLower(strings.ReplaceAll(match[3], ".", ""))
+	hour = to24Hour(hour, meridiem)
+	retryAt := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+	if !retryAt.After(now) {
+		retryAt = retryAt.Add(24 * time.Hour)
+	}
+	return retryAt.Sub(now)
+}
+
+// to24Hour converts a 1-12 clock hour plus a normalized meridiem ("am"/"pm")
+// to a 0-23 hour: 12 PM stays noon, 12 AM becomes midnight (0), every other PM
+// hour is shifted by 12.
+func to24Hour(hour int, meridiem string) int {
+	if meridiem == "pm" && hour != 12 {
+		return hour + 12
+	}
+	if meridiem == "am" && hour == 12 {
+		return 0
+	}
+	return hour
 }
 func (c *appServerClient) recordSafeTurnFailure(event string, params map[string]any) {
 	c.recordRuntimeEvent(event, c.withRuntimeContext(safeTurnFailurePayload(params)))

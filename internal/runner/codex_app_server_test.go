@@ -1354,6 +1354,51 @@ func TestParseRetryAfterTextAcceptsAbsoluteClockTime(t *testing.T) {
 	}
 }
 
+// TestParseRetryAfterText_Table characterizes both parse branches (relative
+// "in N units" and absolute "at H:MM am/pm") and their edge cases, locking the
+// behavior of parseRetryAfterText across its decomposition into the per-branch
+// helpers parseRelativeRetryDelay / parseAbsoluteRetryDelay / to24Hour. now is
+// fixed at 18:00 local so the absolute-time deltas are deterministic
+// (parseRetryAfterText computes against now.Location()).
+func TestParseRetryAfterText_Table(t *testing.T) {
+	now := time.Date(2026, 5, 27, 18, 0, 0, 0, time.Local)
+	cases := []struct {
+		name string
+		msg  string
+		want time.Duration
+	}{
+		// relative branch
+		{"relative seconds", "try again in 30 seconds", 30 * time.Second},
+		{"relative sec abbrev", "please retry in 45 secs", 45 * time.Second},
+		{"relative minutes", "retry in 5 minutes", 5 * time.Minute},
+		{"relative min abbrev", "try again in 10 min", 10 * time.Minute},
+		{"relative hours", "try again in 2 hours", 2 * time.Hour},
+		{"relative decimal hours", "try again in 1.5 hours", 90 * time.Minute},
+		{"relative zero is ignored", "try again in 0 seconds", 0},
+		// absolute branch (now = 18:00)
+		{"absolute pm with minutes", "try again at 6:20 PM", 20 * time.Minute},
+		{"absolute pm no minutes", "try again at 7 PM", time.Hour},
+		{"absolute am non-noon identity", "try again at 9 AM", 15 * time.Hour},
+		{"absolute earlier today rolls to tomorrow", "try again at 5 PM", 23 * time.Hour},
+		{"absolute 12am is midnight", "try again at 12 AM", 6 * time.Hour},
+		{"absolute 12pm is noon", "try again at 12 PM", 18 * time.Hour},
+		{"absolute hour zero rejected", "try again at 0 PM", 0},
+		{"absolute dotted meridiem", "try again at 6:30 p.m.", 30 * time.Minute},
+		{"absolute invalid hour", "try again at 13 PM", 0},
+		{"absolute invalid minute", "try again at 6:75 PM", 0},
+		// no match
+		{"no retry phrasing", "the agent finished the task", 0},
+		{"empty", "", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRetryAfterText(tc.msg, now); got != tc.want {
+				t.Errorf("parseRetryAfterText(%q) = %s; want %s", tc.msg, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCodexAppServerRunnerTreatsInterruptedTurnCompletedAsSuccess(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json
