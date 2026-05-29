@@ -260,114 +260,158 @@ type retryFireOp struct {
 	kind    RetryKind
 }
 
-func (r *retryFireOp) apply(st *OrchestratorState) func() {
-	entry, ok := st.RetryAttempts[r.id]
+// matchingRetryEntry returns the queued RetryEntry for id only while it still
+// matches this fire's (attempt, kind) identity, and false otherwise. The two
+// false cases both mean "drop this fire as a no-op": (1) the entry is absent —
+// already consumed by reconciliation's ReleaseClaim or by an earlier fire of
+// the same retry; and (2) a newer ScheduleRetry replaced the entry with a
+// different attempt/kind, so an older timer fired late (the Stop()-missed race,
+// SPEC §16.6). It mirrors upstream pop_retry_attempt_state's :missing result
+// (orchestrator.ex:1045-1060) minus the pop — the Go port keeps the entry in
+// RetryAttempts across the async candidate fetch and re-checks this guard at
+// every actor re-entry (retryFireOp, retryPollFailedOp, retryFireAfterFetchOp).
+// The returned *RetryEntry is the live pointer from the map, so callers'
+// in-place mutations (entry.Timer, entry.Issue, entry.Identifier) still reach
+// the stored struct.
+func matchingRetryEntry(st *OrchestratorState, id IssueID, attempt int, kind RetryKind) (*RetryEntry, bool) {
+	entry, ok := st.RetryAttempts[id]
 	if !ok {
-		// Already consumed by reconciliation (ReleaseClaim) or by an
-		// earlier fire of the same retry. Either is correct.
-		return nil
+		return nil, false
 	}
-	if entry.Attempt != r.attempt || entry.Kind != r.kind {
-		// A newer ScheduleRetry replaced this entry; the older timer
-		// fired late. Drop the stale fire — the newer entry will
-		// re-dispatch on its own timer.
+	if entry.Attempt != attempt || entry.Kind != kind {
+		return nil, false
+	}
+	return entry, true
+}
+
+func (r *retryFireOp) apply(st *OrchestratorState) func() {
+	entry, ok := matchingRetryEntry(st, r.id, r.attempt, r.kind)
+	if !ok {
 		return nil
 	}
 	if entry.Kind == RetryKindContinuation || entry.Kind == RetryKindExternalBlocker {
-		// Continuation and external-blocker cooldown retries are wake-up
-		// signals. They must not spawn from the cached issue snapshot or carry
-		// failure retry accounting: a poll has to observe the issue still
-		// active and call RequestDispatchAfterTrackerRecheck, which consumes
-		// the entry before spawning the next normal turn.
-		entry.Timer = nil
-		o := r.o
-		return func() { o.wakeRetryPollLoop() }
+		return r.fireWakeSignal(entry)
 	}
-	// SPEC §16.6 on_retry_timer: the fired failure-retry timer must (1)
-	// fetch active candidates, (2) re-schedule with "retry poll failed"
-	// on fetch error, (3) release the claim if the issue is absent, and
-	// only then (4/5) dispatch from the refreshed tracker state. When a
-	// CandidateLister is wired (production via RuntimePoller) we defer
-	// the I/O to a followup; without one we fall back to direct dispatch
-	// from the cached entry.Issue so existing unit tests keep working.
 	o := r.o
 	if lister := o.currentCandidateLister(); lister != nil {
-		entry.Timer = nil
-		id := r.id
-		attempt := r.attempt
-		kind := r.kind
-		return func() {
-			// Per-fetch timeout. The followup runs on a fresh goroutine
-			// outside the actor, and o.runCtx has no deadline of its own.
-			// A tracker client that ignores ctx cancellation would otherwise
-			// pin this goroutine indefinitely — entry.Timer is already
-			// cleared and no retryFireOp would be resubmitted, leaving the
-			// issue stuck in Claimed/RetryAttempts forever. Surfacing the
-			// timeout as a "retry poll failed" reschedule keeps the SPEC
-			// §16.6 backoff window the only source of forward progress.
-			fetchCtx, cancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
-			defer cancel()
-			issues, fetchErr := lister.ListActiveIssues(fetchCtx)
-			found := findIssueByID(issues, id)
-			if fetchErr != nil && found == nil {
-				// Either the whole fetch failed (including timeout), or a
-				// multi-tracker partial failure happened on the tracker that
-				// owns this issue. We can't tell "absent" from "tracker down"
-				// — treat as fetch failure per SPEC §16.6 and reschedule
-				// with the typed error.
-				_ = o.submit(o.runCtx, &retryPollFailedOp{
-					o:        o,
-					id:       id,
-					attempt:  attempt,
-					kind:     kind,
-					fetchErr: fetchErr,
-				})
-				return
-			}
-			// found==nil means the issue is not in the active candidate set:
-			// terminal, merely-inactive, or deleted. The active-only fetch
-			// cannot tell them apart, so resolve the actual state (the way the
-			// reconcile pass does) to recover upstream handle_retry_issue_lookup's
-			// terminal branch — terminal → clean the workspace + release, every
-			// other absence → release only (#341). Resolver errors / unknown
-			// states leave terminal=false, preserving the release-only default.
-			terminal := false
-			terminalState := ""
-			if found == nil {
-				if resolver, terminalStates := o.currentRetryTerminalResolver(); resolver != nil && len(terminalStates) > 0 {
-					// Give the terminal-state lookup its own timeout budget rather
-					// than the already-consumed fetchCtx: a slow-but-successful
-					// ListActiveIssues near the deadline would otherwise leave this
-					// call to fail immediately with context-deadline-exceeded,
-					// dropping a terminal issue onto the release-only path and
-					// leaking its workspace — the exact leak this resolves (Codex
-					// P2). Derived from runCtx so actor shutdown still cancels it.
-					resolveCtx, resolveCancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
-					statesByID, rerr := fetchIssueStates(resolveCtx, resolver, []tracker.IssueRef{{
-						ID:         string(id),
-						Identifier: entry.Identifier,
-					}})
-					resolveCancel()
-					if rerr == nil {
-						if s := strings.TrimSpace(statesByID[string(id)]); s != "" && isTerminalTrackerState(s, terminalStates) {
-							terminal = true
-							terminalState = s
-						}
-					}
-				}
-			}
-			_ = o.submit(o.runCtx, &retryFireAfterFetchOp{
-				o:             o,
-				id:            id,
-				attempt:       attempt,
-				kind:          kind,
-				found:         found,
-				terminal:      terminal,
-				terminalState: terminalState,
-			})
-		}
+		return r.fireWithCandidateFetch(entry, lister)
 	}
+	// No CandidateLister wired (unit-test fallback): dispatch directly from the
+	// cached entry.Issue. Production always wires one via RuntimePoller.
 	return retryFireDispatchTail(st, entry, r.id, r.attempt, o)
+}
+
+// fireWakeSignal handles a fired continuation or external-blocker cooldown
+// retry. Both kinds are wake-up signals, not dispatches: they must not spawn
+// from the cached issue snapshot or carry failure-retry accounting. The entry
+// stays in RetryAttempts (timer cleared) and the followup wakes the poll loop;
+// a poll then observes the issue still active and calls
+// RequestDispatchAfterTrackerRecheck, which consumes the entry before spawning
+// the next normal turn.
+func (r *retryFireOp) fireWakeSignal(entry *RetryEntry) func() {
+	entry.Timer = nil
+	o := r.o
+	return func() { o.wakeRetryPollLoop() }
+}
+
+// fireWithCandidateFetch builds the SPEC §16.6 on_retry_timer followup for a
+// fired failure/quota retry when a CandidateLister is wired: (1) fetch active
+// candidates, (2) reschedule with "retry poll failed" on fetch error, (3)
+// release the claim if the issue is absent, and only then (4/5) dispatch from
+// the refreshed tracker state. The actor-side timer clear happens here (before
+// the followup is returned) so a subsequent ScheduleRetry's Stop() is a no-op
+// on the already-fired timer; the entry is NOT popped — it stays in
+// RetryAttempts so the post-fetch ops re-validate it under actor serialization.
+// id/attempt/kind/identifier are captured by value (not the op or the entry
+// pointer) because the returned closure runs off-actor.
+func (r *retryFireOp) fireWithCandidateFetch(entry *RetryEntry, lister ActiveIssueLister) func() {
+	entry.Timer = nil
+	o := r.o
+	id := r.id
+	attempt := r.attempt
+	kind := r.kind
+	identifier := entry.Identifier
+	return func() {
+		// Per-fetch timeout. The followup runs on a fresh goroutine outside the
+		// actor, and o.runCtx has no deadline of its own. A tracker client that
+		// ignores ctx cancellation would otherwise pin this goroutine
+		// indefinitely — entry.Timer is already cleared and no retryFireOp would
+		// be resubmitted, leaving the issue stuck in Claimed/RetryAttempts
+		// forever. Surfacing the timeout as a "retry poll failed" reschedule
+		// keeps the SPEC §16.6 backoff window the only source of forward progress.
+		fetchCtx, cancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+		defer cancel()
+		issues, fetchErr := lister.ListActiveIssues(fetchCtx)
+		found := findIssueByID(issues, id)
+		if fetchErr != nil && found == nil {
+			// Either the whole fetch failed (including timeout), or a
+			// multi-tracker partial failure happened on the tracker that owns
+			// this issue. We can't tell "absent" from "tracker down" — treat as
+			// fetch failure per SPEC §16.6 and reschedule with the typed error.
+			_ = o.submit(o.runCtx, &retryPollFailedOp{
+				o:        o,
+				id:       id,
+				attempt:  attempt,
+				kind:     kind,
+				fetchErr: fetchErr,
+			})
+			return
+		}
+		// found==nil means the issue is not in the active candidate set:
+		// terminal, merely-inactive, or deleted. The active-only fetch cannot
+		// tell them apart, so resolve the actual state (the way the reconcile
+		// pass does) to recover upstream handle_retry_issue_lookup's terminal
+		// branch — terminal → clean the workspace + release, every other absence
+		// → release only (#341).
+		terminal := false
+		terminalState := ""
+		if found == nil {
+			terminal, terminalState = resolveRetryTerminalState(o, id, identifier)
+		}
+		_ = o.submit(o.runCtx, &retryFireAfterFetchOp{
+			o:             o,
+			id:            id,
+			attempt:       attempt,
+			kind:          kind,
+			found:         found,
+			terminal:      terminal,
+			terminalState: terminalState,
+		})
+	}
+}
+
+// resolveRetryTerminalState reproduces the reconcile pass's terminal-vs-absent
+// classification for a fired failure-retry whose issue is absent from the active
+// candidate set, recovering upstream handle_retry_issue_lookup's terminal branch
+// that the active-only fetch collapses into plain absence (#341). It returns
+// (true, state) only when a resolver is wired and reports a terminal state;
+// every other outcome (no resolver, fetch error, empty/non-terminal state)
+// returns (false, "") so the caller keeps the release-only default. Runs
+// off-actor; the lookup gets its OWN timeout budget rather than reusing the
+// already-consumed candidate-fetch ctx, because a slow-but-successful fetch near
+// the deadline would otherwise fail this call immediately with
+// context-deadline-exceeded, dropping a terminal issue onto the release-only
+// path and leaking its workspace (Codex P2). Derived from runCtx so actor
+// shutdown still cancels it.
+func resolveRetryTerminalState(o *Orchestrator, id IssueID, identifier string) (terminal bool, terminalState string) {
+	resolver, terminalStates := o.currentRetryTerminalResolver()
+	if resolver == nil || len(terminalStates) == 0 {
+		return false, ""
+	}
+	resolveCtx, resolveCancel := context.WithTimeout(o.runCtx, retryFetchTimeout)
+	statesByID, rerr := fetchIssueStates(resolveCtx, resolver, []tracker.IssueRef{{
+		ID:         string(id),
+		Identifier: identifier,
+	}})
+	resolveCancel()
+	if rerr != nil {
+		return false, ""
+	}
+	s := strings.TrimSpace(statesByID[string(id)])
+	if s == "" || !isTerminalTrackerState(s, terminalStates) {
+		return false, ""
+	}
+	return true, s
 }
 
 // retryFireDispatchTail runs the post-fetch tail of a failure-retry fire:
@@ -470,14 +514,10 @@ type retryPollFailedOp struct {
 }
 
 func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
-	entry, ok := st.RetryAttempts[r.id]
+	entry, ok := matchingRetryEntry(st, r.id, r.attempt, r.kind)
 	if !ok {
-		// Reconciliation released the claim between fetch and apply.
-		return nil
-	}
-	if entry.Attempt != r.attempt || entry.Kind != r.kind {
-		// Replaced by a newer ScheduleRetry; the newer entry owns the
-		// re-dispatch.
+		// Entry absent (reconciliation released the claim between fetch and
+		// apply) or replaced by a newer ScheduleRetry that owns the re-dispatch.
 		return nil
 	}
 	o := r.o
@@ -539,11 +579,8 @@ type retryFireAfterFetchOp struct {
 }
 
 func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
-	entry, ok := st.RetryAttempts[r.id]
+	entry, ok := matchingRetryEntry(st, r.id, r.attempt, r.kind)
 	if !ok {
-		return nil
-	}
-	if entry.Attempt != r.attempt || entry.Kind != r.kind {
 		return nil
 	}
 	if r.found == nil {
