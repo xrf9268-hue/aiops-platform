@@ -37,9 +37,13 @@ Official references checked for this path:
 ```bash
 mkdir -p .aiops/secrets .aiops/codex-home
 cp examples/WORKFLOW.md .aiops/WORKFLOW.md
-printf '%s' 'replace-with-linear-personal-key' > .aiops/secrets/linear_api_key
-printf '%s' 'replace-with-least-privilege-github-token' > .aiops/secrets/github_token
-openssl rand -hex 24 > .aiops/secrets/state_api_token
+# Scope umask 077 so every secret lands as 0600; co-tenant users/processes
+# must never get a readable window on these credential files.
+( umask 077
+  printf '%s' 'replace-with-linear-personal-key' > .aiops/secrets/linear_api_key
+  printf '%s' 'replace-with-least-privilege-github-token' > .aiops/secrets/github_token
+  openssl rand -hex 24 > .aiops/secrets/state_api_token
+)
 ```
 
 Run `codex --login` on the host, then copy or provision the Codex home you

@@ -161,7 +161,8 @@ container loopback, so the overlay requires a state API token:
 
 ```bash
 mkdir -p .aiops/secrets
-openssl rand -hex 24 > .aiops/secrets/state_api_token
+# Scope umask 077 to the write so the token lands as 0600 with no 0644 window.
+( umask 077; openssl rand -hex 24 > .aiops/secrets/state_api_token )
 AIOPS_STATE_API_TOKEN_FILE=$PWD/.aiops/secrets/state_api_token \
 docker compose -f deploy/docker-compose.yml \
   -f deploy/docker-compose.dashboard.yml up worker
