@@ -103,51 +103,90 @@ func splitAppServerCommand(command string) ([]string, error) {
 	}
 	return args, nil
 }
+
+// shellSyntaxScan carries hasShellSyntax's quote and token-boundary state across
+// the rune scan so each per-quote-state helper can advance it in place.
+type shellSyntaxScan struct {
+	quote         rune
+	tokenBoundary bool
+}
+
 func hasShellSyntax(command string) bool {
-	var quote rune
-	tokenBoundary := true
+	scan := shellSyntaxScan{tokenBoundary: true}
 	runes := []rune(command)
 	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		switch {
-		case quote == '\'':
-			if r == '\'' {
-				quote = 0
-			}
-		case quote == '"':
-			switch r {
-			case '"':
-				quote = 0
-			case '$', '`', '\n':
-				return true
-			case '\\':
-				if i+1 < len(runes) && runes[i+1] == '\n' {
-					return true
-				}
-				i++
-			}
-		case r == '\'' || r == '"':
-			quote = r
-			tokenBoundary = false
-		case r == '\n' || r == '\r':
-			return true
-		case r == '#':
-			if tokenBoundary {
+		switch scan.quote {
+		case '\'':
+			scan.scanInSingleQuote(runes[i])
+		case '"':
+			found, skip := scan.scanInDoubleQuote(runes, i)
+			if found {
 				return true
 			}
-			tokenBoundary = false
-		case isCommandSpace(r):
-			tokenBoundary = true
-			continue
-		case r == '\\':
-			return true
-		case strings.ContainsRune("|&;<>$()`{}[]*?~", r):
-			return true
+			i += skip
 		default:
-			tokenBoundary = false
+			if scan.scanUnquoted(runes[i]) {
+				return true
+			}
 		}
 	}
-	return quote != 0
+	// An unterminated quote is itself shell syntax the direct-exec path cannot
+	// honor.
+	return scan.quote != 0
+}
+
+// scanInSingleQuote consumes one rune inside a single-quoted span, where only
+// the closing quote is significant — every other rune is literal.
+func (s *shellSyntaxScan) scanInSingleQuote(r rune) {
+	if r == '\'' {
+		s.quote = 0
+	}
+}
+
+// scanInDoubleQuote consumes runes[i] inside a double-quoted span. It reports
+// whether the rune reveals active shell syntax ($, backtick, a literal newline,
+// or a backslash line-continuation) and how many extra runes to skip for a
+// consumed backslash escape.
+func (s *shellSyntaxScan) scanInDoubleQuote(runes []rune, i int) (found bool, skip int) {
+	switch runes[i] {
+	case '"':
+		s.quote = 0
+	case '$', '`', '\n':
+		return true, 0
+	case '\\':
+		if i+1 < len(runes) && runes[i+1] == '\n' {
+			return true, 0
+		}
+		return false, 1
+	}
+	return false, 0
+}
+
+// scanUnquoted consumes one rune outside any quotes, updating the
+// token-boundary state the # comment rule depends on and reporting whether the
+// rune is shell syntax that forces the sh -c fallback.
+func (s *shellSyntaxScan) scanUnquoted(r rune) bool {
+	switch {
+	case r == '\'' || r == '"':
+		s.quote = r
+		s.tokenBoundary = false
+	case r == '\n' || r == '\r':
+		return true
+	case r == '#':
+		if s.tokenBoundary {
+			return true
+		}
+		s.tokenBoundary = false
+	case isCommandSpace(r):
+		s.tokenBoundary = true
+	case r == '\\':
+		return true
+	case strings.ContainsRune("|&;<>$()`{}[]*?~", r):
+		return true
+	default:
+		s.tokenBoundary = false
+	}
+	return false
 }
 func isCommandSpace(r rune) bool {
 	return r == ' ' || r == '\t' || r == '\n' || r == '\r'
