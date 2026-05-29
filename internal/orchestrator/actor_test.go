@@ -1184,6 +1184,41 @@ func TestFinalize_NormalExitMarksCompletedAndSchedulesContinuationRetry(t *testi
 	}, time.Second)
 }
 
+// TestFinalize_NormalExitRecordsCompletedEvent pins the runtime-event KIND a
+// clean worker exit records — `completed`, not `failed`. The sibling
+// continuation test above asserts only the snapshot bucket (Completed), which
+// FinishRunSucceeded drives independently of the recorded event; mutating the
+// RecordEvent kind alone leaves that test green. This characterizes the
+// clean-exit success signal before #499 splits the finalize routing.
+func TestFinalize_NormalExitRecordsCompletedEvent(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-DONE", Identifier: "ENG-DONE", Title: "ok"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: nil, Elapsed: 100 * time.Millisecond})
+
+	var kind RuntimeEventKind
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		for _, ev := range v.RecentEvents {
+			if ev.IssueID == IssueID(iss.ID) && (ev.Kind == RuntimeEventCompleted || ev.Kind == RuntimeEventFailed) {
+				kind = ev.Kind
+				return true
+			}
+		}
+		return false
+	}, time.Second)
+	if kind != RuntimeEventCompleted {
+		t.Fatalf("clean worker exit recorded event kind = %q; want %q", kind, RuntimeEventCompleted)
+	}
+}
+
 func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
 	disp := &fakeDispatcher{}
 	maxTurns := 2
