@@ -406,76 +406,104 @@ type reconcileInactiveTrackerIssuesOp struct {
 	result         chan<- []*RunningEntry
 }
 
+// apply releases every in-process entry whose issue is observed in the inactive
+// listing, gating SPEC §18.1 workspace cleanup on a terminal transition. Each
+// per-collection helper returns what to collect: running entries are cancelled
+// (their workspace cleanup deferred to finalize), while blocked (input-required)
+// and retry-queued (a clean §16.5 self-stop finalized the run) entries hold no
+// live worker, so a terminal one's workspace is removed now via the shared
+// WorkspaceCleaner. An entry whose issue is absent from the (possibly partial)
+// listing is left untouched.
 func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 	var cancelEntries []*RunningEntry
-	// terminalCleanups collects terminal-state entries that hold no live worker
-	// — blocked (input-required, stopped executing) and retry-queued (a clean
-	// SPEC §16.5 self-stop finalized the run before scheduling the continuation
-	// retry) — whose workspace must be removed now rather than deferred to the
-	// finalize path the way running entries are. Every path goes through the
-	// same WorkspaceCleaner so before_remove fires and a reconcile_workspace
-	// event is emitted — mirroring upstream reconcile_blocked_issue_state and
-	// handle_retry_issue_lookup, which clean the workspace only on a terminal
-	// transition. A continuation retry also carries its continuation so the
-	// deletion-time recheck can resume it (preserving the queued attempt and
-	// max-turn budget) if the issue flips back active before removal.
 	var terminalCleanups []reconciledCleanup
 	for id, run := range st.Running {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok {
-			continue
+		if entry := r.reconcileInactiveRun(st, id, run); entry != nil {
+			cancelEntries = append(cancelEntries, entry)
 		}
-		st.ReleaseClaim(id)
-		// Refresh the stored issue and (re)evaluate the terminal cleanup gate
-		// against the CURRENT observation every tick. A terminal transition
-		// flags the entry so finalize fires before_remove + remove (SPEC §18.1
-		// active transition) with the terminal state labeling the
-		// reconcile_workspace event; a merely-inactive cancel leaves it false,
-		// keeping the workspace for reuse (upstream terminate_running_issue
-		// cleanup gating). Assigning unconditionally — rather than only setting
-		// true — clears a flag left by an earlier terminal blip when the issue
-		// has since flipped back to a non-terminal inactive state before the
-		// worker exits (Codex P2 follow-up).
-		run.Issue = issue
-		run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
-		run.ReconcileCancel = true
-		cancelEntries = append(cancelEntries, run)
 	}
 	for id, retry := range st.RetryAttempts {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok {
-			continue
+		if cleanup, ok := r.reconcileInactiveRetry(st, id, retry); ok {
+			terminalCleanups = append(terminalCleanups, cleanup)
 		}
-		// Mirror upstream handle_retry_issue_lookup (orchestrator.ex:1082-1100):
-		// a retry whose issue is now terminal cleans its workspace + releases;
-		// a merely-inactive (non-terminal) one releases only, keeping the
-		// directory for possible reuse. The continuation retry carries the
-		// finalized run's workspace (#341); a failure retry without one yields
-		// no path and is released only. continuationForRetry threads the queued
-		// continuation attempt + workspace through the cleanup so a terminal
-		// observation the deletion-time recheck finds active again resumes the
-		// continuation instead of resetting ContinuationAttempt to 0 on the next
-		// poll (Codex review, PR #455).
-		if isTerminalTrackerState(issue.State, r.terminalStates) {
-			if w, okw := terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, issue.State); okw {
-				terminalCleanups = append(terminalCleanups, reconciledCleanup{workspace: w, continuation: continuationForRetry(retry)})
-			}
-		}
-		st.ReleaseClaim(id)
 	}
 	for id, blocked := range st.Blocked {
-		issue, ok := r.issuesByID[string(id)]
-		if !ok {
-			continue
+		if cleanup, ok := r.reconcileInactiveBlocked(st, id, blocked); ok {
+			terminalCleanups = append(terminalCleanups, cleanup)
 		}
-		if isTerminalTrackerState(issue.State, r.terminalStates) {
-			if w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State); okw {
-				terminalCleanups = append(terminalCleanups, reconciledCleanup{workspace: w})
-			}
-		}
-		st.ReleaseClaim(id)
 	}
 	return r.o.reconcileCancelFollowup(cancelEntries, terminalCleanups, r.result)
+}
+
+// reconcileInactiveRun releases a running entry observed inactive, refreshes its
+// stored issue, and (re)evaluates the SPEC §18.1 terminal cleanup gate against
+// the CURRENT observation: a terminal transition flags the entry so finalize
+// fires before_remove + remove with the terminal state labeling the
+// reconcile_workspace event, while a merely-inactive cancel leaves it false to
+// keep the workspace for reuse (upstream terminate_running_issue gating).
+// Assigning the flag unconditionally clears one left by an earlier terminal blip
+// when the issue has since flipped back to a non-terminal inactive state before
+// the worker exits (Codex P2 follow-up). Returns nil when the issue is absent
+// from the (possibly partial) listing — unknown, not inactive — so it is left
+// untouched.
+func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRun(st *OrchestratorState, id IssueID, run *RunningEntry) *RunningEntry {
+	issue, ok := r.issuesByID[string(id)]
+	if !ok {
+		return nil
+	}
+	st.ReleaseClaim(id)
+	run.Issue = issue
+	run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
+	run.ReconcileCancel = true
+	return run
+}
+
+// reconcileInactiveRetry releases a retry-queued entry observed inactive and,
+// when its issue is terminal, returns the workspace cleanup. Mirrors upstream
+// handle_retry_issue_lookup (orchestrator.ex:1082-1100): a terminal retry cleans
+// its workspace + releases, carrying the queued continuation so the
+// deletion-time recheck can resume it (preserving the attempt + max-turn budget)
+// if the issue flips back active before removal (#455); a merely-inactive one
+// releases only, keeping the directory for reuse. A failure retry without a
+// workspace (#341) yields no path and is released only. An issue absent from the
+// (possibly partial) listing is unknown, not inactive, so the claim is left
+// intact.
+func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRetry(st *OrchestratorState, id IssueID, retry *RetryEntry) (reconciledCleanup, bool) {
+	issue, ok := r.issuesByID[string(id)]
+	if !ok {
+		return reconciledCleanup{}, false
+	}
+	defer st.ReleaseClaim(id)
+	if !isTerminalTrackerState(issue.State, r.terminalStates) {
+		return reconciledCleanup{}, false
+	}
+	w, okw := terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, issue.State)
+	if !okw {
+		return reconciledCleanup{}, false
+	}
+	return reconciledCleanup{workspace: w, continuation: continuationForRetry(retry)}, true
+}
+
+// reconcileInactiveBlocked releases a blocked entry observed inactive and, when
+// its issue is terminal, returns the workspace cleanup. Mirrors upstream
+// reconcile_blocked_issue_state's terminal branch (cleanup + release) vs. its
+// non-terminal inactive branch (release only). An issue absent from the
+// (possibly partial) listing is unknown, not inactive, so the claim is left
+// intact.
+func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveBlocked(st *OrchestratorState, id IssueID, blocked *BlockedEntry) (reconciledCleanup, bool) {
+	issue, ok := r.issuesByID[string(id)]
+	if !ok {
+		return reconciledCleanup{}, false
+	}
+	defer st.ReleaseClaim(id)
+	if !isTerminalTrackerState(issue.State, r.terminalStates) {
+		return reconciledCleanup{}, false
+	}
+	w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State)
+	if !okw {
+		return reconciledCleanup{}, false
+	}
+	return reconciledCleanup{workspace: w}, true
 }
 func isActiveTrackerState(state string, activeStates map[string]struct{}) bool {
 	if len(activeStates) == 0 {
