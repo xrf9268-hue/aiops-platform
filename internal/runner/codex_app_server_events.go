@@ -135,15 +135,8 @@ func toSnakeCase(s string) string {
 	var b strings.Builder
 	var prev rune
 	for i, r := range s {
-		nextIsLower := false
-		if i+1 < len(s) {
-			next := rune(s[i+1])
-			nextIsLower = next >= 'a' && next <= 'z'
-		}
 		if r >= 'A' && r <= 'Z' {
-			prevIsLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
-			prevIsUpper := prev >= 'A' && prev <= 'Z'
-			if i > 0 && (prevIsLowerOrDigit || (prevIsUpper && nextIsLower)) {
+			if i > 0 && snakeCaseWordBoundary(prev, asciiByteIsLower(s, i+1)) {
 				b.WriteByte('_')
 			}
 			r += 'a' - 'A'
@@ -152,4 +145,27 @@ func toSnakeCase(s string) string {
 		prev = rune(s[i])
 	}
 	return b.String()
+}
+
+// asciiByteIsLower reports whether the byte at index i in s is an ASCII
+// lowercase letter. Codex payload keys are ASCII camelCase, so toSnakeCase scans
+// bytes rather than runes; this is the one-byte lookahead its acronym-boundary
+// rule needs.
+func asciiByteIsLower(s string, i int) bool {
+	if i >= len(s) {
+		return false
+	}
+	return s[i] >= 'a' && s[i] <= 'z'
+}
+
+// snakeCaseWordBoundary reports whether an uppercase rune starts a new
+// snake_case word given the previous rune and whether the next byte is
+// lowercase. Two boundaries insert an underscore: after a lowercase/digit (the
+// camelCase boundary, fooB -> foo_b) and at the tail of an acronym run that is
+// followed by a word (an uppercase prev with a lowercase next, HTTPServer ->
+// http_server).
+func snakeCaseWordBoundary(prev rune, nextIsLower bool) bool {
+	prevIsLowerOrDigit := (prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')
+	prevIsUpper := prev >= 'A' && prev <= 'Z'
+	return prevIsLowerOrDigit || (prevIsUpper && nextIsLower)
 }
