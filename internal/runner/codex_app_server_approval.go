@@ -248,52 +248,61 @@ func (c *appServerClient) handleDynamicToolCall(ctx context.Context, msg map[str
 	params, _ := msg["params"].(map[string]any)
 	name := appServerToolCallName(params)
 	arguments := appServerToolCallArguments(params)
-	result, err := dynamicToolResult(false, "unsupported dynamic tool: "+name)
+	result, err := c.resolveDynamicToolResult(ctx, name, arguments)
 	if err != nil {
 		return err
 	}
-	if tool, ok := c.tools.Lookup(name); ok {
-		call := ToolCall{}
-		if err := json.Unmarshal(arguments, &call); err != nil {
-			failure, failureErr := dynamicToolFailure(err.Error())
-			if failureErr != nil {
-				return failureErr
-			}
-			result = failure
-		} else {
-			// Install the audit sink for any tool that may route
-			// through the Linear GraphQL proxy. linear_ai_workpad
-			// composes deterministic commentCreate/commentUpdate
-			// mutations through the same token-isolated transport
-			// (via callRaw); operators need the runtime event for
-			// those harness-attributable writes too. Only the
-			// proxy itself fires the sink, so installing it on
-			// unrelated tools is a no-op.
-			toolCtx := WithLinearGraphQLMutationSink(ctx, func(operationField string) {
-				payload := map[string]any{"tool": name}
-				if operationField != "" {
-					payload["operation_field"] = operationField
-				}
-				c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
-			})
-			result, err = tool.Call(toolCtx, call)
-			if err != nil {
-				failure, failureErr := dynamicToolFailure(err.Error())
-				if failureErr != nil {
-					return failureErr
-				}
-				result = failure
-			}
-		}
-	} else {
-		// SPEC §10.4 unsupported_tool_call: the wire still carries the
-		// structured failure result, but the orchestrator/state surface
-		// needs a typed event to distinguish "agent invoked an
-		// unadvertised tool" from "advertised tool failed". The structured
-		// failure path above already emits its own error; this branch is
-		// reached only when the tool name is not in c.tools.
+	return c.replyDynamicToolOutput(msg, params, result)
+}
+
+// resolveDynamicToolResult runs the named dynamic tool and returns its wire
+// result string. A name not in the advertised set records the SPEC §10.4
+// unsupported_tool_call event — so the orchestrator/state surface can tell
+// "agent invoked an unadvertised tool" apart from "advertised tool failed" —
+// and returns the structured "unsupported dynamic tool" failure; a present
+// tool's argument-decode and execution failures are wrapped as structured
+// dynamicToolFailure results. The returned error is non-nil only when a failure
+// result itself cannot be marshaled, mirroring the original handler's fatal
+// early-return.
+func (c *appServerClient) resolveDynamicToolResult(ctx context.Context, name string, arguments json.RawMessage) (string, error) {
+	tool, ok := c.tools.Lookup(name)
+	if !ok {
 		c.recordUnsupportedToolCall(name, arguments)
+		return dynamicToolResult(false, "unsupported dynamic tool: "+name)
 	}
+	call := ToolCall{}
+	if err := json.Unmarshal(arguments, &call); err != nil {
+		return dynamicToolFailure(err.Error())
+	}
+	result, err := tool.Call(c.withMutationAuditSink(ctx, name), call)
+	if err != nil {
+		return dynamicToolFailure(err.Error())
+	}
+	return result, nil
+}
+
+// withMutationAuditSink derives the tool-execution context carrying the audit
+// sink that fires for any tool routing through the Linear GraphQL proxy.
+// linear_ai_workpad composes deterministic commentCreate/commentUpdate
+// mutations through the same token-isolated callRaw transport, so operators
+// need the tool_call_mutation runtime event for those harness-attributable
+// writes too. Only the proxy itself fires the sink, so installing it on
+// unrelated tools is a no-op.
+func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string) context.Context {
+	return WithLinearGraphQLMutationSink(ctx, func(operationField string) {
+		payload := map[string]any{"tool": name}
+		if operationField != "" {
+			payload["operation_field"] = operationField
+		}
+		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+	})
+}
+
+// replyDynamicToolOutput returns result to codex: parsed as JSON (falling back
+// to a {success:false, output} envelope when result is not valid JSON), sent as
+// the JSON-RPC result when the inbound message carries an id, or emitted as an
+// item/tool/call/output notification keyed by call_id otherwise.
+func (c *appServerClient) replyDynamicToolOutput(msg, params map[string]any, result string) error {
 	var payload any
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		payload = map[string]any{"success": false, "output": result}
