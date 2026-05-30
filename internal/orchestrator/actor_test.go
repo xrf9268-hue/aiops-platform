@@ -810,7 +810,7 @@ func TestFinalize_FirstFailureAfterCleanContinuationUsesFirstFailureBackoff(t *t
 	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1
+		return err == nil && len(view.Retrying) == 1 && !view.Retrying[0].DueAt.After(time.Now())
 	}, time.Second)
 
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
@@ -1238,7 +1238,8 @@ func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
 	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
 	waitFor(t, func() bool {
 		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == 1
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == 1 &&
+			!v.Retrying[0].DueAt.After(time.Now())
 	}, time.Second)
 
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
@@ -1288,7 +1289,7 @@ func TestFinalize_ContinuationBudgetExhaustedEmitsStderrLine(t *testing.T) {
 	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
 	waitFor(t, func() bool {
 		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Retrying) == 1
+		return err == nil && len(v.Retrying) == 1 && !v.Retrying[0].DueAt.After(time.Now())
 	}, time.Second)
 	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
 		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
@@ -1425,7 +1426,8 @@ func TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap(t *testing.T) 
 		expectedAttempt := cycle + 1
 		waitFor(t, func() bool {
 			v, err := o.Snapshot(context.Background())
-			return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == expectedAttempt
+			return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == expectedAttempt &&
+				!v.Retrying[0].DueAt.After(time.Now())
 		}, time.Second)
 		if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
 			t.Fatalf("tracker-rechecked continuation dispatch cycle %d: %v", cycle, err)
