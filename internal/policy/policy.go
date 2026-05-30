@@ -6,6 +6,7 @@ package policy
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Config mirrors the relevant fields of workflow.PolicyConfig. It is
@@ -134,7 +135,7 @@ func matchAny(patterns []string, path string) (string, bool) {
 
 // Match reports whether path matches the glob pattern. Supported syntax:
 //
-//   - "?"  matches any single character except "/"
+//   - "?"  matches exactly one rune (Unicode code point) except "/"
 //   - "*"  matches any sequence of characters except "/"
 //   - "**" matches any sequence of characters, including "/"
 //   - "/**" as a trailing component matches the empty string or "/<anything>"
@@ -157,8 +158,8 @@ func Match(pattern, path string) bool {
 
 // globMatch is the recursive glob matcher. It is a thin dispatcher: the
 // separator-spanning "**" and single-segment "*" wildcards delegate to
-// helpers, and every other position (a literal byte or "?") consumes exactly
-// one character via matchSingleChar.
+// helpers, "?" consumes exactly one rune via matchSingleRune, and a literal
+// position consumes one byte.
 func globMatch(pattern, path string) bool {
 	for len(pattern) > 0 {
 		switch {
@@ -166,9 +167,20 @@ func globMatch(pattern, path string) bool {
 			return matchDoubleStar(strings.TrimPrefix(pattern, "**"), path)
 		case pattern[0] == '*':
 			return matchSingleStar(pattern[1:], path)
+		case pattern[0] == '?':
+			n, ok := matchSingleRune(path)
+			if !ok {
+				return false
+			}
+			pattern = pattern[1:]
+			path = path[n:]
 		default:
-			// A literal byte or "?" consumes exactly one matching character.
-			if !matchSingleChar(pattern[0], path) {
+			// A literal pattern byte must equal the next byte of path.
+			// Comparing byte-by-byte is rune-correct because both sides are
+			// UTF-8: a full rune matches iff all of its bytes match, and "/"
+			// (0x2F) never appears inside a multi-byte rune, so a "/" is only
+			// ever consumed by a literal "/".
+			if len(path) == 0 || pattern[0] != path[0] {
 				return false
 			}
 			pattern = pattern[1:]
@@ -178,17 +190,16 @@ func globMatch(pattern, path string) bool {
 	return len(path) == 0
 }
 
-// matchSingleChar reports whether the non-wildcard pattern byte pc matches the
-// first byte of path. "?" matches any single byte except "/"; any other byte
-// must equal path[0] exactly, so a "/" is only ever consumed by a literal "/".
-func matchSingleChar(pc byte, path string) bool {
-	if len(path) == 0 {
-		return false
+// matchSingleRune reports the byte length of path's leading rune and whether a
+// "?" wildcard may consume it. "?" matches exactly one rune except "/", so an
+// empty path or a leading "/" is rejected. Invalid UTF-8 decodes to a
+// single-byte RuneError, so "?" still advances by one byte and never stalls.
+func matchSingleRune(path string) (int, bool) {
+	if len(path) == 0 || path[0] == '/' {
+		return 0, false
 	}
-	if pc == '?' {
-		return path[0] != '/'
-	}
-	return pc == path[0]
+	_, n := utf8.DecodeRuneInString(path)
+	return n, true
 }
 
 // matchDoubleStar matches a "**" wildcard against path, where rest is the

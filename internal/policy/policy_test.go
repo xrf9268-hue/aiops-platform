@@ -28,6 +28,16 @@ func TestMatch(t *testing.T) {
 		{"?.md", "ab.md", false},
 		{"?.md", "/x.md", false},
 
+		// question mark matches one rune, not one byte (multi-byte UTF-8)
+		{"secret?.key", "secreté.key", true},
+		{"secret?.key", "secreta.key", true},
+		{"?.md", "é.md", true},
+
+		// "*" / "**" runs span multi-byte runes but never cross "/"
+		{"*.md", "café.md", true},
+		{"*.md", "café/x.md", false},
+		{"**/secrets.yaml", "café/prod/secrets.yaml", true},
+
 		// double star: spans separators
 		{"**", "anything/at/all.go", true},
 		{"infra/**", "infra/", true},
@@ -105,12 +115,18 @@ func TestGlobMatchBranches(t *testing.T) {
 		{"?", "a", true},
 		{"?", "/", false},
 		{"a?", "a", false},
+		// "?" matches exactly one rune, not one byte: a single multi-byte
+		// rune matches one "?", and "?" rejects "/" without splitting runes.
+		{"?", "é", true},
+		{"a?b", "aéb", true},
+		{"??", "é", false},
+		{"?", "ab", false},
 		// Literal comparison: length mismatches and exact equality.
 		{"abc", "ab", false},
 		{"ab", "abc", false},
 		{"", "", true},
 		{"", "x", false},
-		// A literal "/" must match "/" exactly, never another byte (matchSingleChar).
+		// A literal "/" must match "/" exactly, never another byte.
 		{"a/b", "axb", false},
 		{"exact/path.txt", "exact/path.txt", true},
 	}
@@ -145,6 +161,23 @@ func TestEvaluateDenyPaths(t *testing.T) {
 		}
 		if v.Pattern == "" || v.Path == "" {
 			t.Errorf("violation missing path/pattern: %+v", v)
+		}
+	}
+}
+
+// TestEvaluateDenyQuestionMarkMultiByte regresses the byte-wise "?" bug: a
+// "?" deny pattern must catch a multi-byte UTF-8 filename just as it catches
+// its ASCII sibling, so the security-relevant deny gate cannot be bypassed by
+// a non-ASCII character where a "?" sits. Before the fix, the multi-byte path
+// slipped through because "?" consumed a single byte of "é".
+func TestEvaluateDenyQuestionMarkMultiByte(t *testing.T) {
+	cfg := Config{DenyPaths: []string{"config/secret?.key"}}
+	for _, path := range []string{"config/secreta.key", "config/secreté.key"} {
+		d := Diffstat{Files: []string{path}}
+		vs := Evaluate(d, cfg)
+		if len(vs) != 1 || vs[0].Kind != KindDenyPath {
+			t.Errorf("Evaluate(deny %q, %q) = %v; want one deny_path violation",
+				cfg.DenyPaths[0], path, vs)
 		}
 	}
 }
