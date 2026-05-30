@@ -628,6 +628,15 @@ func TestRunRunnerWithTimeoutEmitsTerminalErrorPhases(t *testing.T) {
 			to:   task.PhaseTimedOut,
 		},
 		{
+			// Locks the #507 item-3 rationale: an outer-deadline *TimeoutError
+			// routes to the same terminal phase as the *TurnTimeoutError above,
+			// so the classifier reporting one as the other in the coinciding
+			// deadline window is a cosmetic budget difference, not a mis-route.
+			name: "outer_timeout",
+			err:  &runner.TimeoutError{Timeout: 30 * time.Millisecond, Elapsed: 60 * time.Millisecond},
+			to:   task.PhaseTimedOut,
+		},
+		{
 			name: "read_timeout",
 			err:  &runner.ReadTimeoutError{Timeout: 30 * time.Millisecond},
 			to:   task.PhaseTimedOut,

@@ -1449,6 +1449,13 @@ for line in sys.stdin:
 	if err == nil || !strings.Contains(err.Error(), "read timeout") {
 		t.Fatalf("Run error = %v, want app-server read timeout", err)
 	}
+	// End-to-end the read timeout must classify as a *ReadTimeoutError, not just
+	// carry the substring: this pins that readLineOnce emits the typed signal and
+	// classifyAppServerOutcome detects it via errors.As (#507 item 1). A revert to
+	// the bare string error would fall through to a PortExit and fail here.
+	if !IsReadTimeout(err) {
+		t.Fatalf("Run error = %T %[1]v, want *ReadTimeoutError classification", err)
+	}
 }
 
 func TestCodexAppServerInitializeTimeoutDiagnostics(t *testing.T) {

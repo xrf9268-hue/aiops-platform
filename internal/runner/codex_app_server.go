@@ -134,21 +134,36 @@ func setupAppServerCommand(ctx context.Context, in RunInput) (cmd *exec.Cmd, dir
 
 // openAppServerPipes wires the subprocess's stdio. Each pipe error carries the
 // stream name so a setup failure is attributable; callers return the wrapped
-// error verbatim.
+// error verbatim. If a later pipe fails after an earlier one succeeded, the
+// already-opened pipes are closed so their fds do not leak (the process is never
+// started on this path, so cmd.Wait never runs to close them for us).
 func openAppServerPipes(cmd *exec.Cmd) (stdin io.WriteCloser, stdout, stderr io.ReadCloser, err error) {
 	stdin, err = cmd.StdinPipe()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("open codex app-server stdin: %w", err)
 	}
+	defer closeOnError(&err, stdin)
 	stdout, err = cmd.StdoutPipe()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("open codex app-server stdout: %w", err)
 	}
+	defer closeOnError(&err, stdout)
 	stderr, err = cmd.StderrPipe()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("open codex app-server stderr: %w", err)
 	}
 	return stdin, stdout, stderr, nil
+}
+
+// closeOnError closes c when *errp is non-nil at defer time. A setup function
+// that opens several resources defers one of these per resource so a later
+// failure releases the ones already opened, without each early return unwinding
+// by hand. The closer value is captured when the defer is registered, so it
+// survives the failing return that resets the named result to nil.
+func closeOnError(errp *error, c io.Closer) {
+	if *errp != nil {
+		_ = c.Close()
+	}
 }
 
 // appServerProcessPID returns cmd.Process.Pid only when it is guaranteed to be
@@ -183,6 +198,17 @@ func classifyAppServerOutcome(ctx context.Context, res Result, runErr, waitErr e
 	if isAppServerReadTimeout(runErr) {
 		return res, &ReadTimeoutError{Timeout: time.Duration(readTimeoutMs) * time.Millisecond, Cause: runErr}
 	}
+	// This outer-deadline check intentionally precedes the ErrorCategory check
+	// below: when the run ctx deadline has genuinely fired, a coinciding
+	// *TurnTimeoutError (categorized CategoryTurnTimeout) is reported as a
+	// *TimeoutError carrying the run budget. The worker (internal/worker/
+	// runtask.go) routes both to task.PhaseTimedOut, so this only changes the
+	// reported budget/elapsed, not the terminal phase; reporting the run budget
+	// is defensible once the run deadline has elapsed. Kept deliberately (#507
+	// item 3) — flipping the order would be a behavior change with no phase-level
+	// payoff. TestClassifyAppServerOutcome_TurnTimeoutUnderDeadlineIsTimeout pins
+	// this; the worker-routing equivalence is covered by
+	// TestRunRunnerWithTimeoutEmitsTerminalErrorPhases.
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return res, &TimeoutError{Timeout: deadlineBudget(ctx, start), Elapsed: elapsed, Cause: runErr}
 	}
@@ -585,7 +611,7 @@ func (c *appServerClient) readLineOnce(ctx context.Context, ch <-chan readResult
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timeout:
-		return nil, fmt.Errorf("codex app-server read timeout after %dms", c.readTimeoutMs)
+		return nil, &appServerReadTimeoutError{afterMs: c.readTimeoutMs}
 	case res := <-ch:
 		if res.err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -607,8 +633,26 @@ func deadlineDuration(ctx context.Context) (time.Duration, bool) {
 	}
 	return remaining, true
 }
+
+// appServerReadTimeoutError signals that a single stdio read exceeded the
+// configured codex read_timeout_ms budget. It is a typed error so the
+// classification paths detect it via errors.As rather than substring-matching
+// the message (AGENTS.md clean-code rule 8). The message is unchanged from the
+// original fmt.Errorf so existing logs and string-asserting tests still hold.
+type appServerReadTimeoutError struct {
+	afterMs int
+}
+
+func (e *appServerReadTimeoutError) Error() string {
+	return fmt.Sprintf("codex app-server read timeout after %dms", e.afterMs)
+}
+
+// isAppServerReadTimeout reports whether err is (or wraps) the read-timeout
+// signal. Both classifyAppServerOutcome and classifyTurnReadError consume it, so
+// the typed check lives here once rather than being inlined at each call site.
 func isAppServerReadTimeout(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "codex app-server read timeout")
+	var rt *appServerReadTimeoutError
+	return errors.As(err, &rt)
 }
 func protocolMessageCandidate(raw []byte) bool {
 	return strings.HasPrefix(strings.TrimLeft(string(raw), " \t\r\n"), "{")
