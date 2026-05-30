@@ -28,7 +28,7 @@ type giteaIssueLabel struct {
 	Name string
 }
 
-func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string, error) {
+func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string, error) { //nolint:gocognit // baseline (#521)
 	if call.IssueNumber <= 0 {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "gitea_issue_labels issue_number is required"},

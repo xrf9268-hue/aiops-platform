@@ -49,7 +49,7 @@ func DefaultStateLabelMappings() []StateLabelMapping {
 // IssueStateFromLabels derives a workflow state from Gitea aiops/* labels. It
 // is read-only by design: conflicts and malformed labels are reported as
 // diagnostics for humans/agents, but this function never mutates labels.
-func IssueStateFromLabels(labels []Label, mappings []StateLabelMapping) (string, []StateDiagnostic) {
+func IssueStateFromLabels(labels []Label, mappings []StateLabelMapping) (string, []StateDiagnostic) { //nolint:gocognit // baseline (#521)
 	if len(mappings) == 0 {
 		mappings = DefaultStateLabelMappings()
 	}

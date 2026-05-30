@@ -189,7 +189,7 @@ func issueWorkspaceKey(t task.Task) string {
 //     so the runner starts from a clean base, but untracked artifacts
 //     (cached deps, build outputs, .aiops policy feedback) survive across
 //     runs.
-func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) {
+func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) { //nolint:gocognit // baseline (#521)
 	workdir := m.PathFor(t)
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
 		return "", false, err
@@ -476,7 +476,7 @@ func WritePrompt(workdir string, prompt string) error {
 // error is non-nil iff at least one command failed or the phase
 // deadline was exceeded; callers inspect individual results to see
 // which.
-func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) {
+func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) { //nolint:gocognit // baseline (#521)
 	runCtx := ctx
 	if wf.Verify.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -686,7 +686,7 @@ func WriteChangedFiles(workdir string, files []string) error {
 
 // WriteVerification serializes verify command results to
 // .aiops/VERIFICATION.txt so failed runs preserve the diagnostic output.
-func WriteVerification(workdir string, results []VerifyResult) error {
+func WriteVerification(workdir string, results []VerifyResult) error { //nolint:gocognit // baseline (#521)
 	var buf bytes.Buffer
 	for i, r := range results {
 		if i > 0 {

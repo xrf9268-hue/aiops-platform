@@ -246,7 +246,7 @@ func raiseAfterSignal(sig os.Signal) {
 // run drives the poll/render loop until ctx is cancelled (signal or otherwise),
 // restoring terminal state on the way out so an interrupted dashboard never
 // leaves the real terminal in alt-screen / cursor-hidden state.
-func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateResponse, error), interval time.Duration, baseURL string) {
+func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateResponse, error), interval time.Duration, baseURL string) { //nolint:gocognit // baseline (#521)
 	scr.enter()
 	defer scr.restore()
 
@@ -419,7 +419,7 @@ func stateAPIAuthTokenFromEnv() string {
 // ── Rendering ────────────────────────────────────────────────────────────────
 // Mirrors format_snapshot_content/2 in status_dashboard.ex.
 
-func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) string {
+func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) string { //nolint:gocognit,funlen // baseline (#521)
 	if fetchErr != nil {
 		return clipFrame([]string{
 			colorize("╭─ AIOPS STATUS", ansiBold),

@@ -25,7 +25,7 @@ type MockRunner struct {
 	SetBaseToHead       bool
 }
 
-func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
+func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) { //nolint:gocognit,funlen // baseline (#521)
 	if m.Sleep > 0 {
 		start := time.Now()
 		t := time.NewTimer(m.Sleep)

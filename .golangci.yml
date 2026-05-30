@@ -1,8 +1,10 @@
 version: "2"
 
-# Full lint surface. CI runs the clean correctness/mechanical-safety subset as
-# blocking, then keeps funlen/gocognit report-only while #410 burns down the
-# structural complexity baseline.
+# Full lint surface. CI runs every enabled linter — including funlen/gocognit
+# (AGENTS.md rule 7) — as a single blocking gate. The existing complexity
+# baseline is grandfathered in-line via `//nolint:gocognit[,funlen] // baseline
+# (#521)` directives on each known-debt function (removed as #521 decomposes
+# it), not by a report-only step. See .github/workflows/ci.yml.
 run:
   timeout: 5m
 
@@ -34,6 +36,16 @@ linters:
           arguments:
             - ["ID", "API", "HTTP", "HTTPS", "URL", "JSON", "SQL", "UUID"]
             - []
+  exclusions:
+    # Generated code is skipped by default (generated: lax). Test files are
+    # exempt from the size budgets: table-driven tests legitimately exceed
+    # funlen/gocognit, and AGENTS.md rule 7 scopes the budgets to non-test,
+    # non-generated code.
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocognit
 
 formatters:
   enable:

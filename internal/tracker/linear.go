@@ -129,7 +129,7 @@ func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
 	return c.ListIssuesByStates(ctx, c.Config.ActiveStates)
 }
 
-func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
+func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) { //nolint:gocognit,funlen // baseline (#521)
 	if c.APIKey == "" {
 		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
@@ -271,7 +271,7 @@ func parseLinearIssueTime(field, value string) (time.Time, error) {
 	return parsed, nil
 }
 
-func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) { //nolint:gocognit // baseline (#521)
 	if c.APIKey == "" {
 		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
 	}
@@ -363,7 +363,7 @@ func (c *LinearClient) linearBlockersForIssue(ctx context.Context, issueID strin
 	return c.linearBlockersFromInverseRelations(ctx, issueID, out.Data.Issue.InverseRelations.Nodes, out.Data.Issue.InverseRelations.PageInfo.HasNextPage, out.Data.Issue.InverseRelations.PageInfo.EndCursor)
 }
 
-func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]BlockerRef, error) {
+func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]BlockerRef, error) { //nolint:gocognit // baseline (#521)
 	blockers := make([]BlockerRef, 0, len(nodes))
 	appendBlockers := func(nodes []linearRelationNode) {
 		for _, r := range nodes {

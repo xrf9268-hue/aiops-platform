@@ -25,7 +25,7 @@ var baselineHookEnvAllowlist = []string{
 // present" vars without spurious config-validation noise. Duplicate names
 // across the two sources are deduplicated so `cmd.Env` does not carry the
 // same `K=V` twice.
-func subprocessEnv(passthrough []string) []string {
+func subprocessEnv(passthrough []string) []string { //nolint:gocognit // baseline (#521)
 	seen := make(map[string]struct{}, len(baselineHookEnvAllowlist)+len(passthrough))
 	env := make([]string, 0, len(baselineHookEnvAllowlist)+len(passthrough))
 	add := func(name string) {

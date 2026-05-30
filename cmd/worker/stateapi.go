@@ -180,7 +180,7 @@ func stateHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		}
 	})
 }
-func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
+func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler { //nolint:gocognit // baseline (#521)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
@@ -214,7 +214,7 @@ func issueHTTPHandler(snapshot stateSnapshotFunc) http.Handler {
 		}
 	})
 }
-func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler {
+func refreshHTTPHandler(refresh stateRefreshFunc) http.Handler { //nolint:gocognit // baseline (#521)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
@@ -351,7 +351,7 @@ func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueR
 	}
 	return apiIssueResponse{}, false
 }
-func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string) (apiIssueResponse, bool) {
+func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string) (apiIssueResponse, bool) { //nolint:gocognit // baseline (#521)
 	base := func(issueID orchestrator.IssueID, identifier, status string) apiIssueResponse {
 		return apiIssueResponse{
 			IssueIdentifier: identifier,

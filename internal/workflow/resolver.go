@@ -40,7 +40,7 @@ const resolveCandidate = "WORKFLOW.md"
 // SPEC §5.1 treats the workflow file as a single service-level source.
 // When no canonical file is found, schema defaults are returned with
 // Source=default.
-func Resolve(workdir string) (*Workflow, *Resolution, error) {
+func Resolve(workdir string) (*Workflow, *Resolution, error) { //nolint:gocognit // baseline (#521)
 	info, err := os.Stat(workdir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("workdir %q: %w", workdir, err)

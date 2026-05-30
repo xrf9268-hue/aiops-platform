@@ -113,7 +113,7 @@ const (
 // used by the worker to make PR handoff idempotent: if a previous attempt for
 // the same task has already opened a PR for the work branch, retries reuse it
 // instead of asking Gitea to create a duplicate.
-func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestInput) (*PullRequest, error) {
+func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestInput) (*PullRequest, error) { //nolint:gocognit // baseline (#521)
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and GITEA_TOKEN are required")
 	}

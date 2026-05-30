@@ -207,7 +207,7 @@ type linearGraphQLProxy struct {
 // applies the SPEC §15.5 narrowing, fires the optional audit sink, and
 // otherwise delegates to callRaw. Subscription operations are rejected
 // unconditionally because the runner has no streaming surface for them.
-func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) {
+func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) { //nolint:gocognit // baseline (#521)
 	query := strings.TrimSpace(call.Query)
 	if query == "" {
 		return dynamicToolFailure(map[string]any{
@@ -319,7 +319,7 @@ func (p linearGraphQLProxy) callRaw(ctx context.Context, call ToolCall) (string,
 // the result here so the parser does not run twice per request. The
 // audit-sink fire lives here so harness-driven and agent-driven
 // mutations share a single source of truth.
-func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) (string, error) {
+func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) (string, error) { //nolint:gocognit // baseline (#521)
 	endpoint := p.baseURL
 	if endpoint == "" {
 		endpoint = defaultLinearGraphQLEndpoint

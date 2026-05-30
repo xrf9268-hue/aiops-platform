@@ -538,7 +538,7 @@ func isTerminalPhase(phase task.RunAttemptPhase) bool {
 // on failure (timeout or non-zero exit) the same Result is returned so that
 // any partial output telemetry the runner managed to capture (OutputBytes,
 // OutputHead, OutputTail, etc.) is still available to the caller.
-func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
+func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) { //nolint:gocognit,funlen // baseline (#521)
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
@@ -944,7 +944,7 @@ const analysisOnlyDirective = "\n\n---\n\n" +
 	"as `.aiops/PLAN.md`; any optional tracker handoff must happen through " +
 	"agent-side tools advertised to you by the runtime."
 
-func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, identifier, workdir, baseRef string, cfg workflow.Config) error {
+func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, identifier, workdir, baseRef string, cfg workflow.Config) error { //nolint:gocognit // baseline (#521)
 	if cfg.Policy.Mode != "analysis_only" {
 		return nil
 	}

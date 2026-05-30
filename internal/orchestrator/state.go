@@ -462,7 +462,7 @@ func (s *OrchestratorState) StateCapacityFullExcluding(state string, excluded Is
 	return s.RunningCountByStateExcluding(state, excluded) >= limit
 }
 
-func (s *OrchestratorState) RunningCountByStateExcluding(state string, excluded IssueID) int {
+func (s *OrchestratorState) RunningCountByStateExcluding(state string, excluded IssueID) int { //nolint:gocognit // baseline (#521)
 	stateKey := normalizeStateConcurrencyKey(state)
 	if stateKey == "" {
 		return 0

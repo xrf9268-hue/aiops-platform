@@ -114,7 +114,7 @@ func (r *WorkflowRuntime) ReloadInterval() time.Duration {
 	return r.reloadInterval
 }
 
-func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error {
+func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error { //nolint:gocognit // baseline (#521)
 	if r == nil {
 		return errors.New("workflow runtime is nil")
 	}
@@ -253,7 +253,7 @@ type pollOnce interface {
 	PollOnce(context.Context) error
 }
 
-func RunPollLoopWithRuntime(ctx context.Context, poller pollOnce, runtime *WorkflowRuntime, opts PollLoopRuntimeOptions) error {
+func RunPollLoopWithRuntime(ctx context.Context, poller pollOnce, runtime *WorkflowRuntime, opts PollLoopRuntimeOptions) error { //nolint:gocognit // baseline (#521)
 	if poller == nil {
 		return errors.New("orchestrator poll loop requires poller")
 	}
@@ -315,7 +315,7 @@ type WorkflowReloadLoopOptions struct {
 	StopAfterChecks int
 }
 
-func RunWorkflowReloadLoop(ctx context.Context, runtime *WorkflowRuntime, opts WorkflowReloadLoopOptions) error {
+func RunWorkflowReloadLoop(ctx context.Context, runtime *WorkflowRuntime, opts WorkflowReloadLoopOptions) error { //nolint:gocognit // baseline (#521)
 	if runtime == nil {
 		return errors.New("workflow reload loop requires runtime")
 	}

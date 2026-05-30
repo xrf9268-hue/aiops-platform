@@ -105,7 +105,7 @@ func clearPolicyViolationFeedback(workspaceRoot string, t task.Task) {
 	_ = os.Remove(policyViolationFeedbackPath(workspaceRoot, t))
 }
 
-func appendPolicyViolationFeedback(prompt string, feedback *policyViolationFeedback, cfg workflow.Config) string {
+func appendPolicyViolationFeedback(prompt string, feedback *policyViolationFeedback, cfg workflow.Config) string { //nolint:gocognit // baseline (#521)
 	if feedback == nil || feedback.Count <= 0 {
 		return prompt
 	}

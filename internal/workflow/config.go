@@ -236,7 +236,7 @@ func (h WorkspaceHooks) HasCommands() bool {
 	return h.AfterCreate.HasCommands() || h.BeforeRun.HasCommands() || h.AfterRun.HasCommands() || h.BeforeRemove.HasCommands()
 }
 
-func (c Config) WorkspaceHooks() WorkspaceHooks {
+func (c Config) WorkspaceHooks() WorkspaceHooks { //nolint:gocognit // baseline (#521)
 	hooks := c.Hooks
 	legacy := c.Workspace.Hooks
 	if !c.hookFields.AfterCreate && legacy.AfterCreate.HasCommands() {

@@ -47,7 +47,7 @@ type ReconcileConfig struct {
 // workspaces intact. It emits reconcile_start, reconcile_workspace, and
 // reconcile_end task events so startup recovery is visible in the same event
 // stream as normal task lifecycle activity.
-func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
+func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error { //nolint:gocognit,funlen // baseline (#521)
 	if strings.TrimSpace(cfg.WorkspaceRoot) == "" {
 		return fmt.Errorf("workspace root is required")
 	}
@@ -204,7 +204,7 @@ type issueWorkspace struct {
 	Key  string
 }
 
-func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) {
+func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) { //nolint:gocognit // baseline (#521)
 	ownerEntries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -335,7 +335,7 @@ func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue, 
 	return tracker.Issue{}, false
 }
 
-func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tracker.Issue) []string) []string {
+func reworkWorkspaceKeyPrefixes(issue tracker.Issue, activeKeysForIssue func(tracker.Issue) []string) []string { //nolint:gocognit // baseline (#521)
 	seen := map[string]struct{}{}
 	var prefixes []string
 	baseKeys := []string{workspace.SanitizeComponent(issue.ID), sanitizeLegacyWorkspaceKey(issue.ID)}
@@ -457,7 +457,7 @@ func ActiveWorkspaceKeysForWorkflow(cfg workflow.Config) func(tracker.Issue) []s
 	}
 }
 
-func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []string {
+func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []string { //nolint:gocognit // baseline (#521)
 	seen := map[string]struct{}{}
 	var keys []string
 	if strings.EqualFold(issue.State, "Rework") && issue.ID != "" && !issue.UpdatedAt.IsZero() {
@@ -483,7 +483,7 @@ func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []strin
 	return keys
 }
 
-func serviceMatchesIssueForReconcile(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+func serviceMatchesIssueForReconcile(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool { //nolint:gocognit // baseline (#521)
 	route := service.Tracker
 	if !hasExplicitServiceRouteForReconcile(route) {
 		return false
@@ -525,7 +525,7 @@ func hasExplicitServiceRouteForReconcile(route workflow.ServiceTrackerRouteConfi
 		len(route.CustomFields) > 0
 }
 
-func sanitizeLegacyWorkspaceKey(s string) string {
+func sanitizeLegacyWorkspaceKey(s string) string { //nolint:gocognit // baseline (#521)
 	var b strings.Builder
 	for _, r := range strings.TrimSpace(s) {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {

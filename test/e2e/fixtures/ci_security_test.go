@@ -35,40 +35,36 @@ func TestCIRunsSecurityScanning(t *testing.T) {
 	}
 }
 
-// TestCIRunsTwoPhaseGoLint guards #413/#433/#459's rollout model: clean
-// mechanical linters block CI, while the complexity baseline stays report-only.
-func TestCIRunsTwoPhaseGoLint(t *testing.T) {
+// TestCISingleBlockingGoLintGate guards the #413/#433/#459/#504 rollout model:
+// a single blocking golangci-lint gate runs every enabled linter — including
+// funlen/gocognit — over all code, with the existing complexity baseline
+// grandfathered in-line via //nolint (burned down in #521). There is no
+// report-only or only-new-issues step, so a new oversized/over-complex non-test
+// function (or in-place growth of an un-annotated one) fails CI.
+func TestCISingleBlockingGoLintGate(t *testing.T) {
 	ci := readCIWorkflow(t)
 
-	blocking := workflowStep(t, ci, "Run golangci-lint blocking correctness gate")
+	gate := workflowStep(t, ci, "Run golangci-lint blocking gate")
 	for _, want := range []string{
 		"golangci/golangci-lint-action@",
 		"version: v2.",
 		"--config=.golangci.yml",
-		"--enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
+		"--enable-only=contextcheck,errcheck,errorlint,funlen,gocognit,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
 	} {
-		if !strings.Contains(blocking, want) {
-			t.Errorf("blocking golangci-lint step = %q, want marker %q", blocking, want)
+		if !strings.Contains(gate, want) {
+			t.Errorf("blocking golangci-lint step = %q, want marker %q", gate, want)
 		}
 	}
-	if strings.Contains(blocking, "--issues-exit-code=0") {
-		t.Errorf("blocking golangci-lint step = %q, want no report-only marker", blocking)
+	if strings.Contains(gate, "--issues-exit-code=0") {
+		t.Errorf("blocking golangci-lint step = %q, want no report-only marker", gate)
 	}
 
-	reportOnly := workflowStep(t, ci, "Run golangci-lint report-only baseline")
-	for _, want := range []string{
-		"golangci/golangci-lint-action@",
-		"version: v2.",
-		"--config=.golangci.yml",
-		"--enable-only=funlen,gocognit",
-		"--issues-exit-code=0",
-	} {
-		if !strings.Contains(reportOnly, want) {
-			t.Errorf("report-only golangci-lint step = %q, want marker %q", reportOnly, want)
-		}
+	// funlen/gocognit are blocking, not report-only / new-code-only.
+	if strings.Contains(ci, "--issues-exit-code=0") {
+		t.Errorf("ci.yml still has a report-only golangci-lint step (--issues-exit-code=0)")
 	}
-	if strings.Contains(reportOnly, "continue-on-error") {
-		t.Errorf("report-only golangci-lint step = %q, want no continue-on-error", reportOnly)
+	if strings.Contains(ci, "only-new-issues") {
+		t.Errorf("ci.yml still references only-new-issues; the gate is a full blocking gate with an in-line //nolint baseline")
 	}
 }
 

@@ -126,7 +126,7 @@ func NewPollerWithReconciliation(tracker IssueStateLister, orchestrator *Orchest
 // PollOnce performs one tracker tick: fetch active issues and ask the
 // orchestrator actor to dispatch each candidate. Duplicate candidates are
 // ignored by the actor's runtime claim state.
-func (p *Poller) PollOnce(ctx context.Context) error {
+func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // baseline (#521)
 	if p == nil || p.tracker == nil {
 		return errors.New("orchestrator poller requires tracker")
 	}
@@ -201,7 +201,7 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 	return l.tracker.ListIssuesByStates(ctx, l.states)
 }
 
-func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
+func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
 	if p.stateTracker == nil {
 		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
@@ -508,7 +508,7 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 	return candidates
 }
 
-func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]tracker.Issue, error) {
+func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
 	if len(cfg.Services) == 0 {
 		return issues, nil
 	}
@@ -555,7 +555,7 @@ func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.Servi
 	return matches
 }
 
-func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool {
+func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool { //nolint:gocognit // baseline (#521)
 	route := service.Tracker
 	if !hasExplicitServiceRoute(route) {
 		return false
@@ -771,7 +771,7 @@ func serviceConfigByName(cfg workflow.Config, name string) (workflow.ServiceConf
 }
 
 // RunPollLoop repeatedly polls the tracker until ctx is canceled.
-func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) error {
+func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) error { //nolint:gocognit // baseline (#521)
 	if poller == nil {
 		return errors.New("orchestrator poll loop requires poller")
 	}
