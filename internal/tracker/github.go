@@ -174,12 +174,9 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 	return out, nil
 }
 
-func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, bool, error) { //nolint:gocognit // baseline (#521)
+func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, bool, error) {
 	var out []Issue
-	collectionSeen := make(map[string]struct{}, len(seen))
-	for id := range seen {
-		collectionSeen[id] = struct{}{}
-	}
+	collectionSeen := newGitHubCollectionSeen(seen)
 	maxPages := c.issueMaxPages()
 	scope := githubIssueCollectionScope(issueState, label)
 	for page := 1; page <= maxPages+1; page++ {
@@ -188,38 +185,86 @@ func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label
 			return nil, false, err
 		}
 		if page > maxPages {
-			if !hasNext && len(batch) == 0 {
-				return out, false, nil
-			}
-			c.recordPaginationCapHit(scope, maxPages)
-			return nil, true, nil
+			return c.finishGitHubCapProbe(out, batch, hasNext, scope, maxPages)
 		}
-		for _, issue := range batch {
-			if issue.PullRequest != nil {
-				continue
-			}
-			if _, claimed := claimedIssueNumbers[issue.Number]; claimed && strings.EqualFold(strings.TrimSpace(issue.State), "open") {
-				continue
-			}
-			mapped, err := mapGitHubIssue(issue, mappedState)
-			if err != nil {
-				return nil, false, err
-			}
-			if mapped.ID == "" {
-				continue
-			}
-			c.cacheIssueNumber(mapped.ID, issue.Number)
-			if _, ok := collectionSeen[mapped.ID]; ok {
-				continue
-			}
-			collectionSeen[mapped.ID] = struct{}{}
-			out = append(out, mapped)
+		out, err = c.collectIssuesFromPage(batch, mappedState, claimedIssueNumbers, collectionSeen, out)
+		if err != nil {
+			return nil, false, err
 		}
 		if !hasNext && len(batch) < githubIssuePageSize {
 			return out, false, nil
 		}
 	}
 	return nil, true, nil
+}
+
+// newGitHubCollectionSeen seeds a per-collection dedup set from the shared
+// cross-state seen set, copying every key so a global mapped.ID already
+// collected in an earlier state is not re-collected here.
+func newGitHubCollectionSeen(seen map[string]struct{}) map[string]struct{} {
+	collectionSeen := make(map[string]struct{}, len(seen))
+	for id := range seen {
+		collectionSeen[id] = struct{}{}
+	}
+	return collectionSeen
+}
+
+// finishGitHubCapProbe handles the post-cap probe page (page > maxPages): an
+// empty, no-next probe means the collection fit exactly within the cap and the
+// accumulated out is returned; any remaining content records a cap hit and
+// signals capped with a nil issue slice so partial results are not treated as
+// authoritative.
+func (c *GitHubClient) finishGitHubCapProbe(out []Issue, batch []githubIssue, hasNext bool, scope string, maxPages int) ([]Issue, bool, error) {
+	if !hasNext && len(batch) == 0 {
+		return out, false, nil
+	}
+	c.recordPaginationCapHit(scope, maxPages)
+	return nil, true, nil
+}
+
+// collectIssuesFromPage folds one issue batch into out, delegating the
+// per-issue filter/map/dedup decision to collectIssueFromBatch. A mapping
+// error aborts the fold and discards accumulated work. out is passed in and
+// the grown slice returned.
+func (c *GitHubClient) collectIssuesFromPage(batch []githubIssue, mappedState string, claimedIssueNumbers map[int]struct{}, collectionSeen map[string]struct{}, out []Issue) ([]Issue, error) {
+	for _, issue := range batch {
+		mapped, collect, err := c.collectIssueFromBatch(issue, mappedState, claimedIssueNumbers, collectionSeen)
+		if err != nil {
+			return nil, err
+		}
+		if collect {
+			out = append(out, mapped)
+		}
+	}
+	return out, nil
+}
+
+// collectIssueFromBatch applies the single-issue collection rules: it drops PRs
+// disguised as issues, skips issues claimed by an open PR while they are still
+// open, surfaces mapping errors, skips empty-ID issues, caches the issue number
+// for every mapped issue with a non-empty ID before the dedup check, and
+// deduplicates by global mapped.ID against (and into) collectionSeen. It
+// returns the mapped issue and whether the caller should collect it.
+func (c *GitHubClient) collectIssueFromBatch(issue githubIssue, mappedState string, claimedIssueNumbers map[int]struct{}, collectionSeen map[string]struct{}) (Issue, bool, error) {
+	if issue.PullRequest != nil {
+		return Issue{}, false, nil
+	}
+	if _, claimed := claimedIssueNumbers[issue.Number]; claimed && strings.EqualFold(strings.TrimSpace(issue.State), "open") {
+		return Issue{}, false, nil
+	}
+	mapped, err := mapGitHubIssue(issue, mappedState)
+	if err != nil {
+		return Issue{}, false, err
+	}
+	if mapped.ID == "" {
+		return Issue{}, false, nil
+	}
+	c.cacheIssueNumber(mapped.ID, issue.Number)
+	if _, ok := collectionSeen[mapped.ID]; ok {
+		return Issue{}, false, nil
+	}
+	collectionSeen[mapped.ID] = struct{}{}
+	return mapped, true, nil
 }
 
 func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label string, page int) ([]githubIssue, bool, error) {
