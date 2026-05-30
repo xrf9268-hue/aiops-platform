@@ -201,7 +201,7 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 	return l.tracker.ListIssuesByStates(ctx, l.states)
 }
 
-func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
+func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
 	if p.stateTracker == nil {
 		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
@@ -224,6 +224,22 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	if err != nil {
 		fetchErr = errors.Join(fetchErr, err)
 	}
+	mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID, activeStateKeys)
+	if err := p.reconcileActiveRunsPartB(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys); err != nil {
+		return nil, err
+	}
+	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys)
+	fetchErr = errors.Join(fetchErr, deriveErr)
+	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
+	return inactiveByID, errors.Join(reconcileErr, fetchErr)
+}
+
+// mergeRefreshedActiveStates folds the narrow per-issue state refresh back into
+// the active set: issues still in an active state keep their stored entry with
+// the refreshed state copied in (value-copy update, not pointer mutation),
+// while issues that left the active set are dropped from activeIssuesByID. It
+// mutates activeIssuesByID in place and treats refreshedIssuesByID as read-only.
+func mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID map[string]tracker.Issue, activeStateKeys map[string]struct{}) {
 	for id, issue := range refreshedIssuesByID {
 		if isActiveTrackerState(issue.State, activeStateKeys) {
 			if existing, ok := activeIssuesByID[id]; ok {
@@ -234,6 +250,14 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 			delete(activeIssuesByID, id)
 		}
 	}
+}
+
+// reconcileActiveRunsPartB runs SPEC §16.3 Part B: revalidate active runs
+// against the freshly refreshed active set. The error it returns is fatal to
+// the tick (reconcileTick returns it with a nil map), matching the inline
+// behavior before #521. It mutates activeIssuesByID by reference and treats
+// refreshedIssuesByID as read-only.
+func (p *Poller) reconcileActiveRunsPartB(ctx context.Context, activeIssuesByID, refreshedIssuesByID map[string]tracker.Issue, activeStateKeys map[string]struct{}) error {
 	if p.routing != nil {
 		// Routing-aware listings are complete for their scope, so absence from
 		// the active set is real evidence of inactivity and may cancel runs.
@@ -247,17 +271,22 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		// entry fires before_remove + reconcile_workspace reason=terminal mid-run,
 		// while a route-change or non-terminal inactive cancel keeps the workspace
 		// for reuse (#340).
-		if err := p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, normalizedStates(p.reconcile.TerminalStates), refreshedIssuesByID, p.reconcile.WorkerExitTimeout); err != nil {
-			return nil, err
-		}
-	} else {
-		// Without routing the active listing may be partial; still refresh
-		// stored issue metadata for runs we DO see so per-state capacity gates
-		// observe the latest tracker state without treating absence as inactive.
-		if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
-			return nil, err
-		}
+		return p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, normalizedStates(p.reconcile.TerminalStates), refreshedIssuesByID, p.reconcile.WorkerExitTimeout)
 	}
+	// Without routing the active listing may be partial; still refresh
+	// stored issue metadata for runs we DO see so per-state capacity gates
+	// observe the latest tracker state without treating absence as inactive.
+	return p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys)
+}
+
+// deriveInactiveIssues builds the SPEC §16.3 inactive/terminal set for the
+// inactive reconcile pass: refreshed running issues that left the active set
+// for a configured inactive/terminal state, plus explicit terminal/inactive
+// state-group listings (skipping empty IDs and issues still considered active).
+// The returned error joins any per-group listing errors in loop order; it is
+// non-fatal (accumulated into fetchErr by the caller). activeIssuesByID is read
+// only here; refreshedIssuesByID is read-only throughout.
+func (p *Poller) deriveInactiveIssues(ctx context.Context, activeIssuesByID, refreshedIssuesByID map[string]tracker.Issue, activeStateKeys map[string]struct{}) (map[string]tracker.Issue, error) {
 	activeByID := issueMapIDSet(activeIssuesByID)
 	inactiveByID := make(map[string]tracker.Issue)
 	for id, issue := range refreshedIssuesByID {
@@ -270,24 +299,41 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		delete(activeByID, id)
 		inactiveByID[id] = issue
 	}
+	groupErr := p.appendInactiveFromStateGroups(ctx, inactiveByID, activeByID)
+	return inactiveByID, groupErr
+}
+
+// appendInactiveFromStateGroups fetches the explicit terminal/inactive
+// state-group listings and adds each freshly-listed issue to inactiveByID,
+// skipping empty IDs and issues still considered active. It mutates
+// inactiveByID in place and reads activeByID only; per-group listing errors are
+// joined in loop order and returned non-fatally.
+func (p *Poller) appendInactiveFromStateGroups(ctx context.Context, inactiveByID map[string]tracker.Issue, activeByID map[string]struct{}) error {
+	var groupErr error
 	for _, states := range p.reconcileInactiveStateGroups() {
 		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
 		if err != nil {
-			fetchErr = errors.Join(fetchErr, err)
+			groupErr = errors.Join(groupErr, err)
 			continue
 		}
-		for _, issue := range issues {
-			if issue.ID == "" {
-				continue
-			}
-			if _, active := activeByID[issue.ID]; active {
-				continue
-			}
-			inactiveByID[issue.ID] = issue
-		}
+		addInactiveListedIssues(inactiveByID, activeByID, issues)
 	}
-	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
-	return inactiveByID, errors.Join(reconcileErr, fetchErr)
+	return groupErr
+}
+
+// addInactiveListedIssues adds each freshly-listed issue to inactiveByID,
+// skipping empty IDs and issues still considered active. It mutates inactiveByID
+// in place and reads activeByID only.
+func addInactiveListedIssues(inactiveByID map[string]tracker.Issue, activeByID map[string]struct{}, issues []tracker.Issue) {
+	for _, issue := range issues {
+		if issue.ID == "" {
+			continue
+		}
+		if _, active := activeByID[issue.ID]; active {
+			continue
+		}
+		inactiveByID[issue.ID] = issue
+	}
 }
 
 func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue) (map[string]tracker.Issue, error) {
