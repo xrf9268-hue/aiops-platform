@@ -145,9 +145,11 @@ worker --doctor --mode=real "$AIOPS_WORKFLOW_PATH"
 
 On a Docker-less binary host, the "Docker Compose" check is a `WARN` in
 `--mode=mock` but is escalated to a `FAIL` (non-zero exit) in
-`--mode=real`. Treat that single Compose `FAIL` as expected on this
-deployment path and read the tracker/agent/workflow checks for the real
-verdict — see §1 on the doctor's container-centric wording.
+`--mode=real`. The Compose `FAIL` is expected on this deployment path —
+but read every *other* check on its own merits, since `--mode=real` also
+FAILs on genuine problems (e.g. a missing `gh`/deploy-key credential at
+the agent `git push` preflight) that are **not** safe to ignore. See §1
+on the doctor's container-centric wording.
 
 Inspect the effective config (secrets are masked with `***`):
 
@@ -244,9 +246,10 @@ It uses the `/usr/local` paths from §3.
 # install the binaries onto PATH
 sudo scripts/install.sh --prefix /usr/local
 
-# config + state/log dir owned by the running user (the plist logs here)
-sudo install -d -o "$USER" /usr/local/etc/aiops-platform
-mkdir -p /usr/local/var/aiops-platform
+# config + state/log dirs owned by the running user (the plist logs here).
+# /usr/local is root-owned on a stock Mac, so create with sudo + -o "$USER".
+sudo install -d -o "$(id -un)" /usr/local/etc/aiops-platform
+sudo install -d -o "$(id -un)" /usr/local/var/aiops-platform
 cp examples/WORKFLOW.md /usr/local/etc/aiops-platform/WORKFLOW.md   # edit tracker.api_key/kind
 
 # install and load the agent (per-user; runs only while you are logged in)
@@ -270,17 +273,25 @@ user and lands in backups. Prefer the login Keychain plus a thin wrapper
 that exports the token before exec, keeping the plist secret-free:
 
 ```bash
-# store once
-security add-generic-password -a "$USER" -s aiops-linear-api-key -w 'your-token'
-```
+# 1. store the token once, keyed to the login account
+security add-generic-password -a "$(id -un)" -s aiops-linear-api-key -w 'your-token'
 
-```bash
+# 2. install the wrapper into a PATH dir and make it executable. The 'EOF'
+#    is quoted, so id -un / the security lookup run at launch, not now.
+sudo tee /usr/local/bin/aiops-worker-launch >/dev/null <<'EOF'
 #!/usr/bin/env bash
-# /usr/local/bin/aiops-worker-launch — point ProgramArguments at this.
 set -euo pipefail
-LINEAR_API_KEY="$(security find-generic-password -a "$USER" -s aiops-linear-api-key -w)"
+LINEAR_API_KEY="$(security find-generic-password -a "$(id -un)" -s aiops-linear-api-key -w)"
 export LINEAR_API_KEY
 exec /usr/local/bin/worker
+EOF
+sudo chmod 755 /usr/local/bin/aiops-worker-launch
+
+# 3. point the agent at the wrapper instead of the bare binary, then reload
+plutil -replace ProgramArguments.0 -string /usr/local/bin/aiops-worker-launch \
+  ~/Library/LaunchAgents/com.aiops-platform.worker.plist
+launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.aiops-platform.worker.plist
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.aiops-platform.worker.plist
 ```
 
 SSH keys on macOS need no special placement — `ProtectHome` does not
