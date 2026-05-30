@@ -50,7 +50,7 @@ func skipGraphQLLineComment(query string, i int) int {
 // ordinary `"..."` strings, honoring `\`-escaped bytes in the latter so an
 // escaped quote does not falsely terminate the string. An unterminated string
 // consumes to end of input.
-func skipGraphQLString(query string, i int) int {
+func skipGraphQLString(query string, i int) int { //nolint:gocognit // baseline (#521)
 	if strings.HasPrefix(query[i:], `"""`) {
 		i += 3
 		for i < len(query) && !strings.HasPrefix(query[i:], `"""`) {
@@ -158,7 +158,7 @@ func (p *linearGraphQLParser) closeBrace() {
 // it captures the first top-level field. Once a field is captured op.Kind is
 // no longer overridden, so a later operation cannot shadow the one whose body
 // we already entered.
-func (p *linearGraphQLParser) consumeName(name string) {
+func (p *linearGraphQLParser) consumeName(name string) { //nolint:gocognit // baseline (#521)
 	switch {
 	case p.depth == 0 && p.parenDepth == 0 && p.expecting == "":
 		switch name {
@@ -249,7 +249,7 @@ func parseLinearGraphQLOperation(query string) linearGraphQLOperation {
 // shares the lexer skip/scan steps with parseLinearGraphQLOperation so the
 // gate's "exactly one operation" check tolerates the same comment, string,
 // and parameter shapes the operation parse does.
-func countGraphQLOperations(query string) int {
+func countGraphQLOperations(query string) int { //nolint:gocognit,funlen // baseline (#521)
 	count := 0
 	depth := 0
 	parenDepth := 0

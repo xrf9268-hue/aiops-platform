@@ -95,7 +95,7 @@ func (c *TrackerClient) IssueMaxPages() int {
 	return listIssuesMaxPages
 }
 
-func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
+func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
 	}
@@ -154,7 +154,7 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 	return c.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
 }
 
-func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) {
+func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
 	}
@@ -262,7 +262,7 @@ func giteaIssueNumberFromIdentifier(identifier string) (int, bool) {
 	return number, true
 }
 
-func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) {
+func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) { //nolint:gocognit // baseline (#521)
 	var out []tracker.Issue
 	collectionSeen := make(map[string]struct{}, len(seenIssues))
 	for id := range seenIssues {

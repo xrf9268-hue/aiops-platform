@@ -76,7 +76,7 @@ func (p CodexSandboxPolicy) IsZero() bool {
 		!p.ExcludeSlashTmp
 }
 
-func (p *CodexSandboxPolicy) UnmarshalYAML(node *yaml.Node) error {
+func (p *CodexSandboxPolicy) UnmarshalYAML(node *yaml.Node) error { //nolint:gocognit // baseline (#521)
 	if node == nil || node.Tag == "!!null" {
 		*p = CodexSandboxPolicy{}
 		return nil

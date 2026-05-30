@@ -39,7 +39,7 @@ func AgentEnvForPreflight(agent string, cfg workflow.Config) []string {
 	}
 }
 
-func agentEnvWithLookup(passthrough []string, cfg workflow.Config, lookup func(string) (string, bool), loginPath func() string) []string {
+func agentEnvWithLookup(passthrough []string, cfg workflow.Config, lookup func(string) (string, bool), loginPath func() string) []string { //nolint:gocognit // baseline (#521)
 	seen := make(map[string]struct{}, len(baselineAgentEnvAllowlist)+len(passthrough))
 	env := make([]string, 0, len(baselineAgentEnvAllowlist)+len(passthrough))
 	add := func(name string) {

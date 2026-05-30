@@ -211,143 +211,144 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	if err != nil {
 		return "", false, err
 	}
-	// Resolve the base ref via `origin/<base>` because the bare cache
-	// stores upstream branches as remote-tracking refs (see EnsureMirror);
-	// falling back to the bare name covers `file://` test fixtures where
-	// the upstream is the same on-disk repo.
-	startRef := "origin/" + t.BaseBranch
-	if err := runGitQuiet(ctx, mirror, "rev-parse", "--verify", startRef); err != nil {
-		startRef = t.BaseBranch
-	}
+	startRef := resolveStartRef(ctx, mirror, t.BaseBranch)
 
-	// A workdir that exists but isn't a valid, mirror-linked git worktree
-	// must not pin the worker into a bad state. Three classes of "looks
-	// reusable but isn't" we explicitly reject:
-	//
-	//  1. The path is a symlink. An attacker who can plant a symlink at
-	//     the workspace path could otherwise redirect the reuse-path
-	//     `git reset` / `git checkout -B` into a repository outside the
-	//     workspace root entirely. `os.Lstat` (vs the earlier `os.Stat`
-	//     that follows the link) catches this.
-	//  2. The path holds an independent git repository — for example, a
-	//     prior agent run that rewrote its workspace as a fresh `git
-	//     init` would still pass `git rev-parse --git-dir`. We verify
-	//     `git rev-parse --git-common-dir` resolves to *our* mirror so
-	//     unrelated repos can't masquerade as a reusable workspace.
-	//  3. The path is the worktree of a different mirror (different
-	//     clone URL routed to the same key, mirror was wiped and
-	//     recreated between prepares, etc.). The git-common-dir check
-	//     above also covers this.
-	//
-	// On any rejection we fall through to the nuke-and-recreate path
-	// (`os.RemoveAll` removes the symlink itself, not its target) and
-	// report `createdNow=true` so the worker fires `after_create` on
-	// the recovery run.
-	// foreignCommonDir is non-empty only when the gate ran the
-	// `--git-common-dir` probe successfully and the result pointed at a
-	// different mirror (e.g. `t.CloneURL`'s host changed between prepares
-	// and `mirrorPathFor` routed it to a new mirror). We use it later to
-	// prune the orphaned worktree admin entry from the foreign mirror
-	// before recreating against the new one — otherwise the entry would
-	// linger until `gc.worktreePruneExpire` (3 months default) expires it.
-	var foreignCommonDir string
-	reusable := false
+	createdNow, err := attachWorktree(ctx, workdir, mirror, t.WorkBranch, startRef, workdirExists)
+	if err != nil {
+		return "", false, err
+	}
+	return workdir, createdNow, nil
+}
+
+// attachWorktree reuses the existing workdir when it is a valid, mirror-linked
+// worktree and otherwise (re)creates it. It returns createdNow=true on the
+// create path so the caller fires after_create on first touch / recovery.
+func attachWorktree(ctx context.Context, workdir, mirror, workBranch, startRef string, workdirExists bool) (createdNow bool, err error) {
+	reusable, foreignCommonDir := false, ""
 	if workdirExists {
-		lstatInfo, lstatErr := os.Lstat(workdir)
-		if lstatErr == nil && lstatInfo.Mode()&os.ModeSymlink == 0 {
-			if err := runGitQuiet(ctx, workdir, "rev-parse", "--git-dir"); err == nil {
-				// Silence the probe's stderr: on a broken-but-existing
-				// `.git` (mid-corruption, partial `worktree add` crash,
-				// race with `os.RemoveAll`) git prints `fatal: not a git
-				// repository` while we're about to fall through to the
-				// recreate path anyway. Without io.Discard that fatal line
-				// pollutes the worker's inherited fd 2 and obscures the
-				// recovery the gate is about to perform.
-				probe := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir")
-				probe.Stderr = io.Discard
-				cdOut, cdErr := probe.Output()
-				if cdErr == nil {
-					common := strings.TrimSpace(string(cdOut))
-					if sameRealPath(common, workdir, mirror) {
-						reusable = true
-					} else if common != "" {
-						foreignCommonDir = common
-						if !filepath.IsAbs(foreignCommonDir) {
-							foreignCommonDir = filepath.Join(workdir, foreignCommonDir)
-						}
-					}
-				}
-			}
-		}
+		reusable, foreignCommonDir = classifyExistingWorkdir(ctx, workdir, mirror)
 	}
-
 	if reusable {
-		// SPEC §9.1: workspaces are reused across runs for the same issue.
-		// We clear the index first, then snap the work branch to the
-		// refreshed base:
-		//   - `git reset --quiet HEAD -- .` drops any intent-to-add
-		//     entries the previous run's `EnforcePolicy` diffstat
-		//     (`git add --intent-to-add --all` in Diffstat) left in the
-		//     index. Without this step `git checkout` below would treat
-		//     those untracked-but-staged files as removable from the
-		//     working tree because they aren't present in startRef, and
-		//     cached deps / hook artifacts would silently vanish on
-		//     reuse.
-		//   - `git checkout --force --no-track -B` then rebases the work
-		//     branch to startRef and updates the working tree:
-		//     `--force` discards tracked-file modifications, `--no-track`
-		//     keeps the work branch from tracking the base branch (the
-		//     SPEC contract honored by the create path's `worktree add
-		//     --no-track`), and `-B` makes the rebase idempotent.
-		// Untracked files (cached deps, build outputs, .aiops policy
-		// feedback) survive intact.
-		if err := runGitQuiet(ctx, workdir, "reset", "--quiet", "HEAD", "--", "."); err != nil {
-			return "", false, fmt.Errorf("worktree index reset: %w", err)
-		}
-		if err := runGit(ctx, workdir, "checkout", "--force", "--no-track", "-B", t.WorkBranch, startRef); err != nil {
-			return "", false, fmt.Errorf("worktree checkout: %w", err)
-		}
-		if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
-			return "", false, fmt.Errorf("install sensitive artifact excludes: %w", err)
-		}
-		return workdir, false, nil
+		return false, reuseWorktree(ctx, workdir, workBranch, startRef)
 	}
+	return true, createWorktree(ctx, workdir, mirror, workBranch, startRef, foreignCommonDir)
+}
 
-	// First touch (or recovery from a corrupted leftover). If the gate
-	// just rejected a workspace that linked to a *different* mirror,
-	// prune the orphaned admin entry off that mirror first so its
-	// `worktrees/` directory stays in sync with what's actually on disk.
-	// Without this, the foreign mirror keeps a dead worktree record until
-	// `gc.worktreePruneExpire` (3 months default) expires it; harmless in
-	// the common case, confusing for an operator inspecting
-	// `git worktree list` and a latent collision risk if the same
-	// workspace path is ever re-targeted to the old mirror.
+// resolveStartRef resolves the base ref via `origin/<base>` because the bare
+// cache stores upstream branches as remote-tracking refs (see EnsureMirror);
+// it falls back to the bare name to cover `file://` test fixtures where the
+// upstream is the same on-disk repo.
+func resolveStartRef(ctx context.Context, mirror, baseBranch string) string {
+	startRef := "origin/" + baseBranch
+	if err := runGitQuiet(ctx, mirror, "rev-parse", "--verify", startRef); err != nil {
+		startRef = baseBranch
+	}
+	return startRef
+}
+
+// classifyExistingWorkdir decides whether an existing workdir is a valid,
+// mirror-linked worktree safe to reuse. A workdir that exists but isn't must
+// not pin the worker into a bad state, so three classes of "looks reusable but
+// isn't" are explicitly rejected (returning reusable=false):
+//
+//  1. The path is a symlink. An attacker who can plant a symlink at the
+//     workspace path could otherwise redirect the reuse-path `git reset` /
+//     `git checkout -B` into a repository outside the workspace root entirely.
+//     `os.Lstat` (vs the `os.Stat` the caller used) catches this.
+//  2. The path holds an independent git repository — e.g. a prior agent run
+//     that rewrote its workspace as a fresh `git init` would still pass `git
+//     rev-parse --git-dir`. We verify `git rev-parse --git-common-dir`
+//     resolves to *our* mirror so unrelated repos can't masquerade.
+//  3. The path is the worktree of a different mirror. The git-common-dir
+//     check above also covers this.
+//
+// The returned foreignCommonDir is non-empty only when the common-dir probe
+// succeeded but pointed at a different mirror; the caller uses it to prune the
+// orphaned worktree admin entry off that foreign mirror before recreating,
+// otherwise the entry lingers until `gc.worktreePruneExpire` (3 months).
+func classifyExistingWorkdir(ctx context.Context, workdir, mirror string) (reusable bool, foreignCommonDir string) {
+	lstatInfo, lstatErr := os.Lstat(workdir)
+	if lstatErr != nil || lstatInfo.Mode()&os.ModeSymlink != 0 {
+		return false, ""
+	}
+	if err := runGitQuiet(ctx, workdir, "rev-parse", "--git-dir"); err != nil {
+		return false, ""
+	}
+	// Silence the probe's stderr: on a broken-but-existing `.git`
+	// (mid-corruption, partial `worktree add` crash, race with
+	// `os.RemoveAll`) git prints `fatal: not a git repository` while we're
+	// about to fall through to the recreate path anyway. Without io.Discard
+	// that fatal line pollutes the worker's inherited fd 2.
+	probe := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir")
+	probe.Stderr = io.Discard
+	cdOut, cdErr := probe.Output()
+	if cdErr != nil {
+		return false, ""
+	}
+	common := strings.TrimSpace(string(cdOut))
+	if sameRealPath(common, workdir, mirror) {
+		return true, ""
+	}
+	if common != "" {
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(workdir, common)
+		}
+		return false, common
+	}
+	return false, ""
+}
+
+// reuseWorktree refreshes a reusable worktree (SPEC §9.1: workspaces are reused
+// across runs for the same issue). It clears the index first, then snaps the
+// work branch to the refreshed base:
+//   - `git reset --quiet HEAD -- .` drops any intent-to-add entries the
+//     previous run's `EnforcePolicy` diffstat left in the index; without it the
+//     checkout below would treat those untracked-but-staged files as removable
+//     and cached deps / hook artifacts would vanish on reuse.
+//   - `git checkout --force --no-track -B` rebases the work branch to startRef:
+//     `--force` discards tracked-file modifications, `--no-track` keeps the work
+//     branch from tracking the base branch (matching the create path's
+//     `worktree add --no-track`), and `-B` makes it idempotent.
+//
+// Untracked files (cached deps, build outputs, .aiops policy feedback) survive.
+func reuseWorktree(ctx context.Context, workdir, workBranch, startRef string) error {
+	if err := runGitQuiet(ctx, workdir, "reset", "--quiet", "HEAD", "--", "."); err != nil {
+		return fmt.Errorf("worktree index reset: %w", err)
+	}
+	if err := runGit(ctx, workdir, "checkout", "--force", "--no-track", "-B", workBranch, startRef); err != nil {
+		return fmt.Errorf("worktree checkout: %w", err)
+	}
+	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
+		return fmt.Errorf("install sensitive artifact excludes: %w", err)
+	}
+	return nil
+}
+
+// createWorktree handles a first touch (or recovery from a corrupted leftover).
+// If the reuse gate rejected a workspace linked to a *different* mirror,
+// foreignCommonDir prunes the orphaned admin entry off that mirror first so its
+// `worktrees/` directory stays in sync with disk. It then drops any stale
+// worktree entry the mirror still tracks for this path, removes the workdir,
+// prunes, and adds a fresh `--no-track -B` worktree (idempotent via `-B`; the
+// worktree inherits origin from the linked bare mirror, so no remote set-url).
+func createWorktree(ctx context.Context, workdir, mirror, workBranch, startRef, foreignCommonDir string) error {
 	if foreignCommonDir != "" {
 		_ = runGitQuiet(ctx, foreignCommonDir, "worktree", "prune")
 	}
-	// Drop any stale worktree entry the mirror still tracks for this path
-	// before asking it to add a new one. Failures are ignored and stderr
-	// silenced because the common case ("no such worktree") prints a scary
-	// fatal line that obscures real worker logs.
+	// Failures here are ignored and stderr silenced: the common case ("no such
+	// worktree") prints a scary fatal line that obscures real worker logs.
 	_ = runGitQuiet(ctx, mirror, "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
 	if err := runGitQuiet(ctx, mirror, "worktree", "prune"); err != nil {
-		return "", false, fmt.Errorf("worktree prune: %w", err)
+		return fmt.Errorf("worktree prune: %w", err)
 	}
-	// Using -B makes the operation idempotent if a previous attempt left
-	// an in-mirror branch behind. The new worktree inherits remote config
-	// from the linked bare mirror, where `EnsureMirror`'s `git clone --bare`
-	// already recorded origin = t.CloneURL (see internal/workspace/mirror.go);
-	// we deliberately do not re-`git remote set-url` from inside the
-	// worktree because there is no per-worktree config and the write would
-	// land back in the shared mirror config redundantly.
-	if err := runGit(ctx, mirror, "worktree", "add", "--no-track", "-B", t.WorkBranch, workdir, startRef); err != nil {
-		return "", false, fmt.Errorf("worktree add: %w", err)
+	if err := runGit(ctx, mirror, "worktree", "add", "--no-track", "-B", workBranch, workdir, startRef); err != nil {
+		return fmt.Errorf("worktree add: %w", err)
 	}
 	if err := EnsureSensitiveArtifactExcludes(ctx, workdir); err != nil {
-		return "", false, fmt.Errorf("install sensitive artifact excludes: %w", err)
+		return fmt.Errorf("install sensitive artifact excludes: %w", err)
 	}
-	return workdir, true, nil
+	return nil
 }
 
 // RunWorkspaceHook executes the configured shell commands for a lifecycle hook
@@ -476,7 +477,7 @@ func WritePrompt(workdir string, prompt string) error {
 // error is non-nil iff at least one command failed or the phase
 // deadline was exceeded; callers inspect individual results to see
 // which.
-func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) {
+func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) { //nolint:gocognit // baseline (#521)
 	runCtx := ctx
 	if wf.Verify.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -686,7 +687,7 @@ func WriteChangedFiles(workdir string, files []string) error {
 
 // WriteVerification serializes verify command results to
 // .aiops/VERIFICATION.txt so failed runs preserve the diagnostic output.
-func WriteVerification(workdir string, results []VerifyResult) error {
+func WriteVerification(workdir string, results []VerifyResult) error { //nolint:gocognit // baseline (#521)
 	var buf bytes.Buffer
 	for i, r := range results {
 		if i > 0 {

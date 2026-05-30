@@ -261,7 +261,7 @@ func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueI
 	return l.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
 }
 
-func (l multiIssueStateLister) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) {
+func (l multiIssueStateLister) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
 	out := make(map[string]string, len(issueRefs))
 	remaining := append([]tracker.IssueRef(nil), issueRefs...)
 	var errOut error
@@ -455,7 +455,7 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 	}
 }
 
-func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config {
+func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config { //nolint:gocognit // baseline (#521)
 	cfg := d.baseConfig
 	cfg.Workflow = snap.Workflow
 	refresher := d.currentRefresher()

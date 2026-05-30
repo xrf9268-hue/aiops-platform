@@ -114,7 +114,7 @@ func (p linearWorkpadProxy) call(ctx context.Context, call ToolCall) (string, er
 	return dynamicToolResult(true, mutateOutput)
 }
 
-func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issueID string) (string, error) {
+func (p linearWorkpadProxy) findLinearWorkpadCommentID(ctx context.Context, issueID string) (string, error) { //nolint:gocognit // baseline (#521)
 	var after string
 	for pageCount := 0; pageCount < linearWorkpadMaxLookupPages; pageCount++ {
 		variables := map[string]any{"issueId": issueID}

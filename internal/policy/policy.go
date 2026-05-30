@@ -6,6 +6,7 @@ package policy
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // Config mirrors the relevant fields of workflow.PolicyConfig. It is
@@ -57,7 +58,7 @@ type Diffstat struct {
 //     also matches AllowPaths (deny wins).
 //   - MaxChangedFiles / MaxChangedLines (when > 0) are enforced as upper
 //     bounds on len(Files) and Lines respectively.
-func Evaluate(d Diffstat, cfg Config) []Violation {
+func Evaluate(d Diffstat, cfg Config) []Violation { //nolint:gocognit // baseline (#521)
 	var out []Violation
 
 	for _, f := range d.Files {
@@ -134,7 +135,7 @@ func matchAny(patterns []string, path string) (string, bool) {
 
 // Match reports whether path matches the glob pattern. Supported syntax:
 //
-//   - "?"  matches any single character except "/"
+//   - "?"  matches exactly one rune (Unicode code point) except "/"
 //   - "*"  matches any sequence of characters except "/"
 //   - "**" matches any sequence of characters, including "/"
 //   - "/**" as a trailing component matches the empty string or "/<anything>"
@@ -155,59 +156,30 @@ func Match(pattern, path string) bool {
 	return globMatch(pattern, path)
 }
 
-// globMatch is the recursive glob matcher. It walks both pattern and path
-// with explicit handling for "**" so that double-star spans path separators
-// while single "*" and "?" do not.
+// globMatch is the recursive glob matcher. It is a thin dispatcher: the
+// separator-spanning "**" and single-segment "*" wildcards delegate to
+// helpers, "?" consumes exactly one rune via matchSingleRune, and a literal
+// position consumes one byte.
 func globMatch(pattern, path string) bool {
 	for len(pattern) > 0 {
 		switch {
 		case strings.HasPrefix(pattern, "**"):
-			rest := strings.TrimPrefix(pattern, "**")
-			// Allow leading "/" after "**" to consume an arbitrary number of
-			// path segments, including zero.
-			if strings.HasPrefix(rest, "/") {
-				inner := rest[1:]
-				// "**/" matches zero segments.
-				if globMatch(inner, path) {
-					return true
-				}
-				for i := 0; i < len(path); i++ {
-					if path[i] == '/' && globMatch(inner, path[i+1:]) {
-						return true
-					}
-				}
-				return false
-			}
-			// Trailing "**" matches the rest of path.
-			if rest == "" {
-				return true
-			}
-			// "**" followed by non-slash: try every suffix.
-			for i := 0; i <= len(path); i++ {
-				if globMatch(rest, path[i:]) {
-					return true
-				}
-			}
-			return false
+			return matchDoubleStar(strings.TrimPrefix(pattern, "**"), path)
 		case pattern[0] == '*':
-			rest := pattern[1:]
-			// Match any run of non-"/" characters, including empty.
-			for i := 0; i <= len(path); i++ {
-				if i > 0 && path[i-1] == '/' {
-					return false
-				}
-				if globMatch(rest, path[i:]) {
-					return true
-				}
-			}
-			return false
+			return matchSingleStar(pattern[1:], path)
 		case pattern[0] == '?':
-			if len(path) == 0 || path[0] == '/' {
+			n, ok := matchSingleRune(path)
+			if !ok {
 				return false
 			}
 			pattern = pattern[1:]
-			path = path[1:]
+			path = path[n:]
 		default:
+			// A literal pattern byte must equal the next byte of path.
+			// Comparing byte-by-byte is rune-correct because both sides are
+			// UTF-8: a full rune matches iff all of its bytes match, and "/"
+			// (0x2F) never appears inside a multi-byte rune, so a "/" is only
+			// ever consumed by a literal "/".
 			if len(path) == 0 || pattern[0] != path[0] {
 				return false
 			}
@@ -216,4 +188,70 @@ func globMatch(pattern, path string) bool {
 		}
 	}
 	return len(path) == 0
+}
+
+// matchSingleRune reports the byte length of path's leading rune and whether a
+// "?" wildcard may consume it. "?" matches exactly one rune except "/", so an
+// empty path or a leading "/" is rejected. Invalid UTF-8 decodes to a
+// single-byte RuneError, so "?" still advances by one byte and never stalls.
+func matchSingleRune(path string) (int, bool) {
+	if len(path) == 0 || path[0] == '/' {
+		return 0, false
+	}
+	_, n := utf8.DecodeRuneInString(path)
+	return n, true
+}
+
+// matchDoubleStar matches a "**" wildcard against path, where rest is the
+// pattern that follows the "**". A "**" spans path separators: "**/<inner>"
+// skips whole leading segments, a trailing "**" matches the remainder, and
+// "**" before a non-"/" literal tries every suffix of path.
+func matchDoubleStar(rest, path string) bool {
+	// A leading "/" after "**" consumes an arbitrary number of path segments,
+	// including zero, before matching the inner pattern.
+	if strings.HasPrefix(rest, "/") {
+		return matchDoubleStarSegment(rest[1:], path)
+	}
+	// Trailing "**" matches the rest of path.
+	if rest == "" {
+		return true
+	}
+	// "**" followed by a non-"/" literal: try every suffix.
+	for i := 0; i <= len(path); i++ {
+		if globMatch(rest, path[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDoubleStarSegment matches inner (the pattern after a "**/") against
+// path, allowing inner to start at the beginning of path (zero skipped
+// segments) or immediately after any "/" separator.
+func matchDoubleStarSegment(inner, path string) bool {
+	// "**/" matches zero segments.
+	if globMatch(inner, path) {
+		return true
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '/' && globMatch(inner, path[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchSingleStar matches a "*" wildcard against path, where rest is the
+// pattern that follows the "*". A "*" matches a run of non-"/" characters,
+// including the empty run, but never crosses a separator.
+func matchSingleStar(rest, path string) bool {
+	for i := 0; i <= len(path); i++ {
+		if i > 0 && path[i-1] == '/' {
+			return false
+		}
+		if globMatch(rest, path[i:]) {
+			return true
+		}
+	}
+	return false
 }

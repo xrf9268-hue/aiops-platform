@@ -479,18 +479,31 @@ func (c *appServerClient) request(ctx context.Context, method string, params any
 		if err != nil {
 			return nil, err
 		}
-		if gotID, ok := numberID(msg["id"]); ok && gotID == id {
-			if e, ok := msg["error"]; ok {
-				return nil, NewError(CategoryResponseError, fmt.Sprintf("rpc error: %v", e), nil)
-			}
-			result, _ := msg["result"].(map[string]any)
-			if result == nil {
-				result = map[string]any{}
-			}
-			return result, nil
+		if result, matched, rpcErr := responseForID(msg, id); matched {
+			return result, rpcErr
 		}
 		c.handleNotification(msg)
 	}
+}
+
+// responseForID reports whether msg is the JSON-RPC response to request id. When
+// it is (matched=true), it returns the result map — defaulting a missing or null
+// result to an empty map — or a CategoryResponseError carrying the `error`
+// member. A non-matching msg (matched=false) is an interleaved notification the
+// caller must dispatch and keep reading past.
+func responseForID(msg map[string]any, id int) (result map[string]any, matched bool, err error) {
+	gotID, ok := numberID(msg["id"])
+	if !ok || gotID != id {
+		return nil, false, nil
+	}
+	if e, ok := msg["error"]; ok {
+		return nil, true, NewError(CategoryResponseError, fmt.Sprintf("rpc error: %v", e), nil)
+	}
+	result, _ = msg["result"].(map[string]any)
+	if result == nil {
+		result = map[string]any{}
+	}
+	return result, true, nil
 }
 func (c *appServerClient) notify(method string, params map[string]any) error {
 	return c.send(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})

@@ -22,7 +22,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-func main() {
+func main() { //nolint:gocognit // baseline (#521)
 	if len(os.Args) >= 2 && os.Args[1] == "--print-config" {
 		workdir, portOverride, err := parsePrintConfigArgs(os.Args[2:])
 		if err != nil {
@@ -328,7 +328,7 @@ func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker
 		ActiveWorkspaceKeys: worker.ActiveWorkspaceKeysForWorkflow(cfg),
 	}
 }
-func run(ctx context.Context, args []string) error {
+func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen // baseline (#521)
 	workflowPath, portOverride, err := parseRunArgs(args)
 	if err != nil {
 		return err
