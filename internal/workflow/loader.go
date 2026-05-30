@@ -131,7 +131,7 @@ func categoryMatches(category Category, target error) bool {
 	return errors.As(target, &targetCategory) && targetCategory.category() == category
 }
 
-func Load(path string) (*Workflow, error) {
+func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -454,7 +454,7 @@ func expandConfig(cfg *Config) error {
 	return expandConfigForWorkflowPath("", cfg)
 }
 
-func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error {
+func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nolint:gocognit,funlen // baseline (#521)
 	var err error
 	if envName, ok := explicitEnvReferenceName(cfg.Tracker.APIKey); ok {
 		cfg.Tracker.apiKeyEnvVar = envName
@@ -647,7 +647,7 @@ func explicitEnvReferenceName(value string) (string, bool) {
 	return "", false
 }
 
-func isExplicitEnvName(name string) bool {
+func isExplicitEnvName(name string) bool { //nolint:gocognit // baseline (#521)
 	if name == "" {
 		return false
 	}
@@ -712,7 +712,7 @@ func NormalizeStateConcurrencyLimits(limits map[string]int) map[string]int {
 // Used by the codex.linear_graphql.allowed_mutations validator so a typo
 // like " issueUpdate" (with leading space) fails at load time rather than
 // at the first attempted mutation.
-func isLinearGraphQLMutationName(s string) bool {
+func isLinearGraphQLMutationName(s string) bool { //nolint:gocognit // baseline (#521)
 	if s == "" {
 		return false
 	}

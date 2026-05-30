@@ -118,7 +118,7 @@ func (c *GitHubClient) issueMaxPages() int {
 	return githubMaxIssuePages
 }
 
-func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
+func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
 	}
@@ -174,7 +174,7 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 	return out, nil
 }
 
-func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, bool, error) {
+func (c *GitHubClient) listIssuesForState(ctx context.Context, issueState, label, mappedState string, seen map[string]struct{}, claimedIssueNumbers map[int]struct{}) ([]Issue, bool, error) { //nolint:gocognit // baseline (#521)
 	var out []Issue
 	collectionSeen := make(map[string]struct{}, len(seen))
 	for id := range seen {
@@ -265,7 +265,7 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 	return issues, githubHasNextPage(resp.Header.Values("Link")), nil
 }
 
-func (c *GitHubClient) openPullRequestClaimedIssueNumbers(ctx context.Context) (map[int]struct{}, bool, error) {
+func (c *GitHubClient) openPullRequestClaimedIssueNumbers(ctx context.Context) (map[int]struct{}, bool, error) { //nolint:gocognit // baseline (#521)
 	out := map[int]struct{}{}
 	maxPages := c.issueMaxPages()
 	for page := 1; page <= maxPages+1; page++ {
@@ -492,7 +492,7 @@ func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
 }
 
-func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]string, error) {
+func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
 	}

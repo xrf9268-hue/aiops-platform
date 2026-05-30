@@ -69,7 +69,7 @@ func (e *TemplateRenderError) category() Category {
 	return CategoryTemplateRenderError
 }
 
-func Render(template string, vars map[string]any) (string, error) {
+func Render(template string, vars map[string]any) (string, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(template) == "" {
 		template = DefaultPrompt()
 	}
@@ -112,7 +112,7 @@ func Render(template string, vars map[string]any) (string, error) {
 	return out, nil
 }
 
-func renderLiquidIfTags(template string, vars map[string]any) (string, error) {
+func renderLiquidIfTags(template string, vars map[string]any) (string, error) { //nolint:gocognit // baseline (#521)
 	for {
 		match := liquidTagRE.FindStringSubmatchIndex(template)
 		if match == nil {

@@ -54,7 +54,7 @@ fi
 `, strings.Join(patterns, " "))
 }
 
-func WriteSensitiveArtifact(path string, body []byte) error {
+func WriteSensitiveArtifact(path string, body []byte) error { //nolint:gocognit // baseline (#521)
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return err
@@ -123,7 +123,7 @@ func linkCount(info os.FileInfo) (uint64, bool) {
 	return uint64(st.Nlink), true
 }
 
-func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error {
+func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error { //nolint:gocognit // baseline (#521)
 	excludePath, err := gitPath(ctx, workdir, "info/exclude")
 	if err != nil {
 		return err

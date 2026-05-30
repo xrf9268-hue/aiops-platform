@@ -13,7 +13,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, error) {
+func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, error) { //nolint:gocognit // baseline (#521)
 	cfg := in.Workflow.Config.Sandbox
 	if !cfg.Enabled || cfg.Backend == "" || cfg.Backend == "none" {
 		return cmd, nil
@@ -90,7 +90,7 @@ func scopedEnv(allow []string, cfg workflow.Config) []string {
 	return sandboxEnv(nil, allow, cfg)
 }
 
-func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string {
+func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string { //nolint:gocognit // baseline (#521)
 	if len(allow) == 0 {
 		return []string{}
 	}
@@ -126,7 +126,7 @@ func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string 
 	return env
 }
 
-func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) {
+func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) { //nolint:gocognit // baseline (#521)
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		return nil, fmt.Errorf("bubblewrap sandbox requested but bwrap binary not found in PATH: %w", err)
@@ -189,7 +189,7 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 	return wrapped, nil
 }
 
-func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) {
+func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) { //nolint:gocognit,funlen // baseline (#521)
 	firejail, err := exec.LookPath("firejail")
 	if err != nil {
 		return nil, fmt.Errorf("firejail sandbox requested but firejail binary not found in PATH: %w", err)
@@ -286,7 +286,7 @@ func firejailAllowlistNetArg(cfg workflow.SandboxConfig) (string, error) {
 	return "--net=" + iface, nil
 }
 
-func writeFirejailNetfilter(cidrs []string) (string, error) {
+func writeFirejailNetfilter(cidrs []string) (string, error) { //nolint:gocognit // baseline (#521)
 	if len(cidrs) == 0 {
 		return "", fmt.Errorf("sandbox network allowlist requires at least one CIDR")
 	}

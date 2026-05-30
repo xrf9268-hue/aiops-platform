@@ -161,7 +161,7 @@ func (r *reportBuilder) checkHostBinaries(wf *workflow.Workflow) {
 	}
 }
 
-func (r *reportBuilder) checkProjectToolchain(ctx context.Context) {
+func (r *reportBuilder) checkProjectToolchain(ctx context.Context) { //nolint:gocognit // baseline (#521)
 	if !r.realMode() {
 		return
 	}
@@ -300,7 +300,7 @@ func (r *reportBuilder) checkLinear(ctx context.Context, cfg workflow.Config) {
 	r.pass("Linear auth", "API key authenticated and configured projects are visible")
 }
 
-func (r *reportBuilder) checkCodex(ctx context.Context, cfg workflow.Config) {
+func (r *reportBuilder) checkCodex(ctx context.Context, cfg workflow.Config) { //nolint:gocognit // baseline (#521)
 	if !requiresCodex(cfg) {
 		r.pass("Codex", "not required for mock runner")
 		return
@@ -489,7 +489,7 @@ func (r *reportBuilder) checkDashboard(ctx context.Context) {
 	r.pass("Dashboard state API", resp.Status)
 }
 
-func (r *reportBuilder) checkLinearGraphQL(ctx context.Context, cfg workflow.Config) error {
+func (r *reportBuilder) checkLinearGraphQL(ctx context.Context, cfg workflow.Config) error { //nolint:gocognit // baseline (#521)
 	query := `query Doctor($projectSlug: String!) { viewer { id name } projects(filter: { slugId: { eq: $projectSlug } }, first: 1) { nodes { id slugId name } } }`
 	projectSlugs := linearProjectSlugs(cfg)
 	if len(projectSlugs) == 0 {
@@ -542,7 +542,7 @@ func decodeLinearProjectProbe(resp *http.Response, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (r *reportBuilder) probeCodexAppServer(ctx context.Context, cfg workflow.Config) error {
+func (r *reportBuilder) probeCodexAppServer(ctx context.Context, cfg workflow.Config) error { //nolint:gocognit // baseline (#521)
 	probe := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"aiops-doctor","title":"aiops doctor","version":"0.1.0"}}}` + "\n"
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -697,7 +697,7 @@ func defaultRunner(ctx context.Context, name string, args []string, env []string
 
 // lookPathInEnv resolves name against the PATH entry in env, mirroring
 // exec.LookPath's executable-bit check on Unix without touching process state.
-func lookPathInEnv(name string, env []string) (string, error) {
+func lookPathInEnv(name string, env []string) (string, error) { //nolint:gocognit // baseline (#521)
 	var pathVal string
 	for _, kv := range env {
 		if rest, ok := strings.CutPrefix(kv, "PATH="); ok {

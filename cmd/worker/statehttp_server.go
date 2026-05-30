@@ -160,7 +160,7 @@ type stateHTTPServerLoopOptions struct {
 	HostOverride *string
 }
 
-func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error {
+func runStateHTTPServerLoop(ctx context.Context, runtime *orchestrator.WorkflowRuntime, snapshot stateSnapshotFunc, opts stateHTTPServerLoopOptions) error { //nolint:gocognit // baseline (#521)
 	if runtime == nil {
 		return errors.New("state HTTP server loop requires workflow runtime")
 	}
@@ -212,7 +212,7 @@ type stateHTTPServerHandle struct {
 	Done <-chan struct{}
 }
 
-func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) *stateHTTPServerHandle {
+func startStateHTTPServer(ctx context.Context, host string, port int, snapshot stateSnapshotFunc, readiness stateReadinessFunc, refresh ...stateRefreshFunc) *stateHTTPServerHandle { //nolint:gocognit // baseline (#521)
 	if port < 0 {
 		log.Printf("state HTTP server disabled by server.port=%d", port)
 		return nil
@@ -317,7 +317,7 @@ func livenessHTTPHandler() http.Handler {
 		}
 	})
 }
-func readinessHTTPHandler(readiness stateReadinessFunc) http.Handler {
+func readinessHTTPHandler(readiness stateReadinessFunc) http.Handler { //nolint:gocognit // baseline (#521)
 	if readiness == nil {
 		readiness = stateHTTPAlwaysReady
 	}
@@ -391,7 +391,7 @@ func stateHTTPTokenMatches(got, want string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
-func isLoopbackHTTPHost(hostport string) bool {
+func isLoopbackHTTPHost(hostport string) bool { //nolint:gocognit // baseline (#521)
 	if hostport == "" {
 		return false
 	}

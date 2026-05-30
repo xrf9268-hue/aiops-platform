@@ -33,7 +33,7 @@ var ErrSafeRemoveEscapesRoot = errors.New("safe remove: path escapes workspace r
 // idempotent because both worker call sites can race with manual operator
 // cleanup. Containment is checked first so that a non-existent path under root
 // is allowed but a non-existent path outside root is still rejected.
-func SafeRemove(root, path string) error {
+func SafeRemove(root, path string) error { //nolint:gocognit // baseline (#521)
 	root = strings.TrimSpace(root)
 	path = strings.TrimSpace(path)
 	if root == "" || path == "" {

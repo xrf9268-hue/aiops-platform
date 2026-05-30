@@ -57,7 +57,7 @@ type Diffstat struct {
 //     also matches AllowPaths (deny wins).
 //   - MaxChangedFiles / MaxChangedLines (when > 0) are enforced as upper
 //     bounds on len(Files) and Lines respectively.
-func Evaluate(d Diffstat, cfg Config) []Violation {
+func Evaluate(d Diffstat, cfg Config) []Violation { //nolint:gocognit // baseline (#521)
 	var out []Violation
 
 	for _, f := range d.Files {
@@ -158,7 +158,7 @@ func Match(pattern, path string) bool {
 // globMatch is the recursive glob matcher. It walks both pattern and path
 // with explicit handling for "**" so that double-star spans path separators
 // while single "*" and "?" do not.
-func globMatch(pattern, path string) bool {
+func globMatch(pattern, path string) bool { //nolint:gocognit // baseline (#521)
 	for len(pattern) > 0 {
 		switch {
 		case strings.HasPrefix(pattern, "**"):

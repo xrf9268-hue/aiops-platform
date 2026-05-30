@@ -41,14 +41,16 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 	}
 
 	text := string(body)
-	blockingStep := regexp.MustCompile(`(?s)- name: Run golangci-lint blocking correctness gate.*?(?:\n\n|$)`).FindString(text)
+	blockingStep := regexp.MustCompile(`(?s)- name: Run golangci-lint blocking gate.*?(?:\n\n|$)`).FindString(text)
 	if blockingStep == "" {
-		t.Fatal("CI workflow missing blocking golangci-lint correctness gate")
+		t.Fatal("CI workflow missing blocking golangci-lint gate")
 	}
 	for _, want := range []string{
 		"golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c",
 		"version: v2.12.2",
-		"args: --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
+		// funlen+gocognit are part of the single blocking gate (#504); the
+		// baseline is grandfathered in-line via //nolint, not report-only.
+		"args: --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,funlen,gocognit,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused",
 	} {
 		if !strings.Contains(blockingStep, want) {
 			t.Fatalf("blocking golangci-lint step missing %q:\n%s", want, blockingStep)
@@ -58,12 +60,13 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 		t.Fatalf("blocking golangci-lint step must not be report-only:\n%s", blockingStep)
 	}
 
-	reportStep := regexp.MustCompile(`(?s)- name: Run golangci-lint report-only baseline.*?(?:\n\n|$)`).FindString(text)
-	if reportStep == "" {
-		t.Fatal("CI workflow missing report-only golangci-lint baseline step")
+	// The report-only / only-new-issues baseline step must be gone: funlen and
+	// gocognit are now blocking (baseline grandfathered via //nolint, #521).
+	if strings.Contains(text, "--issues-exit-code=0") {
+		t.Errorf("ci.yml still has a report-only golangci-lint step (--issues-exit-code=0); funlen/gocognit must block")
 	}
-	if !strings.Contains(reportStep, "args: --config=.golangci.yml --enable-only=funlen,gocognit --issues-exit-code=0") {
-		t.Fatalf("report-only golangci-lint step missing issues-exit-code=0:\n%s", reportStep)
+	if strings.Contains(text, "only-new-issues") {
+		t.Errorf("ci.yml still references only-new-issues; the gate is now a full blocking gate with an in-line //nolint baseline")
 	}
 }
 

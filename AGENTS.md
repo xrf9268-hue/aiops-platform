@@ -326,9 +326,14 @@ failure per the "Earned rules" principle above.
 7. **Function and file size budgets.** New code must keep single functions at
    or below 80 lines and single files at or below 800 lines, excluding test
    files and generated code. When porting from Elixir, split oversized upstream
-   modules on the Go side instead of preserving a monolith. The current
-   `golangci-lint` gate reports `funlen` and `gocognit` findings without
-   blocking while the baseline is burned down; do not add new violations.
+   modules on the Go side instead of preserving a monolith. CI machine-enforces
+   the **per-function** budgets: the blocking golangci-lint gate runs
+   `funlen`/`gocognit` over all code, with the existing baseline grandfathered
+   in-line via `//nolint:gocognit[,funlen] // baseline (#521)` directives on each
+   known-debt function (removed as #521 decomposes it). A new oversized /
+   over-complex non-test function — or in-place growth of an un-annotated one —
+   fails CI; do not add a new `//nolint` to dodge the gate. The ≤800-line
+   **file** budget has no linter and stays review-only.
    **Earned by:** #410 found `RunTask` at 244 lines, `validateConfig` at 186
    lines, and `actor.go` at 2138 lines; PR #342 showed that one concept rename
    had to touch four files partly because large files hid the domain boundary.
