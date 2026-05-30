@@ -643,3 +643,152 @@ func TestGitHubClientFetchIssueStatesByIDsSurfacesNon404Errors(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByIDs error = %v, want HTTP 500 surfaced", err)
 	}
 }
+
+// TestGitHubClientListIssuesForStateKeepsClaimedNonOpenIssue characterizes the
+// compound claimed-skip guard in listIssuesForState before the #521
+// decomposition: an issue claimed by an open PR is only skipped while it is
+// itself open. A claimed issue in a non-open state must still be collected
+// (e.g. a "closed" issue surfaced by an "all" state query). Every other fixture
+// in this suite uses state:"open", so dropping the `&& EqualFold(...,"open")`
+// half of the guard would go undetected without this case.
+func TestGitHubClientListIssuesForStateKeepsClaimedNonOpenIssue(t *testing.T) {
+	// An open PR claims BOTH #77 and #78, so both enter claimedIssueNumbers.
+	// The "all" state query returns #77 (closed) and #78 (open). The compound
+	// guard must skip #78 (claimed AND open) but keep #77 (claimed but closed).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{{
+				Number:  300,
+				State:   "open",
+				Title:   "Fix it",
+				Body:    "Closes #77\nCloses #78",
+				HTMLURL: "https://github.com/acme/api/pull/300",
+			}})
+		case "/repos/acme/api/issues":
+			if got := r.URL.Query().Get("state"); got != "all" {
+				t.Fatalf("issue state query = %q, want all", got)
+			}
+			_ = json.NewEncoder(w).Encode([]githubIssue{
+				{
+					ID:        77,
+					Number:    77,
+					Title:     "claimed but closed",
+					HTMLURL:   "https://github.com/acme/api/issues/77",
+					State:     "closed",
+					CreatedAt: "2026-05-20T01:02:03Z",
+					UpdatedAt: "2026-05-20T02:03:04Z",
+				},
+				{
+					ID:        78,
+					Number:    78,
+					Title:     "claimed and open",
+					HTMLURL:   "https://github.com/acme/api/issues/78",
+					State:     "open",
+					CreatedAt: "2026-05-20T01:02:03Z",
+					UpdatedAt: "2026-05-20T02:03:04Z",
+				},
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"all"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates(all) = %v; want nil error", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("ListIssuesByStates(all) returned %d issues (%+v); want 1 (claimed-but-closed #77 kept, claimed-and-open #78 skipped)", len(issues), issues)
+	}
+	if got := issues[0].Identifier; got != "#77" {
+		t.Fatalf("ListIssuesByStates(all)[0].Identifier = %q; want %q (claimed non-open issue must be kept)", got, "#77")
+	}
+}
+
+// TestGitHubClientListIssuesForStateSurfacesMapError characterizes that a
+// mapGitHubIssue failure on the list path (here a malformed created_at) is
+// surfaced as an error rather than silently dropped, and that the accumulated
+// partial result is discarded.
+func TestGitHubClientListIssuesForStateSurfacesMapError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{
+				{
+					ID:        90,
+					Number:    90,
+					Title:     "malformed timestamp",
+					HTMLURL:   "https://github.com/acme/api/issues/90",
+					State:     "open",
+					CreatedAt: "not-a-timestamp",
+					UpdatedAt: "2026-05-20T02:03:04Z",
+				},
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"open"})
+	if err == nil || !strings.Contains(err.Error(), "created_at") {
+		t.Fatalf("ListIssuesByStates(open) err = %v; want mapGitHubIssue created_at parse error surfaced", err)
+	}
+	if issues != nil {
+		t.Fatalf("ListIssuesByStates(open) issues = %#v; want nil when a mapping error aborts the listing", issues)
+	}
+}
+
+// TestGitHubClientListIssuesForStateDeduplicatesAcrossStates characterizes that
+// a single global mapped.ID appearing in two different state collections is
+// collected exactly once. The dedup carries across states because each
+// per-state collection seeds collectionSeen from the shared seen set.
+func TestGitHubClientListIssuesForStateDeduplicatesAcrossStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]githubPullRequestSummary{})
+		case "/repos/acme/api/issues":
+			// ID 42 is returned for BOTH the open and closed state queries.
+			_ = json.NewEncoder(w).Encode([]githubIssue{{
+				ID:        42,
+				Number:    42,
+				Title:     "appears in two states",
+				HTMLURL:   "https://github.com/acme/api/issues/42",
+				State:     r.URL.Query().Get("state"),
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+			}})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"open", "closed"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates(open,closed) = %v; want nil error", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("ListIssuesByStates(open,closed) returned %d issues (%+v); want 1 deduplicated by global ID", len(issues), issues)
+	}
+	if got := issues[0].ID; got != "42" {
+		t.Fatalf("ListIssuesByStates(open,closed)[0].ID = %q; want %q", got, "42")
+	}
+}
