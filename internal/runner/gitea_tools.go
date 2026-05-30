@@ -28,31 +28,10 @@ type giteaIssueLabel struct {
 	Name string
 }
 
-func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string, error) { //nolint:gocognit // baseline (#521)
-	if call.IssueNumber <= 0 {
-		return dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "gitea_issue_labels issue_number is required"},
-		})
-	}
-	if len(call.Labels) != 1 {
-		return dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "gitea_issue_labels labels must contain exactly one aiops/* state label"},
-		})
-	}
-	desiredStateLabels := make([]string, 0, len(call.Labels))
-	for _, label := range call.Labels {
-		label = strings.TrimSpace(label)
-		if label == "" || !strings.HasPrefix(strings.ToLower(label), "aiops/") {
-			return dynamicToolFailure(map[string]any{
-				"error": map[string]any{"message": "gitea_issue_labels only accepts aiops/* labels"},
-			})
-		}
-		if _, ok := validGiteaStateLabels()[strings.ToLower(label)]; !ok {
-			return dynamicToolFailure(map[string]any{
-				"error": map[string]any{"message": "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo"},
-			})
-		}
-		desiredStateLabels = append(desiredStateLabels, label)
+func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string, error) {
+	desiredStateLabels, failureResult, failureErr, ok := p.validateDesiredStateLabels(call)
+	if !ok {
+		return failureResult, failureErr
 	}
 
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/labels", strings.TrimRight(p.baseURL, "/"), url.PathEscape(p.owner), url.PathEscape(p.repo), call.IssueNumber)
@@ -64,45 +43,109 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	if failure != "" {
 		return failure, nil
 	}
+	staleStateLabels := computeStaleStateLabels(currentLabels, desiredStateLabels)
+	labelsToAdd := missingLabels(currentLabels, desiredStateLabels)
+	result, failure := p.addAndConfirmDesiredLabels(ctx, client, endpoint, labelsToAdd, desiredStateLabels)
+	if failure != "" {
+		return failure, nil
+	}
+	if failure := p.deleteStaleStateLabels(ctx, client, endpoint, staleStateLabels); failure != "" {
+		return failure, nil
+	}
+	return result, nil
+}
+
+// validateDesiredStateLabels enforces the tool's input contract: exactly one
+// aiops/* state label for a valid issue number. The three guards return the
+// (string, error) pair from dynamicToolFailure directly, so the Go error
+// component is propagated — unlike the post-HTTP failure paths, which nil it.
+func (p giteaIssueLabelsProxy) validateDesiredStateLabels(call ToolCall) (desired []string, failureResult string, failureErr error, ok bool) {
+	if call.IssueNumber <= 0 {
+		failureResult, failureErr = dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels issue_number is required"},
+		})
+		return nil, failureResult, failureErr, false
+	}
+	if len(call.Labels) != 1 {
+		failureResult, failureErr = dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels labels must contain exactly one aiops/* state label"},
+		})
+		return nil, failureResult, failureErr, false
+	}
+	desiredStateLabels := make([]string, 0, len(call.Labels))
+	for _, label := range call.Labels {
+		label = strings.TrimSpace(label)
+		if label == "" || !strings.HasPrefix(strings.ToLower(label), "aiops/") {
+			failureResult, failureErr = dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": "gitea_issue_labels only accepts aiops/* labels"},
+			})
+			return nil, failureResult, failureErr, false
+		}
+		if _, ok := validGiteaStateLabels()[strings.ToLower(label)]; !ok {
+			failureResult, failureErr = dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo"},
+			})
+			return nil, failureResult, failureErr, false
+		}
+		desiredStateLabels = append(desiredStateLabels, label)
+	}
+	return desiredStateLabels, "", nil, true
+}
+
+// computeStaleStateLabels selects the aiops/* labels currently on the issue
+// that are not the desired state label and therefore must be removed.
+func computeStaleStateLabels(currentLabels []giteaIssueLabel, desiredStateLabels []string) []giteaIssueLabel {
 	staleStateLabels := make([]giteaIssueLabel, 0, len(currentLabels))
 	for _, label := range currentLabels {
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(label.Name)), "aiops/") && !containsLabelFold(desiredStateLabels, label.Name) {
 			staleStateLabels = append(staleStateLabels, label)
 		}
 	}
-	labelsToAdd := missingLabels(currentLabels, desiredStateLabels)
-	var result string
+	return staleStateLabels
+}
+
+// addAndConfirmDesiredLabels adds the missing desired labels and confirms the
+// add response actually contains them; when nothing needs adding it returns the
+// synthetic empty-label result. failure is "" on success.
+func (p giteaIssueLabelsProxy) addAndConfirmDesiredLabels(ctx context.Context, client *http.Client, endpoint string, labelsToAdd, desiredStateLabels []string) (result string, failure string) {
 	if len(labelsToAdd) > 0 {
-		var failure string
 		result, failure = p.addIssueLabels(ctx, client, endpoint, labelsToAdd)
 		if failure != "" {
-			return failure, nil
+			return "", failure
 		}
 		confirmedLabels, confirmationFailure := p.decodeIssueLabelsFromToolResult(result, "Gitea label add response")
 		if confirmationFailure != "" {
-			return confirmationFailure, nil
+			return "", confirmationFailure
 		}
 		for _, desired := range desiredStateLabels {
 			if !containsIssueLabelFold(confirmedLabels, desired) {
-				return dynamicToolFailure(map[string]any{
+				failure, _ = dynamicToolFailure(map[string]any{
 					"error": map[string]any{"message": "Gitea label add response did not include desired aiops label", "label": desired},
 				})
+				return "", failure
 			}
 		}
-	} else {
-		result, _ = dynamicToolResult(true, `{"labels":[]}`)
+		return result, ""
 	}
+	result, _ = dynamicToolResult(true, `{"labels":[]}`)
+	return result, ""
+}
+
+// deleteStaleStateLabels removes each stale aiops/* label, failing if Gitea
+// omitted a label's id. failure is "" on success.
+func (p giteaIssueLabelsProxy) deleteStaleStateLabels(ctx context.Context, client *http.Client, endpoint string, staleStateLabels []giteaIssueLabel) string {
 	for _, label := range staleStateLabels {
 		if label.ID == 0 {
-			return dynamicToolFailure(map[string]any{
+			failure, _ := dynamicToolFailure(map[string]any{
 				"error": map[string]any{"message": "Gitea label response omitted id for stale aiops label", "label": label.Name},
 			})
+			return failure
 		}
 		if failure := p.deleteIssueLabel(ctx, client, endpoint, label.ID); failure != "" {
-			return failure, nil
+			return failure
 		}
 	}
-	return result, nil
+	return ""
 }
 
 func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.Client, endpoint string, labels []string) (string, string) {
