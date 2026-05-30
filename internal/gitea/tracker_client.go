@@ -262,7 +262,7 @@ func giteaIssueNumberFromIdentifier(identifier string) (int, bool) {
 	return number, true
 }
 
-func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) { //nolint:gocognit // baseline (#521)
+func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, issueState string, wantedStates map[string]struct{}, seenIssues map[string]struct{}) ([]tracker.Issue, bool, error) {
 	var out []tracker.Issue
 	collectionSeen := make(map[string]struct{}, len(seenIssues))
 	for id := range seenIssues {
@@ -274,65 +274,125 @@ func (c *TrackerClient) listIssuesByStateLabel(ctx context.Context, labelName, i
 		scope = issueState
 	}
 	for page := 1; page <= maxPages+1; page++ {
-		batch, hasNext, err := c.listIssuesPage(ctx, labelName, issueState, page)
+		grown, capped, done, err := c.scopePageStep(ctx, labelName, issueState, page, maxPages, scope, wantedStates, collectionSeen, out)
 		if err != nil {
 			return nil, false, err
 		}
-		if page > maxPages {
-			if !hasNext && len(batch) == 0 {
-				return out, false, nil
-			}
-			c.recordPaginationCapHit(scope, maxPages)
-			return nil, true, nil
+		if done {
+			return grown, capped, nil
 		}
-		for _, issue := range batch {
-			issueKey := giteaIssueID(issue)
-			if _, ok := collectionSeen[issueKey]; ok {
-				continue
-			}
-			c.cacheIssueNumber(issue)
-			state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
-			c.logDiagnostics(issue, diagnostics)
-			if state == "" {
-				continue
-			}
-			if len(wantedStates) > 0 {
-				if _, ok := wantedStates[strings.ToLower(state)]; !ok {
-					continue
-				}
-			}
-			createdAt, err := parseGiteaIssueTime("created_at", issue.CreatedAt)
-			if err != nil {
-				return nil, false, err
-			}
-			updatedAt, err := parseGiteaIssueTime("updated_at", issue.UpdatedAt)
-			if err != nil {
-				return nil, false, err
-			}
-			collectionSeen[issueKey] = struct{}{}
-			out = append(out, tracker.Issue{
-				ID:          issueKey,
-				Identifier:  fmt.Sprintf("#%d", issue.Number),
-				Title:       issue.Title,
-				Description: issue.Body,
-				URL:         issue.HTMLURL,
-				State:       state,
-				CreatedAt:   createdAt,
-				UpdatedAt:   updatedAt,
-				Labels:      extractGiteaLabels(issue.Labels),
-				BlockedBy:   c.buildBlockedBy(ctx, issue.Body),
-				// Priority: Gitea has no native priority field — see
-				// dependsOnRegexp comment / SPEC §4.1.1 note. Left at the zero
-				// value; dispatch sort treats every Gitea issue as equal priority
-				// and falls back to created_at. Operators can opt in to
-				// label-driven priority in a follow-up.
-			})
-		}
-		if !hasNext && len(batch) < listIssuesPageSize {
-			return out, false, nil
-		}
+		out = grown
 	}
 	return nil, true, nil
+}
+
+// scopePageStep fetches one page and either ends the collection or grows out.
+// It returns done=true with the verbatim return values the parent must pass
+// through: the post-cap probe page yields (out|nil, capped) via finishCapProbe;
+// a natural end (no next page and a short final batch) yields (out, false); and
+// a mid-collection page yields done=false so the parent keeps paging with the
+// grown slice. capped is meaningful only when done is true.
+func (c *TrackerClient) scopePageStep(ctx context.Context, labelName, issueState string, page, maxPages int, scope string, wantedStates, collectionSeen map[string]struct{}, out []tracker.Issue) (grown []tracker.Issue, capped, done bool, err error) {
+	batch, hasNext, err := c.listIssuesPage(ctx, labelName, issueState, page)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if page > maxPages {
+		out, capped = c.finishCapProbe(out, batch, hasNext, scope, maxPages)
+		return out, capped, true, nil
+	}
+	out, err = c.collectScopePage(ctx, batch, wantedStates, collectionSeen, out)
+	if err != nil {
+		return nil, false, false, err
+	}
+	if !hasNext && len(batch) < listIssuesPageSize {
+		return out, false, true, nil
+	}
+	return out, false, false, nil
+}
+
+// finishCapProbe owns the post-cap probe page (page > maxPages): an empty,
+// terminal probe response confirms the previous pages were the full result, so
+// the collected issues are authoritative (capped=false); anything else means
+// there were more pages than the cap allows, which records a cap hit and
+// returns capped=true with nil issues so reconcile does not treat the partial
+// result as authoritative.
+func (c *TrackerClient) finishCapProbe(out []tracker.Issue, batch []Issue, hasNext bool, scope string, maxPages int) ([]tracker.Issue, bool) {
+	if !hasNext && len(batch) == 0 {
+		return out, false
+	}
+	c.recordPaginationCapHit(scope, maxPages)
+	return nil, true
+}
+
+// collectScopePage folds one page of Gitea issues into out, applying the
+// dedup-then-filter-then-include ordering: a duplicate (already in
+// collectionSeen) is skipped before any caching/logging so it is neither
+// re-cached nor re-logged; an issue with no derivable state or one outside
+// wantedStates is dropped before the include-only work; and the issue is marked
+// seen only on the include path, after both timestamps parse and right before
+// the blocker lookup + append.
+func (c *TrackerClient) collectScopePage(ctx context.Context, batch []Issue, wantedStates, collectionSeen map[string]struct{}, out []tracker.Issue) ([]tracker.Issue, error) {
+	for _, issue := range batch {
+		issueKey := giteaIssueID(issue)
+		if _, ok := collectionSeen[issueKey]; ok {
+			continue
+		}
+		c.cacheIssueNumber(issue)
+		converted, include, err := c.scopeIssue(ctx, issue, wantedStates)
+		if err != nil {
+			return nil, err
+		}
+		if !include {
+			continue
+		}
+		collectionSeen[issueKey] = struct{}{}
+		out = append(out, converted)
+	}
+	return out, nil
+}
+
+// scopeIssue derives an issue's workflow state (logging label diagnostics),
+// drops it when the state is empty or outside wantedStates, and on the include
+// path parses created_at then updated_at (first malformed wins) and builds the
+// normalized tracker.Issue including the blocker lookup. include is false for a
+// filtered issue; callers must not mark it seen unless include is true.
+func (c *TrackerClient) scopeIssue(ctx context.Context, issue Issue, wantedStates map[string]struct{}) (tracker.Issue, bool, error) {
+	state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
+	c.logDiagnostics(issue, diagnostics)
+	if state == "" {
+		return tracker.Issue{}, false, nil
+	}
+	if len(wantedStates) > 0 {
+		if _, ok := wantedStates[strings.ToLower(state)]; !ok {
+			return tracker.Issue{}, false, nil
+		}
+	}
+	createdAt, err := parseGiteaIssueTime("created_at", issue.CreatedAt)
+	if err != nil {
+		return tracker.Issue{}, false, err
+	}
+	updatedAt, err := parseGiteaIssueTime("updated_at", issue.UpdatedAt)
+	if err != nil {
+		return tracker.Issue{}, false, err
+	}
+	return tracker.Issue{
+		ID:          giteaIssueID(issue),
+		Identifier:  fmt.Sprintf("#%d", issue.Number),
+		Title:       issue.Title,
+		Description: issue.Body,
+		URL:         issue.HTMLURL,
+		State:       state,
+		CreatedAt:   createdAt,
+		UpdatedAt:   updatedAt,
+		Labels:      extractGiteaLabels(issue.Labels),
+		BlockedBy:   c.buildBlockedBy(ctx, issue.Body),
+		// Priority: Gitea has no native priority field — see
+		// dependsOnRegexp comment / SPEC §4.1.1 note. Left at the zero
+		// value; dispatch sort treats every Gitea issue as equal priority
+		// and falls back to created_at. Operators can opt in to
+		// label-driven priority in a follow-up.
+	}, true, nil
 }
 
 func (c *TrackerClient) recordPaginationCapHit(labelName string, maxPages int) {
