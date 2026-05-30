@@ -42,7 +42,9 @@ needs Postgres, it is stale — file an issue.
   source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
   is the fallback when omitted.
 - Optional: Docker and Docker Compose v2, only if you want the
-  containerized worker or e2e tests.
+  containerized worker or e2e tests. To deploy the worker as a plain
+  binary under an init system instead, see the
+  [binary deployment runbook](binary-deployment.md).
 - Optional: the Codex CLI installed and on `PATH`, only if you set
   `agent.default: codex` and want a real model loop.
 

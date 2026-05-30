@@ -1,0 +1,57 @@
+# Sample systemd unit for a binary (non-Docker) aiops-platform worker.
+# See docs/runbooks/binary-deployment.md for the full setup. Adjust the
+# ExecStart and EnvironmentFile paths to match where you installed the
+# binary and config. Runs as a dedicated non-root user (mirrors the
+# container hardening in #365); secrets stay out of this file via
+# EnvironmentFile.
+
+[Unit]
+Description=aiops-platform worker (SPEC-aligned tracker polling loop)
+Documentation=https://github.com/xrf9268-hue/aiops-platform/blob/main/docs/runbooks/binary-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiops
+Group=aiops
+
+# Tracker token(s) and any path overrides live here, mode 0600, owned by
+# aiops. The worker reads a tracker token only via WORKFLOW.md
+# `tracker.api_key: $VAR`, so the referenced $VAR must be present here.
+EnvironmentFile=/etc/aiops-platform/worker.env
+
+# Workflow source and mutable state. StateDirectory creates and chowns
+# /var/lib/aiops-platform to the service user on start.
+Environment=AIOPS_WORKFLOW_PATH=/etc/aiops-platform/WORKFLOW.md
+Environment=AIOPS_WORKSPACE_ROOT=/var/lib/aiops-platform/workspaces
+Environment=AIOPS_MIRROR_ROOT=/var/lib/aiops-platform/mirrors
+StateDirectory=aiops-platform
+WorkingDirectory=/var/lib/aiops-platform
+
+ExecStart=/usr/local/bin/worker
+
+Restart=on-failure
+RestartSec=5s
+
+# Hardening. The worker prepares git workspaces and runs agent/hook/
+# verify/git commands, so constrain the blast radius of a compromised
+# runner or hostile repository content. Loosen only with a concrete
+# reason (e.g. an agent CLI that needs a wider filesystem view).
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# ProtectSystem=strict makes everything read-only except ReadWritePaths;
+# StateDirectory is writable automatically.
+ReadWritePaths=/var/lib/aiops-platform
+
+[Install]
+WantedBy=multi-user.target

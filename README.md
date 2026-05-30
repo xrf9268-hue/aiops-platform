@@ -112,6 +112,11 @@ workspaces from tracker state, and re-dispatches eligible active issues on the
 next poll rather than restoring queue rows, retry timers, or running sessions
 from a database.
 
+The worker is a self-contained binary with no container runtime dependency.
+To run it directly under an init system instead of Compose — build/install,
+`worker --doctor` preflight, and a hardened systemd unit — see the
+[binary deployment runbook](docs/runbooks/binary-deployment.md).
+
 The default Compose service starts `worker`:
 
 ```bash
@@ -433,6 +438,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
 - [Local development runbook](docs/runbooks/local-dev.md)
+- [Binary (non-Docker) deployment runbook](docs/runbooks/binary-deployment.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
