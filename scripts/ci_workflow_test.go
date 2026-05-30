@@ -46,7 +46,7 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 		t.Fatal("CI workflow missing blocking golangci-lint gate")
 	}
 	for _, want := range []string{
-		"golangci/golangci-lint-action@db582008a42febd596419635a5abc9d9815daa9c",
+		"golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee",
 		"version: v2.12.2",
 		// funlen+gocognit are part of the single blocking gate (#504); the
 		// baseline is grandfathered in-line via //nolint, not report-only.
