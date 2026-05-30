@@ -59,6 +59,71 @@ func TestMatch(t *testing.T) {
 	}
 }
 
+// TestGlobMatchBranches pins globMatch's behavior at the boundary of each
+// matching branch (** spanning separators, **/ segment skipping, * runs that
+// stop at "/", ? single-char, and literal comparison). It calls globMatch
+// directly (not via Match) so the cases also cover inputs that Match's
+// pre-processing — empty-pattern guard, trailing-"/" → "/**" rewrite — would
+// otherwise mask. This is the characterization net for the #521 decomposition:
+// every case must keep the same verdict before and after extracting helpers.
+func TestGlobMatchBranches(t *testing.T) {
+	cases := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		// "**" trailing (rest == "") matches the remainder, including empty.
+		{"**", "", true},
+		{"**", "a/b/c", true},
+		{"a**", "a", true},
+		// "**" followed by a non-"/" literal spans separators ("try every suffix").
+		{"**x", "x", true},
+		{"**x", "abx", true},
+		{"**x", "a/b/cx", true},
+		{"**x", "ab", false},
+		// "**" between literals: the suffix scan must succeed at a non-zero,
+		// non-segment-boundary offset (here "**" consumes "ab" / "" / fails).
+		{"x**y", "xaby", true},
+		{"x**y", "xy", true},
+		{"x**y", "xab", false},
+		// "**/" segment skipping: zero or more whole leading path segments.
+		{"**/x", "x", true},
+		{"**/x", "a/x", true},
+		{"**/x", "a/b/x", true},
+		{"**/x", "ax", false},
+		{"**/x", "a/", false},
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		// "*" matches a run of non-"/" characters, including empty, never "/".
+		{"a*", "a", true},
+		{"a*b", "ab", true},
+		{"a*b", "axyzb", true},
+		{"a*b", "ax/b", false},
+		{"*x", "/x", false},
+		// "?" matches exactly one non-"/" character.
+		{"?", "", false},
+		{"?", "a", true},
+		{"?", "/", false},
+		{"a?", "a", false},
+		// Literal comparison: length mismatches and exact equality.
+		{"abc", "ab", false},
+		{"ab", "abc", false},
+		{"", "", true},
+		{"", "x", false},
+		// A literal "/" must match "/" exactly, never another byte (matchSingleChar).
+		{"a/b", "axb", false},
+		{"exact/path.txt", "exact/path.txt", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.pattern+"\x00"+tc.path, func(t *testing.T) {
+			if got := globMatch(tc.pattern, tc.path); got != tc.want {
+				t.Errorf("globMatch(%q, %q) = %v; want %v", tc.pattern, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEvaluateDenyPaths(t *testing.T) {
 	cfg := Config{
 		DenyPaths: []string{"infra/**", "deploy/**", "**/secrets.yaml", "db/migrations/**"},
