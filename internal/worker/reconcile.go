@@ -271,13 +271,17 @@ type issueWorkspace struct {
 	Key  string
 }
 
-func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) { //nolint:gocognit // baseline (#521)
-	ownerEntries, err := os.ReadDir(root)
+// listIssueWorkspaces walks the workspace root and returns one issueWorkspace
+// per per-issue directory, in owner->repo->sourceDir->entry traversal order.
+// It returns (nil, nil) when the root does not exist and short-circuits on the
+// first owner/source read error in traversal order.
+func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) {
+	ownerEntries, err := readWorkspaceRootEntries(root)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read workspace root %s: %w", root, err)
+		return nil, err
+	}
+	if ownerEntries == nil {
+		return nil, nil
 	}
 	sourceDirs := issueWorkspaceSourceDirs(trackerKind)
 	var workspaces []issueWorkspace
@@ -285,34 +289,83 @@ func listIssueWorkspaces(root, trackerKind string) ([]issueWorkspace, error) { /
 		if !ownerEntry.IsDir() {
 			continue
 		}
-		ownerPath := filepath.Join(root, ownerEntry.Name())
-		repoEntries, err := os.ReadDir(ownerPath)
+		ownerWorkspaces, err := collectOwnerIssueWorkspaces(filepath.Join(root, ownerEntry.Name()), sourceDirs)
 		if err != nil {
-			return nil, fmt.Errorf("read workspace owner %s: %w", ownerPath, err)
+			return nil, err
 		}
-		for _, repoEntry := range repoEntries {
-			if !repoEntry.IsDir() {
-				continue
-			}
-			repoPath := filepath.Join(ownerPath, repoEntry.Name())
-			for _, sourceDir := range sourceDirs {
-				sourcePath := filepath.Join(repoPath, sourceDir)
-				workspaceEntries, err := os.ReadDir(sourcePath)
-				if err != nil {
-					if os.IsNotExist(err) {
-						continue
-					}
-					return nil, fmt.Errorf("read issue workspace source %s: %w", sourcePath, err)
-				}
-				for _, workspaceEntry := range workspaceEntries {
-					if !workspaceEntry.IsDir() {
-						continue
-					}
-					path := filepath.Join(sourcePath, workspaceEntry.Name())
-					workspaces = append(workspaces, issueWorkspace{Path: path, Key: workspaceEntry.Name()})
-				}
-			}
+		workspaces = append(workspaces, ownerWorkspaces...)
+	}
+	return workspaces, nil
+}
+
+// readWorkspaceRootEntries reads the workspace root. A non-existent root yields
+// (nil, nil) so reconciliation no-ops before any workspaces are created; any
+// other read error is wrapped.
+func readWorkspaceRootEntries(root string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
 		}
+		return nil, fmt.Errorf("read workspace root %s: %w", root, err)
+	}
+	return entries, nil
+}
+
+// collectOwnerIssueWorkspaces reads one owner directory and gathers the issue
+// workspaces under each of its repo directories. Unlike the source-dir level,
+// an owner read error is always fatal (no os.IsNotExist special-case).
+func collectOwnerIssueWorkspaces(ownerPath string, sourceDirs []string) ([]issueWorkspace, error) {
+	repoEntries, err := os.ReadDir(ownerPath)
+	if err != nil {
+		return nil, fmt.Errorf("read workspace owner %s: %w", ownerPath, err)
+	}
+	var workspaces []issueWorkspace
+	for _, repoEntry := range repoEntries {
+		if !repoEntry.IsDir() {
+			continue
+		}
+		repoWorkspaces, err := collectRepoIssueWorkspaces(filepath.Join(ownerPath, repoEntry.Name()), sourceDirs)
+		if err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, repoWorkspaces...)
+	}
+	return workspaces, nil
+}
+
+// collectRepoIssueWorkspaces gathers the issue workspaces under one repo
+// directory across all candidate source dirs, in source-dir declaration order.
+func collectRepoIssueWorkspaces(repoPath string, sourceDirs []string) ([]issueWorkspace, error) {
+	var workspaces []issueWorkspace
+	for _, sourceDir := range sourceDirs {
+		sourceWorkspaces, err := collectSourceDirIssueWorkspaces(filepath.Join(repoPath, sourceDir))
+		if err != nil {
+			return nil, err
+		}
+		workspaces = append(workspaces, sourceWorkspaces...)
+	}
+	return workspaces, nil
+}
+
+// collectSourceDirIssueWorkspaces reads one candidate source dir and returns
+// its per-issue workspace directories. A missing source dir yields (nil, nil)
+// so the caller skips it (os.IsNotExist); any other read error is wrapped.
+func collectSourceDirIssueWorkspaces(sourcePath string) ([]issueWorkspace, error) {
+	workspaceEntries, err := os.ReadDir(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read issue workspace source %s: %w", sourcePath, err)
+	}
+	var workspaces []issueWorkspace
+	for _, workspaceEntry := range workspaceEntries {
+		if !workspaceEntry.IsDir() {
+			continue
+		}
+		path := filepath.Join(sourcePath, workspaceEntry.Name())
+		workspaces = append(workspaces, issueWorkspace{Path: path, Key: workspaceEntry.Name()})
 	}
 	return workspaces, nil
 }
