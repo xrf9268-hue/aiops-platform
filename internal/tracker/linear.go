@@ -129,33 +129,17 @@ func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
 	return c.ListIssuesByStates(ctx, c.Config.ActiveStates)
 }
 
-func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) { //nolint:gocognit,funlen // baseline (#521)
-	if c.APIKey == "" {
-		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
-	}
-	projectSlug := strings.TrimSpace(c.Config.ProjectSlug)
-	if projectSlug == "" {
-		return nil, NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
-	}
-	// SPEC §17.3: empty fetch_issues_by_states([]) returns empty without API call.
-	nonEmpty := make([]string, 0, len(states))
-	for _, s := range states {
-		if t := strings.TrimSpace(s); t != "" {
-			nonEmpty = append(nonEmpty, t)
-		}
-	}
-	if len(nonEmpty) == 0 {
-		return nil, nil
-	}
-	// customFieldValues is intentionally NOT requested. Linear's GraphQL
-	// schema does not expose a customFieldValues field on Issue (only
-	// customerTicketCount matches `custom*`); requesting it produced
-	// HTTP 400 GRAPHQL_VALIDATION_FAILED on every poll (#326). The
-	// upstream Elixir reference (elixir/lib/symphony_elixir/linear/client.ex)
-	// also omits any custom-field fragment for the same reason.
-	// `services[].tracker.custom_fields` route predicates are rejected at
-	// workflow load time until Linear surfaces a working query field.
-	query := `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
+// listLinearIssuesQuery is the fixed ListIssues GraphQL query.
+//
+// customFieldValues is intentionally NOT requested. Linear's GraphQL
+// schema does not expose a customFieldValues field on Issue (only
+// customerTicketCount matches `custom*`); requesting it produced
+// HTTP 400 GRAPHQL_VALIDATION_FAILED on every poll (#326). The
+// upstream Elixir reference (elixir/lib/symphony_elixir/linear/client.ex)
+// also omits any custom-field fragment for the same reason.
+// `services[].tracker.custom_fields` route predicates are rejected at
+// workflow load time until Linear surfaces a working query field.
+const listLinearIssuesQuery = `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
       id
@@ -175,88 +159,169 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
     pageInfo { hasNextPage endCursor }
   }
 }`
+
+// linearIssueNode is one node of the ListIssues response. The json tags are
+// the wire contract; keep them byte-for-byte in step with listLinearIssuesQuery.
+type linearIssueNode struct {
+	ID          string `json:"id"`
+	Identifier  string `json:"identifier"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	URL         string `json:"url"`
+	Priority    int    `json:"priority"`
+	BranchName  string `json:"branchName"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+	Project     struct {
+		SlugID string `json:"slugId"`
+	} `json:"project"`
+	Team struct {
+		Key string `json:"key"`
+	} `json:"team"`
+	Labels struct {
+		Nodes []struct {
+			Name string `json:"name"`
+		} `json:"nodes"`
+	} `json:"labels"`
+	State struct {
+		Name string `json:"name"`
+	} `json:"state"`
+}
+
+// linearIssuesResponse wraps a single ListIssues page.
+type linearIssuesResponse struct {
+	Data struct {
+		Issues struct {
+			Nodes    []linearIssueNode `json:"nodes"`
+			PageInfo struct {
+				HasNextPage bool   `json:"hasNextPage"`
+				EndCursor   string `json:"endCursor"`
+			} `json:"pageInfo"`
+		} `json:"issues"`
+	} `json:"data"`
+	Errors []map[string]any `json:"errors"`
+}
+
+func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error) {
+	projectSlug, err := c.requireListIssuesConfig()
+	if err != nil {
+		return nil, err
+	}
+	nonEmpty := normalizeRequestedStates(states)
+	// SPEC §17.3: empty fetch_issues_by_states([]) returns empty without API call.
+	if len(nonEmpty) == 0 {
+		return nil, nil
+	}
 	var issues []Issue
 	var after any
 	for page := 0; page < maxLinearIssuePages; page++ {
-		var out struct {
-			Data struct {
-				Issues struct {
-					Nodes []struct {
-						ID          string `json:"id"`
-						Identifier  string `json:"identifier"`
-						Title       string `json:"title"`
-						Description string `json:"description"`
-						URL         string `json:"url"`
-						Priority    int    `json:"priority"`
-						BranchName  string `json:"branchName"`
-						CreatedAt   string `json:"createdAt"`
-						UpdatedAt   string `json:"updatedAt"`
-						Project     struct {
-							SlugID string `json:"slugId"`
-						} `json:"project"`
-						Team struct {
-							Key string `json:"key"`
-						} `json:"team"`
-						Labels struct {
-							Nodes []struct {
-								Name string `json:"name"`
-							} `json:"nodes"`
-						} `json:"labels"`
-						State struct {
-							Name string `json:"name"`
-						} `json:"state"`
-					} `json:"nodes"`
-					PageInfo struct {
-						HasNextPage bool   `json:"hasNextPage"`
-						EndCursor   string `json:"endCursor"`
-					} `json:"pageInfo"`
-				} `json:"issues"`
-			} `json:"data"`
-			Errors []map[string]any `json:"errors"`
-		}
-		if err := c.graphql(ctx, query, map[string]any{"projectSlug": projectSlug, "states": nonEmpty, "first": linearIssuePageSize, "after": after}, &out); err != nil {
+		mapped, pageInfo, err := c.fetchLinearIssuesPage(ctx, map[string]any{"projectSlug": projectSlug, "states": nonEmpty, "first": linearIssuePageSize, "after": after})
+		if err != nil {
 			return nil, err
 		}
-		if len(out.Errors) > 0 {
-			return nil, linearGraphQLErrors(out.Errors)
-		}
-		for _, n := range out.Data.Issues.Nodes {
-			createdAt, err := parseLinearIssueTime("createdAt", n.CreatedAt)
-			if err != nil {
-				return nil, err
-			}
-			updatedAt, err := parseLinearIssueTime("updatedAt", n.UpdatedAt)
-			if err != nil {
-				return nil, err
-			}
-			var blockers []BlockerRef
-			if isTodoState(n.State.Name) {
-				var err error
-				blockers, err = c.linearBlockersForIssue(ctx, n.ID)
-				if err != nil {
-					return nil, err
-				}
-			}
-			labels := make([]string, 0, len(n.Labels.Nodes))
-			for _, label := range n.Labels.Nodes {
-				if strings.TrimSpace(label.Name) != "" {
-					labels = append(labels, strings.ToLower(strings.TrimSpace(label.Name)))
-				}
-			}
-			// Issue.CustomFields stays nil — Linear's GraphQL schema does not
-			// expose any custom-field data on Issue (introspection confirms
-			// only `customerTicketCount` matches `custom*`). See #326.
-			issues = append(issues, Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, State: n.State.Name, BlockedBy: blockers})
-		}
-		if !out.Data.Issues.PageInfo.HasNextPage {
+		issues = append(issues, mapped...)
+		if !pageInfo.HasNextPage {
 			return issues, nil
 		}
-		if out.Data.Issues.PageInfo.EndCursor == "" {
+		if pageInfo.EndCursor == "" {
 			return nil, NewError(CategoryLinearMissingEndCursor, "linear pagination missing endCursor", nil)
 		}
-		after = out.Data.Issues.PageInfo.EndCursor
+		after = pageInfo.EndCursor
 	}
 	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+}
+
+// requireListIssuesConfig enforces the two ListIssuesByStates preconditions
+// and returns the trimmed project slug. It mirrors the original guard order:
+// the API key is checked before the project slug.
+func (c *LinearClient) requireListIssuesConfig() (string, error) {
+	if c.APIKey == "" {
+		return "", NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
+	}
+	projectSlug := strings.TrimSpace(c.Config.ProjectSlug)
+	if projectSlug == "" {
+		return "", NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
+	}
+	return projectSlug, nil
+}
+
+// normalizeRequestedStates trims each requested state and drops empties.
+// The caller keeps the empty short-circuit (SPEC §17.3).
+func normalizeRequestedStates(states []string) []string {
+	nonEmpty := make([]string, 0, len(states))
+	for _, s := range states {
+		if t := strings.TrimSpace(s); t != "" {
+			nonEmpty = append(nonEmpty, t)
+		}
+	}
+	return nonEmpty
+}
+
+// linearPageInfo carries the page-control fields the ListIssuesByStates loop
+// inspects after each page so the HasNextPage / EndCursor branches stay
+// visible in the caller.
+type linearPageInfo struct {
+	HasNextPage bool
+	EndCursor   string
+}
+
+// fetchLinearIssuesPage issues one ListIssues page request, surfaces any
+// GraphQL errors, and maps the page's nodes to domain Issues in order. Page
+// control (HasNextPage / EndCursor / cursor advance) stays in the caller so
+// the early-return semantics remain visible. A page with no nodes yields a nil
+// issue slice so the caller's accumulator preserves nil-vs-empty.
+func (c *LinearClient) fetchLinearIssuesPage(ctx context.Context, vars map[string]any) ([]Issue, linearPageInfo, error) {
+	var out linearIssuesResponse
+	if err := c.graphql(ctx, listLinearIssuesQuery, vars, &out); err != nil {
+		return nil, linearPageInfo{}, err
+	}
+	if len(out.Errors) > 0 {
+		return nil, linearPageInfo{}, linearGraphQLErrors(out.Errors)
+	}
+	var issues []Issue
+	for _, n := range out.Data.Issues.Nodes {
+		iss, err := c.mapLinearIssueNode(ctx, n)
+		if err != nil {
+			return nil, linearPageInfo{}, err
+		}
+		issues = append(issues, iss)
+	}
+	pageInfo := linearPageInfo{
+		HasNextPage: out.Data.Issues.PageInfo.HasNextPage,
+		EndCursor:   out.Data.Issues.PageInfo.EndCursor,
+	}
+	return issues, pageInfo, nil
+}
+
+// mapLinearIssueNode maps one ListIssues node to a domain Issue. Blockers are
+// fetched only for Todo-state issues; createdAt is parsed before updatedAt so
+// the first malformed timestamp wins.
+func (c *LinearClient) mapLinearIssueNode(ctx context.Context, n linearIssueNode) (Issue, error) {
+	createdAt, err := parseLinearIssueTime("createdAt", n.CreatedAt)
+	if err != nil {
+		return Issue{}, err
+	}
+	updatedAt, err := parseLinearIssueTime("updatedAt", n.UpdatedAt)
+	if err != nil {
+		return Issue{}, err
+	}
+	var blockers []BlockerRef
+	if isTodoState(n.State.Name) {
+		blockers, err = c.linearBlockersForIssue(ctx, n.ID)
+		if err != nil {
+			return Issue{}, err
+		}
+	}
+	labels := make([]string, 0, len(n.Labels.Nodes))
+	for _, label := range n.Labels.Nodes {
+		if strings.TrimSpace(label.Name) != "" {
+			labels = append(labels, strings.ToLower(strings.TrimSpace(label.Name)))
+		}
+	}
+	// Issue.CustomFields stays nil — Linear's GraphQL schema does not
+	// expose any custom-field data on Issue (introspection confirms
+	// only `customerTicketCount` matches `custom*`). See #326.
+	return Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, State: n.State.Name, BlockedBy: blockers}, nil
 }
 
 func parseLinearIssueTime(field, value string) (time.Time, error) {
