@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sample macOS LaunchAgent for a binary (non-Docker) aiops-platform worker.
+  See docs/runbooks/binary-deployment.md ("macOS: under launchd").
+
+  launchd has no EnvironmentFile= equivalent and does not expand ~ in
+  paths, so all paths below are absolute and the tracker token is kept
+  out of this file: point ProgramArguments at a thin Keychain wrapper
+  (see the runbook) rather than embedding the token in EnvironmentVariables.
+
+  Per-user agent: install into ~/Library/LaunchAgents and bootstrap into
+  the gui/<uid> domain. For a machine-wide daemon, install into
+  /Library/LaunchDaemons, add a <key>UserName</key> entry, and bootstrap
+  into the system domain.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.aiops-platform.worker</string>
+
+  <!-- Swap to /usr/local/bin/aiops-worker-launch (the Keychain wrapper)
+       when the workflow needs a tracker token; see the runbook. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/worker</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AIOPS_WORKFLOW_PATH</key>
+    <string>/usr/local/etc/aiops-platform/WORKFLOW.md</string>
+    <key>AIOPS_WORKSPACE_ROOT</key>
+    <string>/usr/local/var/aiops-platform/workspaces</string>
+    <key>AIOPS_MIRROR_ROOT</key>
+    <string>/usr/local/var/aiops-platform/mirrors</string>
+  </dict>
+
+  <key>WorkingDirectory</key>
+  <string>/usr/local/var/aiops-platform</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Restart the worker if it exits; pairs with the loop's restart
+       recovery (SPEC §14.3, fresh state on each start). -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/usr/local/var/aiops-platform/worker.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/usr/local/var/aiops-platform/worker.err.log</string>
+</dict>
+</plist>
