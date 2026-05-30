@@ -125,6 +125,84 @@ func TestBuildReportRequiresSSHForSSHCloneURLs(t *testing.T) {
 	}
 }
 
+func TestBuildReportBinaryDeploySkipsDockerComposeChecks(t *testing.T) {
+	installFakeGitOnly(t)
+	path := writeWorkflow(t, "linear", "$AIOPS_TEST_LINEAR_KEY")
+	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin-test")
+
+	dockerReport := BuildReport(context.Background(), Options{
+		WorkflowPath: path,
+		Mode:         "mock",
+		Deploy:       "docker",
+		Runner:       passingRunner,
+	})
+	if !hasCheck(dockerReport, "Docker Compose") {
+		t.Fatalf("Deploy=docker: missing Docker Compose check in %+v", dockerReport.Checks)
+	}
+
+	binaryReport := BuildReport(context.Background(), Options{
+		WorkflowPath: path,
+		Mode:         "mock",
+		Deploy:       "binary",
+		Runner:       passingRunner,
+	})
+	for _, name := range []string{"Docker Compose", "Compose config"} {
+		if hasCheck(binaryReport, name) {
+			t.Errorf("Deploy=binary: %q check present; want it skipped in %+v", name, binaryReport.Checks)
+		}
+	}
+}
+
+func TestBuildReportInstallHintMatchesDeployTarget(t *testing.T) {
+	installFakeGitOnly(t) // git on PATH, ssh absent
+	path := writeWorkflowWithCloneURL(t, "git@example.com:o/r.git")
+	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin-test")
+
+	docker := findCheck(t, BuildReport(context.Background(), Options{
+		WorkflowPath: path, Mode: "mock", Deploy: "docker", Runner: passingRunner,
+	}), "ssh")
+	if docker.Status != Fail {
+		t.Fatalf("Deploy=docker ssh status = %s; want FAIL", docker.Status)
+	}
+	if !strings.Contains(docker.Fix, "in the worker image") {
+		t.Fatalf("Deploy=docker ssh fix = %q; want the container-image hint", docker.Fix)
+	}
+
+	binary := findCheck(t, BuildReport(context.Background(), Options{
+		WorkflowPath: path, Mode: "mock", Deploy: "binary", Runner: passingRunner,
+	}), "ssh")
+	if binary.Status != Fail {
+		t.Fatalf("Deploy=binary ssh status = %s; want FAIL", binary.Status)
+	}
+	if strings.Contains(binary.Fix, "worker image") {
+		t.Fatalf("Deploy=binary ssh fix = %q; should not mention a worker image", binary.Fix)
+	}
+	if !strings.Contains(binary.Fix, "on this host and ensure it is on PATH") {
+		t.Fatalf("Deploy=binary ssh fix = %q; want the host PATH hint", binary.Fix)
+	}
+}
+
+func TestCheckProjectToolchainSkippedForBinaryDeploy(t *testing.T) {
+	// docker real mode runs the Go toolchain probes...
+	dockerR := &reportBuilder{opts: Options{Mode: "real", Deploy: "docker", Runner: fakeRealRunner}}
+	dockerR.normalize()
+	dockerR.checkProjectToolchain(context.Background())
+	if !hasCheck(Report{Checks: dockerR.checks}, "Go version") {
+		t.Fatalf("Deploy=docker real: missing Go version probe in %+v", dockerR.checks)
+	}
+
+	// ...binary deploy skips them, so an absent Go toolchain is not a
+	// spurious real-mode FAIL on a release-archive host.
+	binaryR := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary", Runner: fakeRealRunner}}
+	binaryR.normalize()
+	binaryR.checkProjectToolchain(context.Background())
+	for _, name := range []string{"Go version", "gofmt", "Go test"} {
+		if hasCheck(Report{Checks: binaryR.checks}, name) {
+			t.Errorf("Deploy=binary real: %q probe present; want it skipped in %+v", name, binaryR.checks)
+		}
+	}
+}
+
 func TestBuildReportRealModeUsesCustomCodexCommandForAppServerProbe(t *testing.T) {
 	wrapper := installFakeCodexWrapper(t)
 	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
@@ -1009,6 +1087,15 @@ func dockerOnlyRunner(_ context.Context, name string, args []string, _ []string,
 		return []byte("/usr/local/go\n"), nil
 	}
 	return []byte("ok\n"), nil
+}
+
+func hasCheck(report Report, name string) bool {
+	for _, check := range report.Checks {
+		if check.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func findCheck(t *testing.T, report Report, name string) Check {

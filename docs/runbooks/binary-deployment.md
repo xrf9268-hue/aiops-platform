@@ -48,13 +48,11 @@ Install hints by platform:
 - **macOS:** `git` and `ssh` ship with the Xcode Command Line Tools
   (`xcode-select --install`); add ripgrep with `brew install ripgrep`.
 
-> **Note on `worker --doctor` wording.** Several doctor remediation
-> strings say "… in the worker image" (e.g. a missing `ssh` suggests
-> "Install ssh in the worker image"), and the run includes Docker
-> Compose checks. Those messages assume the container path; on a binary
-> host read them as "install the tool on this host and ensure it is on
-> `PATH`," and ignore the Compose checks. Making doctor
-> deployment-mode-aware is tracked separately.
+> **Run `worker --doctor` with `--deploy=binary`** on a binary host. That
+> skips the container-only Docker Compose checks (irrelevant without a
+> container, and they would otherwise FAIL in `--mode=real`) and phrases
+> install hints for a host `PATH` rather than a worker image. The default
+> `--deploy=docker` is for the container path (`first-run-docker-linear-codex.md`).
 
 ## 2. Obtain the binaries
 
@@ -133,23 +131,20 @@ the target repo.
 
 ## 4. Validate before running
 
-Run the operator preflight; it should pass with no Docker present (the
-Compose checks are advisory on this path — see §1):
+Run the operator preflight with `--deploy=binary` (see §1) so it skips the
+container-only Docker Compose checks and gives host-oriented install hints:
 
 ```bash
 export AIOPS_WORKFLOW_PATH=/etc/aiops-platform/WORKFLOW.md
-worker --doctor --mode=mock "$AIOPS_WORKFLOW_PATH"
+worker --doctor --deploy=binary --mode=mock "$AIOPS_WORKFLOW_PATH"
 # then, when the workflow should validate live tracker auth + a real agent:
-worker --doctor --mode=real "$AIOPS_WORKFLOW_PATH"
+worker --doctor --deploy=binary --mode=real "$AIOPS_WORKFLOW_PATH"
 ```
 
-On a Docker-less binary host, the "Docker Compose" check is a `WARN` in
-`--mode=mock` but is escalated to a `FAIL` (non-zero exit) in
-`--mode=real`. The Compose `FAIL` is expected on this deployment path —
-but read every *other* check on its own merits, since `--mode=real` also
-FAILs on genuine problems (e.g. a missing `gh`/deploy-key credential at
-the agent `git push` preflight) that are **not** safe to ignore. See §1
-on the doctor's container-centric wording.
+With `--deploy=binary` there is no spurious Docker Compose failure to
+discount, so any `FAIL` in `--mode=real` reflects a real problem on this
+path (e.g. a missing `gh`/deploy-key credential at the agent `git push`
+preflight).
 
 Inspect the effective config (secrets are masked with `***`):
 

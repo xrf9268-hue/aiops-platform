@@ -46,6 +46,7 @@ type Check struct {
 type Options struct {
 	WorkflowPath string
 	Mode         string
+	Deploy       string
 	DashboardURL string
 	GoTestDir    string
 	GitHubIssue  int
@@ -112,6 +113,9 @@ func (r *reportBuilder) normalize() {
 	if r.opts.Mode == "" {
 		r.opts.Mode = "mock"
 	}
+	if r.opts.Deploy == "" {
+		r.opts.Deploy = "docker"
+	}
 	if r.opts.Runner == nil {
 		r.opts.Runner = defaultRunner
 	}
@@ -155,7 +159,7 @@ func (r *reportBuilder) checkHostBinaries(wf *workflow.Workflow) {
 		r.pass("ssh", "not required for configured repository clone URLs")
 	}
 	if _, err := exec.LookPath("rg"); err != nil {
-		r.warn("rg", "ripgrep not found on PATH", "Install rg in the worker image for faster agent code search.")
+		r.warn("rg", "ripgrep not found on PATH", r.installFix("rg")+" It speeds up agent code search.")
 	} else {
 		r.pass("rg", "found on PATH")
 	}
@@ -165,11 +169,19 @@ func (r *reportBuilder) checkProjectToolchain(ctx context.Context) { //nolint:go
 	if !r.realMode() {
 		return
 	}
+	if r.binaryDeploy() {
+		// The Go toolchain probes validate a dogfood/worker-image checkout
+		// (they run `go test` for --go-test-dir), not a binary-runtime
+		// prerequisite — a release-archive host ships only worker/tui and
+		// has no Go. Skip them so --deploy=binary --mode=real does not FAIL
+		// on an absent toolchain. #538.
+		return
+	}
 	modulePath, goModVersion := r.goModule()
 	moduleRoot := strings.TrimSpace(r.opts.GoTestDir)
 	out, err := r.run(ctx, "go", []string{"version"})
 	if err != nil {
-		r.fail("Go version", trimOutput(out, err), "Install the Go toolchain required by go.mod in the worker image.")
+		r.fail("Go version", trimOutput(out, err), r.installFix("the Go toolchain required by go.mod"))
 	} else if version := strings.TrimSpace(string(out)); goModVersion != "" && !goVersionCompatible(version, goModVersion) {
 		r.fail("Go version", version, "Install a Go toolchain compatible with go.mod version "+goModVersion+".")
 	} else {
@@ -182,9 +194,9 @@ func (r *reportBuilder) checkProjectToolchain(ctx context.Context) { //nolint:go
 	if err != nil {
 		r.fail("gofmt", err.Error(), "Create a writable temp directory for doctor preflight probes.")
 	} else if gofmtPath, out, err := r.gofmtPath(ctx); err != nil {
-		r.fail("gofmt", trimOutput(out, err), "Install the Go toolchain with gofmt in the worker image.")
+		r.fail("gofmt", trimOutput(out, err), r.installFix("the Go toolchain (gofmt)"))
 	} else if out, err := r.run(ctx, gofmtPath, []string{"-l", gofmtProbe}); err != nil {
-		r.fail("gofmt", trimOutput(out, err), "Install gofmt in the worker image.")
+		r.fail("gofmt", trimOutput(out, err), r.installFix("gofmt"))
 	} else {
 		r.pass("gofmt", "found at "+gofmtPath)
 	}
@@ -204,7 +216,7 @@ func (r *reportBuilder) checkProjectToolchain(ctx context.Context) { //nolint:go
 		return
 	}
 	if out, err := r.runWithTimeout(ctx, goTestProbeTimeout, "go", []string{"test", "-C", moduleRoot, "./internal/doctor", "-run", "TestDoctorGoToolchainProbe", "-count=1"}); err != nil {
-		r.fail("Go test", trimOutput(out, err), "Fix the project Go test prerequisites in the worker image or checkout.")
+		r.fail("Go test", trimOutput(out, err), "Fix the project Go test prerequisites in the targeted module checkout.")
 		return
 	}
 	r.pass("Go test", "go test ./internal/doctor -run TestDoctorGoToolchainProbe -count=1")
@@ -257,6 +269,12 @@ func writeGofmtProbe() (string, error) {
 }
 
 func (r *reportBuilder) checkDockerCompose(ctx context.Context) {
+	if r.binaryDeploy() {
+		// Docker Compose is irrelevant to a binary deployment; a
+		// Docker-less host is the expected case, so don't report it
+		// (and don't escalate to FAIL in real mode). #538.
+		return
+	}
 	if runningInContainer() {
 		r.warn("Docker Compose", "host Docker Compose check skipped inside the worker container", "Run docker compose config --quiet on the host before docker compose run/up.")
 		return
@@ -286,7 +304,7 @@ func (r *reportBuilder) checkLinear(ctx context.Context, cfg workflow.Config) {
 		return
 	}
 	if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
-		r.fail("Linear API key", "tracker.api_key resolved empty", "Set LINEAR_API_KEY or mount it from a Docker secret into the workflow env.")
+		r.fail("Linear API key", "tracker.api_key resolved empty", "Provide LINEAR_API_KEY via the worker environment (a systemd EnvironmentFile, a Docker secret, or a shell export).")
 		return
 	}
 	if !r.realMode() {
@@ -360,7 +378,7 @@ func (r *reportBuilder) checkCodexAPIKeyAuth() {
 		status = Fail
 	}
 	r.add(status, "Codex auth mode", "OPENAI_API_KEY is in codex.env_passthrough but resolved empty",
-		"Mount the model API key from a Docker secret into OPENAI_API_KEY; never pass it on a command line.")
+		"Provide the model API key in OPENAI_API_KEY via the worker environment (a Docker secret or systemd EnvironmentFile); never pass it on a command line.")
 }
 
 func (r *reportBuilder) checkCodexLoginAuth(home string) {
@@ -626,7 +644,7 @@ func closeBody(body io.Closer) {
 
 func (r *reportBuilder) requiredBinary(name string) {
 	if _, err := exec.LookPath(name); err != nil {
-		r.fail(name, "not found on PATH", "Install "+name+" in the worker image.")
+		r.fail(name, "not found on PATH", r.installFix(name))
 		return
 	}
 	r.pass(name, "found on PATH")
@@ -634,6 +652,21 @@ func (r *reportBuilder) requiredBinary(name string) {
 
 func (r *reportBuilder) realMode() bool {
 	return r.opts.Mode == "real"
+}
+
+func (r *reportBuilder) binaryDeploy() bool {
+	return r.opts.Deploy == "binary"
+}
+
+// installFix renders an "install this tool" remediation matching the
+// deployment target: a host PATH for a binary deploy, the worker image
+// for a container deploy. A binary operator has no image to edit, so the
+// container-only phrasing misleads them (#538).
+func (r *reportBuilder) installFix(what string) string {
+	if r.binaryDeploy() {
+		return "Install " + what + " on this host and ensure it is on PATH."
+	}
+	return "Install " + what + " in the worker image."
 }
 
 func (r *reportBuilder) run(ctx context.Context, name string, args []string) ([]byte, error) {

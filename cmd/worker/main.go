@@ -53,6 +53,7 @@ func main() { //nolint:gocognit // baseline (#521)
 func parseDoctorArgs(args []string) (doctor.Options, error) {
 	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
 	mode := fs.String("mode", "mock", "preflight depth: mock or real")
+	deploy := fs.String("deploy", "docker", "deployment target for remediation hints and Docker checks: binary or docker")
 	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
 	goTestDir := fs.String("go-test-dir", "", "repository module root for real-mode targeted go test")
 	githubIssue := fs.Int("github-issue", 0, "optional GitHub issue number for agent-environment gh and git push preflight")
@@ -63,14 +64,17 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	if *mode != "mock" && *mode != "real" {
 		return doctor.Options{}, fmt.Errorf("--mode must be mock or real")
 	}
+	if *deploy != "binary" && *deploy != "docker" {
+		return doctor.Options{}, fmt.Errorf("--deploy must be binary or docker")
+	}
 	if fs.NArg() > 1 {
-		return doctor.Options{}, fmt.Errorf("usage: worker --doctor [--mode=mock|real] [--dashboard-url=http://127.0.0.1:4000] [--go-test-dir=/repo-module] [--github-issue=N] [--github-repo=owner/name] [path-to-WORKFLOW.md]")
+		return doctor.Options{}, fmt.Errorf("usage: worker --doctor [--mode=mock|real] [--deploy=binary|docker] [--dashboard-url=http://127.0.0.1:4000] [--go-test-dir=/repo-module] [--github-issue=N] [--github-repo=owner/name] [path-to-WORKFLOW.md]")
 	}
 	var path string
 	if fs.NArg() == 1 {
 		path = fs.Arg(0)
 	}
-	return doctor.Options{WorkflowPath: path, Mode: *mode, DashboardURL: *dashboardURL, GoTestDir: *goTestDir, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
+	return doctor.Options{WorkflowPath: path, Mode: *mode, Deploy: *deploy, DashboardURL: *dashboardURL, GoTestDir: *goTestDir, GitHubIssue: *githubIssue, GitHubRepo: *githubRepo, Stdout: os.Stdout, Stderr: os.Stderr}, nil
 }
 func reorderDoctorFlags(args []string) []string {
 	flags, positional := make([]string, 0, len(args)), make([]string, 0, len(args))
@@ -80,7 +84,7 @@ func reorderDoctorFlags(args []string) []string {
 		case a == "--":
 			positional = append(positional, append([]string{"--"}, args[i+1:]...)...)
 			i = len(args)
-		case a == "--mode" || a == "-mode" || a == "--dashboard-url" || a == "-dashboard-url" || a == "--go-test-dir" || a == "-go-test-dir" || a == "--github-issue" || a == "-github-issue" || a == "--github-repo" || a == "-github-repo":
+		case a == "--mode" || a == "-mode" || a == "--deploy" || a == "-deploy" || a == "--dashboard-url" || a == "-dashboard-url" || a == "--go-test-dir" || a == "-go-test-dir" || a == "--github-issue" || a == "-github-issue" || a == "--github-repo" || a == "-github-repo":
 			flags = append(flags, a)
 			if i+1 < len(args) {
 				flags = append(flags, args[i+1])

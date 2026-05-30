@@ -2393,6 +2393,26 @@ func TestParseDoctorArgs_AllowsTrailingFlags(t *testing.T) {
 	}
 }
 
+func TestParseDoctorArgs_DeployFlag(t *testing.T) {
+	opts, err := parseDoctorArgs([]string{"/wf.md"})
+	if err != nil {
+		t.Fatalf("parseDoctorArgs(/wf.md) error: %v", err)
+	}
+	if opts.Deploy != "docker" {
+		t.Fatalf("default Deploy = %q; want docker", opts.Deploy)
+	}
+	opts, err = parseDoctorArgs([]string{"/wf.md", "--deploy", "binary"})
+	if err != nil {
+		t.Fatalf("parseDoctorArgs(--deploy binary) error: %v", err)
+	}
+	if opts.Deploy != "binary" {
+		t.Fatalf("Deploy = %q; want binary", opts.Deploy)
+	}
+	if _, err := parseDoctorArgs([]string{"--deploy", "k8s", "/wf.md"}); err == nil {
+		t.Fatalf("parseDoctorArgs(--deploy k8s) = nil error; want a validation error")
+	}
+}
+
 func TestParseDoctorArgs_HelpReturnsFlagErrHelp(t *testing.T) {
 	_, err := parseDoctorArgs([]string{"--help"})
 	if !errors.Is(err, flag.ErrHelp) {
