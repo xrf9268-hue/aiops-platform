@@ -155,60 +155,20 @@ func Match(pattern, path string) bool {
 	return globMatch(pattern, path)
 }
 
-// globMatch is the recursive glob matcher. It walks both pattern and path
-// with explicit handling for "**" so that double-star spans path separators
-// while single "*" and "?" do not.
-func globMatch(pattern, path string) bool { //nolint:gocognit // baseline (#521)
+// globMatch is the recursive glob matcher. It is a thin dispatcher: the
+// separator-spanning "**" and single-segment "*" wildcards delegate to
+// helpers, and every other position (a literal byte or "?") consumes exactly
+// one character via matchSingleChar.
+func globMatch(pattern, path string) bool {
 	for len(pattern) > 0 {
 		switch {
 		case strings.HasPrefix(pattern, "**"):
-			rest := strings.TrimPrefix(pattern, "**")
-			// Allow leading "/" after "**" to consume an arbitrary number of
-			// path segments, including zero.
-			if strings.HasPrefix(rest, "/") {
-				inner := rest[1:]
-				// "**/" matches zero segments.
-				if globMatch(inner, path) {
-					return true
-				}
-				for i := 0; i < len(path); i++ {
-					if path[i] == '/' && globMatch(inner, path[i+1:]) {
-						return true
-					}
-				}
-				return false
-			}
-			// Trailing "**" matches the rest of path.
-			if rest == "" {
-				return true
-			}
-			// "**" followed by non-slash: try every suffix.
-			for i := 0; i <= len(path); i++ {
-				if globMatch(rest, path[i:]) {
-					return true
-				}
-			}
-			return false
+			return matchDoubleStar(strings.TrimPrefix(pattern, "**"), path)
 		case pattern[0] == '*':
-			rest := pattern[1:]
-			// Match any run of non-"/" characters, including empty.
-			for i := 0; i <= len(path); i++ {
-				if i > 0 && path[i-1] == '/' {
-					return false
-				}
-				if globMatch(rest, path[i:]) {
-					return true
-				}
-			}
-			return false
-		case pattern[0] == '?':
-			if len(path) == 0 || path[0] == '/' {
-				return false
-			}
-			pattern = pattern[1:]
-			path = path[1:]
+			return matchSingleStar(pattern[1:], path)
 		default:
-			if len(path) == 0 || pattern[0] != path[0] {
+			// A literal byte or "?" consumes exactly one matching character.
+			if !matchSingleChar(pattern[0], path) {
 				return false
 			}
 			pattern = pattern[1:]
@@ -216,4 +176,71 @@ func globMatch(pattern, path string) bool { //nolint:gocognit // baseline (#521)
 		}
 	}
 	return len(path) == 0
+}
+
+// matchSingleChar reports whether the non-wildcard pattern byte pc matches the
+// first byte of path. "?" matches any single byte except "/"; any other byte
+// must equal path[0] exactly, so a "/" is only ever consumed by a literal "/".
+func matchSingleChar(pc byte, path string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	if pc == '?' {
+		return path[0] != '/'
+	}
+	return pc == path[0]
+}
+
+// matchDoubleStar matches a "**" wildcard against path, where rest is the
+// pattern that follows the "**". A "**" spans path separators: "**/<inner>"
+// skips whole leading segments, a trailing "**" matches the remainder, and
+// "**" before a non-"/" literal tries every suffix of path.
+func matchDoubleStar(rest, path string) bool {
+	// A leading "/" after "**" consumes an arbitrary number of path segments,
+	// including zero, before matching the inner pattern.
+	if strings.HasPrefix(rest, "/") {
+		return matchDoubleStarSegment(rest[1:], path)
+	}
+	// Trailing "**" matches the rest of path.
+	if rest == "" {
+		return true
+	}
+	// "**" followed by a non-"/" literal: try every suffix.
+	for i := 0; i <= len(path); i++ {
+		if globMatch(rest, path[i:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDoubleStarSegment matches inner (the pattern after a "**/") against
+// path, allowing inner to start at the beginning of path (zero skipped
+// segments) or immediately after any "/" separator.
+func matchDoubleStarSegment(inner, path string) bool {
+	// "**/" matches zero segments.
+	if globMatch(inner, path) {
+		return true
+	}
+	for i := 0; i < len(path); i++ {
+		if path[i] == '/' && globMatch(inner, path[i+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchSingleStar matches a "*" wildcard against path, where rest is the
+// pattern that follows the "*". A "*" matches a run of non-"/" characters,
+// including the empty run, but never crosses a separator.
+func matchSingleStar(rest, path string) bool {
+	for i := 0; i <= len(path); i++ {
+		if i > 0 && path[i-1] == '/' {
+			return false
+		}
+		if globMatch(rest, path[i:]) {
+			return true
+		}
+	}
+	return false
 }
