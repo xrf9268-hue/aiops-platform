@@ -661,6 +661,104 @@ func TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure(t *testin
 	}
 }
 
+// TestTrackerClientListIssuesByStatesSurfacesMalformedTimestamp pins coverage
+// gap (a) for #521: a malformed created_at/updated_at routed THROUGH the
+// listing (not just parseGiteaIssueTime in isolation) must surface the parse
+// error from listIssuesByStateLabel. created_at is parsed before updated_at,
+// so a malformed created_at wins; the error names the field and bad value.
+func TestTrackerClientListIssuesByStatesSurfacesMalformedTimestamp(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 401, Number: 1, Title: "todo", HTMLURL: "https://gitea.local/o/r/issues/1", CreatedAt: "not-a-timestamp", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err == nil {
+		t.Fatalf("ListIssuesByStates(malformed created_at) = %#v, nil; want parse error", issues)
+	}
+	if !strings.Contains(err.Error(), "created_at") || !strings.Contains(err.Error(), "not-a-timestamp") {
+		t.Fatalf("ListIssuesByStates err = %q; want created_at field name and bad value", err.Error())
+	}
+	if issues != nil {
+		t.Fatalf("ListIssuesByStates(malformed created_at) issues = %#v; want nil on parse error", issues)
+	}
+}
+
+// TestTrackerClientListIssuesByStatesDeduplicatesWithinSingleLabelScope pins
+// coverage gap (b) for #521: when the SAME issueKey appears twice across the
+// pages of ONE label scope, the collectionSeen dedup (marked on the include
+// path) must keep it once. Existing coverage only exercises cross-label dedup
+// seeded from seenIssues; this exercises intra-scope dedup across pages.
+func TestTrackerClientListIssuesByStatesDeduplicatesWithinSingleLabelScope(t *testing.T) {
+	var requestedPages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPages = append(requestedPages, r.URL.Query().Get("page"))
+		page, err := strconv.Atoi(r.URL.Query().Get("page"))
+		if err != nil {
+			t.Fatalf("page query = %q: %v", r.URL.Query().Get("page"), err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if page < 2 {
+			w.Header().Add("Link", fmt.Sprintf(`<%s%s?page=%d>; rel="next"`, serverURL(r), r.URL.Path, page+1))
+		}
+		// Same issue (ID 501) returned on both page 1 and page 2.
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 501, Number: 1, Title: "todo", HTMLURL: "https://gitea.local/o/r/issues/1", CreatedAt: "2026-05-16T23:59:00Z", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if !slices.Equal(requestedPages, []string{"1", "2"}) {
+		t.Fatalf("requested pages = %#v; want pages 1 and 2 (same issue repeated)", requestedPages)
+	}
+	if len(issues) != 1 || issues[0].ID != "501" {
+		t.Fatalf("ListIssuesByStates(duplicate across pages) = %#v; want issue 501 once", issues)
+	}
+}
+
+// TestTrackerClientListIssuesByStateLabelSkipsEmptyStateWithoutWantedStatesFilter
+// pins coverage gap (c) for #521: an issue whose labels yield an empty state
+// must be dropped by the state=="" guard INDEPENDENTLY of the wantedStates
+// filter. It drives listIssuesByStateLabel directly with an empty wantedStates
+// set, so the wantedStates filter is a no-op (len==0) and cannot drop anything;
+// the unlabelled issue can only be removed by the state=="" guard, while the
+// labelled issue (which would survive the wantedStates filter regardless) is
+// kept.
+func TestTrackerClientListIssuesByStateLabelSkipsEmptyStateWithoutWantedStatesFilter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]Issue{
+			{ID: 601, Number: 1, Title: "no aiops label", HTMLURL: "https://gitea.local/o/r/issues/1", CreatedAt: "2026-05-16T23:59:00Z", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "bug"}}},
+			{ID: 602, Number: 2, Title: "todo", HTMLURL: "https://gitea.local/o/r/issues/2", CreatedAt: "2026-05-16T23:59:00Z", UpdatedAt: "2026-05-17T00:00:00Z", Labels: []Label{{Name: "aiops/todo"}}},
+		})
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	issues, capped, err := client.listIssuesByStateLabel(context.Background(), "aiops/todo", "open", map[string]struct{}{}, map[string]struct{}{})
+	if err != nil {
+		t.Fatalf("listIssuesByStateLabel: %v", err)
+	}
+	if capped {
+		t.Fatalf("listIssuesByStateLabel capped = true; want false")
+	}
+	if len(issues) != 1 || issues[0].ID != "602" || issues[0].State != "AI Ready" {
+		t.Fatalf("listIssuesByStateLabel(empty wantedStates) = %#v; want only issue 602 (unlabelled issue 601 dropped by state==\"\" guard, not wantedStates)", issues)
+	}
+}
+
 func serverURL(r *http.Request) string {
 	return "http://" + r.Host
 }
