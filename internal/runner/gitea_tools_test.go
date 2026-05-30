@@ -526,3 +526,128 @@ func TestGiteaIssueLabelsRejectsMissingIssueNumberWithoutHTTPRequest(t *testing.
 		t.Fatalf("server received %d requests, want 0", requests)
 	}
 }
+
+// TestGiteaIssueLabelsRejectsNonAIOpsPrefixedLabelWithoutHTTPRequest pins the
+// prefix/empty guard (label == "" || !HasPrefix lower "aiops/") that is distinct
+// from the allowlist guard: a "bug" label is rejected for failing the prefix
+// check before it ever reaches validGiteaStateLabels.
+func TestGiteaIssueLabelsRejectsNonAIOpsPrefixedLabelWithoutHTTPRequest(t *testing.T) {
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"bug"}})
+	assertStructuredFailure(t, result, err, "gitea_issue_labels only accepts aiops/* labels")
+	_, _, requests := server.recorded()
+	if requests != 0 {
+		t.Fatalf("call(%q) made %d HTTP requests; want 0", "bug", requests)
+	}
+}
+
+// TestGiteaIssueLabelsAcceptsLabelWithSurroundingWhitespace pins the
+// strings.TrimSpace reassignment: a " aiops/in-progress " input is trimmed and
+// accepted, and the trimmed value (not the padded original) is sent on the wire.
+func TestGiteaIssueLabelsAcceptsLabelWithSurroundingWhitespace(t *testing.T) {
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	const padded = " aiops/in-progress "
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{padded}})
+	if err != nil {
+		t.Fatalf("call(%q) returned Go error %v; want nil", padded, err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Fatalf("call(%q) = %q; want success after trimming", padded, result)
+	}
+
+	methods, _, bodies := server.recordedSequence()
+	if strings.Join(methods, ",") != "GET,POST,DELETE" {
+		t.Fatalf("call(%q) methods = %#v; want GET,POST,DELETE", padded, methods)
+	}
+	if !strings.Contains(bodies[1], `"aiops/in-progress"`) || strings.Contains(bodies[1], padded) {
+		t.Fatalf("call(%q) POST body = %s; want trimmed %q on the wire, not the padded input", padded, bodies[1], "aiops/in-progress")
+	}
+}
+
+// TestGiteaIssueLabelsRejectsStaleAIOpsLabelMissingID pins the label.ID == 0
+// guard in the stale-delete loop: a stale aiops label whose GET response omitted
+// its id yields the "omitted id" failure and no DELETE is attempted.
+func TestGiteaIssueLabelsRejectsStaleAIOpsLabelMissingID(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			// Stale aiops label "aiops/todo" present with id 0 (omitted).
+			_, _ = io.WriteString(w, `[{"id":0,"name":"aiops/todo"}]`)
+		case http.MethodPost:
+			_, _ = io.WriteString(w, `[{"id":303,"name":"aiops/in-progress"}]`)
+		case http.MethodDelete:
+			t.Fatalf("DELETE must not run for a stale aiops label with omitted id")
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: server.URL, owner: "owner", repo: "repo", http: server.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	assertStructuredFailure(t, result, err, "Gitea label response omitted id for stale aiops label")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,POST" {
+		t.Fatalf("methods = %#v; want GET,POST then failure before DELETE", methods)
+	}
+}
+
+// TestGiteaIssueLabelsNoOpWhenDesiredAlreadyPresentAndNoStale pins the else
+// branch: when the desired aiops label is already present (labelsToAdd empty)
+// and no stale aiops label exists, the call returns the synthetic {"labels":[]}
+// result with only the GET request and no add/delete writes.
+func TestGiteaIssueLabelsNoOpWhenDesiredAlreadyPresentAndNoStale(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			// Desired label already present; only non-aiops "bug" otherwise.
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/in-progress"},{"id":202,"name":"bug"}]`)
+		case http.MethodPost:
+			t.Fatalf("POST must not run when the desired aiops label is already present")
+		case http.MethodDelete:
+			t.Fatalf("DELETE must not run when there is no stale aiops label")
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: server.URL, owner: "owner", repo: "repo", http: server.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/in-progress"}})
+	if err != nil {
+		t.Fatalf("no-op call returned Go error %v; want nil", err)
+	}
+	if !strings.Contains(result, `"success":true`) || !strings.Contains(result, `{\"labels\":[]}`) {
+		t.Fatalf("no-op call result = %q; want synthetic success {\"labels\":[]}", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET" {
+		t.Fatalf("methods = %#v; want GET only for an already-satisfied issue", methods)
+	}
+}
