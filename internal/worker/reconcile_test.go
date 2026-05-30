@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -936,4 +937,196 @@ func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
 	payload := reconcileEndPayloadFor(t, emitter)
 	wantPayloadCount(t, payload, "kept", 1) // matched via active_rework prefix branch
 	wantPayloadCount(t, payload, "removed", 0)
+}
+
+// listIssueWorkspaceKeys returns just the sanitized keys discovered by
+// listIssueWorkspaces, sorted, so order-independent membership assertions read
+// cleanly. Traversal-order assertions use the raw slice instead.
+func listIssueWorkspaceKeys(t *testing.T, root, trackerKind string) []string {
+	t.Helper()
+	workspaces, err := listIssueWorkspaces(root, trackerKind)
+	if err != nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, %v; want nil error", root, err)
+	}
+	keys := make([]string, 0, len(workspaces))
+	for _, ws := range workspaces {
+		keys = append(keys, ws.Key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// TestListIssueWorkspacesMissingRootReturnsNil pins the root os.IsNotExist
+// branch: a non-existent workspace root yields (nil, nil), never an error.
+func TestListIssueWorkspacesMissingRootReturnsNil(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	workspaces, err := listIssueWorkspaces(missing, "linear")
+	if err != nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, %v; want nil error", missing, err)
+	}
+	if workspaces != nil {
+		t.Errorf("listIssueWorkspaces(%q) = %v; want nil", missing, workspaces)
+	}
+}
+
+// TestListIssueWorkspacesUnknownTrackerYieldsNoWorkspaces pins the nil
+// sourceDirs branch: an unknown tracker kind ranges over nil source dirs, so a
+// real workspace directory laid out on disk is never discovered.
+func TestListIssueWorkspacesUnknownTrackerYieldsNoWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	workspaces, err := listIssueWorkspaces(root, "bitbucket")
+	if err != nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, %v; want nil error", root, err)
+	}
+	if len(workspaces) != 0 {
+		t.Errorf("listIssueWorkspaces(%q, unknown tracker) = %v; want no workspaces", root, workspaces)
+	}
+}
+
+// TestListIssueWorkspacesExcludesNonDirectoryEntries pins the three !IsDir
+// guards (owner, repo, workspace level). Regular files placed beside real
+// workspace dirs at every level must be excluded from the result; only the
+// genuine workspace directory is reported.
+func TestListIssueWorkspacesExcludesNonDirectoryEntries(t *testing.T) {
+	root := t.TempDir()
+	workspaceDir := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// A file at the owner level (beside the "acme" owner dir).
+	mustWriteFile(t, filepath.Join(root, "owner-file.txt"))
+	// A file at the repo level (beside the "repo" repo dir).
+	mustWriteFile(t, filepath.Join(root, "acme", "repo-file.txt"))
+	// A file at the workspace level (beside the "LIN-1" workspace dir).
+	mustWriteFile(t, filepath.Join(root, "acme", "repo", "linear_issue", "workspace-file.txt"))
+
+	got := listIssueWorkspaceKeys(t, root, "linear")
+	want := []string{"LIN-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("listIssueWorkspaces(%q) keys = %v; want %v (non-directory entries must be excluded)", root, got, want)
+	}
+}
+
+// TestListIssueWorkspacesUnreadableOwnerDirReturnsWrappedError pins the owner
+// read-error branch: an unreadable owner directory is fatal (no IsNotExist
+// special-case at this level) and surfaces the "read workspace owner %s: %w"
+// wrap with the owner path. Skipped under root, which bypasses 0o000.
+func TestListIssueWorkspacesUnreadableOwnerDirReturnsWrappedError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses 0o000 permissions")
+	}
+	root := t.TempDir()
+	ownerPath := filepath.Join(root, "acme")
+	if err := os.MkdirAll(ownerPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(ownerPath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(ownerPath, 0o755) })
+
+	_, err := listIssueWorkspaces(root, "linear")
+	if err == nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, nil; want owner read error", root)
+	}
+	wantPrefix := "read workspace owner " + ownerPath + ":"
+	if !strings.HasPrefix(err.Error(), wantPrefix) {
+		t.Errorf("listIssueWorkspaces(%q) error = %q; want prefix %q", root, err.Error(), wantPrefix)
+	}
+}
+
+// TestListIssueWorkspacesUnreadableSourceDirReturnsWrappedError pins the
+// source-dir read-error branch: an unreadable issue-workspace source directory
+// is fatal (distinct from the IsNotExist skip) and surfaces the "read issue
+// workspace source %s: %w" wrap with the source path. Skipped under root.
+func TestListIssueWorkspacesUnreadableSourceDirReturnsWrappedError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses 0o000 permissions")
+	}
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "acme", "repo", "linear_issue")
+	if err := os.MkdirAll(sourcePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.Chmod(sourcePath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sourcePath, 0o755) })
+
+	_, err := listIssueWorkspaces(root, "linear")
+	if err == nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, nil; want source read error", root)
+	}
+	wantPrefix := "read issue workspace source " + sourcePath + ":"
+	if !strings.HasPrefix(err.Error(), wantPrefix) {
+		t.Errorf("listIssueWorkspaces(%q) error = %q; want prefix %q", root, err.Error(), wantPrefix)
+	}
+}
+
+// TestListIssueWorkspacesMissingSourceDirIsSkipped pins the source-dir
+// os.IsNotExist branch: when one of the candidate source dirs does not exist
+// the traversal continues to the next candidate rather than erroring, so the
+// sibling source dir's workspaces are still discovered.
+func TestListIssueWorkspacesMissingSourceDirIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	// Only the hyphen variant "linear-issue" exists; the underscore variant
+	// "linear_issue" is absent and must be skipped, not error.
+	if err := os.MkdirAll(filepath.Join(root, "acme", "repo", "linear-issue", "LIN-1"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	got := listIssueWorkspaceKeys(t, root, "linear")
+	want := []string{"LIN-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("listIssueWorkspaces(%q) keys = %v; want %v (missing source dir must be skipped)", root, got, want)
+	}
+}
+
+// TestListIssueWorkspacesPreservesTraversalOrder pins the owner->repo->
+// sourceDir->workspaceEntry concatenation order that feeds reconcile_workspace
+// event emission ordering. Entries within a directory come back from os.ReadDir
+// sorted by name, so the expected order is deterministic.
+func TestListIssueWorkspacesPreservesTraversalOrder(t *testing.T) {
+	root := t.TempDir()
+	// Two owners (alpha, beta), each with one repo. Within alpha/repo both
+	// source dirs exist; the inner loop ranges issueWorkspaceSourceDirs in its
+	// declared order ("linear_issue" then "linear-issue"), NOT ReadDir's
+	// name-sorted order, so A2 (under linear_issue) must precede A1 (under
+	// linear-issue) even though "linear-issue" sorts first on disk. This pins
+	// the sourceDir-ordering branch alongside the owner-major sequence.
+	dirs := []string{
+		filepath.Join(root, "alpha", "repo", "linear-issue", "A1"),
+		filepath.Join(root, "alpha", "repo", "linear_issue", "A2"),
+		filepath.Join(root, "beta", "repo", "linear-issue", "B1"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	workspaces, err := listIssueWorkspaces(root, "linear")
+	if err != nil {
+		t.Fatalf("listIssueWorkspaces(%q) = _, %v; want nil error", root, err)
+	}
+	gotPaths := make([]string, 0, len(workspaces))
+	for _, ws := range workspaces {
+		gotPaths = append(gotPaths, ws.Path)
+	}
+	wantPaths := []string{
+		filepath.Join(root, "alpha", "repo", "linear_issue", "A2"),
+		filepath.Join(root, "alpha", "repo", "linear-issue", "A1"),
+		filepath.Join(root, "beta", "repo", "linear-issue", "B1"),
+	}
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Errorf("listIssueWorkspaces(%q) paths = %v; want %v (traversal order must be owner->repo->sourceDir->entry)", root, gotPaths, wantPaths)
+	}
+}
+
+func mustWriteFile(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write file %s: %v", path, err)
+	}
 }
