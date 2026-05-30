@@ -815,3 +815,125 @@ func mustTime(value string) time.Time {
 	}
 	return parsed
 }
+
+// reconcileEndPayloadFor returns the single reconcile_end payload, failing if
+// there is not exactly one. Existing tests assert the skipped/partial status
+// strings but not the kept/removed counts; the tests below pin those counts so
+// the #521 decomposition (which moves the per-workspace counting into
+// reconcileWorkspaces and payload assembly into reconcileEndPayload) is
+// provably behavior-preserving.
+func reconcileEndPayloadFor(t *testing.T, em *fakeEmitter) map[string]any {
+	t.Helper()
+	ends := em.byKind(task.EventReconcileEnd)
+	if len(ends) != 1 {
+		t.Fatalf("reconcile_end events = %d, want 1", len(ends))
+	}
+	payload, ok := ends[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("reconcile_end payload = %T, want map", ends[0].Payload)
+	}
+	return payload
+}
+
+func wantPayloadCount(t *testing.T, payload map[string]any, key string, want int) {
+	t.Helper()
+	if got, _ := payload[key].(int); got != want {
+		t.Errorf("reconcile_end payload[%q] = %v, want %d", key, payload[key], want)
+	}
+}
+
+func TestReconcileStartupEndPayloadReportsKeptRemovedCounts(t *testing.T) {
+	root := t.TempDir()
+	for _, key := range []string{"LIN-1", "LIN-2", "LIN-3"} {
+		if err := os.MkdirAll(filepath.Join(root, "acme", "repo", "linear_issue", key), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", key, err)
+		}
+	}
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"In Progress"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"},
+			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
+		}},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	payload := reconcileEndPayloadFor(t, emitter)
+	if status, _ := payload["status"].(string); status != "ok" {
+		t.Errorf("reconcile_end status = %q, want \"ok\"", status)
+	}
+	wantPayloadCount(t, payload, "kept", 1)    // LIN-1 active
+	wantPayloadCount(t, payload, "removed", 2) // LIN-2 terminal + LIN-3 unknown
+	wantPayloadCount(t, payload, "active_issues", 1)
+	wantPayloadCount(t, payload, "terminal_issues", 1)
+}
+
+func TestReconcileStartupEndPayloadCountsOnTerminalFetchFailure(t *testing.T) {
+	root := t.TempDir()
+	for _, key := range []string{"LIN-1", "LIN-9"} {
+		if err := os.MkdirAll(filepath.Join(root, "acme", "repo", "linear_issue", key), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", key, err)
+		}
+	}
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"In Progress"},
+		TerminalStates: []string{"Done"},
+		Tracker: &fakeReconcileTrackerByCall{
+			issuesByCall: [][]tracker.Issue{{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}, nil},
+			errByCall:    []error{nil, errors.New("terminal outage")},
+		},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	payload := reconcileEndPayloadFor(t, emitter)
+	if status, _ := payload["status"].(string); status != "partial" {
+		t.Errorf("reconcile_end status = %q, want \"partial\"", status)
+	}
+	wantPayloadCount(t, payload, "removed", 0)
+	wantPayloadCount(t, payload, "kept", 2) // LIN-1 active + LIN-9 unknown kept (terminal unconfirmed)
+}
+
+// TestReconcileStartupEndPayloadCountsReworkKeep pins the active_rework branch's
+// kept count. The on-disk workspace timestamp differs from the issue's current
+// updatedAt, so it matches via reworkWorkspaceKeyPrefixes (not an exact active
+// key); a terminal issue arms canRemoveUnknown, so a rework branch that failed
+// to count/keep would remove the workspace instead.
+func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
+	root := t.TempDir()
+	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
+	if err := os.MkdirAll(reworkPath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:  root,
+		ActiveStates:   []string{"Rework"},
+		TerminalStates: []string{"Done"},
+		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
+			{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
+			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
+		}},
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(reworkPath); err != nil {
+		t.Fatalf("active_rework workspace should remain: %v", err)
+	}
+	payload := reconcileEndPayloadFor(t, emitter)
+	wantPayloadCount(t, payload, "kept", 1) // matched via active_rework prefix branch
+	wantPayloadCount(t, payload, "removed", 0)
+}
