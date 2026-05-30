@@ -874,3 +874,112 @@ func TestListIssuesByStatesEmptyShortCircuitsWithoutAPICall(t *testing.T) {
 		t.Fatalf("server received %d requests, want 0 (SPEC §17.3: empty fetch_issues_by_states returns empty without API call)", got)
 	}
 }
+
+// TestListIssuesByStatesSkipsBlockerFetchForNonTodoIssue pins the isTodoState
+// gate (#521 decomposition characterization): blockers are fetched ONLY for
+// Todo-state issues, so a non-Todo issue must end with empty BlockedBy AND must
+// not trigger a ListIssueInverseRelations request. The existing pagination test
+// only asserts the positive (Todo) branch; flipping the gate would survive it.
+func TestListIssuesByStatesSkipsBlockerFetchForNonTodoIssue(t *testing.T) {
+	var mu sync.Mutex
+	var ops []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		mu.Lock()
+		ops = append(ops, opNameFromQuery(payload.Query))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		// Single In Progress (non-Todo) issue; if the gate is flipped and a
+		// blocker fetch fires, the inverse-relations op falls through to this
+		// same handler and is recorded below.
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer srv.Close()
+	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(issues))
+	}
+	if got := len(issues[0].BlockedBy); got != 0 {
+		t.Fatalf("issues[0].BlockedBy = %d, want 0 (non-Todo issue must not fetch blockers)", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, op := range ops {
+		if op == "ListIssueInverseRelations" {
+			t.Fatalf("server ops = %v, want no ListIssueInverseRelations (blockers fetched only for Todo state)", ops)
+		}
+	}
+	if got, want := len(ops), 1; got != want {
+		t.Fatalf("server ops = %v (len %d), want %d (single ListIssues call only)", ops, got, want)
+	}
+}
+
+// TestListIssuesByStatesSkipsBlankLabelNames pins the empty-label skip branch
+// (#521 decomposition characterization): a node label whose name is blank or
+// whitespace-only is dropped from the mapped Labels slice; surviving names are
+// trimmed and lower-cased. No existing test feeds a blank label name.
+func TestListIssuesByStatesSkipsBlankLabelNames(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[{"name":"  "},{"name":""},{"name":" Backend "}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer srv.Close()
+	client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %d, want 1", len(issues))
+	}
+	if got := strings.Join(issues[0].Labels, ","); got != "backend" {
+		t.Fatalf("issues[0].Labels = %q, want %q (blank/whitespace label names skipped, survivor trimmed+lowered)", got, "backend")
+	}
+}
+
+// TestListIssuesByStatesReturnsParseErrorForMalformedTimestamp pins the
+// parse-error propagation branch end-to-end (#521 decomposition
+// characterization): a malformed createdAt/updatedAt routed THROUGH
+// ListIssuesByStates must surface the parse error. parseLinearIssueTime is unit
+// tested standalone, but no test exercises it via the list path; createdAt is
+// parsed before updatedAt, so the first malformed field wins.
+func TestListIssuesByStatesReturnsParseErrorForMalformedTimestamp(t *testing.T) {
+	cases := []struct {
+		name      string
+		createdAt string
+		updatedAt string
+		wantField string
+		wantValue string
+	}{
+		{"malformed-createdAt", "not-a-time", "2026-05-16T00:00:00Z", "createdAt", "not-a-time"},
+		{"malformed-updatedAt", "2026-05-15T00:00:00Z", "also-bad", "updatedAt", "also-bad"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, fmt.Sprintf(`{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":%q,"updatedAt":%q,"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`, c.createdAt, c.updatedAt))
+			}))
+			defer srv.Close()
+			client := newTestClient(t, srv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+			issues, err := client.ListIssuesByStates(context.Background(), []string{"In Progress"})
+			if err == nil {
+				t.Fatalf("ListIssuesByStates(%s) = %v, nil; want parse error", c.name, issues)
+			}
+			if !strings.Contains(err.Error(), c.wantField) || !strings.Contains(err.Error(), c.wantValue) {
+				t.Fatalf("ListIssuesByStates(%s) err = %q; want field %q and value %q", c.name, err.Error(), c.wantField, c.wantValue)
+			}
+		})
+	}
+}
