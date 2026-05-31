@@ -29,9 +29,9 @@ agent:
   # end (clone, branch, draft PR, labels, comments) without authoring
   # any code, so you can validate policy guardrails before letting a
   # real model touch the repository. Only the runners registered in
-  # `internal/runner/runner.go` (`mock`, `codex`, `claude`) can execute;
-  # any other name fails the task with `unknown runner`. Switch to
-  # `codex` (or `claude`) only after auditing several mock runs.
+  # `internal/runner/runner.go` (`mock`, `codex-app-server`, `claude`) can
+  # execute; any other name fails the task with `unknown runner`. Switch to
+  # `codex-app-server` (or `claude`) only after auditing several mock runs.
   default: mock
   max_concurrent_agents: 1
   max_turns: 6
@@ -136,7 +136,7 @@ Process:
 2. While the workflow is on the `mock` runner, no code is authored;
    use those runs to confirm the worker can clone, branch, open a draft
    PR, attach labels, and route review comments correctly.
-3. After graduating to `codex` or `claude`, make the smallest safe edit
+3. After graduating to `codex-app-server` or `claude`, make the smallest safe edit
    that respects every entry in `policy.deny_paths` and stays inside
    `max_changed_files` / `max_changed_loc`.
 4. Run the verification commands and capture results.
@@ -156,7 +156,7 @@ Rules:
 
 This template ships with `agent.default: mock` on purpose. Only the
 runners registered in `internal/runner/runner.go` are accepted today
-(`mock`, `codex`, `claude`); any other name causes the worker to fail
+(`mock`, `codex-app-server`, `claude`); any other name causes the worker to fail
 the task with `unknown runner`. Promote a company repository through
 the following stages, and only move forward after the previous stage
 has produced a clean audit trail:

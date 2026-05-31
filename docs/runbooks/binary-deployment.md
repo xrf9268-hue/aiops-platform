@@ -17,8 +17,8 @@ a service manager (systemd on Linux, launchd on macOS) instead of Compose.
 - **No Postgres / queue.** `cmd/worker` never reads `DATABASE_URL`.
   Restart recovery follows SPEC §14.3: fresh runtime state, re-dispatch
   eligible active issues on the next poll.
-- **No container runtime.** The agent runners (`mock`, `codex`,
-  `codex-app-server`, `claude`) launch local subprocesses via `os/exec`;
+- **No container runtime.** The agent runners (`mock`, `codex-app-server`,
+  `claude`) launch local subprocesses via `os/exec`;
   none shell out to `docker`. `testcontainers-go` is test-only.
 - **No PR creation / tracker writes.** The worker prepares a git
   workspace, runs the agent, enforces policy, and stops. Push and

@@ -108,7 +108,7 @@ to the deviations table above and gets a tracking issue for reversal.
 >   D6 and removed under #73/#407.
 > - **Multi-path WORKFLOW.md discovery** — value was cosmetic only;
 >   tracked as D4, being reverted under #72.
-> - **Runner abstraction supporting `mock` / `codex` / `claude`** — SPEC
+> - **Runner abstraction supporting `mock` / `codex-app-server` / `claude`** — SPEC
 >   is explicitly agent-agnostic, so this is **not a deviation at all**.
 >   It was a documentation error in #69.
 
