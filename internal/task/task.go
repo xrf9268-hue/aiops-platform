@@ -95,18 +95,24 @@ const (
 	EventPolicyFeedbackLoaded    = "policy_feedback_loaded"
 	EventPolicyFeedbackReadError = "policy_feedback_read_error"
 	EventExternalBlocker         = "external_blocker"
-	EventVerifyStart             = "verify_start"
-	EventVerifyEnd               = "verify_end"
-	EventPush                    = "push"
-	EventPRCreated               = "pr_created"
-	EventPRReused                = "pr_reused"
-	EventSucceeded               = "succeeded"
-	EventFailedAttempt           = "failed_attempt"
-	EventReconcileStart          = "reconcile_start"
-	EventReconcileWorkspace      = "reconcile_workspace"
-	EventReconcileEnd            = "reconcile_end"
-	EventWorkflowReloaded        = "workflow_reload"
-	EventWorkflowReloadFailed    = "workflow_reload_failed"
+	// EventSandboxStartupBlocked marks a run parked on a cooldown because the
+	// coding agent's sandbox could not start (codex/bwrap user-namespace denial),
+	// a failure that recurs identically until the host is reconfigured (#550).
+	// Distinct from external_blocker (an agent-declared dependency block) so an
+	// operator can tell a host sandbox regression apart from a normal BLOCKED.json.
+	EventSandboxStartupBlocked = "sandbox_startup_blocked"
+	EventVerifyStart           = "verify_start"
+	EventVerifyEnd             = "verify_end"
+	EventPush                  = "push"
+	EventPRCreated             = "pr_created"
+	EventPRReused              = "pr_reused"
+	EventSucceeded             = "succeeded"
+	EventFailedAttempt         = "failed_attempt"
+	EventReconcileStart        = "reconcile_start"
+	EventReconcileWorkspace    = "reconcile_workspace"
+	EventReconcileEnd          = "reconcile_end"
+	EventWorkflowReloaded      = "workflow_reload"
+	EventWorkflowReloadFailed  = "workflow_reload_failed"
 
 	// Tracker transition events are implementation extensions retained for
 	// operator visibility while tracker writes remain tool-driven.

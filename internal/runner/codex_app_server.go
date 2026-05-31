@@ -105,7 +105,12 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		res.OutputHead = string(head)
 	}
 	res.OutputTail = tail
-	return classifyAppServerOutcome(ctx, res, runErr, waitErr, client.readTimeoutMs, start, elapsed)
+	res, outcomeErr := classifyAppServerOutcome(ctx, res, runErr, waitErr, client.readTimeoutMs, start, elapsed)
+	// Re-tag a recurring codex/bwrap sandbox-startup denial so the worker parks
+	// it on a cooldown instead of hot-retrying every poll (#550). Done here, not
+	// inside classifyAppServerOutcome, because the captured output (OutputHead/
+	// Tail, where bwrap's stderr lands) is only assembled above.
+	return res, classifySandboxStartupFailure(outcomeErr, res)
 }
 
 // setupAppServerCommand builds the `codex app-server` *exec.Cmd ready to start:
