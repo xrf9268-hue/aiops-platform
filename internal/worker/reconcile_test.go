@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -92,6 +93,41 @@ func TestReconcileStartupRemovesTerminalWorkspaces(t *testing.T) {
 	}
 	if got := len(emitter.byKind(task.EventReconcileEnd)); got != 1 {
 		t.Fatalf("reconcile_end events = %d, want 1", got)
+	}
+}
+
+func TestRemoveIssueWorkspaceRemovesGoBuildCache(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	root := t.TempDir()
+	workdir := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workspace %s: %v", workdir, err)
+	}
+	cache := runner.SandboxGoBuildCachePath(workdir)
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatalf("mkdir Go build cache %s: %v", cache, err)
+	}
+
+	removed, err := RemoveIssueWorkspace(context.Background(), &fakeEmitter{}, RemoveWorkspaceRequest{
+		WorkspaceRoot: root,
+		TaskID:        "reconcile-startup",
+		Path:          workdir,
+		IssueID:       "issue-2",
+		Identifier:    "LIN-2",
+		State:         "Done",
+		Reason:        "terminal",
+	})
+	if err != nil {
+		t.Fatalf("RemoveIssueWorkspace() err = %v; want nil", err)
+	}
+	if !removed {
+		t.Fatalf("RemoveIssueWorkspace() removed = %v; want true", removed)
+	}
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("removed workspace stat err = %v; want not exist", err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("removed Go build cache stat err = %v; want not exist", err)
 	}
 }
 

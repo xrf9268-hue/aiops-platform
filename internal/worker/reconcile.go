@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -429,6 +430,9 @@ func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorksp
 	}
 	if err := workspace.SafeRemove(req.WorkspaceRoot, req.Path); err != nil {
 		return false, fmt.Errorf("remove %s workspace %s: %w", req.Reason, req.Path, err)
+	}
+	if err := runner.RemoveSandboxGoBuildCache(req.Path); err != nil {
+		log.Printf("event=go_build_cache_remove_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
 	}
 	Emit(ctx, ev, req.TaskID, "", task.EventReconcileWorkspace, "removed workspace", map[string]any{
 		"path":       req.Path,

@@ -243,6 +243,15 @@ recommended strategy is age-based pruning, gated on operator preference:
   cache. They survive worktree cleanup intentionally, because deleting
   them costs you a fresh `git clone` on the next task. Only purge a
   mirror when you change its upstream URL or the cache disk fills up.
+- **Agent Go caches** (`$TMPDIR/aiops-go-cache/...`): the Codex
+  app-server runner injects a shared `mod/` cache plus a per-workspace
+  `build/<key>/` cache so sandboxed Go commands can write their cache
+  files. `build/<key>/` entries are removed when the worker deletes the
+  matching workspace and are also lazily reaped on app-server setup when
+  the top-level `build/<key>/` directory mtime is older than 7 days. That
+  TTL is not a last-cache-hit signal, so a warm but idle cache can be
+  rebuilt. `mod/` is intentionally shared and is not managed by workspace
+  cleanup.
 
 The Go API for cleanup is `(*workspace.Manager).Cleanup(ctx, maxAge)`.
 It walks `$AIOPS_WORKSPACE_ROOT`, deletes each task directory whose mtime

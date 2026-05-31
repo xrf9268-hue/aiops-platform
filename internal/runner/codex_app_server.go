@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,8 @@ const (
 const PromptPath = ".aiops/PROMPT.md"
 
 func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error) {
+	releaseGoBuildCache := markActiveGoBuildCache(in.Workdir)
+	defer releaseGoBuildCache()
 	if err := validateAppServerWorkdir(in.Workdir); err != nil {
 		return Result{}, err
 	}
@@ -124,6 +127,9 @@ func setupAppServerCommand(ctx context.Context, in RunInput) (cmd *exec.Cmd, dir
 	// Pin the agent's Go toolchain caches to a sandbox-writable, per-workspace
 	// path so its first `go test` does not fail on the default $HOME-based
 	// caches that lie outside codex's workspace-write sandbox (#544).
+	if err := reapSandboxGoBuildCaches(); err != nil {
+		log.Printf("event=go_build_cache_reap_failed error=%q", err)
+	}
 	env = withSandboxGoToolchainCaches(env, in.Workdir)
 	cmd, directCodexExec, err = buildCodexAppServerCmd(ctx, in, env)
 	if err != nil {

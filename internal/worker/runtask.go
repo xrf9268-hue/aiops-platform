@@ -140,6 +140,9 @@ func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID,
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
 		LogTaskIDEventf(taskID, identifier, "workspace_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
 	}
+	if err := runner.RemoveSandboxGoBuildCache(workdir); err != nil {
+		LogTaskIDEventf(taskID, identifier, "go_build_cache_remove_failed", "reason=%s workdir=%q error=%q", reason, workdir, err)
+	}
 }
 
 // runState threads one task's lifecycle state across RunTask's phase helpers
