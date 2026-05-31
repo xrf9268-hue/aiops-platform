@@ -1784,7 +1784,14 @@ func TestBuildCodexAppServerCmdDefaultsEmptyCommandToAppServer(t *testing.T) {
 // visible here; without this guard it would fall through to `sh -c "codex exec"`
 // and block on a JSON-RPC handshake that never completes.
 func TestNewCodexAppServerCommandRejectsRemovedCodexExec(t *testing.T) {
-	for _, command := range []string{"codex exec", "codex exec --sandbox workspace-write", `"codex" "exec"`} {
+	for _, command := range []string{
+		"codex exec",
+		"codex exec --sandbox workspace-write",
+		`"codex" "exec"`,
+		"CODEX_HOME=/tmp/codex codex exec",     // leading env-assignment prefix
+		"env CODEX_HOME=/tmp/codex codex exec", // `env` prefix
+		"FOO=1 BAR=2 codex exec --skip-git-repo-check",
+	} {
 		command := command
 		t.Run(command, func(t *testing.T) {
 			cfg := appServerInput(codexWorkdir(t, "x")).Workflow.Config
@@ -1797,6 +1804,22 @@ func TestNewCodexAppServerCommandRejectsRemovedCodexExec(t *testing.T) {
 				t.Fatalf("NewCodexAppServerCommand(%q) error = %q; want it to point at `codex app-server`", command, err)
 			}
 		})
+	}
+}
+
+// TestNewCodexAppServerCommandAllowsEnvPrefixedAppServer pins that the
+// env-prefix stripping in the removed-exec guard does not over-reject a
+// legitimate env-prefixed `codex app-server` command.
+func TestNewCodexAppServerCommandAllowsEnvPrefixedAppServer(t *testing.T) {
+	binDir := t.TempDir()
+	codex := filepath.Join(binDir, "codex")
+	if err := os.WriteFile(codex, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := appServerInput(codexWorkdir(t, "x")).Workflow.Config
+	cfg.Codex.Command = "CODEX_HOME=/tmp/codex codex app-server"
+	if _, _, err := NewCodexAppServerCommand(context.Background(), cfg, []string{"PATH=" + binDir}); err != nil {
+		t.Fatalf("NewCodexAppServerCommand(%q) = %v; want nil (env-prefixed app-server is valid)", cfg.Codex.Command, err)
 	}
 }
 

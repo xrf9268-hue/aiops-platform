@@ -40,15 +40,22 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 	// `sh -c` and regressed Windows deployments that set a codex-prefixed
 	// codex.command (#417 restored this direct path; #471 pins it).
 	args, err := splitAppServerCommand(command)
-	// Authoritative launch-time guard for the removed one-shot `codex exec`
-	// runner (issue #541). The workflow loader rejects a literal `codex.command:
-	// codex exec`, but a command supplied via env reference (e.g.
-	// `codex.command: $CODEX_COMMAND` resolving to `codex exec`) is only visible
-	// here, after expansion. Without this the command would fall through to
-	// `sh -c "codex exec"` and the app-server runner would block on a JSON-RPC
-	// handshake that never completes; fail with a clear error instead.
-	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "exec" {
-		return nil, false, fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
+	// Launch-time guard for the removed one-shot `codex exec` runner (issue
+	// #541). The workflow loader rejects a literal `codex.command: codex exec`,
+	// but a command supplied via env reference (e.g. `codex.command:
+	// $CODEX_COMMAND` resolving to `codex exec`) is only visible here, after
+	// expansion. We strip a leading shell env-assignment / `env` prefix
+	// (`CODEX_HOME=… codex exec`, `env … codex exec`) before comparing, since
+	// the shell would still exec `codex exec`. This is a best-effort migration
+	// aid for recognizable spellings — it deliberately does not chase arbitrary
+	// shell wrappers (`bash -c …`, absolute paths). The authoritative backstop
+	// for any non-app-server command is the initialize handshake below, which
+	// is bounded by codex.read_timeout_ms and fails with a classified
+	// ReadTimeoutError rather than hanging indefinitely.
+	if err == nil {
+		if run := argvAfterEnvPrefix(args); len(run) >= 2 && run[0] == "codex" && run[1] == "exec" {
+			return nil, false, fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
+		}
 	}
 	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "app-server" && !hasShellSyntax(command) {
 		codexPath, err := lookPathInEnv("codex", env)
@@ -64,6 +71,47 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 	// is not a supported deployment target; codex-prefixed commands take the
 	// cross-platform direct path above.
 	return exec.CommandContext(ctx, "sh", "-c", command), false, nil
+}
+
+// argvAfterEnvPrefix drops a leading run of shell environment-assignment tokens
+// (`KEY=VALUE`) and an optional `env [KEY=VALUE...]` prefix, returning the argv
+// the shell would actually exec. It mirrors how `sh -c` treats a leading run of
+// assignments or the `env` command, so the removed-`codex exec` guard fires on
+// `CODEX_HOME=/x codex exec` and `env CODEX_HOME=/x codex exec` too.
+func argvAfterEnvPrefix(args []string) []string {
+	i := 0
+	for i < len(args) && isShellEnvAssignment(args[i]) {
+		i++
+	}
+	if i < len(args) && args[i] == "env" {
+		i++
+		for i < len(args) && isShellEnvAssignment(args[i]) {
+			i++
+		}
+	}
+	return args[i:]
+}
+
+// isShellEnvAssignment reports whether tok is a `NAME=VALUE` shell assignment
+// with a valid identifier NAME (so `codex=x` counts but `--flag=v` and `=v` do
+// not).
+func isShellEnvAssignment(tok string) bool {
+	eq := strings.IndexByte(tok, '=')
+	if eq <= 0 {
+		return false
+	}
+	for j := 0; j < eq; j++ {
+		c := tok[j]
+		switch {
+		case c == '_',
+			c >= 'A' && c <= 'Z',
+			c >= 'a' && c <= 'z',
+			j > 0 && c >= '0' && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // commandTokenizer carries splitAppServerCommand's token-builder state across
