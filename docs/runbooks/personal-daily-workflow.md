@@ -115,9 +115,9 @@ Shell runner (`internal/runner/shell.go`) that invokes `claude.command` (default
 
 Use when:
 
-- the task touches several files or needs more reasoning across a package.
-- you want richer tool use during the run.
-- Codex produced a thin or wrong patch and you want a second opinion. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
+- you prefer Claude as the coding agent, or want a second opinion when Codex produced a thin or wrong patch.
+- you want Claude's tool use for a run.
+- Note this runner is **one-shot**: it runs a single `sh -c` invocation per worker session, so multi-turn iteration relies on the orchestrator's continuation retries (the D30 cap), not an in-session turn loop like `codex-app-server`. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
 
 ```yaml
 agent:
@@ -138,11 +138,17 @@ Skip automation entirely when:
 Decision shortcut:
 
 ```text
-unsure or risky                  -> manual review, keep issue out of AI Ready
-plumbing or smoke test           -> mock
-small, well-scoped code change   -> codex-app-server
-multi-file or reasoning-heavy    -> claude
+unsure or risky                       -> manual review, keep issue out of AI Ready
+plumbing or smoke test                -> mock
+real code change (SPEC default)       -> codex-app-server
+prefer Claude / want a second opinion -> claude
 ```
+
+`codex-app-server` is the SPEC §10 default real runner and handles the full
+range of code changes — it drives a long-running Codex session of up to
+`agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1), so
+it is not limited to small edits. Pick `claude` when you want a different agent,
+not because the change is larger.
 
 ## Handling failed tasks
 
