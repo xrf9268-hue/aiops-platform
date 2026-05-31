@@ -340,27 +340,35 @@ func rejectRemovedFields(front []byte) error {
 	if err := yaml.Unmarshal(front, &raw); err != nil {
 		return nil
 	}
-	if codex, ok := raw["codex"].(map[string]any); ok {
-		if _, present := codex["profile"]; present {
-			return fmt.Errorf("codex.profile is no longer supported (issue #541); the one-shot `codex exec` runner it configured was removed. The SPEC §10 runner is `codex app-server` (agent.default: codex-app-server); set its sandbox with codex.thread_sandbox / codex.turn_sandbox_policy instead")
-		}
-		// `codex exec` is the removed one-shot runner mode (issue #541). The
-		// app-server launcher would now fall through to `sh -c "codex exec"`
-		// and the app-server runner would wait for JSON-RPC that never comes,
-		// failing the first real run with an opaque protocol/timeout error.
-		// Reject it at load time with a clear config error instead.
-		if command, ok := codex["command"].(string); ok {
-			if fields := strings.Fields(command); len(fields) >= 2 && fields[0] == "codex" && fields[1] == "exec" {
-				return fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
-			}
+	if err := rejectRemovedCodexFields(raw); err != nil {
+		return err
+	}
+	if agent, ok := raw["agent"].(map[string]any); ok {
+		if _, present := agent["fallback"]; present {
+			return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
 		}
 	}
-	agent, ok := raw["agent"].(map[string]any)
+	return nil
+}
+
+// rejectRemovedCodexFields surfaces clear errors for codex.* keys that
+// configured the removed one-shot `codex exec` runner (issue #541): the
+// `codex.profile` field and a `codex.command` whose argv runs `codex exec`.
+// Both would otherwise be silently dropped or fall through to a `sh -c
+// "codex exec"` launch that the app-server runner cannot speak, failing the
+// first real run with an opaque protocol/timeout error.
+func rejectRemovedCodexFields(raw map[string]any) error {
+	codex, ok := raw["codex"].(map[string]any)
 	if !ok {
 		return nil
 	}
-	if _, present := agent["fallback"]; present {
-		return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
+	if _, present := codex["profile"]; present {
+		return fmt.Errorf("codex.profile is no longer supported (issue #541); the one-shot `codex exec` runner it configured was removed. The SPEC §10 runner is `codex app-server` (agent.default: codex-app-server); set its sandbox with codex.thread_sandbox / codex.turn_sandbox_policy instead")
+	}
+	if command, ok := codex["command"].(string); ok {
+		if fields := strings.Fields(command); len(fields) >= 2 && fields[0] == "codex" && fields[1] == "exec" {
+			return fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
+		}
 	}
 	return nil
 }
