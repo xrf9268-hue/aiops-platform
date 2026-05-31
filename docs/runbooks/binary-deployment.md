@@ -54,6 +54,77 @@ Install hints by platform:
 > install hints for a host `PATH` rather than a worker image. The default
 > `--deploy=docker` is for the container path (`first-run-docker-linear-codex.md`).
 
+### Unprivileged user namespaces (codex-app-server only)
+
+With `agent.default: codex-app-server`, Codex runs the agent's shell commands
+inside a bubblewrap (`bwrap`) sandbox that needs **unprivileged user
+namespaces**. On modern Ubuntu (24.04+, and observed on kernel 6.17) these are
+**off by default** — `kernel.apparmor_restrict_unprivileged_userns=1` makes
+`bwrap` fail with `bwrap: setting up uid map: Permission denied`, which breaks
+every agent command (edit / test / push). The run still dispatches, burns a full
+turn, and is recorded as failed. This is **not** required for `agent.default:
+mock`, for the `claude` runner, or when `codex.thread_sandbox: danger-full-access`.
+
+**Verify (run as the worker's service user):**
+
+```bash
+# 1 = restricted (Ubuntu 24.04+ default); 0 = allowed
+sysctl kernel.apparmor_restrict_unprivileged_userns
+# Most authoritative: exercise Codex's own sandbox. Must print "ok".
+codex sandbox -- /bin/echo ok
+# Or the raw capability:
+bwrap --ro-bind / / --unshare-user --uid 0 -- /bin/echo ok
+```
+
+Run `worker --doctor --deploy=binary --mode=real` before a real run: its codex
+sandbox preflight FAILs here (with the remediation below) instead of letting a
+dispatched run burn a turn.
+
+**Remediation (Ubuntu 24.04+).** Prefer the least-privileged option that works
+for your host:
+
+- **Run the worker in a container** that allows user namespaces (the container's
+  sandbox model differs; see `first-run-docker-linear-codex.md`). This is the
+  most practical fix when you already deploy with a container runtime.
+- **Scoped AppArmor profile.** Keeps the host-wide restriction in place for every
+  other binary, so it is the safest fix on a shared host. Ubuntu 24.04+ keys
+  unprivileged-userns permission to the **executable path**, and Codex runs its
+  own vendored `bwrap` (not the system one), so the profile must point at that
+  binary. Locate it and grant `userns`:
+
+  ```bash
+  CODEX_BWRAP=$(find "$(dirname "$(readlink -f "$(command -v codex)")")/.." \
+    -name bwrap -path '*codex-resources*' 2>/dev/null | head -1)
+  sudo tee /etc/apparmor.d/codex-bwrap >/dev/null <<EOF
+  abi <abi/4.0>,
+  include <tunables/global>
+  profile codex-bwrap "$CODEX_BWRAP" flags=(unconfined) {
+    userns,
+    include if exists <local/codex-bwrap>
+  }
+  EOF
+  sudo apparmor_parser -r /etc/apparmor.d/codex-bwrap
+  ```
+
+  Re-run the locate step after a Codex upgrade — the vendored path is
+  version-specific.
+- **Relax the host-wide sysctl (last resort).** This re-enables unprivileged
+  user namespaces for **every** process on the host, weakening its security
+  posture — only do this on a single-purpose host:
+
+  ```bash
+  # runtime (resets on reboot)
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+  # persistent (apply now with --system, otherwise it waits for reboot)
+  echo 'kernel.apparmor_restrict_unprivileged_userns=0' | \
+    sudo tee /etc/sysctl.d/99-userns.conf
+  sudo sysctl --system
+  ```
+
+- **Or skip the sandbox** with `codex.thread_sandbox: danger-full-access` —
+  **only** in an already-isolated environment (a dedicated VM/container), since
+  it runs agent commands without a user-namespace sandbox.
+
 ## 2. Obtain the binaries
 
 ### Option A — build from source (pin Go 1.25 per `go.mod`)
@@ -310,6 +381,10 @@ exist, so a standard `~/.ssh/id_ed25519` for the running user works.
   inside the state dir (see §5 "SSH deploy key under hardening"), because
   `ProtectHome=true` hides keys under `/home`. See also
   [`local-dev.md`](local-dev.md) "Agent fails to push or open PRs".
+- **`bwrap: setting up uid map: Permission denied` on every agent command**
+  (codex-app-server) — the host restricts unprivileged user namespaces. See
+  §1 "Unprivileged user namespaces"; `worker --doctor --deploy=binary
+  --mode=real` catches this at preflight.
 - **`/api/v1/state` refuses to bind** — the server is loopback-only and
   disabled when `server.port: -1`. Confirm with `worker --print-config`.
 - **Workspace permission errors under a service manager** — ensure
