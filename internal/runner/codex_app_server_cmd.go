@@ -40,6 +40,16 @@ func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []st
 	// `sh -c` and regressed Windows deployments that set a codex-prefixed
 	// codex.command (#417 restored this direct path; #471 pins it).
 	args, err := splitAppServerCommand(command)
+	// Authoritative launch-time guard for the removed one-shot `codex exec`
+	// runner (issue #541). The workflow loader rejects a literal `codex.command:
+	// codex exec`, but a command supplied via env reference (e.g.
+	// `codex.command: $CODEX_COMMAND` resolving to `codex exec`) is only visible
+	// here, after expansion. Without this the command would fall through to
+	// `sh -c "codex exec"` and the app-server runner would block on a JSON-RPC
+	// handshake that never completes; fail with a clear error instead.
+	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "exec" {
+		return nil, false, fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
+	}
 	if err == nil && len(args) >= 2 && args[0] == "codex" && args[1] == "app-server" && !hasShellSyntax(command) {
 		codexPath, err := lookPathInEnv("codex", env)
 		if err != nil {

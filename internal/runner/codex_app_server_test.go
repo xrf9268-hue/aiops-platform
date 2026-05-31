@@ -1777,6 +1777,29 @@ func TestBuildCodexAppServerCmdDefaultsEmptyCommandToAppServer(t *testing.T) {
 	}
 }
 
+// TestNewCodexAppServerCommandRejectsRemovedCodexExec pins the authoritative
+// launch-time guard for the removed one-shot runner (#541). The workflow loader
+// rejects a literal `codex.command: codex exec`, but an env-expanded command
+// (e.g. `codex.command: $CODEX_COMMAND` resolving to `codex exec`) is only
+// visible here; without this guard it would fall through to `sh -c "codex exec"`
+// and block on a JSON-RPC handshake that never completes.
+func TestNewCodexAppServerCommandRejectsRemovedCodexExec(t *testing.T) {
+	for _, command := range []string{"codex exec", "codex exec --sandbox workspace-write", `"codex" "exec"`} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			cfg := appServerInput(codexWorkdir(t, "x")).Workflow.Config
+			cfg.Codex.Command = command
+			_, _, err := NewCodexAppServerCommand(context.Background(), cfg, []string{"PATH=" + os.Getenv("PATH")})
+			if err == nil {
+				t.Fatalf("NewCodexAppServerCommand(%q) = nil error; want removed-codex-exec rejection", command)
+			}
+			if !strings.Contains(err.Error(), "codex app-server") {
+				t.Fatalf("NewCodexAppServerCommand(%q) error = %q; want it to point at `codex app-server`", command, err)
+			}
+		})
+	}
+}
+
 // TestNewCodexAppServerCommandKeepsCodexPrefixedCommandCrossPlatform pins the
 // #471 contract at the exported boundary that preflight callers share: a
 // codex-prefixed custom codex.command must exec the codex binary directly,
