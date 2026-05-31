@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +89,313 @@ func TestBuildReportRealModeAuthenticatesServiceLinearProject(t *testing.T) {
 	}
 	if len(gotSlugs) != 1 || gotSlugs[0] != "api-platform" {
 		t.Fatalf("Linear probe project slugs = %#v; want service project slug only", gotSlugs)
+	}
+}
+
+// codexSandboxCfg is a minimal codex-app-server workflow config with the given
+// thread sandbox, for the checkSandbox user-namespace probe tests (#542).
+func codexSandboxCfg(threadSandbox string) workflow.Config {
+	return workflow.Config{
+		Agent: workflow.AgentConfig{Default: "codex-app-server"},
+		Codex: workflow.CommandConfig{ThreadSandbox: threadSandbox},
+	}
+}
+
+// sandboxProbeRunner answers the `codex sandbox` self-test with out/err,
+// records whether codex was invoked (so a test can assert the probe was
+// skipped), and captures its argv into gotArgs (nil to ignore) so a test can
+// assert the load-bearing probe args survive refactors. Any other command is
+// unexpected on this path.
+func sandboxProbeRunner(out []byte, err error, called *bool, gotArgs *[]string) CommandRunner {
+	return func(_ context.Context, name string, args []string, _ []string, _ io.Reader) ([]byte, error) {
+		if name == "codex" {
+			*called = true
+			if gotArgs != nil {
+				*gotArgs = args
+			}
+			return out, err
+		}
+		return nil, fmt.Errorf("unexpected command %q", name)
+	}
+}
+
+// assertCodexSandboxProbeArgs pins the exact load-bearing invocation (the
+// validated `--sandbox <mode>` selecting the configured profile, the `sandbox`
+// subcommand, the `--` separator, and `/bin/true`) so a weaker probe — omitting
+// the mode, dropping `--`, reordering — is caught by tests.
+func assertCodexSandboxProbeArgs(t *testing.T, args []string) {
+	t.Helper()
+	want := []string{"sandbox", "--", "/bin/true"}
+	if !slices.Equal(args, want) {
+		t.Errorf("codex sandbox probe args = %v; want %v", args, want)
+	}
+}
+
+// noContainer pins runningInContainerFn to false so a checkSandbox unit test is
+// not skewed by the host's container markers (the container branch precedes the
+// mode/deploy/probe branches).
+func noContainer(t *testing.T) {
+	t.Helper()
+	old := runningInContainerFn
+	runningInContainerFn = func() bool { return false }
+	t.Cleanup(func() { runningInContainerFn = old })
+}
+
+// requireLinuxProbe skips a test that depends on the live probe running, which
+// happens only on a Linux binary deploy (codex sandboxes agent commands with
+// bwrap user namespaces there; macOS uses seatbelt).
+func requireLinuxProbe(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skipf("codex sandbox probe runs only on linux; GOOS=%s", runtime.GOOS)
+	}
+}
+
+func TestCheckSandboxWarnsInContainer(t *testing.T) {
+	old := runningInContainerFn
+	runningInContainerFn = func() bool { return true }
+	t.Cleanup(func() { runningInContainerFn = old })
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	if called {
+		t.Fatal("checkSandbox ran the host probe inside a container; the container branch must short-circuit first")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Warn {
+		t.Errorf("checkSandbox(container) status = %s; want WARN", c.Status)
+	}
+}
+
+func TestCheckSandboxBinaryRealFailsWhenUserNamespaceBlocked(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	var called bool
+	var args []string
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte("bwrap: setting up uid map: Permission denied\n"), errors.New("exit status 1"), &called, &args)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	if !called {
+		t.Fatal("checkSandbox(real,binary) did not run the codex sandbox probe")
+	}
+	assertCodexSandboxProbeArgs(t, args)
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Fail {
+		t.Errorf("checkSandbox(real,binary,userns-blocked) status = %s; want FAIL", c.Status)
+	}
+	if !strings.Contains(c.Detail, "uid map") {
+		t.Errorf("detail = %q; want codex's sandbox error surfaced", c.Detail)
+	}
+	if !strings.Contains(c.Fix, "apparmor_restrict_unprivileged_userns") {
+		t.Errorf("fix = %q; want the AppArmor unprivileged-userns remediation", c.Fix)
+	}
+}
+
+func TestCheckSandboxBinaryRealPassesWhenSandboxStarts(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	var called bool
+	var args []string
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, &args)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	if !called {
+		t.Fatal("checkSandbox(real,binary) did not run the codex sandbox probe")
+	}
+	assertCodexSandboxProbeArgs(t, args)
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Pass {
+		t.Errorf("checkSandbox(real,binary,sandbox-ok) status = %s; want PASS (detail=%q)", c.Status, c.Detail)
+	}
+	if !strings.Contains(c.Detail, "codex sandbox") {
+		t.Errorf("detail = %q; want it to confirm codex sandbox started a command", c.Detail)
+	}
+}
+
+// TestCheckSandboxFailsAuthoritativelyOnNonUidmapError pins that probing codex's
+// REAL sandbox is authoritative: a failure that is NOT the uid-map message (e.g.
+// the netns/loopback denial that the same AppArmor restriction surfaces) is
+// still a hard FAIL, because the agent will hit it too — no false-PASS, and no
+// signature guessing.
+func TestCheckSandboxFailsAuthoritativelyOnNonUidmapError(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte("bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"), errors.New("exit status 1"), &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Fail {
+		t.Errorf("checkSandbox(real,binary,non-uidmap-error) status = %s; want FAIL (codex sandbox is authoritative)", c.Status)
+	}
+	if !strings.Contains(c.Detail, "RTM_NEWADDR") {
+		t.Errorf("detail = %q; want codex's actual sandbox error surfaced", c.Detail)
+	}
+}
+
+func TestCheckSandboxWarnsOnProbeTimeout(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	// A slow codex cold-start (context deadline) is not a sandbox denial — it
+	// must WARN, not FAIL with the userns remediation.
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner(nil, context.DeadlineExceeded, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Warn {
+		t.Errorf("checkSandbox(real,binary,probe-timeout) status = %s; want WARN", c.Status)
+	}
+	if strings.Contains(c.Fix, "apparmor_restrict_unprivileged_userns") {
+		t.Errorf("fix = %q; a probe timeout must not assert the userns cause", c.Fix)
+	}
+}
+
+func TestCheckSandboxWarnsWhenCodexLacksSandboxSubcommand(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	// An older codex that does not know `codex sandbox` is a version problem,
+	// not a host userns problem — WARN to upgrade, do not FAIL.
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte("error: unrecognized subcommand 'sandbox'\n"), errors.New("exit status 2"), &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Warn {
+		t.Errorf("checkSandbox(real,binary,no-sandbox-subcommand) status = %s; want WARN", c.Status)
+	}
+	if !strings.Contains(c.Fix, "Upgrade") {
+		t.Errorf("fix = %q; want an upgrade hint", c.Fix)
+	}
+}
+
+func TestCheckSandboxBinaryRealWarnsWhenCodexMissing(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner(nil, &exec.Error{Name: "codex", Err: exec.ErrNotFound}, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox")
+	if c.Status != Warn {
+		t.Errorf("checkSandbox(real,binary,codex-missing) status = %s; want WARN", c.Status)
+	}
+	if !strings.Contains(c.Detail, "codex not found") {
+		t.Errorf("detail = %q; want it to note codex could not be run", c.Detail)
+	}
+}
+
+func TestCheckSandboxWarnsForCustomCodexCommand(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	var called bool
+	cfg := codexSandboxCfg("workspace-write")
+	cfg.Codex.Command = "/opt/mycodex app-server" // custom wrapper, not bare codex
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), cfg)
+	if called {
+		t.Fatal("checkSandbox ran `codex sandbox` for a custom codex.command; cannot assume the wrapper supports it")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Warn {
+		t.Errorf("checkSandbox(custom codex.command) status = %s; want WARN", c.Status)
+	}
+}
+
+func TestCheckSandboxSkipsProbeWhenTurnPolicyOverridesToFullAccess(t *testing.T) {
+	noContainer(t)
+	// thread_sandbox stays workspace-write, but an explicit turn_sandbox_policy
+	// override to dangerFullAccess means the agent's turns run unsandboxed — the
+	// probe must follow the effective policy and skip, not false-FAIL (#549).
+	var called bool
+	cfg := codexSandboxCfg("workspace-write")
+	cfg.Codex.TurnSandboxPolicy = workflow.CodexSandboxPolicy{Type: workflow.CodexSandboxDangerFullAccess}
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), cfg)
+	if called {
+		t.Fatal("checkSandbox ran the probe though turn_sandbox_policy overrides to danger-full-access")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Pass {
+		t.Errorf("checkSandbox(turn-policy=dangerFullAccess) status = %s; want PASS", c.Status)
+	}
+}
+
+func TestCheckSandboxSkipsProbeForExternalSandbox(t *testing.T) {
+	noContainer(t)
+	// turn_sandbox_policy: externalSandbox means codex skips its own bwrap
+	// (host-provided isolation), so the userns probe is moot — skip, don't FAIL.
+	var called bool
+	cfg := codexSandboxCfg("workspace-write")
+	cfg.Codex.TurnSandboxPolicy = workflow.CodexSandboxPolicy{Type: workflow.CodexSandboxExternalSandbox}
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), cfg)
+	if called {
+		t.Fatal("checkSandbox ran the probe for externalSandbox (codex runs no userns sandbox)")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Pass {
+		t.Errorf("checkSandbox(externalSandbox) status = %s; want PASS", c.Status)
+	}
+}
+
+func TestCheckSandboxProbesEffectiveReadOnlyTurnPolicy(t *testing.T) {
+	requireLinuxProbe(t)
+	noContainer(t)
+	// read-only is still a sandboxed (bwrap-userns) profile, so the probe runs;
+	// the codex sandbox subcommand ignores a passed mode, so no mode arg.
+	var args []string
+	var called bool
+	cfg := codexSandboxCfg("workspace-write")
+	cfg.Codex.TurnSandboxPolicy = workflow.CodexSandboxPolicy{Type: workflow.CodexSandboxReadOnly}
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, &args)}}
+	r.checkSandbox(context.Background(), cfg)
+	if !called {
+		t.Fatal("checkSandbox(read-only effective) did not run the probe")
+	}
+	assertCodexSandboxProbeArgs(t, args)
+}
+
+func TestCheckSandboxSkipsProbeInMockMode(t *testing.T) {
+	noContainer(t)
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "mock", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	if called {
+		t.Fatal("checkSandbox(mock) ran the codex sandbox probe; mock mode must keep the static check")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Pass {
+		t.Errorf("checkSandbox(mock) status = %s; want static PASS", c.Status)
+	}
+}
+
+func TestCheckSandboxSkipsProbeForDockerDeploy(t *testing.T) {
+	noContainer(t)
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "docker",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("workspace-write"))
+	if called {
+		t.Fatal("checkSandbox(real,docker) ran the host probe; it is not authoritative for a container deploy")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Pass {
+		t.Errorf("checkSandbox(real,docker) status = %s; want static PASS", c.Status)
+	}
+}
+
+func TestCheckSandboxDangerFullAccessSkipsProbe(t *testing.T) {
+	noContainer(t)
+	var called bool
+	r := &reportBuilder{opts: Options{Mode: "real", Deploy: "binary",
+		Runner: sandboxProbeRunner([]byte(""), nil, &called, nil)}}
+	r.checkSandbox(context.Background(), codexSandboxCfg("danger-full-access"))
+	if called {
+		t.Fatal("checkSandbox(danger-full-access) ran the probe; that profile has no userns sandbox")
+	}
+	if c := findCheck(t, Report{Checks: r.checks}, "Codex sandbox"); c.Status != Pass {
+		t.Errorf("checkSandbox(danger-full-access) status = %s; want PASS", c.Status)
 	}
 }
 
