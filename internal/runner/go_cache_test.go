@@ -3,9 +3,11 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,6 +231,96 @@ func TestReapSandboxGoBuildCachesContinuesAfterRemoveError(t *testing.T) {
 	}
 	if _, err := os.Stat(later); !os.IsNotExist(err) {
 		t.Fatalf("later stale Go build cache stat err = %v; want not exist", err)
+	}
+}
+
+// TestReapSandboxGoBuildCachesConcurrentWithActiveChurnIsRaceFree pins the
+// invariant the goBuildCacheActiveMu guard exists for: a workspace marked active
+// is never reaped out from under a live app-server, even while concurrent sweeps
+// race a stream of mark/unmark calls. goBuildCacheActive is package-shared state
+// mutated from per-run goroutines and read by the reaper, so this exercises the
+// mark/active/reap paths under -race; without the mutex the detector trips on the
+// map and counter, and a dropped active check would delete heldCache.
+func TestReapSandboxGoBuildCachesConcurrentWithActiveChurnIsRaceFree(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	oldNow := goCacheNow
+	goCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { goCacheNow = oldNow })
+
+	// One workspace stays continuously marked for the whole run; its stale-mtime
+	// cache must survive every concurrent reap.
+	held := filepath.Join(t.TempDir(), "held")
+	heldCache := filepath.Join(aiopsGoCacheRoot(), "build", workspaceCacheKey(held))
+	staleGoBuildCacheDir(t, heldCache, now)
+	releaseHeld := markActiveGoBuildCache(held)
+	t.Cleanup(releaseHeld)
+
+	const churnKeys = 8
+	churn := make([]string, churnKeys)
+	for i := range churn {
+		churn[i] = filepath.Join(t.TempDir(), fmt.Sprintf("churn-%d", i))
+		staleGoBuildCacheDir(t, filepath.Join(aiopsGoCacheRoot(), "build", workspaceCacheKey(churn[i])), now)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ { // reapers hammer the sweep against active-set churn
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = reapSandboxGoBuildCaches()
+				}
+			}
+		}()
+	}
+	for _, w := range churn { // mark/unmark distinct keys, racing the reapers
+		wg.Add(1)
+		go func(workdir string) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				select {
+				case <-stop:
+					return
+				default:
+					markActiveGoBuildCache(workdir)()
+				}
+			}
+		}(w)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+
+	if _, err := os.Stat(heldCache); err != nil {
+		t.Fatalf("held active Go build cache stat err = %v; want nil (never reaped while marked)", err)
+	}
+	// Balanced mark/unmark must drain every churn key, leaving only the held key.
+	heldKey := workspaceCacheKey(held)
+	goBuildCacheActiveMu.Lock()
+	defer goBuildCacheActiveMu.Unlock()
+	for key, n := range goBuildCacheActive {
+		if key != heldKey {
+			t.Errorf("active set leaked key %q = %d; want only held key %q", key, n, heldKey)
+		}
+	}
+}
+
+// staleGoBuildCacheDir creates dir and backdates its mtime past goBuildCacheMaxAge
+// relative to now, so the reaper treats it as eligible for eviction.
+func staleGoBuildCacheDir(t *testing.T, dir string, now time.Time) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir Go build cache %s: %v", dir, err)
+	}
+	old := now.Add(-goBuildCacheMaxAge - time.Hour)
+	if err := os.Chtimes(dir, old, old); err != nil {
+		t.Fatalf("backdate Go build cache %s: %v", dir, err)
 	}
 }
 
