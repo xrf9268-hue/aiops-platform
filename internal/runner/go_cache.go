@@ -1,11 +1,14 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 // withSandboxGoToolchainCaches returns env with GOCACHE/GOMODCACHE defaulted to
@@ -39,10 +42,10 @@ import (
 // codex.env_passthrough, which wins because a default is applied only when the
 // name is not already set to a non-empty value.
 //
-// These cache dirs live outside the workspace tree, so workspace GC does not
-// reap them; a TTL/size-cap reaper is tracked as tech-debt in #551. The claude
-// ShellRunner does not use this — it runs unsandboxed, where Go's $HOME-based
-// defaults already work.
+// The per-workspace build cache dirs live outside the workspace tree, so a
+// lazy TTL reaper keeps long-lived workers from retaining one forever per
+// distinct workspace. The claude ShellRunner does not use this — it runs
+// unsandboxed, where Go's $HOME-based defaults already work.
 // goToolchainCaches is the single source for the Go cache env vars the worker
 // injects on the codex sandboxed path: GOCACHE is isolated per workspace (build
 // cache, unverified → poisoning vector); GOMODCACHE is shared (subdir only).
@@ -56,6 +59,18 @@ var goToolchainCaches = []struct {
 	{name: "GOCACHE", subdir: "build", perWorkspace: true},
 	{name: "GOMODCACHE", subdir: "mod", perWorkspace: false},
 }
+
+// goBuildCacheMaxAge is measured from the top-level build/<key> directory
+// mtime, not from last cache hit; warm-but-idle caches may be rebuilt.
+const goBuildCacheMaxAge = 7 * 24 * time.Hour
+
+var (
+	goCacheNow       = time.Now
+	goCacheRemoveAll = os.RemoveAll
+
+	goBuildCacheActiveMu sync.Mutex
+	goBuildCacheActive   = map[string]int{}
+)
 
 // aiopsGoCacheRoot is the parent of the worker-injected Go cache dirs.
 func aiopsGoCacheRoot() string { return filepath.Join(os.TempDir(), "aiops-go-cache") }
@@ -77,11 +92,105 @@ func withSandboxGoToolchainCaches(env []string, workdir string) []string {
 		}
 		path := filepath.Join(root, c.subdir)
 		if c.perWorkspace {
-			path = filepath.Join(path, workspaceCacheKey(workdir))
+			path = SandboxGoBuildCachePath(workdir)
 		}
 		env = append(env, c.name+"="+path)
 	}
 	return env
+}
+
+// SandboxGoBuildCachePath returns the worker-owned per-workspace Go build cache
+// path for workdir. Worker cleanup uses it to remove caches with workspaces.
+func SandboxGoBuildCachePath(workdir string) string {
+	return filepath.Join(aiopsGoCacheRoot(), "build", workspaceCacheKey(workdir))
+}
+
+// RemoveSandboxGoBuildCache removes the worker-owned per-workspace Go build
+// cache for workdir. Missing cache directories are treated as already removed.
+func RemoveSandboxGoBuildCache(workdir string) error {
+	path := SandboxGoBuildCachePath(workdir)
+	if err := goCacheRemoveAll(path); err != nil {
+		return fmt.Errorf("remove Go build cache %s: %w", path, err)
+	}
+	return nil
+}
+
+func markActiveGoBuildCache(workdir string) func() {
+	key := workspaceCacheKey(workdir)
+	goBuildCacheActiveMu.Lock()
+	goBuildCacheActive[key]++
+	goBuildCacheActiveMu.Unlock()
+	return func() { unmarkActiveGoBuildCache(key) }
+}
+
+func unmarkActiveGoBuildCache(key string) {
+	goBuildCacheActiveMu.Lock()
+	defer goBuildCacheActiveMu.Unlock()
+	if goBuildCacheActive[key] <= 1 {
+		delete(goBuildCacheActive, key)
+		return
+	}
+	goBuildCacheActive[key]--
+}
+
+func activeGoBuildCache(key string) bool {
+	goBuildCacheActiveMu.Lock()
+	defer goBuildCacheActiveMu.Unlock()
+	return goBuildCacheActive[key] > 0
+}
+
+func reapSandboxGoBuildCaches() error {
+	root := filepath.Join(aiopsGoCacheRoot(), "build")
+	entries, err := readGoBuildCacheEntries(root)
+	if err != nil {
+		return err
+	}
+	cutoff := goCacheNow().Add(-goBuildCacheMaxAge)
+	var errs []error
+	for _, entry := range entries {
+		if err := reapGoBuildCacheEntry(root, entry, cutoff); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func readGoBuildCacheEntries(root string) ([]os.DirEntry, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read Go build cache root %s: %w", root, err)
+	}
+	return entries, nil
+}
+
+func reapGoBuildCacheEntry(root string, entry os.DirEntry, cutoff time.Time) error {
+	if !entry.IsDir() || activeGoBuildCache(entry.Name()) {
+		return nil
+	}
+	path := filepath.Join(root, entry.Name())
+	info, err := entry.Info()
+	if err != nil {
+		return goBuildCacheStatError(path, err)
+	}
+	if info.ModTime().After(cutoff) {
+		return nil
+	}
+	// Directory mtime is only a stale-cache signal after active runs release
+	// their key; live app-server sessions are excluded above.
+	if err := goCacheRemoveAll(path); err != nil {
+		return fmt.Errorf("remove stale Go build cache %s: %w", path, err)
+	}
+	return nil
+}
+
+func goBuildCacheStatError(path string, err error) error {
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return fmt.Errorf("stat Go build cache %s: %w", path, err)
 }
 
 // goCacheNames returns the names of the Go cache env vars the worker injects, so

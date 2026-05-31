@@ -2,9 +2,12 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -111,6 +114,121 @@ func TestSetupAppServerCommandPinsPerWorkspaceGoCache(t *testing.T) {
 	want := "GOCACHE=" + filepath.Join("/sandbox-tmp", "aiops-go-cache", "build", workspaceCacheKey(in.Workdir))
 	if !strings.Contains(strings.Join(cmd.Env, "\n"), want) {
 		t.Errorf("setupAppServerCommand cmd.Env missing %q; got:\n%s", want, strings.Join(cmd.Env, "\n"))
+	}
+}
+
+func TestSetupAppServerCommandReapsStaleGoBuildCaches(t *testing.T) {
+	codexAppServerStubScript(t, "\n") // installs codex stub + login PATH
+	t.Setenv("TMPDIR", t.TempDir())
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	oldNow := goCacheNow
+	goCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { goCacheNow = oldNow })
+
+	buildRoot := filepath.Join(aiopsGoCacheRoot(), "build")
+	stale := filepath.Join(buildRoot, "stale")
+	recent := filepath.Join(buildRoot, "recent")
+	modCache := filepath.Join(aiopsGoCacheRoot(), "mod")
+	for _, dir := range []string{stale, recent, modCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	staleTime := now.Add(-goBuildCacheMaxAge - time.Hour)
+	if err := os.Chtimes(stale, staleTime, staleTime); err != nil {
+		t.Fatalf("backdate stale cache %s: %v", stale, err)
+	}
+	recentTime := now.Add(-time.Hour)
+	if err := os.Chtimes(recent, recentTime, recentTime); err != nil {
+		t.Fatalf("backdate recent cache %s: %v", recent, err)
+	}
+
+	in := appServerInput(codexWorkdir(t, "issue-42"))
+	if _, _, _, err := setupAppServerCommand(context.Background(), in); err != nil {
+		t.Fatalf("setupAppServerCommand: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale Go build cache stat err = %v; want not exist", err)
+	}
+	if _, err := os.Stat(recent); err != nil {
+		t.Fatalf("recent Go build cache stat err = %v; want nil", err)
+	}
+	if _, err := os.Stat(modCache); err != nil {
+		t.Fatalf("shared Go module cache stat err = %v; want nil", err)
+	}
+}
+
+func TestReapSandboxGoBuildCachesSkipsActiveCache(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	oldNow := goCacheNow
+	goCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { goCacheNow = oldNow })
+
+	workdir := filepath.Join(t.TempDir(), "issue-42")
+	cache := filepath.Join(aiopsGoCacheRoot(), "build", workspaceCacheKey(workdir))
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatalf("mkdir active Go build cache %s: %v", cache, err)
+	}
+	old := now.Add(-goBuildCacheMaxAge - time.Hour)
+	if err := os.Chtimes(cache, old, old); err != nil {
+		t.Fatalf("backdate active Go build cache %s: %v", cache, err)
+	}
+
+	release := markActiveGoBuildCache(workdir)
+	if err := reapSandboxGoBuildCaches(); err != nil {
+		t.Fatalf("reapSandboxGoBuildCaches(active) err = %v; want nil", err)
+	}
+	if _, err := os.Stat(cache); err != nil {
+		t.Fatalf("active Go build cache stat err = %v; want nil", err)
+	}
+	release()
+	if err := reapSandboxGoBuildCaches(); err != nil {
+		t.Fatalf("reapSandboxGoBuildCaches(released) err = %v; want nil", err)
+	}
+	if _, err := os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("released stale Go build cache stat err = %v; want not exist", err)
+	}
+}
+
+func TestReapSandboxGoBuildCachesContinuesAfterRemoveError(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	now := time.Date(2026, 5, 31, 12, 0, 0, 0, time.UTC)
+	oldNow := goCacheNow
+	goCacheNow = func() time.Time { return now }
+	t.Cleanup(func() { goCacheNow = oldNow })
+	removeErr := errors.New("remove denied")
+	oldRemoveAll := goCacheRemoveAll
+	t.Cleanup(func() { goCacheRemoveAll = oldRemoveAll })
+
+	buildRoot := filepath.Join(aiopsGoCacheRoot(), "build")
+	blocked := filepath.Join(buildRoot, "00-blocked")
+	later := filepath.Join(buildRoot, "10-later")
+	for _, dir := range []string{blocked, later} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+		old := now.Add(-goBuildCacheMaxAge - time.Hour)
+		if err := os.Chtimes(dir, old, old); err != nil {
+			t.Fatalf("backdate Go build cache %s: %v", dir, err)
+		}
+	}
+	goCacheRemoveAll = func(path string) error {
+		if path == blocked {
+			return removeErr
+		}
+		return os.RemoveAll(path)
+	}
+
+	err := reapSandboxGoBuildCaches()
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("reapSandboxGoBuildCaches() err = %v; want %v", err, removeErr)
+	}
+	if _, err := os.Stat(blocked); err != nil {
+		t.Fatalf("blocked Go build cache stat err = %v; want nil after injected remove failure", err)
+	}
+	if _, err := os.Stat(later); !os.IsNotExist(err) {
+		t.Fatalf("later stale Go build cache stat err = %v; want not exist", err)
 	}
 }
 
