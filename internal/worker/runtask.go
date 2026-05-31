@@ -327,9 +327,14 @@ func (rs *runState) buildPrompt() *RunTaskError {
 
 // runAgent resets stale post-run artifacts so the gates cannot pass on leftover
 // files, runs the before_run hook, invokes the runner under its timeout, and
+// newRunner constructs the runner for a model. It is a package var so tests can
+// inject a runner that returns context.Canceled to exercise the reconcile-cancel
+// artifact-skip path (#543) without standing up a real agent subprocess.
+var newRunner = runner.New
+
 // runs the after_run hook on both the success and failure paths.
 func (rs *runState) runAgent() *RunTaskError {
-	r, err := runner.New(rs.t.Model)
+	r, err := newRunner(rs.t.Model)
 	if err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
@@ -354,7 +359,13 @@ func (rs *runState) runAgent() *RunTaskError {
 		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
 			LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 		}
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
+		// An eligibility reconcile-cancel is a supervised stop, not a runner
+		// failure: leave the agent's RUN_SUMMARY.md intact so the worker does
+		// not overwrite a successful handoff with "runner failed" (#543). The
+		// orchestrator releases the run via its ReconcileCancel flag.
+		if !isReconcileCancel(rs.ctx, runErr) {
+			WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
+		}
 		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 	}
 
@@ -639,6 +650,23 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			}
 			addOutputFields(timeoutPayload, res)
 			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
+			return res, runErr
+		}
+		if isReconcileCancel(ctx, runErr) {
+			// The orchestrator stopped this run because its tracker issue left
+			// the active set (e.g. the agent's own PR handoff to In Review).
+			// That is a supervised stop, not a runner failure: record it as
+			// stopped, do not count it as a failure, and (in runAgent) leave the
+			// agent's RUN_SUMMARY.md intact (#543).
+			in.PhaseTransitionSink(currentPhase, task.PhaseCanceledByReconciliation)
+			stoppedPayload := map[string]any{
+				"model":       in.Task.Model,
+				"duration_ms": elapsed.Milliseconds(),
+				"ok":          true,
+				"reason":      "reconcile_ineligible",
+			}
+			addOutputFields(stoppedPayload, res)
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerStopped, "runner stopped: reconcile ineligible", stoppedPayload)
 			return res, runErr
 		}
 		in.PhaseTransitionSink(currentPhase, task.PhaseFailed)

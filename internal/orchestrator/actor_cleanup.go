@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 )
 
 // beginReconcileWorkspaceCleanup atomically reserves issue id for an
@@ -97,7 +98,10 @@ func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, cl
 	return func() {
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
-				entry.CancelWorker()
+				// Cause = ErrReconcileCancel so the worker records this as a
+				// supervised stop (runner_stopped), not a runner failure, and
+				// keeps the agent's RUN_SUMMARY.md (#543).
+				entry.CancelWorker(worker.ErrReconcileCancel)
 			}
 		}
 		for _, c := range cleanups {

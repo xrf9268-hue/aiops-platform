@@ -8,6 +8,7 @@ package orchestrator
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -285,7 +286,10 @@ func (r *reconcileStalledRunsOp) cancelStalledFollowup(canceled []*RunningEntry)
 	return func() {
 		for _, entry := range canceled {
 			if entry.CancelWorker != nil {
-				entry.CancelWorker()
+				// A stall cancel is a genuine failure (the run is stuck), not an
+				// eligibility stop, so it carries no ErrReconcileCancel cause and
+				// keeps its existing failure classification (#543).
+				entry.CancelWorker(nil)
 			}
 		}
 		if r.result != nil {
@@ -355,7 +359,12 @@ func (r *reconcileTrackerIssuesOp) reconcileActiveRun(st *OrchestratorState, id 
 	}
 	st.ReleaseClaim(id)
 	run.ReconcileCancel = true
+	fromState := run.Issue.State
 	r.flagTerminalRunCleanup(run, id)
+	// Log the stop reason at the reconcile site so an operator sees why the run
+	// was cancelled (otherwise only a bare "context canceled" surfaces). #543.
+	log.Printf("event=reconcile_stopping_run issue_id=%s issue_identifier=%s reason=state_left_active from=%q to=%q",
+		id, run.Identifier, fromState, run.Issue.State)
 	return run
 }
 

@@ -76,13 +76,18 @@ const (
 	EventOtherMessage     = "other_message"
 	EventMalformed        = "malformed"
 
-	EventEnqueued                = "enqueued"
-	EventClaimed                 = "claimed"
-	EventWorkflowResolved        = "workflow_resolved"
-	EventWorkspaceHookStart      = "hook_start"
-	EventWorkspaceHookEnd        = "hook_end"
-	EventRunnerStart             = "runner_start"
-	EventRunnerEnd               = "runner_end"
+	EventEnqueued           = "enqueued"
+	EventClaimed            = "claimed"
+	EventWorkflowResolved   = "workflow_resolved"
+	EventWorkspaceHookStart = "hook_start"
+	EventWorkspaceHookEnd   = "hook_end"
+	EventRunnerStart        = "runner_start"
+	EventRunnerEnd          = "runner_end"
+	// EventRunnerStopped marks a run the orchestrator stopped because its
+	// tracker issue left the active set (eligibility reconcile / agent PR
+	// handoff), distinct from runner_end's success/failure so it is not counted
+	// as either (SPEC §7.3 supervised stop; #543).
+	EventRunnerStopped           = "runner_stopped"
 	EventRunnerTimeout           = "runner_timeout"
 	EventStalled                 = "stalled"
 	EventAnalysisOnlyViolation   = "analysis_only_violation"
