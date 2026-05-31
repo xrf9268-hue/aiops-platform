@@ -1844,6 +1844,44 @@ prompt body
 	}
 }
 
+// TestLoad_RejectsRemovedCodexProfile verifies that workflows still carrying
+// the removed `codex.profile` key fail Load with an error pointing at the SPEC
+// §10 app-server runner. The one-shot `codex exec` runner the profile
+// configured was removed under #541; silently dropping the key would let
+// authors keep believing it controlled the runner's sandbox/approval flags.
+func TestLoad_RejectsRemovedCodexProfile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: codex-app-server
+codex:
+  command: codex app-server
+  profile: safe
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load: expected error for removed codex.profile, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{"codex.profile", "codex-app-server"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("Load error %q: want substring %q", msg, want)
+		}
+	}
+}
+
 // TestLoad_RejectsMissingCloneURL verifies that a workflow front matter
 // that omits `repo.clone_url` (or sets it to an empty string after env
 // expansion) fails Load with an error that names the file path and the
@@ -1992,36 +2030,43 @@ prompt`)
 }
 
 // TestLoad_RejectsUnsupportedAgentDefault matches the runner registry in
-// internal/runner: only mock/codex/claude are wired up. Catching a typo
-// like `agent.default: codexx` at Load time prevents the worker from
-// claiming a task and then dying with "unknown runner" partway through.
+// internal/runner: only mock/codex-app-server/claude are wired up. Catching a
+// typo like `agent.default: codexx` at Load time prevents the worker from
+// claiming a task and then dying with "unknown runner" partway through. The
+// `codex` (one-shot `codex exec`) runner was removed under #541, so it is now
+// rejected here too — the SPEC §10 runner is `codex-app-server`.
 func TestLoad_RejectsUnsupportedAgentDefault(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "WORKFLOW.md")
-	body := `---
+	for _, agent := range []string{"codexx", "codex"} {
+		agent := agent
+		t.Run(agent, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "WORKFLOW.md")
+			body := `---
 repo:
   owner: o
   name: r
   clone_url: git@example.com:o/r.git
 agent:
-  default: codexx
+  default: ` + agent + `
 tracker:
   kind: gitea
 ---
 prompt
 `
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatalf("write workflow: %v", err)
-	}
-	_, err := Load(p)
-	if err == nil {
-		t.Fatalf("Load: expected error for unsupported agent.default, got nil")
-	}
-	msg := err.Error()
-	for _, want := range []string{"agent.default", "codexx", p} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("Load error %q: want substring %q", msg, want)
-		}
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatalf("write workflow: %v", err)
+			}
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("Load(agent.default=%q): expected unsupported-runner error, got nil", agent)
+			}
+			msg := err.Error()
+			for _, want := range []string{"agent.default", agent, p} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("Load(agent.default=%q) error %q: want substring %q", agent, msg, want)
+				}
+			}
+		})
 	}
 }
 
@@ -2254,118 +2299,6 @@ func TestLoad_VerifyTimeoutAndAllowFailureRoundTrip(t *testing.T) {
 	}
 	if !wf.Config.Verify.AllowFailure {
 		t.Fatalf("Verify.AllowFailure = false, want true")
-	}
-}
-
-func TestDefaultConfig_CodexProfileIsSafe(t *testing.T) {
-	t.Parallel()
-	cfg := DefaultConfig()
-	if cfg.Codex.Profile != "safe" {
-		t.Fatalf("DefaultConfig().Codex.Profile = %q, want %q", cfg.Codex.Profile, "safe")
-	}
-}
-
-func TestLoad_AcceptsSupportedCodexProfiles(t *testing.T) {
-	t.Parallel()
-	for _, profile := range []string{"safe", "bypass", "custom"} {
-		profile := profile
-		t.Run(profile, func(t *testing.T) {
-			path := writeTempWorkflow(t, `---
-repo:
-  clone_url: file:///tmp/repo
-tracker:
-  kind: linear
-  project_slug: platform
-agent:
-  default: codex
-codex:
-  command: codex exec
-  profile: `+profile+`
----
-prompt body
-`)
-			wf, err := Load(path)
-			if err != nil {
-				t.Fatalf("Load(%s): %v", profile, err)
-			}
-			if wf.Config.Codex.Profile != profile {
-				t.Fatalf("Codex.Profile = %q, want %q", wf.Config.Codex.Profile, profile)
-			}
-		})
-	}
-}
-
-func TestLoad_RejectsUnknownCodexProfile(t *testing.T) {
-	t.Parallel()
-	path := writeTempWorkflow(t, `---
-repo:
-  clone_url: file:///tmp/repo
-tracker:
-  kind: linear
-  project_slug: platform
-agent:
-  default: codex
-codex:
-  command: codex exec
-  profile: yolo
----
-prompt
-`)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load: expected error for codex.profile=yolo, got nil")
-	}
-	if !strings.Contains(err.Error(), "codex.profile") || !strings.Contains(err.Error(), "yolo") {
-		t.Fatalf("error = %q; want it to mention codex.profile and yolo", err)
-	}
-}
-
-func TestLoad_NormalizesEmptyCodexProfileToSafe(t *testing.T) {
-	t.Parallel()
-	path := writeTempWorkflow(t, `---
-repo:
-  clone_url: file:///tmp/repo
-tracker:
-  kind: linear
-  project_slug: platform
-agent:
-  default: codex
-codex:
-  command: codex exec
----
-prompt
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if wf.Config.Codex.Profile != "safe" {
-		t.Fatalf("Codex.Profile = %q, want %q (normalization)", wf.Config.Codex.Profile, "safe")
-	}
-}
-
-func TestLoad_RejectsClaudeProfile(t *testing.T) {
-	t.Parallel()
-	path := writeTempWorkflow(t, `---
-repo:
-  clone_url: file:///tmp/repo
-tracker:
-  kind: linear
-  project_slug: platform
-agent:
-  default: claude
-claude:
-  command: claude
-  profile: safe
----
-prompt
-`)
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load: expected error for claude.profile, got nil")
-	}
-	if !strings.Contains(err.Error(), "claude.profile") {
-		t.Fatalf("error = %q; want it to mention claude.profile", err)
 	}
 }
 

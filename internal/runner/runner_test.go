@@ -14,6 +14,25 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+// TestNew_RemovedCodexExecRunnerIsUnknown pins the #541 removal: the
+// non-SPEC `codex` (one-shot `codex exec`) runner is no longer in the
+// registry, while the SPEC §10 `codex-app-server` runner still resolves.
+func TestNew_RemovedCodexExecRunnerIsUnknown(t *testing.T) {
+	if _, err := New("codex"); err == nil {
+		t.Fatalf("New(%q) = nil error; want unknown-runner error after #541 removal", "codex")
+	} else if !strings.Contains(err.Error(), "unknown runner") {
+		t.Fatalf("New(%q) error = %q; want it to mention %q", "codex", err, "unknown runner")
+	}
+
+	r, err := New(NameCodexAppServer)
+	if err != nil {
+		t.Fatalf("New(%q) = %v; want the SPEC §10 app-server runner", NameCodexAppServer, err)
+	}
+	if _, ok := r.(CodexAppServerRunner); !ok {
+		t.Fatalf("New(%q) = %T; want CodexAppServerRunner", NameCodexAppServer, r)
+	}
+}
+
 // shellTestWorkdir creates a temp workdir with a stub .aiops/PROMPT.md
 // so the ShellRunner's `< .aiops/PROMPT.md` redirection does not fail
 // before the actual command runs (we care about the kill path, not

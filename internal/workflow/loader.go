@@ -285,20 +285,8 @@ var supportedTrackerKinds = map[string]struct{}{
 // error with the workflow file path attached.
 var supportedAgentDefaults = map[string]struct{}{
 	"mock":             {},
-	"codex":            {},
 	"codex-app-server": {},
 	"claude":           {},
-}
-
-// supportedCodexProfiles enumerates the codex runner profile names the
-// runner package knows how to dispatch. "safe" injects --sandbox
-// workspace-write + --skip-git-repo-check; "bypass" swaps in
-// --dangerously-bypass-approvals-and-sandbox for already-isolated hosts;
-// "custom" falls back to the operator-supplied codex.command via sh -c.
-var supportedCodexProfiles = map[string]struct{}{
-	"safe":   {},
-	"bypass": {},
-	"custom": {},
 }
 
 var supportedSandboxBackends = map[string]struct{}{
@@ -351,6 +339,11 @@ func rejectRemovedFields(front []byte) error {
 	var raw map[string]any
 	if err := yaml.Unmarshal(front, &raw); err != nil {
 		return nil
+	}
+	if codex, ok := raw["codex"].(map[string]any); ok {
+		if _, present := codex["profile"]; present {
+			return fmt.Errorf("codex.profile is no longer supported (issue #541); the one-shot `codex exec` runner it configured was removed. The SPEC §10 runner is `codex app-server` (agent.default: codex-app-server); set its sandbox with codex.thread_sandbox / codex.turn_sandbox_policy instead")
+		}
 	}
 	agent, ok := raw["agent"].(map[string]any)
 	if !ok {
@@ -532,9 +525,6 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nol
 	}
 	if cfg.Tracker.Statuses.Rework == "" {
 		cfg.Tracker.Statuses.Rework = "Rework"
-	}
-	if cfg.Codex.Profile == "" {
-		cfg.Codex.Profile = "safe"
 	}
 	if cfg.Sandbox.Backend == "" {
 		cfg.Sandbox.Backend = "none"

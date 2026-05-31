@@ -96,8 +96,6 @@ func New(name string) (Runner, error) {
 		return MockRunner{SkipAnalysisPlan: true}, nil
 	case "mock-aiops-workflow-change":
 		return MockRunner{WriteAiopsWorkflow: true}, nil
-	case "codex":
-		return CodexRunner{}, nil
 	case NameCodexAppServer:
 		return CodexAppServerRunner{}, nil
 	case "claude":
@@ -114,9 +112,9 @@ func New(name string) (Runner, error) {
 // apply its own continuation-spawn cap: when the runner already enforces
 // max_turns inside the session, the orchestrator must not reuse the same
 // value as a cross-worker budget (see issue #216). Only the codex app-server
-// runner runs an in-session turn loop today; the one-shot codex exec runner
-// and the shell-based claude runner exit after a single turn, so the
-// orchestrator-side cap remains their only spawn safety net.
+// runner runs an in-session turn loop today; the shell-based claude runner and
+// the mock runners exit after a single turn, so the orchestrator-side cap
+// remains their only spawn safety net.
 func EnforcesMaxTurnsInternally(name string) bool {
 	switch name {
 	case NameCodexAppServer:

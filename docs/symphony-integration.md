@@ -45,7 +45,7 @@ After the queue, workspace, and agent-side branch/PR handoff loop works, switch 
 
 ```yaml
 agent:
-  default: codex
+  default: codex-app-server
 ```
 
 For company repositories, keep human review in the loop and prefer draft pull requests.

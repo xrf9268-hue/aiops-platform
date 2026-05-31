@@ -864,7 +864,7 @@ func TestRunRunnerWithTimeoutZeroBudgetUsesDefault(t *testing.T) {
 // post-hoc inspection contract.
 func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	dir := t.TempDir()
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex-app-server\npolicy:\n  mode: draft_pr\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
 	workflowPath := filepath.Join(dir, "WORKFLOW.md")
 	if err := os.WriteFile(workflowPath, []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -881,7 +881,7 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	if src != "file" {
 		t.Fatalf("workflow_source = %q, want %q", src, "file")
 	}
-	if wf.Config.Agent.Default != "codex" {
+	if wf.Config.Agent.Default != "codex-app-server" {
 		t.Fatalf("agent.default not loaded: %q", wf.Config.Agent.Default)
 	}
 	got := ev.byKind(task.EventWorkflowResolved)
@@ -900,8 +900,8 @@ func TestResolveWorkflow_EmitsResolvedEvent(t *testing.T) {
 	if payload["path"] != workflowPath {
 		t.Fatalf("payload.path = %v, want %q", payload["path"], workflowPath)
 	}
-	if payload["agent_default"] != "codex" {
-		t.Fatalf("payload.agent_default = %v, want \"codex\"", payload["agent_default"])
+	if payload["agent_default"] != "codex-app-server" {
+		t.Fatalf("payload.agent_default = %v, want \"codex-app-server\"", payload["agent_default"])
 	}
 	if _, present := payload["shadowed_by"]; present {
 		t.Fatalf("payload should omit shadowed_by when empty: %#v", payload)

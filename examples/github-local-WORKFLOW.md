@@ -30,7 +30,7 @@ workspace:
   root: ~/aiops-workspaces/github/xrf9268-hue-aiops-platform
 
 agent:
-  default: codex
+  default: codex-app-server
   max_concurrent_agents: 2
   max_concurrent_agents_by_state:
     priority:p1: 1
@@ -49,10 +49,11 @@ agent:
   max_timeout_retries: 1
 
 codex:
-  command: codex exec
-  # Full access is intended for a trusted local Mac or an already-isolated Docker
-  # worker. Use safe on shared hosts.
-  profile: bypass
+  # The SPEC §10 runner is the long-running `codex app-server` JSON-RPC session.
+  command: codex app-server
+  # thread_sandbox: danger-full-access is intended for a trusted local Mac or an
+  # already-isolated Docker worker. Use workspace-write on shared hosts.
+  thread_sandbox: danger-full-access
 
 claude:
   command: claude -p --permission-mode bypassPermissions --output-format text --max-turns 20

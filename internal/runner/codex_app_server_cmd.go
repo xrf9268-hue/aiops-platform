@@ -30,7 +30,7 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*ex
 // app-server must share this path so codex.command overrides behave identically.
 func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []string) (*exec.Cmd, bool, error) {
 	command := strings.TrimSpace(cfg.Codex.Command)
-	if command == "" || command == "codex exec" {
+	if command == "" {
 		command = "codex app-server"
 	}
 	// A codex-prefixed command with no shell syntax execs the codex binary

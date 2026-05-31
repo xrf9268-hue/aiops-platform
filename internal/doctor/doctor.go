@@ -757,7 +757,7 @@ func lookPathInEnv(name string, env []string) (string, error) { //nolint:gocogni
 }
 
 func requiresCodex(cfg workflow.Config) bool {
-	return cfg.Agent.Default == "codex" || cfg.Agent.Default == runner.NameCodexAppServer
+	return cfg.Agent.Default == runner.NameCodexAppServer
 }
 
 // codexAPIKeyAuthSelected reports whether the workflow opts the agent into
@@ -872,7 +872,7 @@ func linearProjectSlugs(cfg workflow.Config) []string {
 
 func usesDefaultCodexCLI(cfg workflow.Config) bool {
 	command := strings.TrimSpace(cfg.Codex.Command)
-	return command == "" || command == "codex exec" || command == "codex app-server" || strings.HasPrefix(command, "codex app-server ")
+	return command == "" || command == "codex app-server" || strings.HasPrefix(command, "codex app-server ")
 }
 
 func workflowNeedsSSH(cfg workflow.Config) bool {

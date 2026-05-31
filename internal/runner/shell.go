@@ -15,16 +15,13 @@ type ShellRunner struct {
 
 // killGrace is how long the runner waits between SIGTERM and SIGKILL when
 // the parent context is cancelled or its deadline elapses. We prefer a
-// graceful shutdown so codex/claude can flush output, then fall back to
+// graceful shutdown so the agent can flush output, then fall back to
 // SIGKILL to guarantee the worker does not block forever.
 const killGrace = 5 * time.Second
 
 func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	command := ""
-	switch r.Name {
-	case "codex":
-		command = in.Workflow.Config.Codex.Command
-	case "claude":
+	if r.Name == "claude" {
 		command = in.Workflow.Config.Claude.Command
 	}
 	if command == "" {
@@ -34,12 +31,9 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "sh", "-c", command+" < .aiops/PROMPT.md")
 	cmd.Dir = in.Workdir
-	switch r.Name {
-	case "codex":
-		cmd.Env = agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
-	case "claude":
+	if r.Name == "claude" {
 		cmd.Env = agentEnv(in.Workflow.Config.Claude.EnvPassthrough, in.Workflow.Config)
-	default:
+	} else {
 		cmd.Env = agentEnv(nil, in.Workflow.Config)
 	}
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {

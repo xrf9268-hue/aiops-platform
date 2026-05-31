@@ -144,10 +144,7 @@ func validateSupportedValues(path string, cfg Config) error {
 		return fmt.Errorf("%s: tracker.pagination_max_pages must be zero for the adapter default or greater than zero", path)
 	}
 	if _, ok := supportedAgentDefaults[cfg.Agent.Default]; !ok {
-		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex, codex-app-server, claude)", path, cfg.Agent.Default)
-	}
-	if _, ok := supportedCodexProfiles[cfg.Codex.Profile]; !ok {
-		return fmt.Errorf("%s: codex.profile %q is not supported (allowed: safe, bypass, custom)", path, cfg.Codex.Profile)
+		return fmt.Errorf("%s: agent.default %q is not supported (allowed: mock, codex-app-server, claude)", path, cfg.Agent.Default)
 	}
 	if err := validateAgentEnvPassthrough(path, "codex", cfg.Codex.EnvPassthrough, cfg); err != nil {
 		return err
@@ -222,9 +219,6 @@ func validateServerPort(path string, cfg Config) error {
 func validateCodexClaude(path string, cfg Config) error {
 	if err := cfg.Codex.TurnSandboxPolicy.Validate("codex.turn_sandbox_policy"); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
-	}
-	if strings.TrimSpace(cfg.Claude.Profile) != "" {
-		return fmt.Errorf("%s: claude.profile is not supported (only codex has profiles)", path)
 	}
 	if !cfg.Claude.LinearGraphQL.IsZero() {
 		return fmt.Errorf("%s: claude.linear_graphql is not supported (linear_graphql narrowing is a codex-side tool gate; declare it under codex.linear_graphql)", path)

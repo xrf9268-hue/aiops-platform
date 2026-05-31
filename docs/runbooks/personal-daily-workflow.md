@@ -67,7 +67,7 @@ Issue template that works well:
 
 ## Choosing a runner
 
-Runners are selected by the `agent.default` field in `WORKFLOW.md` and resolved in `internal/runner/runner.go`. Valid values: `mock`, `codex`, `claude`.
+Runners are selected by the `agent.default` field in `WORKFLOW.md` and resolved in `internal/runner/runner.go`. Valid values: `mock`, `codex-app-server`, `claude`.
 
 ### `mock`
 
@@ -84,36 +84,34 @@ agent:
   default: mock
 ```
 
-### `codex`
+### `codex-app-server`
 
-Profile-driven runner (`internal/runner/codex.go`) that invokes the codex CLI with sandbox/approval flags chosen by `codex.profile`. PROMPT.md is piped on stdin; output is captured to `.aiops/CODEX_OUTPUT.txt`. The `custom` profile falls back to `sh -c <codex.command>` (still stdin-fed).
+The SPEC §10 runner (`internal/runner/codex_app_server.go`). It launches `codex app-server` once and drives a long-running JSON-RPC 2.0 session over stdio, running multiple agent turns inside one worker session bounded by `agent.max_turns` (SPEC §5.3.5). PROMPT.md seeds the first turn; combined stdio is captured to `.aiops/CODEX_APP_SERVER_OUTPUT.txt`.
 
 Use when:
 
-- the task is a focused change inside one or two files.
+- you want the SPEC-aligned Codex runner — this is the default real runner.
+- the task may need several agent turns within a single session.
 - you have a Codex CLI session already authenticated locally.
-- you want to compare a Codex result against a Claude result for the same issue.
 
 ```yaml
 agent:
-  default: codex
+  default: codex-app-server
 codex:
-  command: codex exec
+  command: codex app-server
 ```
 
-**Profiles** select how the runner invokes codex:
+The agent's sandbox/approval posture is set by `codex.thread_sandbox` (per-session) and `codex.turn_sandbox_policy` (per-turn; derived from `thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on shared hosts and `danger-full-access` only on already-isolated workers (container, dedicated VM).
 
-- `safe` (default): builds `codex exec --sandbox workspace-write --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` from argv (no shell). PROMPT.md is piped on stdin. This avoids the deprecated `--full-auto` shorthand while preserving the workspace-write sandbox behavior.
-- `bypass`: same shape but with `--dangerously-bypass-approvals-and-sandbox`. Use only when the worker host is already isolated (container, dedicated VM); the flag turns codex's own sandbox off.
-- `custom`: runs the literal `codex.command` via `sh -c` with PROMPT.md on stdin. Note the change from earlier versions: the runner no longer appends `< .aiops/PROMPT.md` to the command — your command must consume stdin (which `codex exec` does by default when no positional prompt is given).
+> The earlier non-SPEC `codex` (one-shot `codex exec`) runner was removed under [#541](https://github.com/xrf9268-hue/aiops-platform/issues/541); it drove the same agent as `codex app-server` in a strictly worse mode (no in-session `max_turns`).
 
 ### Reading codex output after a run
 
-Each codex run writes `.aiops/CODEX_OUTPUT.txt` (combined stdout+stderr, capped at 1 MiB with a truncation footer when the cap fires) and reads `.aiops/CODEX_LAST_MESSAGE.md` (codex's own `-o` artifact) as the run summary. The `runner_end` task event payload also carries `output_head` (first 4 KiB), `output_tail` (last 4 KiB if non-overlapping), `output_bytes`, and `output_dropped` for at-a-glance triage from worker logs and runtime events without cloning the work branch.
+Each run writes `.aiops/CODEX_APP_SERVER_OUTPUT.txt` (combined stdout+stderr, capped at 1 MiB with a truncation footer when the cap fires). The `runner_end` task event payload also carries `output_head` (first 4 KiB), `output_tail` (last 4 KiB if non-overlapping), `output_bytes`, and `output_dropped` for at-a-glance triage from worker logs and runtime events without cloning the work branch.
 
 ### `claude`
 
-Same shell runner, invokes `claude.command` (default `claude`).
+Shell runner (`internal/runner/shell.go`) that invokes `claude.command` (default `claude`) via `sh -c` with PROMPT.md on stdin.
 
 Use when:
 
@@ -142,7 +140,7 @@ Decision shortcut:
 ```text
 unsure or risky                  -> manual review, keep issue out of AI Ready
 plumbing or smoke test           -> mock
-small, well-scoped code change   -> codex
+small, well-scoped code change   -> codex-app-server
 multi-file or reasoning-heavy    -> claude
 ```
 
@@ -169,7 +167,7 @@ reconciliation events. The deterministic workspace also retains
 - `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
 - Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
-- Runner command not found: confirm `codex.command` or `claude.command` resolves in the worker's scoped `PATH`. The codex/claude shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
+- Runner command not found: confirm `codex.command` (the `codex app-server` launch command) or `claude.command` resolves in the worker's scoped `PATH`. The `claude` shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).
 
 ### Re-running a failed task

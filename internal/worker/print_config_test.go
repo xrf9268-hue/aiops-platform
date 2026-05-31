@@ -77,7 +77,7 @@ func TestPrintConfig_DefaultSource(t *testing.T) {
 func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 	dir := t.TempDir()
 	canary := "SHOULD_NOT_LEAK_xyz"
-	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex\ntracker:\n  kind: linear\n  project_slug: platform\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  default: codex-app-server\ntracker:\n  kind: linear\n  project_slug: platform\n---\nFirst line of prompt template.\nSecond line includes canary " + canary + " in the middle.\nMore body...\n"
 	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -110,8 +110,8 @@ func TestPrintConfig_FileSourceWithPromptCanary(t *testing.T) {
 	if out.Resolution.Source != "file" {
 		t.Fatalf("source = %q, want %q", out.Resolution.Source, "file")
 	}
-	if out.Config.Agent.Default != "codex" {
-		t.Fatalf("agent.default = %q, want %q", out.Config.Agent.Default, "codex")
+	if out.Config.Agent.Default != "codex-app-server" {
+		t.Fatalf("agent.default = %q, want %q", out.Config.Agent.Default, "codex-app-server")
 	}
 	if out.PromptTemplate.FirstLine != "First line of prompt template." {
 		t.Fatalf("first_line = %q", out.PromptTemplate.FirstLine)

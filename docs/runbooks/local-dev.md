@@ -46,7 +46,7 @@ needs Postgres, it is stale — file an issue.
   binary under an init system instead, see the
   [binary deployment runbook](binary-deployment.md).
 - Optional: the Codex CLI installed and on `PATH`, only if you set
-  `agent.default: codex` and want a real model loop.
+  `agent.default: codex-app-server` and want a real model loop.
 
 `cmd/worker` does **not** need Postgres.
 

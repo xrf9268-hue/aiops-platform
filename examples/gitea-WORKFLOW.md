@@ -32,8 +32,7 @@ agent:
   max_turns: 8
 
 codex:
-  command: codex exec
-  profile: safe
+  command: codex app-server
 
 claude:
   command: claude

@@ -74,7 +74,7 @@ func (o *Orchestrator) ReconcileTrackerIssues(ctx context.Context, issuesByID ma
 //
 // The Codex app-server runner has its own self-stall detection; this
 // orchestrator-side path closes the gap when the runner goroutine itself
-// wedges or when a non-Codex runner (mock, codex exec) produces no
+// wedges or when a non-Codex runner (mock, shell-based claude) produces no
 // StallError. Without this an issue with `LastEventAt` long in the past
 // would stay claimed forever.
 //

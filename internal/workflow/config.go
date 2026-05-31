@@ -386,13 +386,6 @@ type CommandConfig struct {
 	// inherit in addition to the runner baseline. Tracker/repo API tokens stay
 	// behind orchestrator-owned tools and are rejected here.
 	EnvPassthrough []string `yaml:"env_passthrough,omitempty" json:"env_passthrough,omitempty"`
-	// Profile is consulted only by the codex runner. Allowed values: "safe"
-	// (default), "bypass", "custom". The field lives on the shared
-	// CommandConfig type to avoid splitting CodexConfig out for one field;
-	// loader validation rejects non-empty Profile on the Claude embed so a
-	// copy-paste mistake fails loud at load time instead of silently doing
-	// nothing.
-	Profile string `yaml:"profile,omitempty" json:"profile,omitempty"`
 	// App-server runtime settings mirror the Symphony/Codex app-server
 	// protocol fields. Keep Codex-owned wire shapes typed here so schema
 	// drift fails at workflow load or runner tests instead of in a live run.
@@ -412,9 +405,9 @@ type CommandConfig struct {
 	StallTimeoutMs       int `yaml:"stall_timeout_ms,omitempty" json:"stall_timeout_ms,omitempty"`
 	// LinearGraphQL narrows the agent-visible linear_graphql client-side tool
 	// (SPEC §15.5 harness hardening). The field lives on the shared
-	// CommandConfig type for the same pragmatic reason as Profile above; the
-	// loader rejects a non-zero embed on Claude so a copy-paste mistake fails
-	// loud at load time. See #298.
+	// CommandConfig type to avoid splitting a Codex-only config out for one
+	// embed; the loader rejects a non-zero embed on Claude so a copy-paste
+	// mistake fails loud at load time. See #298.
 	LinearGraphQL LinearGraphQLConfig `yaml:"linear_graphql,omitempty" json:"linear_graphql,omitempty"`
 }
 
@@ -603,7 +596,6 @@ func DefaultConfig() Config {
 		},
 		Codex: CommandConfig{
 			Command: "codex app-server",
-			Profile: "safe",
 			// See loader.go for why this is `granular:` with all flags
 			// false instead of the obsolete `reject:` shape (#329).
 			ApprovalPolicy: map[string]any{"granular": map[string]any{

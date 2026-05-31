@@ -328,7 +328,7 @@ func TestBuildReportRealModeWarnsWithoutExplicitGoTestDir(t *testing.T) {
 
 func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "worker-token-must-not-leak")
-	path := writeGitHubWorkflow(t, "codex")
+	path := writeGitHubWorkflow(t, "codex-app-server")
 	var checked []string
 	runner := func(_ context.Context, name string, args []string, env []string, _ io.Reader) ([]byte, error) {
 		switch name {
@@ -681,28 +681,6 @@ exit 1
 	}
 }
 
-func TestBuildReportRealModeSkipsAppServerProbeForCodexExec(t *testing.T) {
-	installFakeCodexWithoutAppServer(t)
-	path := writeWorkflowWithAgent(t, "codex")
-	report := BuildReport(context.Background(), Options{
-		WorkflowPath: path,
-		Mode:         "real",
-		Runner:       fakeRealRunner,
-	})
-
-	if got := findCheck(t, report, "Codex auth").Status; got != Pass {
-		t.Fatalf("Codex auth status = %s; want PASS", got)
-	}
-	if checkExists(report, "Codex app-server") {
-		t.Fatalf("Codex app-server check should be skipped for agent.default codex")
-	}
-	for _, check := range report.Checks {
-		if check.Status == Fail {
-			t.Fatalf("codex exec workflow should not fail app-server preflight; got %+v", check)
-		}
-	}
-}
-
 func installFakeCodex(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -712,24 +690,6 @@ case "$1" in
   --version) echo "codex-cli 0.133.0"; exit 0 ;;
   login) echo "Logged in"; exit 0 ;;
   app-server) read line; echo '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'; exit 0 ;;
-esac
-exit 1
-`
-	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
-		t.Fatalf("write fake codex: %v", err)
-	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-}
-
-func installFakeCodexWithoutAppServer(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "codex")
-	body := `#!/bin/sh
-case "$1" in
-  --version) echo "codex-cli 0.133.0"; exit 0 ;;
-  login) echo "Logged in"; exit 0 ;;
-  app-server) echo "app-server unavailable" >&2; exit 1 ;;
 esac
 exit 1
 `
@@ -942,11 +902,6 @@ prompt
 		t.Fatalf("write workflow: %v", err)
 	}
 	return path
-}
-
-func writeWorkflowWithAgent(t *testing.T, agent string) string {
-	t.Helper()
-	return writeWorkflowBody(t, "gitea", "token", agent, "")
 }
 
 func writeWorkflowWithCodexCommand(t *testing.T, command string) string {

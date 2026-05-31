@@ -76,15 +76,9 @@ agent:
   max_turns: 8
 
 codex:
-  command: codex exec
-  # profile selects how the runner invokes codex:
-  #   safe   (default) - codex exec --sandbox workspace-write --skip-git-repo-check ...
-  #   bypass           - codex exec --dangerously-bypass-approvals-and-sandbox ...
-  #                      (only when the worker host is already isolated, e.g. a
-  #                      container; codex bypasses its own sandbox + approval gates)
-  #   custom           - run the literal codex.command via sh -c; PROMPT.md
-  #                      is piped on stdin. Escape hatch for bespoke wrappers.
-  profile: safe
+  # The SPEC §10 runner is `codex app-server` — a long-running JSON-RPC 2.0
+  # session over stdio. Set agent.default: codex-app-server to use it.
+  command: codex app-server
   # linear_graphql narrows the agent-visible Linear GraphQL tool to the
   # operator-chosen surface (SPEC §15.5 harness hardening / #298). The
   # zero value (omit the block) keeps the safest posture: queries are

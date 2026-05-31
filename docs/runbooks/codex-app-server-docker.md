@@ -170,8 +170,8 @@ them as `Codex model config: model=…, provider=…, reasoning_effort=…`. If 
 default, so model selection is always explicit and auditable in review.
 
 Provider, profile, service tier, reasoning effort, and feature flags all belong
-in this tracked file or in `WORKFLOW.md` front matter (`codex.profile`,
-`codex.thread_sandbox`, `codex.approval_policy`, the `codex.*_timeout_ms`
+in this tracked file or in `WORKFLOW.md` front matter (`codex.thread_sandbox`,
+`codex.turn_sandbox_policy`, `codex.approval_policy`, the `codex.*_timeout_ms`
 fields), never in operator-local state baked into the image.
 
 ### Rotation, refresh, and revocation

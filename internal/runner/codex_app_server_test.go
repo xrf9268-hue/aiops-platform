@@ -1758,12 +1758,12 @@ for line in sys.stdin:
 	}
 }
 
-func TestBuildCodexAppServerCmdUsesAppServerWhenDefaultCodexExecCommandIsUnchanged(t *testing.T) {
+func TestBuildCodexAppServerCmdDefaultsEmptyCommandToAppServer(t *testing.T) {
 	codexAppServerStubScript(t, `
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Codex.Command = "codex exec"
+	in.Workflow.Config.Codex.Command = ""
 
 	cmd, directExec, err := buildCodexAppServerCmd(context.Background(), in, []string{"PATH=" + os.Getenv("PATH")})
 	if err != nil {

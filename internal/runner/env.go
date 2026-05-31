@@ -30,7 +30,7 @@ func agentEnv(passthrough []string, cfg workflow.Config) []string {
 // credentials that the agent subprocess will never inherit.
 func AgentEnvForPreflight(agent string, cfg workflow.Config) []string {
 	switch agent {
-	case "codex", NameCodexAppServer:
+	case NameCodexAppServer:
 		return agentEnv(cfg.Codex.EnvPassthrough, cfg)
 	case "claude":
 		return agentEnv(cfg.Claude.EnvPassthrough, cfg)

@@ -8,8 +8,8 @@ harness hardening as part of the core safety model, not as an optional add-on.
 ## Current sandbox model
 
 `aiops-platform` always relies on the selected coding agent's own sandbox and
-approval behavior. For Codex runs, that means the Codex CLI sandbox selected by
-`codex.profile` in `WORKFLOW.md`.
+approval behavior. For Codex runs, that means the Codex app-server sandbox
+selected by `codex.thread_sandbox` / `codex.turn_sandbox_policy` in `WORKFLOW.md`.
 
 The platform now also supports an optional Linux process sandbox wrapper for
 agent invocation. It is disabled by default; operators enable it explicitly with

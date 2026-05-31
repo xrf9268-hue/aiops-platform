@@ -65,7 +65,7 @@ brand/UX rationale.
 - `internal/tracker` — tracker abstraction with Linear and GitHub clients.
 - `internal/gitea` — Gitea tracker client plus the Gitea PR-tool exposed through
   the agent/tool surface (not a worker-side PR handoff).
-- `internal/runner` — runner abstraction for `mock`, `codex`, and `claude`.
+- `internal/runner` — runner abstraction for `mock`, `codex-app-server`, and `claude`.
 - `internal/workspace` — deterministic Git workspace management and verification.
 - `internal/policy` — change-size and mode policy checks (`analysis_only`,
   `draft_pr`, …).
@@ -282,7 +282,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `verify.commands` | none | implementation |
 
 Operators who want the historical personal-profile values —
-`agent.max_concurrent_agents: 1`, `codex.command: codex exec`,
+`agent.max_concurrent_agents: 1`, `codex.command: codex app-server`,
 `workspace.root: ~/aiops-workspaces/personal`, the Linear-vocabulary state
 lists — copy [`examples/WORKFLOW.md`](examples/WORKFLOW.md) and declare them
 explicitly. That example pins every divergent value so a SPEC reader can see the
@@ -352,7 +352,7 @@ operators have reviewed the plan:
 
 ```yaml
 agent:
-  default: mock # or codex/claude after the workflow is trusted
+  default: mock # or codex-app-server/claude after the workflow is trusted
 policy:
   mode: analysis_only
 ```
@@ -369,7 +369,7 @@ After the mock loop is trusted, switch to a real runner:
 
 ```yaml
 agent:
-  default: codex
+  default: codex-app-server
 policy:
   mode: draft_pr
 ```
@@ -449,8 +449,9 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 
 See [`docs/security-posture.md`](docs/security-posture.md) for the current
 sandbox model, threat model, and operator checklist. In short: this platform
-always relies on the coding agent's own sandbox/approval behavior, such as Codex
-CLI's sandbox selected by `codex.profile`, and can optionally wrap agent
+always relies on the coding agent's own sandbox/approval behavior, such as the
+Codex app-server sandbox selected by `codex.thread_sandbox` /
+`codex.turn_sandbox_policy`, and can optionally wrap agent
 invocation with a Linux `bubblewrap` or `firejail` sandbox configured by the
 workflow `sandbox:` block. That wrapper is disabled by default and is not a
 container/VM isolation layer.

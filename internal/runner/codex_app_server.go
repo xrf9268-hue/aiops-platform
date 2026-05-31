@@ -29,15 +29,18 @@ const (
 )
 
 // CodexAppServerRunner talks to `codex app-server` over JSON-RPC 2.0 stdio.
-// It is intentionally separate from CodexRunner so the existing one-shot
-// `codex exec` path remains backwards-compatible while the app-server transport
-// can grow toward the Symphony protocol.
+// This is the SPEC §10 agent runner: a long-running app-server session that
+// drives multiple coding-agent turns within one worker session.
 type CodexAppServerRunner struct{}
 
 const (
 	codexAppServerOutputPath = ".aiops/CODEX_APP_SERVER_OUTPUT.txt"
 	nonInteractiveInputReply = "This is a non-interactive session. Operator input is unavailable."
 )
+
+// PromptPath is the workdir-relative location of the rendered prompt the
+// worker writes before invoking the runner.
+const PromptPath = ".aiops/PROMPT.md"
 
 func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	if err := validateAppServerWorkdir(in.Workdir); err != nil {

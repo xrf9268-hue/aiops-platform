@@ -236,7 +236,7 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 |------|------------------|
 | `cmd/worker` | Polls trackers, dispatches eligible issues, and runs the Symphony loop; PR handoff is agent-side |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
-| `internal/runner` | Runner abstraction: `mock`, `codex`, `claude` |
+| `internal/runner` | Runner abstraction: `mock`, `codex-app-server`, `claude` |
 | `internal/workspace` | Deterministic git workspace, verify, policy checks |
 | `internal/tracker` | Tracker abstraction with Linear client |
 | `internal/gitea` | Gitea tracker/client support and PR/tool helpers |

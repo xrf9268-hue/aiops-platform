@@ -114,9 +114,9 @@ type Orchestrator struct {
 	// pin the issue under OrchestratorState.Failed once exceeded.
 	maxFailureRetries int
 	// maxTurns bounds clean continuation dispatches only for runners that
-	// cannot enforce agent.max_turns inside their own session loop (one-shot
-	// codex exec, shell-based claude, mocks). For those runners the cap is a
-	// worker-spawn safety net, not the SPEC §5.3.5 in-session budget.
+	// cannot enforce agent.max_turns inside their own session loop (shell-based
+	// claude, mocks). For those runners the cap is a worker-spawn safety net,
+	// not the SPEC §5.3.5 in-session budget.
 	//
 	// When runnerEnforcesMaxTurns is true (codex app-server, which already
 	// caps turns per session per SPEC §5.3.5), the orchestrator does not apply

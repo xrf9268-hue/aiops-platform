@@ -37,7 +37,7 @@ agent:
   max_turns: 6
 
 codex:
-  command: codex exec
+  command: codex app-server
 
 claude:
   command: claude
@@ -174,8 +174,8 @@ has produced a clean audit trail:
    `pr.draft: true`, and the full `deny_paths` list. Keep
    `max_changed_files` and `max_changed_loc` conservative.
 
-3. **Codex with draft PRs** (`codex`).
-   Once the Claude loop looks healthy, swap `agent.default` to `codex`
+3. **Codex with draft PRs** (`codex-app-server`).
+   Once the Claude loop looks healthy, swap `agent.default` to `codex-app-server`
    under the same guardrails. Raise the size caps only after several
    PRs have been reviewed and merged cleanly.
 

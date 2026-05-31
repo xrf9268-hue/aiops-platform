@@ -35,7 +35,7 @@ This runbook wires the local macOS operator flow for resolving
   Runner-timeout retries follow the same pattern via
   `agent.max_timeout_retries`.
 - Codex is the primary implementer and is configured for full access through
-  `codex.profile: bypass`.
+  `codex.thread_sandbox: danger-full-access`.
 - Codex review and Claude Code are both mandatory independent local diff
   reviewers before PR handoff.
 - `scripts/local-pr-follow-through.sh` serializes PR gates and auto-merge:

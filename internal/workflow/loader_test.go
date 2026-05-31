@@ -515,7 +515,7 @@ func TestSplitFrontMatter_LineAwareClosingFence(t *testing.T) {
 				"  ---\n" +
 				"  More notes.\n" +
 				"agent:\n" +
-				"  default: codex\n" +
+				"  default: codex-app-server\n" +
 				"---\n" +
 				"prompt body\n",
 			wantFront: "description: |\n" +
@@ -523,7 +523,7 @@ func TestSplitFrontMatter_LineAwareClosingFence(t *testing.T) {
 				"  ---\n" +
 				"  More notes.\n" +
 				"agent:\n" +
-				"  default: codex\n",
+				"  default: codex-app-server\n",
 			wantBody: "prompt body\n",
 		},
 		{
@@ -650,7 +650,7 @@ tracker:
   project_slug: example
   api_key: $LINEAR_API_KEY_BLOCK_SCALAR_TEST
 agent:
-  default: codex
+  default: codex-app-server
 ---
 Prompt body across the inner --- line.
 `)
@@ -659,8 +659,8 @@ Prompt body across the inner --- line.
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := wf.Config.Agent.Default; got != "codex" {
-		t.Fatalf("agent.default = %q, want %q (front matter was truncated by inner --- line)", got, "codex")
+	if got := wf.Config.Agent.Default; got != "codex-app-server" {
+		t.Fatalf("agent.default = %q, want %q (front matter was truncated by inner --- line)", got, "codex-app-server")
 	}
 	if got := wf.Config.Tracker.APIKey; got != "linear-secret" {
 		t.Fatalf("tracker.api_key = %q, want %q", got, "linear-secret")
