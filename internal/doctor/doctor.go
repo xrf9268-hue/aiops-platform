@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ func BuildReport(ctx context.Context, opts Options) Report {
 		r.checkLinear(ctx, wf.Config)
 		r.checkCodex(ctx, wf.Config)
 		r.checkGitHubAgent(ctx, wf.Config)
-		r.checkSandbox(wf.Config)
+		r.checkSandbox(ctx, wf.Config)
 	}
 	r.checkDashboard(ctx)
 	if wf != nil && path != "" {
@@ -417,15 +418,136 @@ func (r *reportBuilder) checkCodexModelConfig(home string) {
 	r.pass("Codex model config", detail)
 }
 
-func (r *reportBuilder) checkSandbox(cfg workflow.Config) {
+// effectiveSandboxMode returns the policy the app-server actually applies per
+// turn: the explicit codex.turn_sandbox_policy when set (it overrides
+// thread_sandbox in startTurn), else the thread_sandbox-derived default. Gating
+// must follow the effective policy — e.g. a turn_sandbox_policy override to
+// dangerFullAccess or externalSandbox (with thread_sandbox left at
+// workspace-write) runs agent commands WITHOUT codex's own userns sandbox, so
+// probing would be a false FAIL (codex review #549).
+func effectiveSandboxMode(cfg workflow.Config) string {
+	switch cfg.Codex.TurnSandboxPolicy.Type {
+	case workflow.CodexSandboxDangerFullAccess:
+		return "danger-full-access"
+	case workflow.CodexSandboxExternalSandbox:
+		return "external"
+	case workflow.CodexSandboxReadOnly:
+		return "read-only"
+	case workflow.CodexSandboxWorkspaceWrite:
+		return "workspace-write"
+	}
+	switch cfg.Codex.ThreadSandbox {
+	case "danger-full-access":
+		return "danger-full-access"
+	case "read-only":
+		return "read-only"
+	default:
+		return "workspace-write"
+	}
+}
+
+// codexUsesUserNamespaceSandbox reports whether the effective mode makes codex
+// run agent commands in its own bwrap user-namespace sandbox (read-only or
+// workspace-write). danger-full-access (no sandbox) and external (host-provided
+// isolation; codex skips its own) do not, so the userns probe is moot for them.
+func codexUsesUserNamespaceSandbox(mode string) bool {
+	return mode == "read-only" || mode == "workspace-write"
+}
+
+func (r *reportBuilder) checkSandbox(ctx context.Context, cfg workflow.Config) {
 	if !requiresCodex(cfg) {
 		return
 	}
-	if runningInContainer() && cfg.Codex.ThreadSandbox != "danger-full-access" {
+	mode := effectiveSandboxMode(cfg)
+	if runningInContainerFn() && codexUsesUserNamespaceSandbox(mode) {
 		r.warn("Codex sandbox", "containerized Codex may not support workspace-write namespaces", "Use the documented Docker-isolated profile or enable the required kernel/userns support.")
 		return
 	}
-	r.pass("Codex sandbox", "selected profile is compatible with this preflight")
+	if !codexUsesUserNamespaceSandbox(mode) {
+		r.pass("Codex sandbox", "effective sandbox ("+mode+") runs agent commands without a user-namespace sandbox")
+		return
+	}
+	// The live probe is authoritative only for a real-mode binary deploy on
+	// Linux: codex sandboxes agent shell commands with a bwrap user namespace
+	// there, so a host that blocks unprivileged user namespaces is exactly what
+	// the agent will hit. On macOS codex uses the seatbelt sandbox (no user
+	// namespaces), under --deploy=docker the sandbox runs inside the container
+	// (a different userns policy than this host), and mock mode dispatches
+	// nothing — keep the static classification in those cases.
+	if !r.realMode() || !r.binaryDeploy() || runtime.GOOS != "linux" {
+		r.pass("Codex sandbox", "selected profile is compatible with this preflight")
+		return
+	}
+	r.probeCodexSandbox(ctx, cfg)
+}
+
+// userNamespaceRemediation explains how to restore the host capability codex's
+// bwrap sandbox needs. The safer options lead; the host-wide sysctl is last
+// because it weakens unprivileged user namespaces for every process. Phrased
+// "most commonly" because the probe runs codex's real sandbox and surfaces its
+// actual error, which is authoritative even if the cause is not the AppArmor
+// userns restriction.
+const userNamespaceRemediation = "codex sandboxes agent shell commands in a bubblewrap (bwrap) user namespace, which this host most commonly blocks because unprivileged user namespaces are restricted (Ubuntu 24.04+: kernel.apparmor_restrict_unprivileged_userns=1) — see the codex error above for the exact failure. Prefer: install an AppArmor profile that permits codex's bwrap user namespaces, or run the worker in a container that allows them, or set codex.thread_sandbox: danger-full-access only in an already-isolated environment. Last resort (weakens host security — re-enables unprivileged user namespaces process-wide): `sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0`, persisted via /etc/sysctl.d/99-userns.conf."
+
+// probeCodexSandbox runs a trivial command through codex's OWN sandbox
+// (`codex sandbox -- /bin/true`) so a host where codex cannot start a sandboxed
+// command fails preflight instead of after a full agent turn is dispatched and
+// tokens burned. The static check passes even when
+// kernel.apparmor_restrict_unprivileged_userns=1 blocks codex's bwrap, so every
+// agent command then dies at runtime (e.g. "bwrap: setting up uid map:
+// Permission denied") (#542).
+//
+// This drives codex's vendored bwrap with codex's exact flags — not a
+// hand-rolled system-bwrap proxy — so it is authoritative: it reproduces the
+// real failure mode (uid-map, netns, or an AppArmor profile that covers a
+// different binary path), which a system-bwrap proxy can miss (codex review
+// #549). codex 0.135's `sandbox` subcommand does not forward the root
+// `--sandbox` option, so the probe takes no mode argument; its default
+// sandboxed mode uses the same bwrap user namespace every sandboxed profile
+// needs, and checkSandbox has already skipped the only unsandboxed profile
+// (effective danger-full-access) before reaching here (codex review #549).
+// /bin/true needs no model turn, auth, or network. Routed through r.run so the
+// probe is unit-testable. A custom codex.command can't be assumed to support
+// `codex sandbox`, so it is WARN.
+func (r *reportBuilder) probeCodexSandbox(ctx context.Context, cfg workflow.Config) {
+	if !usesDefaultCodexCLI(cfg) {
+		r.warn("Codex sandbox", "custom codex.command: skipped the codex sandbox self-test",
+			"Verify the wrapper sandboxes agent commands, e.g. `codex sandbox -- /bin/true`.")
+		return
+	}
+	out, err := r.run(ctx, "codex", []string{"sandbox", "--", "/bin/true"})
+	detail := trimOutput(out, err)
+	switch {
+	case err == nil:
+		r.pass("Codex sandbox", "codex sandbox started a command on this host")
+	case errors.Is(err, exec.ErrNotFound):
+		r.warn("Codex sandbox", "codex not found on PATH; cannot run the codex sandbox self-test",
+			"Install Codex CLI on this host, then rerun worker --doctor --deploy=binary --mode=real.")
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+		// A slow codex cold-start (not a sandbox denial) should not block
+		// preflight with a misleading userns remediation.
+		r.warn("Codex sandbox", "codex sandbox self-test timed out before completing; could not determine sandbox health",
+			"Re-run worker --doctor; if it persists, check codex startup time on this host.")
+	case codexLacksSandboxSubcommand(detail):
+		// An older/forked codex without `codex sandbox` is a version problem,
+		// not a host userns problem — warn to upgrade rather than FAIL.
+		r.warn("Codex sandbox", "this codex build does not support `codex sandbox`; cannot self-test the sandbox: "+detail,
+			"Upgrade Codex CLI to a build with the `sandbox` subcommand, or verify the sandbox manually: codex sandbox -- /bin/true.")
+	default:
+		r.fail("Codex sandbox", "codex sandbox cannot start commands: "+detail, userNamespaceRemediation)
+	}
+}
+
+// codexLacksSandboxSubcommand reports whether codex's output is a CLI usage
+// error for an unrecognized `sandbox` subcommand (an older/forked codex) rather
+// than a real sandbox-startup failure, so a version mismatch warns (upgrade
+// codex) instead of FAILing with the userns remediation.
+func codexLacksSandboxSubcommand(out string) bool {
+	out = strings.ToLower(out)
+	return strings.Contains(out, "unrecognized subcommand") ||
+		strings.Contains(out, "no such subcommand") ||
+		strings.Contains(out, "unknown command") ||
+		(strings.Contains(out, "unexpected argument") && strings.Contains(out, "sandbox"))
 }
 
 func (r *reportBuilder) checkGitHubAgent(ctx context.Context, cfg workflow.Config) {
@@ -1149,6 +1271,11 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// runningInContainerFn is a seam so unit tests that construct a reportBuilder
+// and call checkSandbox directly are not skewed by the host's container markers
+// (the container branch precedes the mode/deploy/probe branches).
+var runningInContainerFn = runningInContainer
 
 func runningInContainer() bool {
 	return fileExists("/.dockerenv") || fileExists("/run/.containerenv")
