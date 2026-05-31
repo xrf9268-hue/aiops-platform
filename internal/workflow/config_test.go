@@ -1882,6 +1882,81 @@ prompt body
 	}
 }
 
+// TestLoad_RejectsRemovedCodexExecCommand verifies that a workflow migrated to
+// the app-server runner but still carrying the removed `codex.command: codex
+// exec` fails Load with a clear config error. Without this guard the app-server
+// launcher falls through to `sh -c "codex exec"` and the runner waits for
+// JSON-RPC that never arrives, failing the first real run opaquely (#541).
+func TestLoad_RejectsRemovedCodexExecCommand(t *testing.T) {
+	for _, command := range []string{"codex exec", "codex exec --sandbox workspace-write"} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "WORKFLOW.md")
+			body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: codex-app-server
+codex:
+  command: ` + command + `
+tracker:
+  kind: gitea
+---
+prompt body
+`
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatalf("write workflow: %v", err)
+			}
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("Load(codex.command=%q): expected error for removed codex exec runner, got nil", command)
+			}
+			msg := err.Error()
+			for _, want := range []string{"codex.command", "codex app-server"} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("Load(codex.command=%q) error %q: want substring %q", command, msg, want)
+				}
+			}
+		})
+	}
+}
+
+// TestLoad_AcceptsCodexAppServerCommand pins the positive case: the SPEC §10
+// `codex app-server` command (and a flagged variant) still loads cleanly, so
+// the removed-exec guard does not over-reject the supported runner.
+func TestLoad_AcceptsCodexAppServerCommand(t *testing.T) {
+	for _, command := range []string{"codex app-server", "codex app-server --config profile=ci"} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "WORKFLOW.md")
+			body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: codex-app-server
+codex:
+  command: ` + command + `
+tracker:
+  kind: gitea
+---
+prompt body
+`
+			if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+				t.Fatalf("write workflow: %v", err)
+			}
+			if _, err := Load(p); err != nil {
+				t.Fatalf("Load(codex.command=%q) = %v; want nil for the SPEC §10 runner", command, err)
+			}
+		})
+	}
+}
+
 // TestLoad_RejectsMissingCloneURL verifies that a workflow front matter
 // that omits `repo.clone_url` (or sets it to an empty string after env
 // expansion) fails Load with an error that names the file path and the
