@@ -179,7 +179,11 @@ func reapGoBuildCacheEntry(root string, entry os.DirEntry, cutoff time.Time) err
 		return nil
 	}
 	// Directory mtime is only a stale-cache signal after active runs release
-	// their key; live app-server sessions are excluded above.
+	// their key; live app-server sessions are excluded by the check above.
+	// That active check and this removal are deliberately not atomic: a run
+	// that marks its key active in the gap only loses a cold build cache, which
+	// Go transparently rebuilds. Do not widen the lock over this filesystem
+	// walk — that serializes every run's app-server startup behind it.
 	if err := goCacheRemoveAll(path); err != nil {
 		return fmt.Errorf("remove stale Go build cache %s: %w", path, err)
 	}
