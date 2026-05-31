@@ -25,10 +25,9 @@ Checks:
 - setup Go from `go.mod`
 - Go module download
 - `gofmt` check
-- blocking `golangci-lint` correctness gate for `contextcheck`, `errcheck`,
-  `errorlint`, `gocritic`, `govet`, `ineffassign`, `revive`, `staticcheck`,
-  `unparam`, and `unused`
-- report-only `golangci-lint` complexity baseline for `funlen` and `gocognit`
+- blocking `golangci-lint` gate for all enabled linters in one pass:
+  `contextcheck`, `errcheck`, `errorlint`, `funlen`, `gocognit`, `gocritic`,
+  `govet`, `ineffassign`, `revive`, `staticcheck`, `unparam`, and `unused`
 - `go mod tidy` check
 - `go test -race -covermode=atomic ./...`
 - build `worker` and `tui`
@@ -48,24 +47,24 @@ only if the rebuilt image still contains a fixed finding. Do not add a
 `.trivyignore` entry for a vulnerability that the package manager can already
 fix.
 
-The `golangci-lint` gate runs in two phases. The first phase blocks on the
-clean correctness and mechanical-safety linters (`contextcheck`, `errcheck`,
-`errorlint`, `gocritic`, `govet`, `ineffassign`, `revive`, `staticcheck`,
-`unparam`, and `unused`) so regressions in those classes fail CI. The second
-phase keeps the remaining complexity baseline visible with
-`--enable-only=funlen,gocognit --issues-exit-code=0` while #410 tracks the
-larger structural refactors. Configuration, action, or runtime failures still
-fail the workflow.
+The `golangci-lint` gate runs as a single blocking pass over every enabled
+linter, including the `funlen`/`gocognit` complexity budgets (AGENTS.md rule 7).
+A new oversized / over-complex non-test function — or in-place growth of an
+un-annotated one — fails CI. The existing complexity baseline is grandfathered
+in-line with per-function `//nolint:gocognit[,funlen] // baseline (#521)`
+directives (removed as #521 decomposes each), not by a report-only step; test
+files are exempt via `.golangci.yml`. Configuration, action, or runtime
+failures also fail the workflow.
 
 When comparing local lint output to CI, use an isolated cache if multiple
 worktrees for this repository are open under the same parent directory:
 
 ```bash
-GOLANGCI_LINT_CACHE=$(mktemp -d) go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
+GOLANGCI_LINT_CACHE=$(mktemp -d) go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml
 ```
 
 This prevents stale package-analysis entries from sibling worktrees from
-appearing as false report-only findings.
+appearing as false findings.
 
 ### Release
 
@@ -103,8 +102,7 @@ Run:
 ```bash
 go mod tidy
 gofmt -w cmd internal
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --enable-only=funlen,gocognit --issues-exit-code=0
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml
 cd cmd/worker/dashboard && npm ci && npm test && npm run build && cd -
 go test ./...
 go build ./cmd/worker ./cmd/tui
