@@ -142,7 +142,11 @@ type RunningEntry struct {
 	InputRequiredAt     time.Time
 	InputRequiredMethod string
 
-	CancelWorker context.CancelFunc
+	// CancelWorker cancels the run's context. The cause distinguishes a
+	// supervised eligibility stop (worker.ErrReconcileCancel — the worker then
+	// records runner_stopped, not runner_failed, #543) from a stall/shutdown
+	// cancel (nil cause), which keep their existing classification.
+	CancelWorker context.CancelCauseFunc
 	Done         <-chan struct{}
 
 	// ReconcileCancel is set by per-tick reconciliation before it cancels a

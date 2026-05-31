@@ -22,7 +22,7 @@ func issue(id string) tracker.Issue {
 
 func runningEntry(t *testing.T, iss tracker.Issue) *RunningEntry {
 	t.Helper()
-	_, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	return &RunningEntry{
 		Issue:        iss,

@@ -95,7 +95,7 @@ func TestReconcileStalledRunsOpTimingReference(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			st := NewOrchestratorState(15000, 10)
-			st.Running[IssueID("S")] = &RunningEntry{Identifier: "S", LastEventAt: tt.last, StartedAt: tt.started, CancelWorker: func() {}}
+			st.Running[IssueID("S")] = &RunningEntry{Identifier: "S", LastEventAt: tt.last, StartedAt: tt.started, CancelWorker: func(error) {}}
 			result := make(chan []*RunningEntry, 1)
 			op := &reconcileStalledRunsOp{timeout: time.Minute, now: now, result: result}
 			op.apply(st)()

@@ -169,7 +169,7 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
 func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt int) {
-	runCtx, cancel := context.WithCancel(o.runCtx)
+	runCtx, cancel := context.WithCancelCause(o.runCtx)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
 	entry := &RunningEntry{
@@ -188,14 +188,14 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 		close(registered)
 		return nil
 	})); err != nil {
-		cancel()
+		cancel(nil)
 		close(workerDone)
 		return
 	}
 	select {
 	case <-registered:
 	case <-o.runCtx.Done():
-		cancel()
+		cancel(nil)
 		close(workerDone)
 		return
 	}
@@ -205,7 +205,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 		var res WorkerResult
 		select {
 		case r, ok := <-resultCh:
-			cancel()
+			cancel(nil)
 			if ok {
 				res = r
 			} else {
@@ -215,7 +215,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 				res = WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
 			}
 		case <-o.runCtx.Done():
-			cancel()
+			cancel(nil)
 			close(workerDone)
 			return
 		}
