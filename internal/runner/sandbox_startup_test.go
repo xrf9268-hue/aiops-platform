@@ -21,15 +21,20 @@ func TestClassifySandboxStartupFailure(t *testing.T) {
 			wantTag: true,
 		},
 		{
-			name:    "denial only in captured output tail",
+			name:    "gid-map denial only in captured output tail",
 			err:     NewError(CategoryPortExit, "codex app-server process exited", errors.New("exit status 1")),
 			res:     Result{OutputTail: "bwrap: setting up gid map: Permission denied\n"},
 			wantTag: true,
 		},
 		{
-			name:    "denial in captured output head",
+			name:    "namespace denial in captured output head",
 			err:     NewError(CategoryPortExit, "codex app-server process exited", errors.New("exit status 1")),
-			res:     Result{OutputHead: "creating new user namespace failed\n"},
+			res:     Result{OutputHead: "bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces\n"},
+			wantTag: true,
+		},
+		{
+			name:    "bwrap netns denial (non uid-map variant)",
+			err:     NewError(CategoryTurnFailed, "turn/failed: bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted", nil),
 			wantTag: true,
 		},
 		{
@@ -39,8 +44,14 @@ func TestClassifySandboxStartupFailure(t *testing.T) {
 			wantTag: false,
 		},
 		{
-			name:    "unrelated permission denied is not a sandbox failure",
+			name:    "unrelated permission denied without bwrap prefix is not a sandbox failure",
 			err:     NewError(CategoryTurnFailed, "turn/failed: open /etc/shadow: permission denied", nil),
+			wantTag: false,
+		},
+		{
+			name:    "bwrap mentioned without a denial token is not a sandbox failure",
+			err:     NewError(CategoryTurnFailed, "turn/failed: edited internal/runner/sandbox.go to call bwrap: ok", nil),
+			res:     Result{OutputTail: "grep -n 'bwrap:' sandbox.go\n"},
 			wantTag: false,
 		},
 		{
@@ -87,6 +98,37 @@ func TestClassifySandboxStartupFailure_DoesNotMaskSpecificOutcomes(t *testing.T)
 				t.Fatalf("classifySandboxStartupFailure(%T) = %v; want original error unchanged", tc.err, got)
 			}
 		})
+	}
+}
+
+// TestCodexAppServerRunnerClassifiesBwrapTurnFailureAsSandboxStartup drives a
+// real turn/failed carrying bwrap's uid-map denial through CodexAppServerRunner.Run
+// and asserts it emerges as a *SandboxStartupError. This pins the load-bearing
+// wiring (Run → classifyAppServerOutcome → classifySandboxStartupFailure) and the
+// assumption that the bwrap denial reaches the classifier via the turn reason —
+// the unit tests above bypass Run with a synthetic error.
+func TestCodexAppServerRunnerClassifiesBwrapTurnFailureAsSandboxStartup(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/failed', 'params': {'reason': 'bwrap: setting up uid map: Permission denied'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "bwrap sandbox startup")
+
+	_, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if !IsSandboxStartup(err) {
+		t.Fatalf("Run() err = %T %[1]v; want a *SandboxStartupError", err)
 	}
 }
 

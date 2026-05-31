@@ -414,6 +414,9 @@ func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
 		"reason":              reason,
 		"retry_after_seconds": int(sandboxStartupRetryAfter / time.Second),
 	})
+	// Synthesized in-memory (never written to / read from .aiops/BLOCKED.json),
+	// so it does not pass through BlockerArtifact.validate(); the constants below
+	// are validation-safe by construction (1h is well within the 60s..24h bound).
 	return &RunTaskError{
 		Cfg:             rs.wcfg,
 		Err:             runErr,
