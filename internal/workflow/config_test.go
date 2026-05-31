@@ -1959,6 +1959,33 @@ prompt body
 	}
 }
 
+// TestCommandRunsCodexExec pins the conservative load-time guard directly,
+// including the shell-quoted spelling that a whitespace-only split would miss
+// (#541, Codex PR #546 review). The runner's splitAppServerCommand stays the
+// authoritative launch-time parser; this guard only needs to catch anything
+// that would route to the removed one-shot runner.
+func TestCommandRunsCodexExec(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		command string
+		want    bool
+	}{
+		{"codex exec", true},
+		{"codex exec --sandbox workspace-write", true},
+		{`"codex" "exec"`, true}, // quoted spelling the runner tokenizes to codex exec
+		{`'codex' 'exec' -o x`, true},
+		{"codex app-server", false},
+		{"codex app-server --config profile=ci", false},
+		{"", false},
+		{"codex", false},
+		{"my-codex exec", false}, // different binary
+	} {
+		if got := commandRunsCodexExec(tc.command); got != tc.want {
+			t.Errorf("commandRunsCodexExec(%q) = %v; want %v", tc.command, got, tc.want)
+		}
+	}
+}
+
 // TestLoad_AcceptsCodexAppServerCommand pins the positive case: the SPEC §10
 // `codex app-server` command (and a flagged variant) still loads cleanly, so
 // the removed-exec guard does not over-reject the supported runner.

@@ -370,12 +370,24 @@ func rejectRemovedCodexFields(raw map[string]any) error {
 	if _, present := codex["profile"]; present {
 		return fmt.Errorf("codex.profile is no longer supported (issue #541); the one-shot `codex exec` runner it configured was removed. The SPEC §10 runner is `codex app-server` (agent.default: codex-app-server); set its sandbox with codex.thread_sandbox / codex.turn_sandbox_policy instead")
 	}
-	if command, ok := codex["command"].(string); ok {
-		if fields := strings.Fields(command); len(fields) >= 2 && fields[0] == "codex" && fields[1] == "exec" {
-			return fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
-		}
+	if command, ok := codex["command"].(string); ok && commandRunsCodexExec(command) {
+		return fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
 	}
 	return nil
+}
+
+// commandRunsCodexExec reports whether a codex.command launches the removed
+// one-shot `codex exec` runner (issue #541). It is a deliberately conservative
+// load-time guard: quote characters are stripped before tokenizing so quoted
+// spellings (e.g. `"codex" "exec"`) are caught too. The runner's
+// splitAppServerCommand is the authoritative launch-time parser — this only
+// exists to turn the otherwise opaque app-server JSON-RPC handshake failure into
+// a clear config error at load. Over-rejecting a pathological quoted command is
+// the safe direction (fail fast) versus silently launching the removed runner.
+func commandRunsCodexExec(command string) bool {
+	unquoted := strings.NewReplacer(`"`, "", `'`, "").Replace(command)
+	fields := strings.Fields(unquoted)
+	return len(fields) >= 2 && fields[0] == "codex" && fields[1] == "exec"
 }
 
 var knownTopLevelWorkflowKeys = map[string]struct{}{
