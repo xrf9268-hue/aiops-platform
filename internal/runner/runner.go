@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -150,6 +151,33 @@ func (e *QuotaBackoffError) Error() string {
 func IsQuotaBackoff(err error) bool {
 	var quota *QuotaBackoffError
 	return errors.As(err, &quota)
+}
+
+// SandboxStartupError marks a run that failed because the coding agent's
+// sandbox could not start — most commonly codex's bwrap user namespace being
+// denied by the host (e.g. "bwrap: setting up uid map: Permission denied").
+// Unlike a generic turn failure, this recurs identically on every dispatch
+// until an operator reconfigures the host, so the worker routes it to the
+// external-blocker cooldown instead of the hot failure-retry loop that would
+// burn a full agent turn's tokens every poll (#550). The preflight equivalent
+// is internal/doctor's codex sandbox probe (#542); this is the runtime catch
+// for a host that regresses after preflight or an operator who skipped
+// --doctor. Detail carries a fixed, output-free description so the raw captured
+// subprocess text (which may hold secrets) never reaches an error string.
+type SandboxStartupError struct {
+	Detail string
+}
+
+func (e *SandboxStartupError) Error() string {
+	if e == nil || strings.TrimSpace(e.Detail) == "" {
+		return "agent sandbox failed to start"
+	}
+	return "agent sandbox failed to start: " + e.Detail
+}
+
+func IsSandboxStartup(err error) bool {
+	var se *SandboxStartupError
+	return errors.As(err, &se)
 }
 
 type RunnerErrorCategory string

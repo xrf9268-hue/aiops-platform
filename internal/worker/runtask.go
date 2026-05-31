@@ -356,23 +356,75 @@ func (rs *runState) runAgent() *RunTaskError {
 	rs.res = res
 	rs.sessionID = sessionIDFromRuntimeEvents(res.RuntimeEvents)
 	if runErr != nil {
-		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
-			LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
-		}
-		// An eligibility reconcile-cancel is a supervised stop, not a runner
-		// failure: leave the agent's RUN_SUMMARY.md intact so the worker does
-		// not overwrite a successful handoff with "runner failed" (#543). The
-		// orchestrator releases the run via its ReconcileCancel flag.
-		if !isReconcileCancel(rs.ctx, runErr) {
-			WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
-		}
-		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
+		return rs.handleRunnerFailure(runErr)
 	}
 
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "error=%q", err)
 	}
 	return nil
+}
+
+// handleRunnerFailure runs the after_run hook on the runner-error path and
+// classifies the failure into the right terminal RunTaskError: a supervised
+// reconcile-cancel (RUN_SUMMARY preserved, #543), a recurring sandbox-startup
+// denial parked on a cooldown (#550), or a generic runner failure.
+func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
+	}
+	// An eligibility reconcile-cancel is a supervised stop, not a runner
+	// failure: leave the agent's RUN_SUMMARY.md intact so the worker does not
+	// overwrite a successful handoff with "runner failed" (#543). The
+	// orchestrator releases the run via its ReconcileCancel flag.
+	if isReconcileCancel(rs.ctx, runErr) {
+		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
+	}
+	// A recurring codex sandbox-startup denial recurs identically every dispatch
+	// until the host is fixed, so park it on a cooldown instead of the hot
+	// failure-retry loop (#550).
+	if runner.IsSandboxStartup(runErr) {
+		return rs.sandboxStartupBlocked(runErr)
+	}
+	WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
+	return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
+}
+
+// sandboxStartupRetryAfter is the cooldown a sandbox-startup failure parks on
+// before the next dispatch. The failure recurs identically until an operator
+// reconfigures the host (#550), so the cooldown only needs to be long enough to
+// stop the per-poll token burn the #542 blast radius quantified (~590k input
+// tokens per failed turn); an operator fix plus the normal poll/reconcile loop
+// re-dispatches sooner once the host recovers.
+const sandboxStartupRetryAfter = time.Hour
+
+// sandboxStartupBlocked routes a recurring codex sandbox-startup failure to the
+// external-blocker cooldown path instead of the hot failure-retry loop: the run
+// is parked blocked and only re-dispatched after the cooldown, reusing the same
+// orchestrator machinery as a BLOCKED.json external-dependency block (#550). It
+// emits a dedicated event so an operator can tell a host sandbox denial apart
+// from an agent-declared dependency block, and synthesizes the blocker in-memory
+// (it never writes/reads .aiops/BLOCKED.json) so the agent's own artifact is not
+// shadowed. The fixed reason points at `worker --doctor`, which detects the same
+// condition at preflight (#542); ErrSummary(runErr) is the output-free
+// SandboxStartupError text, so no raw subprocess output reaches the surface.
+func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
+	const reason = "codex sandbox could not start on this host (denied bwrap user namespace); run worker --doctor and fix the host before retrying"
+	Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventSandboxStartupBlocked, "codex sandbox startup failed; parking issue on cooldown", map[string]any{
+		"reason":              reason,
+		"retry_after_seconds": int(sandboxStartupRetryAfter / time.Second),
+	})
+	return &RunTaskError{
+		Cfg:             rs.wcfg,
+		Err:             runErr,
+		ExternalBlocked: true,
+		Blocker: BlockerArtifact{
+			Version:           blockerArtifactVersion,
+			Kind:              blockerArtifactKindExternal,
+			Reason:            reason,
+			RetryAfterSeconds: int(sandboxStartupRetryAfter / time.Second),
+		},
+	}
 }
 
 // resetStaleArtifacts deletes RUN_SUMMARY.md, the blocker artifact, and (in
