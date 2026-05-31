@@ -343,6 +343,11 @@ func rejectRemovedFields(front []byte) error {
 	if err := rejectRemovedCodexFields(raw); err != nil {
 		return err
 	}
+	if claude, ok := raw["claude"].(map[string]any); ok {
+		if _, present := claude["profile"]; present {
+			return fmt.Errorf("claude.profile is not supported; the codex-only `profile` field was removed in issue #541 and Claude never had runner profiles. Remove it")
+		}
+	}
 	if agent, ok := raw["agent"].(map[string]any); ok {
 		if _, present := agent["fallback"]; present {
 			return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")

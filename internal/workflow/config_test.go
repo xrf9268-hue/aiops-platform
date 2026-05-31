@@ -1882,6 +1882,41 @@ prompt body
 	}
 }
 
+// TestLoad_RejectsRemovedClaudeProfile verifies that a leftover `claude.profile`
+// key still fails Load. The codex-only `profile` field was removed with the
+// codex exec runner (#541); before that, validateCodexClaude rejected
+// claude.profile explicitly. Silently dropping it would let an operator believe
+// a Claude profile is active when none exists.
+func TestLoad_RejectsRemovedClaudeProfile(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: claude
+claude:
+  command: claude
+  profile: safe
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load: expected error for removed claude.profile, got nil")
+	}
+	if msg := err.Error(); !strings.Contains(msg, "claude.profile") {
+		t.Fatalf("Load error %q: want substring %q", msg, "claude.profile")
+	}
+}
+
 // TestLoad_RejectsRemovedCodexExecCommand verifies that a workflow migrated to
 // the app-server runner but still carrying the removed `codex.command: codex
 // exec` fails Load with a clear config error. Without this guard the app-server
