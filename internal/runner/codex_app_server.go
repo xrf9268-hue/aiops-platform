@@ -116,6 +116,10 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 // sandbox wraps it — both feed appServerProcessPID's PID-emission guard.
 func setupAppServerCommand(ctx context.Context, in RunInput) (cmd *exec.Cmd, directCodexExec, sandboxEnabled bool, err error) {
 	env := agentEnv(in.Workflow.Config.Codex.EnvPassthrough, in.Workflow.Config)
+	// Pin the agent's Go toolchain caches to a sandbox-writable, per-workspace
+	// path so its first `go test` does not fail on the default $HOME-based
+	// caches that lie outside codex's workspace-write sandbox (#544).
+	env = withSandboxGoToolchainCaches(env, in.Workdir)
 	cmd, directCodexExec, err = buildCodexAppServerCmd(ctx, in, env)
 	if err != nil {
 		return nil, false, false, err

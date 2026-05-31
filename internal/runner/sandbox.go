@@ -123,6 +123,23 @@ func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string 
 			env = append(env, name+"="+value)
 		}
 	}
+	// Carry the worker-injected Go toolchain cache defaults (#544) through the
+	// allowlist: setupAppServerCommand sets GOCACHE/GOMODCACHE as agent-runtime
+	// requirements, not operator passthrough, so the operator should not have to
+	// allowlist them for the agent's first `go test` to find a writable cache.
+	// Only WORKER-INJECTED values (under aiopsGoCacheRoot) are carried — an
+	// operator's own GOCACHE/GOMODCACHE that they kept out of env_allowlist still
+	// respects that boundary (codex review #548). The bwrap/firejail tmpfs /tmp
+	// keeps the default writable.
+	for _, name := range goCacheNames() {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		if value, ok := primaryByName[name]; ok && isWorkerInjectedGoCache(value) {
+			seen[name] = struct{}{}
+			env = append(env, name+"="+value)
+		}
+	}
 	return env
 }
 
