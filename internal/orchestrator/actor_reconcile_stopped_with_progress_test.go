@@ -1,12 +1,13 @@
 package orchestrator
 
-// actor_reconcile_finished_test.go pins #557's observability fix: a reconcile-
-// stopped run that had handed off (completed ≥1 agent turn) is surfaced in
-// /api/v1/state's ReconcileFinished set, so a successful-but-reaped handoff is
-// visible instead of absent from both Completed and Failed. It must NOT be added
-// to Completed (a reconcile-stopped run is not a clean §16.5 exit — completed
-// stays upstream-aligned), and a 0-turn reconcile cancel (genuine no-progress
-// stop) must not be recorded.
+// actor_reconcile_stopped_with_progress_test.go pins #557's observability fix: a
+// reconcile-stopped run that had completed ≥1 agent turn (made progress — these
+// tests simulate the agent's handoff) is surfaced in /api/v1/state's
+// ReconcileStoppedWithProgress set, so a progressed-but-reaped run is visible
+// instead of absent from both Completed and Failed. It must NOT be added to
+// Completed (a reconcile-stopped run is not a clean §16.5 exit — completed stays
+// upstream-aligned), and a 0-turn reconcile cancel (genuine no-progress stop)
+// must not be recorded.
 
 import (
 	"context"
@@ -45,10 +46,10 @@ func reconcileCancelRun(t *testing.T, o *Orchestrator, disp *fakeDispatcher, iss
 	}, time.Second)
 }
 
-// TestReconcileCancelAfterHandoffRecordsReconcileFinished: a reconcile-cancel of
-// a run that completed a turn is surfaced in ReconcileFinished (and the lifetime
+// TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress: a reconcile-cancel of
+// a run that completed a turn is surfaced in ReconcileStoppedWithProgress (and the lifetime
 // counter), and is NOT counted as completed.
-func TestReconcileCancelAfterHandoffRecordsReconcileFinished(t *testing.T) {
+func TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
@@ -57,21 +58,21 @@ func TestReconcileCancelAfterHandoffRecordsReconcileFinished(t *testing.T) {
 	reconcileCancelRun(t, o, disp, iss, true)
 
 	v, _ := o.Snapshot(context.Background())
-	if len(v.ReconcileFinished) != 1 || v.ReconcileFinished[0] != IssueID(iss.ID) {
-		t.Fatalf("ReconcileFinished = %v; want [%s]", v.ReconcileFinished, iss.ID)
+	if len(v.ReconcileStoppedWithProgress) != 1 || v.ReconcileStoppedWithProgress[0] != IssueID(iss.ID) {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s]", v.ReconcileStoppedWithProgress, iss.ID)
 	}
-	if v.CumulativeReconcileFinishedTotal != 1 {
-		t.Fatalf("CumulativeReconcileFinishedTotal = %d; want 1", v.CumulativeReconcileFinishedTotal)
+	if v.CumulativeReconcileStoppedWithProgressTotal != 1 {
+		t.Fatalf("CumulativeReconcileStoppedWithProgressTotal = %d; want 1", v.CumulativeReconcileStoppedWithProgressTotal)
 	}
 	if len(v.Completed) != 0 {
 		t.Fatalf("Completed = %v; want empty (a reconcile-stopped run is not a clean §16.5 exit)", v.Completed)
 	}
 }
 
-// TestReconcileCancelNoTurnDoesNotRecordReconcileFinished: a reconcile-cancel
+// TestReconcileCancelNoTurnDoesNotRecordReconcileStoppedWithProgress: a reconcile-cancel
 // before any turn completed is a genuine no-progress stop and must not be
 // surfaced as a handoff.
-func TestReconcileCancelNoTurnDoesNotRecordReconcileFinished(t *testing.T) {
+func TestReconcileCancelNoTurnDoesNotRecordReconcileStoppedWithProgress(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
@@ -80,19 +81,19 @@ func TestReconcileCancelNoTurnDoesNotRecordReconcileFinished(t *testing.T) {
 	reconcileCancelRun(t, o, disp, iss, false)
 
 	v, _ := o.Snapshot(context.Background())
-	if len(v.ReconcileFinished) != 0 {
-		t.Fatalf("ReconcileFinished = %v; want empty (0-turn cancel is a genuine no-progress stop)", v.ReconcileFinished)
+	if len(v.ReconcileStoppedWithProgress) != 0 {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty (0-turn cancel is a genuine no-progress stop)", v.ReconcileStoppedWithProgress)
 	}
-	if v.CumulativeReconcileFinishedTotal != 0 {
-		t.Fatalf("CumulativeReconcileFinishedTotal = %d; want 0", v.CumulativeReconcileFinishedTotal)
+	if v.CumulativeReconcileStoppedWithProgressTotal != 0 {
+		t.Fatalf("CumulativeReconcileStoppedWithProgressTotal = %d; want 0", v.CumulativeReconcileStoppedWithProgressTotal)
 	}
 }
 
-// TestReconcileTerminalCancelAfterHandoffRecordsReconcileFinished exercises the
+// TestReconcileTerminalCancelAfterHandoffRecordsReconcileStoppedWithProgress exercises the
 // OTHER record site — applyReconciledCancelCleanup, reached when the issue moved
 // to a TERMINAL state (ReconcileCleanupWorkspace=true) after a completed turn —
-// so deleting that branch's recordReconcileFinished call fails a test.
-func TestReconcileTerminalCancelAfterHandoffRecordsReconcileFinished(t *testing.T) {
+// so deleting that branch's recordReconcileStoppedWithProgress call fails a test.
+func TestReconcileTerminalCancelAfterHandoffRecordsReconcileStoppedWithProgress(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
@@ -118,44 +119,44 @@ func TestReconcileTerminalCancelAfterHandoffRecordsReconcileFinished(t *testing.
 	}, time.Second)
 
 	v, _ := o.Snapshot(context.Background())
-	if len(v.ReconcileFinished) != 1 || v.ReconcileFinished[0] != IssueID(iss.ID) {
-		t.Fatalf("ReconcileFinished = %v; want [%s] (terminal cancel after handoff)", v.ReconcileFinished, iss.ID)
+	if len(v.ReconcileStoppedWithProgress) != 1 || v.ReconcileStoppedWithProgress[0] != IssueID(iss.ID) {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s] (terminal cancel after handoff)", v.ReconcileStoppedWithProgress, iss.ID)
 	}
 	if len(v.Completed) != 0 {
 		t.Fatalf("Completed = %v; want empty", v.Completed)
 	}
 }
 
-// TestRecordReconcileFinishedCapsAndDedup pins the FIFO cap + dedup + cumulative
-// semantics of recordReconcileFinished (mirrors the Completed-set boundary test):
+// TestRecordReconcileStoppedWithProgressCapsAndDedup pins the FIFO cap + dedup + cumulative
+// semantics of recordReconcileStoppedWithProgress (mirrors the Completed-set boundary test):
 // the recent set is capped at MaxRecentCompleted with oldest-evicted, a repeat id
 // is a no-op for the set/order but still increments the lifetime counter.
-func TestRecordReconcileFinishedCapsAndDedup(t *testing.T) {
+func TestRecordReconcileStoppedWithProgressCapsAndDedup(t *testing.T) {
 	s := NewOrchestratorState(1000, 4)
 	s.MaxRecentCompleted = 2 // shrink the recent cap for the boundary check
 
-	s.recordReconcileFinished("a")
-	s.recordReconcileFinished("b")
-	if got := len(s.reconcileFinishedOrder); got != 2 {
+	s.recordReconcileStoppedWithProgress("a")
+	s.recordReconcileStoppedWithProgress("b")
+	if got := len(s.reconcileStoppedWithProgressOrder); got != 2 {
 		t.Fatalf("order len at cap = %d; want 2", got)
 	}
 	// N+1: oldest ("a") evicted from both the order slice and the set.
-	s.recordReconcileFinished("c")
-	if got := len(s.reconcileFinishedOrder); got != 2 {
+	s.recordReconcileStoppedWithProgress("c")
+	if got := len(s.reconcileStoppedWithProgressOrder); got != 2 {
 		t.Fatalf("order len at N+1 = %d; want 2 (capped)", got)
 	}
-	if _, ok := s.ReconcileFinished["a"]; ok {
-		t.Fatalf("ReconcileFinished still has evicted oldest %q; order=%v", "a", s.reconcileFinishedOrder)
+	if _, ok := s.ReconcileStoppedWithProgress["a"]; ok {
+		t.Fatalf("ReconcileStoppedWithProgress still has evicted oldest %q; order=%v", "a", s.reconcileStoppedWithProgressOrder)
 	}
-	if len(s.ReconcileFinished) != len(s.reconcileFinishedOrder) {
-		t.Fatalf("set/order out of sync: set=%d order=%d", len(s.ReconcileFinished), len(s.reconcileFinishedOrder))
+	if len(s.ReconcileStoppedWithProgress) != len(s.reconcileStoppedWithProgressOrder) {
+		t.Fatalf("set/order out of sync: set=%d order=%d", len(s.ReconcileStoppedWithProgress), len(s.reconcileStoppedWithProgressOrder))
 	}
 	// Dedup: repeating a live id bumps the cumulative counter but not the set.
-	s.recordReconcileFinished("c")
-	if got := len(s.reconcileFinishedOrder); got != 2 {
+	s.recordReconcileStoppedWithProgress("c")
+	if got := len(s.reconcileStoppedWithProgressOrder); got != 2 {
 		t.Fatalf("order len after dedup = %d; want 2", got)
 	}
-	if got := s.CumulativeReconcileFinishedTotal; got != 4 {
-		t.Fatalf("CumulativeReconcileFinishedTotal = %d; want 4 (a,b,c,c)", got)
+	if got := s.CumulativeReconcileStoppedWithProgressTotal; got != 4 {
+		t.Fatalf("CumulativeReconcileStoppedWithProgressTotal = %d; want 4 (a,b,c,c)", got)
 	}
 }

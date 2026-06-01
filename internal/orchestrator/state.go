@@ -234,20 +234,23 @@ type OrchestratorState struct {
 	CumulativeCompletedTotal int64
 	CumulativeFailedTotal    int64
 
-	// ReconcileFinished records reconcile-stopped runs that had completed ≥1
-	// agent turn — i.e. the agent had handed off (e.g. opened a PR + moved the
-	// issue to a review/inactive state) before the per-tick reconcile reaped the
-	// run mid-finalization. Pure bookkeeping like Completed; reconcileFinishedOrder
-	// mirrors it as the FIFO/cap slice and CumulativeReconcileFinishedTotal is the
-	// monotonic lifetime counter. It exists so a successful-but-reaped handoff is
-	// VISIBLE in /api/v1/state instead of being absent from both completed and
-	// failed (#557). It does NOT change Completed (a reconcile-stopped run did not
-	// exit through the clean §16.5 path, matching upstream's accounting); it only
-	// surfaces the run an operator would otherwise miss. Capped by
-	// MaxRecentCompleted (same recent-bookkeeping bound).
-	ReconcileFinished                map[IssueID]struct{}
-	reconcileFinishedOrder           []IssueID
-	CumulativeReconcileFinishedTotal int64
+	// ReconcileStoppedWithProgress records reconcile-stopped runs that had completed
+	// ≥1 agent turn — i.e. made progress before the per-tick reconcile reaped the
+	// run mid-finalization. This is USUALLY the agent's own handoff (opened a PR +
+	// moved the issue to a review state), but turn_completed fires after every turn,
+	// so it can also be a run an operator stopped after an intermediate turn — it is
+	// a "reaped after progress, worth inspecting" signal, NOT a guaranteed success.
+	// Pure bookkeeping like Completed; reconcileStoppedWithProgressOrder mirrors it
+	// as the FIFO/cap slice and CumulativeReconcileStoppedWithProgressTotal is the
+	// monotonic lifetime counter. It exists so such a progressed run is VISIBLE in
+	// /api/v1/state instead of being absent from both completed and failed (#557).
+	// It does NOT change Completed (a reconcile-stopped run did not exit through the
+	// clean §16.5 path, matching upstream's accounting); it only surfaces a run an
+	// operator would otherwise miss. Capped by MaxRecentCompleted (same
+	// recent-bookkeeping bound).
+	ReconcileStoppedWithProgress                map[IssueID]struct{}
+	reconcileStoppedWithProgressOrder           []IssueID
+	CumulativeReconcileStoppedWithProgressTotal int64
 
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
@@ -295,20 +298,20 @@ type FailedEntry struct {
 // on a nil-map write.
 func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *OrchestratorState {
 	return &OrchestratorState{
-		PollIntervalMs:             pollIntervalMs,
-		MaxConcurrentAgents:        maxConcurrentAgents,
-		MaxConcurrentAgentsByState: map[string]int{},
-		Running:                    map[IssueID]*RunningEntry{},
-		Blocked:                    map[IssueID]*BlockedEntry{},
-		Claimed:                    map[IssueID]struct{}{},
-		ClaimedIssues:              map[IssueID]tracker.Issue{},
-		RetryAttempts:              map[IssueID]*RetryEntry{},
-		Failed:                     map[IssueID]FailedEntry{},
-		Completed:                  map[IssueID]struct{}{},
-		ReconcileFinished:          map[IssueID]struct{}{},
-		cleaningWorkspaces:         map[IssueID]struct{}{},
-		MaxRecentCompleted:         DefaultMaxRecentCompleted,
-		MaxRecentFailed:            DefaultMaxRecentFailed,
+		PollIntervalMs:               pollIntervalMs,
+		MaxConcurrentAgents:          maxConcurrentAgents,
+		MaxConcurrentAgentsByState:   map[string]int{},
+		Running:                      map[IssueID]*RunningEntry{},
+		Blocked:                      map[IssueID]*BlockedEntry{},
+		Claimed:                      map[IssueID]struct{}{},
+		ClaimedIssues:                map[IssueID]tracker.Issue{},
+		RetryAttempts:                map[IssueID]*RetryEntry{},
+		Failed:                       map[IssueID]FailedEntry{},
+		Completed:                    map[IssueID]struct{}{},
+		ReconcileStoppedWithProgress: map[IssueID]struct{}{},
+		cleaningWorkspaces:           map[IssueID]struct{}{},
+		MaxRecentCompleted:           DefaultMaxRecentCompleted,
+		MaxRecentFailed:              DefaultMaxRecentFailed,
 	}
 }
 
@@ -417,24 +420,26 @@ func (s *OrchestratorState) recordCompleted(id IssueID) {
 	}
 }
 
-// recordReconcileFinished records a reconcile-stopped run that had handed off
-// (completed ≥1 agent turn) into the ReconcileFinished bookkeeping set, mirroring
-// recordCompleted's cap/cumulative semantics. It is bookkeeping only and is
-// independent of Completed: the run was NOT a clean §16.5 exit (so it must not be
-// counted as completed, matching upstream), but it succeeded from the agent's
-// side, so surfacing it lets /api/v1/state distinguish it from a genuine
-// no-progress cancel (#557).
-func (s *OrchestratorState) recordReconcileFinished(id IssueID) {
-	s.CumulativeReconcileFinishedTotal++
-	if _, ok := s.ReconcileFinished[id]; ok {
+// recordReconcileStoppedWithProgress records a reconcile-stopped run that had
+// completed ≥1 agent turn (made progress) into the ReconcileStoppedWithProgress
+// bookkeeping set, mirroring recordCompleted's cap/cumulative semantics. It is
+// bookkeeping only and independent of Completed: the run was NOT a clean §16.5
+// exit (so it must not be counted as completed, matching upstream), but it made
+// progress, so surfacing it lets /api/v1/state distinguish it from a genuine
+// no-progress cancel (#557). Progress is usually the agent's handoff but is not a
+// guaranteed success — the caller gates on runHasCompletedTurn, which is true
+// after any turn.
+func (s *OrchestratorState) recordReconcileStoppedWithProgress(id IssueID) {
+	s.CumulativeReconcileStoppedWithProgressTotal++
+	if _, ok := s.ReconcileStoppedWithProgress[id]; ok {
 		return
 	}
-	s.ReconcileFinished[id] = struct{}{}
-	s.reconcileFinishedOrder = append(s.reconcileFinishedOrder, id)
-	if s.MaxRecentCompleted > 0 && len(s.reconcileFinishedOrder) > s.MaxRecentCompleted {
-		oldest := s.reconcileFinishedOrder[0]
-		s.reconcileFinishedOrder = s.reconcileFinishedOrder[1:]
-		delete(s.ReconcileFinished, oldest)
+	s.ReconcileStoppedWithProgress[id] = struct{}{}
+	s.reconcileStoppedWithProgressOrder = append(s.reconcileStoppedWithProgressOrder, id)
+	if s.MaxRecentCompleted > 0 && len(s.reconcileStoppedWithProgressOrder) > s.MaxRecentCompleted {
+		oldest := s.reconcileStoppedWithProgressOrder[0]
+		s.reconcileStoppedWithProgressOrder = s.reconcileStoppedWithProgressOrder[1:]
+		delete(s.ReconcileStoppedWithProgress, oldest)
 	}
 }
 
@@ -759,17 +764,18 @@ type StateView struct {
 	// match; under sustained failure load, the count exceeds the
 	// slice length.
 	FailedSuppressedCount int
-	// ReconcileFinished is the FIFO-bounded recent set of reconcile-stopped runs
-	// that had handed off (completed ≥1 agent turn) — surfaced so a
-	// successful-but-reaped handoff is visible rather than absent from both
-	// Completed and Failed (#557). CumulativeReconcileFinishedTotal is the
-	// lifetime monotonic counter that survives FIFO eviction.
-	ReconcileFinished                []IssueID
-	CumulativeCompletedTotal         int64
-	CumulativeFailedTotal            int64
-	CumulativeReconcileFinishedTotal int64
-	CodexTotals                      CodexTotals
-	CodexRateLimits                  *RateLimitSnapshot
+	// ReconcileStoppedWithProgress is the FIFO-bounded recent set of reconcile-stopped
+	// runs that had completed ≥1 agent turn (made progress — usually the agent's
+	// handoff, but inspect to confirm) — surfaced so a progressed-but-reaped run is
+	// visible rather than absent from both Completed and Failed (#557).
+	// CumulativeReconcileStoppedWithProgressTotal is the lifetime monotonic counter
+	// that survives FIFO eviction.
+	ReconcileStoppedWithProgress                []IssueID
+	CumulativeCompletedTotal                    int64
+	CumulativeFailedTotal                       int64
+	CumulativeReconcileStoppedWithProgressTotal int64
+	CodexTotals                                 CodexTotals
+	CodexRateLimits                             *RateLimitSnapshot
 	// RecentEvents is the bounded orchestrator-wide event log (capped at
 	// MaxRuntimeEvents). It carries SPEC §13.7 operator-visible signals
 	// like dispatch_preflight_failed that are not scoped to one issue.
@@ -902,22 +908,22 @@ func (s *OrchestratorState) Snapshot() StateView {
 		}
 	}
 	view := StateView{
-		GeneratedAt:                      now.UTC(),
-		PollIntervalMs:                   s.PollIntervalMs,
-		MaxConcurrentAgents:              s.MaxConcurrentAgents,
-		MaxConcurrentAgentsByState:       copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
-		Blocked:                          make([]BlockedView, 0, len(s.Blocked)),
-		Retrying:                         make([]RetryView, 0, len(s.RetryAttempts)),
-		Failed:                           make([]IssueID, 0, len(s.failedOrder)),
-		Completed:                        make([]IssueID, 0, len(s.completedOrder)),
-		FailedSuppressedCount:            len(s.Failed),
-		ReconcileFinished:                make([]IssueID, 0, len(s.reconcileFinishedOrder)),
-		CumulativeCompletedTotal:         s.CumulativeCompletedTotal,
-		CumulativeFailedTotal:            s.CumulativeFailedTotal,
-		CumulativeReconcileFinishedTotal: s.CumulativeReconcileFinishedTotal,
-		CodexTotals:                      totals,
-		CodexRateLimits:                  copyRateLimitSnapshot(s.CodexRateLimits),
-		RecentEvents:                     append([]RuntimeEvent(nil), s.RecentEvents...),
+		GeneratedAt:                  now.UTC(),
+		PollIntervalMs:               s.PollIntervalMs,
+		MaxConcurrentAgents:          s.MaxConcurrentAgents,
+		MaxConcurrentAgentsByState:   copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
+		Blocked:                      make([]BlockedView, 0, len(s.Blocked)),
+		Retrying:                     make([]RetryView, 0, len(s.RetryAttempts)),
+		Failed:                       make([]IssueID, 0, len(s.failedOrder)),
+		Completed:                    make([]IssueID, 0, len(s.completedOrder)),
+		FailedSuppressedCount:        len(s.Failed),
+		ReconcileStoppedWithProgress: make([]IssueID, 0, len(s.reconcileStoppedWithProgressOrder)),
+		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
+		CumulativeFailedTotal:        s.CumulativeFailedTotal,
+		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
+		CodexTotals:     totals,
+		CodexRateLimits: copyRateLimitSnapshot(s.CodexRateLimits),
+		RecentEvents:    append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
 	view.Running = s.snapshotRunningViews()
 	for id, b := range s.Blocked {
@@ -950,7 +956,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 	// stably, and the bounded slice matches MaxRecent* exactly.
 	view.Failed = append(view.Failed, s.failedOrder...)
 	view.Completed = append(view.Completed, s.completedOrder...)
-	view.ReconcileFinished = append(view.ReconcileFinished, s.reconcileFinishedOrder...)
+	view.ReconcileStoppedWithProgress = append(view.ReconcileStoppedWithProgress, s.reconcileStoppedWithProgressOrder...)
 	return view
 }
 

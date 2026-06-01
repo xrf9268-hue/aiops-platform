@@ -199,10 +199,12 @@ func (f *finalizeRunOp) applyReconciledCancelCleanup(st *OrchestratorState, elap
 		close(f.done)
 		return nil, true
 	}
-	// The agent had completed ≥1 turn (gate above) before reconcile reaped the
-	// run, so it handed off — surface it in /api/v1/state instead of leaving it
-	// absent from both completed and failed (#557).
-	st.recordReconcileFinished(f.id)
+	// The run completed ≥1 turn (gate above) before reconcile reaped it, so it made
+	// progress — surface it in /api/v1/state instead of leaving it absent from both
+	// completed and failed (#557). turn_completed fires after every turn, so this is
+	// "reaped after progress" (usually the agent's handoff; inspect to confirm), not
+	// a guaranteed success.
+	st.recordReconcileStoppedWithProgress(f.id)
 	close(f.done)
 	return cleanup, true
 }
@@ -247,12 +249,15 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 		close(f.done)
 		return nil, true
 	}
-	// If the agent had handed off (completed ≥1 turn) before reconcile reaped the
-	// run mid-finalization, surface it distinctly so a successful-but-reaped run is
-	// visible in /api/v1/state instead of absent from completed and failed (#557).
-	// A 0-turn cancel is a genuine no-progress stop and stays unrecorded.
+	// If the run completed ≥1 turn before reconcile reaped it mid-finalization, it
+	// made progress — surface it distinctly so a progressed run is visible in
+	// /api/v1/state instead of absent from completed and failed (#557). It is
+	// usually the agent's handoff, but turn_completed fires after every turn, so it
+	// can also be a run an operator stopped after an intermediate turn (inspect to
+	// confirm) — not a guaranteed success. A 0-turn cancel is a genuine no-progress
+	// stop and stays unrecorded.
 	if runHasCompletedTurn(f.entry) {
-		st.recordReconcileFinished(f.id)
+		st.recordReconcileStoppedWithProgress(f.id)
 	}
 	close(f.done)
 	return cleanup, true

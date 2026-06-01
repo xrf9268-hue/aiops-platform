@@ -133,8 +133,8 @@ the shape here without updating the handler — or vice versa — fails the buil
     "failed": 0,
     "completed_total": 12,
     "failed_total": 3,
-    "reconcile_finished": 1,
-    "reconcile_finished_total": 2
+    "reconcile_stopped_with_progress": 1,
+    "reconcile_stopped_with_progress_total": 2
   },
   "running": [
     {
@@ -183,7 +183,7 @@ the shape here without updating the handler — or vice versa — fails the buil
   ],
   "completed": [],
   "failed": [],
-  "reconcile_finished": [],
+  "reconcile_stopped_with_progress": [],
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -205,10 +205,10 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `failed`          | Size of the dispatch-suppression set (uncapped; not bounded by the FIFO cap). |
 | `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
 | `failed_total`    | Monotonic counter of NonRetryableFailed transitions since process start.      |
-| `reconcile_finished` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had handed off (completed ≥1 agent turn) before the per-tick reconcile reaped them mid-finalization. Surfaced so a successful-but-reaped handoff is visible rather than absent from both `completed` and `failed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
-| `reconcile_finished_total` | Monotonic counter of reconcile-finished-after-handoff transitions since process start. |
+| `reconcile_stopped_with_progress` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had completed ≥1 agent turn (made progress) before the per-tick reconcile reaped them mid-finalization. Usually the agent's own handoff, but `turn_completed` fires after every turn, so it can also be a run stopped after an intermediate turn — treat it as "reaped after progress, worth inspecting," not a guaranteed success. Surfaced so such a run is visible rather than absent from both `completed` and `failed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
+| `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 
-`completed`, `failed`, and `reconcile_finished` arrays at the top level publish
+`completed`, `failed`, and `reconcile_stopped_with_progress` arrays at the top level publish
 the recent N issue IDs in those sets; for lifetime totals across FIFO eviction
 use the `_total` counters.
 
