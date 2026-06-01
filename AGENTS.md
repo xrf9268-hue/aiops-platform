@@ -129,6 +129,30 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    focused tools (`linear_graphql`, one Gitea PR tool, etc.); resist
    the temptation to wrap every Gitea / Linear endpoint as a separate
    tool.
+6. **Upstream absence is an over-design signal; delete, don't relocate.**
+   Before adding any worker/orchestrator phase, gate, artifact, or config
+   that acts on the agent's output (verify, secret scan, run summary, diff
+   policy, push, PR, tracker write, …), `grep` the Elixir reference for an
+   equivalent *first*. **Upstream having no equivalent is a strong signal the
+   component is over-design, not a feature gap to fill.** The default home for
+   "check the agent's work before handoff" is the WORKFLOW prompt (agent-owned,
+   pre-push, *preventive*), not a worker post-turn phase — a worker phase runs
+   *after* the agent has already pushed (#76), so it can only flag, never
+   prevent, and it races the D9 reconcile-cancel / §16.5 self-stop, which is
+   exactly what caused #557. When a component is found on the wrong side of the
+   boundary, the fix is to **delete it**, not relocate it (move-to-prompt) or
+   merely document it (a new `DEVIATIONS.md` row); relocating or documenting
+   preserves scaffolding that no longer earns its place (principle 4). Keep a
+   piece only if you can name a behavior SPEC's scheduler/runner boundary
+   genuinely permits *and* that the prompt cannot replicate (e.g. the
+   `policy`-violation corrective retry loop). **Earned by:** this port has
+   built-then-unwound the same misplacement at least five times — Postgres
+   queue (#73/#407), Gitea webhook (#74), orchestrator PR/push/tracker-writes
+   (#76), the worker verify gate (#557), and the worker secret-scan gate
+   (#561; the RUN_SUMMARY gate is being unwound in the same #561 effort) — each
+   a dedicated removal on top of the original build, plus the bugs the
+   misplacement itself caused (the #557 reconcile-cancel race was a direct
+   consequence of running verify as a worker post-turn phase).
 
 ## Cross-cutting checklist when porting from the Elixir reference
 
