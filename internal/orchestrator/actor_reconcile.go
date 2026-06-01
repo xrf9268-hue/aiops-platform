@@ -357,6 +357,19 @@ func (r *reconcileTrackerIssuesOp) reconcileActiveRun(st *OrchestratorState, id 
 		st.ClaimedIssues[id] = issue
 		return nil
 	}
+	if refreshed, ok := r.refreshedByID[string(id)]; ok &&
+		!isActiveTrackerState(refreshed.State, r.activeStates) &&
+		reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, run.Issue, refreshed, r.terminalStates) {
+		// Agent self-handoff to a non-terminal inactive state on a self-stopping
+		// runner: defer to its SPEC §16.5 self-stop rather than hard-cancelling
+		// mid-turn (#557). Leave run.Issue and the ClaimedIssues snapshot at their
+		// dispatch-time ACTIVE state — the worker is still an in-flight agent
+		// finishing its current turn, so per-state capacity gates must keep
+		// counting it under that state; refreshing to the inactive state would
+		// over/under-count until the worker self-stops (a turn later) through the
+		// clean-exit path.
+		return nil
+	}
 	st.ReleaseClaim(id)
 	run.ReconcileCancel = true
 	fromState := run.Issue.State
@@ -464,6 +477,40 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 	return strings.TrimSpace(previous.ServiceName) == strings.TrimSpace(current.ServiceName)
 }
 
+// reconcileDefersToSelfStop reports whether per-tick reconciliation should leave
+// a running entry to its SPEC §16.5 per-turn self-stop instead of hard-cancelling
+// it. It is true only for a self-stopping runner (codex app-server — the runner
+// whose in-session loop runs the §16.5 issue-state refresh after every turn, gated
+// by runner.EnforcesMaxTurnsInternally) whose issue moved to a NON-terminal
+// inactive state on the same service route: the agent's own PR handoff (e.g. moving
+// the issue to In Review as its final turn action).
+//
+// Without this, reconcile-cancel races the §16.5 self-stop on the same "issue left
+// the active set" observation (#557): a cancel win stops the run mid-turn and
+// finalizes it as PhaseCanceledByReconciliation, which finishRunAborted drops from
+// /api/v1/state entirely — so an agent that opened a PR and handed off shows up as
+// neither completed nor failed. Deferring lets the worker's next §16.5 refresh stop
+// the run through the clean-exit path (recorded completed, true terminal status).
+// The current turn is bounded by turn/agent timeouts, and a wedged turn is still
+// reaped by stall detection, so deferral cannot strand the claim.
+//
+// A terminal transition (the issue is genuinely done/cancelled — typically an
+// operator action, not an agent handoff), a route change, or a non-self-stopping
+// runner (mock / shell-based claude exit after a single turn with no §16.5 loop)
+// keeps the existing prompt hard-cancel.
+//
+// `current` must already be a non-active observation — the function does not
+// re-check it (the active vs non-active split is the caller's domain): the
+// inactive pass only feeds entries from its inactive/terminal listing, and the
+// active pass guards the call with an explicit
+// `!isActiveTrackerState(refreshed.State, …)`. A new call site MUST establish the
+// same precondition (AGENTS.md cross-cutting checklist item 1).
+func reconcileDefersToSelfStop(selfStopRunner bool, prev, current tracker.Issue, terminalStates map[string]struct{}) bool {
+	return selfStopRunner &&
+		sameServiceRoute(prev, current) &&
+		!isTerminalTrackerState(current.State, terminalStates)
+}
+
 type reconcileInactiveTrackerIssuesOp struct {
 	o              *Orchestrator
 	issuesByID     map[string]tracker.Issue
@@ -514,6 +561,18 @@ func (r *reconcileInactiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
 func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRun(st *OrchestratorState, id IssueID, run *RunningEntry) *RunningEntry {
 	issue, ok := r.issuesByID[string(id)]
 	if !ok {
+		return nil
+	}
+	if reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, run.Issue, issue, r.terminalStates) {
+		// Agent self-handoff to a non-terminal inactive state on a self-stopping
+		// runner: defer to the worker's SPEC §16.5 self-stop so the run finalizes
+		// through the clean-exit path (recorded completed) instead of
+		// CanceledByReconciliation, which is invisible in /api/v1/state (#557).
+		// Leave run.Issue and the ClaimedIssues snapshot at their dispatch-time
+		// ACTIVE state so per-state capacity gates keep counting this still-running
+		// agent under that state (refreshing to the inactive state would
+		// over/under-count until the worker self-stops a turn later). A
+		// non-terminal transition keeps the workspace.
 		return nil
 	}
 	st.ReleaseClaim(id)
