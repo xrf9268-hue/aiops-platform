@@ -173,8 +173,11 @@ func TestReconcileActiveDefersSelfStopRunnerOnNonTerminalInactive(t *testing.T) 
 	dispatchActiveRun(t, o, disp, iss)
 
 	// Active listing no longer contains the issue (it left active); the narrow
-	// refresh observed it in a non-terminal inactive state on the same route.
-	refreshed := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review", ServiceName: "api"}}
+	// refresh observed it in a non-terminal inactive state. The real refresh
+	// (FetchIssueStatesByIDs) returns only id/identifier/state, so ServiceName is
+	// empty here even though the run was dispatched on "api" — deferral must still
+	// apply (route is not part of the decision; Codex P1 on #562).
+	refreshed := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
 	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
 		map[string]tracker.Issue{}, normalizedStates([]string{"in progress"}),
 		normalizedStates([]string{"done"}), refreshed, 0); err != nil {

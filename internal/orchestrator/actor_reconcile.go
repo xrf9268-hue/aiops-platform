@@ -359,7 +359,7 @@ func (r *reconcileTrackerIssuesOp) reconcileActiveRun(st *OrchestratorState, id 
 	}
 	if refreshed, ok := r.refreshedByID[string(id)]; ok &&
 		!isActiveTrackerState(refreshed.State, r.activeStates) &&
-		reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, run.Issue, refreshed, r.terminalStates) {
+		reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, refreshed, r.terminalStates) {
 		// Agent self-handoff to a non-terminal inactive state on a self-stopping
 		// runner: defer to its SPEC §16.5 self-stop rather than hard-cancelling
 		// mid-turn (#557). Leave run.Issue and the ClaimedIssues snapshot at their
@@ -479,11 +479,11 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 
 // reconcileDefersToSelfStop reports whether per-tick reconciliation should leave
 // a running entry to its SPEC §16.5 per-turn self-stop instead of hard-cancelling
-// it. It is true only for a self-stopping runner (codex app-server — the runner
-// whose in-session loop runs the §16.5 issue-state refresh after every turn, gated
-// by runner.EnforcesMaxTurnsInternally) whose issue moved to a NON-terminal
-// inactive state on the same service route: the agent's own PR handoff (e.g. moving
-// the issue to In Review as its final turn action).
+// it. It is true for a self-stopping runner (codex app-server — the runner whose
+// in-session loop runs the §16.5 issue-state refresh after every turn, gated by
+// runner.EnforcesMaxTurnsInternally) whose issue moved to a NON-terminal inactive
+// state: the agent's own PR handoff (e.g. moving the issue to In Review as its
+// final turn action).
 //
 // Without this, reconcile-cancel races the §16.5 self-stop on the same "issue left
 // the active set" observation (#557): a cancel win stops the run mid-turn and
@@ -494,21 +494,27 @@ func sameServiceRoute(previous, current tracker.Issue) bool {
 // The current turn is bounded by turn/agent timeouts, and a wedged turn is still
 // reaped by stall detection, so deferral cannot strand the claim.
 //
-// A terminal transition (the issue is genuinely done/cancelled — typically an
-// operator action, not an agent handoff), a route change, or a non-self-stopping
-// runner (mock / shell-based claude exit after a single turn with no §16.5 loop)
-// keeps the existing prompt hard-cancel.
+// A terminal transition (genuinely done/cancelled — typically an operator action,
+// not an agent handoff) or a non-self-stopping runner (mock / shell-based claude
+// exit after a single turn with no §16.5 loop) keeps the existing prompt
+// hard-cancel.
 //
-// `current` must already be a non-active observation — the function does not
-// re-check it (the active vs non-active split is the caller's domain): the
-// inactive pass only feeds entries from its inactive/terminal listing, and the
-// active pass guards the call with an explicit
-// `!isActiveTrackerState(refreshed.State, …)`. A new call site MUST establish the
-// same precondition (AGENTS.md cross-cutting checklist item 1).
-func reconcileDefersToSelfStop(selfStopRunner bool, prev, current tracker.Issue, terminalStates map[string]struct{}) bool {
-	return selfStopRunner &&
-		sameServiceRoute(prev, current) &&
-		!isTerminalTrackerState(current.State, terminalStates)
+// Route (ServiceName) is deliberately NOT checked here: the narrow state refresh
+// (FetchIssueStatesByIDs) that feeds both call sites returns only id/identifier/
+// state for an issue that left the active listing, so `current.ServiceName` is
+// empty for a routed run and a route comparison would always fail — wrongly
+// hard-cancelling every routed handoff (Codex P1 on PR #562). It is also
+// unnecessary: a route-change to an *active* state is excluded by the active
+// pass's own `!isActiveTrackerState` guard before this is called, and the worker's
+// §16.5 refresh self-stops on ANY non-active state regardless of route. `current`
+// must already be a non-active observation — the function does not re-check it
+// (the active/non-active split is the caller's domain): the inactive pass only
+// feeds entries from its inactive/terminal listing, and the active pass guards the
+// call with an explicit `!isActiveTrackerState(refreshed.State, …)`. A new call
+// site MUST establish the same precondition (AGENTS.md cross-cutting checklist
+// item 1).
+func reconcileDefersToSelfStop(selfStopRunner bool, current tracker.Issue, terminalStates map[string]struct{}) bool {
+	return selfStopRunner && !isTerminalTrackerState(current.State, terminalStates)
 }
 
 type reconcileInactiveTrackerIssuesOp struct {
@@ -563,7 +569,7 @@ func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRun(st *Orchestrator
 	if !ok {
 		return nil
 	}
-	if reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, run.Issue, issue, r.terminalStates) {
+	if reconcileDefersToSelfStop(r.o.runnerEnforcesMaxTurns, issue, r.terminalStates) {
 		// Agent self-handoff to a non-terminal inactive state on a self-stopping
 		// runner: defer to the worker's SPEC §16.5 self-stop so the run finalizes
 		// through the clean-exit path (recorded completed) instead of
