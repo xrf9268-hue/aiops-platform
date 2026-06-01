@@ -343,6 +343,9 @@ func rejectRemovedFields(front []byte) error {
 	if err := rejectRemovedCodexFields(raw); err != nil {
 		return err
 	}
+	if err := rejectRemovedVerifyFields(raw); err != nil {
+		return err
+	}
 	if claude, ok := raw["claude"].(map[string]any); ok {
 		if _, present := claude["profile"]; present {
 			return fmt.Errorf("claude.profile is not supported; the codex-only `profile` field was removed in issue #541 and Claude never had runner profiles. Remove it")
@@ -351,6 +354,27 @@ func rejectRemovedFields(front []byte) error {
 	if agent, ok := raw["agent"].(map[string]any); ok {
 		if _, present := agent["fallback"]; present {
 			return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
+		}
+	}
+	return nil
+}
+
+// rejectRemovedVerifyFields surfaces clear errors for the verify.* keys that
+// configured the removed worker verify gate (#557 / DEVIATIONS D33): timeout,
+// allow_failure, and env_passthrough. Verification is the coding agent's job
+// now — verify.commands are surfaced to the agent's prompt and the worker no
+// longer runs them, so these worker-execution knobs would otherwise be silently
+// dropped, leaving an operator believing verification is still timeout-bounded,
+// allowed to fail, or receiving env passthrough. verify.commands and the nested
+// verify.secret_scan remain valid and are not rejected.
+func rejectRemovedVerifyFields(raw map[string]any) error {
+	verify, ok := raw["verify"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"timeout", "allow_failure", "env_passthrough"} {
+		if _, present := verify[key]; present {
+			return fmt.Errorf("verify.%s is no longer supported (#557): the worker verify gate was removed, so verification is the agent's responsibility — verify.commands are surfaced to the prompt and the worker no longer runs them. Remove verify.%s and express the check in the WORKFLOW prompt instead", key, key)
 		}
 	}
 	return nil
