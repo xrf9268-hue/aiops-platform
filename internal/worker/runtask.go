@@ -26,10 +26,6 @@ type EventEmitter interface {
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
 }
 
-// secretScanFn is the indirection used to swap the real workspace scanner
-// for a stub in tests. It mirrors workspace.RunSecretScan's signature.
-type secretScanFn func(ctx context.Context, workdir string, cfg workflow.SecretScanConfig) workspace.SecretScanResult
-
 // RunTaskError bundles the resolved workflow Config alongside the error so
 // callers can classify failures without re-resolving the workflow.
 type RunTaskError struct {
@@ -183,7 +179,7 @@ func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
 //
 // Per SPEC §1, push, PR creation, and tracker state writes are the agent's
 // responsibility. The worker's role is: claim, prepare workspace, resolve
-// workflow, run agent session, enforce policy/secret-scan/RUN_SUMMARY gates,
+// workflow, run agent session, enforce the policy/RUN_SUMMARY gates,
 // emit events, and clean up. The lifecycle is split across runState phase
 // helpers; RunTask only sequences them and stamps PhaseFailed on the way out
 // of any non-terminal error path.
@@ -487,11 +483,14 @@ func (rs *runState) enforcePostRunPolicy() *RunTaskError {
 	return &RunTaskError{Cfg: rs.wcfg, Err: err}
 }
 
-// runPostRunGates runs the analysis-only diff check, external-blocker handoff,
-// RUN_SUMMARY gate, and secret scan. A recorded external blocker is a success
+// runPostRunGates runs the analysis-only diff check, the external-blocker
+// handoff, and the RUN_SUMMARY gate. A recorded external blocker is a success
 // path: it returns a *RunTaskError with ExternalBlocked set after stamping
 // PhaseSucceeded. Verification is the agent's responsibility per SPEC §1
-// (surfaced to the prompt via AppendVerifyDirective), not a worker phase.
+// (surfaced to the prompt via AppendVerifyDirective), not a worker phase;
+// likewise the secret scan was removed (#561) — it ran after the agent had
+// already pushed, so it could only flag, never prevent, a leak, and it raced
+// reconcile-cancel the same way the verify gate did (#557).
 func (rs *runState) runPostRunGates() *RunTaskError {
 	if err := enforceAnalysisOnlyChanges(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.workspaceBase, rs.wcfg); err != nil {
 		WriteFailureArtifacts(rs.ctx, rs.workdir, ErrSummary(err))
@@ -520,15 +519,6 @@ func (rs *runState) runPostRunGates() *RunTaskError {
 	if rtErr := rs.checkRunSummary(); rtErr != nil {
 		return rtErr
 	}
-
-	// Run the optional secret scanner. The scanner runs even
-	// though push is now the agent's responsibility — it acts as a final
-	// gate that fails the task before the orchestrator records success, so
-	// a branch carrying credential leaks is never considered complete.
-	if err := runSecretScan(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.wf.Config); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, "secret scan blocked: "+ErrSummary(err))
-		return &RunTaskError{Cfg: rs.wcfg, Err: err}
-	}
 	return nil
 }
 
@@ -539,10 +529,6 @@ func (rs *runState) runPostRunGates() *RunTaskError {
 // progress. We do NOT fall back to a worker-generated summary here on purpose:
 // the artifact must come from the runner so it reflects intent, not a
 // synthesized recap.
-//
-// This gate runs BEFORE the secret scanner: a run with no real summary is not
-// allowed to proceed regardless of scanner outcome, and skipping the scanner on
-// this path keeps the failure attribution unambiguous.
 func (rs *runState) checkRunSummary() *RunTaskError {
 	_, status, checkErr := workspace.CheckSummary(rs.workdir)
 	if checkErr != nil {
@@ -785,71 +771,6 @@ func runtimeEventKey(event task.RuntimeEvent) string {
 		encoded = []byte(fmt.Sprintf("%#v", event.Payload))
 	}
 	return event.Event + "\x00" + string(encoded)
-}
-
-// runSecretScan executes the configured secret scanner and
-// records structured task events for the start, clean exit, finding, or
-// execution error cases. It returns a non-nil error only when the task
-// should be failed, so the caller can simply propagate the error and let
-// the existing failed_attempt path take over.
-//
-// Event kinds emitted (mirroring the existing event vocabulary):
-//
-//   - secret_scan_start:     scanner is about to run
-//   - secret_scan_clean:     scanner exited zero, no findings
-//   - secret_scan_violation: scanner exited non-zero (potential secrets)
-//   - secret_scan_error:     scanner failed to run (binary missing, etc.)
-//
-// When the scan is disabled or unconfigured, no events are emitted; this
-// preserves the worker's previous behavior for repos that have not opted
-// in.
-func runSecretScan(ctx context.Context, ev EventEmitter, taskID, _ string, workdir string, cfg workflow.Config) error {
-	return runSecretScanWith(ctx, ev, taskID, workdir, cfg, workspace.RunSecretScan)
-}
-
-func runSecretScanWith(ctx context.Context, ev EventEmitter, taskID string, workdir string, cfg workflow.Config, scan secretScanFn) error {
-	scfg := cfg.Verify.SecretScan
-	if !scfg.Enabled || len(scfg.Command) == 0 {
-		return nil
-	}
-
-	_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_start", "running secret scan", map[string]any{
-		"command": scfg.Command,
-	})
-
-	res := scan(ctx, workdir, scfg)
-	payload := map[string]any{
-		"command":     res.Command,
-		"exit_code":   res.ExitCode,
-		"duration_ms": res.DurationMs,
-		"stdout":      res.Stdout,
-		"stderr":      res.Stderr,
-	}
-
-	switch res.Status {
-	case workspace.SecretScanClean:
-		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_clean", "secret scan reported no findings", payload)
-		return nil
-	case workspace.SecretScanViolation:
-		msg := fmt.Sprintf("secret scan reported findings (exit %d)", res.ExitCode)
-		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_violation", msg, payload)
-		if res.ShouldBlockCompletion(scfg) {
-			return errors.New(msg)
-		}
-		return nil
-	case workspace.SecretScanError:
-		msg := fmt.Sprintf("secret scan failed to execute: %v", res.Err)
-		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
-		// Execution errors always block: an operator-misconfigured scanner
-		// must not silently allow the task to complete.
-		return errors.New(msg)
-	default:
-		// Defensive: an unexpected status should not leak through. Treat
-		// like a violation so the task is blocked rather than waved through.
-		msg := fmt.Sprintf("secret scan returned unexpected status %q", res.Status)
-		_ = ev.AddEventWithPayload(ctx, taskID, "secret_scan_error", msg, payload)
-		return errors.New(msg)
-	}
 }
 
 // recordPolicyViolation writes a structured `policy_violation` task event

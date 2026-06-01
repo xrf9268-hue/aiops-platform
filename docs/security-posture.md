@@ -127,18 +127,17 @@ The current Go implementation provides these safety controls:
 - draft-PR mode for human review before merge;
 - `$VAR` indirection for secrets in workflow configuration;
 - masking of secret values in configuration inspection output;
-- optional pre-push secret scanning;
 - operator-visible blocked state for Codex input-required and MCP elicitation
   requests, so non-interactive runs stop and remain claimed instead of burning
   retries silently;
-- allow-listed environment for agent, hook, and verify subprocesses: by
+- allow-listed environment for agent and hook subprocesses: by
   default these children run with only a small POSIX baseline env (`PATH`,
   `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`). Tracker/repo
   tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`, `GITEA_TOKEN`) and any other secret
   in the worker's `.env` are excluded — a malicious or buggy WORKFLOW.md cannot
   `env > /tmp/dump` and exfiltrate them. Operators opt non-tracker vars back in
-  per workflow with `codex.env_passthrough`, `claude.env_passthrough`,
-  `hooks.env_passthrough`, or `verify.env_passthrough`; agent passthrough
+  per workflow with `codex.env_passthrough`, `claude.env_passthrough`, or
+  `hooks.env_passthrough`; agent passthrough
   rejects tracker/repo API token names so those credentials stay behind
   orchestrator-owned tools. See
   [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
@@ -211,8 +210,12 @@ repository:
     credentials and prompts so it only operates on the intended project.
 11. Review every agent-authored PR before merge, including generated files,
     workflow changes, dependency updates, and scripts run by CI.
-12. Enable the optional secret-scan hook where practical; see
-    `docs/runbooks/secret-scanning.md`.
+12. Scan for credential leaks before the branch is pushed — run a secret
+    scanner (e.g. `gitleaks`) from the WORKFLOW prompt as part of the agent's
+    pre-handoff checks, and rely on PR CI / your host's secret scanning as the
+    backstop. The worker does not scan after the fact: push is the agent's
+    responsibility (SPEC §1), so a post-turn worker scan could only flag a leak
+    that was already pushed, never prevent it (#561).
 13. Run workers under a dedicated OS user and keep the workspace root permissions
     restricted to that user.
 14. Treat logs, run summaries, PR bodies, and tracker comments as data exfiltration

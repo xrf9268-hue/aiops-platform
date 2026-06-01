@@ -1846,15 +1846,18 @@ prompt body
 
 // TestLoad_RejectsRemovedVerifyExecutionFields verifies that workflows still
 // carrying the worker-execution-only verify keys removed in #557
-// (verify.timeout / allow_failure / env_passthrough) fail Load with a clear
-// error instead of being silently accepted while the worker ignores them —
-// verification is the agent's job now. verify.commands stays valid.
+// (verify.timeout / allow_failure / env_passthrough) or the worker secret-scan
+// gate removed in #561 (verify.secret_scan) fail Load with a clear error
+// instead of being silently accepted while the worker ignores them —
+// verification and pre-push secret scanning are the agent's job now.
+// verify.commands stays valid.
 func TestLoad_RejectsRemovedVerifyExecutionFields(t *testing.T) {
 	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n"
 	for _, tc := range []struct{ name, block string }{
 		{"timeout", "verify:\n  timeout: 5m\n"},
 		{"allow_failure", "verify:\n  allow_failure: true\n"},
 		{"env_passthrough", "verify:\n  env_passthrough:\n    - GOMODCACHE\n"},
+		{"secret_scan", "verify:\n  secret_scan:\n    enabled: true\n    command:\n      - gitleaks\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

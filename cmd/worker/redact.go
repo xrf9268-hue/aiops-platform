@@ -13,8 +13,7 @@ const stateAPILastMessageMaxRunes = 256
 
 // stateAPIRedactionPatterns is the small set of secret-shaped substrings
 // that this redaction layer scrubs before emitting `last_message` on
-// /api/v1/state. The list is intentionally narrow — heavy redaction lives
-// in `internal/workspace/secretscan`'s push-gate path; this is only the
+// /api/v1/state. The list is intentionally narrow — this is only the
 // last-line guard against incidental loopback exposure of common token
 // shapes that Codex notifications can echo (Authorization headers, raw
 // bearer tokens, basic-auth URLs, sk-/ghp_/ghu_-prefixed keys).

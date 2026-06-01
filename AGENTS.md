@@ -243,7 +243,7 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 | `internal/worker` | Worker lifecycle |
 | `internal/task`, `internal/policy` | Task event constants, policy helpers |
 | `docs/adr/` | Architectural decisions (start here for "why") |
-| `docs/runbooks/` | Operational guides (CI, local dev, secret scan, workspace cache) |
+| `docs/runbooks/` | Operational guides (CI, local dev, workspace cache) |
 | `test/e2e/` | Build-tagged E2E suite (`-tags e2e`) using Gitea containers |
 
 ## Build, test, lint
@@ -426,7 +426,6 @@ searched or reported as normal shadow sources.
 - `docs/runbooks/local-dev.md` — local dev loop
 - `docs/runbooks/codex-app-server-docker.md` — production-style Docker notes for real `codex app-server`
 - `docs/runbooks/ci.md` — CI behavior, release flow, pre-push checks
-- `docs/runbooks/secret-scanning.md` — opt-in pre-push leak scan
 - `docs/runbooks/workspace-cache.md` — workspace lifecycle and cleanup
 - `docs/runbooks/batch-issue-processing.md` — running a `/goal` over a set of issues: one-issue-per-PR, parallelism, deferral protocol, and the authorized auto-merge flow
 - `docs/adr/0001-symphony-style-personal-orchestrator.md` — the "why"

@@ -13,9 +13,9 @@ type recordedEvent struct {
 }
 
 // fakeEmitter is an in-memory EventEmitter used by package-internal tests
-// (secretscan_test.go, print_config_test.go) that live in package worker.
-// The external test file (run_test.go, package worker_test) defines its own
-// copy because Go does not share _test.go types across package boundaries.
+// that live in package worker. The external test file (run_test.go, package
+// worker_test) defines its own copy because Go does not share _test.go types
+// across package boundaries.
 type fakeEmitter struct {
 	mu     sync.Mutex
 	events []recordedEvent
