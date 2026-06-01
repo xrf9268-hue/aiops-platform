@@ -96,21 +96,43 @@ func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
 	}
 }
 
-// TestApiIssueFromViewFindsReconcileStoppedWithProgress pins the per-issue lookup
-// consistency with the aggregate: an ID surfaced only in
-// reconcile_stopped_with_progress (no terminal runtime event, not in
-// completed/failed) is drillable via /api/v1/<issue> instead of returning
-// issue_not_found (#557).
-func TestApiIssueFromViewFindsReconcileStoppedWithProgress(t *testing.T) {
+// TestApiIssueFromViewFindsReconcileStoppedByIdentifierAndID pins the per-issue
+// lookup consistency: the bucket stores the global id, but the recorded runtime
+// event carries the human identifier, so BOTH /api/v1/<identifier> and
+// /api/v1/<global-id> resolve a reconcile-stopped run instead of issue_not_found
+// (#557). The empty-identifier bucket alone could only match the global id.
+func TestApiIssueFromViewFindsReconcileStoppedByIdentifierAndID(t *testing.T) {
 	view := orchestrator.StateView{
-		ReconcileStoppedWithProgress: []orchestrator.IssueID{"AIS-51"},
+		ReconcileStoppedWithProgress: []orchestrator.IssueID{"linear-uuid-51"},
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventReconcileStopped,
+			IssueID:    "linear-uuid-51",
+			Identifier: "AIS-51",
+			Message:    "reconcile stopped run after ≥1 completed turn",
+			At:         time.Unix(1700000000, 0).UTC(),
+		}},
 	}
-	got, ok := apiIssueFromView(view, "AIS-51")
-	if !ok {
-		t.Fatal("apiIssueFromView(AIS-51) ok = false; want true (reconcile-stopped-with-progress must be drillable)")
+	for _, want := range []string{"AIS-51", "linear-uuid-51"} {
+		got, ok := apiIssueFromView(view, want)
+		if !ok {
+			t.Fatalf("apiIssueFromView(%q) ok = false; want true", want)
+		}
+		if got.Status != "reconcile_stopped_with_progress" || got.IssueID != "linear-uuid-51" {
+			t.Fatalf("apiIssueFromView(%q) = (%s, %s); want (reconcile_stopped_with_progress, linear-uuid-51)", want, got.Status, got.IssueID)
+		}
 	}
-	if got.Status != "reconcile_stopped_with_progress" || got.IssueID != "AIS-51" {
-		t.Fatalf("issue = (%s, %s); want (reconcile_stopped_with_progress, AIS-51)", got.Status, got.IssueID)
+}
+
+// TestApiIssueFromViewResolvesReconcileStoppedFromBucketWhenEventAgedOut: once the
+// runtime event rotates out of RecentEvents, the global id is still drillable via
+// the reconcile_stopped_with_progress bucket fallback (mirroring completed/failed).
+func TestApiIssueFromViewResolvesReconcileStoppedFromBucketWhenEventAgedOut(t *testing.T) {
+	view := orchestrator.StateView{
+		ReconcileStoppedWithProgress: []orchestrator.IssueID{"linear-uuid-51"},
+	}
+	got, ok := apiIssueFromView(view, "linear-uuid-51")
+	if !ok || got.Status != "reconcile_stopped_with_progress" {
+		t.Fatalf("apiIssueFromView(linear-uuid-51) = (%v, %s); want (true, reconcile_stopped_with_progress)", ok, got.Status)
 	}
 }
 

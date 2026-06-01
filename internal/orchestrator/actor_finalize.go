@@ -203,8 +203,10 @@ func (f *finalizeRunOp) applyReconciledCancelCleanup(st *OrchestratorState, elap
 	// progress — surface it in /api/v1/state instead of leaving it absent from both
 	// completed and failed (#557). turn_completed fires after every turn, so this is
 	// "reaped after progress" (usually the agent's handoff; inspect to confirm), not
-	// a guaranteed success.
+	// a guaranteed success. The runtime event carries the identifier so the run is
+	// drillable by identifier via /api/v1/<issue>, like completed/failed.
 	st.recordReconcileStoppedWithProgress(f.id)
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
 	close(f.done)
 	return cleanup, true
 }
@@ -255,9 +257,11 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 	// usually the agent's handoff, but turn_completed fires after every turn, so it
 	// can also be a run an operator stopped after an intermediate turn (inspect to
 	// confirm) — not a guaranteed success. A 0-turn cancel is a genuine no-progress
-	// stop and stays unrecorded.
+	// stop and stays unrecorded. The runtime event carries the identifier so the run
+	// is drillable by identifier via /api/v1/<issue>, like completed/failed.
 	if runHasCompletedTurn(f.entry) {
 		st.recordReconcileStoppedWithProgress(f.id)
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
 	}
 	close(f.done)
 	return cleanup, true

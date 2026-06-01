@@ -13,6 +13,15 @@ const (
 	RuntimeEventFailed           RuntimeEventKind = "failed"
 	RuntimeEventCandidateBlocked RuntimeEventKind = "blocked"
 	RuntimeEventInputBlocked     RuntimeEventKind = "input_blocked"
+	// RuntimeEventReconcileStopped marks a run the per-tick reconcile stopped
+	// after it had completed ≥1 agent turn (made progress — usually the agent's
+	// handoff). Recorded so the run appears in the event stream and is drillable
+	// by IDENTIFIER (not just global id) via /api/v1/<issue>, mirroring how
+	// completed/failed surface there — the reconcile-cancel finalize path records
+	// no completed/failed event otherwise, so an id in reconcile_stopped_with_progress
+	// would only be resolvable by global id (#557). The string value matches the
+	// /api/v1 status so string(kind) maps straight through.
+	RuntimeEventReconcileStopped RuntimeEventKind = "reconcile_stopped_with_progress"
 	// RuntimeEventDispatchPreflightFailed flags SPEC §8.1 step 2 failures:
 	// the per-tick dispatch preflight could not validate the workflow's
 	// tracker / agent / API-key config, so the orchestrator skipped

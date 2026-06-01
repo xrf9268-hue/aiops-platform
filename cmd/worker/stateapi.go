@@ -379,7 +379,9 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 	}
 	for i := len(view.RecentEvents) - 1; i >= 0; i-- {
 		ev := view.RecentEvents[i]
-		if ev.Kind != orchestrator.RuntimeEventCompleted && ev.Kind != orchestrator.RuntimeEventFailed {
+		if ev.Kind != orchestrator.RuntimeEventCompleted &&
+			ev.Kind != orchestrator.RuntimeEventFailed &&
+			ev.Kind != orchestrator.RuntimeEventReconcileStopped {
 			continue
 		}
 		if !matchesIssueLookup(ev.IssueID, ev.Identifier, normalizedWant) {
