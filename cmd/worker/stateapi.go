@@ -42,7 +42,14 @@ type apiStateResponse struct {
 	Retrying                   []apiStateRetry        `json:"retrying"`
 	Completed                  []orchestrator.IssueID `json:"completed"`
 	Failed                     []orchestrator.IssueID `json:"failed"`
-	CodexTotals                apiCodexTotals         `json:"codex_totals"`
+	// ReconcileFinished lists reconcile-stopped runs that had handed off
+	// (completed ≥1 agent turn) before the per-tick reconcile reaped them —
+	// surfaced so a successful-but-reaped handoff is visible rather than absent
+	// from both completed and failed (#557). It does not overlap completed: a
+	// reconcile-stopped run is not a clean §16.5 exit, matching upstream's
+	// accounting, so completed stays unchanged.
+	ReconcileFinished []orchestrator.IssueID `json:"reconcile_finished"`
+	CodexTotals       apiCodexTotals         `json:"codex_totals"`
 	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
 	// is emitted unconditionally — `null` until a `rate_limit_updated`
 	// notification is observed — so operators can rely on the key always
@@ -83,6 +90,12 @@ type apiStateCounts struct {
 	// lifetime number when the bounded sets have rotated.
 	CompletedTotal int64 `json:"completed_total"`
 	FailedTotal    int64 `json:"failed_total"`
+	// ReconcileFinished is the size of the FIFO-bounded recent set of
+	// reconcile-stopped-after-handoff runs (the same set published as
+	// `state.reconcile_finished`); ReconcileFinishedTotal is the lifetime
+	// monotonic counter that survives FIFO eviction (#557).
+	ReconcileFinished      int   `json:"reconcile_finished"`
+	ReconcileFinishedTotal int64 `json:"reconcile_finished_total"`
 }
 type apiStateRunning struct {
 	IssueID    orchestrator.IssueID `json:"issue_id"`
@@ -543,6 +556,10 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(failed, func(i, j int) bool {
 		return failed[i] < failed[j]
 	})
+	reconcileFinished := append([]orchestrator.IssueID(nil), view.ReconcileFinished...)
+	sort.Slice(reconcileFinished, func(i, j int) bool {
+		return reconcileFinished[i] < reconcileFinished[j]
+	})
 	return apiStateResponse{
 		GeneratedAt:                generatedAt,
 		PollIntervalMs:             view.PollIntervalMs,
@@ -554,6 +571,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		Retrying:                   retrying,
 		Completed:                  completed,
 		Failed:                     failed,
+		ReconcileFinished:          reconcileFinished,
 		CodexTotals: apiCodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
@@ -585,13 +603,15 @@ func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
 }
 func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 	return apiStateCounts{
-		Running:        len(view.Running),
-		Blocked:        len(view.Blocked),
-		Retrying:       len(view.Retrying),
-		Completed:      len(view.Completed),
-		Failed:         view.FailedSuppressedCount,
-		CompletedTotal: view.CumulativeCompletedTotal,
-		FailedTotal:    view.CumulativeFailedTotal,
+		Running:                len(view.Running),
+		Blocked:                len(view.Blocked),
+		Retrying:               len(view.Retrying),
+		Completed:              len(view.Completed),
+		Failed:                 view.FailedSuppressedCount,
+		CompletedTotal:         view.CumulativeCompletedTotal,
+		FailedTotal:            view.CumulativeFailedTotal,
+		ReconcileFinished:      len(view.ReconcileFinished),
+		ReconcileFinishedTotal: view.CumulativeReconcileFinishedTotal,
 	}
 }
 func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {

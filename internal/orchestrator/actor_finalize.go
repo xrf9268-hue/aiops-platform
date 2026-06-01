@@ -199,6 +199,10 @@ func (f *finalizeRunOp) applyReconciledCancelCleanup(st *OrchestratorState, elap
 		close(f.done)
 		return nil, true
 	}
+	// The agent had completed ≥1 turn (gate above) before reconcile reaped the
+	// run, so it handed off — surface it in /api/v1/state instead of leaving it
+	// absent from both completed and failed (#557).
+	st.recordReconcileFinished(f.id)
 	close(f.done)
 	return cleanup, true
 }
@@ -242,6 +246,13 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 	if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil, true
+	}
+	// If the agent had handed off (completed ≥1 turn) before reconcile reaped the
+	// run mid-finalization, surface it distinctly so a successful-but-reaped run is
+	// visible in /api/v1/state instead of absent from completed and failed (#557).
+	// A 0-turn cancel is a genuine no-progress stop and stays unrecorded.
+	if runHasCompletedTurn(f.entry) {
+		st.recordReconcileFinished(f.id)
 	}
 	close(f.done)
 	return cleanup, true

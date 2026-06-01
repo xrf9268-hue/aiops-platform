@@ -132,7 +132,9 @@ the shape here without updating the handler — or vice versa — fails the buil
     "completed": 0,
     "failed": 0,
     "completed_total": 12,
-    "failed_total": 3
+    "failed_total": 3,
+    "reconcile_finished": 1,
+    "reconcile_finished_total": 2
   },
   "running": [
     {
@@ -181,6 +183,7 @@ the shape here without updating the handler — or vice versa — fails the buil
   ],
   "completed": [],
   "failed": [],
+  "reconcile_finished": [],
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -202,10 +205,12 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `failed`          | Size of the dispatch-suppression set (uncapped; not bounded by the FIFO cap). |
 | `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
 | `failed_total`    | Monotonic counter of NonRetryableFailed transitions since process start.      |
+| `reconcile_finished` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had handed off (completed ≥1 agent turn) before the per-tick reconcile reaped them mid-finalization. Surfaced so a successful-but-reaped handoff is visible rather than absent from both `completed` and `failed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
+| `reconcile_finished_total` | Monotonic counter of reconcile-finished-after-handoff transitions since process start. |
 
-`completed` and `failed` arrays at the top level publish the recent N issue
-IDs in those sets; for lifetime totals across FIFO eviction use the `_total`
-counters.
+`completed`, `failed`, and `reconcile_finished` arrays at the top level publish
+the recent N issue IDs in those sets; for lifetime totals across FIFO eviction
+use the `_total` counters.
 
 ### `codex_totals.seconds_running` semantics
 
