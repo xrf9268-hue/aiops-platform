@@ -61,8 +61,6 @@ Important task event kinds emitted into the worker log/event emitter include:
 - `runner_start`, `runner_end`, `runner_timeout`
 - `external_blocker` — `.aiops/BLOCKED.json` was accepted and converted to
   an `external_blocker` cooldown retry
-- `secret_scan_start`, `secret_scan_clean`, `secret_scan_violation`,
-  `secret_scan_error`
 - `policy_violation`, `policy_feedback_loaded`,
   `policy_feedback_read_error`
 - `workflow_resolved`, `hook_start`, `hook_end`

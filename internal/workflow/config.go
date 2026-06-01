@@ -488,46 +488,9 @@ type SandboxConfig struct {
 // VerifyConfig carries the operator-declared verification surface. Per SPEC §1
 // verification is the coding agent's responsibility: Commands are surfaced to
 // the agent in the rendered prompt (via AppendVerifyDirective) rather than run
-// by the worker. SecretScan is the nested secret-scan config the worker still
-// enforces as a pre-completion gate.
+// by the worker.
 type VerifyConfig struct {
-	Commands   []string         `yaml:"commands" json:"commands"`
-	SecretScan SecretScanConfig `yaml:"secret_scan" json:"secret_scan"`
-}
-
-// SecretScanConfig describes an optional secret scanner that runs after verify
-// commands and policy enforcement but before task completion. The scanner is
-// invoked in the workspace directory; a non-zero exit code is treated as a
-// finding by default and blocks completion.
-//
-// Recommended tools (installed by the operator, not bundled here):
-//
-//   - gitleaks:   ["gitleaks", "detect", "--source", ".", "--no-banner"]
-//   - trufflehog: ["trufflehog", "filesystem", "--no-update", "."]
-//
-// Leave Enabled=false (or omit the section) to keep the previous behavior.
-type SecretScanConfig struct {
-	// Enabled toggles the hook. When false, the worker skips the scan and
-	// proceeds with completion.
-	Enabled bool `yaml:"enabled" json:"enabled"`
-	// Command is argv to exec inside the workspace. The first element is
-	// the binary; remaining elements are passed verbatim. No shell is used,
-	// so quoting/expansion is not performed.
-	Command []string `yaml:"command" json:"command"`
-	// FailOnFinding controls whether a non-zero exit code blocks completion.
-	// Defaults to true. Set to false to surface findings as a warning event
-	// without aborting (useful while tuning false positives).
-	FailOnFinding *bool `yaml:"fail_on_finding,omitempty" json:"fail_on_finding,omitempty"`
-}
-
-// ShouldFailOnFinding reports whether a non-zero exit from the scanner
-// should block completion. The default is true; callers should pass through
-// this method rather than reading FailOnFinding directly.
-func (s SecretScanConfig) ShouldFailOnFinding() bool {
-	if s.FailOnFinding == nil {
-		return true
-	}
-	return *s.FailOnFinding
+	Commands []string `yaml:"commands" json:"commands"`
 }
 
 type PRConfig struct {

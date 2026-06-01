@@ -10,7 +10,7 @@ import (
 )
 
 // LoginPATH returns the PATH value a login shell would expose to a subprocess,
-// captured once per process. Workspace subprocesses (hooks, secret scan) use it
+// captured once per process. Workspace subprocesses (hooks) use it
 // so they inherit version-manager additions (nvm, rustup, pyenv, etc.) without
 // paying the cost — or the stdout-capture cost — of sourcing the login profile
 // on every command.

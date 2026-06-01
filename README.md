@@ -435,7 +435,6 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
-- [Pre-push secret scanning](docs/runbooks/secret-scanning.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)
 
 ## Safety notes

@@ -360,13 +360,19 @@ func rejectRemovedFields(front []byte) error {
 }
 
 // rejectRemovedVerifyFields surfaces clear errors for the verify.* keys that
-// configured the removed worker verify gate (#557 / DEVIATIONS D33): timeout,
-// allow_failure, and env_passthrough. Verification is the coding agent's job
-// now — verify.commands are surfaced to the agent's prompt and the worker no
-// longer runs them, so these worker-execution knobs would otherwise be silently
-// dropped, leaving an operator believing verification is still timeout-bounded,
-// allowed to fail, or receiving env passthrough. verify.commands and the nested
-// verify.secret_scan remain valid and are not rejected.
+// configured removed worker gates so a stale workflow fails loud instead of
+// silently dropping a control the operator believes is active:
+//
+//   - timeout / allow_failure / env_passthrough configured the removed worker
+//     verify gate (#557 / DEVIATIONS D33). Verification is the coding agent's
+//     job now — verify.commands are surfaced to the agent's prompt and the
+//     worker no longer runs them.
+//   - secret_scan configured the removed worker secret-scan gate (#561). It
+//     ran after the agent had already pushed, so it could only flag, never
+//     prevent, a leak, and it raced reconcile-cancel the same way the verify
+//     gate did (#557). PR CI / the host's secret scanning is the backstop now.
+//
+// verify.commands remains valid and is not rejected.
 func rejectRemovedVerifyFields(raw map[string]any) error {
 	verify, ok := raw["verify"].(map[string]any)
 	if !ok {
@@ -376,6 +382,9 @@ func rejectRemovedVerifyFields(raw map[string]any) error {
 		if _, present := verify[key]; present {
 			return fmt.Errorf("verify.%s is no longer supported (#557): the worker verify gate was removed, so verification is the agent's responsibility — verify.commands are surfaced to the prompt and the worker no longer runs them. Remove verify.%s and express the check in the WORKFLOW prompt instead", key, key)
 		}
+	}
+	if _, present := verify["secret_scan"]; present {
+		return fmt.Errorf("verify.secret_scan is no longer supported (#561): the worker secret-scan gate was removed — it ran after the agent had already pushed, so it could only flag, never prevent, a leak, and it raced reconcile-cancel. Remove verify.secret_scan and rely on PR CI / your host's secret scanning, or run the scan from the WORKFLOW prompt before the agent pushes")
 	}
 	return nil
 }
