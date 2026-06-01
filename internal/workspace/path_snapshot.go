@@ -10,16 +10,17 @@ import (
 )
 
 // LoginPATH returns the PATH value a login shell would expose to a subprocess,
-// captured once per process. Hooks and verify commands use it so they inherit
-// version-manager additions (nvm, rustup, pyenv, etc.) without paying the cost
-// — or the stdout-capture cost — of sourcing the login profile on every command.
+// captured once per process. Workspace subprocesses (hooks, secret scan) use it
+// so they inherit version-manager additions (nvm, rustup, pyenv, etc.) without
+// paying the cost — or the stdout-capture cost — of sourcing the login profile
+// on every command.
 //
 // Earned by #314: `sh -lc` re-sources `/etc/profile` (and friends) per command.
 // Under dash on the default Claude Code on the web image, `/etc/profile.d/nvm.sh`
-// prints "nvm\n" to stdout, which then leads every HookResult.Output and
-// VerifyResult.Output. Snapshotting PATH once and running per-command shells
-// without `-l` keeps the PATH-inheritance contract while removing the per-command
-// profile-source side-effect.
+// prints "nvm\n" to stdout, which then leads every HookResult.Output.
+// Snapshotting PATH once and running per-command shells without `-l` keeps the
+// PATH-inheritance contract while removing the per-command profile-source
+// side-effect.
 func LoginPATH() string {
 	loginPATHOnce.Do(func() {
 		loginPATHCached = captureLoginPATH()

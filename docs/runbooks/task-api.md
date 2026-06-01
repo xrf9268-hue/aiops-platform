@@ -54,13 +54,11 @@ details, use process logs and workspace artifacts:
   `retry_after_seconds` (60..86400); unknown or legacy fields are rejected;
   schema: [`docs/protocols/blocked-artifact.schema.json`](../protocols/blocked-artifact.schema.json)
 - `.aiops/CHANGED_FILES.txt` — newline-separated changed files
-- `.aiops/VERIFICATION.txt` — verify command output, exit codes, and durations
 
 Important task event kinds emitted into the worker log/event emitter include:
 
 - `run_phase_transition` — SPEC run-attempt phase transitions
 - `runner_start`, `runner_end`, `runner_timeout`
-- `verify_start`, `verify_end`
 - `external_blocker` — `.aiops/BLOCKED.json` was accepted and converted to
   an `external_blocker` cooldown retry
 - `secret_scan_start`, `secret_scan_clean`, `secret_scan_violation`,

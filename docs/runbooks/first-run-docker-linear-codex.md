@@ -266,8 +266,10 @@ the agent to:
 
 After the run, verify Linear independently with the API or UI: the expected
 comment must exist, the issue must be in the expected terminal state, the worker
-must report `runner_end ok:true` and `verify_end status:ok`, and the issue
-workspace should be cleaned up on the next reconciliation. If you rerun the same
+must report `runner_end ok:true` (verification is the agent's own pre-handoff
+step now, so there is no worker `verify_end` event — confirm the agent's checks
+passed from its RUN_SUMMARY and PR CI), and the issue workspace should be cleaned
+up on the next reconciliation. If you rerun the same
 disposable issue id, clean the previous temporary worktree first; workspace
 branch names are derived from issue ids and can collide.
 

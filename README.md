@@ -279,7 +279,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |
 | `tracker.pagination_max_pages` | adapter default (`github`: 10 pages; `gitea`: 20 pages; `linear`: uncapped cursor walk) | implementation |
 | `workspace.root` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` at startup, typically `/tmp/symphony_workspaces` on Linux; per-boot — set explicitly to a long-lived path for persistence) | SPEC §6.4 |
-| `verify.commands` | none | implementation |
+| `verify.commands` | none — surfaced to the agent's prompt as its own pre-handoff responsibility; the worker does not run them (SPEC §1 agent boundary) | implementation |
 
 Operators who want the historical personal-profile values —
 `agent.max_concurrent_agents: 1`, `codex.command: codex app-server`,
@@ -297,21 +297,14 @@ defaults above. The `workflow_resolved` event records this as
 `source: prompt_only` so an operator can tell apart "ran with full Symphony
 config" from "ran with body-only template".
 
-### `verify.timeout` and `verify.allow_failure`
+### `verify.commands`
 
-`verify.timeout` (Go duration string, e.g. `5m`) caps the entire verify phase.
-The default `0` means unbounded. When the deadline elapses, the in-flight
-command is killed via context cancellation and the remaining commands are
-skipped; the task fails through the normal verify path unless
-`verify.allow_failure` is set.
-
-`verify.allow_failure: true` opts the worker into "investigation mode": when
-verify fails, the worker emits a `verify_end` event with
-`status: failed_allowed` and still requires the agent-produced summary. The
-agent remains responsible for any branch push or PR handoff it performs from the
-workflow/tool surface. Use this when you want to inspect what the agent produced
-even though the checks flagged it. Default is `false`; failed verification blocks
-the worker from marking the run successful.
+Per SPEC §1 the orchestrator is a scheduler/runner, not a verifier: running the
+checks is the coding agent's responsibility. `verify.commands` are no longer run
+by the worker. Instead they are appended to the rendered prompt as the agent's
+own pre-handoff contract — the agent runs them in the workspace and fixes the
+code until they pass before opening a PR or moving the issue to a review state.
+PR CI is the backstop. There is no `verify_end`/`verify_start` task event.
 
 ### Inspecting effective config
 

@@ -373,7 +373,6 @@ func (r *e2eEventRecorder) AddEventWithPayload(_ context.Context, taskID, kind, 
 func writeE2EServiceWorkflow(t *testing.T, body, cloneURL string) string {
 	t.Helper()
 	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-happy.git", cloneURL)
-	body = strings.ReplaceAll(body, "http://localhost:3000/aiops-bot/demo-allow-fail.git", cloneURL)
 	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write service workflow: %v", err)

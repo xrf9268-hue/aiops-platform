@@ -485,28 +485,14 @@ type SandboxConfig struct {
 	CredentialFiles       []string `yaml:"credential_files" json:"credential_files"`
 }
 
+// VerifyConfig carries the operator-declared verification surface. Per SPEC §1
+// verification is the coding agent's responsibility: Commands are surfaced to
+// the agent in the rendered prompt (via AppendVerifyDirective) rather than run
+// by the worker. SecretScan is the nested secret-scan config the worker still
+// enforces as a pre-completion gate.
 type VerifyConfig struct {
 	Commands   []string         `yaml:"commands" json:"commands"`
 	SecretScan SecretScanConfig `yaml:"secret_scan" json:"secret_scan"`
-	// Timeout caps the entire verify phase. Zero (the default) means
-	// unbounded so repos that have not opted in keep their previous
-	// behavior. When exceeded, the in-flight command is killed via
-	// context cancellation and remaining commands are skipped; the
-	// task fails through the normal verify path unless AllowFailure
-	// is set.
-	Timeout time.Duration `yaml:"timeout" json:"timeout"`
-	// AllowFailure, when true, lets the worker open a draft PR even
-	// after verify reports failures, so the human can inspect what
-	// the agent produced and what the verifier saw. The PR body is
-	// annotated with a "verification failed (investigation mode)"
-	// banner. Default false: failed verification blocks PR creation.
-	AllowFailure bool `yaml:"allow_failure" json:"allow_failure"`
-	// EnvPassthrough names environment variables that verify subprocesses
-	// inherit from the worker process. Same allowlist semantics as
-	// `hooks.env_passthrough` — typically holds build-tool env like
-	// CARGO_HOME or GOMODCACHE. See
-	// docs/design/hook-verify-env-allowlist.md (#227).
-	EnvPassthrough []string `yaml:"env_passthrough" json:"env_passthrough"`
 }
 
 // SecretScanConfig describes an optional secret scanner that runs after verify

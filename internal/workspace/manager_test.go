@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -504,50 +503,6 @@ func TestRunWorkspaceHookTimeoutDoesNotWaitForeverOnEscapedDescendantOutput(t *t
 	}
 }
 
-// TestRunVerifyCollectsAllFailures pins the post-#18 contract: RunVerify
-// runs every non-empty command and records a result for each, even after
-// a non-zero exit. The aggregate error is non-nil iff at least one
-// command failed; per-command failure detail lives on VerifyResult.Err.
-func TestRunVerifyCollectsAllFailures(t *testing.T) {
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
-		"echo hello-world",
-		"   ", // empty command should be skipped without recording a result
-		"sh -c 'echo to-stderr 1>&2; exit 7'",
-		"sh -c 'echo still-running; exit 0'",
-		"sh -c 'exit 3'",
-	}}}
-
-	results, err := RunVerify(context.Background(), dir, cfg)
-	if err == nil {
-		t.Fatalf("RunVerify should report an aggregate error when any command fails")
-	}
-	if got, want := len(results), 4; got != want {
-		t.Fatalf("expected %d verify results (skipping the empty entry), got %d", want, got)
-	}
-	if results[0].ExitCode != 0 || results[0].Err != nil {
-		t.Fatalf("result[0] should be success: %+v", results[0])
-	}
-	if !strings.Contains(results[0].Output, "hello-world") {
-		t.Fatalf("result[0] missing stdout: %q", results[0].Output)
-	}
-	if results[1].ExitCode != 7 || results[1].Err == nil {
-		t.Fatalf("result[1] should record exit=7 and Err: %+v", results[1])
-	}
-	if !strings.Contains(results[1].Output, "to-stderr") {
-		t.Fatalf("result[1] should capture stderr: %q", results[1].Output)
-	}
-	if results[2].ExitCode != 0 || results[2].Err != nil {
-		t.Fatalf("result[2] should be success despite earlier failure: %+v", results[2])
-	}
-	if !strings.Contains(results[2].Output, "still-running") {
-		t.Fatalf("result[2] missing stdout: %q", results[2].Output)
-	}
-	if results[3].ExitCode != 3 || results[3].Err == nil {
-		t.Fatalf("result[3] should record exit=3 and Err: %+v", results[3])
-	}
-}
-
 func TestWriteArtifacts(t *testing.T) {
 	dir := t.TempDir()
 
@@ -557,18 +512,10 @@ func TestWriteArtifacts(t *testing.T) {
 	if err := WriteChangedFiles(dir, []string{"a.go", "b.go"}); err != nil {
 		t.Fatalf("WriteChangedFiles error: %v", err)
 	}
-	if err := WriteVerification(dir, []VerifyResult{{
-		Command:  "go test ./...",
-		ExitCode: 0,
-		Output:   "ok\n",
-	}}); err != nil {
-		t.Fatalf("WriteVerification error: %v", err)
-	}
 
 	for name, want := range map[string]string{
 		"RUN_SUMMARY.md":    "summary body",
 		"CHANGED_FILES.txt": "a.go\nb.go\n",
-		"VERIFICATION.txt":  "go test ./...",
 	} {
 		got, err := os.ReadFile(filepath.Join(dir, ".aiops", name))
 		if err != nil {
@@ -577,45 +524,6 @@ func TestWriteArtifacts(t *testing.T) {
 		if !strings.Contains(string(got), want) {
 			t.Fatalf("%s = %q, want substring %q", name, got, want)
 		}
-	}
-}
-
-func TestRunVerifyCapsLargeOutputAndMarksTruncated(t *testing.T) {
-	dir := t.TempDir()
-	// Emit ~2 MiB so we exceed VerifyOutputCap (1 MiB) and trigger truncation.
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
-		"yes 0123456789abcdef0123456789abcdef | head -c 2097152",
-	}}}
-
-	results, err := RunVerify(context.Background(), dir, cfg)
-	if err != nil {
-		t.Fatalf("RunVerify error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected 1 verify result, got %d", len(results))
-	}
-	r := results[0]
-	if !r.Truncated {
-		t.Fatalf("expected Truncated=true for 2 MiB output, got false")
-	}
-	if got := len(r.Output); got > VerifyOutputCap {
-		t.Fatalf("captured output should be <= cap, got %d > %d", got, VerifyOutputCap)
-	}
-	if got := len(r.Output); got < VerifyOutputCap-1024 {
-		t.Fatalf("captured output unexpectedly small: %d bytes", got)
-	}
-
-	// Persist + ensure the artifact mentions the truncation.
-	if err := WriteVerification(dir, results); err != nil {
-		t.Fatalf("WriteVerification: %v", err)
-	}
-	body, err := os.ReadFile(filepath.Join(dir, ".aiops", "VERIFICATION.txt"))
-	if err != nil {
-		t.Fatalf("read VERIFICATION.txt: %v", err)
-	}
-	wantMarker := fmt.Sprintf("...output truncated at %d bytes", VerifyOutputCap)
-	if !strings.Contains(string(body), wantMarker) {
-		t.Fatalf("VERIFICATION.txt missing truncation marker %q", wantMarker)
 	}
 }
 
@@ -672,73 +580,6 @@ func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("AllChangedFiles missing %q in %q", want, got)
 		}
-	}
-}
-
-// TestRunVerify_PhaseTimeout pins the verify-phase deadline behavior:
-// when Verify.Timeout elapses, the in-flight command is killed via
-// context cancellation, remaining commands are not started, and the
-// aggregate error is non-nil. Already-completed results are preserved.
-func TestRunVerify_PhaseTimeout(t *testing.T) {
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{
-		Timeout: 200 * time.Millisecond,
-		Commands: []string{
-			"echo first-finished",
-			"sleep 5",          // killed by phase deadline
-			"echo unreachable", // skipped
-		},
-	}}
-	start := time.Now()
-	results, err := RunVerify(context.Background(), dir, cfg)
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatalf("RunVerify should report an aggregate error on timeout")
-	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("phase took %v, expected ~200ms (timeout not enforced)", elapsed)
-	}
-	if len(results) < 2 {
-		t.Fatalf("expected at least 2 results (first finished + sleep killed), got %d", len(results))
-	}
-	if results[0].ExitCode != 0 || results[0].Err != nil {
-		t.Fatalf("result[0] should be success: %+v", results[0])
-	}
-	if results[1].Err == nil {
-		t.Fatalf("result[1] (sleep) should record an error from context cancel")
-	}
-	for _, r := range results[2:] {
-		if r.Command == "echo unreachable" {
-			t.Fatalf("third command must not have been executed after deadline")
-		}
-	}
-}
-
-// TestRunVerify_ParentContextCancelPropagates pins the contract that
-// when the parent context is canceled (not the inner verify.timeout),
-// RunVerify returns the cancellation error rather than misattributing
-// the killed commands as plain verify failures.
-func TestRunVerify_ParentContextCancelPropagates(t *testing.T) {
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
-		"sleep 5",
-	}}}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	_, err := RunVerify(ctx, dir, cfg)
-	elapsed := time.Since(start)
-
-	if elapsed > 2*time.Second {
-		t.Fatalf("RunVerify did not honor parent cancel; took %v", elapsed)
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want errors.Is(err, context.Canceled)", err)
 	}
 }
 
@@ -804,45 +645,6 @@ func TestRunWorkspaceHookEnvPassthroughLetsNamedVarThrough(t *testing.T) {
 	}
 }
 
-func TestRunVerifyEnvDropsNonAllowlistedSecretsByDefault(t *testing.T) {
-	t.Setenv("LINEAR_API_KEY", "lin_secret_must_not_leak_zz")
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{
-		`printf '<%s>' "$LINEAR_API_KEY"`,
-	}}}
-
-	results, err := RunVerify(context.Background(), dir, cfg)
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("results len = %d, want 1", len(results))
-	}
-	if strings.Contains(results[0].Output, "lin_secret_must_not_leak_zz") {
-		t.Fatalf("LINEAR_API_KEY leaked into verify env: %q", results[0].Output)
-	}
-	if results[0].Output != "<>" {
-		t.Fatalf("verify output = %q, want <>", results[0].Output)
-	}
-}
-
-func TestRunVerifyEnvPassthroughLetsNamedVarThrough(t *testing.T) {
-	t.Setenv("CARGO_HOME", "/tmp/cargo-home-227")
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{
-		Commands:       []string{`printf '<%s>' "$CARGO_HOME"`},
-		EnvPassthrough: []string{"CARGO_HOME"},
-	}}
-
-	results, err := RunVerify(context.Background(), dir, cfg)
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if !strings.Contains(results[0].Output, "/tmp/cargo-home-227") {
-		t.Fatalf("CARGO_HOME did not pass through: %q", results[0].Output)
-	}
-}
-
 // TestRunWorkspaceHookDoesNotSourceUserLoginProfile is a regression for
 // #314: the hook runner used `sh -lc`, which under dash re-sources
 // /etc/profile.d/* per command and leaks any stdout those scripts emit into
@@ -869,32 +671,6 @@ func TestRunWorkspaceHookDoesNotSourceUserLoginProfile(t *testing.T) {
 	}
 	if results[0].Output != "clean" {
 		t.Fatalf("hook output = %q, want %q (login-profile stdout leaked into hook output buffer)", results[0].Output, "clean")
-	}
-}
-
-// TestRunVerifyDoesNotSourceUserLoginProfile mirrors the hook regression for
-// the verify command path (manager.go RunVerify): per #314, dropping the
-// `-l` flag must prevent $HOME/.profile from being sourced per command.
-func TestRunVerifyDoesNotSourceUserLoginProfile(t *testing.T) {
-	home := t.TempDir()
-	profilePath := filepath.Join(home, ".profile")
-	if err := os.WriteFile(profilePath, []byte("printf 'LEAKED_FROM_PROFILE\\n'\n"), 0o644); err != nil {
-		t.Fatalf("seed .profile: %v", err)
-	}
-	t.Setenv("HOME", home)
-
-	dir := t.TempDir()
-	cfg := workflow.Config{Verify: workflow.VerifyConfig{Commands: []string{`printf clean`}}}
-
-	results, err := RunVerify(context.Background(), dir, cfg)
-	if err != nil {
-		t.Fatalf("RunVerify: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("results len = %d, want 1", len(results))
-	}
-	if results[0].Output != "clean" {
-		t.Fatalf("verify output = %q, want %q (login-profile stdout leaked into verify output buffer)", results[0].Output, "clean")
 	}
 }
 

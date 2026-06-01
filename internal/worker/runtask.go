@@ -298,7 +298,7 @@ func (rs *runState) buildPrompt() *RunTaskError {
 			"path":  policyFeedbackPath,
 			"error": ErrSummary(feedbackErr),
 		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy feedback read failed: "+ErrSummary(feedbackErr))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, "policy feedback read failed: "+ErrSummary(feedbackErr))
 		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
 	} else if policyFeedback != nil {
 		policyBudget := rs.wcfg.Agent.PolicyViolationBudgetValue()
@@ -309,7 +309,7 @@ func (rs *runState) buildPrompt() *RunTaskError {
 			"budget":          policyBudget,
 		})
 		if policyBudget > 0 && policyFeedback.Count >= policyBudget {
-			WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
+			WriteFailureArtifacts(rs.ctx, rs.workdir, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
 		}
 	}
@@ -321,6 +321,12 @@ func (rs *runState) buildPrompt() *RunTaskError {
 	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, rs.wcfg)
 	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
 	prompt = AppendRunSummaryDirective(prompt)
+	// Skip the verify directive in analysis-only mode: that mode forbids source
+	// edits / PR handoff, so "run the verification commands before handing off"
+	// has no code change to verify and contradicts the analysis-only directive.
+	if rs.wcfg.Policy.Mode != "analysis_only" {
+		prompt = AppendVerifyDirective(prompt, rs.wcfg.Verify.Commands)
+	}
 	if err := writeTaskFiles(rs.workdir, t, prompt); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
@@ -347,7 +353,7 @@ func (rs *runState) runAgent() *RunTaskError {
 	}
 
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookBeforeRun, rs.hooks.BeforeRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "before_run hook failed: "+ErrSummary(err))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, "before_run hook failed: "+ErrSummary(err))
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
@@ -389,7 +395,7 @@ func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
 	if runner.IsSandboxStartup(runErr) {
 		return rs.sandboxStartupBlocked(runErr)
 	}
-	WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "runner failed: "+ErrSummary(runErr))
+	WriteFailureArtifacts(rs.ctx, rs.workdir, "runner failed: "+ErrSummary(runErr))
 	return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 }
 
@@ -471,7 +477,7 @@ func (rs *runState) enforcePostRunPolicy() *RunTaskError {
 		willRetry = false
 	}
 	recordPolicyViolation(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
-	WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "policy check failed: "+ErrSummary(err))
+	WriteFailureArtifacts(rs.ctx, rs.workdir, "policy check failed: "+ErrSummary(err))
 	if feedbackErr != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %w", feedbackErr, err), NonRetryable: true}
 	}
@@ -481,17 +487,14 @@ func (rs *runState) enforcePostRunPolicy() *RunTaskError {
 	return &RunTaskError{Cfg: rs.wcfg, Err: err}
 }
 
-// runPostRunGates runs the post-run verification, analysis-only diff check,
-// external-blocker handoff, RUN_SUMMARY gate, and secret scan. A recorded
-// external blocker is a success path: it returns a *RunTaskError with
-// ExternalBlocked set after stamping PhaseSucceeded.
+// runPostRunGates runs the analysis-only diff check, external-blocker handoff,
+// RUN_SUMMARY gate, and secret scan. A recorded external blocker is a success
+// path: it returns a *RunTaskError with ExternalBlocked set after stamping
+// PhaseSucceeded. Verification is the agent's responsibility per SPEC §1
+// (surfaced to the prompt via AppendVerifyDirective), not a worker phase.
 func (rs *runState) runPostRunGates() *RunTaskError {
-	if _, err := RunVerifyPhase(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.wcfg); err != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: err}
-	}
-
 	if err := enforceAnalysisOnlyChanges(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.workspaceBase, rs.wcfg); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, ErrSummary(err))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, ErrSummary(err))
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
@@ -523,7 +526,7 @@ func (rs *runState) runPostRunGates() *RunTaskError {
 	// gate that fails the task before the orchestrator records success, so
 	// a branch carrying credential leaks is never considered complete.
 	if err := runSecretScan(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.wf.Config); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "secret scan blocked: "+ErrSummary(err))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, "secret scan blocked: "+ErrSummary(err))
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 	return nil
@@ -551,7 +554,7 @@ func (rs *runState) checkRunSummary() *RunTaskError {
 			"reason": "summary_unreadable",
 			"path":   workspace.SummaryPath,
 		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, "RUN_SUMMARY.md unreadable: "+ErrSummary(checkErr))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, "RUN_SUMMARY.md unreadable: "+ErrSummary(checkErr))
 		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)}
 	}
 	if status != workspace.SummaryOK {
@@ -563,7 +566,7 @@ func (rs *runState) checkRunSummary() *RunTaskError {
 			"reason": "summary_" + string(status),
 			"path":   workspace.SummaryPath,
 		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, nil, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
+		WriteFailureArtifacts(rs.ctx, rs.workdir, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
 		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
 	}
 	return nil
@@ -784,71 +787,6 @@ func runtimeEventKey(event task.RuntimeEvent) string {
 	return event.Event + "\x00" + string(encoded)
 }
 
-// RunVerifyPhase runs the configured verify commands, persists the
-// VERIFICATION.txt artifact, emits the verify_start/verify_end events,
-// and returns whether the run is in degraded mode. Degraded mode means
-// at least one command failed (or the phase deadline elapsed) AND the
-// operator has opted into verify.allow_failure: the caller continues
-// but must annotate the result. The agent is responsible for deciding
-// whether to open a draft PR when degraded=true.
-//
-// Returns (degraded, err). When err is non-nil, verify failed AND
-// allow_failure was off; the caller propagates the error. When
-// degraded=true, err is nil.
-func RunVerifyPhase(ctx context.Context, ev EventEmitter, taskID, identifier, workdir string, cfg workflow.Config) (bool, error) {
-	Emit(ctx, ev, taskID, identifier, task.EventVerifyStart, "verify started", map[string]any{
-		"commands":      cfg.Verify.Commands,
-		"timeout_ms":    cfg.Verify.Timeout.Milliseconds(),
-		"allow_failure": cfg.Verify.AllowFailure,
-	})
-	start := time.Now()
-	results, verifyErr := workspace.RunVerify(ctx, workdir, cfg)
-	if writeErr := workspace.WriteVerification(workdir, results); writeErr != nil {
-		LogTaskIDEventf(taskID, identifier, "verification_write_failed", "error=%q", writeErr)
-	}
-	payload := map[string]any{
-		"duration_ms":   time.Since(start).Milliseconds(),
-		"commands":      SummarizeVerifyResults(results),
-		"failed_count":  countVerifyFailures(results),
-		"allow_failure": cfg.Verify.AllowFailure,
-	}
-	if verifyErr == nil {
-		payload["status"] = "ok"
-		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify completed", payload)
-		return false, nil
-	}
-	payload["error"] = ErrSummary(verifyErr)
-	// Parent context cancellation (worker shutdown, task abort) must always
-	// propagate, even when allow_failure is on. allow_failure only downgrades
-	// real verification failures — a canceled task is not an "investigation"
-	// case and must not result in the task completing. RunVerify
-	// returns ctx.Err() directly on parent-cancel, so errors.Is matches.
-	if errors.Is(verifyErr, context.Canceled) || errors.Is(verifyErr, context.DeadlineExceeded) {
-		payload["status"] = "canceled"
-		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify canceled", payload)
-		return false, verifyErr
-	}
-	if cfg.Verify.AllowFailure {
-		payload["status"] = "failed_allowed"
-		Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify failed (investigation mode)", payload)
-		return true, nil
-	}
-	payload["status"] = "failed"
-	Emit(ctx, ev, taskID, identifier, task.EventVerifyEnd, "verify failed", payload)
-	WriteFailureArtifacts(ctx, workdir, results, "verify failed: "+ErrSummary(verifyErr))
-	return false, verifyErr
-}
-
-func countVerifyFailures(results []workspace.VerifyResult) int {
-	n := 0
-	for _, r := range results {
-		if r.Err != nil || r.ExitCode != 0 {
-			n++
-		}
-	}
-	return n
-}
-
 // runSecretScan executes the configured secret scanner and
 // records structured task events for the start, clean exit, finding, or
 // execution error cases. It returns a non-nil error only when the task
@@ -955,12 +893,9 @@ func writeTaskFiles(workdir string, t task.Task, prompt string) error {
 
 // WriteFailureArtifacts persists what we know on the failure path so failed
 // tasks can be inspected after the fact via the workspace tree.
-func WriteFailureArtifacts(ctx context.Context, workdir string, verifyResults []workspace.VerifyResult, summary string) {
+func WriteFailureArtifacts(ctx context.Context, workdir string, summary string) {
 	if changed, err := workspace.AllChangedFiles(ctx, workdir); err == nil {
 		_ = workspace.WriteChangedFiles(workdir, changed)
-	}
-	if len(verifyResults) > 0 {
-		_ = workspace.WriteVerification(workdir, verifyResults)
 	}
 	_ = workspace.WriteSummary(workdir, summary+"\n")
 }
@@ -992,24 +927,6 @@ func ErrSummary(err error) string {
 	return msg
 }
 
-// SummarizeVerifyResults converts a slice of VerifyResult to a JSON-safe
-// slice of maps for event payloads.
-func SummarizeVerifyResults(results []workspace.VerifyResult) []map[string]any {
-	out := make([]map[string]any, 0, len(results))
-	for _, r := range results {
-		entry := map[string]any{
-			"command":     r.Command,
-			"exit_code":   r.ExitCode,
-			"duration_ms": r.Duration.Milliseconds(),
-		}
-		if r.Err != nil {
-			entry["error"] = ErrSummary(r.Err)
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
 // runSummaryDirective is appended to every rendered prompt so runners know the
 // worker requires a RUN_SUMMARY.md artifact. Per SPEC §1, push, PR creation,
 // and tracker writes are not orchestrator responsibilities; workflow/tooling
@@ -1029,6 +946,14 @@ const analysisOnlyDirective = "\n\n---\n\n" +
 	"or post tracker comments on the worker's behalf. Produce your assessment " +
 	"as `.aiops/PLAN.md`; any optional tracker handoff must happen through " +
 	"agent-side tools advertised to you by the runtime."
+
+const verifyDirectiveMarker = "**Verification (you own this):**"
+
+const verifyDirectiveTemplate = "\n\n---\n\n" +
+	verifyDirectiveMarker + " before you hand off — i.e. before opening a PR or moving " +
+	"the issue to a review/inactive state — run the workflow's verification commands in " +
+	"the workspace and make sure they pass: %s. If any fail, fix the code and re-run until " +
+	"they pass; do not hand off on red. The orchestrator does not run these for you."
 
 func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, identifier, workdir, baseRef string, cfg workflow.Config) error { //nolint:gocognit // baseline (#521)
 	if cfg.Policy.Mode != "analysis_only" {
@@ -1087,6 +1012,23 @@ func AppendRunSummaryDirective(prompt string) string {
 		prompt += blockerDirective
 	}
 	return prompt
+}
+
+// AppendVerifyDirective adds the operator-declared verify.commands to the
+// rendered prompt as the agent's own pre-handoff responsibility. Verification
+// is the agent's job per SPEC §1; the worker no longer runs these commands.
+// No-op when no commands are configured or the directive is already present.
+func AppendVerifyDirective(prompt string, commands []string) string {
+	cmds := make([]string, 0, len(commands))
+	for _, c := range commands {
+		if strings.TrimSpace(c) != "" {
+			cmds = append(cmds, strings.TrimSpace(c))
+		}
+	}
+	if len(cmds) == 0 || strings.Contains(prompt, verifyDirectiveMarker) {
+		return prompt
+	}
+	return prompt + fmt.Sprintf(verifyDirectiveTemplate, strings.Join(cmds, "; "))
 }
 
 // AppendAnalysisOnlyDirective adds the plan-artifact/no-handoff contract for

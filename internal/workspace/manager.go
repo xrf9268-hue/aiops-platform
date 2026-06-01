@@ -73,20 +73,6 @@ const VerifyOutputCap = 1 << 20 // 1 MiB
 
 const maxSanitizedLength = 120
 
-// VerifyResult captures the outcome of running a workflow verify command.
-// Output contains the combined stdout+stderr so it can be persisted as a
-// run artifact even when the command fails. When the captured output exceeds
-// VerifyOutputCap, Output is truncated to the cap and Truncated is set so
-// callers can surface the fact in artifacts and event payloads.
-type VerifyResult struct {
-	Command   string
-	ExitCode  int
-	Output    string
-	Truncated bool
-	Duration  time.Duration
-	Err       error
-}
-
 // cappedBuffer is an io.Writer that buffers up to Cap bytes and silently
 // drops the rest while remembering how many bytes were dropped. It avoids
 // holding the entire output of a verbose verify command in memory.
@@ -463,115 +449,6 @@ func WritePrompt(workdir string, prompt string) error {
 	return WriteSensitiveArtifact(filepath.Join(dir, "PROMPT.md"), []byte(prompt))
 }
 
-// RunVerify executes the workflow verify commands in order and returns
-// one VerifyResult per non-empty command. Unlike the original
-// short-circuit semantics, it does not stop on the first failing
-// command: the AI workflow is more efficient when a single rework cycle
-// can address every reported failure. Per-command failure detail stays
-// on VerifyResult.Err and ExitCode.
-//
-// When wf.Verify.Timeout > 0 the entire phase runs under a derived
-// deadline. If the deadline elapses, the in-flight command is killed
-// via context cancellation and remaining commands are skipped (no
-// result is recorded for the skipped tail). The returned aggregate
-// error is non-nil iff at least one command failed or the phase
-// deadline was exceeded; callers inspect individual results to see
-// which.
-func RunVerify(ctx context.Context, workdir string, wf workflow.Config) ([]VerifyResult, error) { //nolint:gocognit // baseline (#521)
-	runCtx := ctx
-	if wf.Verify.Timeout > 0 {
-		var cancel context.CancelFunc
-		runCtx, cancel = context.WithTimeout(ctx, wf.Verify.Timeout)
-		defer cancel()
-	}
-	env := subprocessEnv(wf.Verify.EnvPassthrough)
-
-	var (
-		results  []VerifyResult
-		failures int
-	)
-	for _, command := range wf.Verify.Commands {
-		if strings.TrimSpace(command) == "" {
-			continue
-		}
-		// Stop launching new commands once the phase deadline (or the
-		// parent context) has elapsed. The previous command's cmd.Run
-		// already returned with a context-related error; we don't need
-		// to wait for anything.
-		if runCtx.Err() != nil {
-			break
-		}
-		start := time.Now()
-		buf := &cappedBuffer{Cap: VerifyOutputCap}
-		// `sh -c` (no `-l`): see runWorkspaceHookCommand and #314 for why
-		// the login flag was dropped. PATH inheritance is preserved via the
-		// LoginPATH snapshot threaded through cmd.Env.
-		cmd := exec.CommandContext(runCtx, "sh", "-c", command)
-		cmd.Dir = workdir
-		cmd.Env = env
-		cmd.Stdout = buf
-		cmd.Stderr = buf
-		// Run each verify command in its own process group so a
-		// shell-spawned child (e.g. `sleep 5`) doesn't outlive
-		// cancellation as an orphan. Without Setpgid, exec's default
-		// Cancel hook only SIGKILLs the shell pid; the child keeps the
-		// stdout pipe open and cmd.Wait() stalls until the child exits
-		// on its own — turning a 200ms verify timeout into a 5s wait.
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			// Negative pid sends to the whole process group. ESRCH
-			// is benign: the process already exited before we got
-			// here. Anything else is logged but not propagated; the
-			// goroutine that waits on the context owns the return
-			// value of Run, not us.
-			if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-				return err
-			}
-			return nil
-		}
-		// Final safety net for the rare case where a wedged
-		// grandchild keeps the pipe open even after the group SIGKILL
-		// (e.g. a process with PR_SET_PDEATHSIG suppressed by a
-		// container runtime). After this delay, Go forcibly closes
-		// the pipes so cmd.Wait returns and we unblock.
-		cmd.WaitDelay = 2 * time.Second
-		runErr := cmd.Run()
-		// Nil-guard ProcessState: when the context expires between the
-		// pre-loop check and exec.Cmd.Start(), Go returns an error without
-		// starting the process, leaving ProcessState nil. Calling ExitCode()
-		// on a nil pointer would panic; -1 is Go's documented "no exit code"
-		// sentinel and matches the behaviour callers already expect for
-		// context-cancelled commands.
-		exitCode := -1
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
-		}
-		res := VerifyResult{
-			Command:   command,
-			Output:    buf.String(),
-			Truncated: buf.Truncated(),
-			Duration:  time.Since(start),
-			ExitCode:  exitCode,
-		}
-		if runErr != nil {
-			res.Err = runErr
-			failures++
-		}
-		results = append(results, res)
-	}
-
-	if ctx.Err() != nil {
-		return results, ctx.Err()
-	}
-	if runCtx.Err() == context.DeadlineExceeded {
-		return results, fmt.Errorf("verify phase exceeded timeout %s after %d command(s)", wf.Verify.Timeout, len(results))
-	}
-	if failures > 0 {
-		return results, fmt.Errorf("verify: %d of %d command(s) failed", failures, len(results))
-	}
-	return results, nil
-}
-
 // WriteSummary writes the per-run summary to .aiops/RUN_SUMMARY.md so it can
 // be committed alongside the change and inspected on failure paths.
 func WriteSummary(workdir, summary string) error {
@@ -683,32 +560,6 @@ func WriteChangedFiles(workdir string, files []string) error {
 		body += "\n"
 	}
 	return writeAiopsFile(workdir, "CHANGED_FILES.txt", body)
-}
-
-// WriteVerification serializes verify command results to
-// .aiops/VERIFICATION.txt so failed runs preserve the diagnostic output.
-func WriteVerification(workdir string, results []VerifyResult) error { //nolint:gocognit // baseline (#521)
-	var buf bytes.Buffer
-	for i, r := range results {
-		if i > 0 {
-			buf.WriteString("\n")
-		}
-		fmt.Fprintf(&buf, "$ %s\n", r.Command)
-		fmt.Fprintf(&buf, "exit_code=%d duration_ms=%d\n", r.ExitCode, r.Duration.Milliseconds())
-		if r.Err != nil {
-			fmt.Fprintf(&buf, "error: %s\n", r.Err.Error())
-		}
-		if r.Output != "" {
-			buf.WriteString(r.Output)
-			if !strings.HasSuffix(r.Output, "\n") {
-				buf.WriteString("\n")
-			}
-		}
-		if r.Truncated {
-			fmt.Fprintf(&buf, "...output truncated at %d bytes\n", VerifyOutputCap)
-		}
-	}
-	return writeAiopsFile(workdir, "VERIFICATION.txt", buf.String())
 }
 
 func writeAiopsFile(workdir, name, body string) error {

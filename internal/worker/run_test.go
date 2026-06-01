@@ -105,27 +105,6 @@ func TestErrSummaryTruncatesLongMessages(t *testing.T) {
 	}
 }
 
-func TestSummarizeVerifyResultsIncludesError(t *testing.T) {
-	results := []workspace.VerifyResult{
-		{Command: "go test", ExitCode: 0, Duration: 10 * time.Millisecond},
-		{Command: "make lint", ExitCode: 2, Err: errors.New("lint failed"), Duration: 5 * time.Millisecond},
-	}
-	got := worker.SummarizeVerifyResults(results)
-	if len(got) != 2 {
-		t.Fatalf("got %d entries, want 2", len(got))
-	}
-	if got[0]["command"] != "go test" || got[0]["exit_code"] != 0 {
-		t.Fatalf("entry 0 = %+v", got[0])
-	}
-	if got[1]["error"] != "lint failed" {
-		t.Fatalf("entry 1 should propagate error, got %+v", got[1])
-	}
-	// Round-trip JSON to ensure it is a valid jsonb payload.
-	if _, err := json.Marshal(got); err != nil {
-		t.Fatalf("verify summary JSON: %v", err)
-	}
-}
-
 // TestAppendRunSummaryDirectiveAppendsRunSummaryContract verifies the runner
 // contract is appended without overriding workflow-directed publication steps.
 func TestRunTaskUsesConfiguredServiceWorkflowInsteadOfRepoWorkflow(t *testing.T) {
@@ -204,6 +183,42 @@ func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
 	// Idempotent once the full directive is already present.
 	if gotAgain := worker.AppendRunSummaryDirective(got); gotAgain != got {
 		t.Fatalf("expected no-op when full directive is present, got %q", gotAgain)
+	}
+}
+
+// TestAppendVerifyDirective pins the SPEC §1 verify hand-off contract: the
+// operator-declared verify.commands are surfaced to the agent's prompt (the
+// worker no longer runs them), joined by "; ", appended exactly once, and a
+// no-op when no commands are configured.
+func TestAppendVerifyDirective(t *testing.T) {
+	const marker = "**Verification (you own this):**"
+	plain := "do the work"
+	cmds := []string{"go build ./...", "go test ./..."}
+
+	out := worker.AppendVerifyDirective(plain, cmds)
+	if !strings.Contains(out, marker) {
+		t.Fatalf("AppendVerifyDirective(%q, %v) = %q; want directive marker present", plain, cmds, out)
+	}
+	if !strings.Contains(out, "go build ./...; go test ./...") {
+		t.Fatalf("AppendVerifyDirective(%q, %v) = %q; want commands joined by \"; \"", plain, cmds, out)
+	}
+	if got := strings.Count(out, marker); got != 1 {
+		t.Fatalf("AppendVerifyDirective(%q, %v) marker count = %d; want 1", plain, cmds, got)
+	}
+
+	// No commands configured: the prompt is returned unchanged.
+	if got := worker.AppendVerifyDirective(plain, nil); got != plain {
+		t.Fatalf("AppendVerifyDirective(%q, nil) = %q; want unchanged %q", plain, got, plain)
+	}
+
+	// All-whitespace commands filter to empty and must also be a no-op.
+	if got := worker.AppendVerifyDirective(plain, []string{"  ", "\t"}); got != plain {
+		t.Fatalf("AppendVerifyDirective(%q, [whitespace]) = %q; want unchanged %q", plain, got, plain)
+	}
+
+	// Idempotent: a second call when the marker is already present is a no-op.
+	if gotAgain := worker.AppendVerifyDirective(out, cmds); gotAgain != out {
+		t.Fatalf("AppendVerifyDirective(<already has directive>, %v) = %q; want unchanged %q", cmds, gotAgain, out)
 	}
 }
 
@@ -345,8 +360,6 @@ func TestEventKindConstantsAreSnakeCase(t *testing.T) {
 		task.EventRunnerStart,
 		task.EventRunnerEnd,
 		task.EventRunnerTimeout,
-		task.EventVerifyStart,
-		task.EventVerifyEnd,
 		task.EventPush,
 		task.EventPRCreated,
 		task.EventPRReused,
@@ -699,21 +712,6 @@ func TestRunTaskEmitsFailedPhaseWhenPromptRenderingFails(t *testing.T) {
 	assertLastPhaseTransition(t, ev, task.PhaseBuildingPrompt, task.PhaseFailed)
 }
 
-func TestRunTaskEmitsFailedPhaseWhenVerifyFails(t *testing.T) {
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
-	t.Setenv("REPO_URL", cloneURL)
-
-	ev := &fakeEmitter{}
-	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Verify.Commands = []string{"false"}
-
-	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
-	if rterr == nil {
-		t.Fatal("RunTaskForTest succeeded, want verify failure")
-	}
-	assertLastPhaseTransition(t, ev, task.PhaseFinishing, task.PhaseFailed)
-}
-
 func assertLastPhaseTransition(t *testing.T, ev *fakeEmitter, from, to task.RunAttemptPhase) {
 	t.Helper()
 	transitions := ev.byKind(task.EventRunPhaseTransition)
@@ -1050,73 +1048,6 @@ func TestRunRunnerWithTimeout_StampsWorkflowSource(t *testing.T) {
 	}
 }
 
-// TestVerifyAllowFailure_ReturnsDegradedWithoutError pins the investigation-
-// override contract: when verify fails AND verify.allow_failure=true,
-// RunVerifyPhase returns (true, nil) and emits verify_end with
-// status="failed_allowed".
-func TestVerifyAllowFailure_ReturnsDegradedWithoutError(t *testing.T) {
-	ev := &fakeEmitter{}
-	dir := t.TempDir()
-
-	cfg := workflow.Config{
-		Verify: workflow.VerifyConfig{
-			Commands:     []string{"sh -c 'exit 1'"},
-			AllowFailure: true,
-		},
-	}
-
-	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_af", "", dir, cfg)
-	if err != nil {
-		t.Fatalf("RunVerifyPhase with allow_failure=true must not return error, got: %v", err)
-	}
-	if !degraded {
-		t.Fatal("RunVerifyPhase must return degraded=true when verify fails with allow_failure=true")
-	}
-
-	// Confirm verify_end event with status=failed_allowed.
-	ends := ev.byKind(task.EventVerifyEnd)
-	if len(ends) != 1 {
-		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
-	}
-	status, _ := payloadField(t, ends[0].Payload, "status").(string)
-	if status != "failed_allowed" {
-		t.Fatalf("verify_end status: got=%q want=%q", status, "failed_allowed")
-	}
-}
-
-// TestVerifyFails_BlocksPRWhenAllowFailureOff pins the default behavior:
-// a failing verify command without allow_failure prevents the task from
-// completing.
-func TestVerifyFails_BlocksPRWhenAllowFailureOff(t *testing.T) {
-	ev := &fakeEmitter{}
-	dir := t.TempDir()
-
-	cfg := workflow.Config{
-		Verify: workflow.VerifyConfig{
-			Commands:     []string{"sh -c 'exit 1'"},
-			AllowFailure: false,
-		},
-	}
-
-	degraded, err := worker.RunVerifyPhase(context.Background(), ev, "tsk_naf", "", dir, cfg)
-	if err == nil {
-		t.Fatal("RunVerifyPhase must return error when verify fails and allow_failure=false")
-	}
-	if degraded {
-		t.Fatal("RunVerifyPhase must return degraded=false when allow_failure=false")
-	}
-
-	// Confirm verify_end event with status=failed.
-	ends := ev.byKind(task.EventVerifyEnd)
-	if len(ends) != 1 {
-		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
-	}
-	status, _ := payloadField(t, ends[0].Payload, "status").(string)
-	if status != "failed" {
-		t.Fatalf("verify_end status: got=%q want=%q", status, "failed")
-	}
-}
-
 // fakeOutputRunner returns a fixed Result with non-zero output fields so we
 // can assert RunRunnerWithTimeout forwards them onto the runner_end payload.
 type fakeOutputRunner struct{}
@@ -1186,53 +1117,5 @@ func TestRunRunnerWithTimeout_OmitsOutputFieldsForMockRunner(t *testing.T) {
 		if got := payloadField(t, pe.Payload, k); got != nil {
 			t.Fatalf("payload should not contain %q for mock runner; got %v", k, got)
 		}
-	}
-}
-
-// TestVerifyAllowFailure_DoesNotMaskParentCancel pins that allow_failure
-// only downgrades real verification failures, not context cancellation.
-// Codex review on PR #55 caught that the original runVerifyPhase swallowed
-// every non-nil verifyErr under allow_failure, including context.Canceled
-// from a parent ctx, turning worker shutdown into a "failed_allowed" PR.
-// The cancellation must still abort the task.
-func TestVerifyAllowFailure_DoesNotMaskParentCancel(t *testing.T) {
-	ev := &fakeEmitter{}
-	dir := t.TempDir()
-
-	cfg := workflow.Config{
-		Verify: workflow.VerifyConfig{
-			Commands:     []string{"sleep 5"},
-			AllowFailure: true, // would otherwise downgrade
-		},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	degraded, err := worker.RunVerifyPhase(ctx, ev, "tsk_cancel", "", dir, cfg)
-	elapsed := time.Since(start)
-
-	if elapsed > 2*time.Second {
-		t.Fatalf("RunVerifyPhase did not honor parent cancel; took %v", elapsed)
-	}
-	if degraded {
-		t.Fatalf("degraded must be false on parent cancel even when allow_failure=true")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want errors.Is(err, context.Canceled)", err)
-	}
-
-	// Event should report status=canceled, not failed_allowed.
-	ends := ev.byKind(task.EventVerifyEnd)
-	if len(ends) != 1 {
-		t.Fatalf("verify_end event count: got=%d want=1", len(ends))
-	}
-	status, _ := payloadField(t, ends[0].Payload, "status").(string)
-	if status != "canceled" {
-		t.Fatalf("verify_end status: got=%q want=%q", status, "canceled")
 	}
 }

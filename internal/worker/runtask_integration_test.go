@@ -980,6 +980,62 @@ func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
 	}
 }
 
+// TestBuildPromptVerifyDirectiveGatedByMode pins that operator-declared
+// verify.commands reach the agent's rendered prompt in normal mode (the worker
+// no longer runs them, #557) but are withheld in analysis_only mode, where the
+// agent does no code handoff to verify and the directive would contradict the
+// analysis-only contract. It exercises the buildPrompt gate end-to-end by
+// reading back the rendered PROMPT.md, so removing either the AppendVerifyDirective
+// wiring or the analysis_only guard fails a case.
+func TestBuildPromptVerifyDirectiveGatedByMode(t *testing.T) {
+	const verifyMarker = "**Verification (you own this):**"
+
+	t.Run("normal mode surfaces the directive", func(t *testing.T) {
+		cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+		t.Setenv("REPO_URL", cloneURL)
+		ev := &fakeEmitter{}
+		cfg := workerCfgForIntegration(t)
+		cfg.Workflow.Config.Verify.Commands = []string{"go build ./...", "go test ./..."}
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+		workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
+		prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+		if err != nil {
+			t.Fatalf("read PROMPT.md: %v", err)
+		}
+		if !strings.Contains(string(prompt), verifyMarker) {
+			t.Fatalf("normal-mode PROMPT.md missing verify directive marker %q; got:\n%s", verifyMarker, prompt)
+		}
+		if !strings.Contains(string(prompt), "go build ./...; go test ./...") {
+			t.Fatalf("normal-mode PROMPT.md missing joined verify commands; got:\n%s", prompt)
+		}
+	})
+
+	t.Run("analysis_only mode withholds the directive", func(t *testing.T) {
+		analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock\npolicy:\n  mode: analysis_only", 1)
+		cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
+		t.Setenv("REPO_URL", cloneURL)
+		ev := &fakeEmitter{}
+		cfg := workerCfgForIntegration(t)
+		cfg.Workflow.Config.Policy.Mode = "analysis_only"
+		cfg.Workflow.Config.Verify.Commands = []string{"go build ./...", "go test ./..."}
+
+		if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+			t.Fatalf("runTask: %v", rterr.Err)
+		}
+		workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
+		prompt, err := os.ReadFile(filepath.Join(workdir, ".aiops", "PROMPT.md"))
+		if err != nil {
+			t.Fatalf("read PROMPT.md: %v", err)
+		}
+		if strings.Contains(string(prompt), verifyMarker) {
+			t.Fatalf("analysis_only PROMPT.md must omit verify directive marker %q; got:\n%s", verifyMarker, prompt)
+		}
+	})
+}
+
 func TestAnalysisOnlyRunRejectsSourceChanges(t *testing.T) {
 	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files")
 }
@@ -1119,9 +1175,6 @@ func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	if got := len(ev.byKind(task.EventRunnerEnd)); got != 1 {
 		t.Fatalf("runner_end events = %d, want 1; events=%#v", got, ev.events)
 	}
-	if got := len(ev.byKind(task.EventVerifyEnd)); got != 1 {
-		t.Fatalf("verify_end events = %d, want 1; events=%#v", got, ev.events)
-	}
 
 	refs, err := exec.Command("git", "--git-dir", cloneURL[len("file://"):], "for-each-ref", "--format=%(refname:short)", "refs/heads").CombinedOutput()
 	if err != nil {
@@ -1138,8 +1191,16 @@ func TestRunTaskExternalBlockerArtifactReturnsBlockedResult(t *testing.T) {
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Verify.Commands = []string{
-		`mkdir -p .aiops && printf '{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}' > .aiops/BLOCKED.json`,
+	// The blocker artifact (.aiops/BLOCKED.json) is normally written by the agent
+	// during its turn. The worker no longer runs verify.commands (#557), so this
+	// test pre-populates it via an operator-controlled before_run hook as a test
+	// stand-in for the agent's write (the hook is orchestrator setup, not a model
+	// of agent behavior); it runs after resetStaleArtifacts clears stale blockers
+	// and before runPostRunGates consumes the freshly written one.
+	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
+		BeforeRun: workflow.WorkspaceHook{Commands: []string{
+			`mkdir -p .aiops && printf '{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}' > .aiops/BLOCKED.json`,
+		}},
 	}
 
 	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)

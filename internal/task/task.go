@@ -101,8 +101,6 @@ const (
 	// Distinct from external_blocker (an agent-declared dependency block) so an
 	// operator can tell a host sandbox regression apart from a normal BLOCKED.json.
 	EventSandboxStartupBlocked = "sandbox_startup_blocked"
-	EventVerifyStart           = "verify_start"
-	EventVerifyEnd             = "verify_end"
 	EventPush                  = "push"
 	EventPRCreated             = "pr_created"
 	EventPRReused              = "pr_reused"
