@@ -402,6 +402,15 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 			return base(issueID, string(issueID), "failed"), true
 		}
 	}
+	// Keep the per-issue lookup consistent with the aggregate: an ID surfaced in
+	// reconcile_stopped_with_progress must be drillable here instead of returning
+	// issue_not_found (#557). Checked after completed/failed so a later clean exit
+	// or terminal failure for the same id takes precedence.
+	for _, issueID := range view.ReconcileStoppedWithProgress {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
+		}
+	}
 	return apiIssueResponse{}, false
 }
 func apiRuntimeEventFromView(ev orchestrator.RuntimeEvent) map[string]any {

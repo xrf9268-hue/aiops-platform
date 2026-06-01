@@ -96,6 +96,24 @@ func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
 	}
 }
 
+// TestApiIssueFromViewFindsReconcileStoppedWithProgress pins the per-issue lookup
+// consistency with the aggregate: an ID surfaced only in
+// reconcile_stopped_with_progress (no terminal runtime event, not in
+// completed/failed) is drillable via /api/v1/<issue> instead of returning
+// issue_not_found (#557).
+func TestApiIssueFromViewFindsReconcileStoppedWithProgress(t *testing.T) {
+	view := orchestrator.StateView{
+		ReconcileStoppedWithProgress: []orchestrator.IssueID{"AIS-51"},
+	}
+	got, ok := apiIssueFromView(view, "AIS-51")
+	if !ok {
+		t.Fatal("apiIssueFromView(AIS-51) ok = false; want true (reconcile-stopped-with-progress must be drillable)")
+	}
+	if got.Status != "reconcile_stopped_with_progress" || got.IssueID != "AIS-51" {
+		t.Fatalf("issue = (%s, %s); want (reconcile_stopped_with_progress, AIS-51)", got.Status, got.IssueID)
+	}
+}
+
 // TestApiRunningRowEmitsLastEventAt pins the SPEC §13.7.2 running-row
 // contract: once a runtime event has been observed the row exposes
 // last_event_at as an RFC3339 string; no back-compat alias is emitted.
