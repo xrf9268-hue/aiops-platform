@@ -68,9 +68,9 @@ func TestRunAgentParksSandboxStartupFailureOnCooldown(t *testing.T) {
 		t.Fatalf("external_blocker events = %d; want 0 (sandbox uses its own event); events=%#v", got, ev.events)
 	}
 
-	// A parked run is not a failure: no RUN_SUMMARY artifact is written.
-	if _, err := os.Stat(filepath.Join(rs.workdir, ".aiops", "RUN_SUMMARY.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("RUN_SUMMARY.md stat error = %v; want not-exist (parked, not failed)", err)
+	// A parked run is not a failure: no FAILURE.md artifact is written.
+	if _, err := os.Stat(filepath.Join(rs.workdir, ".aiops", "FAILURE.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("FAILURE.md stat error = %v; want not-exist (parked, not failed)", err)
 	}
 }
 

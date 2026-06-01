@@ -15,9 +15,7 @@ const SensitiveArtifactFileMode os.FileMode = 0o600
 
 var AllowedHandoffArtifactPaths = []string{
 	".aiops/PLAN.md",
-	SummaryPath,
 	".aiops/CHANGED_FILES.txt",
-	".aiops/VERIFICATION.txt",
 }
 
 var sensitiveArtifactPaths = []string{

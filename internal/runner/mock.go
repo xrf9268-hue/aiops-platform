@@ -54,9 +54,6 @@ func (m MockRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	if err := m.writeMockTaskArtifact(dir, in, completedAt); err != nil {
 		return Result{}, err
 	}
-	if err := m.writeMockRunSummary(dir, in, completedAt); err != nil {
-		return Result{}, err
-	}
 	return Result{Summary: "mock completed"}, nil
 }
 
@@ -197,29 +194,6 @@ Prompt was written to .aiops/PROMPT.md.
 `, in.Task.ID, in.Task.Title, in.Task.Actor, in.Task.Model, completedAt)
 	if err := os.WriteFile(filepath.Join(dir, in.Task.ID+".md"), []byte(content), 0o644); err != nil {
 		return err
-	}
-	return nil
-}
-
-// writeMockRunSummary writes the RUN_SUMMARY.md artifact the worker requires
-// before opening a PR. The mock runner produces a minimal but recognisably
-// non-stub summary so the worker's CheckSummary gate accepts it.
-func (m MockRunner) writeMockRunSummary(dir string, in RunInput, completedAt string) error {
-	summary := fmt.Sprintf(`# Run summary (mock)
-
-- Task: %s
-- Title: %s
-- Actor: %s
-- Model: %s
-- Completed at: %s
-
-This summary was produced by the mock runner. The mock runner does not edit
-source files; it writes only its own .aiops/<task>.md and this RUN_SUMMARY.md
-so end-to-end gating logic (worker requires RUN_SUMMARY.md before opening a
-PR) can be exercised in tests and local dev.
-`, in.Task.ID, in.Task.Title, in.Task.Actor, in.Task.Model, completedAt)
-	if err := os.WriteFile(filepath.Join(dir, "RUN_SUMMARY.md"), []byte(summary), 0o644); err != nil {
-		return fmt.Errorf("write RUN_SUMMARY.md: %w", err)
 	}
 	return nil
 }

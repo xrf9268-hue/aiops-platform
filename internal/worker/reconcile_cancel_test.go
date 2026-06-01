@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,30 +13,24 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// summaryThenCancelRunner writes the agent's RUN_SUMMARY.md (as a successful
-// handoff would) and then returns context.Canceled, simulating the agent being
-// cut off by an eligibility reconcile-cancel after it finished its work.
-type summaryThenCancelRunner struct{ summary string }
+// cancelRunner returns context.Canceled, simulating the agent being cut off by
+// an eligibility reconcile-cancel after it finished its work (e.g. it already
+// opened a draft PR and moved its issue to In Review).
+type cancelRunner struct{}
 
-func (r summaryThenCancelRunner) Run(_ context.Context, in runner.RunInput) (runner.Result, error) {
-	dir := filepath.Join(in.Workdir, ".aiops")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return runner.Result{}, err
-	}
-	if err := os.WriteFile(filepath.Join(dir, "RUN_SUMMARY.md"), []byte(r.summary), 0o644); err != nil {
-		return runner.Result{}, err
-	}
+func (cancelRunner) Run(_ context.Context, _ runner.RunInput) (runner.Result, error) {
 	return runner.Result{}, context.Canceled
 }
 
-// TestRunAgentPreservesRunSummaryOnReconcileCancel pins the #543 headline fix:
-// on an eligibility reconcile-cancel the worker must NOT overwrite the agent's
-// RUN_SUMMARY.md with a "runner failed" artifact (the artifact-skip wiring, a
-// separate path from the event classification).
-func TestRunAgentPreservesRunSummaryOnReconcileCancel(t *testing.T) {
-	const agentSummary = "# Run summary\n\nagent handoff: opened draft PR, moved issue to In Review.\n"
+// TestRunAgentWritesNoFailureArtifactOnReconcileCancel pins the #543 fix: an
+// eligibility reconcile-cancel is a supervised stop (the agent already handed
+// off), not a runner failure, so the worker must NOT write a .aiops/FAILURE.md
+// post-mortem for it. (Before #561 this asserted the agent's RUN_SUMMARY.md was
+// preserved; that gate/artifact was removed, so the invariant is now expressed
+// as "no FAILURE.md for a superseded run".)
+func TestRunAgentWritesNoFailureArtifactOnReconcileCancel(t *testing.T) {
 	oldNew := newRunner
-	newRunner = func(string) (runner.Runner, error) { return summaryThenCancelRunner{summary: agentSummary}, nil }
+	newRunner = func(string) (runner.Runner, error) { return cancelRunner{}, nil }
 	t.Cleanup(func() { newRunner = oldNew })
 
 	dir := t.TempDir()
@@ -53,15 +46,38 @@ func TestRunAgentPreservesRunSummaryOnReconcileCancel(t *testing.T) {
 	if rtErr == nil || !errors.Is(rtErr.Err, context.Canceled) {
 		t.Fatalf("runAgent() = %v; want a RunTaskError wrapping context.Canceled", rtErr)
 	}
-	got, err := os.ReadFile(filepath.Join(dir, ".aiops", "RUN_SUMMARY.md"))
-	if err != nil {
-		t.Fatalf("RUN_SUMMARY.md missing after reconcile cancel: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, ".aiops", "FAILURE.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("FAILURE.md stat error = %v; want not-exist (a reconcile cancel is a supervised stop, not a failure)", err)
 	}
-	if !strings.Contains(string(got), "agent handoff") {
-		t.Errorf("RUN_SUMMARY.md = %q; want the agent's summary preserved", got)
+}
+
+// TestResetStaleArtifactsClearsWorkerArtifacts pins the #561 review fixes: stale
+// untracked worker artifacts left on a reused workspace must not survive into
+// the next run. PrepareGitWorkspace preserves untracked files on reuse, so
+// without the reset (a) a stale FAILURE.md would be swept into CHANGED_FILES.txt
+// and could be committed by an `git add -A` agent, and (b) a RUN_SUMMARY.md
+// (#561) or VERIFICATION.txt (#560) left by an older worker version — no longer
+// in AllowedHandoffArtifactPaths — would trip the analysis-only diff check.
+func TestResetStaleArtifactsClearsWorkerArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	aiops := filepath.Join(dir, ".aiops")
+	if err := os.MkdirAll(aiops, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(string(got), "runner failed") {
-		t.Errorf("RUN_SUMMARY.md was overwritten with a runner-failed artifact: %q", got)
+	stale := []string{"FAILURE.md", "RUN_SUMMARY.md", "VERIFICATION.txt"}
+	for _, name := range stale {
+		if err := os.WriteFile(filepath.Join(aiops, name), []byte("left over from a previous attempt\n"), 0o644); err != nil {
+			t.Fatalf("seed stale %s: %v", name, err)
+		}
+	}
+	rs := &runState{workdir: dir, wcfg: workflow.Config{}}
+	if rtErr := rs.resetStaleArtifacts(); rtErr != nil {
+		t.Fatalf("resetStaleArtifacts() = %v; want nil", rtErr.Err)
+	}
+	for _, name := range stale {
+		if _, err := os.Stat(filepath.Join(aiops, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s stat error = %v; want not-exist (a stale worker artifact must not survive a rerun)", name, err)
+		}
 	}
 }
 

@@ -235,8 +235,8 @@ func uniqueRepoOwnerForTest(t *testing.T) string {
 func assertTaskWorkdir(t *testing.T, root string, tk task.Task) {
 	t.Helper()
 	workdir := filepath.Join(root, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
-	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "RUN_SUMMARY.md")); err != nil {
-		t.Fatalf("expected task workspace under %q; stat RUN_SUMMARY.md: %v", workdir, err)
+	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "TASK.md")); err != nil {
+		t.Fatalf("expected task workspace under %q; stat TASK.md: %v", workdir, err)
 	}
 }
 
@@ -331,49 +331,11 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 	}
 }
 
-// TestRunTaskFailsWhenRunSummaryMissingAfterRunner is a characterization test
-// for the RUN_SUMMARY.md gate as wired through RunTask (checkRunSummary): when
-// the artifact is absent after the runner exits, RunTask must refuse to record
-// success, emit `summary_missing` + `failed_attempt`, and return a non-nil
-// error naming the missing artifact. The mock runner always writes the summary,
-// so an after_run hook deletes it to simulate a runner that exited without
-// producing one. Skipping the gate makes this run succeed, so the test guards
-// the RunTask wiring, not just CheckSummary in isolation.
-func TestRunTaskFailsWhenRunSummaryMissingAfterRunner(t *testing.T) {
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
-	t.Setenv("REPO_URL", cloneURL)
-
-	ev := &fakeEmitter{}
-	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
-		AfterRun: workflow.WorkspaceHook{Commands: []string{"rm -f .aiops/RUN_SUMMARY.md"}},
-	}
-
-	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
-	if rterr == nil {
-		t.Fatalf("RunTask() = nil; want error because RUN_SUMMARY.md is missing after the runner")
-	}
-	if got := rterr.Err.Error(); !strings.Contains(got, "missing required artifact") || !strings.Contains(got, workspace.SummaryPath) {
-		t.Fatalf("RunTask() err = %q; want it to report a missing required %s artifact", got, workspace.SummaryPath)
-	}
-
-	summaryEvents := ev.byKind("summary_missing")
-	if len(summaryEvents) != 1 {
-		t.Fatalf("summary_missing events = %d; want 1 (events=%#v)", len(summaryEvents), ev.events)
-	}
-	if status := fmt.Sprint(summaryEvents[0].Payload.(map[string]any)["status"]); status != string(workspace.SummaryMissing) {
-		t.Fatalf("summary_missing status = %q; want %q", status, workspace.SummaryMissing)
-	}
-
-	failedEvents := ev.byKind(task.EventFailedAttempt)
-	if len(failedEvents) != 1 {
-		t.Fatalf("failed_attempt events = %d; want 1 (events=%#v)", len(failedEvents), ev.events)
-	}
-	wantReason := "summary_" + string(workspace.SummaryMissing)
-	if reason := fmt.Sprint(failedEvents[0].Payload.(map[string]any)["reason"]); reason != wantReason {
-		t.Fatalf("failed_attempt reason = %q; want %q", reason, wantReason)
-	}
-}
+// The worker RUN_SUMMARY.md gate was removed under #561 (it ran after the agent
+// had already pushed, so it could only flag — never prevent — and it raced
+// reconcile-cancel like the verify gate did in #557). The characterization test
+// that pinned the gate (TestRunTaskFailsWhenRunSummaryMissingAfterRunner) was
+// deleted with it; RunTask no longer fails a run for a missing summary.
 
 func TestRunTaskRendersAttemptVariable(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, strings.Replace(linearWorkflowBody, "do the work for {{task.title}}", "attempt {{ attempt }} for {{ task.title }}", 1))

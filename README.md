@@ -351,7 +351,7 @@ policy:
 ```
 
 Analysis-only mode asks the agent to produce an assessment artifact such as
-`.aiops/PLAN.md` and the required `.aiops/RUN_SUMMARY.md` without relying on the
+`.aiops/PLAN.md` without relying on the
 worker to commit, push, open PRs, or post tracker comments. If the plan needs to
 be posted back to a tracker, that handoff belongs to the agent-side tool surface
 (for example `linear_graphql` when configured), not worker-side tracker writes.

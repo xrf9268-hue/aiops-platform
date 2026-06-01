@@ -25,10 +25,11 @@ workspace:
   root: ~/aiops-workspaces/company
 
 agent:
-  # Start with the mock runner. It executes the worker pipeline end to
-  # end (clone, branch, draft PR, labels, comments) without authoring
+  # Start with the mock runner. It exercises the worker pipeline (clone,
+  # branch, workspace prep, policy checks, runner loop) without authoring
   # any code, so you can validate policy guardrails before letting a
-  # real model touch the repository. Only the runners registered in
+  # real model touch the repository. PR creation, labels, and comments are
+  # the agent's responsibility per SPEC §1, not the worker's. Only the runners registered in
   # `internal/runner/runner.go` (`mock`, `codex-app-server`, `claude`) can
   # execute; any other name fails the task with `unknown runner`. Switch to
   # `codex-app-server` (or `claude`) only after auditing several mock runs.
@@ -134,13 +135,15 @@ Description:
 Process:
 1. Read the relevant files before proposing any change.
 2. While the workflow is on the `mock` runner, no code is authored;
-   use those runs to confirm the worker can clone, branch, open a draft
-   PR, attach labels, and route review comments correctly.
+   use those runs to confirm the worker can clone, branch, prepare the
+   workspace, and run the agent loop correctly. PR creation, labels, and
+   review handoff are the agent's responsibility per SPEC §1, not the
+   worker's.
 3. After graduating to `codex-app-server` or `claude`, make the smallest safe edit
    that respects every entry in `policy.deny_paths` and stays inside
    `max_changed_files` / `max_changed_loc`.
 4. Run the verification commands and capture results.
-5. Write a concise summary in `.aiops/RUN_SUMMARY.md`.
+5. Summarize what you changed, why, and how you verified it in the pull request description.
 6. Stop and explain the blocker if the task is ambiguous, exceeds
    policy limits, or touches a denied path.
 
@@ -163,9 +166,10 @@ has produced a clean audit trail:
 
 1. **Mock runner end-to-end** (`mock`).
    Use this to validate that the repository, tracker, and policy
-   guardrails behave correctly. The mock runner writes a deterministic
-   summary, opens the draft PR, attaches labels, and never authors
-   code. Stay here until you have reviewed several runs and confirmed
+   guardrails behave correctly. The mock runner produces deterministic
+   workspace artifacts and never authors code; PR creation, labels, and
+   review handoff are the agent's responsibility per SPEC §1, not the
+   worker's. Stay here until you have reviewed several runs and confirmed
    `deny_paths` blocks the directories you expect.
 
 2. **Claude with draft PRs** (`claude`).

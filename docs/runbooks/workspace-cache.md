@@ -57,11 +57,10 @@ What this preserves and what it resets:
     them from the working tree. The reset clears the index back to HEAD
     so the checkout only updates tracked files.
 - **Tracked-file modifications are reset.** The `--force` flag
-  discards any uncommitted edits to tracked files; `RUN_SUMMARY.md` is
-  also wiped explicitly by `workspace.ResetRunSummary` before the
-  runner starts, and `enforceAnalysisOnlyChanges` resets
-  `.aiops/PLAN.md` for analysis-only mode. The runner therefore starts
-  every run from a known-clean tracked state.
+  discards any uncommitted edits to tracked files, and
+  `enforceAnalysisOnlyChanges` resets `.aiops/PLAN.md` for analysis-only
+  mode. The runner therefore starts every run from a known-clean tracked
+  state.
 - **The work branch is rebased to `origin/<base-branch>`.** Commits the
   previous run pushed on the work branch live in the PR / remote; the
   next run starts from the refreshed base, not on top of those

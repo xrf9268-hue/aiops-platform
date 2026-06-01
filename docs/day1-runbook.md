@@ -84,8 +84,8 @@ verification commands.
 
 The worker creates deterministic workspaces under the configured
 `workspace.root` (or `AIOPS_WORKSPACE_ROOT` fallback). Inspect the issue
-workspace for `.aiops/RUN_SUMMARY.md`, `.aiops/VERIFICATION.txt`, and
-`.aiops/CHANGED_FILES.txt`.
+workspace for `.aiops/CHANGED_FILES.txt` (and `.aiops/FAILURE.md` on failed
+runs).
 
 ## 7. Current Day 1 Limitations
 

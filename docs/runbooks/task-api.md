@@ -48,7 +48,7 @@ details, use process logs and workspace artifacts:
 
 - `.aiops/PROMPT.md` — rendered prompt sent to the runner
 - `.aiops/TASK.md` — task description
-- `.aiops/RUN_SUMMARY.md` — high-level summary written by the agent
+- `.aiops/FAILURE.md` — worker-written failure post-mortem (present only on failed runs)
 - `.aiops/BLOCKED.json` — strict external-dependency cooldown artifact:
   `version: 1`, `kind: "external_dependency"`, `reason`, and
   `retry_after_seconds` (60..86400); unknown or legacy fields are rejected;

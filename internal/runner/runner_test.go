@@ -386,17 +386,19 @@ func TestMockRunnerArtifactMatrix(t *testing.T) {
 		absent []string
 	}{
 		{
-			name:     "default non-analysis writes task md and run summary only",
+			name:     "default non-analysis writes task md only",
 			runner:   MockRunner{},
 			workflow: workflow.Workflow{},
 			present: map[string]string{
-				filepath.Join(".aiops", "tsk_chr.md"):     "",
-				filepath.Join(".aiops", "RUN_SUMMARY.md"): "",
+				filepath.Join(".aiops", "tsk_chr.md"): "",
 			},
 			absent: []string{
 				sourceFile,
 				filepath.Join(".aiops", "PLAN.md"),
 				filepath.Join(".aiops", "WORKFLOW.md"),
+				// The RUN_SUMMARY gate was removed (#561); the mock no longer
+				// writes RUN_SUMMARY.md.
+				filepath.Join(".aiops", "RUN_SUMMARY.md"),
 			},
 		},
 		{
@@ -414,25 +416,24 @@ func TestMockRunnerArtifactMatrix(t *testing.T) {
 			runner:   MockRunner{},
 			workflow: analysisOnlyWorkflow(),
 			present: map[string]string{
-				filepath.Join(".aiops", "PLAN.md"):        "",
-				filepath.Join(".aiops", "RUN_SUMMARY.md"): "",
+				filepath.Join(".aiops", "PLAN.md"): "",
 			},
 			absent: []string{
 				filepath.Join(".aiops", "tsk_chr.md"),
 				sourceFile,
+				filepath.Join(".aiops", "RUN_SUMMARY.md"),
 			},
 		},
 		{
 			name:     "analysis_only with SkipAnalysisPlan writes neither PLAN nor task md",
 			runner:   MockRunner{SkipAnalysisPlan: true},
 			workflow: analysisOnlyWorkflow(),
-			present: map[string]string{
-				filepath.Join(".aiops", "RUN_SUMMARY.md"): "",
-			},
+			present:  map[string]string{},
 			absent: []string{
 				filepath.Join(".aiops", "PLAN.md"),
 				filepath.Join(".aiops", "tsk_chr.md"),
 				sourceFile,
+				filepath.Join(".aiops", "RUN_SUMMARY.md"),
 			},
 		},
 		{

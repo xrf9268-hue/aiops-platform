@@ -163,15 +163,15 @@ curl 'http://127.0.0.1:4000/api/v1/state'
 ```
 
 For failed tasks, inspect process logs and task events emitted by
-`worker.RunTask` such as `workflow_resolved`, `runner_start`, `verify_*`, and
+`worker.RunTask` such as `workflow_resolved`, `runner_start`, `runner_end`, and
 reconciliation events. The deterministic workspace also retains
-`.aiops/RUN_SUMMARY.md`, `.aiops/VERIFICATION.txt`, and
+`.aiops/FAILURE.md` (the worker's failure post-mortem) and
 `.aiops/CHANGED_FILES.txt` when the runner reaches those phases.
 
 ### Common causes and fixes
 
 - `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
-- Verification command failed (`go test ./...` non-zero): read `.aiops/RUN_SUMMARY.md` in the work branch if the runner produced one. Reproduce locally on the same branch.
+- Verification command failed (`go test ./...` non-zero): read `.aiops/FAILURE.md` in the workspace if present. Reproduce locally on the same branch.
 - Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
 - Runner command not found: confirm `codex.command` (the `codex app-server` launch command) or `claude.command` resolves in the worker's scoped `PATH`. The `claude` shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).

@@ -41,8 +41,14 @@ func TestTerminalUpdateContext_RespectsItsOwnCancel(t *testing.T) {
 
 func TestAnalysisOnlyArtifactAllowedIsExplicit(t *testing.T) {
 	cases := map[string]bool{
-		".aiops/PLAN.md": true, ".aiops/RUN_SUMMARY.md": true, ".aiops/CHANGED_FILES.txt": true, ".aiops/VERIFICATION.txt": true,
-		".aiops/PROMPT.md": false, ".aiops/TASK.md": false, ".aiops/WORKFLOW.md": false, ".aiops/debug.md": false, ".aiops/logs/runner.log": false,
+		".aiops/PLAN.md": true, ".aiops/CHANGED_FILES.txt": true,
+		// RUN_SUMMARY.md and VERIFICATION.txt are no longer handoff artifacts —
+		// the RUN_SUMMARY gate (#561) and the verify gate (#560) were removed.
+		".aiops/RUN_SUMMARY.md": false, ".aiops/VERIFICATION.txt": false,
+		// FAILURE.md is a worker-written failure post-mortem (#561), never an
+		// agent handoff artifact, so it must not be allowed under analysis-only.
+		".aiops/FAILURE.md": false,
+		".aiops/PROMPT.md":  false, ".aiops/TASK.md": false, ".aiops/WORKFLOW.md": false, ".aiops/debug.md": false, ".aiops/logs/runner.log": false,
 	}
 	for path, want := range cases {
 		if got := analysisOnlyArtifactAllowed(path); got != want {

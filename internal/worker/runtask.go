@@ -179,8 +179,8 @@ func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
 //
 // Per SPEC §1, push, PR creation, and tracker state writes are the agent's
 // responsibility. The worker's role is: claim, prepare workspace, resolve
-// workflow, run agent session, enforce the policy/RUN_SUMMARY gates,
-// emit events, and clean up. The lifecycle is split across runState phase
+// workflow, run agent session, enforce the policy gate, emit events, and clean
+// up. The lifecycle is split across runState phase
 // helpers; RunTask only sequences them and stamps PhaseFailed on the way out
 // of any non-terminal error path.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
@@ -316,7 +316,7 @@ func (rs *runState) buildPrompt() *RunTaskError {
 	}
 	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, rs.wcfg)
 	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
-	prompt = AppendRunSummaryDirective(prompt)
+	prompt = AppendBlockerDirective(prompt)
 	// Skip the verify directive in analysis-only mode: that mode forbids source
 	// edits / PR handoff, so "run the verification commands before handing off"
 	// has no code change to verify and contradicts the analysis-only directive.
@@ -372,16 +372,18 @@ func (rs *runState) runAgent() *RunTaskError {
 
 // handleRunnerFailure runs the after_run hook on the runner-error path and
 // classifies the failure into the right terminal RunTaskError: a supervised
-// reconcile-cancel (RUN_SUMMARY preserved, #543), a recurring sandbox-startup
-// denial parked on a cooldown (#550), or a generic runner failure.
+// reconcile-cancel (no FAILURE.md written for a superseded run, #543), a
+// recurring sandbox-startup denial parked on a cooldown (#550), or a generic
+// runner failure.
 func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 	}
 	// An eligibility reconcile-cancel is a supervised stop, not a runner
-	// failure: leave the agent's RUN_SUMMARY.md intact so the worker does not
-	// overwrite a successful handoff with "runner failed" (#543). The
-	// orchestrator releases the run via its ReconcileCancel flag.
+	// failure: it means the agent already handed off (e.g. moved its issue to
+	// In Review), so the worker must not write a FAILURE.md post-mortem for a
+	// run that actually succeeded (#543). The orchestrator releases the run via
+	// its ReconcileCancel flag.
 	if isReconcileCancel(rs.ctx, runErr) {
 		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 	}
@@ -435,21 +437,35 @@ func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
 	}
 }
 
-// resetStaleArtifacts deletes RUN_SUMMARY.md, the blocker artifact, and (in
-// analysis_only mode) .aiops/PLAN.md before the runner starts so the post-run
-// gates cannot pass on stale files from a previous run or from the base branch.
-// PrepareGitWorkspace resets tracked files to origin/<base> on every prepare
-// (fresh checkout on first touch, `checkout --force -B` on reuse per SPEC §9.1),
-// but those artifacts may also be committed on the base branch itself (left over
-// from a prior PR or seeded by hand), and on reuse any untracked artifact written
-// by the previous run still lingers in the workdir. Deleting them here means the
-// gates can only succeed when the runner produced artifacts during this run.
+// resetStaleArtifacts deletes the blocker artifact, the worker failure
+// post-mortem (.aiops/FAILURE.md), and (in analysis_only mode) .aiops/PLAN.md
+// before the runner starts so the post-run gates cannot pass on stale files
+// from a previous run or from the base branch. PrepareGitWorkspace resets
+// tracked files to origin/<base> on every prepare (fresh checkout on first
+// touch, `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may
+// also be committed on the base branch itself (left over from a prior PR or
+// seeded by hand), and on reuse any untracked artifact written by the previous
+// run still lingers in the workdir. Deleting them here means the gates can only
+// succeed when the runner produced artifacts during this run, and a stale
+// FAILURE.md from a previous failed attempt does not leak into a later
+// successful rerun's CHANGED_FILES.txt or commits (#561 review).
 func (rs *runState) resetStaleArtifacts() *RunTaskError {
-	if err := workspace.ResetRunSummary(rs.workdir); err != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset run summary: %w", err)}
-	}
 	if err := ResetBlockerArtifact(rs.workdir); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
+	}
+	if err := workspace.ResetFailureSummary(rs.workdir); err != nil {
+		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset failure summary: %w", err)}
+	}
+	// Clear artifacts retired by earlier worker versions: RUN_SUMMARY.md (#561)
+	// and VERIFICATION.txt (#560). They are no longer written, but on a
+	// long-lived workspace reused across a worker upgrade an old untracked copy
+	// can linger (PrepareGitWorkspace preserves untracked files) and — now that
+	// they are no longer in AllowedHandoffArtifactPaths — would trip the
+	// analysis-only diff check or be swept into CHANGED_FILES.txt.
+	for _, retired := range []string{"RUN_SUMMARY.md", "VERIFICATION.txt"} {
+		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", retired)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset retired artifact %s: %w", retired, err)}
+		}
 	}
 	if rs.wcfg.Policy.Mode == "analysis_only" {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -483,14 +499,14 @@ func (rs *runState) enforcePostRunPolicy() *RunTaskError {
 	return &RunTaskError{Cfg: rs.wcfg, Err: err}
 }
 
-// runPostRunGates runs the analysis-only diff check, the external-blocker
-// handoff, and the RUN_SUMMARY gate. A recorded external blocker is a success
-// path: it returns a *RunTaskError with ExternalBlocked set after stamping
-// PhaseSucceeded. Verification is the agent's responsibility per SPEC §1
-// (surfaced to the prompt via AppendVerifyDirective), not a worker phase;
-// likewise the secret scan was removed (#561) — it ran after the agent had
-// already pushed, so it could only flag, never prevent, a leak, and it raced
-// reconcile-cancel the same way the verify gate did (#557).
+// runPostRunGates runs the analysis-only diff check and the external-blocker
+// handoff. A recorded external blocker is a success path: it returns a
+// *RunTaskError with ExternalBlocked set after stamping PhaseSucceeded.
+// Verification (SPEC §1, surfaced via AppendVerifyDirective), the secret scan,
+// and the RUN_SUMMARY gate were all removed under #561 — each ran after the
+// agent had already pushed (#76), so it could only flag, never prevent, and
+// each raced the D9 reconcile-cancel / §16.5 self-stop the way the verify gate
+// did in #557.
 func (rs *runState) runPostRunGates() *RunTaskError {
 	if err := enforceAnalysisOnlyChanges(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.workspaceBase, rs.wcfg); err != nil {
 		WriteFailureArtifacts(rs.ctx, rs.workdir, ErrSummary(err))
@@ -514,46 +530,6 @@ func (rs *runState) runPostRunGates() *RunTaskError {
 	}
 	if !errors.Is(blockerErr, ErrBlockerArtifactMissing) {
 		return &RunTaskError{Cfg: rs.wcfg, Err: blockerErr}
-	}
-
-	if rtErr := rs.checkRunSummary(); rtErr != nil {
-		return rtErr
-	}
-	return nil
-}
-
-// checkRunSummary enforces the RUN_SUMMARY.md gate: the runner must write
-// .aiops/RUN_SUMMARY.md describing the change. If it is missing/empty/a
-// placeholder we refuse to record success and emit `summary_missing` +
-// `failed_attempt` events so the human can see exactly why the task did not
-// progress. We do NOT fall back to a worker-generated summary here on purpose:
-// the artifact must come from the runner so it reflects intent, not a
-// synthesized recap.
-func (rs *runState) checkRunSummary() *RunTaskError {
-	_, status, checkErr := workspace.CheckSummary(rs.workdir)
-	if checkErr != nil {
-		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, "summary_missing", "read RUN_SUMMARY.md failed", map[string]any{
-			"path":  workspace.SummaryPath,
-			"error": ErrSummary(checkErr),
-		})
-		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
-			"reason": "summary_unreadable",
-			"path":   workspace.SummaryPath,
-		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, "RUN_SUMMARY.md unreadable: "+ErrSummary(checkErr))
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read %s: %w", workspace.SummaryPath, checkErr)}
-	}
-	if status != workspace.SummaryOK {
-		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, "summary_missing", "runner did not produce RUN_SUMMARY.md", map[string]any{
-			"path":   workspace.SummaryPath,
-			"status": string(status),
-		})
-		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventFailedAttempt, "missing run summary artifact", map[string]any{
-			"reason": "summary_" + string(status),
-			"path":   workspace.SummaryPath,
-		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, fmt.Sprintf("RUN_SUMMARY.md %s; runner must write %s before exiting.", status, workspace.SummaryPath))
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("missing required artifact %s (%s)", workspace.SummaryPath, status)}
 	}
 	return nil
 }
@@ -592,10 +568,10 @@ func isTerminalPhase(phase task.RunAttemptPhase) bool {
 // from agent.timeout. It emits structured task events
 // (runner_start, runner_end, runner_timeout) so retry policy and observers
 // can distinguish a clean exit from a kill due to deadline. The returned
-// runner.Result is what runTask passes to runSummary on the success path;
-// on failure (timeout or non-zero exit) the same Result is returned so that
-// any partial output telemetry the runner managed to capture (OutputBytes,
-// OutputHead, OutputTail, etc.) is still available to the caller.
+// runner.Result carries any output telemetry the runner captured; on failure
+// (timeout or non-zero exit) the same Result is returned so that partial
+// telemetry (OutputBytes, OutputHead, OutputTail, etc.) is still available to
+// the caller.
 func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) { //nolint:gocognit,funlen // baseline (#521)
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
@@ -703,8 +679,8 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			// The orchestrator stopped this run because its tracker issue left
 			// the active set (e.g. the agent's own PR handoff to In Review).
 			// That is a supervised stop, not a runner failure: record it as
-			// stopped, do not count it as a failure, and (in runAgent) leave the
-			// agent's RUN_SUMMARY.md intact (#543).
+			// stopped, do not count it as a failure, and (in runAgent) write no
+			// .aiops/FAILURE.md post-mortem for the superseded run (#543).
 			in.PhaseTransitionSink(currentPhase, task.PhaseCanceledByReconciliation)
 			stoppedPayload := map[string]any{
 				"model":       in.Task.Model,
@@ -813,12 +789,13 @@ func writeTaskFiles(workdir string, t task.Task, prompt string) error {
 }
 
 // WriteFailureArtifacts persists what we know on the failure path so failed
-// tasks can be inspected after the fact via the workspace tree.
+// tasks can be inspected after the fact via the workspace tree: the changed-file
+// list and a human-readable .aiops/FAILURE.md describing why the run failed.
 func WriteFailureArtifacts(ctx context.Context, workdir string, summary string) {
 	if changed, err := workspace.AllChangedFiles(ctx, workdir); err == nil {
 		_ = workspace.WriteChangedFiles(workdir, changed)
 	}
-	_ = workspace.WriteSummary(workdir, summary+"\n")
+	_ = workspace.WriteFailureSummary(workdir, summary+"\n")
 }
 
 // Emit records a structured task event. It is a no-op when ev is nil.
@@ -847,15 +824,6 @@ func ErrSummary(err error) string {
 	}
 	return msg
 }
-
-// runSummaryDirective is appended to every rendered prompt so runners know the
-// worker requires a RUN_SUMMARY.md artifact. Per SPEC §1, push, PR creation,
-// and tracker writes are not orchestrator responsibilities; workflow/tooling
-// instructions control whether the in-run agent performs those actions.
-const runSummaryDirective = "\n\n---\n\n" +
-	"**Required output:** before exiting, you MUST write `.aiops/RUN_SUMMARY.md` " +
-	"describing what you changed, why, and how it was verified. The task will " +
-	"fail if this file is missing, empty, or contains only a placeholder."
 
 const blockerDirective = "\n\nIf you are blocked only by an external dependency and cannot make progress in this run, " +
 	"write `.aiops/BLOCKED.json` with exactly this JSON shape before exiting: " +
@@ -923,12 +891,11 @@ func analysisOnlyArtifactAllowed(path string) bool {
 	return workspace.IsAllowedHandoffArtifact(path)
 }
 
-// AppendRunSummaryDirective adds the RUN_SUMMARY.md contract to the rendered
-// prompt unless the full directive is already present.
-func AppendRunSummaryDirective(prompt string) string {
-	if !strings.Contains(prompt, strings.TrimSpace(runSummaryDirective)) {
-		prompt += runSummaryDirective
-	}
+// AppendBlockerDirective adds the external-dependency BLOCKED.json contract to
+// the rendered prompt unless it is already present. (The worker no longer
+// requires a RUN_SUMMARY.md artifact — the gate was removed under #561 — so the
+// only standing prompt contract here is the optional external-blocker handoff.)
+func AppendBlockerDirective(prompt string) string {
 	if !strings.Contains(prompt, strings.TrimSpace(blockerDirective)) {
 		prompt += blockerDirective
 	}

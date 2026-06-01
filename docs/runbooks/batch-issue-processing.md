@@ -90,7 +90,7 @@ robbed the human of the chance to weigh in while the context was fresh.
 
 If a worker-run agent cannot proceed only because an external dependency is
 unresolved (for example an overlapping PR has not merged), it must not rely on
-free-text `.aiops/RUN_SUMMARY.md` parsing to pause the worker. It should write
+free-text summaries or comments to pause the worker. It should write
 the strict `.aiops/BLOCKED.json` artifact:
 
 ```json

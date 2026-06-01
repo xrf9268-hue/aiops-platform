@@ -16,7 +16,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	worker "github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
-	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 type recordedEvent struct {
@@ -105,8 +104,9 @@ func TestErrSummaryTruncatesLongMessages(t *testing.T) {
 	}
 }
 
-// TestAppendRunSummaryDirectiveAppendsRunSummaryContract verifies the runner
-// contract is appended without overriding workflow-directed publication steps.
+// TestRunTaskUsesConfiguredServiceWorkflowInsteadOfRepoWorkflow verifies the
+// worker runs the startup-selected service workflow and its agent default, not
+// a WORKFLOW.md committed inside the cloned repo.
 func TestRunTaskUsesConfiguredServiceWorkflowInsteadOfRepoWorkflow(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, `---
 repo:
@@ -155,34 +155,21 @@ repo prompt should not run
 	}
 }
 
-func TestAppendRunSummaryDirectiveAppendsOnce(t *testing.T) {
+// TestAppendBlockerDirective pins the external-dependency BLOCKED.json contract:
+// it is appended once, present after the call, and idempotent. The RUN_SUMMARY
+// half of the old directive was removed with the worker gate in #561.
+func TestAppendBlockerDirective(t *testing.T) {
 	plain := "do the work"
-	out := worker.AppendRunSummaryDirective(plain)
-	if !strings.Contains(out, "RUN_SUMMARY.md") {
-		t.Fatalf("directive not appended: %q", out)
-	}
+	out := worker.AppendBlockerDirective(plain)
 	if !strings.Contains(out, "BLOCKED.json") {
-		t.Fatalf("blocker artifact directive not appended: %q", out)
+		t.Fatalf("AppendBlockerDirective(%q) = %q; want the BLOCKED.json directive appended", plain, out)
 	}
-	if strings.Contains(out, "Do not push branches or open pull requests") {
-		t.Fatalf("directive must not forbid in-run publication without a post-gate handoff: %q", out)
+	if strings.Contains(out, "RUN_SUMMARY.md") {
+		t.Fatalf("AppendBlockerDirective(%q) = %q; must not append the removed RUN_SUMMARY directive", plain, out)
 	}
-
-	// A prompt that merely mentions RUN_SUMMARY.md still receives the full
-	// worker-enforced contract; old workflows commonly mentioned the artifact
-	// without knowing about the SPEC §1 boundary fix.
-	mentionsSummary := "please write .aiops/RUN_SUMMARY.md when done"
-	got := worker.AppendRunSummaryDirective(mentionsSummary)
-	if got == mentionsSummary {
-		t.Fatalf("expected full directive even when summary is mentioned, got %q", got)
-	}
-	if !strings.Contains(got, "BLOCKED.json") {
-		t.Fatalf("expected blocker artifact directive when summary is mentioned, got %q", got)
-	}
-
-	// Idempotent once the full directive is already present.
-	if gotAgain := worker.AppendRunSummaryDirective(got); gotAgain != got {
-		t.Fatalf("expected no-op when full directive is present, got %q", gotAgain)
+	// Idempotent: a second call when the directive is already present is a no-op.
+	if again := worker.AppendBlockerDirective(out); again != out {
+		t.Fatalf("AppendBlockerDirective(<already present>) = %q; want unchanged %q", again, out)
 	}
 }
 
@@ -222,29 +209,6 @@ func TestAppendVerifyDirective(t *testing.T) {
 	}
 }
 
-func TestAppendRunSummaryDirectiveDoesNotSuppressOnPartialLegacyPhrases(t *testing.T) {
-	cases := []string{
-		"do not push from inside this runner",
-		"wait until worker-side gates pass",
-		"inside this runner, do the work; worker-side gates pass later",
-	}
-
-	for _, prompt := range cases {
-		t.Run(prompt, func(t *testing.T) {
-			got := worker.AppendRunSummaryDirective(prompt)
-			if got == prompt {
-				t.Fatalf("directive was suppressed by partial legacy phrase: %q", prompt)
-			}
-			if !strings.Contains(got, "RUN_SUMMARY.md") {
-				t.Fatalf("directive missing RUN_SUMMARY.md: %q", got)
-			}
-			if !strings.Contains(got, "BLOCKED.json") {
-				t.Fatalf("directive missing BLOCKED.json: %q", got)
-			}
-		})
-	}
-}
-
 func TestAppendAnalysisOnlyDirectiveOnlyForAnalysisMode(t *testing.T) {
 	plain := "inspect the issue"
 	got := worker.AppendAnalysisOnlyDirective(plain, "analysis_only")
@@ -259,100 +223,6 @@ func TestAppendAnalysisOnlyDirectiveOnlyForAnalysisMode(t *testing.T) {
 	if draft := worker.AppendAnalysisOnlyDirective(plain, "draft_pr"); draft != plain {
 		t.Fatalf("draft_pr prompt should not receive analysis-only directive: %q", draft)
 	}
-}
-
-// TestMockRunnerWritesRunSummary confirms the mock runner produces a
-// RUN_SUMMARY.md that satisfies workspace.CheckSummary, so the worker gate
-// passes end-to-end without touching codex/claude.
-func TestMockRunnerWritesRunSummary(t *testing.T) {
-	dir := t.TempDir()
-	r := runner.MockRunner{}
-	tk := task.Task{ID: "tsk_mock", Title: "mock task", Actor: "tester", Model: "mock"}
-	if _, err := r.Run(context.Background(), runner.RunInput{Task: tk, Workflow: workflow.Workflow{}, Workdir: dir, Prompt: "p"}); err != nil {
-		t.Fatalf("mock runner: %v", err)
-	}
-	body, status, err := workspace.CheckSummary(dir)
-	if err != nil {
-		t.Fatalf("CheckSummary: %v", err)
-	}
-	if status != workspace.SummaryOK {
-		t.Fatalf("status = %s, want ok; body=%q", status, body)
-	}
-	if !strings.Contains(body, "tsk_mock") {
-		t.Fatalf("mock summary should contain task id, got: %s", body)
-	}
-}
-
-// TestCheckSummaryRejectsMissingEmptyAndPlaceholder asserts the gate
-// distinguishes the three failure modes the worker exposes via the
-// `summary_missing` / `failed_attempt` events.
-func TestCheckSummaryRejectsMissingEmptyAndPlaceholder(t *testing.T) {
-	cases := []struct {
-		name    string
-		write   func(dir string) error
-		want    workspace.SummaryStatus
-		wantErr bool
-	}{
-		{
-			name:  "missing",
-			write: func(dir string) error { return nil },
-			want:  workspace.SummaryMissing,
-		},
-		{
-			name: "empty",
-			write: func(dir string) error {
-				return writeAiopsFileForTest(dir, "")
-			},
-			want: workspace.SummaryEmpty,
-		},
-		{
-			name: "whitespace only",
-			write: func(dir string) error {
-				return writeAiopsFileForTest(dir, "   \n\n\t\n")
-			},
-			want: workspace.SummaryEmpty,
-		},
-		{
-			name: "TODO placeholder",
-			write: func(dir string) error {
-				return writeAiopsFileForTest(dir, "TODO\n")
-			},
-			want: workspace.SummaryPlaceholder,
-		},
-		{
-			name: "real summary",
-			write: func(dir string) error {
-				return writeAiopsFileForTest(dir, "# Summary\n\nFixed bug, verified with go test ./...\n")
-			},
-			want: workspace.SummaryOK,
-		},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			if err := tc.write(dir); err != nil {
-				t.Fatalf("setup: %v", err)
-			}
-			_, status, err := workspace.CheckSummary(dir)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
-			}
-			if status != tc.want {
-				t.Fatalf("status=%s want=%s", status, tc.want)
-			}
-		})
-	}
-}
-
-// writeAiopsFileForTest is a small helper to seed .aiops/RUN_SUMMARY.md on
-// disk for gate tests. It avoids exporting a workspace test helper.
-func writeAiopsFileForTest(dir, body string) error {
-	aiops := filepath.Join(dir, ".aiops")
-	if err := os.MkdirAll(aiops, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(aiops, "RUN_SUMMARY.md"), []byte(body), 0o644)
 }
 
 func TestEventKindConstantsAreSnakeCase(t *testing.T) {

@@ -10,7 +10,8 @@ import (
 // active set — e.g. the agent's own PR handoff moved the issue to In Review.
 // The worker detects it via context.Cause so it classifies the stop as a
 // superseded run (PhaseCanceledByReconciliation, runner_stopped) rather than a
-// runner failure, and preserves the agent's .aiops/RUN_SUMMARY.md (#543).
+// runner failure, so it does not write a FAILURE.md post-mortem for a run that
+// actually handed off (#543).
 //
 // It is deliberately distinct from a stall cancel or a shutdown cancel, which
 // the orchestrator triggers without this cause and which keep their existing

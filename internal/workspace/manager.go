@@ -449,108 +449,31 @@ func WritePrompt(workdir string, prompt string) error {
 	return WriteSensitiveArtifact(filepath.Join(dir, "PROMPT.md"), []byte(prompt))
 }
 
-// WriteSummary writes the per-run summary to .aiops/RUN_SUMMARY.md so it can
-// be committed alongside the change and inspected on failure paths.
-func WriteSummary(workdir, summary string) error {
-	return writeAiopsFile(workdir, "RUN_SUMMARY.md", summary)
+// WriteFailureSummary writes a human-readable .aiops/FAILURE.md describing why
+// a run failed so a failed workspace can be inspected directly. It is a worker
+// observability artifact, not an agent handoff record: the worker's RUN_SUMMARY
+// gate (which demanded an agent-written summary) was removed under #561, since
+// verification and the PR body are the agent's responsibility per SPEC §1.
+func WriteFailureSummary(workdir, summary string) error {
+	return writeAiopsFile(workdir, "FAILURE.md", summary)
 }
 
-// SummaryPath is the location where runners are required to write their
-// per-run summary so the worker can include it in the PR body.
-const SummaryPath = ".aiops/RUN_SUMMARY.md"
+// FailureSummaryPath is the worker's failure post-mortem artifact.
+const FailureSummaryPath = ".aiops/FAILURE.md"
 
-// ResetRunSummary deletes any pre-existing .aiops/RUN_SUMMARY.md from the
-// workdir before the runner starts so the post-runner CheckSummary gate can
-// only pass when the runner produced a summary for *this* run. Without this
-// reset, a stale summary committed to the repo (or left over from a previous
-// attempt in the same workspace) would silently satisfy the gate and let the
-// worker open a PR with content that does not describe the current change.
-//
-// The function is idempotent: a missing file is not an error. Any other I/O
-// error (permission, etc.) is returned so the caller can surface it before
-// running the runner.
-func ResetRunSummary(workdir string) error {
-	path := filepath.Join(workdir, SummaryPath)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("reset %s: %w", SummaryPath, err)
+// ResetFailureSummary deletes any pre-existing .aiops/FAILURE.md before the
+// runner starts. FAILURE.md is untracked, and PrepareGitWorkspace preserves
+// untracked files on workspace reuse (#561 review): without this reset, a
+// failure note from a previous attempt would linger into a later successful
+// run, get swept into .aiops/CHANGED_FILES.txt by finalize(), and could be
+// committed by an agent that runs `git add -A`. Idempotent: a missing file is
+// not an error.
+func ResetFailureSummary(workdir string) error {
+	path := filepath.Join(workdir, FailureSummaryPath)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reset %s: %w", FailureSummaryPath, err)
 	}
 	return nil
-}
-
-// summaryPlaceholderHints are substrings whose presence (in a short file)
-// indicates the runner did not actually fill in a real summary. We keep the
-// list intentionally narrow so legitimate summaries are not rejected.
-var summaryPlaceholderHints = []string{
-	"TODO",
-	"PLACEHOLDER",
-	"<fill in",
-	"<TBD>",
-}
-
-// ReadSummary returns the trimmed contents of .aiops/RUN_SUMMARY.md.
-// It returns an empty string and nil error when the file does not exist so
-// callers can distinguish "missing" from "unreadable". Any other I/O error
-// is propagated.
-func ReadSummary(workdir string) (string, error) {
-	path := filepath.Join(workdir, SummaryPath)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
-}
-
-// SummaryStatus describes why a candidate RUN_SUMMARY.md was rejected. It is
-// "ok" when the file is present and looks like a real summary.
-type SummaryStatus string
-
-const (
-	SummaryOK          SummaryStatus = "ok"
-	SummaryMissing     SummaryStatus = "missing"
-	SummaryEmpty       SummaryStatus = "empty"
-	SummaryPlaceholder SummaryStatus = "placeholder"
-)
-
-// CheckSummary inspects the current workdir for a runner-produced
-// .aiops/RUN_SUMMARY.md. It returns the trimmed contents (when present) and
-// a status describing whether the file satisfies the artifact contract:
-//
-//   - SummaryOK         file exists, has substantive content
-//   - SummaryMissing    file does not exist on disk
-//   - SummaryEmpty      file exists but is empty / whitespace only
-//   - SummaryPlaceholder file is suspiciously short and contains a TODO/TBD
-//     style marker, suggesting the runner wrote a stub instead of an actual
-//     summary
-//
-// The threshold for "substantive" is intentionally permissive (32 chars):
-// the goal is to catch obvious skips like "TODO\n", not to grade prose.
-func CheckSummary(workdir string) (string, SummaryStatus, error) {
-	path := filepath.Join(workdir, SummaryPath)
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", SummaryMissing, nil
-		}
-		return "", SummaryMissing, err
-	}
-	content := strings.TrimSpace(string(b))
-	if content == "" {
-		return "", SummaryEmpty, nil
-	}
-	// Reject obvious stubs: short files (<32 chars after trimming) that
-	// contain a known placeholder marker.
-	if len(content) < 32 {
-		upper := strings.ToUpper(content)
-		for _, hint := range summaryPlaceholderHints {
-			if strings.Contains(upper, strings.ToUpper(hint)) {
-				return content, SummaryPlaceholder, nil
-			}
-		}
-	}
-	return content, SummaryOK, nil
 }
 
 // WriteChangedFiles writes one path per line to .aiops/CHANGED_FILES.txt.
@@ -652,7 +575,7 @@ func parseNumstatZ(out []byte) (policy.Diffstat, error) {
 // AllChangedFiles returns every path the worker is about to commit: tracked
 // modifications plus untracked files reported by `git status --porcelain`.
 // This is what we want to persist as a run artifact since the runner often
-// creates new files (for example .aiops/RUN_SUMMARY.md) that `git diff`
+// creates new files (for example .aiops/CHANGED_FILES.txt) that `git diff`
 // alone does not surface. We pass `-uall` so newly created directories like
 // `.aiops/` are expanded to their individual files instead of collapsed to a
 // single `.aiops/` entry.
