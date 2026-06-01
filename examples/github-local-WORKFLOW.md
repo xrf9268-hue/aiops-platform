@@ -90,7 +90,6 @@ sandbox:
   network: none
 
 verify:
-  timeout: 30m
   commands:
     - test -z "$(gofmt -l $(git ls-files '*.go'))"
     - go mod tidy && git diff --exit-code -- go.mod go.sum
