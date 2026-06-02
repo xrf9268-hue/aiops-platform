@@ -1459,23 +1459,33 @@ for line in sys.stdin:
 }
 
 func TestCodexAppServerInitializeTimeoutDiagnostics(t *testing.T) {
-	// Route the started-log evidence and a JSON-RPC handshake through a fast
-	// shell preamble instead of the Python interpreter's startup. The runner
-	// reads the handshake line — which the stub prints only after it has
-	// written the started-log to disk — so by the time the next read hits the
-	// initialize read timeout, the started-log is guaranteed present. And even
-	// if the handshake read itself were to time out, the shell has already
-	// written the started-log within a few milliseconds of exec, so the
-	// process-start evidence holds either way. This removes the race where a
-	// tight read timeout fired before Python startup wrote the file (#476); the
-	// runtime read-timeout behavior is unchanged — the stub simply never answers
-	// initialize, so the initialize request still times out.
-	installCodexStub(t, `#!/bin/sh
-printf 'started\n' > "$CODEX_STARTED_LOG"
-printf '%s\n' '{"jsonrpc":"2.0","method":"session/started"}'
-# Stay initialized-but-silent so the runner's next read hits the read timeout.
+	// The stub stays initialized-but-silent — it never answers initialize — so the
+	// runner's initialize request always hits the read timeout, regardless of when
+	// (or whether) the OS schedules the subprocess. That makes the read-timeout
+	// error deterministic.
+	//
+	// The diagnostics assertion is the part that used to flake: codex writes its
+	// started-log on launch, and the old test made the *fake* stub write that
+	// marker, then asserted the diagnostics carried it. Under a constrained local
+	// sandbox the subprocess was not scheduled to write the marker until ~350ms
+	// after exec, so the tight read timeout tore the process down before the file
+	// landed (#476/#587). The fix decouples the two concerns: the marker is seeded
+	// up front as a fixture rather than raced out of the live subprocess. What is
+	// under test is that the diagnostics *formatter* surfaces process-start
+	// evidence on an initialize timeout — not that the OS scheduled the subprocess
+	// in time, which is not our behavior to assert.
+	binDir := installCodexStub(t, `#!/bin/sh
 cat > /dev/null
 `)
+	// Seed both diagnostic source files (the started-log and the stdin transcript)
+	// so each content assertion below is non-vacuous: a missing file would leave
+	// only the label, which a label-only check would still satisfy.
+	if err := os.WriteFile(filepath.Join(binDir, "started.txt"), []byte("started\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "stdin.txt"), []byte(`{"jsonrpc":"2.0","id":0,"method":"initialize"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 200
@@ -1494,8 +1504,8 @@ cat > /dev/null
 	if !strings.Contains(diagnostics, "started log") || !strings.Contains(diagnostics, "started\n") {
 		t.Fatalf("Run() diagnostics = %q; want started-log process-start evidence", diagnostics)
 	}
-	if !strings.Contains(diagnostics, "stdin log") {
-		t.Fatalf("Run() diagnostics = %q; want stdin-log status line", diagnostics)
+	if !strings.Contains(diagnostics, "stdin log") || !strings.Contains(diagnostics, `"method":"initialize"`) {
+		t.Fatalf("Run() diagnostics = %q; want stdin-log transcript", diagnostics)
 	}
 }
 
