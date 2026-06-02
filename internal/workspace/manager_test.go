@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,11 +12,11 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// The RUN_SUMMARY gate and its CheckSummary/ResetRunSummary/WriteSummary/
-// ReadSummary helpers were removed under #561 (the worker no longer demands an
-// agent-written summary — the PR body is the record per SPEC §1). The tests that
-// pinned them were deleted with them; WriteFailureSummary (the worker's own
-// FAILURE.md post-mortem) is exercised via the worker failure-path tests.
+// The RUN_SUMMARY gate (#561) and the worker's FAILURE.md / CHANGED_FILES.txt
+// observability artifacts (#575) were removed because they duplicated the
+// SPEC §13.1/§13.2 structured event log. Their write/reset helpers and the tests
+// that pinned them were deleted with them; failure reasons are now asserted via
+// the worker's structured-event tests.
 
 func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 	dir := t.TempDir()
@@ -106,51 +105,6 @@ func TestRunWorkspaceHookTimeoutDoesNotWaitForeverOnEscapedDescendantOutput(t *t
 	}
 }
 
-func TestWriteArtifacts(t *testing.T) {
-	dir := t.TempDir()
-
-	if err := WriteFailureSummary(dir, "failure note"); err != nil {
-		t.Fatalf("WriteFailureSummary error: %v", err)
-	}
-	if err := WriteChangedFiles(dir, []string{"a.go", "b.go"}); err != nil {
-		t.Fatalf("WriteChangedFiles error: %v", err)
-	}
-
-	for name, want := range map[string]string{
-		"FAILURE.md":        "failure note",
-		"CHANGED_FILES.txt": "a.go\nb.go\n",
-	} {
-		got, err := os.ReadFile(filepath.Join(dir, ".aiops", name))
-		if err != nil {
-			t.Fatalf("read %s: %v", name, err)
-		}
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("%s = %q, want substring %q", name, got, want)
-		}
-	}
-}
-
-// TestResetFailureSummary verifies the helper resetStaleArtifacts calls before
-// each run removes a stale .aiops/FAILURE.md and is idempotent on a missing
-// file (#561 review: a failure note from a prior attempt must not survive
-// workspace reuse).
-func TestResetFailureSummary(t *testing.T) {
-	dir := t.TempDir()
-	if err := WriteFailureSummary(dir, "runner failed: boom\n"); err != nil {
-		t.Fatalf("WriteFailureSummary: %v", err)
-	}
-	if err := ResetFailureSummary(dir); err != nil {
-		t.Fatalf("ResetFailureSummary: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, FailureSummaryPath)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("FAILURE.md stat err = %v; want not-exist after reset", err)
-	}
-	// Idempotent: removing a missing file is not an error.
-	if err := ResetFailureSummary(dir); err != nil {
-		t.Fatalf("ResetFailureSummary (missing) = %v; want nil (idempotent)", err)
-	}
-}
-
 func TestCappedBufferDropsBeyondCap(t *testing.T) {
 	buf := &cappedBuffer{Cap: 10}
 	n, err := buf.Write([]byte("hello "))
@@ -169,50 +123,6 @@ func TestCappedBufferDropsBeyondCap(t *testing.T) {
 	}
 	if buf.Dropped() != 3 {
 		t.Fatalf("dropped bytes = %d, want 3", buf.Dropped())
-	}
-}
-
-func TestAllChangedFilesIncludesArtifactsWhenSnapshotAfterWrite(t *testing.T) {
-	// Regression: success-path metadata under-reported pushed contents because
-	// AllChangedFiles ran before .aiops artifacts were written. Ordering the
-	// snapshot after WriteChangedFiles/WriteFailureSummary should make those
-	// files appear in the result.
-	dir := t.TempDir()
-	mustGit(t, dir, "init", "-q")
-	mustGit(t, dir, "config", "user.email", "test@example.com")
-	mustGit(t, dir, "config", "user.name", "test")
-	mustGit(t, dir, "config", "commit.gpgsign", "false")
-	mustGit(t, dir, "config", "tag.gpgsign", "false")
-	mustGit(t, dir, "commit", "--allow-empty", "-q", "-m", "init")
-
-	if err := os.WriteFile(filepath.Join(dir, "src.go"), []byte("package main\n"), 0o644); err != nil {
-		t.Fatalf("write src.go: %v", err)
-	}
-	if err := WriteChangedFiles(dir, nil); err != nil {
-		t.Fatalf("seed CHANGED_FILES.txt: %v", err)
-	}
-	if err := WriteFailureSummary(dir, "failure note"); err != nil {
-		t.Fatalf("seed FAILURE.md: %v", err)
-	}
-
-	files, err := AllChangedFiles(context.Background(), dir)
-	if err != nil {
-		t.Fatalf("AllChangedFiles: %v", err)
-	}
-	got := strings.Join(files, ",")
-	for _, want := range []string{"src.go", ".aiops/CHANGED_FILES.txt", ".aiops/FAILURE.md"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("AllChangedFiles missing %q in %q", want, got)
-		}
-	}
-}
-
-func mustGit(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
 

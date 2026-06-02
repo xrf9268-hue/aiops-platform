@@ -48,8 +48,13 @@ details, use process logs and workspace artifacts:
 
 - `.aiops/PROMPT.md` — rendered prompt sent to the runner
 - `.aiops/TASK.md` — task description
-- `.aiops/FAILURE.md` — worker-written failure post-mortem (present only on failed runs)
-- `.aiops/CHANGED_FILES.txt` — newline-separated changed files
+- `.aiops/PLAN.md` — agent's assessment handoff (analysis-only mode)
+
+Failure reasons are not persisted as a workspace file: the worker emits them in
+the structured event log (`runner_end` with an `error` payload,
+`run_phase_transition`). The `.aiops/FAILURE.md` post-mortem and
+`.aiops/CHANGED_FILES.txt` snapshot were removed in #575 as duplicates of that
+log.
 
 Important task event kinds emitted into the worker log/event emitter include:
 

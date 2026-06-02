@@ -83,8 +83,9 @@ verification commands.
 
 The worker creates deterministic workspaces under the configured
 `workspace.root` (or `AIOPS_WORKSPACE_ROOT` fallback). Inspect the issue
-workspace for `.aiops/CHANGED_FILES.txt` (and `.aiops/FAILURE.md` on failed
-runs).
+workspace for the agent's branch and any handoff artifacts (e.g. `.aiops/PLAN.md`
+in analysis-only mode); failure reasons are in the worker's structured event log
+(`runner_end`, `run_phase_transition`), not a workspace file.
 
 ## 7. Current Day 1 Limitations
 

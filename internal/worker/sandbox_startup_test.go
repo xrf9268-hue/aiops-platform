@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,9 +37,11 @@ func sandboxStartupRunState(t *testing.T, ev *fakeEmitter, runErr error) *runSta
 // TestRunAgentSandboxStartupFailureRidesGenericFailurePath pins the #572
 // behavior: the dedicated external-blocker cooldown is gone, so a codex
 // sandbox-startup denial is now a generic retryable runner failure (it rides the
-// SPEC §8.4 backoff like any other error). The run is NOT parked: a FAILURE.md
-// post-mortem is written and its text is the output-free SandboxStartupError
-// detail, so raw bwrap subprocess output (which may hold secrets) never leaks.
+// SPEC §8.4 backoff like any other error). The failure reason survives via the
+// SPEC §13.1/§13.2 structured `runner_end "runner failed"` event whose `error`
+// payload is the output-free SandboxStartupError detail, so raw bwrap subprocess
+// output (which may hold secrets) never leaks — and no .aiops/FAILURE.md
+// post-mortem artifact is written (removed in #575).
 func TestRunAgentSandboxStartupFailureRidesGenericFailurePath(t *testing.T) {
 	ev := &fakeEmitter{}
 	rs := sandboxStartupRunState(t, ev, &runner.SandboxStartupError{Detail: "host denied the codex bwrap user namespace"})
@@ -54,13 +57,32 @@ func TestRunAgentSandboxStartupFailureRidesGenericFailurePath(t *testing.T) {
 		t.Fatalf("runAgent() Err = %T %[1]v; want the *SandboxStartupError classification preserved", rtErr.Err)
 	}
 
-	// A generic failure writes the FAILURE.md post-mortem, and its content is the
-	// fixed output-free detail — no raw bwrap output reaches the artifact.
-	body, err := os.ReadFile(filepath.Join(rs.workdir, ".aiops", "FAILURE.md"))
-	if err != nil {
-		t.Fatalf("read FAILURE.md = %v; want the failure post-mortem written", err)
+	// The failure reason is carried by the structured runner_end event, and its
+	// `error` payload is the fixed output-free detail — no raw bwrap output
+	// reaches the event.
+	ends := ev.byKind(task.EventRunnerEnd)
+	var failed *recordedEvent
+	for i := range ends {
+		if ends[i].Message == "runner failed" {
+			failed = &ends[i]
+			break
+		}
 	}
-	if !strings.Contains(string(body), "host denied the codex bwrap user namespace") {
-		t.Fatalf("FAILURE.md = %q; want the output-free sandbox-startup detail", string(body))
+	if failed == nil {
+		t.Fatalf("no runner_end %q event among %d runner_end events; want the failure recorded structurally", "runner failed", len(ends))
+	}
+	payload, ok := failed.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("runner_end payload = %T; want map[string]any", failed.Payload)
+	}
+	gotErr, _ := payload["error"].(string)
+	if !strings.Contains(gotErr, "host denied the codex bwrap user namespace") {
+		t.Fatalf("runner_end error payload = %q; want the output-free sandbox-startup detail", gotErr)
+	}
+
+	// The .aiops/FAILURE.md post-mortem artifact must no longer be written (#575):
+	// the structured event above is the sole source of truth for the reason.
+	if _, err := os.Stat(filepath.Join(rs.workdir, ".aiops", "FAILURE.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("FAILURE.md stat = %v; want not-exist (the post-mortem artifact was removed in #575)", err)
 	}
 }

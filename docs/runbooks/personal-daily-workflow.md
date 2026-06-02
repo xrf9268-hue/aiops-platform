@@ -163,15 +163,16 @@ curl 'http://127.0.0.1:4000/api/v1/state'
 ```
 
 For failed tasks, inspect process logs and task events emitted by
-`worker.RunTask` such as `workflow_resolved`, `runner_start`, `runner_end`, and
-reconciliation events. The deterministic workspace also retains
-`.aiops/FAILURE.md` (the worker's failure post-mortem) and
-`.aiops/CHANGED_FILES.txt` when the runner reaches those phases.
+`worker.RunTask` such as `workflow_resolved`, `runner_start`, `runner_end`
+(its `error` payload carries the failure reason), `run_phase_transition`, and
+reconciliation events. The structured event log is the single source of truth
+for why a run failed — the worker no longer writes a `.aiops/FAILURE.md`
+post-mortem or `.aiops/CHANGED_FILES.txt` snapshot (#575).
 
 ### Common causes and fixes
 
 - `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
-- Verification command failed (`go test ./...` non-zero): read `.aiops/FAILURE.md` in the workspace if present. Reproduce locally on the same branch.
+- Verification command failed (`go test ./...` non-zero): read the `runner_end` event's `error` payload (and process logs) for the failure reason. Reproduce locally on the same branch.
 - Change landed out of scope or oversized (touched an off-limits path, or the diff is too big for review): re-scope the task into a smaller issue, sharpen the prompt's scope guidance, or do it manually.
 - Runner command not found: confirm `codex.command` (the `codex app-server` launch command) or `claude.command` resolves in the worker's scoped `PATH`. The `claude` shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).

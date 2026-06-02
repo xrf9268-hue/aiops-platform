@@ -99,8 +99,8 @@ func (o *Orchestrator) reconcileCancelFollowup(cancelEntries []*RunningEntry, cl
 		for _, entry := range cancelEntries {
 			if entry.CancelWorker != nil {
 				// Cause = ErrReconcileCancel so the worker records this as a
-				// supervised stop (runner_stopped), not a runner failure, so it
-				// writes no FAILURE.md post-mortem for a superseded run (#543).
+				// supervised stop (runner_stopped), not a runner failure, for a
+				// superseded run (#543).
 				entry.CancelWorker(worker.ErrReconcileCancel)
 			}
 		}
