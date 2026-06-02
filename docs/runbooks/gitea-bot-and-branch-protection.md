@@ -71,17 +71,22 @@ other on purpose:
 
 Recommended `GITEA_TOKEN` scopes (Gitea 1.20+ scoped token model):
 
-- `write:repository` on the specific repositories the bot is allowed to act on
-  (the orchestrator-owned `gitea_issue_labels` tool writes aiops/* state labels
-  through the worker process).
-- `read:repository` is implied (covers issue/label polling).
-- `write:issue` only if the workflow exposes an issue-comment tool. The state
-  tool uses label writes covered by `write:repository`; leave `write:issue` off
-  until a workflow needs it.
+- `write:issue` on the specific repositories the bot is allowed to act on —
+  **required** whenever the `gitea_issue_labels` state tool is enabled (the
+  normal Gitea path). The tool moves an issue's aiops/* state via
+  `POST`/`DELETE /repos/{owner}/{repo}/issues/{index}/labels`, which Gitea
+  classifies under the `issue` scope, not `repository`. With only
+  `read`-level issue scope the agent's first state transition fails
+  authorization. `write:issue` implies `read:issue`.
+- `read:issue` covers issue/label polling and is implied by `write:issue`.
+- `GITEA_TOKEN` does **not** need `write:repository`: it neither pushes
+  branches nor opens PRs (those use the separate `repo.clone_url` credential
+  below). Granting it only widens blast radius for no functional gain.
 
-The `repo.clone_url` credential is separate and needs repository **write** on
-the target repositories (it authorizes both the agent's branch push and its PR
-creation).
+The `repo.clone_url` credential is separate and needs repository **write**
+(`write:repository`) on the target repositories: it authorizes both the agent's
+branch push and the PR creation (`POST /repos/{owner}/{repo}/pulls`, which Gitea
+classifies under the `repository` scope).
 
 Recommended token scopes to **not** grant:
 
@@ -179,7 +184,7 @@ Before enabling the worker against company repositories, confirm:
 
 - [ ] Dedicated `aiops-bot` Gitea account exists with 2FA.
 - [ ] Bot has Write (not Admin) access on each target repository.
-- [ ] `GITEA_TOKEN` is scoped to `write:repository` on the allowed repositories only, and is denied passthrough into the agent subprocess (orchestrator-tools-only).
+- [ ] `GITEA_TOKEN` is scoped to `write:issue` (not `write:repository`) on the allowed repositories only, and is denied passthrough into the agent subprocess (orchestrator-tools-only).
 - [ ] The `repo.clone_url` push + PR credential has repository write on the allowed repositories and is configured independently of `GITEA_TOKEN`.
 - [ ] Branch protection on `main` blocks direct push, requires PR review, requires status checks, blocks force push, blocks deletion.
 - [ ] The bot is not in any push-allowlist on protected branches.
