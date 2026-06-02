@@ -2,10 +2,19 @@ name: PR Metadata
 
 # Enforces the SPEC-deviation merge gate (AGENTS.md principle 6/7, #588): a PR
 # that changes a SPEC-sensitive path must cite an upstream Elixir reference or
-# track a DEVIATIONS.md row, not claim it adds no new key/phase. Runs from the
-# base ref so the trusted validator (not the PR's copy) decides.
+# track a DEVIATIONS.md row, not claim it adds no new key/phase.
+#
+# Uses `pull_request` (not `pull_request_target`) so the check attaches to the PR
+# head SHA that branch-protection required-status-checks evaluate against — a
+# `pull_request_target` run reports on the base SHA, which would leave the
+# required context perpetually pending. This repo takes PRs only from
+# same-repository branches authored by the trusted maintainer/agent (no untrusted
+# forks), so running the PR's own validator is acceptable: a PR that tampered
+# with the validator to bypass the gate would be an obvious, self-defeating diff.
+# If untrusted fork PRs are ever accepted, switch to `pull_request_target` with a
+# base-ref checkout that publishes a commit status to the PR head SHA instead.
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, edited, reopened, synchronize, ready_for_review, converted_to_draft]
 
 permissions:
@@ -21,11 +30,10 @@ jobs:
     name: Validate PR metadata
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout base workflow code
+      - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Set up Node
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
