@@ -11,10 +11,11 @@ in it (#76 removed all worker-side push/PR/merge code). Two trust boundaries
 matter:
 
 - A Gitea API token (`GITEA_TOKEN`) is held by the **worker process** for
-  tracker polling and is exposed to the agent only through orchestrator-owned
-  tool proxies, never as an environment variable inside the agent subprocess
-  (the `linear_graphql`-style token isolation from #76). The agent's branch
-  push uses a separate credential embedded in `repo.clone_url` (see below).
+  tracker polling and the orchestrator-owned `gitea_issue_labels` state-label
+  tool, never as an environment variable inside the agent subprocess (the
+  `linear_graphql`-style token isolation from #76). The agent's branch push
+  **and** PR creation use a separate credential embedded in `repo.clone_url`
+  (see below).
 - Reviewers must remain the only path that lands code on `main`.
 
 The settings below keep both boundaries enforced even if the worker, the agent,
@@ -44,32 +45,43 @@ other on purpose:
 
 1. **`GITEA_TOKEN` — the orchestrator-held tracker/API token.** The worker
    process exports it and uses it for Gitea issue polling (reading issues and
-   labels). It is also the token behind the agent's orchestrator-owned tool
-   proxies: when the agent calls a Gitea tool (the `gitea_issue_labels` state
-   tool wired in `internal/runner/tools.go`, and the Gitea PR helper in
-   `internal/gitea/client.go`), the **worker process** attaches the token
-   server-side and makes the authenticated call. The raw token is **never**
-   copied into the agent subprocess environment, tool metadata, or prompt text
-   — `internal/workflow/agent_env_policy.go` explicitly denies `GITEA_TOKEN`
+   labels) and for the one orchestrator-owned Gitea write tool currently
+   advertised to the agent: `gitea_issue_labels` (the aiops/* state-label
+   tool wired in `internal/runner/tools.go`). When the agent calls that tool
+   the **worker process** attaches the token server-side and makes the
+   authenticated call; the raw token is **never** copied into the agent
+   subprocess environment, tool metadata, or prompt text —
+   `internal/workflow/agent_env_policy.go` explicitly denies `GITEA_TOKEN`
    (and `GITEA_API_TOKEN`, `GITHUB_TOKEN`, …) passthrough. This is the same
    token-isolation boundary `linear_graphql` enforces for Linear (#76).
-2. **`repo.clone_url` basic-auth — the branch-push credential.** The workspace
-   sets `origin` to `repo.clone_url`, whose embedded basic-auth userinfo
-   carries the push credential, so the agent's `git push origin <work-branch>`
-   succeeds inside its workspace without `GITEA_TOKEN` ever being present as an
-   env var. Configure this credential independently of `GITEA_TOKEN` (it can be
-   a narrowly scoped deploy token). It is masked from logs and error strings by
-   `workflow.MaskCloneURL`.
+   `GITEA_TOKEN` is **not** the credential the agent uses to open a PR — there
+   is no orchestrator-owned Gitea PR-creation proxy today (the
+   `internal/gitea.CreatePullRequest` helper is defined and unit-tested but has
+   no production call path; only `gitea_issue_labels` is advertised).
+2. **`repo.clone_url` basic-auth — the agent's push + PR credential.** The
+   workspace sets `origin` to `repo.clone_url`, whose embedded basic-auth
+   userinfo authorizes the agent's `git push origin <work-branch>` inside its
+   workspace without `GITEA_TOKEN` ever being present as an env var. The same
+   credential is what the agent uses to open the pull request the `WORKFLOW.md`
+   prompt instructs it to create (e.g. via the Gitea `POST /api/v1/repos/.../pulls`
+   API), since the agent has no other Gitea credential. Configure it
+   independently of `GITEA_TOKEN`; because it must both push branches and open
+   PRs it needs repository **write** (a read-only deploy token is not enough).
+   It is masked from logs and error strings by `workflow.MaskCloneURL`.
 
 Recommended `GITEA_TOKEN` scopes (Gitea 1.20+ scoped token model):
 
 - `write:repository` on the specific repositories the bot is allowed to act on
-  (needed for the agent's PR-creation tool and label writes routed through the
-  worker process).
+  (the orchestrator-owned `gitea_issue_labels` tool writes aiops/* state labels
+  through the worker process).
 - `read:repository` is implied (covers issue/label polling).
 - `write:issue` only if the workflow exposes an issue-comment tool. The state
   tool uses label writes covered by `write:repository`; leave `write:issue` off
   until a workflow needs it.
+
+The `repo.clone_url` credential is separate and needs repository **write** on
+the target repositories (it authorizes both the agent's branch push and its PR
+creation).
 
 Recommended token scopes to **not** grant:
 
@@ -83,7 +95,7 @@ If the deployed Gitea version only exposes the legacy `repo` scope, prefer that 
 ## Token storage and rotation
 
 - Inject `GITEA_TOKEN` only as an environment variable on the worker process. Do not commit it. Do not add it to `codex.env_passthrough` / `claude.env_passthrough` — it is denied passthrough into the agent subprocess by design.
-- Keep the `repo.clone_url` push credential in the same secret manager and out of logs (`workflow.MaskCloneURL` scrubs it from worker output).
+- Keep the `repo.clone_url` push + PR credential in the same secret manager and out of logs (`workflow.MaskCloneURL` scrubs it from worker output).
 - Store the source of truth in a secret manager.
 - Rotate both credentials on a schedule (recommended: every 90 days) and immediately if a worker host or backup is suspected compromised.
 - Revoke a credential in Gitea before deleting it from the secret store, so any in-flight call fails closed.
@@ -117,7 +129,7 @@ is:
   `POST /api/v1/repos/.../pulls` code path (#76 removed them; `cmd/worker` and
   `internal/orchestrator` carry only a `-github-issue` push *preflight* flag,
   not a push).
-- Whether a PR is opened as a draft is set via the `WORKFLOW.md` prompt (the `pr.draft` front-matter key was removed in #578 and is now rejected at load). Gitea's `POST /repos/{owner}/{repo}/pulls` API has no `draft` request field (verified against `release/v1.26` `modules/structs/pull.go`); draft state is derived purely from a Work-In-Progress title prefix matched against `setting.Repository.PullRequest.WorkInProgressPrefixes` (default `WIP:` and `[WIP]`), which the PR tool sets. Reviewers will see PR titles like `WIP: chore(ai): ...` for drafts. Draft state is a workflow-level signal only — do not rely on it as a human gate; reviewers must still treat every agent-authored PR as unverified until a human review is complete.
+- Whether a PR is opened as a draft is set via the `WORKFLOW.md` prompt (the `pr.draft` front-matter key was removed in #578 and is now rejected at load). Gitea's `POST /repos/{owner}/{repo}/pulls` API has no `draft` request field (verified against `release/v1.26` `modules/structs/pull.go`); draft state is derived purely from a Work-In-Progress title prefix matched against `setting.Repository.PullRequest.WorkInProgressPrefixes` (default `WIP:` and `[WIP]`), which the agent sets on the PR title. Reviewers will see PR titles like `WIP: chore(ai): ...` for drafts. Draft state is a workflow-level signal only — do not rely on it as a human gate; reviewers must still treat every agent-authored PR as unverified until a human review is complete.
 - Neither the worker nor any orchestrator-held tool calls a merge endpoint. There is no merge code path in `cmd/worker/main.go` or `internal/gitea/client.go`. If you add one in the future, gate it behind explicit configuration and do not enable it by default.
 - The agent does not delete branches.
 - Neither the worker nor the agent changes repository settings, webhooks, or branch protection.
@@ -154,7 +166,7 @@ the SPEC-aligned runtime. Operational requirements:
 
 If the bot account or its token may be compromised:
 
-1. Revoke both bot credentials in Gitea immediately: `GITEA_TOKEN` and the `repo.clone_url` push credential.
+1. Revoke both bot credentials in Gitea immediately: `GITEA_TOKEN` and the `repo.clone_url` push + PR credential.
 2. Stop the worker process.
 3. Audit recent pushes by the bot account (`git log --author=aiops-bot` on each repo, plus Gitea audit log).
 4. Force-close any open PRs the agent opened under the bot identity during the suspect window.
@@ -168,7 +180,7 @@ Before enabling the worker against company repositories, confirm:
 - [ ] Dedicated `aiops-bot` Gitea account exists with 2FA.
 - [ ] Bot has Write (not Admin) access on each target repository.
 - [ ] `GITEA_TOKEN` is scoped to `write:repository` on the allowed repositories only, and is denied passthrough into the agent subprocess (orchestrator-tools-only).
-- [ ] The `repo.clone_url` push credential is scoped to the allowed repositories and configured independently of `GITEA_TOKEN`.
+- [ ] The `repo.clone_url` push + PR credential has repository write on the allowed repositories and is configured independently of `GITEA_TOKEN`.
 - [ ] Branch protection on `main` blocks direct push, requires PR review, requires status checks, blocks force push, blocks deletion.
 - [ ] The bot is not in any push-allowlist on protected branches.
 - [ ] Worker host stores the token only in environment variables sourced from a secret manager.
