@@ -46,10 +46,12 @@ const specOptionMarkers = [
 const closingKeywordPattern =
   /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s+#(\d+)/gi;
 
-// elixirCitationPattern matches a concrete upstream reference: an Elixir source
-// path (optionally with a line) or an elixir/ tree path. A bare "Elixir" word
-// does not count — the citation must point somewhere a reviewer can open.
-const elixirCitationPattern = /(?:elixir\/[\w./-]+|[\w./-]+\.ex)(?::\d+)?/i;
+// elixirCitationPattern matches a concrete reference into the openai/symphony
+// Elixir tree: `elixir/.../<module>.ex`, optionally with a line. A bare
+// `<name>.ex` filename or the word "Elixir" does not count — the citation must
+// point at a path in the upstream tree a reviewer can open, so a fabricated
+// `not_a_real.ex` cannot satisfy the gate.
+const elixirCitationPattern = /elixir\/[\w./-]+\.ex(?::\d+)?/i;
 
 export function extractClosingIssueNumbers(body) {
   const numbers = new Set();
@@ -100,7 +102,11 @@ export function hasElixirCitation(body) {
 }
 
 export function touchesDeviations(files) {
-  return (files ?? []).some((file) => file.filename === 'DEVIATIONS.md');
+  // A 'removed' DEVIATIONS.md tracks no deviation — require an added/modified
+  // change so deleting the file cannot satisfy the gate.
+  return (files ?? []).some(
+    (file) => file.filename === 'DEVIATIONS.md' && file.status !== 'removed',
+  );
 }
 
 // validatePullRequestMetadata returns the list of blocking errors for a PR. It

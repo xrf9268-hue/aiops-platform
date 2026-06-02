@@ -85,9 +85,11 @@ test('classifySpecSensitivity flags config.go and newly-added scheduler files on
   assert.equal(classifySpecSensitivity(NON_SENSITIVE).sensitive, false);
 });
 
-test('hasElixirCitation requires a concrete path, not a bare word', () => {
+test('hasElixirCitation requires a concrete openai/symphony Elixir-tree path', () => {
   assert.equal(hasElixirCitation('see elixir/lib/symphony_elixir/orchestrator.ex:1142'), true);
-  assert.equal(hasElixirCitation('matches schema.ex shape'), true);
+  assert.equal(hasElixirCitation('elixir/lib/symphony_elixir/config/schema.ex'), true);
+  assert.equal(hasElixirCitation('a bare schema.ex name'), false, 'bare .ex filename is not a tree path');
+  assert.equal(hasElixirCitation('not_a_real.ex'), false, 'a fabricated .ex name cannot satisfy the gate');
   assert.equal(hasElixirCitation('this matches the Elixir reference conceptually'), false);
 });
 
@@ -105,8 +107,14 @@ test('the shipped PR template cannot self-satisfy the citation gate', async () =
   );
 });
 
-test('touchesDeviations detects a DEVIATIONS.md change', () => {
+test('touchesDeviations needs a non-removed DEVIATIONS.md change', () => {
   assert.equal(touchesDeviations([{ filename: 'DEVIATIONS.md', status: 'modified' }]), true);
+  assert.equal(touchesDeviations([{ filename: 'DEVIATIONS.md', status: 'added' }]), true);
+  assert.equal(
+    touchesDeviations([{ filename: 'DEVIATIONS.md', status: 'removed' }]),
+    false,
+    'deleting DEVIATIONS.md must not satisfy deviation tracking',
+  );
   assert.equal(touchesDeviations(CONFIG), false);
 });
 
