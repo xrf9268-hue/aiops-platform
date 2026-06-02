@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 
 import {
   classifySpecSensitivity,
@@ -83,6 +84,20 @@ test('hasElixirCitation requires a concrete path, not a bare word', () => {
   assert.equal(hasElixirCitation('see elixir/lib/symphony_elixir/orchestrator.ex:1142'), true);
   assert.equal(hasElixirCitation('matches schema.ex shape'), true);
   assert.equal(hasElixirCitation('this matches the Elixir reference conceptually'), false);
+});
+
+test('the shipped PR template cannot self-satisfy the citation gate', async () => {
+  const template = await readFile(new URL('../pull_request_template.md', import.meta.url), 'utf8');
+  assert.equal(
+    parseSpecAlignmentChecklist(template).presentOptions.length,
+    3,
+    'template must keep all three SPEC-alignment options',
+  );
+  assert.equal(
+    hasElixirCitation(template),
+    false,
+    'an author copying the template must not pass the citation gate without adding a real reference',
+  );
 });
 
 test('touchesDeviations detects a DEVIATIONS.md change', () => {

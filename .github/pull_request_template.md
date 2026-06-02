@@ -11,7 +11,7 @@ Check exactly one. When this PR changes a SPEC-sensitive path
 an extension upstream lacks must be cited or tracked, not waved through.
 
 - [ ] No new top-level `WORKFLOW.md`/`Config` key and no new worker/orchestrator phase/gate/artifact.
-- [ ] Adds one, justified by an upstream **Elixir reference** cited here (e.g. `elixir/lib/symphony_elixir/orchestrator.ex:1142`).
+- [ ] Adds one, justified by an upstream **Elixir reference** — cite the matching file and line from the openai/symphony Elixir tree in the body below (a bare module name does not count; the gate looks for a concrete source path).
 - [ ] Adds one, tracked as a **DEVIATIONS.md row** + an `area:spec-alignment` issue, updated in this PR.
 
 ## Size budget (AGENTS.md)
