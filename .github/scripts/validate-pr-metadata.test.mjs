@@ -73,6 +73,11 @@ test('classifySpecSensitivity flags config.go and newly-added scheduler files on
     'a nested subpackage phase still trips the gate',
   );
   assert.equal(
+    classifySpecSensitivity([{ filename: 'internal/worker/moved_phase.go', status: 'renamed' }]).sensitive,
+    true,
+    'a git mv/rename into the sensitive tree is a new surface',
+  );
+  assert.equal(
     classifySpecSensitivity([{ filename: 'internal/worker/sub/new_phase_test.go', status: 'added' }]).sensitive,
     false,
     'a nested test file does not trip the gate',

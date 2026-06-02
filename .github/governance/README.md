@@ -6,21 +6,25 @@ so it must be imported once (and re-imported after edits) by a repo admin.
 
 ## What it enforces
 
-- **`PR Metadata / Validate PR metadata`** is a required status check — the
-  SPEC-deviation merge gate (AGENTS.md principle 6/7, #588). A PR that changes a
-  SPEC-sensitive path (`internal/workflow/config.go`, a newly-added
+Required-check `context` values are the **emitted check-run names** (the
+Actions job `name:`), not the `Workflow / Job` form shown in the PR UI — a
+mismatched context blocks every PR forever waiting on a check that never reports.
+
+- **`Validate PR metadata`** is a required status check — the SPEC-deviation
+  merge gate (AGENTS.md principle 6/7, #588). A PR that changes a SPEC-sensitive
+  path (`internal/workflow/config.go`, a newly-added or renamed
   `internal/orchestrator/`/`internal/worker/` file) cannot merge while claiming
   it adds no new key/phase; it must cite an upstream Elixir reference or track a
   `DEVIATIONS.md` row.
-- **`CI / Go build and test`** and **`CI / Security and supply-chain`** required.
+- **`Go build and test`** and **`Security and supply-chain`** required.
 - Review-thread resolution required (the Codex-review protocol's unresolved
   threads block merge); stale reviews dismissed on push; squash-only; no branch
   deletion or force-push on `main`.
 
 `required_approving_review_count` is `0` because the repo is single-maintainer /
 agent-driven; raise it (and re-import) once a second reviewer account exists.
-`CI / E2E Gitea mock loop` and `CI / Docker image build` are intentionally left
-out of the required set (heavier / Docker-pull sensitive); add their contexts to
+`E2E Gitea mock loop` and `Docker image build` are intentionally left out of the
+required set (heavier / Docker-pull sensitive); add their (job-name) contexts to
 `required_status_checks` if you want them blocking too.
 
 ## Apply / update the ruleset

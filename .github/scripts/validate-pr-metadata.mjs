@@ -14,14 +14,17 @@ const apiVersion = '2022-11-28';
 // specSensitivePatterns triggers the gate. Kept path-level (no AST parse),
 // matching the Wink model: the surfaces where a SPEC deviation actually enters.
 //   - internal/workflow/config.go: new top-level WORKFLOW.md/Config keys.
-//   - new (added) non-test files anywhere under internal/orchestrator or
+//   - new non-test files anywhere under internal/orchestrator or
 //     internal/worker (including nested subpackages): new scheduler/runner
-//     phases, gates, or artifacts.
+//     phases, gates, or artifacts. 'added', 'renamed', and 'copied' all land a
+//     new file at the destination, so a `git mv` into the sensitive tree does
+//     not bypass the gate.
+const newFileStatuses = new Set(['added', 'renamed', 'copied']);
 const specSensitivePatterns = [
   { test: (file) => file.filename === 'internal/workflow/config.go' },
   {
     test: (file) =>
-      file.status === 'added' &&
+      newFileStatuses.has(file.status) &&
       /^internal\/(orchestrator|worker)\/.+\.go$/.test(file.filename) &&
       !file.filename.endsWith('_test.go'),
   },
