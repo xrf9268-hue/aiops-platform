@@ -378,11 +378,9 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 	if err != nil {
 		return err
 	}
-	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher:        dispatcher,
-		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
-		MaxFailureRetries: &maxFailureRetries,
+		Dispatcher: dispatcher,
+		Scheduler:  orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
 		// SPEC §18.1 active-transition cleanup: the dispatcher removes the
 		// workspace (firing before_remove against the live workflow snapshot)
 		// when a running issue moves to a terminal state mid-run.

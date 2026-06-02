@@ -7,7 +7,6 @@ package orchestrator
 import (
 	"errors"
 	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -252,34 +251,22 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 }
 
 // applyFailureRetry is the default terminal route for a retryable runner error:
-// schedule a backoff retry with attempt+1, or fail permanently once an explicit
-// failure-retry cap is exceeded. It always handles the exit, so it returns the
+// schedule a backoff retry with attempt+1. SPEC §8.4 / §16.6 retry unboundedly
+// until the tracker takes the issue out of active work (the opt-in failure-retry
+// cap was removed in #577). It always handles the exit, so it returns the
 // followup directly.
 func (f *finalizeRunOp) applyFailureRetry(st *OrchestratorState, elapsed time.Duration) func() {
 	// Schedule a retry with attempt+1. Per SPEC §4.1.5 the first run's
 	// RetryAttempt is nil; the first retry is attempt 1, the second 2,
-	// and so on. SPEC §8.4 / §16.6 expect the orchestrator to keep
-	// scheduling retries indefinitely (with the exponential-backoff
-	// ceiling) — only an explicit harness-hardening opt-in (SPEC §15.5)
-	// caps the count. A negative maxFailureRetries leaves the SPEC
-	// behavior in place; non-negative opts into the cap.
+	// and so on. SPEC §8.4 / §16.6 keep scheduling retries indefinitely with
+	// the exponential-backoff ceiling until the tracker takes the issue out of
+	// active work — there is no retry-count cap (the opt-in max_retry_attempts
+	// cap was removed in #577 / DEVIATIONS D29).
 	nextAttempt := 1
 	if f.attempt != nil {
 		nextAttempt = *f.attempt + 1
 	}
 	runErr := f.result.Err.Error()
-	if f.o.maxFailureRetries >= 0 && nextAttempt > f.o.maxFailureRetries {
-		if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
-			close(f.done)
-			return nil
-		}
-		msg := "failure retry budget exhausted after " + strconv.Itoa(f.o.maxFailureRetries) + " retries: " + runErr
-		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
-		// SPEC §13.1 failed outcome on stderr (see continuation-budget site).
-		log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=failure_retry_budget_exhausted attempts=%d error=%q", f.id, f.identifier, f.o.maxFailureRetries, runErr)
-		close(f.done)
-		return nil
-	}
 	if !st.FinishRunFailed(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil

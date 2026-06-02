@@ -151,34 +151,6 @@ func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Sched
 	}
 }
 
-// UpdateMaxFailureRetries applies the reloaded failure retry budget through the
-// actor. The budget counts scheduled failure retry entries after the first run;
-// any negative value (including the workflow-layer UnboundedRetryBudget sentinel
-// that a workflow with no `agent.max_retry_attempts` produces) disables the cap
-// and restores SPEC §8.4 unbounded retries. Zero disables failure retries
-// outright as a deliberate opt-in. Clean continuations are bounded separately
-// by agent.max_turns.
-func (o *Orchestrator) UpdateMaxFailureRetries(ctx context.Context, maxFailureRetries int) error {
-	if maxFailureRetries < 0 {
-		maxFailureRetries = UnboundedFailureRetries
-	}
-	done := make(chan struct{}, 1)
-	op := opFunc(func(*OrchestratorState) func() {
-		o.maxFailureRetries = maxFailureRetries
-		done <- struct{}{}
-		return nil
-	})
-	if err := o.submit(ctx, op); err != nil {
-		return err
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 func (o *Orchestrator) RunningRetryingAndBlockedIssueIDs(ctx context.Context) []string {
 	reply := make(chan []string, 1)
 	if err := o.submit(ctx, &runningRetryingAndBlockedIssueIDsOp{result: reply}); err != nil {

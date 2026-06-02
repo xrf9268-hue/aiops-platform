@@ -1295,46 +1295,6 @@ func TestFinalize_NonRetryableErrorEmitsStderrLine(t *testing.T) {
 	}
 }
 
-// TestFinalize_FailureRetryBudgetExhaustedEmitsStderrLine covers SPEC §13.1
-// (issue #332) for the opt-in failure-retry-budget-exhausted terminal path.
-func TestFinalize_FailureRetryBudgetExhaustedEmitsStderrLine(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cap := 1
-	o, cancel := startActor(t, Deps{
-		Dispatcher:        disp,
-		Scheduler:         RetryScheduler{MaxBackoff: time.Hour},
-		MaxFailureRetries: &cap,
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-BUDGET", Identifier: "ENG-BUDGET", Title: "retry budget"}
-	attempt := 1
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
-		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	got := captureOrchestratorLog(t, func() {
-		disp.finishAt(0, WorkerResult{Err: errors.New("still failing"), Elapsed: 50 * time.Millisecond})
-		waitFor(t, func() bool {
-			v, err := o.Snapshot(context.Background())
-			return err == nil && len(v.Failed) == 1
-		}, time.Second)
-	})
-	for _, want := range []string{
-		"event=run_failed",
-		"issue_id=ENG-BUDGET",
-		"issue_identifier=ENG-BUDGET",
-		"reason=failure_retry_budget_exhausted",
-		"attempts=1",
-		`error="still failing"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("failure-retry-budget stderr line missing %q in:\n%s", want, got)
-		}
-	}
-}
-
 // TestFinalize_ContinuationSpawnsAreUnbounded covers SPEC §7.1 (issue #576 /
 // DEVIATIONS D30): the orchestrator no longer caps continuation spawns. Every
 // clean exit on a still-active issue schedules another continuation; the issue
@@ -1426,58 +1386,15 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 }
 
-// TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget verifies
-// the SPEC §15.5 harness-hardening opt-in: when a workflow sets an
-// explicit agent.max_retry_attempts cap, the orchestrator stops
-// scheduling retries once the cap is exhausted and pins the issue
-// under OrchestratorState.Failed. The default (no cap) is exercised
-// by TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault.
-func TestFinalize_AbnormalExitStopsAfterOptInFailureRetryBudget(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cap := 1
-	o, cancel := startActor(t, Deps{
-		Dispatcher:        disp,
-		Scheduler:         RetryScheduler{MaxBackoff: time.Hour},
-		MaxFailureRetries: &cap,
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-BUDGET", Identifier: "ENG-BUDGET", Title: "retry budget"}
-	attempt := 1
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, &attempt); err != nil {
-		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	disp.finishAt(0, WorkerResult{Err: errors.New("still failing"), Elapsed: 50 * time.Millisecond})
-
-	waitFor(t, func() bool {
-		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Running) == 0 && len(v.Retrying) == 0
-	}, time.Second)
-	v, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(v.Retrying) != 0 {
-		t.Fatalf("retrying entries after exhausted budget = %+v, want none", v.Retrying)
-	}
-	if got := disp.count(); got != 1 {
-		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional retry after exhausted budget", got)
-	}
-	if len(v.Failed) != 1 {
-		t.Fatalf("failed entries after exhausted opt-in budget = %d, want 1 (issue pinned until tracker changes)", len(v.Failed))
-	}
-}
-
-func TestFinalize_QuotaBackoffBypassesFailureRetryBudget(t *testing.T) {
+// TestFinalize_QuotaBackoffReschedulesWithRetryAfter pins that a quota-backoff
+// runner error reschedules the issue as a RetryKindQuotaBackoff entry with the
+// error's RetryAfter delay and the original attempt preserved (never Failed).
+func TestFinalize_QuotaBackoffReschedulesWithRetryAfter(t *testing.T) {
 	disp := &fakeDispatcher{}
 	scheduler := &recordingScheduler{delay: time.Hour}
-	cap := 1
 	o, cancel := startActor(t, Deps{
-		Dispatcher:        disp,
-		Scheduler:         scheduler,
-		MaxFailureRetries: &cap,
+		Dispatcher: disp,
+		Scheduler:  scheduler,
 	})
 	defer cancel()
 
@@ -1531,11 +1448,9 @@ func TestFinalize_QuotaBackoffBypassesFailureRetryBudget(t *testing.T) {
 
 func TestFinalize_QuotaBackoffDoesNotBumpNextFailureRetryAttempt(t *testing.T) {
 	disp := &fakeDispatcher{}
-	cap := 1
 	o, cancel := startActor(t, Deps{
-		Dispatcher:        disp,
-		Scheduler:         &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
-		MaxFailureRetries: &cap,
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Hour, time.Hour}},
 	})
 	defer cancel()
 
@@ -1580,13 +1495,13 @@ func TestFinalize_QuotaBackoffDoesNotBumpNextFailureRetryAttempt(t *testing.T) {
 	}
 }
 
-// TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault verifies
-// the SPEC §8.4 / §16.6 default — no MaxFailureRetries in Deps means
-// the cap is disabled and the orchestrator keeps scheduling retries
-// past the historical default-1 threshold. Without this guard, a
-// regression that re-introduces a finite default would silently
-// truncate retry sequences for issues a SPEC-conforming operator
-// expects to keep tapping the backoff wall.
+// TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault verifies the SPEC
+// §8.4 / §16.6 contract: there is no failure-retry cap (the opt-in cap was
+// removed in #577 / DEVIATIONS D29), so the orchestrator keeps scheduling
+// retries past the historical default-1 threshold. Without this guard, a
+// regression that re-introduces a finite retry cap would silently truncate
+// retry sequences for issues a SPEC-conforming operator expects to keep tapping
+// the backoff wall.
 func TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{

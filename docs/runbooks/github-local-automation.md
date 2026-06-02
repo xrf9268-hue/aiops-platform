@@ -26,16 +26,12 @@ This runbook wires the local macOS operator flow for resolving
   session (the codex app-server in-session loop, SPEC §5.3.5), not the number of
   continuation worker spawns — the orchestrator-side continuation cap was removed
   in #576.
-- Failure-driven worker retries follow SPEC §8.4 by default: unbounded, with
-  the exponential-backoff ceiling at `agent.max_retry_backoff_ms` (default
-  5 minutes), released only when the tracker takes the issue out of active
-  work. Setting an explicit `agent.max_retry_attempts` opts into the SPEC
-  §15.5 harness-hardening cap; the local workflow at
-  [`examples/github-local-WORKFLOW.md`](../../examples/github-local-WORKFLOW.md)
-  pins `max_retry_attempts: 1` as that opt-in (first run plus one retry,
-  then pinned under `OrchestratorState.Failed` until the tracker changes).
-  Runner-timeout retries follow the same pattern via
-  `agent.max_timeout_retries`.
+- Failure-driven worker retries follow SPEC §8.4 / §16.6: unbounded, with the
+  exponential-backoff ceiling at `agent.max_retry_backoff_ms` (default 5
+  minutes), released only when the tracker takes the issue out of active work.
+  The `agent.max_retry_attempts` / `agent.max_timeout_retries` opt-in caps were
+  removed in #577 (rejected at load); to stop a persistently failing issue, move
+  it out of the active states rather than capping retries.
 - Codex is the primary implementer and is configured for full access through
   `codex.thread_sandbox: danger-full-access`.
 - Codex review and Claude Code are both mandatory independent local diff

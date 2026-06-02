@@ -910,63 +910,8 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	if cfg.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("default Agent.Timeout: got %v want 30m", cfg.Agent.Timeout)
 	}
-	if got := cfg.Agent.MaxTimeoutRetriesValue(); got != UnboundedRetryBudget {
-		t.Fatalf("default Agent.MaxTimeoutRetriesValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
-	}
-	if got := cfg.Agent.MaxRetryAttemptsValue(); got != UnboundedRetryBudget {
-		t.Fatalf("default Agent.MaxRetryAttemptsValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
-	}
 	if cfg.Agent.MaxRetryBackoffMs != 300000 {
 		t.Fatalf("default Agent.MaxRetryBackoffMs: got %d want 300000", cfg.Agent.MaxRetryBackoffMs)
-	}
-}
-
-// TestMaxRetryAttemptsValue_OptInCapHonored verifies that an explicit
-// positive opt-in survives MaxRetryAttemptsValue() exactly and that
-// explicit zero is honored as "no retries" (the deliberate single-shot
-// mode) rather than coerced back to the unbounded default. This is the
-// harness-hardening path documented under SPEC §15.5.
-func TestMaxRetryAttemptsValue_OptInCapHonored(t *testing.T) {
-	cases := []struct {
-		name string
-		set  int
-		want int
-	}{
-		{"explicit zero disables retries", 0, 0},
-		{"explicit one matches historical default", 1, 1},
-		{"explicit three caps at three", 3, 3},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			val := tc.set
-			cfg := AgentConfig{MaxRetryAttempts: &val}
-			if got := cfg.MaxRetryAttemptsValue(); got != tc.want {
-				t.Fatalf("MaxRetryAttemptsValue(%d) = %d, want %d", tc.set, got, tc.want)
-			}
-		})
-	}
-}
-
-// TestMaxTimeoutRetriesValue_OptInCapHonored mirrors
-// TestMaxRetryAttemptsValue_OptInCapHonored for runner-timeout retries.
-func TestMaxTimeoutRetriesValue_OptInCapHonored(t *testing.T) {
-	cases := []struct {
-		name string
-		set  int
-		want int
-	}{
-		{"explicit zero disables re-queue", 0, 0},
-		{"explicit one matches historical default", 1, 1},
-		{"explicit five caps at five", 5, 5},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			val := tc.set
-			cfg := AgentConfig{MaxTimeoutRetries: &val}
-			if got := cfg.MaxTimeoutRetriesValue(); got != tc.want {
-				t.Fatalf("MaxTimeoutRetriesValue(%d) = %d, want %d", tc.set, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -1036,47 +981,29 @@ prompt body
 	}
 }
 
-func TestLoadParsesAgentMaxRetryAttempts(t *testing.T) {
-	body := `---
+func TestLoadRejectsRemovedRetryCapKeys(t *testing.T) {
+	for _, key := range []string{"max_retry_attempts", "max_timeout_retries"} {
+		t.Run(key, func(t *testing.T) {
+			body := `---
 repo:
   owner: o
   name: r
   clone_url: git@example.com:o/r.git
 agent:
-  max_retry_attempts: 0
+  ` + key + `: 3
 tracker:
   kind: gitea
 ---
 prompt body
 `
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := wf.Config.Agent.MaxRetryAttemptsValue(); got != 0 {
-		t.Fatalf("Agent.MaxRetryAttemptsValue = %d, want explicit zero", got)
-	}
-}
-
-func TestLoadRejectsNegativeAgentMaxRetryAttempts(t *testing.T) {
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-agent:
-  max_retry_attempts: -1
-tracker:
-  kind: gitea
----
-prompt body
-`
-	_, err := Load(writeTempWorkflow(t, body))
-	if err == nil {
-		t.Fatal("Load succeeded with agent.max_retry_attempts=-1, want validation error")
-	}
-	if !strings.Contains(err.Error(), "agent.max_retry_attempts must be non-negative") {
-		t.Fatalf("Load error = %v, want agent.max_retry_attempts guidance", err)
+			_, err := Load(writeTempWorkflow(t, body))
+			if err == nil {
+				t.Fatalf("Load(agent.%s) = nil error; want rejection of the removed retry cap (#577)", key)
+			}
+			if !strings.Contains(err.Error(), "agent."+key) || !strings.Contains(err.Error(), "#577") {
+				t.Fatalf("Load(agent.%s) error = %q; want it to name agent.%s and #577", key, err, key)
+			}
+		})
 	}
 }
 
@@ -1736,17 +1663,14 @@ func TestLoadOptionalAppliesAgentTimeoutDefaults(t *testing.T) {
 	if wf.Config.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("expanded Agent.Timeout: got %v want 30m", wf.Config.Agent.Timeout)
 	}
-	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != UnboundedRetryBudget {
-		t.Fatalf("expanded Agent.MaxTimeoutRetriesValue: got %d want UnboundedRetryBudget (%d)", got, UnboundedRetryBudget)
-	}
 }
 
 // TestLoadOptionalHonorsExplicitAgentTimeout confirms a user-specified
-// agent.timeout / max_timeout_retries override the schema defaults.
+// agent.timeout overrides the schema default.
 func TestLoadOptionalHonorsExplicitAgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  timeout: 5m\n  max_timeout_retries: 3\ntracker:\n  kind: gitea\n---\nhello\n"
+	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  timeout: 5m\ntracker:\n  kind: gitea\n---\nhello\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1756,9 +1680,6 @@ func TestLoadOptionalHonorsExplicitAgentTimeout(t *testing.T) {
 	}
 	if wf.Config.Agent.Timeout != 5*time.Minute {
 		t.Fatalf("explicit Agent.Timeout: got %v want 5m", wf.Config.Agent.Timeout)
-	}
-	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 3 {
-		t.Fatalf("explicit Agent.MaxTimeoutRetriesValue: got %d want 3", got)
 	}
 }
 
@@ -2350,26 +2271,6 @@ func TestLoadOptional_MissingFileSkipsValidation(t *testing.T) {
 	}
 	if wf.Config.Repo.CloneURL != "" {
 		t.Fatalf("default Config.Repo.CloneURL: got %q want empty", wf.Config.Repo.CloneURL)
-	}
-}
-
-// TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries verifies that an
-// operator who deliberately sets max_timeout_retries: 0 in YAML can
-// disable the runner-timeout retry budget entirely. Previously the
-// loader coerced 0 back to 1, silently undoing this override.
-func TestLoadOptionalHonorsExplicitZeroMaxTimeoutRetries(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  max_timeout_retries: 0\ntracker:\n  kind: gitea\n---\nhello\n"
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	wf, err := LoadOptional(path)
-	if err != nil {
-		t.Fatalf("LoadOptional: %v", err)
-	}
-	if got := wf.Config.Agent.MaxTimeoutRetriesValue(); got != 0 {
-		t.Fatalf("explicit zero Agent.MaxTimeoutRetriesValue: got %d want 0", got)
 	}
 }
 
