@@ -237,12 +237,15 @@ func TestTodoSmokeScriptRequiresIssueIDInsideTerminalArrays(t *testing.T) {
 	}
 	text := string(body)
 	for _, want := range []string{
+		// Completed is still detected by membership in the `completed` array;
+		// failure is now detected by the per-issue drill-down status (the
+		// `failed` array/counter was removed in #584, D29).
 		`state_array_contains_issue completed "$selected_issue_id" "$state_file"`,
-		`state_array_contains_issue failed "$selected_issue_id" "$state_file"`,
+		`[ "$selected_status" = "failed" ]`,
 		`"\"$field\":[[:space:]]*\[[^]]*\"$issue_id\""`,
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("smoke script missing selected-issue array check %q", want)
+			t.Fatalf("smoke script missing selected-issue lifecycle check %q", want)
 		}
 	}
 	for _, forbidden := range []string{
@@ -357,7 +360,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"issue_id":"issue-1"}).encode())
+            # A failed run surfaces via the per-issue status (RuntimeEventFailed
+            # scan); there is no failed aggregate array anymore (#584).
+            if os.environ.get("AIOPS_FAKE_WORKER_STATE") == "failed":
+                issue = {"issue_id":"issue-1","status":"failed"}
+            else:
+                issue = {"issue_id":"issue-1","status":"completed"}
+            self.wfile.write(json.dumps(issue).encode())
             return
         if self.path == "/api/v1/state":
             if os.environ.get("AIOPS_FAKE_WORKER_STATE") == "state-fail":
@@ -367,10 +376,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
+            # Failures retry on the SPEC 8.4 backoff (parked in retrying); the
+            # worker no longer emits failed / failed_total (#584, D29).
             if os.environ.get("AIOPS_FAKE_WORKER_STATE") == "failed":
-                state = {"completed_total":0,"failed_total":1,"completed":[],"failed":["issue-1"]}
+                state = {"completed_total":0,"completed":[],"retrying":["issue-1"]}
             else:
-                state = {"completed_total":1,"failed_total":0,"completed":["issue-1"],"failed":[]}
+                state = {"completed_total":1,"completed":["issue-1"]}
             self.wfile.write(json.dumps(state).encode())
             return
         self.send_response(404)

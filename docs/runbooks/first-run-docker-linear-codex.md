@@ -231,7 +231,7 @@ The smoke script:
 - runs `worker --doctor`;
 - starts a worker on `127.0.0.1:4010`;
 - triggers `/api/v1/refresh`;
-- waits for one lifecycle to increment `completed_total` or `failed_total`;
+- waits for one lifecycle — the selected issue reaching `completed`, or its per-issue status reporting `failed` (failures retry on the §8.4 backoff; there is no `failed_total` counter, #584);
 - writes a timestamped report under `docs/validation/smoke/`;
 - records the state snapshot and worker log paths without printing secrets.
 
