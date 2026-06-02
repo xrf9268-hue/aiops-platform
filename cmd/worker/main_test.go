@@ -209,7 +209,6 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Error:      "input required",
 		}},
 		Completed: []orchestrator.IssueID{"issue-9", "issue-3"},
-		Failed:    []orchestrator.IssueID{"issue-8", "issue-4"},
 		CodexTotals: orchestrator.CodexTotals{
 			InputTokens:    10,
 			OutputTokens:   20,
@@ -259,7 +258,6 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Kind            string `json:"kind"`
 		} `json:"retrying"`
 		Completed   []string `json:"completed"`
-		Failed      []string `json:"failed"`
 		CodexTotals struct {
 			InputTokens    int64   `json:"input_tokens"`
 			OutputTokens   int64   `json:"output_tokens"`
@@ -304,8 +302,16 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
 	}
-	if !reflect.DeepEqual(payload.Failed, []string{"issue-4", "issue-8"}) {
-		t.Fatalf("failed = %+v, want sorted issue-4 issue-8", payload.Failed)
+	// SPEC §8.4: failures retry rather than being parked in a suppression set,
+	// so the state surface no longer emits a `failed` array (#584, D29 closed).
+	if _, ok := raw["failed"]; ok {
+		t.Fatalf("state response still emits a `failed` key: %#v", raw)
+	}
+	if _, ok := raw["counts"].(map[string]any)["failed"]; ok {
+		t.Fatalf("state counts still emit a `failed` key: %#v", raw["counts"])
+	}
+	if _, ok := raw["counts"].(map[string]any)["failed_total"]; ok {
+		t.Fatalf("state counts still emit a `failed_total` key: %#v", raw["counts"])
 	}
 	if payload.CodexTotals.InputTokens != 10 || payload.CodexTotals.OutputTokens != 20 || payload.CodexTotals.TotalTokens != 30 || payload.CodexTotals.SecondsRunning != 1.5 {
 		t.Fatalf("codex_totals = %+v, want snake_case token totals", payload.CodexTotals)

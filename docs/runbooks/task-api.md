@@ -16,7 +16,7 @@ curl 'http://127.0.0.1:4000/api/v1/state'
 ```
 
 Returns the process-wide runtime snapshot: running rows, blocked rows, retry
-rows, completed and failed issue IDs, aggregate token/runtime totals, and the
+rows, completed issue IDs, aggregate token/runtime totals, and the
 current poll/concurrency metadata. See `docs/runbooks/runtime-status.md` for
 the full JSON shape.
 

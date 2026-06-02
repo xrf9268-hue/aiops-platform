@@ -18,7 +18,7 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `candidate` — tracker issue was observed as an eligible candidate.
 - `running` — candidate was dispatched to an agent run.
 - `completed` — run exited successfully or reached workflow handoff.
-- `failed` — run failed and may retry or be suppressed by deterministic failure rules.
+- `failed` — run exited abnormally; it is rescheduled on the SPEC §8.4 backoff (no deterministic-failure suppression — removed in #584).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 
 These are observability events. They do not imply the worker changed tracker
@@ -79,7 +79,7 @@ The effective port is resolved in this order, per SPEC §13.7:
 3. Otherwise the schema default of `4000`.
 
 - `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
-  retry rows, completed and failed issue IDs, aggregate token/runtime totals,
+  retry rows, completed issue IDs, aggregate token/runtime totals,
   and the current poll/concurrency metadata.
 - `GET /api/v1/<issue_identifier>` returns one issue's current runtime row.
   Lookup is case-insensitive and matches either the tracker issue identifier or
@@ -123,9 +123,7 @@ the shape here without updating the handler — or vice versa — fails the buil
     "blocked": 1,
     "retrying": 0,
     "completed": 0,
-    "failed": 0,
     "completed_total": 12,
-    "failed_total": 3,
     "reconcile_stopped_with_progress": 1,
     "reconcile_stopped_with_progress_total": 2
   },
@@ -175,7 +173,6 @@ the shape here without updating the handler — or vice versa — fails the buil
     }
   ],
   "completed": [],
-  "failed": [],
   "reconcile_stopped_with_progress": [],
   "codex_totals": {
     "input_tokens": 0,
@@ -195,13 +192,15 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `blocked`         | Live count of input-blocked rows (Codex elicitation / approval pending).      |
 | `retrying`        | Current retry-backoff queue depth.                                            |
 | `completed`       | Size of the FIFO-bounded recent-completed set published as `completed`.       |
-| `failed`          | Size of the dispatch-suppression set (uncapped; not bounded by the FIFO cap). |
 | `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
-| `failed_total`    | Monotonic counter of NonRetryableFailed transitions since process start.      |
-| `reconcile_stopped_with_progress` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had completed ≥1 agent turn (made progress) before the per-tick reconcile reaped them mid-finalization. Usually the agent's own handoff, but `turn_completed` fires after every turn, so it can also be a run stopped after an intermediate turn — treat it as "reaped after progress, worth inspecting," not a guaranteed success. Surfaced so such a run is visible rather than absent from both `completed` and `failed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
+| `reconcile_stopped_with_progress` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had completed ≥1 agent turn (made progress) before the per-tick reconcile reaped them mid-finalization. Usually the agent's own handoff, but `turn_completed` fires after every turn, so it can also be a run stopped after an intermediate turn — treat it as "reaped after progress, worth inspecting," not a guaranteed success. Surfaced so such a run is visible rather than absent from `completed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 
-`completed`, `failed`, and `reconcile_stopped_with_progress` arrays at the top level publish
+There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
+backoff (visible under `retrying`), not parked in a suppression bucket — the
+former deterministic-non-retryable suppression was removed in #584 (D29).
+
+`completed` and `reconcile_stopped_with_progress` arrays at the top level publish
 the recent N issue IDs in those sets; for lifetime totals across FIFO eviction
 use the `_total` counters.
 

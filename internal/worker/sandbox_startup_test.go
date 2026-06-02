@@ -50,9 +50,6 @@ func TestRunAgentSandboxStartupFailureRidesGenericFailurePath(t *testing.T) {
 	if rtErr == nil {
 		t.Fatal("runAgent() = nil; want a RunTaskError for the sandbox-startup failure")
 	}
-	if rtErr.NonRetryable {
-		t.Fatalf("runAgent() NonRetryable = true; want false so it rides the §8.4 backoff like any failure")
-	}
 	if !runner.IsSandboxStartup(rtErr.Err) {
 		t.Fatalf("runAgent() Err = %T %[1]v; want the *SandboxStartupError classification preserved", rtErr.Err)
 	}

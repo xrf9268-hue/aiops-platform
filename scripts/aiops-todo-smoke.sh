@@ -286,15 +286,12 @@ if ! api_curl -X POST -H 'X-AIOPS-Refresh: true' "$dashboard_url/api/v1/refresh"
 fi
 
 completed_before="0"
-failed_before="0"
 selected_issue_id=""
 selected_observed="false"
 if api_curl "$dashboard_url/api/v1/state" >"$state_file"; then
   completed_before="$(sed -n 's/.*"completed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
-  failed_before="$(sed -n 's/.*"failed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
 fi
 completed_before="${completed_before:-0}"
-failed_before="${failed_before:-0}"
 
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! api_curl "$dashboard_url/api/v1/state" >"$state_file"; then
@@ -303,18 +300,28 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
     exit 1
   fi
-  if [ -n "$issue" ] && [ "$selected_observed" = "false" ]; then
+  # Poll the per-issue drill-down every iteration. A failed run no longer lands
+  # in a terminal `failed` set (removed in #584, D29); it is parked in `retrying`
+  # on the SPEC §8.4 backoff, so the drill-down reports status=="retrying" with a
+  # non-null `last_error` (and retry.kind=="failure"). `last_error` is the
+  # failure signal — it is null for a clean §16.6 continuation, so a healthy run
+  # never trips it.
+  selected_error=""
+  if [ -n "$issue" ]; then
     issue_file="$(mktemp "${TMPDIR:-/tmp}/aiops-smoke-issue.json.XXXXXX")"
     if api_curl "$dashboard_url/api/v1/$issue" >"$issue_file"; then
-      selected_observed="true"
-      selected_issue_id="$(sed -n 's/.*"issue_id":[[:space:]]*"\([^"]*\)".*/\1/p' "$issue_file" | head -1)"
-      printf '\n## selected issue\n\nObserved `%s` in runtime state as `%s`.\n\n' "$issue" "${selected_issue_id:-unknown}" >>"$report"
+      # Match only a non-null string value; "last_error":null (clean run) yields
+      # no match and leaves selected_error empty.
+      selected_error="$(sed -n 's/.*"last_error":[[:space:]]*"\([^"]*\)".*/\1/p' "$issue_file" | head -1)"
+      if [ "$selected_observed" = "false" ]; then
+        selected_observed="true"
+        selected_issue_id="$(sed -n 's/.*"issue_id":[[:space:]]*"\([^"]*\)".*/\1/p' "$issue_file" | head -1)"
+        printf '\n## selected issue\n\nObserved `%s` in runtime state as `%s`.\n\n' "$issue" "${selected_issue_id:-unknown}" >>"$report"
+      fi
     fi
   fi
   completed_now="$(sed -n 's/.*"completed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
-  failed_now="$(sed -n 's/.*"failed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
   completed_now="${completed_now:-0}"
-  failed_now="${failed_now:-0}"
   if [ -n "$selected_issue_id" ] && state_array_contains_issue completed "$selected_issue_id" "$state_file"; then
     if ! verify_expected_draft_pr; then
       printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
@@ -325,9 +332,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     printf '%s\n' "$report"
     exit 0
   fi
-  if [ -n "$selected_issue_id" ] && state_array_contains_issue failed "$selected_issue_id" "$state_file"; then
+  if [ -n "$selected_issue_id" ] && [ -n "$selected_error" ]; then
     verify_expected_draft_pr || true
-    printf '\n## result\n\nFAIL selected issue `%s` failed.\n\n' "$issue" >>"$report"
+    printf '\n## result\n\nFAIL selected issue `%s` failed: %s\n\n' "$issue" "$selected_error" >>"$report"
     printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
     exit 1
   fi
@@ -341,12 +348,9 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     printf '%s\n' "$report"
     exit 0
   fi
-  if [ -z "$issue" ] && [ "$failed_now" -gt "$failed_before" ]; then
-    verify_expected_draft_pr || true
-    printf '\n## result\n\nFAIL failed_total advanced from `%s` to `%s`.\n\n' "$failed_before" "$failed_now" >>"$report"
-    printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
-    exit 1
-  fi
+  # No aggregate failure counter exists anymore (#584): a persistently failing
+  # no-specific-issue run keeps retrying on the §8.4 backoff and is caught by the
+  # readiness/lifecycle timeout below rather than a `failed_total` advance.
   if [ -n "$issue" ]; then
     if [ "$completed_now" -gt "$completed_before" ] && [ "$selected_observed" != "true" ]; then
       verify_expected_draft_pr || true
