@@ -136,8 +136,7 @@ is:
   not a push).
 - Whether a PR is opened as a draft is set via the `WORKFLOW.md` prompt (the `pr.draft` front-matter key was removed in #578 and is now rejected at load). Gitea's `POST /repos/{owner}/{repo}/pulls` API has no `draft` request field (verified against `release/v1.26` `modules/structs/pull.go`); draft state is derived purely from a Work-In-Progress title prefix matched against `setting.Repository.PullRequest.WorkInProgressPrefixes` (default `WIP:` and `[WIP]`), which the agent sets on the PR title. Reviewers will see PR titles like `WIP: chore(ai): ...` for drafts. Draft state is a workflow-level signal only — do not rely on it as a human gate; reviewers must still treat every agent-authored PR as unverified until a human review is complete.
 - Neither the worker nor any orchestrator-held tool calls a merge endpoint. There is no merge code path in `cmd/worker/main.go` or `internal/gitea/client.go`. If you add one in the future, gate it behind explicit configuration and do not enable it by default.
-- The agent does not delete branches.
-- Neither the worker nor the agent changes repository settings, webhooks, or branch protection.
+- The **worker** has no code path that deletes branches or changes repository settings, webhooks, or branch protection — that is a hard guarantee of the worker binary (#76). The **agent** is instructed only to push its work branch and open a PR; it is not asked to delete branches or touch repository settings. But the agent holds a repository-**write** credential (`repo.clone_url`), so "the agent does not delete branches" is a behavioral expectation, **not** an enforced boundary: a misbehaving or compromised agent can delete or force-update any branch that branch protection does not cover. Per the threat model, the enforced guarantee comes from Gitea protection, so block deletions / force-push on **every** branch that must survive (release branches, shared feature branches), not just `main` — see "Branch protection on `main`" above and apply the same `Block deletions` / `Block force push` settings to those branch patterns.
 
 If a future change introduces auto-merge, it must be opt-in per repository, must require all status checks green, and must still require at least one human review according to branch protection.
 
@@ -187,6 +186,7 @@ Before enabling the worker against company repositories, confirm:
 - [ ] `GITEA_TOKEN` is scoped to `write:issue` (not `write:repository`) on the allowed repositories only, and is denied passthrough into the agent subprocess (orchestrator-tools-only).
 - [ ] The `repo.clone_url` push + PR credential has repository write on the allowed repositories and is configured independently of `GITEA_TOKEN`.
 - [ ] Branch protection on `main` blocks direct push, requires PR review, requires status checks, blocks force push, blocks deletion.
+- [ ] Any other branch that must not be deleted or force-updated (release branches, shared feature branches) carries `Block deletions` / `Block force push` protection — the agent's `repo.clone_url` write credential can otherwise delete or rewrite unprotected branches.
 - [ ] The bot is not in any push-allowlist on protected branches.
 - [ ] Worker host stores the token only in environment variables sourced from a secret manager.
 - [ ] Gitea issues use the configured `aiops/*` state labels for poller discovery.
