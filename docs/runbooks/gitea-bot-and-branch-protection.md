@@ -67,7 +67,14 @@ other on purpose:
    API), since the agent has no other Gitea credential. Configure it
    independently of `GITEA_TOKEN`; because it must both push branches and open
    PRs it needs repository **write** (a read-only deploy token is not enough).
-   It is masked from logs and error strings by `workflow.MaskCloneURL`.
+   `workflow.MaskCloneURL` scrubs this credential from the diagnostics that
+   route through it, but masking is **not yet complete**: the workspace
+   mirror error paths (`internal/workspace/mirror.go` wraps a failed bare
+   clone with the raw clone URL, and `runGit` forwards git's stderr verbatim)
+   can still surface the embedded userinfo on a clone/fetch failure — tracked
+   in #595. Until that is fixed, prefer a clone-URL credential you can rotate
+   easily, and treat worker logs as potentially credential-bearing (restrict
+   and scrub them) rather than relying on full masking.
 
 Recommended `GITEA_TOKEN` scopes (Gitea 1.20+ scoped token model):
 
@@ -100,7 +107,7 @@ If the deployed Gitea version only exposes the legacy `repo` scope, prefer that 
 ## Token storage and rotation
 
 - Inject `GITEA_TOKEN` only as an environment variable on the worker process. Do not commit it. Do not add it to `codex.env_passthrough` / `claude.env_passthrough` — it is denied passthrough into the agent subprocess by design.
-- Keep the `repo.clone_url` push + PR credential in the same secret manager and out of logs (`workflow.MaskCloneURL` scrubs it from worker output).
+- Keep the `repo.clone_url` push + PR credential in the same secret manager. `workflow.MaskCloneURL` scrubs it from most worker output, but not yet from the workspace-mirror clone/fetch error paths (#595) — treat worker logs as potentially credential-bearing until that lands.
 - Store the source of truth in a secret manager.
 - Rotate both credentials on a schedule (recommended: every 90 days) and immediately if a worker host or backup is suspected compromised.
 - Revoke a credential in Gitea before deleting it from the secret store, so any in-flight call fails closed.
