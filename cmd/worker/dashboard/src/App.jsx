@@ -412,7 +412,6 @@ export default function App() {
   const maxAgents = state?.max_concurrent_agents ?? '—';
 
   const completed = Number(counts.completed_total ?? counts.completed ?? 0);
-  const failed = Number(counts.failed_total ?? counts.failed ?? 0);
   const blocked = Number(counts.blocked ?? 0);
   const retrying = Number(counts.retrying ?? 0);
 
@@ -604,7 +603,7 @@ export default function App() {
       )}
 
       {/* Metrics row */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6 [&>*:last-child]:col-span-2 sm:[&>*:last-child]:col-span-1">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 mb-6">
         <h2 className="sr-only">Session status counts</h2>
         <MetricCard label="Running" value={formatCount(counts.running)} hint="Active sessions" loading={loading} />
         <MetricCard
@@ -626,13 +625,6 @@ export default function App() {
           value={formatCount(completed)}
           hint={`Recent: ${formatCount(counts.completed)}`}
           tone={completed > 0 ? 'good' : 'default'}
-          loading={loading}
-        />
-        <MetricCard
-          label="Failed"
-          value={formatCount(failed)}
-          hint={`Suppressed: ${formatCount(counts.failed)}`}
-          tone={failed > 0 ? 'danger' : 'default'}
           loading={loading}
         />
       </section>

@@ -6,7 +6,7 @@ const sampleState = {
   generated_at: '2026-05-24T00:00:00.000Z',
   poll_interval_ms: 2000,
   max_concurrent_agents: 10,
-  counts: { running: 2, retrying: 1, blocked: 1, completed_total: 142, completed: 8, failed_total: 3, failed: 1 },
+  counts: { running: 2, retrying: 1, blocked: 1, completed_total: 142, completed: 8 },
   codex_totals: { input_tokens: 1234567, output_tokens: 234567, total_tokens: 1469134, seconds_running: 252 },
   rate_limits: {
     limit_id: 'pro-tier',
@@ -71,15 +71,6 @@ describe('Operations Dashboard', () => {
     render(<App />);
     const matches = await screen.findAllByText('abc1…123456');
     expect(matches.length).toBeGreaterThan(0);
-  });
-
-  it('tones the Failed metric as danger when greater than zero', async () => {
-    render(<App />);
-    await screen.findByText('pro-tier');
-
-    const failedCard = screen.getByText('Failed').closest('article');
-    const value = within(failedCard).getByText('3');
-    expect(value.className).toContain('text-danger');
   });
 
   it('shows quota backoff kind in the retry queue', async () => {
