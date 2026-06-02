@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 var (
@@ -167,8 +169,10 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 		return "", fmt.Errorf("mkdir mirror parent: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
-		// Existing mirror: refresh remote-tracking refs only.
-		if err := runGit(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
+		// Existing mirror: refresh remote-tracking refs only. `fetch origin`
+		// resolves the stored credentialed remote.origin.url, so its forwarded
+		// stderr is redacted (#595).
+		if err := runGitRedacted(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
 			return "", fmt.Errorf("refresh mirror %s: %w", mirror, err)
 		}
 		if err := runGit(ctx, mirror, "config", "extensions.worktreeConfig", "true"); err != nil {
@@ -179,8 +183,11 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 	// First-time clone. Remove any partial directory left over from a prior
 	// failed attempt so `git clone` does not refuse to overwrite it.
 	_ = os.RemoveAll(mirror)
-	if err := runGit(ctx, filepath.Dir(mirror), "clone", "--bare", cloneURL, mirror); err != nil {
-		return "", fmt.Errorf("clone mirror %s: %w", cloneURL, err)
+	// The clone URL carries the agent's `user:token@` push credential on the
+	// command line, so both the forwarded git stderr (runGitRedacted) and the
+	// wrapped error string (MaskCloneURL) must mask it (#595).
+	if err := runGitRedacted(ctx, filepath.Dir(mirror), "clone", "--bare", cloneURL, mirror); err != nil {
+		return "", fmt.Errorf("clone mirror %s: %w", workflow.MaskCloneURL(cloneURL), err)
 	}
 	// `git clone --bare` defaults to a "do nothing" fetch refspec; rewrite
 	// it to the standard remote-tracking layout so subsequent fetches and
@@ -188,7 +195,7 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 	if err := runGit(ctx, mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return "", fmt.Errorf("configure fetch refspec: %w", err)
 	}
-	if err := runGit(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
+	if err := runGitRedacted(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
 		return "", fmt.Errorf("initial fetch: %w", err)
 	}
 	if err := runGit(ctx, mirror, "config", "extensions.worktreeConfig", "true"); err != nil {

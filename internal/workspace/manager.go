@@ -565,6 +565,28 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 	return cmd.Run()
 }
 
+// runGitRedacted runs git like runGit but scrubs basic-auth userinfo from the
+// forwarded stdout/stderr. Use it for clone/fetch against a credentialed
+// remote, where git can echo the `user:token@host` clone URL (the agent's push
+// credential) on failure — directly, when the URL is on the clone command line,
+// or via the stored remote.origin.url on a fetch. Without this, a failed
+// `git clone --bare <cloneURL>` / `git fetch` leaks the credential to the
+// worker's os.Stderr (#595, AGENTS.md secret-masking convention).
+func runGitRedacted(ctx context.Context, dir string, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	outW := &credentialRedactingWriter{w: os.Stdout}
+	errW := &credentialRedactingWriter{w: os.Stderr}
+	cmd.Stdout = outW
+	cmd.Stderr = errW
+	err := cmd.Run()
+	// Flush regardless of err: a failed clone/fetch is exactly when git emits
+	// the credentialed URL, and that output may not end in a newline.
+	_ = outW.Flush()
+	_ = errW.Flush()
+	return err
+}
+
 // runQuiet runs a command without forwarding stdout/stderr. We use it for
 // probe operations like `git rev-parse --verify` whose stderr is expected
 // noise on the unhappy path.

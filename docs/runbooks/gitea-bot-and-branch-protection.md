@@ -68,13 +68,12 @@ other on purpose:
    independently of `GITEA_TOKEN`; because it must both push branches and open
    PRs it needs repository **write** (a read-only deploy token is not enough).
    `workflow.MaskCloneURL` scrubs this credential from the diagnostics that
-   route through it, but masking is **not yet complete**: the workspace
-   mirror error paths (`internal/workspace/mirror.go` wraps a failed bare
-   clone with the raw clone URL, and `runGit` forwards git's stderr verbatim)
-   can still surface the embedded userinfo on a clone/fetch failure — tracked
-   in #595. Until that is fixed, prefer a clone-URL credential you can rotate
-   easily, and treat worker logs as potentially credential-bearing (restrict
-   and scrub them) rather than relying on full masking.
+   route through it, and the workspace-mirror clone/fetch paths now mask it too
+   (#595): `internal/workspace/mirror.go` wraps a failed bare clone with
+   `MaskCloneURL`, and clone/fetch git output is forwarded through
+   `runGitRedacted`, which strips embedded `user:token@` userinfo from git's
+   stderr. As with any credential, still prefer a clone-URL credential you can
+   rotate easily.
 
 Recommended `GITEA_TOKEN` scopes (Gitea 1.20+ scoped token model):
 
@@ -107,7 +106,7 @@ If the deployed Gitea version only exposes the legacy `repo` scope, prefer that 
 ## Token storage and rotation
 
 - Inject `GITEA_TOKEN` only as an environment variable on the worker process. Do not commit it. Do not add it to `codex.env_passthrough` / `claude.env_passthrough` — it is denied passthrough into the agent subprocess by design.
-- Keep the `repo.clone_url` push + PR credential in the same secret manager. `workflow.MaskCloneURL` scrubs it from most worker output, but not yet from the workspace-mirror clone/fetch error paths (#595) — treat worker logs as potentially credential-bearing until that lands.
+- Keep the `repo.clone_url` push + PR credential in the same secret manager. `workflow.MaskCloneURL` scrubs it from worker output, including the workspace-mirror clone/fetch error and stderr paths (#595).
 - Store the source of truth in a secret manager.
 - Rotate both credentials on a schedule (recommended: every 90 days) and immediately if a worker host or backup is suspected compromised.
 - Revoke a credential in Gitea before deleting it from the secret store, so any in-flight call fails closed.
