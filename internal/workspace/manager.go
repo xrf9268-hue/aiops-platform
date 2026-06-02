@@ -575,6 +575,16 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 func runGitRedacted(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	return runRedacted(cmd)
+}
+
+// runRedacted runs cmd with its stdout/stderr forwarded to os.Stdout/os.Stderr
+// through a credentialRedactingWriter, so embedded basic-auth userinfo never
+// reaches the worker's logs. It is split out from runGitRedacted so the
+// redaction wiring can be tested end-to-end with a command that emits a real
+// `user:token@` URL on stderr — git's own messages already sanitise the URL on
+// some versions, which would make a git-driven test a placebo (#595).
+func runRedacted(cmd *exec.Cmd) error {
 	outW := &credentialRedactingWriter{w: os.Stdout}
 	errW := &credentialRedactingWriter{w: os.Stderr}
 	cmd.Stdout = outW
