@@ -451,6 +451,17 @@ failure per the "Earned rules" principle above.
   language nudged the agent toward compressing tests to fit the threshold,
   which is backwards when the extra lines are paying for correctness.
 - **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is the only post-merge line of defense for shipped-past bot feedback, not a required merge check; agents should still handle actionable review feedback before merging. After merging a PR with non-trivial bot review activity, sanity-check the next-day `Capture unresolved reviews` Actions history so workflow regressions do not age silently.
+- **SPEC deviations are gated at author time, not audit time**: the `PR Metadata`
+  workflow (`.github/workflows/pr-metadata.yml` + `.github/scripts/validate-pr-metadata.mjs`)
+  blocks a PR that changes a SPEC-sensitive path (`internal/workflow/config.go`, a
+  newly-added `internal/orchestrator/`/`internal/worker/` file) while it claims no
+  new key/phase — the author must cite an upstream Elixir reference or track a
+  `DEVIATIONS.md` row (principle 6/7). Fill the `SPEC alignment` checklist in the
+  PR template. This makes a documented deviation cost something *before* merge
+  instead of being unwound later (the #73/#74/#76/#557/#561/D25 recurrence). The
+  required-check wiring lives in `.github/governance/main-ruleset.json`. **Earned
+  by:** #588 — those removals all shipped despite the rules existing, because the
+  checks were judgment at audit time rather than mechanical at author time.
 
 ## WORKFLOW.md discovery (worker side)
 

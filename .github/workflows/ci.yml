@@ -55,7 +55,7 @@ jobs:
             cmd/worker/dashboard/package-lock.json
 
       - name: Run GitHub script tests
-        run: node --test .github/scripts/capture-unresolved-reviews.test.mjs
+        run: node --test .github/scripts/*.test.mjs
 
       - name: Install dashboard dependencies
         working-directory: cmd/worker/dashboard
