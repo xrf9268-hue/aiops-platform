@@ -102,15 +102,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go_mod_version=$(awk '/^go [0-9]/ {split($2, p, "."); print p[1]"."p[2]; exit}' go.mod)
+          # Compare the FULL patch version (not just major.minor): the
+          # codex-worker image copies /usr/local/go from golang:${GO_VERSION}
+          # into the agent runtime, so the shipped toolchain patch must equal the
+          # go.mod security floor (scan == ship). A floating golang:1.25 base
+          # could ship a pre-floor patch even with the gate green (GO-2026-5037/
+          # 5039); pinning both to the same exact patch closes that gap.
+          go_mod_version=$(awk '/^go [0-9]/ {print $2; exit}' go.mod)
           docker_version=$(awk -F= '/^ARG GO_VERSION=/ {print $2; exit}' Dockerfile)
           if [ -z "$go_mod_version" ] || [ -z "$docker_version" ]; then
             echo "could not extract version: go.mod=$go_mod_version Dockerfile=$docker_version"
             exit 1
           fi
           if [ "$go_mod_version" != "$docker_version" ]; then
-            echo "Drift detected: go.mod Go major.minor = '$go_mod_version', Dockerfile GO_VERSION = '$docker_version'"
-            echo "Bump them together."
+            echo "Drift detected: go.mod Go version = '$go_mod_version', Dockerfile GO_VERSION = '$docker_version'"
+            echo "Bump them together to the same exact patch."
             exit 1
           fi
           echo "Go version aligned: $go_mod_version"

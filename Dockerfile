@@ -1,4 +1,4 @@
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.25.11
 FROM node:22-bookworm AS dashboard
 WORKDIR /src/cmd/worker/dashboard
 COPY cmd/worker/dashboard/package.json cmd/worker/dashboard/package-lock.json ./
