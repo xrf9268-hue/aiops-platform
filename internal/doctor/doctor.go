@@ -144,8 +144,8 @@ func (r *reportBuilder) checkWorkflow() (*workflow.Workflow, string) {
 		r.fail("Workflow", err.Error(), "Fix the WORKFLOW.md front matter, then rerun worker --doctor.")
 		return nil, path
 	}
-	if wf.Config.Repo.CloneURL == "" && len(wf.Config.Services) == 0 {
-		r.fail("Runtime config", "repo.clone_url is required for worker dispatch", "Set repo.clone_url or configure services[].repo.clone_url.")
+	if wf.Config.Repo.CloneURL == "" {
+		r.fail("Runtime config", "repo.clone_url is required for worker dispatch", "Set repo.clone_url.")
 	} else {
 		r.pass("Runtime config", "repo/workflow config is dispatchable")
 	}
@@ -986,9 +986,6 @@ func linearProjectSlugs(cfg workflow.Config) []string {
 		slugs = append(slugs, slug)
 	}
 	add(cfg.Tracker.ProjectSlug)
-	for _, service := range cfg.Services {
-		add(service.Tracker.ProjectSlug)
-	}
 	return slugs
 }
 
@@ -1007,16 +1004,10 @@ func workflowNeedsSSH(cfg workflow.Config) bool {
 }
 
 func workflowCloneURLs(cfg workflow.Config) []string {
-	urls := make([]string, 0, 1+len(cfg.Services))
-	if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
-		urls = append(urls, cfg.Repo.CloneURL)
+	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
+		return nil
 	}
-	for _, service := range cfg.Services {
-		if strings.TrimSpace(service.Repo.CloneURL) != "" {
-			urls = append(urls, service.Repo.CloneURL)
-		}
-	}
-	return urls
+	return []string{cfg.Repo.CloneURL}
 }
 
 type githubRepo struct {
@@ -1031,30 +1022,13 @@ func (r githubRepo) fullName() string {
 
 func selectGitHubRepo(cfg workflow.Config, target string) (githubRepo, error) {
 	repos := githubRepos(cfg)
-	target = strings.TrimSpace(target)
-	if target != "" {
-		matches := matchGitHubRepos(repos, target)
-		switch len(matches) {
-		case 0:
-			// target may itself be a clone_url carrying basic-auth userinfo;
-			// mask it before echoing (owner/name targets pass through unchanged).
-			return githubRepo{}, fmt.Errorf("github repo %q not found in workflow", workflow.MaskCloneURL(target))
-		case 1:
-			return matches[0], nil
-		default:
-			// Same owner/name routed to distinct clone URLs (e.g. an HTTPS
-			// fallback and an SSH deploy-key service). owner/name alone cannot
-			// name the credential path the agent will actually push to, so make
-			// the operator pass the exact clone_url instead of silently testing
-			// the first entry.
-			return githubRepo{}, fmt.Errorf("github repo %q matches multiple clone URLs (%s); pass the exact clone_url to --github-repo", workflow.MaskCloneURL(target), cloneURLList(matches))
-		}
-	}
 	if len(repos) == 0 {
 		return githubRepo{}, fmt.Errorf("no GitHub repo owner/name and clone_url found in workflow")
 	}
-	if len(repos) > 1 {
-		return githubRepo{}, fmt.Errorf("multiple GitHub repos configured; pass --github-repo owner/name or clone_url")
+	if target = strings.TrimSpace(target); target != "" && len(matchGitHubRepos(repos, target)) == 0 {
+		// target may itself be a clone_url carrying basic-auth userinfo;
+		// mask it before echoing (owner/name targets pass through unchanged).
+		return githubRepo{}, fmt.Errorf("github repo %q not found in workflow", workflow.MaskCloneURL(target))
 	}
 	return repos[0], nil
 }
@@ -1065,9 +1039,7 @@ func selectGitHubRepo(cfg workflow.Config, target string) (githubRepo, error) {
 // embedded token on the command line. Exact owner/name and raw clone-URL matches
 // take precedence: a fully specified target is never widened by a masked-form
 // collision with a different repo, and a bare clone URL that exactly matches one
-// repo selects it even if another repo masks to the same value. An owner/name
-// target can still match several repos when the same owner/name is configured
-// with different clone URLs, which selectGitHubRepo reports as ambiguous.
+// repo selects it even if another repo masks to the same value.
 // Clone-URL comparison is a normalized string match (see normalizeCloneURL), so
 // equivalent SSH spellings such as scp-style git@host:o/r.git versus
 // ssh://git@host/o/r.git are not folded; pass the exact configured form.
@@ -1087,41 +1059,11 @@ func matchGitHubRepos(repos []githubRepo, target string) []githubRepo {
 	return masked
 }
 
-// cloneURLList renders the candidate clone URLs for the ambiguity error. Each
-// URL is masked because clone_url may embed basic-auth userinfo that the repo
-// treats as a secret (see workflow.MaskCloneURL); the detail string is logged.
-func cloneURLList(repos []githubRepo) string {
-	urls := make([]string, 0, len(repos))
-	for _, repo := range repos {
-		urls = append(urls, workflow.MaskCloneURL(repo.CloneURL))
-	}
-	return strings.Join(urls, ", ")
-}
-
 func githubRepos(cfg workflow.Config) []githubRepo {
-	repos := make([]githubRepo, 0, 1+len(cfg.Services))
-	seen := make(map[string]bool, 1+len(cfg.Services))
-	add := func(repo githubRepo) {
-		// Keep the clone URL in the identity: a workflow can route the same
-		// owner/name to distinct clone URLs (HTTPS fallback vs SSH service), and
-		// collapsing on owner/name alone would drop the URL the agent actually
-		// pushes to from the preflight.
-		key := strings.ToLower(repo.fullName()) + "\x00" + normalizeCloneURL(repo.CloneURL)
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		repos = append(repos, repo)
-	}
 	if repo, ok := githubRepoFromConfig(cfg.Repo); ok {
-		add(repo)
+		return []githubRepo{repo}
 	}
-	for _, service := range cfg.Services {
-		if repo, ok := githubRepoFromConfig(service.Repo); ok {
-			add(repo)
-		}
-	}
-	return repos
+	return nil
 }
 
 func githubRepoFromConfig(repo workflow.RepoConfig) (githubRepo, bool) {

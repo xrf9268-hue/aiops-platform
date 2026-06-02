@@ -13,7 +13,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
-	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // fakeDispatcher records every Spawn call and lets the test control
@@ -445,57 +444,7 @@ func TestReconcileStalledRunsSkipsWhenTimeoutDisabled(t *testing.T) {
 	}
 }
 
-func TestReconcileTrackerIssuesCancelsRunWhenServiceRouteChanges(t *testing.T) {
-	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "api"}
-	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	active := map[string]tracker.Issue{
-		"LIN-16": {ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "web"},
-	}
-	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"AI Ready"})); err != nil {
-		t.Fatalf("ReconcileTrackerIssues: %v", err)
-	}
-	select {
-	case <-disp.contexts[0].Done():
-	case <-time.After(time.Second):
-		t.Fatal("route-changed worker context was not canceled")
-	}
-
-	if err := o.RequestDispatch(context.Background(), active["LIN-16"], nil); err == nil {
-		t.Fatal("RequestDispatch while canceled worker is exiting returned nil error, want duplicate guard to keep old run claimed")
-	}
-	if got := disp.count(); got != 1 {
-		t.Fatalf("dispatch count while canceled worker is exiting = %d, want duplicate guard to suppress new worker", got)
-	}
-
-	disp.finishAt(0, WorkerResult{Err: context.Canceled})
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		if err != nil {
-			t.Fatalf("Snapshot: %v", err)
-		}
-		return len(view.Running) == 0
-	}, time.Second)
-
-	if err := o.RequestDispatch(context.Background(), active["LIN-16"], nil); err != nil {
-		t.Fatalf("RequestDispatch after canceled worker exit: %v", err)
-	}
-	if got := disp.count(); got != 2 {
-		t.Fatalf("dispatch count after route change = %d, want new routed worker", got)
-	}
-	if got := disp.issueAt(1).ServiceName; got != "web" {
-		t.Fatalf("redispatched service = %q, want web", got)
-	}
-}
-
-func TestReconcileTrackerIssuesRefreshesIssueStateForCapacityCounting(t *testing.T) {
+func TestRefreshActiveTrackerIssuesRefreshesIssueStateForCapacityCounting(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)
 	st.MaxConcurrentAgentsByState = map[string]int{"rework": 1}
@@ -516,8 +465,8 @@ func TestReconcileTrackerIssuesRefreshesIssueStateForCapacityCounting(t *testing
 	moved := iss
 	moved.State = "Rework"
 	active := map[string]tracker.Issue{moved.ID: moved}
-	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
-		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	if err := o.RefreshActiveTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
 	}
 
 	other := tracker.Issue{ID: "ENG-OTHER", Identifier: "ENG-OTHER", Title: "second rework", State: "Rework"}
@@ -553,8 +502,8 @@ func TestFinalizeRunSchedulesRetryWithRefreshedIssueState(t *testing.T) {
 	moved := moving
 	moved.State = "Rework"
 	active := map[string]tracker.Issue{moved.ID: moved}
-	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
-		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	if err := o.RefreshActiveTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
 	}
 
 	disp.finishAt(0, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
@@ -626,8 +575,8 @@ func TestRetryFireUsesRefreshedIssueWhenReconciledMidQueue(t *testing.T) {
 	moved := ip
 	moved.State = "Rework"
 	active := map[string]tracker.Issue{moved.ID: moved, rw.ID: rw}
-	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
-		t.Fatalf("ReconcileTrackerIssues: %v", err)
+	if err := o.RefreshActiveTrackerIssues(context.Background(), active, normalizedStates([]string{"In Progress", "Rework"})); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
 	}
 
 	if err := o.submit(context.Background(), &retryFireOp{
@@ -648,38 +597,6 @@ func TestRetryFireUsesRefreshedIssueWhenReconciledMidQueue(t *testing.T) {
 	}
 	if len(v.Retrying) != 1 {
 		t.Fatalf("retry queue after refresh-aware fire = %+v, want still queued behind Rework cap", v.Retrying)
-	}
-}
-
-func TestReconcileTrackerIssuesReleasesRetryWhenServiceRouteChanges(t *testing.T) {
-	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "api"}
-	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
-		t.Fatalf("ScheduleRetry: %v", err)
-	}
-	view, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(view.Retrying) != 1 {
-		t.Fatalf("retrying entries = %d, want queued retry", len(view.Retrying))
-	}
-
-	active := map[string]tracker.Issue{
-		"LIN-16": {ID: "LIN-16", Identifier: "LIN-16", Title: "route", State: "AI Ready", ServiceName: "web"},
-	}
-	if err := o.ReconcileTrackerIssues(context.Background(), active, normalizedStates([]string{"AI Ready"})); err != nil {
-		t.Fatalf("ReconcileTrackerIssues: %v", err)
-	}
-	view, err = o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(view.Retrying) != 0 {
-		t.Fatalf("retrying entries after route change = %+v, want released retry", view.Retrying)
 	}
 }
 
@@ -1618,47 +1535,49 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	})
 	defer cancel()
 
-	active := tracker.Issue{ID: "ENG-BLOCK-A", Identifier: "ENG-BLOCK-A", State: "AI Ready", Title: "active block"}
-	inactive := tracker.Issue{ID: "ENG-BLOCK-B", Identifier: "ENG-BLOCK-B", State: "AI Ready", Title: "inactive block"}
+	blocked := tracker.Issue{ID: "ENG-BLOCK-A", Identifier: "ENG-BLOCK-A", State: "AI Ready", Title: "active block"}
 	terminalWorkspace := t.TempDir()
-	for _, iss := range []tracker.Issue{active, inactive} {
-		if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-			t.Fatalf("RequestDispatch %s: %v", iss.ID, err)
-		}
+	if err := o.RequestDispatch(context.Background(), blocked, nil); err != nil {
+		t.Fatalf("RequestDispatch %s: %v", blocked.ID, err)
 	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-	if err := o.RecordWorkspace(context.Background(), active.ID, Workspace{Path: terminalWorkspace}); err != nil {
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	if err := o.RecordWorkspace(context.Background(), blocked.ID, Workspace{Path: terminalWorkspace}); err != nil {
 		t.Fatalf("RecordWorkspace: %v", err)
 	}
-	for i, iss := range []tracker.Issue{active, inactive} {
-		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
-			Event:   task.EventTurnInputRequired,
-			Payload: map[string]any{"method": "item/tool/requestUserInput"},
-		}); err != nil {
-			t.Fatalf("RecordRuntimeEvent %s: %v", iss.ID, err)
-		}
-		disp.finishAt(i, WorkerResult{Err: errors.New("input required"), Elapsed: time.Millisecond})
+	if err := o.RecordRuntimeEvent(context.Background(), blocked.ID, task.RuntimeEvent{
+		Event:   task.EventTurnInputRequired,
+		Payload: map[string]any{"method": "item/tool/requestUserInput"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent %s: %v", blocked.ID, err)
 	}
+	disp.finishAt(0, WorkerResult{Err: errors.New("input required"), Elapsed: time.Millisecond})
 	waitFor(t, func() bool {
 		view, _ := o.Snapshot(context.Background())
-		return len(view.Blocked) == 2
+		return len(view.Blocked) == 1
 	}, time.Second)
 
+	// Active pass: the blocked entry is still in an active state (moved to
+	// Rework), so it is refreshed in place rather than released.
 	activeStates := map[string]struct{}{"ai ready": {}, "rework": {}}
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
-		active.ID: {ID: active.ID, Identifier: active.Identifier, State: "Rework", Title: active.Title},
-	}, activeStates, nil, nil, time.Second); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
+	if err := o.RefreshActiveTrackerIssues(context.Background(), map[string]tracker.Issue{
+		blocked.ID: {ID: blocked.ID, Identifier: blocked.Identifier, State: "Rework", Title: blocked.Title},
+	}, activeStates); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
 	}
 	view, err := o.Snapshot(context.Background())
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(view.Blocked) != 1 || view.Blocked[0].IssueID != IssueID(active.ID) || view.Blocked[0].State != "Rework" {
-		t.Fatalf("blocked after active reconcile = %+v, want refreshed active block only", view.Blocked)
+	if len(view.Blocked) != 1 || view.Blocked[0].IssueID != IssueID(blocked.ID) || view.Blocked[0].State != "Rework" {
+		t.Fatalf("blocked after active refresh = %+v, want refreshed in place at Rework", view.Blocked)
 	}
+
+	// Inactive pass: the blocked entry moves to a terminal state, so it is
+	// released and its workspace removed through the WorkspaceCleaner
+	// (before_remove hook), not a bare os.RemoveAll — matching upstream
+	// reconcile_blocked_issue_state and the running-entry path (#331).
 	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
-		active.ID: {ID: active.ID, Identifier: active.Identifier, State: "Done", Title: active.Title},
+		blocked.ID: {ID: blocked.ID, Identifier: blocked.Identifier, State: "Done", Title: blocked.Title},
 	}, map[string]struct{}{"done": {}}, time.Second); err != nil {
 		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
 	}
@@ -1669,351 +1588,10 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	if len(view.Blocked) != 0 || len(view.Running) != 0 || len(view.Retrying) != 0 {
 		t.Fatalf("state after terminal blocked release = running %+v retrying %+v blocked %+v", view.Running, view.Retrying, view.Blocked)
 	}
-	// The terminal blocked release must remove the workspace through the
-	// WorkspaceCleaner (before_remove hook), not a bare os.RemoveAll, matching
-	// upstream reconcile_blocked_issue_state and the running-entry path (#331).
 	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
 	got := cleaner.snapshot()[0]
-	if got.IssueID != IssueID(active.ID) || got.Path != terminalWorkspace || got.Reason != "terminal" || got.State != "Done" {
-		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, active.ID, terminalWorkspace)
-	}
-}
-
-// TestReconcileRoutingTerminalRunFiresActiveWorkspaceCleanup is the #340
-// regression: in routing mode the routing-aware pass cancels (and waits for) a
-// running issue that goes terminal mid-run before the terminal-aware inactive
-// pass would see it, so the SPEC §18.1 active-transition cleanup must be flagged
-// in this pass. Pre-fix the routing pass never set the flag and the workspace
-// lingered until the next startup sweep.
-func TestReconcileRoutingTerminalRunFiresActiveWorkspaceCleanup(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	issue := tracker.Issue{ID: "ENG-R1", Identifier: "ENG-R1", State: "In Progress"}
-	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-R1"
-	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
-
-	// Routing pass: the issue is absent from the active set (it went terminal);
-	// refreshedByID carries its terminal state so the cleanup is flagged here.
-	// wait=0 returns before the worker exits; finishAt then drives finalize →
-	// cleanup.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"in progress": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{issue.ID: {ID: issue.ID, State: "Done"}},
-		0); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	got := cleaner.snapshot()[0]
-	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
-		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
-	}
-	if got.Root != testWorkspaceRoot {
-		t.Fatalf("cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
-	}
-	view, _ := o.Snapshot(context.Background())
-	if len(view.Running) != 0 {
-		t.Fatalf("running not cleared after terminal cancel: %+v", view.Running)
-	}
-}
-
-// TestReconcileRoutingRouteChangeKeepsWorkspace pins the #340 negative for the
-// running path: a routed run cancelled because its issue moved to a different
-// service (still active, non-terminal) must keep its workspace. A terminal
-// sibling reconciled in the same pass is cleaned and acts as a progress barrier
-// so the single-call assertion is a real negative for the rerouted run.
-func TestReconcileRoutingRouteChangeKeepsWorkspace(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	rerouted := tracker.Issue{ID: "ENG-RC1", Identifier: "ENG-RC1", State: "In Progress", ServiceName: "svc-a"}
-	barrier := tracker.Issue{ID: "ENG-RC2", Identifier: "ENG-RC2", State: "In Progress"}
-	const reroutedPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RC1"
-	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RC2"
-	dispatchRunningIssue(t, o, disp, rerouted, reroutedPath, 1)
-	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
-
-	// rerouted: still active but moved to svc-b → cancelled for route change,
-	// not terminal → keep. barrier: went terminal (absent from active set) →
-	// cleaned, proving both finalizes ran.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{rerouted.ID: {ID: rerouted.ID, Identifier: rerouted.Identifier, State: "In Progress", ServiceName: "svc-b"}},
-		map[string]struct{}{"in progress": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{
-			rerouted.ID: {ID: rerouted.ID, Identifier: rerouted.Identifier, State: "In Progress", ServiceName: "svc-b"},
-			barrier.ID:  {ID: barrier.ID, State: "Done"},
-		},
-		0); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
-	disp.finishAt(1, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	calls := cleaner.snapshot()
-	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
-		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
-	}
-}
-
-// TestReconcileRoutingTerminalBlockedFiresWorkspaceCleanup is the #340
-// blocked-path regression (scope addendum): in routing mode a blocked entry
-// that goes terminal must be removed through the WorkspaceCleaner (before_remove
-// + reconcile_workspace reason=terminal), not the bare os.RemoveAll the routing
-// pass used pre-fix.
-func TestReconcileRoutingTerminalBlockedFiresWorkspaceCleanup(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	issue := tracker.Issue{ID: "ENG-RB1", Identifier: "ENG-RB1", State: "AI Ready"}
-	blockedWorkspace := t.TempDir()
-	blockRunningIssue(t, o, disp, issue, blockedWorkspace, 1)
-
-	// Routing pass: blocked issue went terminal → cleaned via the WorkspaceCleaner.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"ai ready": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{issue.ID: {ID: issue.ID, State: "Done"}},
-		time.Second); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	got := cleaner.snapshot()[0]
-	if got.IssueID != IssueID(issue.ID) || got.Path != blockedWorkspace || got.Reason != "terminal" || got.State != "Done" {
-		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, issue.ID, blockedWorkspace)
-	}
-	if got.Root != testWorkspaceRoot {
-		t.Fatalf("blocked cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
-	}
-	view, _ := o.Snapshot(context.Background())
-	if len(view.Blocked) != 0 {
-		t.Fatalf("blocked not cleared after terminal release: %+v", view.Blocked)
-	}
-}
-
-// TestReconcileRoutingNonTerminalBlockedKeepsWorkspace pins the #340 blocked
-// negative: a routed blocked entry that moves to a non-terminal inactive state
-// must keep its workspace. A terminal sibling cleaned in the same pass proves
-// the pass ran, so the single-call assertion is a real negative for the kept
-// entry. Pre-fix the routing pass removed every released blocked workspace
-// unconditionally (bare os.RemoveAll).
-func TestReconcileRoutingNonTerminalBlockedKeepsWorkspace(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	kept := tracker.Issue{ID: "ENG-NB1", Identifier: "ENG-NB1", State: "AI Ready"}
-	barrier := tracker.Issue{ID: "ENG-NB2", Identifier: "ENG-NB2", State: "AI Ready"}
-	keptWorkspace := t.TempDir()
-	barrierWorkspace := t.TempDir()
-	blockRunningIssue(t, o, disp, kept, keptWorkspace, 1)
-	blockRunningIssue(t, o, disp, barrier, barrierWorkspace, 2)
-
-	// kept → Backlog (non-terminal inactive) must keep its workspace; barrier →
-	// Done is cleaned. Both released blocked workspaces would be removed pre-fix.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"ai ready": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{
-			kept.ID:    {ID: kept.ID, State: "Backlog"},
-			barrier.ID: {ID: barrier.ID, State: "Done"},
-		},
-		time.Second); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	calls := cleaner.snapshot()
-	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierWorkspace {
-		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
-	}
-}
-
-// TestReconcileRoutingTerminalContinuationRetryFiresWorkspaceCleanup is the
-// routing-mode half of the #341 retry-cleanup contract: the routing-aware pass
-// runs before the terminal-aware inactive pass and releases the retry, so a
-// queued continuation retry whose issue went terminal must clean its workspace
-// HERE through the WorkspaceCleaner (before_remove + reconcile_workspace
-// reason=terminal). Pre-fix the routing pass released terminal retries with no
-// §18.1 cleanup, leaking the directory until the next startup sweep.
-func TestReconcileRoutingTerminalContinuationRetryFiresWorkspaceCleanup(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	issue := tracker.Issue{ID: "ENG-RCR1", Identifier: "ENG-RCR1", State: "In Progress", Title: "self-stop"}
-	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RCR1"
-	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
-
-	// Clean §16.5 self-stop → continuation retry carrying the run's workspace.
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
-	}, time.Second)
-
-	// Routing pass: the issue is absent from the active set (it went terminal);
-	// refreshedByID carries its terminal state so the retry cleanup fires here.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"in progress": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"}},
-		0); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	got := cleaner.snapshot()[0]
-	if got.IssueID != IssueID(issue.ID) || got.Path != wsPath || got.Reason != "terminal" || got.State != "Done" {
-		t.Fatalf("cleanup = %+v, want terminal cleanup for %s at %q reason=terminal state=Done", got, issue.ID, wsPath)
-	}
-	if got.Root != testWorkspaceRoot {
-		t.Fatalf("cleanup root = %q, want recorded dispatch-time root %q", got.Root, testWorkspaceRoot)
-	}
-	view, _ := o.Snapshot(context.Background())
-	if len(view.Retrying) != 0 {
-		t.Fatalf("retry not released after routing terminal reconcile: %+v", view.Retrying)
-	}
-}
-
-// TestReconcileRoutingNonTerminalContinuationRetryKeepsWorkspace is the routing
-// retry negative (mirrors TestReconcileRoutingNonTerminalBlockedKeepsWorkspace):
-// a continuation retry released because its issue moved to a non-terminal
-// inactive state must keep its workspace. A terminal sibling cleaned in the same
-// pass is the progress barrier that makes the single-call assertion a real
-// negative; a reverted terminal gate would clean both and push the count to 2.
-func TestReconcileRoutingNonTerminalContinuationRetryKeepsWorkspace(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	kept := tracker.Issue{ID: "ENG-NCR1", Identifier: "ENG-NCR1", State: "In Progress", Title: "kept self-stop"}
-	barrier := tracker.Issue{ID: "ENG-NCR2", Identifier: "ENG-NCR2", State: "In Progress", Title: "terminal self-stop"}
-	const keptPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-NCR1"
-	const barrierPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-NCR2"
-	dispatchRunningIssue(t, o, disp, kept, keptPath, 1)
-	dispatchRunningIssue(t, o, disp, barrier, barrierPath, 2)
-
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 2
-	}, time.Second)
-
-	// kept → Backlog (non-terminal inactive) keeps its workspace; barrier → Done
-	// is cleaned, proving the pass released both retries.
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"in progress": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{
-			kept.ID:    {ID: kept.ID, Identifier: kept.Identifier, State: "Backlog"},
-			barrier.ID: {ID: barrier.ID, Identifier: barrier.Identifier, State: "Done"},
-		},
-		0); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-
-	waitFor(t, func() bool { return len(cleaner.snapshot()) == 1 }, time.Second)
-	calls := cleaner.snapshot()
-	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
-		t.Fatalf("only the terminal barrier may be cleaned, got %+v", calls)
-	}
-}
-
-// TestReconcileRoutingTerminalContinuationRetryActiveRecheckPreservesContinuation
-// is the routing-mode counterpart of
-// TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation: when
-// the routing pass collects a terminal continuation retry but the deletion-time
-// recheck finds the issue active again, the continuation must be resumed
-// (attempt + budget preserved), not dropped to a bare poll wake. Pins that the
-// routing pass carries continuationForRetry through its retry cleanup too.
-func TestReconcileRoutingTerminalContinuationRetryActiveRecheckPreservesContinuation(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        RetryScheduler{MaxBackoff: time.Minute},
-		WorkspaceCleaner: cleaner,
-	})
-	defer cancel()
-
-	issue := tracker.Issue{ID: "ENG-RCR3", Identifier: "ENG-RCR3", State: "In Progress", Title: "self-stop"}
-	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RCR3"
-	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
-
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
-	}, time.Second)
-
-	// The recheck resolver reports the issue active again, so the deletion-time
-	// recheck must skip removal and resume the continuation.
-	o.SetRetryTerminalStateResolver(staticStateRefresher{issue.ID: "In Progress"}, []string{"Done"})
-
-	if err := o.ReconcileTrackerIssuesAndWait(context.Background(),
-		map[string]tracker.Issue{},
-		map[string]struct{}{"in progress": {}},
-		map[string]struct{}{"done": {}},
-		map[string]tracker.Issue{issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"}},
-		0); err != nil {
-		t.Fatalf("ReconcileTrackerIssuesAndWait: %v", err)
-	}
-
-	// Continuation resumed with the queued attempt preserved (not reset to 0).
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
-	}, time.Second)
-	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
-		t.Fatalf("RequestDispatch after recheck-active continuation = %v, want ErrNotDispatched while continuation retry is claimed", err)
-	}
-	if calls := cleaner.snapshot(); len(calls) != 0 {
-		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
+	if got.IssueID != IssueID(blocked.ID) || got.Path != terminalWorkspace || got.Reason != "terminal" || got.State != "Done" {
+		t.Fatalf("blocked cleanup = %+v, want terminal cleanup for %s at %q", got, blocked.ID, terminalWorkspace)
 	}
 }
 
@@ -2071,22 +1649,6 @@ func dispatchRunningIssue(t *testing.T, o *Orchestrator, disp *fakeDispatcher, i
 // the Blocked set via an input-required turn so reconcile-cancel cleanup tests
 // have a blocked entry with a workspace to act on. wantSpawn is the cumulative
 // spawn count (and expected Blocked count) after this call.
-func blockRunningIssue(t *testing.T, o *Orchestrator, disp *fakeDispatcher, issue tracker.Issue, wsPath string, wantSpawn int) {
-	t.Helper()
-	dispatchRunningIssue(t, o, disp, issue, wsPath, wantSpawn)
-	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
-		Event:   task.EventTurnInputRequired,
-		Payload: map[string]any{"method": "item/tool/requestUserInput"},
-	}); err != nil {
-		t.Fatalf("RecordRuntimeEvent %s: %v", issue.ID, err)
-	}
-	disp.finishAt(wantSpawn-1, WorkerResult{Err: errors.New("input required"), Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		view, _ := o.Snapshot(context.Background())
-		return len(view.Blocked) == wantSpawn
-	}, time.Second)
-}
-
 // TestReconcileTerminalRunFiresActiveWorkspaceCleanup is the regression for
 // #331: a running issue that moves to a terminal state mid-run must have its
 // workspace removed (via the WorkspaceCleaner / before_remove hook) once the
@@ -4157,10 +3719,9 @@ func TestRetryFire_QuotaBackoffFetchFailureReschedulesWithoutOrphaningClaim(t *t
 }
 
 // stubActiveIssueLister returns canned issues without applying any
-// downstream filters. Tests stack the real production wrappers
-// (routedActiveIssueLister, eligibleActiveIssueLister) on top of it
-// so the assertions exercise the actual filter code rather than a
-// mock that pre-filters.
+// downstream filters. Tests stack the real production wrapper
+// (eligibleActiveIssueLister) on top of it so the assertions exercise
+// the actual filter code rather than a mock that pre-filters.
 type stubActiveIssueLister struct {
 	mu     sync.Mutex
 	issues []tracker.Issue
@@ -4179,76 +3740,6 @@ func (s *stubActiveIssueLister) replace(issues []tracker.Issue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.issues = issues
-}
-
-// TestRetryFire_RoutedAwayIssueReleasesClaim asserts the SPEC §16.6
-// candidate-fetch contract holds when the lister applies service routing
-// on top of the active-state filter: an issue that is still in an active
-// state but has routed to another service must look absent to the retry
-// timer (no dispatch, claim released) instead of being dispatched against
-// a workflow that no longer owns it. The test installs the real
-// routedActiveIssueLister wrap (the production code path) over a stub
-// inner lister, so a future refactor that bypasses the wrap will fail
-// here — not just a mock that pre-filters.
-func TestRetryFire_RoutedAwayIssueReleasesClaim(t *testing.T) {
-	disp := &fakeDispatcher{}
-	inner := &stubActiveIssueLister{}
-	cfg := workflow.Config{
-		Tracker: workflow.TrackerConfig{Kind: "linear"},
-		Services: []workflow.ServiceConfig{
-			{
-				Name:    "api",
-				Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "api-platform"},
-				Repo:    workflow.RepoConfig{Owner: "acme", Name: "api", CloneURL: "git@example.com:acme/api.git", DefaultBranch: "main"},
-			},
-		},
-	}
-	lister := routedActiveIssueLister{inner: inner, cfg: cfg}
-
-	o, cancel := startActor(t, Deps{
-		Dispatcher:      disp,
-		Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
-		CandidateLister: lister,
-	})
-	defer cancel()
-
-	// At schedule time the issue still matched the "api" service route.
-	iss := tracker.Issue{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ProjectSlug: "api-platform"}
-	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
-		t.Fatalf("ScheduleRetry: %v", err)
-	}
-
-	// Between schedule and fire the issue routes away — its ProjectSlug
-	// now points at ops-platform, which has no matching service entry.
-	// selectRoutedCandidates inside routedActiveIssueLister must drop
-	// it, so the retry-fire path sees an empty candidate set.
-	inner.replace([]tracker.Issue{{ID: "ENG-ROUTED", Identifier: "ENG-ROUTED", Title: "moved", State: "AI Ready", ProjectSlug: "ops-platform"}})
-
-	if err := o.submit(context.Background(), &retryFireOp{
-		o:       o,
-		id:      IssueID(iss.ID),
-		issue:   iss,
-		attempt: 1,
-		kind:    RetryKindFailure,
-	}); err != nil {
-		t.Fatalf("submit retry fire: %v", err)
-	}
-
-	waitFor(t, func() bool {
-		v, _ := o.Snapshot(context.Background())
-		return len(v.Retrying) == 0
-	}, 2*time.Second)
-
-	v, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot after fire: %v", err)
-	}
-	if got := disp.count(); got != 0 {
-		t.Fatalf("Dispatcher.Spawn calls = %d, want 0; routed-away issue must not be dispatched", got)
-	}
-	if len(v.Retrying) != 0 {
-		t.Fatalf("retrying view after routed-away fetch = %+v, want claim released", v.Retrying)
-	}
 }
 
 // TestRetryFire_TodoIssueBlockedByOpenDependencyReleasesClaim is the

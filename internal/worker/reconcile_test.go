@@ -574,19 +574,13 @@ func TestReconcileStartupKeepsReworkWorkspaceWithLegacyOffsetTimestampSuffix(t *
 
 func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *testing.T) {
 	issue := tracker.Issue{ID: "issue-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")}
-	keys := func(tracker.Issue) []string {
-		return []string{
-			"issue-3-rework-2026-05-08t10-30-00z",
-			"issue-3-rework-2026-05-08t12-30-00-02-00",
-		}
-	}
 
 	// reworkWorkspaceKeyPrefixes emits three prefix forms so
 	// reconciliation matches workspaces from every aiops-platform
 	// sanitizer vintage on disk: the canonical SPEC §4.2 `_rework_`,
 	// the interim case-preserved `-rework-`, and the pre-#229
 	// lowercased-base `-rework-`.
-	got := reworkWorkspaceKeyPrefixes(issue, keys)
+	got := reworkWorkspaceKeyPrefixes(issue)
 	want := []string{"issue-3_rework_", "issue-3-rework-"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, want %#v", got, want)
@@ -637,18 +631,8 @@ func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 // production code that powers the migration test above.
 func TestReworkWorkspaceKeyPrefixesIncludesPreSpecLowercaseForm(t *testing.T) {
 	issue := tracker.Issue{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T10:00:00Z")}
-	// Simulate the activeKey set that workspaceKeysForRawIssueKeys
-	// produces for this issue under the current sanitizer.
-	keys := func(tracker.Issue) []string {
-		return []string{
-			"LIN-123",
-			"issue-3",
-			"LIN-123_rework_2026-05-16T10_00_00Z",
-			"issue-3_rework_2026-05-16T10_00_00Z",
-		}
-	}
 
-	got := reworkWorkspaceKeyPrefixes(issue, keys)
+	got := reworkWorkspaceKeyPrefixes(issue)
 	for _, want := range []string{
 		"LIN-123_rework_", // SPEC §4.2 form
 		"LIN-123-rework-", // interim dash form

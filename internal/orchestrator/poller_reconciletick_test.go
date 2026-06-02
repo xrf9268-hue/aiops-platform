@@ -145,7 +145,7 @@ func TestReconcileTickDropsNonActiveNonInactiveRefreshedIssueFromInactiveSet(t *
 	if err := orch.RequestDispatch(ctx, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}, nil); err != nil {
 		t.Fatalf("request dispatch: %v", err)
 	}
-	waitForCancellationDispatcherCount(t, dispatcher, 1)
+	waitForCancellationDispatcherCount(t, dispatcher)
 
 	// "Triage" is neither an active state nor a configured terminal/inactive
 	// state. The narrow refresh reports issue-1 there; reconcileTick must drop

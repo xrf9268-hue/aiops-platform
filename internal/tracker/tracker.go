@@ -7,22 +7,18 @@ import (
 )
 
 type Issue struct {
-	ID           string
-	Identifier   string
-	Title        string
-	Description  string
-	URL          string
-	State        string
-	ProjectSlug  string
-	TeamKey      string
-	Labels       []string
-	CustomFields map[string]string
-	ServiceName  string
-	BranchName   string
-	Priority     int
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	BlockedBy    []BlockerRef
+	ID          string
+	Identifier  string
+	Title       string
+	Description string
+	URL         string
+	State       string
+	Labels      []string
+	BranchName  string
+	Priority    int
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	BlockedBy   []BlockerRef
 }
 
 // IssueRef carries the stable tracker ID plus the human identifier captured at
