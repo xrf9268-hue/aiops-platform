@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/policy"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -173,7 +172,7 @@ func issueWorkspaceKey(t task.Task) string {
 //   - createdNow=false (reuse path, SPEC §9.1): the existing worktree's
 //     tracked state is reset to origin/<base> via `git checkout --force -B`
 //     so the runner starts from a clean base, but untracked artifacts
-//     (cached deps, build outputs, .aiops policy feedback) survive across
+//     (cached deps, build outputs) survive across
 //     runs.
 func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) {
 	workdir := m.PathFor(t)
@@ -287,8 +286,8 @@ func classifyExistingWorkdir(ctx context.Context, workdir, mirror string) (reusa
 // reuseWorktree refreshes a reusable worktree (SPEC §9.1: workspaces are reused
 // across runs for the same issue). It clears the index first, then snaps the
 // work branch to the refreshed base:
-//   - `git reset --quiet HEAD -- .` drops any intent-to-add entries the
-//     previous run's `EnforcePolicy` diffstat left in the index; without it the
+//   - `git reset --quiet HEAD -- .` drops any stray intent-to-add entries left
+//     in the index (e.g. by a hook running `git add -N`); without it the
 //     checkout below would treat those untracked-but-staged files as removable
 //     and cached deps / hook artifacts would vanish on reuse.
 //   - `git checkout --force --no-track -B` rebases the work branch to startRef:
@@ -296,7 +295,7 @@ func classifyExistingWorkdir(ctx context.Context, workdir, mirror string) (reusa
 //     branch from tracking the base branch (matching the create path's
 //     `worktree add --no-track`), and `-B` makes it idempotent.
 //
-// Untracked files (cached deps, build outputs, .aiops policy feedback) survive.
+// Untracked files (cached deps, build outputs) survive.
 func reuseWorktree(ctx context.Context, workdir, workBranch, startRef string) error {
 	if err := runGitQuiet(ctx, workdir, "reset", "--quiet", "HEAD", "--", "."); err != nil {
 		return fmt.Errorf("worktree index reset: %w", err)
@@ -493,85 +492,6 @@ func writeAiopsFile(workdir, name, body string) error {
 	return os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644)
 }
 
-func ChangedFiles(ctx context.Context, workdir string) ([]string, error) {
-	d, err := Diffstat(ctx, workdir)
-	if err != nil {
-		return nil, err
-	}
-	return d.Files, nil
-}
-
-// Diffstat returns the set of changed files and the total added+deleted
-// lines for the working tree at workdir. It uses `git add --intent-to-add
-// --all` so newly created (untracked) files show up, then runs
-// `git diff --numstat -z HEAD` to capture both modified and added paths.
-// The `-z` flag is required for correct policy matching: without it, git
-// emits rename entries as `old => new` or `{a => b}/c` strings that no
-// glob will match, silently bypassing deny/allow rules. With `-z`, rename
-// entries are emitted as `added\tdeleted\t\0old\0new\0` (three NUL fields
-// instead of one), letting us pull the destination path verbatim.
-// Binary files (which numstat reports as "-\t-") contribute 0 lines but
-// are still counted as changed files.
-func Diffstat(ctx context.Context, workdir string) (policy.Diffstat, error) {
-	// Mark untracked files so they appear in `git diff` without actually
-	// staging their content. This is reversible and idempotent; the
-	// subsequent `git add .` in CommitAndPush will fully stage them.
-	if err := runGit(ctx, workdir, "add", "--intent-to-add", "--all"); err != nil {
-		return policy.Diffstat{}, fmt.Errorf("git add --intent-to-add: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--numstat", "-z", "HEAD")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		return policy.Diffstat{}, err
-	}
-	return parseNumstatZ(out)
-}
-
-// parseNumstatZ parses the NUL-delimited output of `git diff --numstat -z`.
-// Each record is one of:
-//
-//	"<added>\t<deleted>\t<path>\0"               (normal)
-//	"<added>\t<deleted>\t\0<old_path>\0<new_path>\0" (rename/copy)
-//
-// For renames we record only the destination path so that policy globs
-// match the file as it will live in the tree.
-func parseNumstatZ(out []byte) (policy.Diffstat, error) {
-	var d policy.Diffstat
-	// Split on NUL; the trailing terminator yields a final empty token we skip.
-	tokens := strings.Split(string(out), "\x00")
-	i := 0
-	for i < len(tokens) {
-		tok := tokens[i]
-		if tok == "" {
-			i++
-			continue
-		}
-		// Each numstat record begins with "<added>\t<deleted>\t<rest>".
-		parts := strings.SplitN(tok, "\t", 3)
-		if len(parts) != 3 {
-			i++
-			continue
-		}
-		added, _ := strconv.Atoi(parts[0])
-		deleted, _ := strconv.Atoi(parts[1])
-		d.Lines += added + deleted
-		if parts[2] == "" {
-			// Rename/copy: next two NUL-delimited tokens are old, then new.
-			if i+2 >= len(tokens) {
-				return d, fmt.Errorf("malformed numstat -z rename record: %q", tok)
-			}
-			newPath := tokens[i+2]
-			d.Files = append(d.Files, newPath)
-			i += 3
-			continue
-		}
-		d.Files = append(d.Files, parts[2])
-		i++
-	}
-	return d, nil
-}
-
 // AllChangedFiles returns every path the worker is about to commit: tracked
 // modifications plus untracked files reported by `git status --porcelain`.
 // This is what we want to persist as a run artifact since the runner often
@@ -610,10 +530,6 @@ func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
 	return files, nil
 }
 
-// AllChangedFilesSinceUpstream returns both uncommitted worktree changes and
-// files changed by commits ahead of the current branch's upstream. Worker policy
-// gates that must constrain the whole agent-produced branch (not only the dirty
-// worktree) should use this instead of AllChangedFiles.
 func ResolveBaseBranchRef(ctx context.Context, workdir, baseBranch string) (string, error) {
 	baseRef := "origin/" + strings.TrimSpace(baseBranch)
 	if strings.TrimSpace(baseBranch) == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
@@ -662,10 +578,6 @@ func AllChangedFilesSinceRef(ctx context.Context, workdir, baseRef string) ([]st
 	return files, nil
 }
 
-func AllChangedFilesSinceUpstream(ctx context.Context, workdir string) ([]string, error) {
-	return AllChangedFilesSinceRef(ctx, workdir, "@{upstream}")
-}
-
 func HasCommitsSinceRef(ctx context.Context, workdir, baseRef string) (bool, error) {
 	if baseRef == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
 		baseRef = "@{upstream}"
@@ -685,37 +597,6 @@ func HasCommitsSinceRef(ctx context.Context, workdir, baseRef string) (bool, err
 
 func HasCommitsSinceWorkspaceBase(ctx context.Context, workdir string) (bool, error) {
 	return HasCommitsSinceRef(ctx, workdir, "@{upstream}")
-}
-
-// PolicyError is returned by EnforcePolicy when one or more policy checks
-// fail. It carries the structured violations so callers (the worker) can
-// emit a precise task event.
-type PolicyError struct {
-	Violations []policy.Violation
-}
-
-func (e *PolicyError) Error() string {
-	return "policy violation: " + policy.Summarize(e.Violations)
-}
-
-// EnforcePolicy gathers a diffstat for workdir and evaluates it against the
-// workflow PolicyConfig. On any violation it returns *PolicyError so that
-// the worker can both block completion and write a structured task event.
-func EnforcePolicy(ctx context.Context, workdir string, cfg workflow.Config) error {
-	d, err := Diffstat(ctx, workdir)
-	if err != nil {
-		return err
-	}
-	pcfg := policy.Config{
-		AllowPaths:      cfg.Policy.AllowPaths,
-		DenyPaths:       cfg.Policy.DenyPaths,
-		MaxChangedFiles: cfg.Policy.MaxChangedFiles,
-		MaxChangedLines: cfg.Policy.LineLimit(),
-	}
-	if vs := policy.Evaluate(d, pcfg); len(vs) > 0 {
-		return &PolicyError{Violations: vs}
-	}
-	return nil
 }
 
 // CommitIdentName and CommitIdentEmail are the git author/committer

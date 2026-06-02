@@ -172,12 +172,6 @@ The local state roots are:
   review` trigger comment records keyed by repo, PR number, head SHA, base SHA,
   and base branch name. A cached trigger is reused only if the referenced
   comment still contains all three current refs.
-- `~/aiops-workspaces/github/xrf9268-hue-aiops-platform/.aiops-policy-feedback`
-  — worker policy feedback records. A first policy rejection is fed into the
-  next prompt; the second repeated policy rejection for the same issue becomes
-  non-retryable to prevent broad diffs from burning another full agent run.
-  Read or write errors for these files are also non-retryable, because failing
-  open would disable the stop-after counter.
 
 GitHub tracker pagination is label/state-scoped: if issue pagination exceeds
 `tracker.pagination_max_pages`, that label/state scan is skipped, a cap-hit

@@ -44,14 +44,11 @@ git checkout --force --no-track -B <work-branch> origin/<base-branch>
 What this preserves and what it resets:
 
 - **Untracked files survive.** Cached deps (`node_modules/`, `venv/`,
-  Go build caches under `.cache/`), build outputs, and any
-  `.aiops/POLICY_VIOLATION_FEEDBACK.md` left by a prior policy
-  violation carry over so the next run benefits from the warm cache
-  and sees the same operator/agent feedback.
-  - The `git reset --quiet HEAD -- .` step is load-bearing: the prior
-    run's `EnforcePolicy` calls `git add --intent-to-add --all` to make
-    untracked files visible to `git diff --numstat`, which leaves those
-    paths in the index pointing at the empty blob. Without the reset,
+  Go build caches under `.cache/`) and build outputs carry over so the
+  next run benefits from the warm cache.
+  - The `git reset --quiet HEAD -- .` step is load-bearing: if a hook or
+    other step left intent-to-add entries in the index (e.g. `git add -N`),
+    those paths point at the empty blob. Without the reset,
     the subsequent `git checkout --force -B` would treat them as
     "files in the index but not in the target ref" and silently delete
     them from the working tree. The reset clears the index back to HEAD
@@ -196,18 +193,6 @@ find "$AIOPS_WORKSPACE_ROOT" -mindepth 4 -maxdepth 4 -type d
 # fresh worktree-add, not a fresh clone.
 rm -rf "$AIOPS_WORKSPACE_ROOT"/*
 ```
-
-The wipe also removes the `<owner>/<repo>/.aiops-policy-feedback`
-subtree alongside the per-task worktrees, so every in-flight issue's
-SPEC §11.4 `policy_violation_budget` counter resets to zero on the
-first retry after the upgrade. For the Linear, Gitea, and GitHub
-trackers shipped today the counter would already be preserved across
-the cutover even without the wipe (the `SourceType` / `SourceEventID`
-path components are case-identical before and after #229, so
-`policy_feedback.go` writes to the same on-disk path under both
-sanitizers); the reset matters only for a hypothetical future tracker
-whose `SourceType` or `SourceEventID` contains characters the pre-#229
-sanitizer would have collapsed.
 
 Active *rework* workspaces survive the cutover even without a manual
 sweep: `reworkWorkspaceKeyPrefixes` emits three prefix forms for each

@@ -198,7 +198,7 @@ type OrchestratorState struct {
 	RetryAttempts map[IssueID]*RetryEntry
 	// Failed is a non-SPEC harness extension (DEVIATIONS.md D29) that
 	// suppresses redispatch of deterministically non-retryable runs
-	// (policy violation / continuation budget) and of runs
+	// (continuation budget) and of runs
 	// that exceeded the opt-in SPEC §15.5 `agent.max_retry_attempts` cap.
 	// Under the SPEC default (no cap) only the deterministic-failure
 	// branches populate this map; ReleaseFailedIfIssueChanged clears the

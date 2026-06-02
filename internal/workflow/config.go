@@ -303,16 +303,6 @@ type AgentConfig struct {
 	// re-queues entirely. Read via MaxTimeoutRetriesValue() rather than
 	// dereferencing directly.
 	MaxTimeoutRetries *int `yaml:"max_timeout_retries" json:"max_timeout_retries"`
-	// PolicyViolationBudget bounds how many policy-violation feedback
-	// entries an issue can accumulate before the worker fails the run
-	// non-retryably. The default of 2 preserves the historical hardcoded
-	// behavior; explicit 0 disables policy-violation-based suppression so
-	// aggressive workflows can iterate until verify converges or another
-	// non-retryable error fires. Read via PolicyViolationBudgetValue()
-	// rather than dereferencing directly. Negative values are clamped to 0
-	// (no policy-violation suppression). See #230 for the operator-visible
-	// budget motivation.
-	PolicyViolationBudget *int `yaml:"policy_violation_budget" json:"policy_violation_budget"`
 }
 
 // UnboundedRetryBudget is the sentinel MaxTimeoutRetriesValue() and
@@ -360,24 +350,6 @@ func (a AgentConfig) MaxRetryAttemptsValue() int {
 		return UnboundedRetryBudget
 	}
 	return *a.MaxRetryAttempts
-}
-
-// DefaultPolicyViolationBudget is the historical hardcoded value preserved
-// when `agent.policy_violation_budget` is absent from WORKFLOW.md.
-const DefaultPolicyViolationBudget = 2
-
-// PolicyViolationBudgetValue returns the effective per-issue policy-violation
-// budget. A nil pointer (field omitted from YAML) yields
-// DefaultPolicyViolationBudget; an explicit value — including 0 — is honored
-// as configured. Negative values clamp to 0 (no suppression).
-func (a AgentConfig) PolicyViolationBudgetValue() int {
-	if a.PolicyViolationBudget == nil {
-		return DefaultPolicyViolationBudget
-	}
-	if *a.PolicyViolationBudget < 0 {
-		return 0
-	}
-	return *a.PolicyViolationBudget
 }
 
 type CommandConfig struct {
@@ -440,25 +412,15 @@ func (c LinearGraphQLConfig) IsZero() bool {
 	return !c.AllowMutations && len(c.AllowedMutations) == 0
 }
 
+// PolicyConfig carries the workflow run mode. The worker-enforced path/diffstat
+// gate (allow_paths / deny_paths / max_changed_*) was removed under #561: SPEC
+// §3.2 homes scope/validation rules in the operator's WORKFLOW.md prompt, the
+// gate ran post-push (could only flag, never prevent) and raced reconcile-cancel,
+// and upstream has no such config. Hard path prevention belongs to the `sandbox`
+// write restrictions; scope guidance belongs to the prompt.
 type PolicyConfig struct {
-	Mode            string   `yaml:"mode" json:"mode"`
-	AllowPaths      []string `yaml:"allow_paths" json:"allow_paths"`
-	DenyPaths       []string `yaml:"deny_paths" json:"deny_paths"`
-	MaxChangedFiles int      `yaml:"max_changed_files" json:"max_changed_files"`
-	// MaxChangedLines bounds the total added+deleted lines reported by
-	// `git diff --numstat`. The legacy YAML key `max_changed_loc` is still
-	// honored via MaxChangedLOC below for back-compat.
-	MaxChangedLines int `yaml:"max_changed_lines" json:"max_changed_lines"`
-	MaxChangedLOC   int `yaml:"max_changed_loc" json:"max_changed_loc"`
-}
-
-// LineLimit returns the effective maximum changed lines, preferring the
-// new MaxChangedLines field but falling back to the legacy MaxChangedLOC.
-func (p PolicyConfig) LineLimit() int {
-	if p.MaxChangedLines > 0 {
-		return p.MaxChangedLines
-	}
-	return p.MaxChangedLOC
+	// Mode selects the run mode: "draft_pr" (default) or "analysis_only".
+	Mode string `yaml:"mode" json:"mode"`
 }
 
 // SafetyConfig documents the policy envelope operators expect agents and
@@ -569,7 +531,7 @@ func DefaultConfig() Config {
 			StallTimeoutMs:    300000,
 		},
 		Claude:  CommandConfig{Command: "claude"},
-		Policy:  PolicyConfig{Mode: "draft_pr", MaxChangedFiles: 12, MaxChangedLOC: 300},
+		Policy:  PolicyConfig{Mode: "draft_pr"},
 		Sandbox: SandboxConfig{Backend: "none", NetworkMode: "none"},
 		Verify:  VerifyConfig{Commands: []string{}},
 		// PR.Draft defaults to false so workflows that omit `pr.draft` keep

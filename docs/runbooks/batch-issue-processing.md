@@ -172,7 +172,7 @@ When auto-merge **is** authorized, apply the full merge gate and hard-stop list
 in [protocol §8](pr-review-merge-protocol.md#8-merge): CI green on the head,
 fresh `@codex review` clean with zero unresolved non-outdated threads, every
 acceptance criterion met or deferred to a tracked issue, classified
-`within budget` and changing no `policy.deny_paths`, required reviews
+`within budget` and touching no off-limits paths, required reviews
 satisfied, agreed squash method. Native auto-merge enforces only CI + required
 reviews, so confirm the non-check gates yourself immediately before enabling it,
 and re-confirm after any push (a new commit re-opens the `@codex` round).

@@ -19,7 +19,7 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `running` — candidate was dispatched to an agent run.
 - `completed` — run exited successfully or reached workflow handoff.
 - `failed` — run failed and may retry or be suppressed by deterministic failure rules.
-- `blocked` — runtime observed an issue that cannot proceed because a dependency or policy gate is blocking it.
+- `blocked` — runtime observed an issue that cannot proceed because an external dependency is blocking it (the agent wrote `.aiops/BLOCKED.json`).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 
 These are observability events. They do not imply the worker changed tracker

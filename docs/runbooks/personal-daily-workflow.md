@@ -43,8 +43,8 @@ Checklist before moving an issue to `AI Ready`:
 - One clear outcome. Not "improve logging" but "log tracker issue id in worker poll dispatch output".
 - Concrete file or package hints. Mention paths like `internal/runner/shell.go` so the agent does not wander.
 - Acceptance criteria as a bullet list. The verification section in `WORKFLOW.md` runs `go test ./...`, but tests do not catch design intent.
-- Out-of-scope notes. Call out things you do not want touched, especially anything under `policy.deny_paths` (`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`).
-- Size budget that fits `policy.max_changed_files: 12` and `policy.max_changed_loc: 300`. If a task realistically needs more, split it.
+- Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt so the agent self-limits; use `sandbox:` write restrictions for hard prevention.
+- Size budget: keep the change small (aim for ≤12 files / ≤300 LOC as a review guideline). If a task realistically needs more, split it.
 - Link to the relevant ADR or research doc when the task involves architecture decisions.
 
 Issue template that works well:
@@ -130,10 +130,10 @@ claude:
 
 Skip automation entirely when:
 
-- the task touches `policy.deny_paths` (infra, deploy, migrations, secrets).
+- the task touches sensitive areas (infra, deploy, migrations, secrets).
 - it is a security-sensitive change or a data migration.
 - requirements are still ambiguous. Use a planning issue instead and only move to `AI Ready` once the design is settled.
-- the change is large enough that a draft PR would exceed `max_changed_files` or `max_changed_loc`.
+- the change is large enough that a draft PR would blow well past the ~12-file / ~300-LOC review guideline.
 
 Decision shortcut:
 
@@ -172,7 +172,7 @@ reconciliation events. The deterministic workspace also retains
 
 - `repo.clone_url missing in WORKFLOW.md`: worker log line. Fix `WORKFLOW.md`, restart the worker.
 - Verification command failed (`go test ./...` non-zero): read `.aiops/FAILURE.md` in the workspace if present. Reproduce locally on the same branch.
-- Policy violation (deny path or size cap): re-scope the task into a smaller issue, or do it manually.
+- Change landed out of scope or oversized (touched an off-limits path, or the diff is too big for review): re-scope the task into a smaller issue, sharpen the prompt's scope guidance, or do it manually.
 - Runner command not found: confirm `codex.command` (the `codex app-server` launch command) or `claude.command` resolves in the worker's scoped `PATH`. The `claude` shell runner uses plain `sh -c`, so `/etc/profile.d/*` and `~/.profile` are not re-sourced per command; pass any required non-secret env explicitly with `codex.env_passthrough` or `claude.env_passthrough`.
 - Empty diff: agent decided nothing to do. Tighten the issue body, then move it to `Rework` (or the equivalent active Gitea `aiops/*` state label).
 
@@ -190,6 +190,6 @@ Mark the issue back to `Backlog` or `Human Review` and finish it by hand if any 
 
 - two runner attempts produced wrong or empty diffs.
 - the failure mode is unclear after reading worker logs and workspace artifacts.
-- the work has crossed into a `deny_paths` area or grown past the size caps.
+- the work has crossed into a sensitive (infra/deploy/migrations/secrets) area or grown well past the size guideline.
 
 The platform is meant to save time on small, well-scoped tasks. When it stops doing that for a given issue, do not fight it.

@@ -134,6 +134,6 @@ Rejected for now. The current target is personal productivity, not a multi-team 
 2. Validate Codex runner on a personal demo repository.
 3. Add Linear status updates after successful handoff.
 4. Add PR labels and reviewers.
-5. Add better diff statistics and path policy checks.
+5. ~~Add better diff statistics and path policy checks.~~ — implemented as the worker `policy` path/diffstat gate, then removed under #561: SPEC §3.2 homes scope/path rules in the `WORKFLOW.md` prompt and the gate ran post-push (could only flag, never prevent). Do not re-add.
 6. ~~Add `RUN_SUMMARY.md` enforcement.~~ — implemented, then removed under #561: the worker gate ran after the agent had already pushed (SPEC §1), the agent's PR body is the change record, and nothing read the artifact. Do not re-add.
 7. Add a Claude analysis-only workflow mode.

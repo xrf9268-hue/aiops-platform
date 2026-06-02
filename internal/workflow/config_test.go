@@ -1892,6 +1892,54 @@ func TestLoad_RejectsRemovedVerifyExecutionFields(t *testing.T) {
 	})
 }
 
+// TestLoad_RejectsRemovedPolicyFields verifies that workflows still carrying the
+// worker policy path/diffstat gate keys removed in #561 fail Load with a clear
+// error instead of being silently dropped — an operator who set policy.deny_paths
+// or policy.max_changed_files must not believe the worker still enforces them.
+// policy.mode stays valid.
+func TestLoad_RejectsRemovedPolicyFields(t *testing.T) {
+	const head = "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: gitea\n"
+	for _, tc := range []struct{ name, block string }{
+		{"policy.allow_paths", "policy:\n  allow_paths:\n    - src/**\n"},
+		{"policy.deny_paths", "policy:\n  deny_paths:\n    - .github/**\n"},
+		{"policy.max_changed_files", "policy:\n  max_changed_files: 12\n"},
+		{"policy.max_changed_lines", "policy:\n  max_changed_lines: 300\n"},
+		{"policy.max_changed_loc", "policy:\n  max_changed_loc: 300\n"},
+		{"agent.policy_violation_budget", "agent:\n  policy_violation_budget: 2\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			p := filepath.Join(dir, "WORKFLOW.md")
+			if err := os.WriteFile(p, []byte(head+tc.block+"---\nprompt body\n"), 0o644); err != nil {
+				t.Fatalf("write workflow: %v", err)
+			}
+			_, err := Load(p)
+			if err == nil {
+				t.Fatalf("Load(%s present) = nil; want rejection error", tc.name)
+			}
+			if msg := err.Error(); !strings.Contains(msg, tc.name) {
+				t.Fatalf("Load(%s) error = %q; want substring %q", tc.name, msg, tc.name)
+			}
+		})
+	}
+
+	t.Run("policy.mode still accepted", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "WORKFLOW.md")
+		body := head + "policy:\n  mode: analysis_only\n---\nprompt body\n"
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatalf("write workflow: %v", err)
+		}
+		wf, err := Load(p)
+		if err != nil {
+			t.Fatalf("Load(policy.mode) = %v; want nil", err)
+		}
+		if got := wf.Config.Policy.Mode; got != "analysis_only" {
+			t.Fatalf("Policy.Mode = %q; want analysis_only", got)
+		}
+	})
+}
+
 // TestLoad_RejectsRemovedCodexProfile verifies that workflows still carrying
 // the removed `codex.profile` key fail Load with an error pointing at the SPEC
 // §10 app-server runner. The one-shot `codex exec` runner the profile

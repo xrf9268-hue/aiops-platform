@@ -7,8 +7,7 @@ Gitea issue with an active aiops/* label
   -> worker poll tick
   -> orchestrator in-memory dispatch
   -> workspace prepare
-  -> configured agent run
-  -> verification and policy gates
+  -> configured agent run (agent verifies + hands off the branch/PR itself)
 ```
 
 The agent, not the worker, is responsible for branch pushes, PR creation, and

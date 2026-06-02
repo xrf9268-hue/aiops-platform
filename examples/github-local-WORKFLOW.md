@@ -60,12 +60,9 @@ claude:
 
 policy:
   mode: draft_pr
-  deny_paths:
-    - .env
-    - .env.*
-    - secrets/**
-  max_changed_files: 20
-  max_changed_loc: 600
+  # Scope and path rules belong in the prompt body (SPEC §3.2); hard path
+  # prevention belongs to `sandbox:` write restrictions. The worker path/diffstat
+  # gate was removed in #561 — `deny_paths` / `max_changed_*` are not accepted.
 
 safety:
   allowed_networks:
