@@ -29,11 +29,9 @@ type EventEmitter interface {
 // RunTaskError bundles the resolved workflow Config alongside the error so
 // callers can classify failures without re-resolving the workflow.
 type RunTaskError struct {
-	Cfg             workflow.Config
-	Err             error
-	NonRetryable    bool
-	ExternalBlocked bool
-	Blocker         BlockerArtifact
+	Cfg          workflow.Config
+	Err          error
+	NonRetryable bool
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -199,9 +197,6 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if rtErr := rs.runAgent(); rtErr != nil {
 		return rtErr
 	}
-	if rtErr := rs.consumeExternalBlocker(); rtErr != nil {
-		return rtErr
-	}
 	rs.finalize()
 	return nil
 }
@@ -283,7 +278,6 @@ func (rs *runState) buildPrompt() *RunTaskError {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err, NonRetryable: true}
 	}
 	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
-	prompt = AppendBlockerDirective(prompt)
 	// Skip the verify directive in analysis-only mode: that mode forbids source
 	// edits / PR handoff, so "run the verification commands before handing off"
 	// has no code change to verify and contradicts the analysis-only directive.
@@ -339,9 +333,13 @@ func (rs *runState) runAgent() *RunTaskError {
 
 // handleRunnerFailure runs the after_run hook on the runner-error path and
 // classifies the failure into the right terminal RunTaskError: a supervised
-// reconcile-cancel (no FAILURE.md written for a superseded run, #543), a
-// recurring sandbox-startup denial parked on a cooldown (#550), or a generic
-// runner failure.
+// reconcile-cancel (no FAILURE.md written for a superseded run, #543) or a
+// generic runner failure that goes through SPEC §8.4 backoff. A codex
+// sandbox-startup denial is a generic runner failure here: the runner already
+// re-tagged it as an output-free *SandboxStartupError (no raw bwrap text leaks),
+// and it rides the same §8.4 backoff as any other failure. `worker --doctor`
+// (#542) is the preventive layer that catches the host misconfiguration before
+// dispatch.
 func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
@@ -354,80 +352,32 @@ func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
 	if isReconcileCancel(rs.ctx, runErr) {
 		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 	}
-	// A recurring codex sandbox-startup denial recurs identically every dispatch
-	// until the host is fixed, so park it on a cooldown instead of the hot
-	// failure-retry loop (#550).
-	if runner.IsSandboxStartup(runErr) {
-		return rs.sandboxStartupBlocked(runErr)
-	}
 	WriteFailureArtifacts(rs.ctx, rs.workdir, "runner failed: "+ErrSummary(runErr))
 	return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 }
 
-// sandboxStartupRetryAfter is the cooldown a sandbox-startup failure parks on
-// before the next dispatch. The failure recurs identically until an operator
-// reconfigures the host (#550), so the cooldown only needs to be long enough to
-// stop the per-poll token burn the #542 blast radius quantified (~590k input
-// tokens per failed turn); an operator fix plus the normal poll/reconcile loop
-// re-dispatches sooner once the host recovers.
-const sandboxStartupRetryAfter = time.Hour
-
-// sandboxStartupBlocked routes a recurring codex sandbox-startup failure to the
-// external-blocker cooldown path instead of the hot failure-retry loop: the run
-// is parked blocked and only re-dispatched after the cooldown, reusing the same
-// orchestrator machinery as a BLOCKED.json external-dependency block (#550). It
-// emits a dedicated event so an operator can tell a host sandbox denial apart
-// from an agent-declared dependency block, and synthesizes the blocker in-memory
-// (it never writes/reads .aiops/BLOCKED.json) so the agent's own artifact is not
-// shadowed. The fixed reason points at `worker --doctor`, which detects the same
-// condition at preflight (#542); ErrSummary(runErr) is the output-free
-// SandboxStartupError text, so no raw subprocess output reaches the surface.
-func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
-	const reason = "codex sandbox could not start on this host (denied bwrap user namespace); run worker --doctor and fix the host before retrying"
-	Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventSandboxStartupBlocked, "codex sandbox startup failed; parking issue on cooldown", map[string]any{
-		"reason":              reason,
-		"retry_after_seconds": int(sandboxStartupRetryAfter / time.Second),
-	})
-	// Synthesized in-memory (never written to / read from .aiops/BLOCKED.json),
-	// so it does not pass through BlockerArtifact.validate(); the constants below
-	// are validation-safe by construction (1h is well within the 60s..24h bound).
-	return &RunTaskError{
-		Cfg:             rs.wcfg,
-		Err:             runErr,
-		ExternalBlocked: true,
-		Blocker: BlockerArtifact{
-			Version:           blockerArtifactVersion,
-			Kind:              blockerArtifactKindExternal,
-			Reason:            reason,
-			RetryAfterSeconds: int(sandboxStartupRetryAfter / time.Second),
-		},
-	}
-}
-
-// resetStaleArtifacts deletes the blocker artifact, the worker failure
-// post-mortem (.aiops/FAILURE.md), and (in analysis-only mode) the agent's
-// .aiops/PLAN.md handoff artifact before the runner starts so leftovers from a
-// previous run or the base branch are not mistaken for this run's output.
-// PrepareGitWorkspace resets tracked files to origin/<base> on every prepare
-// (fresh checkout on first touch, `checkout --force -B` on reuse per SPEC §9.1),
-// but those artifacts may also be committed on the base branch itself (left over
-// from a prior PR or seeded by hand), and on reuse any untracked artifact
-// written by the previous run still lingers in the workdir. Deleting them here
-// means a stale FAILURE.md from a previous failed attempt does not leak into a
-// later successful rerun's CHANGED_FILES.txt or commits (#561 review).
+// resetStaleArtifacts deletes the worker failure post-mortem (.aiops/FAILURE.md)
+// and (in analysis-only mode) the agent's .aiops/PLAN.md handoff artifact before
+// the runner starts so leftovers from a previous run or the base branch are not
+// mistaken for this run's output. PrepareGitWorkspace resets tracked files to
+// origin/<base> on every prepare (fresh checkout on first touch,
+// `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may also be
+// committed on the base branch itself (left over from a prior PR or seeded by
+// hand), and on reuse any untracked artifact written by the previous run still
+// lingers in the workdir. Deleting them here means a stale FAILURE.md from a
+// previous failed attempt does not leak into a later successful rerun's
+// CHANGED_FILES.txt or commits (#561 review).
 func (rs *runState) resetStaleArtifacts() *RunTaskError {
-	if err := ResetBlockerArtifact(rs.workdir); err != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: err}
-	}
 	if err := workspace.ResetFailureSummary(rs.workdir); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset failure summary: %w", err)}
 	}
-	// Clear artifacts retired by earlier worker versions: RUN_SUMMARY.md (#561)
-	// and VERIFICATION.txt (#560). They are no longer written, but on a
+	// Clear artifacts retired by earlier worker versions: RUN_SUMMARY.md (#561),
+	// VERIFICATION.txt (#560), and BLOCKED.json (the external-blocker cooldown
+	// artifact removed in #572). They are no longer written or read, but on a
 	// long-lived workspace reused across a worker upgrade an old untracked copy
 	// can linger (PrepareGitWorkspace preserves untracked files) and be swept
 	// into the finalize() CHANGED_FILES.txt snapshot.
-	for _, retired := range []string{"RUN_SUMMARY.md", "VERIFICATION.txt"} {
+	for _, retired := range []string{"RUN_SUMMARY.md", "VERIFICATION.txt", "BLOCKED.json"} {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", retired)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset retired artifact %s: %w", retired, err)}
 		}
@@ -444,38 +394,6 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
 		}
-	}
-	return nil
-}
-
-// consumeExternalBlocker checks for the agent's external-dependency handoff
-// (.aiops/BLOCKED.json). A recorded external blocker is a success path: it
-// returns a *RunTaskError with ExternalBlocked set after stamping
-// PhaseSucceeded. The worker runs no post-turn gate on the agent's output:
-// verification (SPEC §1, surfaced via AppendVerifyDirective), the secret scan,
-// the RUN_SUMMARY and policy path/diffstat gates (#561), and the analysis-only
-// diff gate (#574) were all removed — each ran after the agent had already
-// pushed (#76), so it could only flag, never prevent, and each raced the D9
-// reconcile-cancel / §16.5 self-stop the way the verify gate did in #557.
-// analysis-only behavior is now preventive only, via AppendAnalysisOnlyDirective.
-func (rs *runState) consumeExternalBlocker() *RunTaskError {
-	blocker, blockerErr := ConsumeBlockerArtifact(rs.workdir)
-	if blockerErr == nil {
-		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventExternalBlocker, "external dependency blocker recorded", map[string]any{
-			"path":                BlockerArtifactPath,
-			"reason":              blocker.Reason,
-			"retry_after_seconds": blocker.RetryAfterSeconds,
-		})
-		rs.emitPhase(task.PhaseFinishing, task.PhaseSucceeded)
-		return &RunTaskError{
-			Cfg:             rs.wcfg,
-			Err:             &ExternalBlockerError{Artifact: blocker},
-			ExternalBlocked: true,
-			Blocker:         blocker,
-		}
-	}
-	if !errors.Is(blockerErr, ErrBlockerArtifactMissing) {
-		return &RunTaskError{Cfg: rs.wcfg, Err: blockerErr}
 	}
 	return nil
 }
@@ -737,11 +655,6 @@ func ErrSummary(err error) string {
 	return msg
 }
 
-const blockerDirective = "\n\nIf you are blocked only by an external dependency and cannot make progress in this run, " +
-	"write `.aiops/BLOCKED.json` with exactly this JSON shape before exiting: " +
-	"`{\"version\":1,\"kind\":\"external_dependency\",\"reason\":\"<specific dependency>\",\"retry_after_seconds\":3600}`. " +
-	"`retry_after_seconds` must be between 60 and 86400. Do not write this file for ordinary failures or completed work."
-
 const analysisOnlyDirective = "\n\n---\n\n" +
 	"**Analysis-only mode:** do not edit source files, commit, push, open PRs, " +
 	"or post tracker comments on the worker's behalf. Produce your assessment " +
@@ -755,17 +668,6 @@ const verifyDirectiveTemplate = "\n\n---\n\n" +
 	"the issue to a review/inactive state — run the workflow's verification commands in " +
 	"the workspace and make sure they pass: %s. If any fail, fix the code and re-run until " +
 	"they pass; do not hand off on red. The orchestrator does not run these for you."
-
-// AppendBlockerDirective adds the external-dependency BLOCKED.json contract to
-// the rendered prompt unless it is already present. (The worker no longer
-// requires a RUN_SUMMARY.md artifact — the gate was removed under #561 — so the
-// only standing prompt contract here is the optional external-blocker handoff.)
-func AppendBlockerDirective(prompt string) string {
-	if !strings.Contains(prompt, strings.TrimSpace(blockerDirective)) {
-		prompt += blockerDirective
-	}
-	return prompt
-}
 
 // AppendVerifyDirective adds the operator-declared verify.commands to the
 // rendered prompt as the agent's own pre-handoff responsibility. Verification

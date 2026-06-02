@@ -131,12 +131,12 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 // resolveDispatchClaim decides whether a dispatchOp may proceed past the claim
 // gate, and (for a tracker-rechecked dispatch) which queued retry entry it
 // consumes. A fresh dispatch is denied only when the issue is already claimed.
-// A tracker-rechecked dispatch consumes a DUE continuation or external-blocker
-// cooldown entry (returned so the caller can clear it, with continuationAttempt
-// carried forward only for continuations); it is denied when the queued entry is
-// any other kind (e.g. a failure retry, which stays claimed until retryFireOp
-// re-dispatches it) or not yet due, and — when no such entry exists — when the
-// issue is already claimed. deny is true on every rejection path.
+// A tracker-rechecked dispatch consumes a DUE continuation entry (returned so the
+// caller can clear it, carrying its turn count forward as continuationAttempt);
+// it is denied when the queued entry is any other kind (e.g. a failure retry,
+// which stays claimed until retryFireOp re-dispatches it) or not yet due, and —
+// when no such entry exists — when the issue is already claimed. deny is true on
+// every rejection path.
 func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bool) (consumed *RetryEntry, continuationAttempt int, deny bool) {
 	if !trackerRechecked {
 		return nil, 0, st.IsClaimed(id)
@@ -145,19 +145,13 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 	if !ok {
 		return nil, 0, st.IsClaimed(id)
 	}
-	if entry.Kind != RetryKindContinuation && entry.Kind != RetryKindExternalBlocker {
+	if entry.Kind != RetryKindContinuation {
 		return nil, 0, true
 	}
 	if !entry.IsDue(time.Now()) {
 		return nil, 0, true
 	}
-	// Only a continuation carries a turn count forward; an external-blocker
-	// cooldown is a wake signal, so continuationAttempt stays 0 and the resumed
-	// turn does not inherit a stale count.
-	if entry.Kind == RetryKindContinuation {
-		continuationAttempt = entry.Attempt
-	}
-	return entry, continuationAttempt, false
+	return entry, entry.Attempt, false
 }
 
 // spawn asks the dispatcher for a worker, records the Running entry

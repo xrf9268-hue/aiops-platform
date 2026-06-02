@@ -2,11 +2,10 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -34,10 +33,13 @@ func sandboxStartupRunState(t *testing.T, ev *fakeEmitter, runErr error) *runSta
 	}
 }
 
-// TestRunAgentParksSandboxStartupFailureOnCooldown pins the #550 fix: a recurring
-// codex sandbox-startup failure is routed to the external-blocker cooldown path
-// (parked + re-dispatched after a backoff) instead of the hot failure-retry loop.
-func TestRunAgentParksSandboxStartupFailureOnCooldown(t *testing.T) {
+// TestRunAgentSandboxStartupFailureRidesGenericFailurePath pins the #572
+// behavior: the dedicated external-blocker cooldown is gone, so a codex
+// sandbox-startup denial is now a generic retryable runner failure (it rides the
+// SPEC §8.4 backoff like any other error). The run is NOT parked: a FAILURE.md
+// post-mortem is written and its text is the output-free SandboxStartupError
+// detail, so raw bwrap subprocess output (which may hold secrets) never leaks.
+func TestRunAgentSandboxStartupFailureRidesGenericFailurePath(t *testing.T) {
 	ev := &fakeEmitter{}
 	rs := sandboxStartupRunState(t, ev, &runner.SandboxStartupError{Detail: "host denied the codex bwrap user namespace"})
 
@@ -45,50 +47,20 @@ func TestRunAgentParksSandboxStartupFailureOnCooldown(t *testing.T) {
 	if rtErr == nil {
 		t.Fatal("runAgent() = nil; want a RunTaskError for the sandbox-startup failure")
 	}
-	if !rtErr.ExternalBlocked {
-		t.Fatalf("runAgent() ExternalBlocked = false; want true so the orchestrator parks it on a cooldown")
+	if rtErr.NonRetryable {
+		t.Fatalf("runAgent() NonRetryable = true; want false so it rides the §8.4 backoff like any failure")
 	}
 	if !runner.IsSandboxStartup(rtErr.Err) {
-		t.Fatalf("runAgent() Err = %T %[1]v; want a SandboxStartupError", rtErr.Err)
-	}
-	wantRetry := int(sandboxStartupRetryAfter / time.Second)
-	if got := rtErr.Blocker.RetryAfterSeconds; got != wantRetry {
-		t.Fatalf("Blocker.RetryAfterSeconds = %d; want %d (the sandbox cooldown)", got, wantRetry)
-	}
-	if got := (&ExternalBlockerError{Artifact: rtErr.Blocker}).RetryAfter(); got != sandboxStartupRetryAfter {
-		t.Fatalf("RetryAfter() = %v; want %v", got, sandboxStartupRetryAfter)
+		t.Fatalf("runAgent() Err = %T %[1]v; want the *SandboxStartupError classification preserved", rtErr.Err)
 	}
 
-	// Observability: a dedicated event fires, distinct from a normal external
-	// blocker so an operator can tell a host sandbox denial apart.
-	if got := len(ev.byKind(task.EventSandboxStartupBlocked)); got != 1 {
-		t.Fatalf("sandbox_startup_blocked events = %d; want 1; events=%#v", got, ev.events)
+	// A generic failure writes the FAILURE.md post-mortem, and its content is the
+	// fixed output-free detail — no raw bwrap output reaches the artifact.
+	body, err := os.ReadFile(filepath.Join(rs.workdir, ".aiops", "FAILURE.md"))
+	if err != nil {
+		t.Fatalf("read FAILURE.md = %v; want the failure post-mortem written", err)
 	}
-	if got := len(ev.byKind(task.EventExternalBlocker)); got != 0 {
-		t.Fatalf("external_blocker events = %d; want 0 (sandbox uses its own event); events=%#v", got, ev.events)
-	}
-
-	// A parked run is not a failure: no FAILURE.md artifact is written.
-	if _, err := os.Stat(filepath.Join(rs.workdir, ".aiops", "FAILURE.md")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("FAILURE.md stat error = %v; want not-exist (parked, not failed)", err)
-	}
-}
-
-// TestRunAgentGenericFailureSkipsSandboxCooldown guards the negative: the routing
-// must hinge on the typed error, so an ordinary turn failure keeps the standard
-// (non-blocked) failure path and emits no sandbox event.
-func TestRunAgentGenericFailureSkipsSandboxCooldown(t *testing.T) {
-	ev := &fakeEmitter{}
-	rs := sandboxStartupRunState(t, ev, runner.NewError(runner.CategoryTurnFailed, "turn/failed: tests failed", nil))
-
-	rtErr := rs.runAgent()
-	if rtErr == nil {
-		t.Fatal("runAgent() = nil; want a RunTaskError for the turn failure")
-	}
-	if rtErr.ExternalBlocked {
-		t.Fatalf("runAgent() ExternalBlocked = true; want false for a generic turn failure")
-	}
-	if got := len(ev.byKind(task.EventSandboxStartupBlocked)); got != 0 {
-		t.Fatalf("sandbox_startup_blocked events = %d; want 0 for a generic failure", got)
+	if !strings.Contains(string(body), "host denied the codex bwrap user namespace") {
+		t.Fatalf("FAILURE.md = %q; want the output-free sandbox-startup detail", string(body))
 	}
 }

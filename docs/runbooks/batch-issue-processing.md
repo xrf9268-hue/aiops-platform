@@ -89,21 +89,14 @@ robbed the human of the chance to weigh in while the context was fresh.
    restate deferrals already raised, not introduce them.
 
 If a worker-run agent cannot proceed only because an external dependency is
-unresolved (for example an overlapping PR has not merged), it must not rely on
-free-text summaries or comments to pause the worker. It should write
-the strict `.aiops/BLOCKED.json` artifact:
-
-```json
-{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}
-```
-
-The worker records this as an `external_blocker` cooldown in the retrying
-state. This preserves the SPEC boundary: tracker comments/state changes remain
-agent-side, while the worker only holds its scheduler claim until the cooldown
-expires and the tracker poll confirms the issue is still active. Keep the wire
-shape aligned with
-[`docs/protocols/blocked-artifact.schema.json`](../protocols/blocked-artifact.schema.json);
-do not add aliases or prose heuristics for old artifacts.
+unresolved (for example an overlapping PR has not merged), it surfaces that in
+its PR/tracker comment per the SPEC §1 agent boundary — the worker has no
+blocker artifact to pause on (the `.aiops/BLOCKED.json` external-blocker cooldown
+was removed as over-design in #572). A still-active issue is simply re-dispatched
+on the normal continuation / §8.4 backoff cycle, re-checking tracker state each
+poll. When the dependency is modeled as a tracker "blocked by" relation, the
+poller already holds the issue out of the candidate set until its blockers go
+terminal.
 
 ## Keep a live status checklist
 

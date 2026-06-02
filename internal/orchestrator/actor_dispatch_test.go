@@ -46,12 +46,6 @@ func TestResolveDispatchClaim_Table(t *testing.T) {
 		{name: "rechecked not-due continuation denied", rechecked: true, setup: func(st *OrchestratorState) {
 			st.RetryAttempts[id] = entry(RetryKindContinuation, 3, notDue)
 		}, wantDeny: true},
-		{name: "rechecked due external blocker consumed without continuation attempt", rechecked: true, setup: func(st *OrchestratorState) {
-			st.RetryAttempts[id] = entry(RetryKindExternalBlocker, 7, due)
-		}, wantConsumed: true, wantConsumedKind: RetryKindExternalBlocker, wantContAttempt: 0, wantDeny: false},
-		{name: "rechecked not-due external blocker denied", rechecked: true, setup: func(st *OrchestratorState) {
-			st.RetryAttempts[id] = entry(RetryKindExternalBlocker, 0, notDue)
-		}, wantDeny: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

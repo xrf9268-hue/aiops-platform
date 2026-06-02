@@ -19,7 +19,6 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `running` — candidate was dispatched to an agent run.
 - `completed` — run exited successfully or reached workflow handoff.
 - `failed` — run failed and may retry or be suppressed by deterministic failure rules.
-- `blocked` — runtime observed an issue that cannot proceed because an external dependency is blocking it (the agent wrote `.aiops/BLOCKED.json`).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 
 These are observability events. They do not imply the worker changed tracker
@@ -35,18 +34,12 @@ workflow/prompt so the agent no longer needs unavailable input. The read-only
 `counts.blocked` value so input-blocked sessions are visible from the HTTP
 state surface.
 
-An agent blocked by an external dependency must report it with the strict
-`.aiops/BLOCKED.json` artifact instead of relying on free-text summary parsing:
-
-```json
-{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}
-```
-
-The worker treats this as an `external_blocker` retry cooldown. The issue
-remains claimed until the cooldown expires, appears in `retrying` with
-`kind: "external_blocker"`, and is rechecked through the normal tracker poll
-before any redispatch. Unknown or legacy fields are rejected. The schema is
-versioned in [`docs/protocols/blocked-artifact.schema.json`](../protocols/blocked-artifact.schema.json).
+An agent blocked by an external dependency reports it agent-side in its
+PR/tracker comment (SPEC section 1); the worker has no blocker artifact and does
+not park a dedicated cooldown for it (the `.aiops/BLOCKED.json` →
+`kind: "external_blocker"` cooldown was removed as over-design in #572). A
+still-active issue rides the normal continuation / §8.4 backoff retry cycle,
+re-checking tracker state each poll.
 
 ## Branches and pull requests
 

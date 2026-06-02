@@ -679,18 +679,12 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			d.WorkspacePrepared(ctx, issue, tk, workspacePathForTask(d.Config, tk))
 		}
 		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {
-			result := WorkerResult{
-				Err:             rterr.Err,
-				NonRetryable:    rterr.NonRetryable,
-				InputRequired:   runner.IsInputRequired(rterr.Err),
-				ExternalBlocked: rterr.ExternalBlocked,
-				Elapsed:         time.Since(start),
+			out <- WorkerResult{
+				Err:           rterr.Err,
+				NonRetryable:  rterr.NonRetryable,
+				InputRequired: runner.IsInputRequired(rterr.Err),
+				Elapsed:       time.Since(start),
 			}
-			if rterr.ExternalBlocked {
-				result.BlockerReason = rterr.Blocker.Reason
-				result.BlockerRetryAfter = (&worker.ExternalBlockerError{Artifact: rterr.Blocker}).RetryAfter()
-			}
-			out <- result
 			return
 		}
 		out <- WorkerResult{Elapsed: time.Since(start)}

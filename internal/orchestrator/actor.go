@@ -39,13 +39,10 @@ import (
 // configuration/task-build failures do not spin forever. Elapsed is folded
 // into CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
-	Err               error
-	NonRetryable      bool
-	InputRequired     bool
-	ExternalBlocked   bool
-	BlockerReason     string
-	BlockerRetryAfter time.Duration
-	Elapsed           time.Duration
+	Err           error
+	NonRetryable  bool
+	InputRequired bool
+	Elapsed       time.Duration
 }
 
 // Dispatcher is the seam through which the actor spawns a per-issue

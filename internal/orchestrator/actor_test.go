@@ -1608,86 +1608,6 @@ func TestFinalize_NormalExitAfterInputRequiredBlocksInsteadOfContinuationRetry(t
 	}, time.Second)
 }
 
-func TestFinalize_ExternalBlockedExitSchedulesCooldownRetry(t *testing.T) {
-	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-EXT-BLOCK", Identifier: "ENG-EXT-BLOCK", State: "In Progress", Title: "blocked externally"}
-	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	disp.finishAt(0, WorkerResult{
-		Err:               errors.New("external dependency blocked run: PR #455 remains open"),
-		ExternalBlocked:   true,
-		BlockerReason:     "PR #455 remains open",
-		BlockerRetryAfter: time.Hour,
-		Elapsed:           50 * time.Millisecond,
-	})
-
-	waitFor(t, func() bool {
-		view, _ := o.Snapshot(context.Background())
-		return len(view.Running) == 0 && len(view.Retrying) == 1 && view.Retrying[0].Kind == RetryKindExternalBlocker
-	}, time.Second)
-	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
-		t.Fatalf("cooldown issue dispatch err = %v; want ErrNotDispatched", err)
-	}
-	view, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if got := view.Retrying[0].Error; got != "PR #455 remains open" {
-		t.Fatalf("external blocker retry error = %q; want blocker reason", got)
-	}
-	if len(view.Completed) != 0 {
-		t.Fatalf("completed entries after external blocker = %+v; want none", view.Completed)
-	}
-	if view.CumulativeCompletedTotal != 0 {
-		t.Fatalf("completed total after external blocker = %d; want 0", view.CumulativeCompletedTotal)
-	}
-	if view.Retrying[0].DueAt.Before(time.Now().Add(59 * time.Minute)) {
-		t.Fatalf("external blocker due_at = %v; want roughly one hour from now", view.Retrying[0].DueAt)
-	}
-}
-
-func TestDispatchAfterTrackerRecheckConsumesDueExternalBlockerCooldown(t *testing.T) {
-	disp := &fakeDispatcher{}
-	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-EXT-READY", Identifier: "ENG-EXT-READY", State: "In Progress", Title: "blocked externally"}
-	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-	disp.finishAt(0, WorkerResult{
-		ExternalBlocked:   true,
-		BlockerReason:     "dependency has not merged",
-		BlockerRetryAfter: time.Millisecond,
-		Elapsed:           time.Millisecond,
-	})
-	waitFor(t, func() bool {
-		view, _ := o.Snapshot(context.Background())
-		return len(view.Retrying) == 1 && view.Retrying[0].Kind == RetryKindExternalBlocker && !time.Now().Before(view.Retrying[0].DueAt)
-	}, time.Second)
-
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-	if got := disp.attemptValueAt(1); got != nil {
-		t.Fatalf("external blocker redispatch attempt = %v; want nil normal dispatch", *got)
-	}
-}
-
 func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
@@ -3209,63 +3129,63 @@ func TestRetryFire_DropsStaleFireAfterAttemptBumpReplacement(t *testing.T) {
 	}
 }
 
-// TestRetryFire_ExternalBlockerFireWakesPollLoopWithoutDispatch pins the
-// external-blocker arm of the wake-only branch of (*retryFireOp).apply. Until
-// now only the continuation arm of that shared OR condition was exercised
-// (TestContinuationRetryTimerRequiresTrackerRecheckedDispatch), and that test
-// drives the eventual dispatch via an explicit RequestDispatchAfterTrackerRecheck
-// — so deleting the wake-emission call would not fail it. This test fires an
-// external-blocker timer straight into apply and asserts (a) the entry is
-// retained for the tracker recheck, (b) its timer is cleared, (c) nothing
-// dispatches from the cached snapshot, and (d) the followup actually queues a
-// poll wake (closing the placebo gap for both wake arms).
-func TestRetryFire_ExternalBlockerFireWakesPollLoopWithoutDispatch(t *testing.T) {
+// TestRetryFire_ContinuationFireWakesPollLoopWithoutDispatch pins the wake-only
+// branch of (*retryFireOp).apply for a fired continuation timer. The companion
+// TestContinuationRetryTimerRequiresTrackerRecheckedDispatch drives the eventual
+// dispatch via an explicit RequestDispatchAfterTrackerRecheck — so deleting the
+// wake-emission call would not fail it. This test fires a continuation timer
+// straight into apply and asserts (a) the entry is retained for the tracker
+// recheck, (b) its timer is cleared, (c) nothing dispatches from the cached
+// snapshot, and (d) the followup actually queues a poll wake (closing the
+// placebo gap). Continuation is now the only wake kind — the external-blocker arm
+// of this branch was removed with the cooldown in #572.
+func TestRetryFire_ContinuationFireWakesPollLoopWithoutDispatch(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)
 	o := New(st, Deps{Dispatcher: disp})
 
-	issueID := IssueID("ENG-BLOCK")
-	issue := tracker.Issue{ID: string(issueID), Identifier: "ENG-BLOCK", State: "Blocked", Title: "external blocker"}
+	issueID := IssueID("ENG-CONT")
+	issue := tracker.Issue{ID: string(issueID), Identifier: "ENG-CONT", State: "In Progress", Title: "continuation wake"}
 	timer := time.AfterFunc(time.Hour, func() {})
 	defer timer.Stop()
 	st.ScheduleRetry(&RetryEntry{
 		Issue:      issue,
 		IssueID:    issueID,
 		Identifier: issue.Identifier,
-		Attempt:    0,
+		Attempt:    3,
 		Timer:      timer,
-		Kind:       RetryKindExternalBlocker,
+		Kind:       RetryKindContinuation,
 	})
 
 	followup := (&retryFireOp{
 		o:       o,
 		id:      issueID,
 		issue:   issue,
-		attempt: 0,
-		kind:    RetryKindExternalBlocker,
+		attempt: 3,
+		kind:    RetryKindContinuation,
 	}).apply(st)
 	if followup == nil {
-		t.Fatal("external-blocker fire returned nil, want a poll-wake followup")
+		t.Fatal("continuation fire returned nil, want a poll-wake followup")
 	}
 
 	entry, ok := st.RetryAttempts[issueID]
 	if !ok {
-		t.Fatal("external-blocker fire consumed the retry entry, want it retained for tracker recheck")
+		t.Fatal("continuation fire consumed the retry entry, want it retained for tracker recheck")
 	}
 	if entry.Timer != nil {
-		t.Fatal("external-blocker fire left entry.Timer set, want it cleared after firing")
+		t.Fatal("continuation fire left entry.Timer set, want it cleared after firing")
 	}
 	if got := disp.count(); got != 0 {
-		t.Fatalf("external-blocker fire spawned %d workers, want 0 (must re-observe via poll)", got)
+		t.Fatalf("continuation fire spawned %d workers, want 0 (must re-observe via poll)", got)
 	}
 
-	// The followup must actually wake the poll loop; otherwise the cooldown
+	// The followup must actually wake the poll loop; otherwise the continuation
 	// retry would never be re-observed and the issue would stall in the queue.
 	followup()
 	select {
 	case <-o.retryWakeCh():
 	default:
-		t.Fatal("external-blocker fire followup did not queue a poll wake")
+		t.Fatal("continuation fire followup did not queue a poll wake")
 	}
 }
 
