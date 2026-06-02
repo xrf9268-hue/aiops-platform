@@ -26,7 +26,7 @@ workspace:
 
 agent:
   # Start with the mock runner. It exercises the worker pipeline (clone,
-  # branch, workspace prep, policy checks, runner loop) without authoring
+  # branch, workspace prep, runner loop) without authoring
   # any code, so you can validate policy guardrails before letting a
   # real model touch the repository. PR creation, labels, and comments are
   # the agent's responsibility per SPEC §1, not the worker's. Only the runners registered in
@@ -48,24 +48,11 @@ policy:
   # graduate from analysis-only. Do not set this to a non-draft mode
   # for company repositories.
   mode: draft_pr
-  # The current `internal/workspace.matchesPath` only enforces patterns
-  # ending in `/**` (prefix match) or `/*` (also prefix). Globs that
-  # start with `**/` (e.g. `**/secrets/**`) become a literal prefix that
-  # no real file path matches, so they silently fail open. List each
-  # top-level directory you actually want to block. Add more entries if
-  # your repository keeps these concerns under a different prefix
-  # (e.g. `services/billing/**`, `apps/web/migrations/**`).
-  deny_paths:
-    - infra/**
-    - deploy/**
-    - secrets/**
-    - auth/**
-    - billing/**
-    - migrations/**
-    - db/migrations/**
-    - .github/**
-  max_changed_files: 8
-  max_changed_loc: 200
+  # Path/scope rules (e.g. "do not touch infra/**, deploy/**, secrets/**,
+  # .github/**; keep the diff small") belong in the prompt body below (SPEC
+  # §3.2). For HARD path prevention on a company repo, restrict writes via the
+  # `sandbox:` block. The worker path/diffstat gate was removed in #561 —
+  # `deny_paths` / `max_changed_*` are no longer accepted here.
 
 # Safety policy for cautious company runs. These entries are descriptive: they
 # make the expected network/path/command envelope explicit for the agent and
@@ -140,8 +127,8 @@ Process:
    review handoff are the agent's responsibility per SPEC §1, not the
    worker's.
 3. After graduating to `codex-app-server` or `claude`, make the smallest safe edit
-   that respects every entry in `policy.deny_paths` and stays inside
-   `max_changed_files` / `max_changed_loc`.
+   that respects the off-limits paths stated in the prompt and keeps the diff
+   small (≤12 files / ≤300 LOC review guideline).
 4. Run the verification commands and capture results.
 5. Summarize what you changed, why, and how you verified it in the pull request description.
 6. Stop and explain the blocker if the task is ambiguous, exceeds
@@ -169,14 +156,15 @@ has produced a clean audit trail:
    guardrails behave correctly. The mock runner produces deterministic
    workspace artifacts and never authors code; PR creation, labels, and
    review handoff are the agent's responsibility per SPEC §1, not the
-   worker's. Stay here until you have reviewed several runs and confirmed
-   `deny_paths` blocks the directories you expect.
+   worker's. Stay here until you have reviewed several runs and confirmed the
+   prompt + `sandbox:` write restrictions keep changes out of the directories
+   you expect.
 
 2. **Claude with draft PRs** (`claude`).
    When you are ready to let a model author code, switch
-   `agent.default` to `claude` while keeping `policy.mode: draft_pr`,
-   `pr.draft: true`, and the full `deny_paths` list. Keep
-   `max_changed_files` and `max_changed_loc` conservative.
+   `agent.default` to `claude` while keeping `policy.mode: draft_pr` and
+   `pr.draft: true`. State the off-limits paths and a tight size budget in the
+   prompt, and keep the `sandbox:` write restrictions conservative.
 
 3. **Codex with draft PRs** (`codex-app-server`).
    Once the Claude loop looks healthy, swap `agent.default` to `codex-app-server`
@@ -188,7 +176,7 @@ Do not switch off `mock` if any of the following is still true:
 - Branch protection is not enforced on the default branch.
 - A low-privilege bot account is not in use for Gitea or GitHub.
 - Reviewers are not consistently triaging `ai-generated` PRs.
-- Recent mock runs have surfaced policy violations or scope creep.
+- Recent runs have surfaced out-of-scope edits or scope creep in review.
 
 When in doubt, stay on `mock`. Cautious mode is the default for
 company repositories until the workflow has earned trust.

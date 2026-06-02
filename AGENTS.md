@@ -282,11 +282,11 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 | `cmd/worker` | Polls trackers, dispatches eligible issues, and runs the Symphony loop; PR handoff is agent-side |
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
 | `internal/runner` | Runner abstraction: `mock`, `codex-app-server`, `claude` |
-| `internal/workspace` | Deterministic git workspace, verify, policy checks |
+| `internal/workspace` | Deterministic git workspace, hooks, run artifacts |
 | `internal/tracker` | Tracker abstraction with Linear client |
 | `internal/gitea` | Gitea tracker/client support and PR/tool helpers |
 | `internal/worker` | Worker lifecycle |
-| `internal/task`, `internal/policy` | Task event constants, policy helpers |
+| `internal/task` | Task event constants |
 | `docs/adr/` | Architectural decisions (start here for "why") |
 | `docs/runbooks/` | Operational guides (CI, local dev, workspace cache) |
 | `test/e2e/` | Build-tagged E2E suite (`-tags e2e`) using Gitea containers |
@@ -422,15 +422,19 @@ failure per the "Earned rules" principle above.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template. Secret-bearing values that arrive via config or CLI (e.g. `clone_url` basic-auth userinfo) must be masked before they reach any log, error string, or state output — env-var-only redaction does not cover them. Mask clone URLs with `workflow.MaskCloneURL`. **Earned by:** #469/PR #483, where a doctor ambiguity/not-found error echoed a credentialed `clone_url` because `redact()` only scrubbed env-var values.
-- **`policy.max_changed_files` (12) and `policy.max_changed_loc` (300) are a
-  size gate, not an LOC-reduction mandate.** Worker PRs are draft + labeled by
+- **Keep worker PRs small — ≤12 changed files / ≤300 changed LOC is a review
+  guideline, not an LOC-reduction mandate.** (These were the
+  `policy.max_changed_files` / `policy.max_changed_loc` worker caps; the worker
+  no longer enforces them — the path/diffstat gate was removed in #561 because
+  it ran post-push and raced reconcile-cancel — so the budget is now a review
+  discipline, not config.) Worker PRs are draft + labeled by
   default; shape them small when you can, but the budget exists to catch scope
   creep and force explicit handling — not to incentivize deleting necessary
   tests, weakening state-machine coverage, skipping race coverage, or
   preferring compact code over clear reliable code when review feedback
   exposes a real correctness, safety, performance, or coverage gap. Classify
   every PR into exactly one of three states and surface it in the PR body:
-  - `within budget` — diff fits the effective budget.
+  - `within budget` — diff fits the ~12-file / ~300-LOC guideline.
   - `size-gated: justified overage` — over the budget because the extra LOC
     pays for correctness, regression coverage, race/state-machine safety, or
     other best-practice hardening that cannot be split without losing

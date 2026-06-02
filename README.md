@@ -2,8 +2,8 @@
 
 A personal-productivity AI coding orchestrator: a single Go worker that watches
 a tracker (Linear, Gitea, or GitHub), turns eligible issues into deterministic
-Git workspaces, runs a coding agent under a repo-owned policy, verifies the
-result, and hands the branch/PR back through the agent's own tools.
+Git workspaces, runs a coding agent in each, and lets the agent hand the
+branch/PR back through its own tools.
 
 ```text
 Linear, Gitea, or GitHub issue
@@ -66,9 +66,7 @@ brand/UX rationale.
 - `internal/gitea` — Gitea tracker client plus the Gitea PR-tool exposed through
   the agent/tool surface (not a worker-side PR handoff).
 - `internal/runner` — runner abstraction for `mock`, `codex-app-server`, and `claude`.
-- `internal/workspace` — deterministic Git workspace management and verification.
-- `internal/policy` — change-size and mode policy checks (`analysis_only`,
-  `draft_pr`, …).
+- `internal/workspace` — deterministic Git workspace management and run artifacts.
 - `internal/task` — task model and shared types.
 
 ## Quick start: worker-owned tracker polling path
@@ -263,15 +261,12 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `agent.timeout` | `30m` | implementation (#215) |
 | `agent.max_retry_attempts` | unbounded (SPEC §8.4 retry-until-tracker-changes); explicit positive integer opts into the §15.5 harness-hardening cap, explicit `0` disables failure retries | SPEC §8.4 / §16.6 default; opt-in cap tracked under DEVIATIONS D29 |
 | `agent.max_timeout_retries` | unbounded (SPEC §8.4 backoff-only); explicit positive integer opts into the §15.5 cap, explicit `0` disables runner-timeout re-queues | SPEC §8.4 default; opt-in cap tracked under DEVIATIONS D29 |
-| `agent.policy_violation_budget` | `2` policy-violation feedback entries per issue before non-retryable fail (`0` disables suppression) | implementation (#230) |
 | `codex.command` | `codex app-server` | SPEC §6.4 |
 | `codex.env_passthrough` / `claude.env_passthrough` | none beyond runner baseline (`PATH`, `HOME`, `USER`, locale, `TZ`, `TERM`); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384) |
 | `pr.draft` | `false` | implementation |
 | `pr.labels` | `[ai-generated, needs-review]` | implementation |
 | `server.port` | `4000` (`-1` disables the HTTP state server + dashboard) | implementation |
-| `policy.mode` | `draft_pr` | implementation |
-| `policy.max_changed_files` | `12` | implementation |
-| `policy.max_changed_loc` | `300` | implementation |
+| `policy.mode` | `draft_pr` (or `analysis_only`) | implementation |
 | `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |
 | `tracker.endpoint` | Linear defaults to `https://api.linear.app/graphql`; Gitea/GitHub use this as the REST API base URL, with env fallbacks only when omitted | SPEC §6.4 / implementation |
 | `tracker.project_slug` | required for `tracker.kind: linear` unless `services[]` routes define per-service project slugs | SPEC §6.4 |

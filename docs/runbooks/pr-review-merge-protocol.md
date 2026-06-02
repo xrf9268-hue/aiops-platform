@@ -129,8 +129,8 @@ workflow is a backstop, not a merge substitute.
 The size-gate rule — the three states (`within budget` /
 `size-gated: justified overage` / `size-gated: split recommended`) and the
 principle that correctness/coverage/safety take precedence over LOC compliance
-— is canonical in [`AGENTS.md`](../../AGENTS.md) (the `policy.max_changed_files`
-/ `policy.max_changed_loc` bullet). Classify every PR into exactly one state and
+— is canonical in [`AGENTS.md`](../../AGENTS.md) (the size-gate bullet).
+Classify every PR into exactly one state and
 disclose it in the body; never delete meaningful tests or weaken coverage to
 fit the budget.
 
@@ -143,10 +143,11 @@ Merge-flow application of those states:
 - `size-gated: split recommended` — **hard stop, split into smaller PRs**; do
   not seek sign-off in lieu of splitting.
 
-Read the effective budget and `policy.deny_paths` from the repo's `WORKFLOW.md`;
-do not trust a hardcoded list (defaults are 12 files / 300 LOC and deny
-`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but workflows differ
-— e.g. the `github-local` example uses 20 / 600).
+The size budget is a review guideline (≤12 changed files / ≤300 changed LOC),
+not worker-enforced config — the `policy.max_changed_*` gate was removed in
+#561. Off-limits paths now live in the repo's `WORKFLOW.md` prompt (SPEC §3.2)
+rather than a `policy.deny_paths` config key; read them there (commonly
+`infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`, but workflows differ).
 
 ## 7. PR body is a living ledger
 
@@ -160,8 +161,7 @@ Include a size-gate checklist (exactly one box checked):
 
 ```markdown
 ### Size gate
-- [ ] `within budget` — diff fits effective `policy.max_changed_files` /
-      `max_changed_loc`
+- [ ] `within budget` — diff fits the ~12-file / ~300-LOC review guideline
 - [ ] `size-gated: justified overage` — rationale: <why correctness/coverage/
       safety/perf justifies the extra LOC; not auto-mergeable; needs human
       size-gate sign-off>
@@ -185,7 +185,7 @@ Include a size-gate checklist (exactly one box checked):
      non-outdated threads.
   3. Every acceptance criterion met, or each gap deferred to a tracked, linked
      issue.
-  4. Classified `within budget` and changes no `policy.deny_paths`.
+  4. Classified `within budget` and touches no off-limits paths.
   5. Branch protection's required reviews satisfied.
   6. The agreed merge method (default squash) into the agreed base.
 
@@ -196,7 +196,7 @@ Include a size-gate checklist (exactly one box checked):
 
   **Hard stops — always require human sign-off even under an auto-merge grant:**
   force-pushing/merging into `main` out of band or any history rewrite; editing
-  `go.mod`'s `go` directive or touching `policy.deny_paths`; a
+  `go.mod`'s `go` directive or touching off-limits paths; a
   `size-gated: justified overage` PR (flag, don't merge without size-gate
   sign-off); a `size-gated: split recommended` PR (split, don't seek sign-off);
   anything the human's instructions put off-limits. When at the edge of the

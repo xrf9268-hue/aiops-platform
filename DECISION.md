@@ -95,9 +95,11 @@ gradient flattens to zero.
 
 - **AI per-token throughput** on Go is higher than on Elixir (training
   corpus). Under "AI does the writing", this favors Go.
-- **Existing Go code (~800 LOC)** is salvageable infrastructure
-  (`internal/policy`, `internal/workspace.RunVerify`, `internal/workspace.secretscan`,
-  workflow loader, mock runner, `--print-config`).
+- **Existing Go code (~800 LOC)** is salvageable infrastructure — the workflow
+  loader, mock runner, and `--print-config`. (This originally also counted the
+  harness gates `internal/policy`, `internal/workspace.RunVerify`, and
+  `internal/workspace.secretscan`; they were later found to be over-design on
+  the wrong side of the SPEC §1 boundary and removed under #557 / #561.)
 - **No language switch tax** — neither the operator nor AI needs to take on
   Elixir/BEAM operational surface.
 - **Elixir reference remains accessible** as a disambiguation oracle (via

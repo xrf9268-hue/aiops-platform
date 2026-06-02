@@ -317,7 +317,7 @@ func TestPrepareGitWorkspaceDoesNotSetBaseBranchAsWorkBranchUpstream(t *testing.
 
 // TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns covers SPEC §9.1:
 // workspaces are reused across runs for the same issue. Untracked artifacts
-// (cached deps, build outputs, .aiops policy feedback) must survive a
+// (cached deps, build outputs) must survive a
 // re-prepare, while tracked-file modifications get snapped back to the
 // refreshed base ref so the next runner starts from a clean tracked state.
 func TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns(t *testing.T) {
@@ -723,24 +723,15 @@ func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlinkToPeerWorktree(t *testing
 	}
 }
 
-// TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat locks
-// the reuse-path `git reset --quiet HEAD -- .` invariant at the workspace
-// boundary. A prior run's `EnforcePolicy` / `Diffstat` calls
-// `git add --intent-to-add --all`, leaving untracked files staged as
-// empty-blob entries in the index. Without the reset, the next prepare's
-// `git checkout --force -B` would treat those entries as
-// "files-in-index-not-in-target-ref" and delete them from the working
-// tree — silently nuking cached deps and hook artifacts that SPEC §9.1
-// reuse semantics promise to preserve.
-//
-// `TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns` covers the
-// happy reuse path but never calls Diffstat, so the reset is a no-op
-// there. Only the worker-integration test
-// `TestRunTaskReusesWorkspaceAcrossRunsAndGatesAfterCreate` exercises
-// this scenario today, which means removing the reset only fails the
-// worker test, not anything in the workspace package. This test pins the
-// invariant where the code lives.
-func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat(t *testing.T) {
+// TestPrepareGitWorkspace_ReuseSurvivesIntentToAddEntries locks the reuse-path
+// `git reset --quiet HEAD -- .` invariant at the workspace boundary. If a prior
+// run leaves untracked files staged as intent-to-add (empty-blob) entries in
+// the index — e.g. a hook running `git add -N` / `git add --intent-to-add` —
+// then without the reset the next prepare's `git checkout --force -B` would
+// treat those entries as "files-in-index-not-in-target-ref" and delete them
+// from the working tree, silently nuking cached deps and hook artifacts that
+// SPEC §9.1 reuse semantics promise to preserve.
+func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddEntries(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
 	ctx := context.Background()
@@ -754,22 +745,22 @@ func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat(t *testin
 		t.Fatal("first prepare reported createdNow=false")
 	}
 	// Cached untracked artifacts a prior agent run would leave behind
-	// (build outputs, .aiops policy feedback, etc.).
+	// (build outputs, hook caches, etc.).
 	if err := os.WriteFile(filepath.Join(dir, "cached-dep.txt"), []byte("cache\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, ".aiops"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".aiops", "POLICY_VIOLATION_FEEDBACK.md"), []byte("feedback\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".aiops", "cache-marker.txt"), []byte("cache\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Diffstat runs `git add --intent-to-add --all`, leaving cached-dep.txt
-	// and the .aiops file in the index as empty-blob entries. The next
-	// prepare's reset must drop those entries before the checkout, or
-	// `git checkout --force -B` would treat them as removable.
-	if _, err := Diffstat(ctx, dir); err != nil {
-		t.Fatalf("Diffstat: %v", err)
+	// Stage the untracked files as intent-to-add (empty-blob) entries, the
+	// condition the reuse reset must clear. The next prepare's reset must drop
+	// those entries before the checkout, or `git checkout --force -B` would
+	// treat them as removable.
+	if err := runGit(ctx, dir, "add", "--intent-to-add", "--all"); err != nil {
+		t.Fatalf("git add --intent-to-add: %v", err)
 	}
 
 	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
@@ -782,7 +773,7 @@ func TestPrepareGitWorkspace_ReuseSurvivesIntentToAddFromPriorDiffstat(t *testin
 	if dir != dir2 {
 		t.Fatalf("workspace dir changed across runs: %s vs %s", dir, dir2)
 	}
-	for _, rel := range []string{"cached-dep.txt", filepath.Join(".aiops", "POLICY_VIOLATION_FEEDBACK.md")} {
+	for _, rel := range []string{"cached-dep.txt", filepath.Join(".aiops", "cache-marker.txt")} {
 		if body, err := os.ReadFile(filepath.Join(dir2, rel)); err != nil {
 			t.Fatalf("untracked artifact %q removed across reuse despite intent-to-add gate: %v", rel, err)
 		} else if len(body) == 0 {

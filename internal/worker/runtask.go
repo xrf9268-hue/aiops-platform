@@ -179,8 +179,8 @@ func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
 //
 // Per SPEC §1, push, PR creation, and tracker state writes are the agent's
 // responsibility. The worker's role is: claim, prepare workspace, resolve
-// workflow, run agent session, enforce the policy gate, emit events, and clean
-// up. The lifecycle is split across runState phase
+// workflow, run the agent session, emit events, and clean up. The lifecycle is
+// split across runState phase
 // helpers; RunTask only sequences them and stamps PhaseFailed on the way out
 // of any non-terminal error path.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
@@ -198,9 +198,6 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 		return rtErr
 	}
 	if rtErr := rs.runAgent(); rtErr != nil {
-		return rtErr
-	}
-	if rtErr := rs.enforcePostRunPolicy(); rtErr != nil {
 		return rtErr
 	}
 	if rtErr := rs.runPostRunGates(); rtErr != nil {
@@ -264,9 +261,8 @@ func (rs *runState) applyDefaultModel() {
 	}
 }
 
-// buildPrompt assembles the prompt template variables (including any prior
-// policy-violation feedback and its retry budget), renders the prompt, appends
-// the standing directives, and writes the task files. It transitions
+// buildPrompt assembles the prompt template variables, renders the prompt,
+// appends the standing directives, and writes the task files. It transitions
 // PreparingWorkspace → BuildingPrompt.
 func (rs *runState) buildPrompt() *RunTaskError {
 	t := rs.t
@@ -288,33 +284,11 @@ func (rs *runState) buildPrompt() *RunTaskError {
 	if t.Attempts > 0 {
 		renderVars["attempt"] = t.Attempts
 	}
-	policyFeedback, policyFeedbackPath, feedbackErr := readPolicyViolationFeedback(rs.workspaceRoot, t)
-	if feedbackErr != nil {
-		Emit(rs.ctx, rs.ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackReadError, "failed to read prior policy violation feedback", map[string]any{
-			"path":  policyFeedbackPath,
-			"error": ErrSummary(feedbackErr),
-		})
-		WriteFailureArtifacts(rs.ctx, rs.workdir, "policy feedback read failed: "+ErrSummary(feedbackErr))
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("read policy violation feedback: %w", feedbackErr), NonRetryable: true}
-	} else if policyFeedback != nil {
-		policyBudget := rs.wcfg.Agent.PolicyViolationBudgetValue()
-		Emit(rs.ctx, rs.ev, t.ID, t.SourceEventID, task.EventPolicyFeedbackLoaded, "loaded prior policy violation feedback", map[string]any{
-			"path":            policyFeedbackPath,
-			"violation_count": policyFeedback.Count,
-			"summary":         policyFeedback.Summary,
-			"budget":          policyBudget,
-		})
-		if policyBudget > 0 && policyFeedback.Count >= policyBudget {
-			WriteFailureArtifacts(rs.ctx, rs.workdir, "policy violation retry budget already exhausted: "+policyFeedback.Summary)
-			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("policy violation retry budget already exhausted after %d attempts: %s", policyFeedback.Count, policyFeedback.Summary), NonRetryable: true}
-		}
-	}
 	rs.emitPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
 	prompt, err := workflow.Render(rs.wf.PromptTemplate, renderVars)
 	if err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err, NonRetryable: true}
 	}
-	prompt = appendPolicyViolationFeedback(prompt, policyFeedback, rs.wcfg)
 	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
 	prompt = AppendBlockerDirective(prompt)
 	// Skip the verify directive in analysis-only mode: that mode forbids source
@@ -330,14 +304,14 @@ func (rs *runState) buildPrompt() *RunTaskError {
 	return nil
 }
 
-// runAgent resets stale post-run artifacts so the gates cannot pass on leftover
-// files, runs the before_run hook, invokes the runner under its timeout, and
 // newRunner constructs the runner for a model. It is a package var so tests can
 // inject a runner that returns context.Canceled to exercise the reconcile-cancel
 // artifact-skip path (#543) without standing up a real agent subprocess.
 var newRunner = runner.New
 
-// runs the after_run hook on both the success and failure paths.
+// runAgent resets stale run artifacts left over from a previous run, runs the
+// before_run hook, invokes the runner under its timeout, and runs the after_run
+// hook on both the success and failure paths.
 func (rs *runState) runAgent() *RunTaskError {
 	r, err := newRunner(rs.t.Model)
 	if err != nil {
@@ -439,16 +413,16 @@ func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
 
 // resetStaleArtifacts deletes the blocker artifact, the worker failure
 // post-mortem (.aiops/FAILURE.md), and (in analysis_only mode) .aiops/PLAN.md
-// before the runner starts so the post-run gates cannot pass on stale files
-// from a previous run or from the base branch. PrepareGitWorkspace resets
-// tracked files to origin/<base> on every prepare (fresh checkout on first
-// touch, `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may
-// also be committed on the base branch itself (left over from a prior PR or
-// seeded by hand), and on reuse any untracked artifact written by the previous
-// run still lingers in the workdir. Deleting them here means the gates can only
-// succeed when the runner produced artifacts during this run, and a stale
-// FAILURE.md from a previous failed attempt does not leak into a later
-// successful rerun's CHANGED_FILES.txt or commits (#561 review).
+// before the runner starts so leftovers from a previous run or the base branch
+// are not mistaken for this run's output. PrepareGitWorkspace resets tracked
+// files to origin/<base> on every prepare (fresh checkout on first touch,
+// `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may also be
+// committed on the base branch itself (left over from a prior PR or seeded by
+// hand), and on reuse any untracked artifact written by the previous run still
+// lingers in the workdir. Deleting them here means the analysis-only diff check
+// only sees this run's PLAN.md, and a stale FAILURE.md from a previous failed
+// attempt does not leak into a later successful rerun's CHANGED_FILES.txt or
+// commits (#561 review).
 func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	if err := ResetBlockerArtifact(rs.workdir); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
@@ -473,30 +447,6 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 		}
 	}
 	return nil
-}
-
-// enforcePostRunPolicy runs the workspace policy check and, on violation,
-// records retry feedback and classifies whether the failure is retryable.
-func (rs *runState) enforcePostRunPolicy() *RunTaskError {
-	err := workspace.EnforcePolicy(rs.ctx, rs.workdir, rs.wcfg)
-	if err == nil {
-		return nil
-	}
-	feedback, feedbackPath, feedbackErr := writePolicyViolationFeedback(rs.workspaceRoot, rs.t, err)
-	willRetry := feedbackErr == nil
-	policyBudget := rs.wcfg.Agent.PolicyViolationBudgetValue()
-	if feedback != nil && policyBudget > 0 && feedback.Count >= policyBudget {
-		willRetry = false
-	}
-	recordPolicyViolation(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, err, feedback, feedbackPath, willRetry, feedbackErr, policyBudget)
-	WriteFailureArtifacts(rs.ctx, rs.workdir, "policy check failed: "+ErrSummary(err))
-	if feedbackErr != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("write policy violation feedback: %w; original policy error: %w", feedbackErr, err), NonRetryable: true}
-	}
-	if !willRetry {
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("repeated policy violation after %d attempts: %w", feedback.Count, err), NonRetryable: true}
-	}
-	return &RunTaskError{Cfg: rs.wcfg, Err: err}
 }
 
 // runPostRunGates runs the analysis-only diff check and the external-blocker
@@ -534,13 +484,12 @@ func (rs *runState) runPostRunGates() *RunTaskError {
 	return nil
 }
 
-// finalize snapshots the changed-file list for post-run inspection, clears any
-// policy-violation feedback now that the run succeeded, and stamps the terminal
-// success phase. Its file-snapshot steps are best-effort (failures are logged,
-// not fatal), so it has no error to return. It does not push; that is the
-// agent's job.
+// finalize snapshots the changed-file list for post-run inspection and stamps
+// the terminal success phase. Its file-snapshot steps are best-effort (failures
+// are logged, not fatal), so it has no error to return. It does not push; that
+// is the agent's job.
 func (rs *runState) finalize() {
-	// Snapshot the changed files after all gates have passed so
+	// Snapshot the changed files after the post-run checks so
 	// CHANGED_FILES.txt is available as a workspace artifact for post-run
 	// inspection.
 	if err := workspace.WriteChangedFiles(rs.workdir, nil); err != nil {
@@ -550,7 +499,6 @@ func (rs *runState) finalize() {
 	if err := workspace.WriteChangedFiles(rs.workdir, changed); err != nil {
 		LogIssueEventf(rs.t, "changed_files_write_failed", "error=%q", err)
 	}
-	clearPolicyViolationFeedback(rs.workspaceRoot, rs.t)
 
 	rs.emitPhase(task.PhaseFinishing, task.PhaseSucceeded)
 }
@@ -747,38 +695,6 @@ func runtimeEventKey(event task.RuntimeEvent) string {
 		encoded = []byte(fmt.Sprintf("%#v", event.Payload))
 	}
 	return event.Event + "\x00" + string(encoded)
-}
-
-// recordPolicyViolation writes a structured `policy_violation` task event
-// before the worker fails the task. budget is the configured
-// `agent.policy_violation_budget` (resolved via PolicyViolationBudgetValue),
-// emitted alongside the running count so dashboards can render "violation N
-// of M (final attempt)".
-func recordPolicyViolation(ctx context.Context, ev EventEmitter, taskID, _ string, err error, feedback *policyViolationFeedback, feedbackPath string, willRetry bool, feedbackErr error, budget int) {
-	if ev == nil {
-		return
-	}
-	var perr *workspace.PolicyError
-	if errors.As(err, &perr) {
-		payload := map[string]any{
-			"violations": perr.Violations,
-			"will_retry": willRetry,
-			"budget":     budget,
-		}
-		if feedback != nil {
-			payload["violation_count"] = feedback.Count
-		}
-		if feedbackPath != "" {
-			payload["feedback_path"] = feedbackPath
-		}
-		if feedbackErr != nil {
-			payload["feedback_error"] = ErrSummary(feedbackErr)
-		}
-		if emitErr := ev.AddEventWithPayload(ctx, taskID, task.EventPolicyViolation, perr.Error(), payload); emitErr == nil {
-			return
-		}
-	}
-	_ = ev.AddEvent(ctx, taskID, task.EventPolicyViolation, err.Error())
 }
 
 func writeTaskFiles(workdir string, t task.Task, prompt string) error {

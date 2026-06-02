@@ -122,8 +122,6 @@ The current Go implementation provides these safety controls:
 - coding-agent execution from the per-issue workspace directory;
 - runner-side `cwd` and workspace-root validation before agent subprocess
   launch, even when `sandbox.enabled` is false;
-- workflow-configured policy limits such as `deny_paths`, `max_changed_files`,
-  and `max_changed_loc`;
 - draft-PR mode for human review before merge;
 - `$VAR` indirection for secrets in workflow configuration;
 - masking of secret values in configuration inspection output;
@@ -200,10 +198,14 @@ repository:
    tokens, SSH agents, or customer data into the worker environment or workspace.
 6. Keep `.env`, `.env.*`, private keys, and service-account files outside the
    repository and workspace unless a specific run absolutely requires them.
-7. Configure `policy.deny_paths` for sensitive directories such as deployment
-   manifests, infrastructure, migrations, billing, auth, and secrets.
-8. Keep `policy.max_changed_files` and `policy.max_changed_loc` small enough for
-   reliable review.
+7. Keep the agent away from sensitive directories (deployment manifests,
+   infrastructure, migrations, billing, auth, secrets): state them as
+   off-limits in the `WORKFLOW.md` prompt (SPEC §3.2) and, for hard
+   prevention, restrict writes via the `sandbox:` block. (The worker
+   `policy.deny_paths` / `max_changed_*` gate was removed in #561: it ran
+   post-push, so it could only flag — never prevent — a forbidden change.)
+8. Keep changes small enough for reliable review — instruct the agent to keep
+   diffs tight in the prompt, and split oversized PRs at review time.
 9. Restrict tracker eligibility to trusted projects, teams, labels, and workflow
    states. Do not let arbitrary tracker items automatically reach the agent.
 10. Prefer project-scoped tracker tools. If `linear_graphql` is available, scope

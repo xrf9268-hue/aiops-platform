@@ -6,8 +6,6 @@ agent:
   timeout: 5m
 policy:
   mode: draft_pr
-  max_changed_files: 12
-  max_changed_loc: 300
 verify:
   commands: []
 tracker:

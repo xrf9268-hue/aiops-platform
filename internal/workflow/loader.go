@@ -346,6 +346,9 @@ func rejectRemovedFields(front []byte) error {
 	if err := rejectRemovedVerifyFields(raw); err != nil {
 		return err
 	}
+	if err := rejectRemovedPolicyFields(raw); err != nil {
+		return err
+	}
 	if claude, ok := raw["claude"].(map[string]any); ok {
 		if _, present := claude["profile"]; present {
 			return fmt.Errorf("claude.profile is not supported; the codex-only `profile` field was removed in issue #541 and Claude never had runner profiles. Remove it")
@@ -385,6 +388,29 @@ func rejectRemovedVerifyFields(raw map[string]any) error {
 	}
 	if _, present := verify["secret_scan"]; present {
 		return fmt.Errorf("verify.secret_scan is no longer supported (#561): the worker secret-scan gate was removed — it ran after the agent had already pushed, so it could only flag, never prevent, a leak, and it raced reconcile-cancel. Remove verify.secret_scan and rely on PR CI / your host's secret scanning, or run the scan from the WORKFLOW prompt before the agent pushes")
+	}
+	return nil
+}
+
+// rejectRemovedPolicyFields surfaces clear errors for the policy path/diffstat
+// gate keys removed under #561, so a stale workflow fails loud instead of
+// silently dropping a scope/path control the operator believes is enforced. The
+// worker policy gate ran after the agent had already pushed (could only flag,
+// never prevent) and raced reconcile-cancel; SPEC §3.2 homes scope/validation
+// rules in the WORKFLOW.md prompt and upstream has no such config. policy.mode
+// remains valid (it selects draft_pr vs analysis_only).
+func rejectRemovedPolicyFields(raw map[string]any) error {
+	if policy, ok := raw["policy"].(map[string]any); ok {
+		for _, key := range []string{"allow_paths", "deny_paths", "max_changed_files", "max_changed_lines", "max_changed_loc"} {
+			if _, present := policy[key]; present {
+				return fmt.Errorf("policy.%s is no longer supported (#561): the worker path/diffstat gate was removed — it ran after the agent had already pushed, so it could only flag, never prevent. Express scope/path rules in the WORKFLOW prompt (SPEC §3.2) and use sandbox write restrictions for hard path prevention. Remove policy.%s; policy.mode is still honored", key, key)
+			}
+		}
+	}
+	if agent, ok := raw["agent"].(map[string]any); ok {
+		if _, present := agent["policy_violation_budget"]; present {
+			return fmt.Errorf("agent.policy_violation_budget is no longer supported (#561): the worker policy gate and its violation-retry loop were removed. Remove agent.policy_violation_budget")
+		}
 	}
 	return nil
 }
