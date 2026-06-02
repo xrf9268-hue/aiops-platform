@@ -2252,6 +2252,20 @@ for line in sys.stdin:
 	if !errors.As(err, &te) {
 		t.Fatalf("Run error = %v, want app-server turn timeout", err)
 	}
+	// Run must return BEFORE the outer ctx fires — that is the "without waiting
+	// for the outer context" property in the test name. te.Elapsed (below) proves
+	// the turn deadline preempted promptly, but it is measured from turn start and
+	// cannot see time Run spends AFTER the turn in process termination /
+	// cmd.Wait(): if that cleanup rode the 10s outer ctx to expiry,
+	// classifyAppServerOutcome would wrap the same *TurnTimeoutError in a
+	// *TimeoutError (codex_app_server.go), whose Unwrap still satisfies the
+	// errors.As above — so the run could wait the full outer budget yet still pass
+	// the type + elapsed checks. Assert the outer ctx never fired to close that
+	// gap. This is boot-independent: interpreter boot only delays the 25ms turn,
+	// it never advances the 10s deadline, so a healthy run leaves ctx.Err() nil.
+	if ctx.Err() != nil {
+		t.Fatalf("ctx.Err() = %v after Run; want nil — Run waited for the outer context instead of returning on the 25ms turn deadline", ctx.Err())
+	}
 	// Assert promptness on TurnTimeoutError.Elapsed, which the runner measures as
 	// time.Since(turnStarted) (codex_app_server.go) — turnStarted is captured
 	// AFTER the initialize/thread/turn handshake, not before Run, so this bound
