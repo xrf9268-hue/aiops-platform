@@ -84,13 +84,6 @@ historical deviations — for example multi-path `WORKFLOW.md` discovery (D4,
 Linear writes (D8, #76) — are no longer in the codebase; legacy alternate
 workflow paths are not searched or reported as shadow sources.
 
-The multi-service `services` workflow key used for Linear tracker-to-service
-routing is tracked as D25 (#143) and documented in
-[`docs/workflows/services-routing.md`](workflows/services-routing.md). It is a
-read-only candidate-selection extension: the orchestrator may use Linear
-project/team/label/custom-field metadata to choose a configured service/repo,
-but ticket writes remain agent/tool-side per SPEC §1.
-
 ## Pointers
 
 - Symphony's Codex integration uses the long-running `codex app-server`
