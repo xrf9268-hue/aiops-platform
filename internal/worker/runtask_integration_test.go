@@ -727,19 +727,35 @@ func TestBuildPromptVerifyDirectiveGatedByMode(t *testing.T) {
 // and ran post-push, #76); analysis-only is preventive only, via the
 // AppendAnalysisOnlyDirective prompt directive. This fails if
 // enforceAnalysisOnlyChanges is reintroduced (it rejected exactly this input).
+//
+// The agent's source edit is simulated with the `claude` shell runner writing a
+// non-.aiops file; the bespoke mock-source-change runner fixture was removed in
+// #581 (it existed solely to feed the now-deleted gate's tests).
 func TestAnalysisOnlyRunNoLongerGatesSourceChanges(t *testing.T) {
-	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock-source-change\npolicy:\n  mode: analysis_only", 1)
+	const sourceEdit = `agent:
+  default: claude
+claude:
+  command: "echo edited > mock-source-change.txt"
+policy:
+  mode: analysis_only`
+	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", sourceEdit, 1)
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
 	t.Setenv("REPO_URL", cloneURL)
-	tk.Model = "mock-source-change"
+	tk.Model = "claude"
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Agent.Default = "mock-source-change"
+	cfg.Workflow.Config.Agent.Default = "claude"
+	cfg.Workflow.Config.Claude.Command = "echo edited > mock-source-change.txt"
 	cfg.Workflow.Config.Policy.Mode = "analysis_only"
 
 	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
 		t.Fatalf("RunTaskForTest(analysis_only + source change) = %v; want nil (the post-turn analysis-only gate was removed in #574)", rterr.Err)
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
+	if _, err := os.Stat(filepath.Join(workdir, "mock-source-change.txt")); err != nil {
+		t.Fatalf("agent source edit mock-source-change.txt stat = %v; want present (the run must actually produce the source change the removed gate rejected)", err)
 	}
 }
 
