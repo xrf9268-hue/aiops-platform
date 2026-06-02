@@ -197,12 +197,15 @@ type OrchestratorState struct {
 	ClaimedIssues map[IssueID]tracker.Issue
 	RetryAttempts map[IssueID]*RetryEntry
 	// Failed is a non-SPEC harness extension (DEVIATIONS.md D29) that
-	// suppresses redispatch of deterministically non-retryable runs
-	// (continuation budget) and of runs
-	// that exceeded the opt-in SPEC §15.5 `agent.max_retry_attempts` cap.
-	// Under the SPEC default (no cap) only the deterministic-failure
-	// branches populate this map; ReleaseFailedIfIssueChanged clears the
-	// entry once the tracker visibly changes the issue.
+	// suppresses redispatch of deterministically non-retryable runs — runner
+	// failures flagged NonRetryable (e.g. a malformed WORKFLOW.md) via
+	// applyNonRetryable -> FinishRunNonRetryableFailed, which would otherwise
+	// spin on every poll tick. The opt-in max_retry_attempts cap (removed in
+	// #577) and the continuation-spawn cap (removed in #576) that also wrote
+	// here are gone, so FinishRunNonRetryableFailed is now the sole writer.
+	// ReleaseFailedIfIssueChanged clears the entry once the tracker visibly
+	// changes the issue. Whether this deterministic suppression is itself
+	// SPEC-aligned is tracked by #584.
 	Failed    map[IssueID]FailedEntry
 	Completed map[IssueID]struct{} // bookkeeping only per SPEC §4.1.8
 

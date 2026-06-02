@@ -267,87 +267,11 @@ type AgentConfig struct {
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state" json:"max_concurrent_agents_by_state"`
 	MaxTurns                   int            `yaml:"max_turns" json:"max_turns"`
 	MaxRetryBackoffMs          int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
-	// MaxRetryAttempts bounds failure-driven orchestrator retries after
-	// retryable worker exits such as failed verification or missing summaries.
-	// It counts scheduled retry entries, not the first run.
-	//
-	// SPEC §8.4 / §16.6 / §4.1.8 do not budget retry attempts: an orchestrator
-	// keeps tapping the exponential-backoff wall (capped at
-	// agent.max_retry_backoff_ms) until the tracker takes the issue out of
-	// active work. Leaving this field absent (nil) preserves that SPEC default
-	// — failure retries are unbounded. An explicit positive integer opts into
-	// SPEC §15.5 harness-hardening: caps the number of scheduled retries and
-	// pins the issue under OrchestratorState.Failed until the tracker's
-	// `state` or `updated_at` changes. An explicit 0 means "no failure
-	// retries at all" — also an opt-in harness extension, surfaced for
-	// operators who want a single shot per tracker transition. Read via
-	// MaxRetryAttemptsValue() rather than dereferencing directly.
-	MaxRetryAttempts *int `yaml:"max_retry_attempts" json:"max_retry_attempts"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.
 	// Configured via YAML as `agent.timeout: 10m`. Zero means use the
 	// schema default of 30m.
 	Timeout time.Duration `yaml:"timeout" json:"timeout"`
-	// MaxTimeoutRetries bounds how many times a task may be re-queued
-	// after a runner timeout. This is intentionally separate from the
-	// generic max_attempts (which covers verify/policy/other failures)
-	// so a flaky runner cannot exhaust the global retry budget.
-	//
-	// SPEC §8.4 expresses runner-timeout recovery purely through backoff
-	// (no attempt-count budget), so leaving this field absent (nil) means
-	// "re-queue forever, bounded only by tracker state changes" — the SPEC
-	// default. An explicit positive integer opts into the SPEC §15.5
-	// harness-hardening cap; an explicit 0 disables runner-timeout
-	// re-queues entirely. Read via MaxTimeoutRetriesValue() rather than
-	// dereferencing directly.
-	MaxTimeoutRetries *int `yaml:"max_timeout_retries" json:"max_timeout_retries"`
-}
-
-// UnboundedRetryBudget is the sentinel MaxTimeoutRetriesValue() and
-// MaxRetryAttemptsValue() return when the corresponding YAML field is
-// absent. It signals "no cap" to downstream callers so the SPEC §8.4
-// default — keep retrying with exponential backoff until the tracker
-// takes the issue out of active work — is what an out-of-the-box
-// workflow gets. Any value < 0 is equivalent to UnboundedRetryBudget;
-// callers should compare with `< 0` rather than `== UnboundedRetryBudget`
-// so future sentinel renumbering does not require a sweep.
-const UnboundedRetryBudget = -1
-
-// MaxTimeoutRetriesValue returns the effective runner-timeout retry
-// budget. A nil pointer (field omitted from YAML) yields
-// UnboundedRetryBudget so SPEC §8.4 backoff is the only ceiling; an
-// explicit non-negative value opts into a harness-hardening cap and
-// is honored as configured (including explicit 0, which disables the
-// re-queue path entirely). Negative explicit values are rejected at
-// load; this accessor clamps defensively to UnboundedRetryBudget for
-// any caller that constructed a config in-process with a negative
-// pointer.
-func (a AgentConfig) MaxTimeoutRetriesValue() int {
-	if a.MaxTimeoutRetries == nil {
-		return UnboundedRetryBudget
-	}
-	if *a.MaxTimeoutRetries < 0 {
-		return UnboundedRetryBudget
-	}
-	return *a.MaxTimeoutRetries
-}
-
-// MaxRetryAttemptsValue returns the effective failure retry budget.
-// A nil pointer yields UnboundedRetryBudget so the SPEC §8.4 / §16.6
-// "retry forever, bounded only by backoff and tracker state" contract
-// is the default; an explicit non-negative value opts into the SPEC
-// §15.5 harness-hardening cap. Explicit 0 means "no failure retries at
-// all" (a deliberate single-shot mode), not "use the default". Negative
-// explicit values are rejected during validation; this accessor clamps
-// defensively to UnboundedRetryBudget.
-func (a AgentConfig) MaxRetryAttemptsValue() int {
-	if a.MaxRetryAttempts == nil {
-		return UnboundedRetryBudget
-	}
-	if *a.MaxRetryAttempts < 0 {
-		return UnboundedRetryBudget
-	}
-	return *a.MaxRetryAttempts
 }
 
 type CommandConfig struct {
@@ -365,7 +289,7 @@ type CommandConfig struct {
 	// turnSandboxPolicySet records whether codex.turn_sandbox_policy was
 	// explicitly present in the front matter. DefaultConfig() pre-fills
 	// TurnSandboxPolicy, so it cannot carry the "absent" signal through a YAML
-	// overlay (unlike Agent.MaxRetryAttempts, which is a nil pointer). The
+	// overlay the way a nil-pointer field can. The
 	// loader needs that signal to decide whether to derive the per-turn policy
 	// from thread_sandbox; an operator who set turn_sandbox_policy explicitly
 	// keeps full control.
@@ -471,15 +395,6 @@ func DefaultConfig() Config {
 		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
-		// Agent.MaxRetryAttempts is intentionally left nil here so the
-		// "absent" signal survives YAML overlay. The effective default is
-		// unbounded failure retries (UnboundedRetryBudget), supplied by
-		// MaxRetryAttemptsValue() per SPEC §8.4 / §16.6 (README "unbounded";
-		// DEVIATIONS D29).
-		// Agent.MaxTimeoutRetries is intentionally left nil here so the
-		// "absent" signal survives a YAML unmarshal that overlays this
-		// default. The effective default is likewise unbounded timeout
-		// requeues (UnboundedRetryBudget), supplied by MaxTimeoutRetriesValue().
 		Agent: AgentConfig{
 			Default:             "mock",
 			MaxConcurrentAgents: 10,

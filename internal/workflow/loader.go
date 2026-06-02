@@ -368,16 +368,35 @@ func rejectRemovedMiscFields(raw map[string]any) error {
 			return fmt.Errorf("claude.profile is not supported; the codex-only `profile` field was removed in issue #541 and Claude never had runner profiles. Remove it")
 		}
 	}
-	if agent, ok := raw["agent"].(map[string]any); ok {
-		if _, present := agent["fallback"]; present {
-			return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
-		}
-	}
+	// pr:/safety: are top-level keys, so they must be checked regardless of
+	// whether an `agent:` block is present (rejectRemovedAgentFields below
+	// returns early when it is not).
 	if _, present := raw["pr"]; present {
 		return fmt.Errorf("pr.* is no longer supported (#578): the worker does not open, label, or assign reviewers to PRs — PR creation is the coding agent's responsibility (SPEC §1, #76). Express draft/labels/reviewers in the agent's WORKFLOW prompt or tool surface, and remove the `pr:` block")
 	}
 	if _, present := raw["safety"]; present {
 		return fmt.Errorf("safety.* is no longer supported (#578): it was a descriptive struct the worker never enforced, which falsely implied enforcement. Express the safety envelope in the WORKFLOW prompt/README, and use `sandbox:` for worker-enforced write/network restrictions. Remove the `safety:` block")
+	}
+	return rejectRemovedAgentFields(raw)
+}
+
+// rejectRemovedAgentFields surfaces clear errors for removed agent.* keys so a
+// stale workflow fails loud instead of being silently dropped: `agent.fallback`
+// (#40, never read) and the `agent.max_retry_attempts` / `agent.max_timeout_retries`
+// retry caps removed under #577 (the orchestrator no longer caps retries). Split
+// out of rejectRemovedFields to keep that function under the gocognit budget.
+func rejectRemovedAgentFields(raw map[string]any) error {
+	agent, ok := raw["agent"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, present := agent["fallback"]; present {
+		return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
+	}
+	for _, key := range []string{"max_retry_attempts", "max_timeout_retries"} {
+		if _, present := agent[key]; present {
+			return fmt.Errorf("agent.%s is no longer supported (#577): the orchestrator no longer caps retries. SPEC §8.4 / §16.6 retry unboundedly with exponential backoff until the tracker takes the issue out of active work; to stop a persistently-failing issue, move it out of the active states. Remove agent.%s", key, key)
+		}
 	}
 	return nil
 }
@@ -610,14 +629,6 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nol
 	if cfg.Agent.Timeout <= 0 {
 		cfg.Agent.Timeout = 30 * time.Minute
 	}
-	// MaxTimeoutRetries is *int so callers can distinguish "absent"
-	// (nil → MaxTimeoutRetriesValue() returns UnboundedRetryBudget so the
-	// SPEC §8.4 retry-until-tracker-changes contract is the default) from
-	// "explicitly 0" (no runner-timeout re-queue) or an explicit positive
-	// integer (SPEC §15.5 harness-hardening cap). We deliberately do not
-	// coerce here: forcing 0 → unbounded would strip operators of the
-	// ability to opt into a single-shot run, and forcing nil → 1 would
-	// silently deviate from SPEC §8.4.
 	if cfg.Polling.IntervalMs <= 0 {
 		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
 	}

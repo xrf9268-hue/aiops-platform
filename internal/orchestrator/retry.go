@@ -11,8 +11,8 @@ import (
 // substate (SPEC §7.1). Fields match SPEC §4.1.7 exactly:
 //
 //   - IssueID, Identifier — which issue this retry is for.
-//   - Attempt — 1-based retry counter; SPEC §8.4 bounds it via
-//     `max_retry_attempts`.
+//   - Attempt — 1-based retry counter; SPEC §8.4 caps only the backoff delay,
+//     not the attempt count (the opt-in retry cap was removed in #577).
 //   - DueAt — absolute deadline at which the retry should fire. Go's
 //     time.Time carries a monotonic reading on construction so SPEC's
 //     "due_at_ms (monotonic)" requirement is satisfied without a

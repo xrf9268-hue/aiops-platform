@@ -67,11 +67,6 @@ type Scheduler interface {
 type Deps struct {
 	Dispatcher Dispatcher
 	Scheduler  Scheduler
-	// MaxFailureRetries opts into a non-SPEC cap on failure-driven
-	// orchestrator retries. nil (the default) and any negative value
-	// leave the SPEC §8.4 unbounded behavior in place; a non-negative
-	// integer applies the harness-hardening cap.
-	MaxFailureRetries *int
 	// CandidateLister, when set, enables the SPEC §16.6 retry-fire
 	// candidate-fetch step. A fired failure-retry timer fetches the
 	// active candidate list, confirms the issue is still present,
@@ -99,14 +94,7 @@ type Orchestrator struct {
 	state      *OrchestratorState
 	dispatcher Dispatcher
 	scheduler  Scheduler
-	// maxFailureRetries bounds failure-driven retry entries after retryable
-	// worker failures. SPEC §8.4 / §16.6 expect unbounded retries (with the
-	// exponential-backoff ceiling), so a negative value here means "no cap —
-	// keep retrying until the tracker takes the issue out of active work".
-	// Non-negative values opt into the SPEC §15.5 harness-hardening cap and
-	// pin the issue under OrchestratorState.Failed once exceeded.
-	maxFailureRetries int
-	retryWake         chan struct{}
+	retryWake  chan struct{}
 
 	// workspaceCleaner removes the workspace of a terminal-state run after its
 	// worker exits (SPEC §18.1 active transition). nil disables the active
@@ -144,27 +132,15 @@ type Orchestrator struct {
 // must call Run(ctx) in a separate goroutine before the actor processes
 // any submitted op; tests can wait via WaitStarted.
 func New(state *OrchestratorState, deps Deps) *Orchestrator {
-	// Default to unbounded so the SPEC §8.4 contract — retry forever,
-	// bounded only by backoff and tracker state — is what a caller gets
-	// without explicit opt-in. A negative pointer normalizes to the same
-	// "no cap" sentinel so test/production callers can pass either.
-	maxFailureRetries := UnboundedFailureRetries
-	if deps.MaxFailureRetries != nil {
-		maxFailureRetries = *deps.MaxFailureRetries
-		if maxFailureRetries < 0 {
-			maxFailureRetries = UnboundedFailureRetries
-		}
-	}
 	o := &Orchestrator{
-		ops:               make(chan stateOp),
-		state:             state,
-		dispatcher:        deps.Dispatcher,
-		scheduler:         deps.Scheduler,
-		maxFailureRetries: maxFailureRetries,
-		retryWake:         make(chan struct{}, 1),
-		candidateLister:   deps.CandidateLister,
-		workspaceCleaner:  deps.WorkspaceCleaner,
-		started:           make(chan struct{}),
+		ops:              make(chan stateOp),
+		state:            state,
+		dispatcher:       deps.Dispatcher,
+		scheduler:        deps.Scheduler,
+		retryWake:        make(chan struct{}, 1),
+		candidateLister:  deps.CandidateLister,
+		workspaceCleaner: deps.WorkspaceCleaner,
+		started:          make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
 		aware.AttachOrchestrator(o)

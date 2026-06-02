@@ -181,9 +181,7 @@ type agentConfigView struct {
 	MaxConcurrentAgents int    `json:"max_concurrent_agents"`
 	MaxTurns            int    `json:"max_turns"`
 	MaxRetryBackoffMs   int    `json:"max_retry_backoff_ms"`
-	MaxRetryAttempts    *int   `json:"max_retry_attempts"`
 	Timeout             string `json:"timeout"`
-	MaxTimeoutRetries   *int   `json:"max_timeout_retries"`
 }
 
 func newConfigView(cfg workflow.Config) configView {
@@ -196,9 +194,7 @@ func newConfigView(cfg workflow.Config) configView {
 			MaxConcurrentAgents: cfg.Agent.MaxConcurrentAgents,
 			MaxTurns:            cfg.Agent.MaxTurns,
 			MaxRetryBackoffMs:   cfg.Agent.MaxRetryBackoffMs,
-			MaxRetryAttempts:    cfg.Agent.MaxRetryAttempts,
 			Timeout:             cfg.Agent.Timeout.String(),
-			MaxTimeoutRetries:   cfg.Agent.MaxTimeoutRetries,
 		},
 		Codex:   cfg.Codex,
 		Claude:  cfg.Claude,

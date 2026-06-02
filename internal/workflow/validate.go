@@ -249,8 +249,8 @@ func validateAllowedMutations(path string, cfg Config) error {
 	return nil
 }
 
-// validateAgentLimits enforces the positive/non-negative agent concurrency
-// and retry caps, including the per-state concurrency overrides.
+// validateAgentLimits enforces the positive agent concurrency limits and the
+// max_retry_backoff_ms floor, including the per-state concurrency overrides.
 func validateAgentLimits(path string, cfg Config) error {
 	if cfg.Agent.MaxRetryBackoffMs <= 0 {
 		return fmt.Errorf("%s: agent.max_retry_backoff_ms must be positive", path)
@@ -260,9 +260,6 @@ func validateAgentLimits(path string, cfg Config) error {
 	}
 	if cfg.Agent.MaxConcurrentAgents <= 0 {
 		return fmt.Errorf("%s: agent.max_concurrent_agents must be a positive integer (SPEC §6.4 default 10; explicit 0 is not allowed — Elixir validate_number greater_than: 0)", path)
-	}
-	if cfg.Agent.MaxRetryAttempts != nil && *cfg.Agent.MaxRetryAttempts < 0 {
-		return fmt.Errorf("%s: agent.max_retry_attempts must be non-negative", path)
 	}
 	return validateStateConcurrencyCaps(path, cfg)
 }

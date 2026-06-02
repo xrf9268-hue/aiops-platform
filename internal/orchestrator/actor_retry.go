@@ -82,21 +82,6 @@ func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 	return delay
 }
 
-// UnboundedFailureRetries is the maxFailureRetries sentinel that disables
-// the failure-retry cap. SPEC §8.4 / §16.6 / §4.1.8 do not budget retry
-// attempts, so this value is what an orchestrator constructed without an
-// explicit MaxFailureRetries override sees. The check at finalizeRunOp
-// skips the cap branch whenever maxFailureRetries is negative; any caller
-// that wants the harness-hardening cap (SPEC §15.5) must pass a
-// non-negative value through workflow.AgentConfig.MaxRetryAttempts or
-// orchestrator.Deps.MaxFailureRetries.
-//
-// This sentinel mirrors workflow.UnboundedRetryBudget; both equal -1
-// today and are interoperable via the `< 0` predicate that all
-// consumers use. Future renumbering must keep the predicate, not the
-// literal value.
-const UnboundedFailureRetries = -1
-
 type continuationAfterSkippedCleanup struct {
 	issue      tracker.Issue
 	identifier string
