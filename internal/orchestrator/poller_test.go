@@ -111,7 +111,7 @@ func (d *erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *in
 	d.calls++
 	d.mu.Unlock()
 	ch := make(chan WorkerResult, 1)
-	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), NonRetryable: true, Elapsed: time.Millisecond}
+	ch <- WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), Elapsed: time.Millisecond}
 	close(ch)
 	return ch
 }
@@ -1440,7 +1440,16 @@ func TestRunPollLoopWakesWhenContinuationRetryTimerFires(t *testing.T) {
 	}
 }
 
-func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
+// TestPollOnceBuildTaskFailureSchedulesBackoffRetryNotPerTickSpin covers #584
+// (DEVIATIONS D29 closed): a deterministic build-task / worker-setup failure no
+// longer lands in the removed OrchestratorState.Failed suppression map. It now
+// rides the SPEC §8.4 failure backoff — the issue is parked Claimed in a
+// pending retry, so subsequent poll ticks do NOT re-dispatch it (the #234
+// per-tick spin is prevented by the backoff claim, not by suppression). The
+// retry-fire's own tracker-eligibility recheck (covered by the TestRetryFire_*
+// suite) is what eventually stops or re-dispatches it, matching upstream's
+// prompt_builder raise → retry_agent_down → schedule_issue_retry.
+func TestPollOnceBuildTaskFailureSchedulesBackoffRetryNotPerTickSpin(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1448,7 +1457,9 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	dispatcher := &erroringTaskDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
 		Dispatcher: dispatcher,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+		// 10s base backoff (the scheduler floor) keeps the retry pending well
+		// past this test, so a per-tick re-dispatch would be a real regression.
+		Scheduler: RetryScheduler{MaxBackoff: time.Hour},
 	})
 	go orch.Run(ctx)
 	if err := orch.WaitStarted(ctx); err != nil {
@@ -1459,46 +1470,39 @@ func TestPollOnceFailsFastAfterBuildTaskFailureWithoutRetryLoop(t *testing.T) {
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch)
+	// The failure schedules a §8.4 backoff retry: issue-1 is parked in Retrying.
+	waitForRetryingFailure(t, ctx, orch, "issue-1")
 
+	// A second poll tick while the backoff is pending must not re-dispatch the
+	// Claimed-in-retry issue — this is the SPEC-pure #234 spin prevention.
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("second poll once: %v", err)
 	}
-	waitForNoRunningOrRetrying(t, ctx, orch)
 	if got := dispatcher.count(); got != 1 {
-		t.Fatalf("deterministic build failure dispatched %d times, want 1", got)
+		t.Fatalf("deterministic build failure dispatched %d times while a backoff retry was pending, want 1 (no per-tick spin)", got)
 	}
 }
 
-func TestPollOnceReleasesNonRetryableFailureAfterTrackerStateChanges(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready", UpdatedAt: mustTime("2026-05-17T00:00:00Z")}}}
-	dispatcher := &erroringTaskDispatcher{}
-	orch := New(NewOrchestratorState(30000, 1), Deps{
-		Dispatcher: dispatcher,
-		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
-	})
-	go orch.Run(ctx)
-	if err := orch.WaitStarted(ctx); err != nil {
-		t.Fatalf("wait for orchestrator: %v", err)
+// waitForRetryingFailure blocks until id is parked in a RetryKindFailure backoff
+// entry, asserting the §8.4 failure-retry route rather than the removed Failed
+// suppression.
+func waitForRetryingFailure(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		view, err := orch.Snapshot(ctx)
+		if err != nil {
+			t.Fatalf("snapshot: %v", err)
+		}
+		for _, retry := range view.Retrying {
+			if retry.IssueID == id && retry.Kind == RetryKindFailure {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
 	}
-
-	poller := NewPoller(trackerClient, orch)
-	if err := poller.PollOnce(ctx); err != nil {
-		t.Fatalf("poll once: %v", err)
-	}
-	waitForNoRunningOrRetrying(t, ctx, orch)
-
-	trackerClient.issues = []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Rework", UpdatedAt: mustTime("2026-05-17T00:05:00Z")}}
-	if err := poller.PollOnce(ctx); err != nil {
-		t.Fatalf("poll once after tracker state changed: %v", err)
-	}
-	waitForNoRunningOrRetrying(t, ctx, orch)
-	if got := dispatcher.count(); got != 2 {
-		t.Fatalf("changed tracker issue dispatched %d times, want retry after state change", got)
-	}
+	view, _ := orch.Snapshot(ctx)
+	t.Fatalf("issue %s not in a failure-backoff retry after deterministic build failure: retrying=%v", id, view.Retrying)
 }
 
 func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {

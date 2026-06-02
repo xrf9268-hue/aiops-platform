@@ -328,14 +328,6 @@ func TestClaimedIssuesClearedOnTerminalTransitions(t *testing.T) {
 			},
 		},
 		{
-			name: "non_retryable_failed",
-			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
-				if !st.FinishRunNonRetryableFailed(id, entry, time.Second) {
-					t.Fatalf("FinishRunNonRetryableFailed returned false")
-				}
-			},
-		},
-		{
 			name: "reconciled_cancelled",
 			act: func(st *OrchestratorState, id IssueID, entry *RunningEntry) {
 				if !st.FinishRunReconciledCancelled(id, entry, time.Second) {
@@ -657,103 +649,6 @@ func TestFinishRunSucceeded_CapsCompletedAndCountsCumulative(t *testing.T) {
 	}
 }
 
-// TestFinishRunNonRetryableFailed_CapsRecentFIFOButKeepsSuppression
-// pins the Failed-side carve-out — the dispatch-suppression map is
-// NEVER evicted (capping it would re-open redispatch on still-broken
-// deterministic failures, which is the spin behavior the suppression
-// contract exists to prevent). Only the recent-FIFO slice that
-// /api/v1/state publishes is capped.
-//
-// Boundary-coverage:
-//   - =N entries: map size N, slice size N, IsClaimed true for all
-//   - =N+1 entries: map size N+1 (no eviction), slice size N (oldest
-//     IS dropped from FIFO display), IsClaimed still true for all
-//     (including the slice-evicted oldest)
-//   - paired edge: ReleaseFailedIfIssueChanged removes from BOTH map
-//     and slice when present; cumulative stays monotonic.
-func TestFinishRunNonRetryableFailed_CapsRecentFIFOButKeepsSuppression(t *testing.T) {
-	state := NewOrchestratorState(60_000, 4)
-	const cap = 3
-	state.MaxRecentFailed = cap
-
-	for i := 0; i < cap; i++ {
-		id := IssueID(fmt.Sprintf("fail-%d", i))
-		run := &RunningEntry{Issue: tracker.Issue{ID: string(id), State: "Done", UpdatedAt: time.Unix(int64(i), 0).UTC()}}
-		state.BeginDispatch(id, run)
-		if !state.FinishRunNonRetryableFailed(id, run, time.Second) {
-			t.Fatalf("FinishRunNonRetryableFailed(%s) returned false", id)
-		}
-	}
-	if got := len(state.Failed); got != cap {
-		t.Fatalf("Failed map size at =N: got %d, want %d", got, cap)
-	}
-	if got := len(state.failedOrder); got != cap {
-		t.Fatalf("failedOrder size at =N: got %d, want %d", got, cap)
-	}
-	if got := state.CumulativeFailedTotal; got != int64(cap) {
-		t.Fatalf("CumulativeFailedTotal at =N: got %d, want %d", got, cap)
-	}
-
-	// Boundary =N+1 — the FIFO slice trims but the map MUST keep all
-	// entries, otherwise IsClaimed loses suppression for older
-	// still-broken issues and they spin every poll cycle.
-	overflow := IssueID("fail-overflow")
-	overflowRun := &RunningEntry{Issue: tracker.Issue{ID: string(overflow), State: "Done", UpdatedAt: time.Unix(99, 0).UTC()}}
-	state.BeginDispatch(overflow, overflowRun)
-	if !state.FinishRunNonRetryableFailed(overflow, overflowRun, time.Second) {
-		t.Fatalf("FinishRunNonRetryableFailed(%s) returned false", overflow)
-	}
-	if got := len(state.Failed); got != cap+1 {
-		t.Fatalf("Failed map at =N+1: got %d, want %d (map is the suppression source, must NOT evict)", got, cap+1)
-	}
-	if got := len(state.failedOrder); got != cap {
-		t.Fatalf("failedOrder at =N+1: got %d, want %d (FIFO display IS capped)", got, cap)
-	}
-	if _, ok := state.Failed[IssueID("fail-0")]; !ok {
-		t.Fatalf("fail-0 missing from Failed map after FIFO eviction — suppression regression")
-	}
-	if state.IsClaimed(IssueID("fail-0")) != true {
-		t.Fatalf("IsClaimed(fail-0) = false after FIFO eviction — suppression regression")
-	}
-	for _, id := range state.failedOrder {
-		if id == IssueID("fail-0") {
-			t.Fatalf("fail-0 still in failedOrder after FIFO eviction; expected oldest to be trimmed from display slice")
-		}
-	}
-	if got, want := state.CumulativeFailedTotal, int64(cap+1); got != want {
-		t.Fatalf("CumulativeFailedTotal at =N+1: got %d, want %d", got, want)
-	}
-
-	// Paired-edge: ReleaseFailedIfIssueChanged removes a still-in-slice
-	// entry from BOTH map and order; cumulative stays at N+1 (monotonic).
-	released := state.ReleaseFailedIfIssueChanged(tracker.Issue{ID: "fail-1", State: "Reworking", UpdatedAt: time.Unix(99999, 0).UTC()})
-	if !released {
-		t.Fatalf("ReleaseFailedIfIssueChanged should have removed fail-1 (state/updated_at changed)")
-	}
-	if _, ok := state.Failed[IssueID("fail-1")]; ok {
-		t.Fatalf("fail-1 still in Failed map after release")
-	}
-	for _, id := range state.failedOrder {
-		if id == IssueID("fail-1") {
-			t.Fatalf("fail-1 still in failedOrder after release")
-		}
-	}
-	if got, want := state.CumulativeFailedTotal, int64(cap+1); got != want {
-		t.Fatalf("CumulativeFailedTotal after release: got %d, want %d (release must not decrement)", got, want)
-	}
-
-	// Release of a map-only entry (fail-0 was FIFO-evicted) must also
-	// clear the map — important so suppression doesn't outlive the
-	// tracker state change just because the slice forgot about it.
-	released = state.ReleaseFailedIfIssueChanged(tracker.Issue{ID: "fail-0", State: "Reworking", UpdatedAt: time.Unix(88888, 0).UTC()})
-	if !released {
-		t.Fatalf("ReleaseFailedIfIssueChanged should release fail-0 even when only in the map (not the FIFO slice)")
-	}
-	if _, ok := state.Failed[IssueID("fail-0")]; ok {
-		t.Fatalf("fail-0 still in Failed map after release")
-	}
-}
-
 // TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction pins
 // the constructor-layer default per the project's drop-fallback
 // pattern: callers don't have to remember to set MaxRecent* —
@@ -763,9 +658,6 @@ func TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction(t *testing.T)
 	state := NewOrchestratorState(60_000, 4)
 	if state.MaxRecentCompleted != DefaultMaxRecentCompleted {
 		t.Fatalf("MaxRecentCompleted = %d, want %d", state.MaxRecentCompleted, DefaultMaxRecentCompleted)
-	}
-	if state.MaxRecentFailed != DefaultMaxRecentFailed {
-		t.Fatalf("MaxRecentFailed = %d, want %d", state.MaxRecentFailed, DefaultMaxRecentFailed)
 	}
 }
 

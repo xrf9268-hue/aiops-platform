@@ -33,14 +33,14 @@ import (
 )
 
 // WorkerResult is the per-run outcome the Dispatcher delivers when its
-// spawned worker exits. Err is nil for SPEC §7.3 normal exit; retryable
-// errors are treated as abnormal exits and trigger ScheduleRetry(attempt+1).
-// NonRetryable errors fail fast and release the claim so deterministic
-// configuration/task-build failures do not spin forever. Elapsed is folded
-// into CodexTotals.SecondsRunning per SPEC §13.3.
+// spawned worker exits. Err is nil for SPEC §7.3 normal exit; a non-nil Err is
+// an abnormal exit and triggers ScheduleRetry(attempt+1) with §8.4 backoff —
+// SPEC §8.4/§16.6 retry unboundedly (a deterministic config/task-build failure
+// re-checks tracker eligibility on each backoff-paced retry, matching upstream
+// prompt_builder raise → retry_agent_down). Elapsed is folded into
+// CodexTotals.SecondsRunning per SPEC §13.3.
 type WorkerResult struct {
 	Err           error
-	NonRetryable  bool
 	InputRequired bool
 	Elapsed       time.Duration
 }

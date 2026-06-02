@@ -41,7 +41,6 @@ type apiStateResponse struct {
 	Blocked                    []apiStateBlocked      `json:"blocked"`
 	Retrying                   []apiStateRetry        `json:"retrying"`
 	Completed                  []orchestrator.IssueID `json:"completed"`
-	Failed                     []orchestrator.IssueID `json:"failed"`
 	// ReconcileStoppedWithProgress lists reconcile-stopped runs that had completed ≥1
 	// agent turn (made progress — usually the agent's handoff, but turn_completed
 	// fires after every turn, so it can also be a run stopped after an intermediate
@@ -75,23 +74,11 @@ type apiStateCounts struct {
 	// totals across worker restarts and FIFO evictions, use
 	// completed_total. SPEC §13.7 §4.1.8.
 	Completed int `json:"completed"`
-	// Failed is the size of the dispatch-suppression set the
-	// orchestrator currently holds — i.e. the count of issues whose
-	// non-retryable failure still blocks redispatch. Unlike
-	// `completed`, this is NOT bounded by the recent-FIFO cap: the
-	// suppression set must keep entries until ReleaseFailedIfIssueChanged
-	// observes a tracker state/updated_at change, or the entry would
-	// spin every poll cycle. For the recent N IDs that /api/v1/state
-	// publishes under `failed`, see that array. For the lifetime
-	// monotonic counter, see `failed_total`.
-	Failed int `json:"failed"`
-	// CompletedTotal / FailedTotal are monotonic counters that count
-	// every observed Succeeded / NonRetryableFailed transition since
-	// process start, independent of FIFO eviction or release. Added
-	// for #234 so long-running deployments still expose a true
-	// lifetime number when the bounded sets have rotated.
+	// CompletedTotal is a monotonic counter of every observed Succeeded
+	// transition since process start, independent of FIFO eviction. Added
+	// for #234 so long-running deployments still expose a true lifetime
+	// number when the bounded set has rotated.
 	CompletedTotal int64 `json:"completed_total"`
-	FailedTotal    int64 `json:"failed_total"`
 	// ReconcileStoppedWithProgress is the size of the FIFO-bounded recent set of
 	// reconcile-stopped runs that had made progress (≥1 completed turn; the same set
 	// published as `state.reconcile_stopped_with_progress`);
@@ -399,15 +386,12 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 			return base(issueID, string(issueID), "completed"), true
 		}
 	}
-	for _, issueID := range view.Failed {
-		if matchesIssueLookup(issueID, "", normalizedWant) {
-			return base(issueID, string(issueID), "failed"), true
-		}
-	}
 	// Keep the per-issue lookup consistent with the aggregate: an ID surfaced in
 	// reconcile_stopped_with_progress must be drillable here instead of returning
-	// issue_not_found (#557). Checked after completed/failed so a later clean exit
-	// or terminal failure for the same id takes precedence.
+	// issue_not_found (#557). Checked after completed so a later clean exit
+	// for the same id takes precedence. A failed run is surfaced by the
+	// RuntimeEventFailed scan above (failures now retry per SPEC §8.4 rather
+	// than being parked in a suppression set).
 	for _, issueID := range view.ReconcileStoppedWithProgress {
 		if matchesIssueLookup(issueID, "", normalizedWant) {
 			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
@@ -566,10 +550,6 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(completed, func(i, j int) bool {
 		return completed[i] < completed[j]
 	})
-	failed := append([]orchestrator.IssueID(nil), view.Failed...)
-	sort.Slice(failed, func(i, j int) bool {
-		return failed[i] < failed[j]
-	})
 	reconcileFinished := append([]orchestrator.IssueID(nil), view.ReconcileStoppedWithProgress...)
 	sort.Slice(reconcileFinished, func(i, j int) bool {
 		return reconcileFinished[i] < reconcileFinished[j]
@@ -584,7 +564,6 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		Blocked:                      blocked,
 		Retrying:                     retrying,
 		Completed:                    completed,
-		Failed:                       failed,
 		ReconcileStoppedWithProgress: reconcileFinished,
 		CodexTotals: apiCodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
@@ -621,9 +600,7 @@ func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 		Blocked:                           len(view.Blocked),
 		Retrying:                          len(view.Retrying),
 		Completed:                         len(view.Completed),
-		Failed:                            view.FailedSuppressedCount,
 		CompletedTotal:                    view.CumulativeCompletedTotal,
-		FailedTotal:                       view.CumulativeFailedTotal,
 		ReconcileStoppedWithProgress:      len(view.ReconcileStoppedWithProgress),
 		ReconcileStoppedWithProgressTotal: view.CumulativeReconcileStoppedWithProgressTotal,
 	}

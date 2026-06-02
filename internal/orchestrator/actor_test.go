@@ -1176,9 +1176,16 @@ func TestFinalize_NormalExitRecordsCompletedEvent(t *testing.T) {
 	}
 }
 
-// TestFinalize_NonRetryableErrorEmitsStderrLine covers SPEC §13.1 (issue #332)
-// for the explicit non-retryable runner-error terminal path.
-func TestFinalize_NonRetryableErrorEmitsStderrLine(t *testing.T) {
+// TestFinalize_WorkerSetupFailureSchedulesBackoffRetry covers #584 (DEVIATIONS
+// D29 closed): a deterministic worker-setup / task-build failure — formerly
+// flagged NonRetryable and parked in the removed OrchestratorState.Failed
+// suppression map — now rides the SPEC §8.4/§16.6 failure backoff like any
+// abnormal exit. It is scheduled for retry (a later fire re-checks tracker
+// eligibility), not suppressed; this matches upstream, where prompt_builder
+// raises and the orchestrator routes the agent-down to schedule_issue_retry.
+// The assertion fails if suppression is reintroduced: a suppressed failure
+// would leave Retrying empty.
+func TestFinalize_WorkerSetupFailureSchedulesBackoffRetry(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{
 		Dispatcher: disp,
@@ -1186,39 +1193,53 @@ func TestFinalize_NonRetryableErrorEmitsStderrLine(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-NONRETRY", Identifier: "ENG-NONRETRY", Title: "non-retryable"}
+	iss := tracker.Issue{ID: "ENG-SETUPFAIL", Identifier: "ENG-SETUPFAIL", Title: "worker-setup failure"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	got := captureOrchestratorLog(t, func() {
-		disp.finishAt(0, WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), NonRetryable: true, Elapsed: time.Millisecond})
-		waitFor(t, func() bool {
-			v, err := o.Snapshot(context.Background())
-			return err == nil && len(v.Failed) == 1
-		}, time.Second)
-	})
-	for _, want := range []string{
-		"event=run_failed",
-		"issue_id=ENG-NONRETRY",
-		"issue_identifier=ENG-NONRETRY",
-		"reason=non_retryable_runner_error",
-		`error="repo.clone_url missing in WORKFLOW.md"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("non-retryable stderr line missing %q in:\n%s", want, got)
+	disp.finishAt(0, WorkerResult{Err: errors.New("repo.clone_url missing in WORKFLOW.md"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1
+	}, time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.Retrying) != 1 {
+		t.Fatalf("Snapshot().Retrying = %d; want 1 (failure rides §8.4 backoff, not suppressed)", len(v.Retrying))
+	}
+	if got := v.Retrying[0].IssueID; got != "ENG-SETUPFAIL" {
+		t.Errorf("Retrying[0].IssueID = %q; want %q", got, "ENG-SETUPFAIL")
+	}
+	if got := v.Retrying[0].Kind; got != RetryKindFailure {
+		t.Errorf("Retrying[0].Kind = %q; want %q (§8.4 failure backoff)", got, RetryKindFailure)
+	}
+	// The error is still surfaced as a RuntimeEventFailed for operator visibility.
+	var sawFailed bool
+	for _, ev := range v.RecentEvents {
+		if ev.Kind == RuntimeEventFailed && ev.IssueID == "ENG-SETUPFAIL" {
+			sawFailed = true
+			if !strings.Contains(ev.Message, "repo.clone_url missing in WORKFLOW.md") {
+				t.Errorf("RuntimeEventFailed.Message = %q; want the failure detail", ev.Message)
+			}
 		}
+	}
+	if !sawFailed {
+		t.Errorf("RecentEvents = %+v; want a RuntimeEventFailed for ENG-SETUPFAIL", v.RecentEvents)
 	}
 }
 
 // TestFinalize_ContinuationSpawnsAreUnbounded covers SPEC §7.1 (issue #576 /
 // DEVIATIONS D30): the orchestrator no longer caps continuation spawns. Every
 // clean exit on a still-active issue schedules another continuation; the issue
-// never lands in Failed for "too many turns". The in-session turn budget
+// is never dropped for "too many turns". The in-session turn budget
 // (agent.max_turns, SPEC §5.3.5) is the runner's job, not a cross-worker cap.
-// This fails if the legacy continuation-spawn cap is reintroduced (it routed an
-// active issue into Failed once the continuation count reached max_turns).
+// This fails if the legacy continuation-spawn cap is reintroduced (it stopped
+// re-dispatching once the continuation count reached max_turns).
 func TestFinalize_ContinuationSpawnsAreUnbounded(t *testing.T) {
 	disp := &fakeDispatcher{}
 	// Drive more clean continuation cycles than the old default max_turns (20)
@@ -1257,13 +1278,10 @@ func TestFinalize_ContinuationSpawnsAreUnbounded(t *testing.T) {
 		waitFor(t, func() bool { return disp.count() == cycle+2 }, time.Second)
 	}
 
-	v, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(v.Failed) != 0 {
-		t.Fatalf("Failed entries after %d clean continuations = %+v, want none (continuations are unbounded, #576)", cycles, v.Failed)
-	}
+	// Every clean exit kept scheduling another continuation past the old
+	// max_turns=20 default rather than dropping the issue (SPEC §7.1, #576 /
+	// D30). The dispatch count is the proof: the legacy cap would have stopped
+	// re-dispatching once the continuation count reached the cap.
 	if got, want := disp.count(), cycles+1; got != want {
 		t.Fatalf("Dispatcher.Spawn calls = %d, want %d (1 initial + %d unbounded continuations past the old max_turns=20 default)", got, want, cycles)
 	}
@@ -1336,9 +1354,6 @@ func TestFinalize_QuotaBackoffReschedulesWithRetryAfter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(v.Failed) != 0 {
-		t.Fatalf("failed entries after quota backoff = %d, want 0", len(v.Failed))
-	}
 	if v.Retrying[0].Attempt != 1 {
 		t.Fatalf("quota retry attempt = %d, want original attempt 1", v.Retrying[0].Attempt)
 	}
@@ -1404,9 +1419,6 @@ func TestFinalize_QuotaBackoffDoesNotBumpNextFailureRetryAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(v.Failed) != 0 {
-		t.Fatalf("failed entries after first ordinary failure post-quota = %d, want 0", len(v.Failed))
-	}
 	if got := v.Retrying[0].Attempt; got != 1 {
 		t.Fatalf("ordinary failure retry attempt after quota = %d, want first failure retry attempt 1", got)
 	}
@@ -1450,9 +1462,6 @@ func TestFinalize_AbnormalExitKeepsRetryingWithUnboundedDefault(t *testing.T) {
 	}
 	if len(v.Retrying) != 1 || v.Retrying[0].Attempt != 2 {
 		t.Fatalf("retry view = %+v, want one entry with Attempt=2 under unbounded default", v.Retrying)
-	}
-	if len(v.Failed) != 0 {
-		t.Fatalf("failed entries with unbounded default = %d, want 0 (SPEC §8.4 keeps retrying)", len(v.Failed))
 	}
 }
 

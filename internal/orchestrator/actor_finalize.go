@@ -6,7 +6,6 @@ package orchestrator
 
 import (
 	"errors"
-	"log"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -32,10 +31,10 @@ type finalizeRunOp struct {
 // handler that, once its guard matches, owns the state transition, the
 // close(f.done), and the returned followup; the guard order is the SPEC routing
 // priority (input-required block → clean exit → reconciled cancel cleanup →
-// non-retryable → quota backoff → reconcile cancel → failure retry). Handlers
-// that may schedule async work report (followup, handled); the two pure terminal
-// blocks (input-required, non-retryable) report only handled since they never
-// schedule a followup. applyCleanExit and applyFailureRetry are reached
+// quota backoff → reconcile cancel → failure retry). Handlers
+// that may schedule async work report (followup, handled); the pure terminal
+// input-required block reports only handled since it never
+// schedules a followup. applyCleanExit and applyFailureRetry are reached
 // unconditionally on their branch and always handle, so they return the followup
 // directly.
 func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
@@ -51,9 +50,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if followup, ok := f.applyReconciledCancelCleanup(st, elapsed); ok {
 		return followup
-	}
-	if f.applyNonRetryable(st, elapsed) {
-		return nil
 	}
 	if followup, ok := f.applyQuotaBackoff(st, elapsed); ok {
 		return followup
@@ -159,24 +155,6 @@ func (f *finalizeRunOp) applyReconciledCancelCleanup(st *OrchestratorState, elap
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
 	close(f.done)
 	return cleanup, true
-}
-
-// applyNonRetryable is the terminal failure for a runner error flagged
-// non-retryable (e.g. a malformed WORKFLOW.md), never retried. It never
-// schedules a followup, so it reports only whether it handled the exit.
-func (f *finalizeRunOp) applyNonRetryable(st *OrchestratorState, elapsed time.Duration) bool {
-	if !f.result.NonRetryable {
-		return false
-	}
-	if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
-		close(f.done)
-		return true
-	}
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: f.result.Err.Error()})
-	// SPEC §13.1 failed outcome on stderr (see continuation-budget site).
-	log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=non_retryable_runner_error error=%q", f.id, f.identifier, f.result.Err.Error())
-	close(f.done)
-	return true
 }
 
 // applyReconcileCancel cleans the workspace of a run reconciliation cancelled

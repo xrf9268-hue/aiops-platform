@@ -553,7 +553,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		start := time.Now()
 		tk, err := d.buildTaskWithAttempt(issue, copiedAttempt)
 		if err != nil {
-			out <- WorkerResult{Err: err, NonRetryable: true, Elapsed: time.Since(start)}
+			out <- WorkerResult{Err: err, Elapsed: time.Since(start)}
 			return
 		}
 		if d.WorkspacePrepared != nil {
@@ -562,7 +562,6 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {
 			out <- WorkerResult{
 				Err:           rterr.Err,
-				NonRetryable:  rterr.NonRetryable,
 				InputRequired: runner.IsInputRequired(rterr.Err),
 				Elapsed:       time.Since(start),
 			}

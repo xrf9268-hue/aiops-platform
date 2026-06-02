@@ -29,9 +29,8 @@ type EventEmitter interface {
 // RunTaskError bundles the resolved workflow Config alongside the error so
 // callers can classify failures without re-resolving the workflow.
 type RunTaskError struct {
-	Cfg          workflow.Config
-	Err          error
-	NonRetryable bool
+	Cfg workflow.Config
+	Err error
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -275,7 +274,7 @@ func (rs *runState) buildPrompt() *RunTaskError {
 	rs.emitPhase(task.PhasePreparingWorkspace, task.PhaseBuildingPrompt)
 	prompt, err := workflow.Render(rs.wf.PromptTemplate, renderVars)
 	if err != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: err, NonRetryable: true}
+		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 	prompt = AppendAnalysisOnlyDirective(prompt, rs.wcfg.Policy.Mode)
 	// Skip the verify directive in analysis-only mode: that mode forbids source

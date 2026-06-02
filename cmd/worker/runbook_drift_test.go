@@ -99,9 +99,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			Blocked:                           1,
 			Retrying:                          1,
 			Completed:                         0,
-			Failed:                            0,
 			CompletedTotal:                    12,
-			FailedTotal:                       3,
 			ReconcileStoppedWithProgress:      1,
 			ReconcileStoppedWithProgressTotal: 2,
 		},
@@ -144,7 +142,6 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			Error:      "retry soon",
 		}},
 		Completed:                    []orchestrator.IssueID{"issue-4"},
-		Failed:                       []orchestrator.IssueID{"issue-5"},
 		ReconcileStoppedWithProgress: []orchestrator.IssueID{"issue-6"},
 		CodexTotals: apiCodexTotals{
 			InputTokens:    100,

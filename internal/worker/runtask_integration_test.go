@@ -518,9 +518,9 @@ func TestRunTaskFailsOnUnknownPromptVariable(t *testing.T) {
 	if !strings.Contains(rterr.Err.Error(), "template_render_error") || !strings.Contains(rterr.Err.Error(), "missing") {
 		t.Fatalf("runTask error = %q, want typed missing variable render error", rterr.Err)
 	}
-	if !rterr.NonRetryable {
-		t.Fatal("runTask render failure was retryable, want deterministic template errors to fail fast")
-	}
+	// A deterministic template-render failure rides the SPEC §8.4 failure
+	// backoff like any abnormal exit (#584, D29 closed): RunTaskError no longer
+	// carries a NonRetryable flag, so the typed error is the only contract.
 	var renderErr *workflow.TemplateRenderError
 	if !errors.As(rterr.Err, &renderErr) {
 		t.Fatalf("runTask error type = %T, want *workflow.TemplateRenderError", rterr.Err)

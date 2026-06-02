@@ -82,7 +82,6 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrNotDispatched
 		return nil
 	}
-	st.ReleaseFailedIfIssueChanged(d.issue)
 	consumedContinuation, continuationAttempt, deny := resolveDispatchClaim(st, id, d.trackerRechecked)
 	if deny {
 		d.result <- ErrNotDispatched
