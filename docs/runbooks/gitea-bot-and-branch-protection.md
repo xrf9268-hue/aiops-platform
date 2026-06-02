@@ -111,6 +111,7 @@ If the deployed Gitea version only exposes the legacy `repo` scope, prefer that 
 - Store the source of truth in a secret manager.
 - Rotate both credentials on a schedule (recommended: every 90 days) and immediately if a worker host or backup is suspected compromised.
 - Revoke a credential in Gitea before deleting it from the secret store, so any in-flight call fails closed.
+- **Rotating the `repo.clone_url` credential also requires invalidating the cached bare mirror.** The mirror is keyed by host/path, not by the URL userinfo, and the reuse path only runs `git fetch` — it does not rewrite `remote.origin.url` (`internal/workspace/manager.go` → `ensureMirrorLocked`). So a mirror cloned with the old credential keeps using it until reset: after rotating, delete the repo's mirror under `$AIOPS_MIRROR_ROOT/` (or rewrite its `remote.origin.url`) so the next prepare re-clones with the new credential. See [`workspace-cache.md`](workspace-cache.md) for the cache layout and reset. Skipping this makes the worker keep authenticating with the just-revoked credential and then fail closed on the next fetch/push.
 
 ## Branch protection on `main`
 
@@ -179,10 +180,11 @@ If the bot account or its token may be compromised:
 
 1. Revoke both bot credentials in Gitea immediately: `GITEA_TOKEN` and the `repo.clone_url` push + PR credential.
 2. Stop the worker process.
-3. Audit recent pushes by the bot account (`git log --author=aiops-bot` on each repo, plus Gitea audit log).
-4. Force-close any open PRs the agent opened under the bot identity during the suspect window.
-5. Confirm `main` is unaffected (branch protection should guarantee this, but verify).
-6. Issue new credentials with the recommended scopes above and resume the worker.
+3. Delete the affected repos' cached bare mirrors under `$AIOPS_MIRROR_ROOT/` (see [`workspace-cache.md`](workspace-cache.md)) — a mirror cloned with the now-revoked `repo.clone_url` credential retains it in `remote.origin.url` until reset, so it must not survive into the post-incident worker.
+4. Audit recent pushes by the bot account (`git log --author=aiops-bot` on each repo, plus Gitea audit log).
+5. Force-close any open PRs the agent opened under the bot identity during the suspect window.
+6. Confirm `main` is unaffected (branch protection should guarantee this, but verify).
+7. Issue new credentials with the recommended scopes above and resume the worker.
 
 ## Pre-production checklist
 
