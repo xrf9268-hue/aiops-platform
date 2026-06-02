@@ -2230,37 +2230,40 @@ for line in sys.stdin:
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
 	// The 25ms per-turn deadline is the load-bearing value, not the outer ctx.
 	// classifyTurnError only yields a *TurnTimeoutError when the per-turn deadline
-	// fires while the outer ctx is still alive (codex_app_server.go), so
-	// IsTurnTimeout below already proves the turn timeout — not the outer ctx —
-	// ended the run.
+	// fires while the outer ctx is still alive (codex_app_server.go), so the
+	// errors.As(err, &te) check below already proves the turn timeout — not the
+	// outer ctx — ended the run.
 	//
 	// The stub sleeps 30s after turn/start — longer than the 10s outer ctx — so
 	// the ONLY way Run can return a *TurnTimeoutError is genuine 25ms preemption:
 	// a runner that ignored the per-turn deadline and blocked on the subprocess
 	// would instead hit the 10s outer ctx and surface a context-deadline error
-	// (IsTurnTimeout=false), failing the test. There is no subprocess-exit point
+	// (errors.As=false), failing the test. There is no subprocess-exit point
 	// inside the window that a non-preemptive runner could ride to a passing
 	// turn-timeout result.
 	//
 	// The outer ctx stays generous (a hang-guard) so Python interpreter boot under
-	// -race contention never expires it during the handshake; the old 1.5s ctx vs
-	// <1s elapsed bound coupled the assertion to boot latency, which is the
-	// #587/#598 flake class.
+	// -race contention never expires it during the handshake.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	start := time.Now()
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
-	elapsed := time.Since(start)
-	if !IsTurnTimeout(err) {
+	var te *TurnTimeoutError
+	if !errors.As(err, &te) {
 		t.Fatalf("Run error = %v, want app-server turn timeout", err)
 	}
-	// Returned well before the outer deadline. The 5s bound sits far above any
-	// realistic interpreter boot yet far below the 10s ctx, so it still catches a
-	// runner that wrongly waited for the outer context without re-coupling to
-	// subprocess startup latency.
-	if elapsed >= 5*time.Second {
-		t.Fatalf("Run elapsed %s, want return before outer context deadline", elapsed)
+	// Assert promptness on TurnTimeoutError.Elapsed, which the runner measures as
+	// time.Since(turnStarted) (codex_app_server.go) — turnStarted is captured
+	// AFTER the initialize/thread/turn handshake, not before Run, so this bound
+	// excludes Python interpreter boot + handshake latency. The old before-Run
+	// elapsed bound rode subprocess startup (the #587/#598 flake class, #602); a
+	// turn-start-relative measurement verifies only that the 25ms deadline
+	// preempts the 10s outer ctx. The deadline fires almost immediately once the
+	// turn is live, so a 2s bound is ~80x the budget (ample -race headroom) yet
+	// far below the 10s ctx — it still catches a runner that detected the turn
+	// timeout but returned late instead of preempting promptly.
+	if te.Elapsed >= 2*time.Second {
+		t.Fatalf("TurnTimeoutError.Elapsed = %s, want 25ms turn-deadline preemption measured from turn start (< 2s, well under the 10s outer ctx)", te.Elapsed)
 	}
 }
 
