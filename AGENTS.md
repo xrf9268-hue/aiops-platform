@@ -144,15 +144,36 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    merely document it (a new `DEVIATIONS.md` row); relocating or documenting
    preserves scaffolding that no longer earns its place (principle 4). Keep a
    piece only if you can name a behavior SPEC's scheduler/runner boundary
-   genuinely permits *and* that the prompt cannot replicate (e.g. the
-   `policy`-violation corrective retry loop). **Earned by:** this port has
-   built-then-unwound the same misplacement at least five times — Postgres
-   queue (#73/#407), Gitea webhook (#74), orchestrator PR/push/tracker-writes
-   (#76), the worker verify gate (#557), and the worker secret-scan gate
-   (#561; the RUN_SUMMARY gate is being unwound in the same #561 effort) — each
-   a dedicated removal on top of the original build, plus the bugs the
-   misplacement itself caused (the #557 reconcile-cancel race was a direct
-   consequence of running verify as a worker post-turn phase).
+   genuinely permits *and* that the prompt cannot replicate — and confirm that
+   bar against SPEC before claiming it. **Earned by:** this port has
+   built-then-unwound the same misplacement repeatedly — Postgres queue
+   (#73/#407), Gitea webhook (#74), orchestrator PR/push/tracker-writes (#76),
+   and the worker verify / secret-scan / RUN_SUMMARY / policy gates (#557 /
+   #561) — each a dedicated removal on top of the original build, plus the bugs
+   the misplacement itself caused (the #557 reconcile-cancel race was a direct
+   consequence of running verify as a worker post-turn phase). The `policy`
+   path/diffstat gate looked like a legitimate keep because of its
+   violation-retry loop, but SPEC §3.2 homes scope/validation rules in the
+   `WORKFLOW.md` prompt, the loop fired post-push and raced reconcile-cancel,
+   and upstream has no such config — so it is being removed under #561, not
+   kept.
+7. **Research to a verdict before proposing; bring the verdict, not a menu.**
+   Before proposing how to handle a component (keep / change / remove), finish
+   the SPEC + Elixir-reference research that would settle it — including what
+   SPEC says the *correct* home is (e.g. §3.2 places ticket-handling,
+   validation, and scope rules in the operator's `WORKFLOW.md` prompt, not a
+   worker gate). When that research settles the verdict — most often that an
+   extension upstream lacks and SPEC homes elsewhere should be removed — decide
+   and act on it directly; do **not** hand the operator a keep / relocate /
+   document multiple-choice. Such a menu is usually a symptom that the SPEC +
+   reference research which would rule out "keep" was not finished; it
+   re-litigates settled evidence and biases toward preserving the scaffolding.
+   Reserve operator choices for genuine scope, intent, or safety forks SPEC
+   leaves open. **Earned by:** the #561 `policy`-gate decision was first handed
+   back as a keep-vs-remove-vs-document menu *twice*, when SPEC §3.2 + the
+   post-push reconcile-cancel race + the upstream config gap already settled it
+   as a removal — research that should have produced a direct verdict up front,
+   before any option was offered.
 
 ## Cross-cutting checklist when porting from the Elixir reference
 
