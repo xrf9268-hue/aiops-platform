@@ -2115,7 +2115,12 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
 	in.Workflow.Config.Codex.StallTimeoutMs = 1000
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// The outer ctx is only a hang-guard, not the assertion: what is under test
+	// is that periodic item/updated events reset the StallTimeoutMs clock so the
+	// turn completes. Keep it generous enough that Python interpreter boot under
+	// full-suite -race contention never eats the budget before the turn runs
+	// (#587/#598) — the turn still completes in well under a second once up.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -2153,7 +2158,10 @@ for line in sys.stdin:
 	in.Workflow.Config.Tracker.ProjectSlug = "http://127.0.0.1:1"
 	in.Workflow.Config.Repo.Owner = "o"
 	in.Workflow.Config.Repo.Name = "r"
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Hang-guard only; the assertion is that the dynamic tool call + its output
+	// count as activity that resets the StallTimeoutMs clock. Generous so Python
+	// interpreter boot under -race contention never eats it (#587/#598).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -2187,7 +2195,10 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
 	in.Workflow.Config.Codex.StallTimeoutMs = 500
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	// Hang-guard only; the assertion is that an inbound server request counts as
+	// activity that resets the StallTimeoutMs clock. Generous so Python
+	// interpreter boot under -race contention never eats it (#587/#598).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	res, err := (CodexAppServerRunner{}).Run(ctx, in)
@@ -2210,23 +2221,45 @@ for line in sys.stdin:
         print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
     elif msg.get('method') == 'turn/start':
         print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
-        time.sleep(2)
+        time.sleep(30)
         break
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
 	in.Workflow.Config.Codex.TurnTimeoutMs = 25
 	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	// The 25ms per-turn deadline is the load-bearing value, not the outer ctx.
+	// classifyTurnError only yields a *TurnTimeoutError when the per-turn deadline
+	// fires while the outer ctx is still alive (codex_app_server.go), so
+	// IsTurnTimeout below already proves the turn timeout — not the outer ctx —
+	// ended the run.
+	//
+	// The stub sleeps 30s after turn/start — longer than the 10s outer ctx — so
+	// the ONLY way Run can return a *TurnTimeoutError is genuine 25ms preemption:
+	// a runner that ignored the per-turn deadline and blocked on the subprocess
+	// would instead hit the 10s outer ctx and surface a context-deadline error
+	// (IsTurnTimeout=false), failing the test. There is no subprocess-exit point
+	// inside the window that a non-preemptive runner could ride to a passing
+	// turn-timeout result.
+	//
+	// The outer ctx stays generous (a hang-guard) so Python interpreter boot under
+	// -race contention never expires it during the handshake; the old 1.5s ctx vs
+	// <1s elapsed bound coupled the assertion to boot latency, which is the
+	// #587/#598 flake class.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	_, err := (CodexAppServerRunner{}).Run(ctx, in)
 	elapsed := time.Since(start)
-	if err == nil || !strings.Contains(err.Error(), "turn timeout") {
+	if !IsTurnTimeout(err) {
 		t.Fatalf("Run error = %v, want app-server turn timeout", err)
 	}
-	if elapsed >= time.Second {
+	// Returned well before the outer deadline. The 5s bound sits far above any
+	// realistic interpreter boot yet far below the 10s ctx, so it still catches a
+	// runner that wrongly waited for the outer context without re-coupling to
+	// subprocess startup latency.
+	if elapsed >= 5*time.Second {
 		t.Fatalf("Run elapsed %s, want return before outer context deadline", elapsed)
 	}
 }
