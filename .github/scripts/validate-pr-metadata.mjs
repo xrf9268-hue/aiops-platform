@@ -14,14 +14,15 @@ const apiVersion = '2022-11-28';
 // specSensitivePatterns triggers the gate. Kept path-level (no AST parse),
 // matching the Wink model: the surfaces where a SPEC deviation actually enters.
 //   - internal/workflow/config.go: new top-level WORKFLOW.md/Config keys.
-//   - new (added) non-test files under internal/orchestrator or internal/worker:
-//     new scheduler/runner phases, gates, or artifacts.
+//   - new (added) non-test files anywhere under internal/orchestrator or
+//     internal/worker (including nested subpackages): new scheduler/runner
+//     phases, gates, or artifacts.
 const specSensitivePatterns = [
   { test: (file) => file.filename === 'internal/workflow/config.go' },
   {
     test: (file) =>
       file.status === 'added' &&
-      /^internal\/(orchestrator|worker)\/[^/]+\.go$/.test(file.filename) &&
+      /^internal\/(orchestrator|worker)\/.+\.go$/.test(file.filename) &&
       !file.filename.endsWith('_test.go'),
   },
 ];

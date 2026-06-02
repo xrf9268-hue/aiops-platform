@@ -66,6 +66,16 @@ test('classifySpecSensitivity flags config.go and newly-added scheduler files on
     false,
     'added test files do not trip the gate',
   );
+  assert.deepEqual(
+    classifySpecSensitivity([{ filename: 'internal/orchestrator/sub/new_phase.go', status: 'added' }]).matches,
+    ['internal/orchestrator/sub/new_phase.go'],
+    'a nested subpackage phase still trips the gate',
+  );
+  assert.equal(
+    classifySpecSensitivity([{ filename: 'internal/worker/sub/new_phase_test.go', status: 'added' }]).sensitive,
+    false,
+    'a nested test file does not trip the gate',
+  );
   assert.equal(classifySpecSensitivity(NON_SENSITIVE).sensitive, false);
 });
 
