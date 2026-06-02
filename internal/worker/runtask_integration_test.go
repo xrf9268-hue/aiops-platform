@@ -665,36 +665,6 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 	}
 }
 
-// TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1
-// boundary: a successful worker run prepares the workspace, executes the
-// agent, and enforces gates, but it does not push branches, create PRs, or
-// mutate tracker state. Those writes belong to the agent/tool surface.
-func TestAnalysisOnlyRunAllowsPlanArtifactWithoutSourceChanges(t *testing.T) {
-	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock\npolicy:\n  mode: analysis_only", 1)
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
-	t.Setenv("REPO_URL", cloneURL)
-
-	ev := &fakeEmitter{}
-	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Policy.Mode = "analysis_only"
-
-	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
-		t.Fatalf("runTask: %v", rterr.Err)
-	}
-
-	workdir := filepath.Join(cfg.WorkspaceRoot, tk.RepoOwner, tk.RepoName, "linear_issue", tk.SourceEventID)
-	if _, err := os.Stat(filepath.Join(workdir, ".aiops", "PLAN.md")); err != nil {
-		t.Fatalf("analysis-only run should write plan artifact: %v", err)
-	}
-	refs, err := exec.Command("git", "--git-dir", cloneURL[len("file://"):], "for-each-ref", "--format=%(refname:short)", "refs/heads").CombinedOutput()
-	if err != nil {
-		t.Fatalf("list upstream refs: %v\n%s", err, refs)
-	}
-	if string(refs) != "main\n" {
-		t.Fatalf("analysis-only run must not push work branches; upstream refs:\n%s", refs)
-	}
-}
-
 // TestBuildPromptVerifyDirectiveGatedByMode pins that operator-declared
 // verify.commands reach the agent's rendered prompt in normal mode (the worker
 // no longer runs them, #557) but are withheld in analysis_only mode, where the
@@ -751,102 +721,25 @@ func TestBuildPromptVerifyDirectiveGatedByMode(t *testing.T) {
 	})
 }
 
-func TestAnalysisOnlyRunRejectsSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-source-change", "analysis-only run changed source files")
-}
-
-func TestAnalysisOnlyRunRejectsCommittedSourceChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change", "analysis-only run changed source files")
-}
-
-func TestAnalysisOnlyRunRejectsCommittedSourceChangesEvenIfRunnerMutatesBaseConfig(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-source-change-and-reset-base-config", "analysis-only run changed source files")
-}
-
-func TestAnalysisOnlyRunRejectsCommittedArtifacts(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-commit-analysis-artifact", "analysis-only run created commits")
-}
-
-func TestAnalysisOnlyRunRequiresPlanArtifact(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-no-plan", "analysis-only run did not produce .aiops/PLAN.md")
-}
-
-func TestAnalysisOnlyRunRequiresFreshPlanArtifact(t *testing.T) {
-	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock-no-plan\npolicy:\n  mode: analysis_only", 1)
+// TestAnalysisOnlyRunNoLongerGatesSourceChanges pins the #574 removal: a run in
+// analysis_only mode whose agent edits source files now succeeds. The worker no
+// longer enforces analysis-only after the turn (that gate raced reconcile-cancel
+// and ran post-push, #76); analysis-only is preventive only, via the
+// AppendAnalysisOnlyDirective prompt directive. This fails if
+// enforceAnalysisOnlyChanges is reintroduced (it rejected exactly this input).
+func TestAnalysisOnlyRunNoLongerGatesSourceChanges(t *testing.T) {
+	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: mock-source-change\npolicy:\n  mode: analysis_only", 1)
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
 	t.Setenv("REPO_URL", cloneURL)
-	tk.Model = "mock-no-plan"
-	seed := cloneURL[len("file://"):]
-	work := filepath.Join(t.TempDir(), "seed-plan")
-	for _, args := range [][]string{
-		{"git", "clone", "-q", seed, work},
-		{"git", "-C", work, "config", "user.email", "u@example.com"},
-		{"git", "-C", work, "config", "user.name", "u"},
-		{"git", "-C", work, "config", "commit.gpgsign", "false"},
-		{"git", "-C", work, "config", "tag.gpgsign", "false"},
-	} {
-		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, out)
-		}
-	}
-	if err := os.MkdirAll(filepath.Join(work, ".aiops"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(work, ".aiops", "PLAN.md"), []byte("stale committed plan\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{
-		{"git", "-C", work, "add", ".aiops/PLAN.md"},
-		{"git", "-C", work, "commit", "-q", "-m", "seed stale plan"},
-		{"git", "-C", work, "push", "-q", "origin", "main"},
-	} {
-		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v\n%s", args, err, out)
-		}
-	}
+	tk.Model = "mock-source-change"
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Agent.Default = "mock-no-plan"
+	cfg.Workflow.Config.Agent.Default = "mock-source-change"
 	cfg.Workflow.Config.Policy.Mode = "analysis_only"
 
-	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
-	if rterr == nil {
-		t.Fatal("analysis-only run with only a stale base PLAN.md succeeded, want policy failure")
-	}
-	if !strings.Contains(rterr.Err.Error(), "analysis-only run did not produce .aiops/PLAN.md") {
-		t.Fatalf("error = %v, want stale plan rejection", rterr.Err)
-	}
-	if got := len(ev.byKind(task.EventAnalysisOnlyViolation)); got != 1 {
-		t.Fatalf("analysis_only_violation events = %d, want 1; events=%#v", got, ev.events)
-	}
-}
-
-func TestAnalysisOnlyRunRejectsRepoOwnedAiopsChanges(t *testing.T) {
-	testAnalysisOnlyMockFailure(t, "mock-aiops-workflow-change", "analysis-only run changed source files")
-}
-
-func testAnalysisOnlyMockFailure(t *testing.T, runnerName, wantErr string) {
-	t.Helper()
-	analysisWorkflow := strings.Replace(linearWorkflowBody, "agent:\n  default: mock", "agent:\n  default: "+runnerName+"\npolicy:\n  mode: analysis_only", 1)
-	cloneURL, tk := initBareUpstreamWithWorkflow(t, analysisWorkflow)
-	t.Setenv("REPO_URL", cloneURL)
-	tk.Model = runnerName
-
-	ev := &fakeEmitter{}
-	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Agent.Default = runnerName
-	cfg.Workflow.Config.Policy.Mode = "analysis_only"
-
-	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
-	if rterr == nil {
-		t.Fatalf("analysis-only run with %s succeeded, want policy failure", runnerName)
-	}
-	if !strings.Contains(rterr.Err.Error(), wantErr) {
-		t.Fatalf("error = %v, want %q", rterr.Err, wantErr)
-	}
-	if got := len(ev.byKind(task.EventAnalysisOnlyViolation)); got != 1 {
-		t.Fatalf("%s events = %d, want 1; events=%#v", task.EventAnalysisOnlyViolation, got, ev.events)
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("RunTaskForTest(analysis_only + source change) = %v; want nil (the post-turn analysis-only gate was removed in #574)", rterr.Err)
 	}
 }
 
@@ -861,6 +754,10 @@ func assertPerm(t *testing.T, path string, want os.FileMode) {
 	}
 }
 
+// TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker pins the SPEC §1
+// boundary: a successful worker run prepares the workspace and executes the
+// agent, but it does not push branches, create PRs, or mutate tracker state.
+// Those writes belong to the agent/tool surface.
 func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
@@ -911,7 +808,7 @@ func TestRunTaskExternalBlockerArtifactReturnsBlockedResult(t *testing.T) {
 	// test pre-populates it via an operator-controlled before_run hook as a test
 	// stand-in for the agent's write (the hook is orchestrator setup, not a model
 	// of agent behavior); it runs after resetStaleArtifacts clears stale blockers
-	// and before runPostRunGates consumes the freshly written one.
+	// and before consumeExternalBlocker consumes the freshly written one.
 	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
 		BeforeRun: workflow.WorkspaceHook{Commands: []string{
 			`mkdir -p .aiops && printf '{"version":1,"kind":"external_dependency","reason":"PR #455 still open","retry_after_seconds":3600}' > .aiops/BLOCKED.json`,

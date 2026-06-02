@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -528,75 +527,6 @@ func AllChangedFiles(ctx context.Context, workdir string) ([]string, error) {
 		files = append(files, path)
 	}
 	return files, nil
-}
-
-func ResolveBaseBranchRef(ctx context.Context, workdir, baseBranch string) (string, error) {
-	baseRef := "origin/" + strings.TrimSpace(baseBranch)
-	if strings.TrimSpace(baseBranch) == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
-		baseRef = strings.TrimSpace(baseBranch)
-	}
-	if baseRef == "" {
-		baseRef = "@{upstream}"
-	}
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", baseRef+"^{commit}")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func AllChangedFilesSinceRef(ctx context.Context, workdir, baseRef string) ([]string, error) {
-	files, err := AllChangedFiles(ctx, workdir)
-	if err != nil {
-		return nil, err
-	}
-	if baseRef == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
-		baseRef = "@{upstream}"
-	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--name-only", "-z", baseRef+"...HEAD")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]struct{}, len(files))
-	for _, file := range files {
-		seen[file] = struct{}{}
-	}
-	for _, file := range strings.Split(string(out), "\x00") {
-		if file == "" {
-			continue
-		}
-		if _, ok := seen[file]; ok {
-			continue
-		}
-		seen[file] = struct{}{}
-		files = append(files, file)
-	}
-	return files, nil
-}
-
-func HasCommitsSinceRef(ctx context.Context, workdir, baseRef string) (bool, error) {
-	if baseRef == "" || runGitQuiet(ctx, workdir, "rev-parse", "--verify", baseRef) != nil {
-		baseRef = "@{upstream}"
-	}
-	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", baseRef+"..HEAD")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
-	if err != nil {
-		return false, err
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-func HasCommitsSinceWorkspaceBase(ctx context.Context, workdir string) (bool, error) {
-	return HasCommitsSinceRef(ctx, workdir, "@{upstream}")
 }
 
 // CommitIdentName and CommitIdentEmail are the git author/committer

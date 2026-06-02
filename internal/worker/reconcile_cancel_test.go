@@ -56,8 +56,8 @@ func TestRunAgentWritesNoFailureArtifactOnReconcileCancel(t *testing.T) {
 // the next run. PrepareGitWorkspace preserves untracked files on reuse, so
 // without the reset (a) a stale FAILURE.md would be swept into CHANGED_FILES.txt
 // and could be committed by an `git add -A` agent, and (b) a RUN_SUMMARY.md
-// (#561) or VERIFICATION.txt (#560) left by an older worker version — no longer
-// in AllowedHandoffArtifactPaths — would trip the analysis-only diff check.
+// (#561) or VERIFICATION.txt (#560) left by an older worker version would
+// likewise be swept into CHANGED_FILES.txt.
 func TestResetStaleArtifactsClearsWorkerArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	aiops := filepath.Join(dir, ".aiops")
@@ -78,6 +78,32 @@ func TestResetStaleArtifactsClearsWorkerArtifacts(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(aiops, name)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s stat error = %v; want not-exist (a stale worker artifact must not survive a rerun)", name, err)
 		}
+	}
+}
+
+// TestResetStaleArtifactsClearsAnalysisPlan pins the Codex review fix on #574:
+// in analysis-only mode .aiops/PLAN.md is the agent's handoff artifact, so a
+// stale copy from a previous attempt on a reused workspace must be cleared
+// before the run — otherwise it can be read as this run's assessment or swept
+// into the finalize() CHANGED_FILES.txt snapshot. Removing the post-turn
+// analysis-only gate must not take this hygiene reset with it; this test fails
+// if the reset is dropped again.
+func TestResetStaleArtifactsClearsAnalysisPlan(t *testing.T) {
+	dir := t.TempDir()
+	aiops := filepath.Join(dir, ".aiops")
+	if err := os.MkdirAll(aiops, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan := filepath.Join(aiops, "PLAN.md")
+	if err := os.WriteFile(plan, []byte("stale assessment from a previous attempt\n"), 0o644); err != nil {
+		t.Fatalf("seed stale PLAN.md: %v", err)
+	}
+	rs := &runState{workdir: dir, wcfg: workflow.Config{Policy: workflow.PolicyConfig{Mode: "analysis_only"}}}
+	if rtErr := rs.resetStaleArtifacts(); rtErr != nil {
+		t.Fatalf("resetStaleArtifacts() = %v; want nil", rtErr.Err)
+	}
+	if _, err := os.Stat(plan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("PLAN.md stat error = %v; want not-exist (a stale analysis-only handoff artifact must not survive a rerun)", err)
 	}
 }
 

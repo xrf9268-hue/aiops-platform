@@ -157,7 +157,6 @@ type runState struct {
 	hooks          workflow.WorkspaceHooks
 	workspaceRoot  string
 	workdir        string
-	workspaceBase  string
 	prompt         string
 	res            runner.Result
 	sessionID      string
@@ -200,7 +199,7 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	if rtErr := rs.runAgent(); rtErr != nil {
 		return rtErr
 	}
-	if rtErr := rs.runPostRunGates(); rtErr != nil {
+	if rtErr := rs.consumeExternalBlocker(); rtErr != nil {
 		return rtErr
 	}
 	rs.finalize()
@@ -229,12 +228,6 @@ func (rs *runState) prepareWorkspace() *RunTaskError {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 	rs.workdir = workdir
-	if rs.wcfg.Policy.Mode == "analysis_only" {
-		rs.workspaceBase, err = workspace.ResolveBaseBranchRef(rs.ctx, workdir, rs.t.BaseBranch)
-		if err != nil {
-			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("resolve workspace base: %w", err)}
-		}
-	}
 	if createdNow {
 		// SPEC §9.4: after_create runs only when a workspace directory
 		// is newly created. Reuses skip it so bootstrap commands
@@ -412,17 +405,16 @@ func (rs *runState) sandboxStartupBlocked(runErr error) *RunTaskError {
 }
 
 // resetStaleArtifacts deletes the blocker artifact, the worker failure
-// post-mortem (.aiops/FAILURE.md), and (in analysis_only mode) .aiops/PLAN.md
-// before the runner starts so leftovers from a previous run or the base branch
-// are not mistaken for this run's output. PrepareGitWorkspace resets tracked
-// files to origin/<base> on every prepare (fresh checkout on first touch,
-// `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may also be
-// committed on the base branch itself (left over from a prior PR or seeded by
-// hand), and on reuse any untracked artifact written by the previous run still
-// lingers in the workdir. Deleting them here means the analysis-only diff check
-// only sees this run's PLAN.md, and a stale FAILURE.md from a previous failed
-// attempt does not leak into a later successful rerun's CHANGED_FILES.txt or
-// commits (#561 review).
+// post-mortem (.aiops/FAILURE.md), and (in analysis-only mode) the agent's
+// .aiops/PLAN.md handoff artifact before the runner starts so leftovers from a
+// previous run or the base branch are not mistaken for this run's output.
+// PrepareGitWorkspace resets tracked files to origin/<base> on every prepare
+// (fresh checkout on first touch, `checkout --force -B` on reuse per SPEC §9.1),
+// but those artifacts may also be committed on the base branch itself (left over
+// from a prior PR or seeded by hand), and on reuse any untracked artifact
+// written by the previous run still lingers in the workdir. Deleting them here
+// means a stale FAILURE.md from a previous failed attempt does not leak into a
+// later successful rerun's CHANGED_FILES.txt or commits (#561 review).
 func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	if err := ResetBlockerArtifact(rs.workdir); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
@@ -433,14 +425,21 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	// Clear artifacts retired by earlier worker versions: RUN_SUMMARY.md (#561)
 	// and VERIFICATION.txt (#560). They are no longer written, but on a
 	// long-lived workspace reused across a worker upgrade an old untracked copy
-	// can linger (PrepareGitWorkspace preserves untracked files) and — now that
-	// they are no longer in AllowedHandoffArtifactPaths — would trip the
-	// analysis-only diff check or be swept into CHANGED_FILES.txt.
+	// can linger (PrepareGitWorkspace preserves untracked files) and be swept
+	// into the finalize() CHANGED_FILES.txt snapshot.
 	for _, retired := range []string{"RUN_SUMMARY.md", "VERIFICATION.txt"} {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", retired)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset retired artifact %s: %w", retired, err)}
 		}
 	}
+	// In analysis-only mode .aiops/PLAN.md is the agent's handoff artifact (it
+	// writes its assessment there per AppendAnalysisOnlyDirective). On a reused
+	// workspace a stale PLAN.md from a previous attempt survives
+	// PrepareGitWorkspace (it preserves untracked files), so clear it before the
+	// run — otherwise a prior assessment can be read as this run's output or
+	// swept into the finalize() CHANGED_FILES.txt snapshot. The removed post-turn
+	// analysis-only gate previously also relied on this reset; the hygiene reason
+	// stands on its own (Codex review on #574).
 	if rs.wcfg.Policy.Mode == "analysis_only" {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
@@ -449,20 +448,17 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	return nil
 }
 
-// runPostRunGates runs the analysis-only diff check and the external-blocker
-// handoff. A recorded external blocker is a success path: it returns a
-// *RunTaskError with ExternalBlocked set after stamping PhaseSucceeded.
-// Verification (SPEC §1, surfaced via AppendVerifyDirective), the secret scan,
-// and the RUN_SUMMARY gate were all removed under #561 — each ran after the
-// agent had already pushed (#76), so it could only flag, never prevent, and
-// each raced the D9 reconcile-cancel / §16.5 self-stop the way the verify gate
-// did in #557.
-func (rs *runState) runPostRunGates() *RunTaskError {
-	if err := enforceAnalysisOnlyChanges(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, rs.workspaceBase, rs.wcfg); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, ErrSummary(err))
-		return &RunTaskError{Cfg: rs.wcfg, Err: err}
-	}
-
+// consumeExternalBlocker checks for the agent's external-dependency handoff
+// (.aiops/BLOCKED.json). A recorded external blocker is a success path: it
+// returns a *RunTaskError with ExternalBlocked set after stamping
+// PhaseSucceeded. The worker runs no post-turn gate on the agent's output:
+// verification (SPEC §1, surfaced via AppendVerifyDirective), the secret scan,
+// the RUN_SUMMARY and policy path/diffstat gates (#561), and the analysis-only
+// diff gate (#574) were all removed — each ran after the agent had already
+// pushed (#76), so it could only flag, never prevent, and each raced the D9
+// reconcile-cancel / §16.5 self-stop the way the verify gate did in #557.
+// analysis-only behavior is now preventive only, via AppendAnalysisOnlyDirective.
+func (rs *runState) consumeExternalBlocker() *RunTaskError {
 	blocker, blockerErr := ConsumeBlockerArtifact(rs.workdir)
 	if blockerErr == nil {
 		Emit(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, task.EventExternalBlocker, "external dependency blocker recorded", map[string]any{
@@ -759,53 +755,6 @@ const verifyDirectiveTemplate = "\n\n---\n\n" +
 	"the issue to a review/inactive state — run the workflow's verification commands in " +
 	"the workspace and make sure they pass: %s. If any fail, fix the code and re-run until " +
 	"they pass; do not hand off on red. The orchestrator does not run these for you."
-
-func enforceAnalysisOnlyChanges(ctx context.Context, ev EventEmitter, taskID, identifier, workdir, baseRef string, cfg workflow.Config) error { //nolint:gocognit // baseline (#521)
-	if cfg.Policy.Mode != "analysis_only" {
-		return nil
-	}
-	planPath := filepath.Join(workdir, ".aiops", "PLAN.md")
-	plan, err := os.ReadFile(planPath)
-	if err != nil || strings.TrimSpace(string(plan)) == "" {
-		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run did not produce .aiops/PLAN.md", map[string]any{
-			"path": ".aiops/PLAN.md",
-		})
-		if err != nil {
-			return fmt.Errorf("analysis-only run did not produce .aiops/PLAN.md: %w", err)
-		}
-		return fmt.Errorf("analysis-only run did not produce .aiops/PLAN.md")
-	}
-	changed, err := workspace.AllChangedFilesSinceRef(ctx, workdir, baseRef)
-	if err != nil {
-		return fmt.Errorf("inspect analysis-only changes: %w", err)
-	}
-	violations := make([]string, 0)
-	for _, path := range changed {
-		if analysisOnlyArtifactAllowed(path) {
-			continue
-		}
-		violations = append(violations, path)
-	}
-	if len(violations) > 0 {
-		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run changed source files", map[string]any{
-			"files": violations,
-		})
-		return fmt.Errorf("analysis-only run changed source files: %s", strings.Join(violations, ", "))
-	}
-	committed, err := workspace.HasCommitsSinceRef(ctx, workdir, baseRef)
-	if err != nil {
-		return fmt.Errorf("inspect analysis-only commits: %w", err)
-	}
-	if committed {
-		Emit(ctx, ev, taskID, identifier, task.EventAnalysisOnlyViolation, "analysis-only run created commits", nil)
-		return fmt.Errorf("analysis-only run created commits")
-	}
-	return nil
-}
-
-func analysisOnlyArtifactAllowed(path string) bool {
-	return workspace.IsAllowedHandoffArtifact(path)
-}
 
 // AppendBlockerDirective adds the external-dependency BLOCKED.json contract to
 // the rendered prompt unless it is already present. (The worker no longer

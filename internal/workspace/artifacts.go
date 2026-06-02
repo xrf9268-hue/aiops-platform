@@ -28,15 +28,6 @@ var sensitiveArtifactPaths = []string{
 
 var sensitiveArtifactExcludePatterns = append(sensitiveArtifactPaths, ".aiops/logs/")
 
-func IsAllowedHandoffArtifact(path string) bool {
-	for _, allowed := range AllowedHandoffArtifactPaths {
-		if path == allowed {
-			return true
-		}
-	}
-	return false
-}
-
 func sensitiveArtifactPreCommitHook() string {
 	patterns := make([]string, 0, len(AllowedHandoffArtifactPaths))
 	for _, path := range AllowedHandoffArtifactPaths {

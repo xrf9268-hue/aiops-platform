@@ -87,11 +87,10 @@ const (
 	// tracker issue left the active set (eligibility reconcile / agent PR
 	// handoff), distinct from runner_end's success/failure so it is not counted
 	// as either (SPEC §7.3 supervised stop; #543).
-	EventRunnerStopped         = "runner_stopped"
-	EventRunnerTimeout         = "runner_timeout"
-	EventStalled               = "stalled"
-	EventAnalysisOnlyViolation = "analysis_only_violation"
-	EventExternalBlocker       = "external_blocker"
+	EventRunnerStopped   = "runner_stopped"
+	EventRunnerTimeout   = "runner_timeout"
+	EventStalled         = "stalled"
+	EventExternalBlocker = "external_blocker"
 	// EventSandboxStartupBlocked marks a run parked on a cooldown because the
 	// coding agent's sandbox could not start (codex/bwrap user-namespace denial),
 	// a failure that recurs identically until the host is reconfigured (#550).
