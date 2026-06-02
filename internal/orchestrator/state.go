@@ -229,7 +229,7 @@ type OrchestratorState struct {
 	// Pure bookkeeping like Completed; reconcileStoppedWithProgressOrder mirrors it
 	// as the FIFO/cap slice and CumulativeReconcileStoppedWithProgressTotal is the
 	// monotonic lifetime counter. It exists so such a progressed run is VISIBLE in
-	// /api/v1/state instead of being absent from both completed and failed (#557).
+	// /api/v1/state instead of being absent from completed (#557).
 	// It does NOT change Completed (a reconcile-stopped run did not exit through the
 	// clean §16.5 path, matching upstream's accounting); it only surfaces a run an
 	// operator would otherwise miss. Capped by MaxRecentCompleted (same
@@ -628,7 +628,7 @@ type StateView struct {
 	// ReconcileStoppedWithProgress is the FIFO-bounded recent set of reconcile-stopped
 	// runs that had completed ≥1 agent turn (made progress — usually the agent's
 	// handoff, but inspect to confirm) — surfaced so a progressed-but-reaped run is
-	// visible rather than absent from both Completed and Failed (#557).
+	// visible rather than absent from Completed (#557).
 	// CumulativeReconcileStoppedWithProgressTotal is the lifetime monotonic counter
 	// that survives FIFO eviction.
 	ReconcileStoppedWithProgress                []IssueID

@@ -119,8 +119,8 @@ func TestTodoSmokeScriptRecordsDraftPRWhenWorkerFails(t *testing.T) {
 	if !strings.Contains(report, "Verified new `#11 https://example.test/pr/11` closes `xrf9268-hue/aiops-platform#450`") {
 		t.Fatalf("report missing draft PR verification on worker failure:\n%s", report)
 	}
-	if !strings.Contains(report, "FAIL selected issue `AIS-1` failed.") {
-		t.Fatalf("report missing selected issue failure:\n%s", report)
+	if !strings.Contains(report, "FAIL selected issue `AIS-1` failed: boom") {
+		t.Fatalf("report missing selected issue failure (with last_error detail):\n%s", report)
 	}
 }
 
@@ -238,10 +238,10 @@ func TestTodoSmokeScriptRequiresIssueIDInsideTerminalArrays(t *testing.T) {
 	text := string(body)
 	for _, want := range []string{
 		// Completed is still detected by membership in the `completed` array;
-		// failure is now detected by the per-issue drill-down status (the
-		// `failed` array/counter was removed in #584, D29).
+		// failure is now detected by a non-null per-issue `last_error` (a failed
+		// run is parked in `retrying`, not a terminal `failed` set — #584, D29).
 		`state_array_contains_issue completed "$selected_issue_id" "$state_file"`,
-		`[ "$selected_status" = "failed" ]`,
+		`[ -n "$selected_error" ]`,
 		`"\"$field\":[[:space:]]*\[[^]]*\"$issue_id\""`,
 	} {
 		if !strings.Contains(text, want) {
@@ -360,12 +360,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            # A failed run surfaces via the per-issue status (RuntimeEventFailed
-            # scan); there is no failed aggregate array anymore (#584).
+            # Mirror the real apiIssueFromView: a failed run is parked in
+            # retrying (the Retrying branch wins over the terminal-event scan),
+            # so the drill-down reports status "retrying" with retry.kind
+            # "failure" and a non-null last_error. There is no terminal "failed"
+            # status for a retrying run anymore (#584).
             if os.environ.get("AIOPS_FAKE_WORKER_STATE") == "failed":
-                issue = {"issue_id":"issue-1","status":"failed"}
+                issue = {"issue_id":"issue-1","status":"retrying","retry":{"attempt":1,"kind":"failure"},"last_error":"boom"}
             else:
-                issue = {"issue_id":"issue-1","status":"completed"}
+                issue = {"issue_id":"issue-1","status":"completed","last_error":None}
             self.wfile.write(json.dumps(issue).encode())
             return
         if self.path == "/api/v1/state":
@@ -379,7 +382,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # Failures retry on the SPEC 8.4 backoff (parked in retrying); the
             # worker no longer emits failed / failed_total (#584, D29).
             if os.environ.get("AIOPS_FAKE_WORKER_STATE") == "failed":
-                state = {"completed_total":0,"completed":[],"retrying":["issue-1"]}
+                state = {"completed_total":0,"completed":[],"retrying":[{"issue_id":"issue-1","kind":"failure"}]}
             else:
                 state = {"completed_total":1,"completed":["issue-1"]}
             self.wfile.write(json.dumps(state).encode())

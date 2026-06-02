@@ -46,7 +46,7 @@ type apiStateResponse struct {
 	// fires after every turn, so it can also be a run stopped after an intermediate
 	// turn; inspect to confirm, it is not a guaranteed success) before the per-tick
 	// reconcile reaped them — surfaced so a progressed-but-reaped run is visible
-	// rather than absent from both completed and failed (#557). It does not overlap
+	// rather than absent from completed (#557). It does not overlap
 	// completed: a reconcile-stopped run is not a clean §16.5 exit, matching
 	// upstream's accounting, so completed stays unchanged.
 	ReconcileStoppedWithProgress []orchestrator.IssueID `json:"reconcile_stopped_with_progress"`

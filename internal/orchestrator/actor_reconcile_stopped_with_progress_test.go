@@ -4,7 +4,7 @@ package orchestrator
 // reconcile-stopped run that had completed ≥1 agent turn (made progress — these
 // tests simulate the agent's handoff) is surfaced in /api/v1/state's
 // ReconcileStoppedWithProgress set, so a progressed-but-reaped run is visible
-// instead of absent from both Completed and Failed. It must NOT be added to
+// instead of absent from Completed. It must NOT be added to
 // Completed (a reconcile-stopped run is not a clean §16.5 exit — completed stays
 // upstream-aligned), and a 0-turn reconcile cancel (genuine no-progress stop)
 // must not be recorded.

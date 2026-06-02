@@ -79,7 +79,7 @@ The effective port is resolved in this order, per SPEC §13.7:
 3. Otherwise the schema default of `4000`.
 
 - `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
-  retry rows, completed and failed issue IDs, aggregate token/runtime totals,
+  retry rows, completed issue IDs, aggregate token/runtime totals,
   and the current poll/concurrency metadata.
 - `GET /api/v1/<issue_identifier>` returns one issue's current runtime row.
   Lookup is case-insensitive and matches either the tracker issue identifier or
