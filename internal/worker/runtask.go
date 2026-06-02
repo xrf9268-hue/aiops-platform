@@ -310,7 +310,6 @@ func (rs *runState) runAgent() *RunTaskError {
 	}
 
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookBeforeRun, rs.hooks.BeforeRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
-		WriteFailureArtifacts(rs.ctx, rs.workdir, "before_run hook failed: "+ErrSummary(err))
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
@@ -332,52 +331,40 @@ func (rs *runState) runAgent() *RunTaskError {
 }
 
 // handleRunnerFailure runs the after_run hook on the runner-error path and
-// classifies the failure into the right terminal RunTaskError: a supervised
-// reconcile-cancel (no FAILURE.md written for a superseded run, #543) or a
-// generic runner failure that goes through SPEC §8.4 backoff. A codex
-// sandbox-startup denial is a generic runner failure here: the runner already
-// re-tagged it as an output-free *SandboxStartupError (no raw bwrap text leaks),
-// and it rides the same §8.4 backoff as any other failure. `worker --doctor`
-// (#542) is the preventive layer that catches the host misconfiguration before
-// dispatch.
+// returns the terminal RunTaskError. The failure reason is already carried by
+// the SPEC §13.1/§13.2 structured events the runner path emits (runner_end
+// "runner failed" with an `error` payload, or the workspace_hook_end error for a
+// before_run failure), so there is nothing more to persist here. A codex
+// sandbox-startup denial rides this same generic-failure path: the runner
+// already re-tagged it as an output-free *SandboxStartupError (no raw bwrap text
+// leaks) and it takes the SPEC §8.4 backoff like any other failure.
+// `worker --doctor` (#542) is the preventive layer that catches the host
+// misconfiguration before dispatch.
 func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
 	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 	}
-	// An eligibility reconcile-cancel is a supervised stop, not a runner
-	// failure: it means the agent already handed off (e.g. moved its issue to
-	// In Review), so the worker must not write a FAILURE.md post-mortem for a
-	// run that actually succeeded (#543). The orchestrator releases the run via
-	// its ReconcileCancel flag.
-	if isReconcileCancel(rs.ctx, runErr) {
-		return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
-	}
-	WriteFailureArtifacts(rs.ctx, rs.workdir, "runner failed: "+ErrSummary(runErr))
 	return &RunTaskError{Cfg: rs.wcfg, Err: runErr}
 }
 
-// resetStaleArtifacts deletes the worker failure post-mortem (.aiops/FAILURE.md)
-// and (in analysis-only mode) the agent's .aiops/PLAN.md handoff artifact before
-// the runner starts so leftovers from a previous run or the base branch are not
-// mistaken for this run's output. PrepareGitWorkspace resets tracked files to
-// origin/<base> on every prepare (fresh checkout on first touch,
-// `checkout --force -B` on reuse per SPEC §9.1), but those artifacts may also be
-// committed on the base branch itself (left over from a prior PR or seeded by
-// hand), and on reuse any untracked artifact written by the previous run still
-// lingers in the workdir. Deleting them here means a stale FAILURE.md from a
-// previous failed attempt does not leak into a later successful rerun's
-// CHANGED_FILES.txt or commits (#561 review).
+// resetStaleArtifacts deletes untracked worker/agent artifacts left over from a
+// previous run (and, in analysis-only mode, the agent's .aiops/PLAN.md handoff
+// artifact) before the runner starts so leftovers are not mistaken for this
+// run's output. PrepareGitWorkspace resets tracked files to origin/<base> on
+// every prepare (fresh checkout on first touch, `checkout --force -B` on reuse
+// per SPEC §9.1), but those artifacts may also be committed on the base branch
+// itself (left over from a prior PR or seeded by hand), and on reuse any
+// untracked artifact written by a previous run still lingers in the workdir.
 func (rs *runState) resetStaleArtifacts() *RunTaskError {
-	if err := workspace.ResetFailureSummary(rs.workdir); err != nil {
-		return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset failure summary: %w", err)}
-	}
-	// Clear artifacts retired by earlier worker versions: RUN_SUMMARY.md (#561),
-	// VERIFICATION.txt (#560), and BLOCKED.json (the external-blocker cooldown
-	// artifact removed in #572). They are no longer written or read, but on a
-	// long-lived workspace reused across a worker upgrade an old untracked copy
-	// can linger (PrepareGitWorkspace preserves untracked files) and be swept
-	// into the finalize() CHANGED_FILES.txt snapshot.
-	for _, retired := range []string{"RUN_SUMMARY.md", "VERIFICATION.txt", "BLOCKED.json"} {
+	// Clear artifacts retired by earlier worker versions: FAILURE.md and
+	// CHANGED_FILES.txt (the failure post-mortem / changed-file snapshot removed
+	// in #575 — failure reasons live in the SPEC §13.1/§13.2 structured events),
+	// RUN_SUMMARY.md (#561), VERIFICATION.txt (#560), and BLOCKED.json (the
+	// external-blocker cooldown artifact removed in #572). They are no longer
+	// written or read, but on a long-lived workspace reused across a worker
+	// upgrade an old untracked copy can linger (PrepareGitWorkspace preserves
+	// untracked files) and be committed by an agent that runs `git add -A`.
+	for _, retired := range []string{"FAILURE.md", "CHANGED_FILES.txt", "RUN_SUMMARY.md", "VERIFICATION.txt", "BLOCKED.json"} {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", retired)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset retired artifact %s: %w", retired, err)}
 		}
@@ -386,10 +373,9 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	// writes its assessment there per AppendAnalysisOnlyDirective). On a reused
 	// workspace a stale PLAN.md from a previous attempt survives
 	// PrepareGitWorkspace (it preserves untracked files), so clear it before the
-	// run — otherwise a prior assessment can be read as this run's output or
-	// swept into the finalize() CHANGED_FILES.txt snapshot. The removed post-turn
-	// analysis-only gate previously also relied on this reset; the hygiene reason
-	// stands on its own (Codex review on #574).
+	// run — otherwise a prior assessment can be read as this run's output. The
+	// removed post-turn analysis-only gate previously also relied on this reset;
+	// the hygiene reason stands on its own (Codex review on #574).
 	if rs.wcfg.Policy.Mode == "analysis_only" {
 		if err := os.Remove(filepath.Join(rs.workdir, ".aiops", "PLAN.md")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return &RunTaskError{Cfg: rs.wcfg, Err: fmt.Errorf("reset analysis plan: %w", err)}
@@ -398,22 +384,9 @@ func (rs *runState) resetStaleArtifacts() *RunTaskError {
 	return nil
 }
 
-// finalize snapshots the changed-file list for post-run inspection and stamps
-// the terminal success phase. Its file-snapshot steps are best-effort (failures
-// are logged, not fatal), so it has no error to return. It does not push; that
-// is the agent's job.
+// finalize stamps the terminal success phase. It does not push; that is the
+// agent's job.
 func (rs *runState) finalize() {
-	// Snapshot the changed files after the post-run checks so
-	// CHANGED_FILES.txt is available as a workspace artifact for post-run
-	// inspection.
-	if err := workspace.WriteChangedFiles(rs.workdir, nil); err != nil {
-		LogIssueEventf(rs.t, "changed_files_seed_failed", "error=%q", err)
-	}
-	changed, _ := workspace.AllChangedFiles(rs.ctx, rs.workdir)
-	if err := workspace.WriteChangedFiles(rs.workdir, changed); err != nil {
-		LogIssueEventf(rs.t, "changed_files_write_failed", "error=%q", err)
-	}
-
 	rs.emitPhase(task.PhaseFinishing, task.PhaseSucceeded)
 }
 
@@ -541,8 +514,8 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 			// The orchestrator stopped this run because its tracker issue left
 			// the active set (e.g. the agent's own PR handoff to In Review).
 			// That is a supervised stop, not a runner failure: record it as
-			// stopped, do not count it as a failure, and (in runAgent) write no
-			// .aiops/FAILURE.md post-mortem for the superseded run (#543).
+			// stopped and do not count it as a failure for the superseded run
+			// (#543).
 			in.PhaseTransitionSink(currentPhase, task.PhaseCanceledByReconciliation)
 			stoppedPayload := map[string]any{
 				"model":       in.Task.Model,
@@ -616,16 +589,6 @@ func writeTaskFiles(workdir string, t task.Task, prompt string) error {
 		return err
 	}
 	return workspace.WriteSensitiveArtifact(workdir+"/.aiops/TASK.md", []byte(fmt.Sprintf("# Task %s\n\n%s\n", t.ID, t.Description)))
-}
-
-// WriteFailureArtifacts persists what we know on the failure path so failed
-// tasks can be inspected after the fact via the workspace tree: the changed-file
-// list and a human-readable .aiops/FAILURE.md describing why the run failed.
-func WriteFailureArtifacts(ctx context.Context, workdir string, summary string) {
-	if changed, err := workspace.AllChangedFiles(ctx, workdir); err == nil {
-		_ = workspace.WriteChangedFiles(workdir, changed)
-	}
-	_ = workspace.WriteFailureSummary(workdir, summary+"\n")
 }
 
 // Emit records a structured task event. It is a no-op when ev is nil.
