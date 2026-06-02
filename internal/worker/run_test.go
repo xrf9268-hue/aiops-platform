@@ -155,24 +155,6 @@ repo prompt should not run
 	}
 }
 
-// TestAppendBlockerDirective pins the external-dependency BLOCKED.json contract:
-// it is appended once, present after the call, and idempotent. The RUN_SUMMARY
-// half of the old directive was removed with the worker gate in #561.
-func TestAppendBlockerDirective(t *testing.T) {
-	plain := "do the work"
-	out := worker.AppendBlockerDirective(plain)
-	if !strings.Contains(out, "BLOCKED.json") {
-		t.Fatalf("AppendBlockerDirective(%q) = %q; want the BLOCKED.json directive appended", plain, out)
-	}
-	if strings.Contains(out, "RUN_SUMMARY.md") {
-		t.Fatalf("AppendBlockerDirective(%q) = %q; must not append the removed RUN_SUMMARY directive", plain, out)
-	}
-	// Idempotent: a second call when the directive is already present is a no-op.
-	if again := worker.AppendBlockerDirective(out); again != out {
-		t.Fatalf("AppendBlockerDirective(<already present>) = %q; want unchanged %q", again, out)
-	}
-}
-
 // TestAppendVerifyDirective pins the SPEC §1 verify hand-off contract: the
 // operator-declared verify.commands are surfaced to the agent's prompt (the
 // worker no longer runs them), joined by "; ", appended exactly once, and a

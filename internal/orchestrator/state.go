@@ -604,18 +604,6 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 	return true
 }
 
-// FinishRunExternalBlocked releases the active worker slot while preserving the
-// issue claim for an external-blocker cooldown retry. It is not a completed
-// run: the tracker issue still needs a future poll after the dependency clears.
-func (s *OrchestratorState) FinishRunExternalBlocked(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
-	if current, ok := s.Running[id]; !ok || current != run {
-		return false
-	}
-	delete(s.Running, id)
-	s.CodexTotals.AddSeconds(elapsed)
-	return true
-}
-
 // FinishRunFailed is the transition for a worker that exited abnormally
 // (SPEC §7.3 abnormal exit). The retry policy itself (exponential
 // backoff per SPEC §8.4, currently D16) is owned by the scheduler in

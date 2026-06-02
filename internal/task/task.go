@@ -87,24 +87,17 @@ const (
 	// tracker issue left the active set (eligibility reconcile / agent PR
 	// handoff), distinct from runner_end's success/failure so it is not counted
 	// as either (SPEC §7.3 supervised stop; #543).
-	EventRunnerStopped   = "runner_stopped"
-	EventRunnerTimeout   = "runner_timeout"
-	EventStalled         = "stalled"
-	EventExternalBlocker = "external_blocker"
-	// EventSandboxStartupBlocked marks a run parked on a cooldown because the
-	// coding agent's sandbox could not start (codex/bwrap user-namespace denial),
-	// a failure that recurs identically until the host is reconfigured (#550).
-	// Distinct from external_blocker (an agent-declared dependency block) so an
-	// operator can tell a host sandbox regression apart from a normal BLOCKED.json.
-	EventSandboxStartupBlocked = "sandbox_startup_blocked"
-	EventPRReused              = "pr_reused"
-	EventSucceeded             = "succeeded"
-	EventFailedAttempt         = "failed_attempt"
-	EventReconcileStart        = "reconcile_start"
-	EventReconcileWorkspace    = "reconcile_workspace"
-	EventReconcileEnd          = "reconcile_end"
-	EventWorkflowReloaded      = "workflow_reload"
-	EventWorkflowReloadFailed  = "workflow_reload_failed"
+	EventRunnerStopped        = "runner_stopped"
+	EventRunnerTimeout        = "runner_timeout"
+	EventStalled              = "stalled"
+	EventPRReused             = "pr_reused"
+	EventSucceeded            = "succeeded"
+	EventFailedAttempt        = "failed_attempt"
+	EventReconcileStart       = "reconcile_start"
+	EventReconcileWorkspace   = "reconcile_workspace"
+	EventReconcileEnd         = "reconcile_end"
+	EventWorkflowReloaded     = "workflow_reload"
+	EventWorkflowReloadFailed = "workflow_reload_failed"
 
 	// Tracker transition events are implementation extensions retained for
 	// operator visibility while tracker writes remain tool-driven.

@@ -7,12 +7,11 @@ import "time"
 type RuntimeEventKind string
 
 const (
-	RuntimeEventCandidate        RuntimeEventKind = "candidate"
-	RuntimeEventRunning          RuntimeEventKind = "running"
-	RuntimeEventCompleted        RuntimeEventKind = "completed"
-	RuntimeEventFailed           RuntimeEventKind = "failed"
-	RuntimeEventCandidateBlocked RuntimeEventKind = "blocked"
-	RuntimeEventInputBlocked     RuntimeEventKind = "input_blocked"
+	RuntimeEventCandidate    RuntimeEventKind = "candidate"
+	RuntimeEventRunning      RuntimeEventKind = "running"
+	RuntimeEventCompleted    RuntimeEventKind = "completed"
+	RuntimeEventFailed       RuntimeEventKind = "failed"
+	RuntimeEventInputBlocked RuntimeEventKind = "input_blocked"
 	// RuntimeEventReconcileStopped marks a run the per-tick reconcile stopped
 	// after it had completed ≥1 agent turn (made progress — usually the agent's
 	// handoff). Recorded so the run appears in the event stream and is drillable

@@ -137,14 +137,13 @@ func IsQuotaBackoff(err error) bool {
 // SandboxStartupError marks a run that failed because the coding agent's
 // sandbox could not start — most commonly codex's bwrap user namespace being
 // denied by the host (e.g. "bwrap: setting up uid map: Permission denied").
-// Unlike a generic turn failure, this recurs identically on every dispatch
-// until an operator reconfigures the host, so the worker routes it to the
-// external-blocker cooldown instead of the hot failure-retry loop that would
-// burn a full agent turn's tokens every poll (#550). The preflight equivalent
-// is internal/doctor's codex sandbox probe (#542); this is the runtime catch
-// for a host that regresses after preflight or an operator who skipped
-// --doctor. Detail carries a fixed, output-free description so the raw captured
-// subprocess text (which may hold secrets) never reaches an error string.
+// It is re-tagged from the raw runner failure so Detail carries a fixed,
+// output-free description: the raw captured subprocess text (which may hold
+// secrets) never reaches an error string. The worker treats it as a generic
+// retryable failure that rides the SPEC §8.4 backoff like any other runner
+// error (the dedicated external-blocker cooldown was removed in #572). The
+// preventive layer is internal/doctor's codex sandbox probe (#542), which
+// catches the host misconfiguration before dispatch.
 type SandboxStartupError struct {
 	Detail string
 }

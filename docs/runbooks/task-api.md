@@ -49,18 +49,12 @@ details, use process logs and workspace artifacts:
 - `.aiops/PROMPT.md` — rendered prompt sent to the runner
 - `.aiops/TASK.md` — task description
 - `.aiops/FAILURE.md` — worker-written failure post-mortem (present only on failed runs)
-- `.aiops/BLOCKED.json` — strict external-dependency cooldown artifact:
-  `version: 1`, `kind: "external_dependency"`, `reason`, and
-  `retry_after_seconds` (60..86400); unknown or legacy fields are rejected;
-  schema: [`docs/protocols/blocked-artifact.schema.json`](../protocols/blocked-artifact.schema.json)
 - `.aiops/CHANGED_FILES.txt` — newline-separated changed files
 
 Important task event kinds emitted into the worker log/event emitter include:
 
 - `run_phase_transition` — SPEC run-attempt phase transitions
 - `runner_start`, `runner_end`, `runner_timeout`
-- `external_blocker` — `.aiops/BLOCKED.json` was accepted and converted to
-  an `external_blocker` cooldown retry
 - `workflow_resolved`, `hook_start`, `hook_end`
 
 Push, PR creation, and tracker writes are agent-side responsibilities per SPEC

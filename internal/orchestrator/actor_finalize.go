@@ -7,7 +7,6 @@ package orchestrator
 import (
 	"errors"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -32,13 +31,13 @@ type finalizeRunOp struct {
 // apply routes a worker's terminal RunResult. Each branch is a single-concern
 // handler that, once its guard matches, owns the state transition, the
 // close(f.done), and the returned followup; the guard order is the SPEC routing
-// priority (input-required block → external blocked → clean exit → reconciled
-// cancel cleanup → non-retryable → quota backoff → reconcile cancel → failure
-// retry). Handlers that may schedule async work report (followup, handled); the
-// two pure terminal blocks (input-required, non-retryable) report only handled
-// since they never schedule a followup. applyCleanExit and applyFailureRetry are
-// reached unconditionally on their branch and always handle, so they return the
-// followup directly.
+// priority (input-required block → clean exit → reconciled cancel cleanup →
+// non-retryable → quota backoff → reconcile cancel → failure retry). Handlers
+// that may schedule async work report (followup, handled); the two pure terminal
+// blocks (input-required, non-retryable) report only handled since they never
+// schedule a followup. applyCleanExit and applyFailureRetry are reached
+// unconditionally on their branch and always handle, so they return the followup
+// directly.
 func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	elapsed := f.result.Elapsed
 	if elapsed == 0 {
@@ -46,9 +45,6 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	}
 	if f.applyInputRequiredBlock(st, elapsed) {
 		return nil
-	}
-	if followup, ok := f.applyExternalBlocked(st, elapsed); ok {
-		return followup
 	}
 	if f.result.Err == nil {
 		return f.applyCleanExit(st, elapsed)
@@ -86,35 +82,6 @@ func (f *finalizeRunOp) applyInputRequiredBlock(st *OrchestratorState, elapsed t
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventInputBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
 	close(f.done)
 	return true
-}
-
-// applyExternalBlocked parks a run blocked on an external dependency and
-// schedules the cooldown retry that re-checks the blocker.
-func (f *finalizeRunOp) applyExternalBlocked(st *OrchestratorState, elapsed time.Duration) (func(), bool) {
-	if !f.result.ExternalBlocked {
-		return nil, false
-	}
-	reason := strings.TrimSpace(f.result.BlockerReason)
-	if reason == "" && f.result.Err != nil {
-		reason = f.result.Err.Error()
-	}
-	if reason == "" {
-		reason = "external dependency blocked run"
-	}
-	if !st.FinishRunExternalBlocked(f.id, f.entry, elapsed) {
-		close(f.done)
-		return nil, true
-	}
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCandidateBlocked, IssueID: f.id, Identifier: f.identifier, Message: reason})
-	issue := f.entry.Issue
-	workspace := f.entry.Workspace
-	close(f.done)
-	o := f.o
-	identifier := f.identifier
-	delay := f.result.BlockerRetryAfter
-	return func() {
-		_ = o.scheduleExternalBlockerRetry(o.runCtx, issue, identifier, reason, delay, workspace)
-	}, true
 }
 
 // applyCleanExit handles a normal (Err==nil) worker exit: a reconciled-cleanup

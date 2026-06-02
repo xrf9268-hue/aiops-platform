@@ -17,10 +17,9 @@ import (
 type RetryKind string
 
 const (
-	RetryKindFailure         RetryKind = "failure"
-	RetryKindContinuation    RetryKind = "continuation"
-	RetryKindQuotaBackoff    RetryKind = "quota_backoff"
-	RetryKindExternalBlocker RetryKind = "external_blocker"
+	RetryKindFailure      RetryKind = "failure"
+	RetryKindContinuation RetryKind = "continuation"
+	RetryKindQuotaBackoff RetryKind = "quota_backoff"
 )
 
 // RetryRequest describes the retry being scheduled. Attempt is the 1-based
@@ -143,12 +142,6 @@ func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue trac
 func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, workspace Workspace) error {
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace)
 }
-func (o *Orchestrator) scheduleExternalBlockerRetry(ctx context.Context, issue tracker.Issue, identifier, reason string, delay time.Duration, workspace Workspace) error {
-	if delay <= 0 {
-		delay = time.Hour
-	}
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindExternalBlocker, DelayOverride: delay}, 0, reason, workspace)
-}
 func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace) error {
 	op := &scheduleRetryOp{
 		o:          o,
@@ -256,7 +249,7 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	if !ok {
 		return nil
 	}
-	if entry.Kind == RetryKindContinuation || entry.Kind == RetryKindExternalBlocker {
+	if entry.Kind == RetryKindContinuation {
 		return r.fireWakeSignal(entry)
 	}
 	o := r.o
@@ -268,13 +261,12 @@ func (r *retryFireOp) apply(st *OrchestratorState) func() {
 	return retryFireDispatchTail(st, entry, r.id, r.attempt, o)
 }
 
-// fireWakeSignal handles a fired continuation or external-blocker cooldown
-// retry. Both kinds are wake-up signals, not dispatches: they must not spawn
-// from the cached issue snapshot or carry failure-retry accounting. The entry
-// stays in RetryAttempts (timer cleared) and the followup wakes the poll loop;
-// a poll then observes the issue still active and calls
-// RequestDispatchAfterTrackerRecheck, which consumes the entry before spawning
-// the next normal turn.
+// fireWakeSignal handles a fired continuation retry. A continuation is a
+// wake-up signal, not a dispatch: it must not spawn from the cached issue
+// snapshot or carry failure-retry accounting. The entry stays in RetryAttempts
+// (timer cleared) and the followup wakes the poll loop; a poll then observes the
+// issue still active and calls RequestDispatchAfterTrackerRecheck, which consumes
+// the entry before spawning the next normal turn.
 func (r *retryFireOp) fireWakeSignal(entry *RetryEntry) func() {
 	entry.Timer = nil
 	o := r.o

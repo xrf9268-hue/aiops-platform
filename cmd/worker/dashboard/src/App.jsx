@@ -536,7 +536,7 @@ export default function App() {
       header: 'Kind',
       cell: (row) => {
         const kind = row.kind || 'failure';
-        const tone = kind === 'external_blocker' || kind === 'quota_backoff' ? 'warning' : 'default';
+        const tone = kind === 'quota_backoff' ? 'warning' : 'default';
         return <StateBadge value={kind} type={tone} />;
       },
     },
