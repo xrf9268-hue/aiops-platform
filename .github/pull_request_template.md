@@ -17,8 +17,8 @@ an extension upstream lacks must be cited or tracked, not waved through.
 ## Size budget (AGENTS.md)
 Classify into exactly one (review discipline; the size-gate is human-signed, not CI-blocked):
 
-- [ ] `within budget` — ≤12 files / ≤300 changed LOC.
-- [ ] `size-gated: justified overage` — over budget for correctness / regression / race-safety coverage that cannot be split without losing atomicity. **Needs human size-gate sign-off.**
+- [ ] `within budget` — ≤12 production files / ≤300 production LOC (test files and generated code excluded).
+- [ ] `size-gated: justified overage` — production diff over budget for correctness / regression / race-safety coverage that cannot be split without losing atomicity. **Needs human size-gate sign-off.**
 - [ ] `size-gated: split recommended` — over budget for scope creep / separable concerns. Split instead.
 
 ## Testing

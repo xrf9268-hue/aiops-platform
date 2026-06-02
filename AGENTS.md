@@ -422,8 +422,11 @@ failure per the "Earned rules" principle above.
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
 - **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template. Secret-bearing values that arrive via config or CLI (e.g. `clone_url` basic-auth userinfo) must be masked before they reach any log, error string, or state output — env-var-only redaction does not cover them. Mask clone URLs with `workflow.MaskCloneURL`. **Earned by:** #469/PR #483, where a doctor ambiguity/not-found error echoed a credentialed `clone_url` because `redact()` only scrubbed env-var values.
-- **Keep worker PRs small — ≤12 changed files / ≤300 changed LOC is a review
-  guideline, not an LOC-reduction mandate.** (These were the
+- **Keep worker PRs small — ≤12 changed production files / ≤300 changed
+  production LOC is a review guideline, not an LOC-reduction mandate.** Test
+  files and generated code are excluded from the count (matching the
+  function/file budgets in the Clean-code rules), so test coverage never by
+  itself pushes a PR into overage. (These were the
   `policy.max_changed_files` / `policy.max_changed_loc` worker caps; the worker
   no longer enforces them — the path/diffstat gate was removed in #561 because
   it ran post-push and raced reconcile-cancel — so the budget is now a review
@@ -434,7 +437,7 @@ failure per the "Earned rules" principle above.
   preferring compact code over clear reliable code when review feedback
   exposes a real correctness, safety, performance, or coverage gap. Classify
   every PR into exactly one of three states and surface it in the PR body:
-  - `within budget` — diff fits the ~12-file / ~300-LOC guideline.
+  - `within budget` — production diff fits the ~12-file / ~300-LOC guideline (tests and generated code excluded).
   - `size-gated: justified overage` — over the budget because the extra LOC
     pays for correctness, regression coverage, race/state-machine safety, or
     other best-practice hardening that cannot be split without losing
@@ -449,7 +452,10 @@ failure per the "Earned rules" principle above.
   exceeded the default 300 LOC after multiple valid Codex review findings
   required additional race/state-machine coverage; the prevailing workflow
   language nudged the agent toward compressing tests to fit the threshold,
-  which is backwards when the extra lines are paying for correctness.
+  which is backwards when the extra lines are paying for correctness. Counting
+  production LOC only (tests/generated excluded) removes that pressure at the
+  source, so a well-tested focused change stays `within budget` instead of
+  defaulting to a sign-off-requiring overage.
 - **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is the only post-merge line of defense for shipped-past bot feedback, not a required merge check; agents should still handle actionable review feedback before merging. After merging a PR with non-trivial bot review activity, sanity-check the next-day `Capture unresolved reviews` Actions history so workflow regressions do not age silently.
 - **SPEC deviations are gated at author time, not audit time**: the `PR Metadata`
   workflow (`.github/workflows/pr-metadata.yml` + `.github/scripts/validate-pr-metadata.mjs`)
