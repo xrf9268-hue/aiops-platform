@@ -1,6 +1,6 @@
 module github.com/xrf9268-hue/aiops-platform
 
-go 1.25.0
+go 1.25.11
 
 require (
 	github.com/testcontainers/testcontainers-go v0.42.0

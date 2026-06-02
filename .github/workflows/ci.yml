@@ -153,16 +153,17 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref || github.ref }}
 
-      # Use the latest 1.25.x patch toolchain (not the pinned go.mod floor) so
-      # govulncheck evaluates the code against an up-to-date standard library.
-      # go.mod's `go` directive is intentionally left untouched.
+      # Build the govulncheck toolchain from the go.mod floor (now 1.25.11, the
+      # patched release for GO-2026-5037/5039) so the scan evaluates the same
+      # standard library the release/docker builds ship. The previous "latest
+      # 1.25.x via check-latest" posture broke when the actions version manifest
+      # lagged the 1.25.11 security release: check-latest still resolved a
+      # vulnerable 1.25.10, so the gate failed repo-wide while shipped artifacts
+      # stayed on the unpatched floor. Pinning scan == ship via go.mod fixes both.
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
-          go-version: "1.25"
-          # Always resolve the newest 1.25.x rather than a stale cached patch,
-          # so govulncheck evaluates against an up-to-date standard library.
-          check-latest: true
+          go-version-file: go.mod
           cache: true
           cache-dependency-path: |
             go.mod
