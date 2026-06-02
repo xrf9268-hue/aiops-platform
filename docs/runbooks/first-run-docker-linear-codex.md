@@ -138,9 +138,9 @@ Docker/Codex paths that are not needed by the mock runner. On the host,
 host Docker CLI check and validates live Linear auth/project visibility, Codex
 CLI version, Codex login status, and a minimal `codex app-server` JSON-RPC
 probe. When `--github-issue` is set, it also validates `gh issue view` and
-`git push --dry-run` from the exact Codex agent environment. Omit
-`--github-repo` only for single-repo workflows; multi-service workflows must
-name the target repo so the preflight cannot validate the wrong route.
+`git push --dry-run` from the exact Codex agent environment. `--github-repo` is
+optional and only validates the supplied owner/name or clone URL against the
+workflow's single configured repo.
 
 ## 4. Start the long-lived worker
 

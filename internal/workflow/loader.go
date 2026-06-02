@@ -498,7 +498,6 @@ var knownTopLevelWorkflowKeys = map[string]struct{}{
 	"repo":      {},
 	"sandbox":   {},
 	"server":    {},
-	"services":  {},
 	"tracker":   {},
 	"verify":    {},
 	"workspace": {},
@@ -593,11 +592,6 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nol
 	}
 	if err := expandRepoConfig("repo.clone_url", &cfg.Repo); err != nil {
 		return err
-	}
-	for i := range cfg.Services {
-		if err := expandRepoConfig(fmt.Sprintf("services[%d].repo.clone_url", i), &cfg.Services[i].Repo); err != nil {
-			return err
-		}
 	}
 	if cfg.Workspace.Root, err = normalizeWorkflowPath(workflowPath, cfg.Workspace.Root); err != nil {
 		return err

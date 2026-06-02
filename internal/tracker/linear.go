@@ -137,8 +137,6 @@ func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
 // HTTP 400 GRAPHQL_VALIDATION_FAILED on every poll (#326). The
 // upstream Elixir reference (elixir/lib/symphony_elixir/linear/client.ex)
 // also omits any custom-field fragment for the same reason.
-// `services[].tracker.custom_fields` route predicates are rejected at
-// workflow load time until Linear surfaces a working query field.
 const listLinearIssuesQuery = `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
@@ -151,8 +149,6 @@ const listLinearIssuesQuery = `query ListIssues($projectSlug: String!, $states: 
       branchName
       createdAt
       updatedAt
-      project { slugId }
-      team { key }
       labels(first: 50) { nodes { name } }
       state { name }
     }
@@ -172,13 +168,7 @@ type linearIssueNode struct {
 	BranchName  string `json:"branchName"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
-	Project     struct {
-		SlugID string `json:"slugId"`
-	} `json:"project"`
-	Team struct {
-		Key string `json:"key"`
-	} `json:"team"`
-	Labels struct {
+	Labels      struct {
 		Nodes []struct {
 			Name string `json:"name"`
 		} `json:"nodes"`
@@ -321,7 +311,7 @@ func (c *LinearClient) mapLinearIssueNode(ctx context.Context, n linearIssueNode
 	// Issue.CustomFields stays nil — Linear's GraphQL schema does not
 	// expose any custom-field data on Issue (introspection confirms
 	// only `customerTicketCount` matches `custom*`). See #326.
-	return Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, ProjectSlug: n.Project.SlugID, TeamKey: n.Team.Key, Labels: labels, State: n.State.Name, BlockedBy: blockers}, nil
+	return Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, Priority: n.Priority, BranchName: n.BranchName, CreatedAt: createdAt, UpdatedAt: updatedAt, Labels: labels, State: n.State.Name, BlockedBy: blockers}, nil
 }
 
 func parseLinearIssueTime(field, value string) (time.Time, error) {

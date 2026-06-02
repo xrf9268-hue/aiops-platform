@@ -89,7 +89,6 @@ type Poller struct {
 	overflow       []tracker.Issue
 	reconcile      ReconciliationConfig
 	reconcileKnown bool
-	routing        *workflow.Config
 	// preflight is the workflow.Config used for SPEC §8.1 step 2
 	// dispatch-preflight validation. nil disables the gate (legacy
 	// constructors / tests). RuntimePoller sets it on every workflow
@@ -151,23 +150,15 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 	if activeErr != nil {
 		pollErr = errors.Join(pollErr, activeErr)
 	}
-	routedIssues := issues
-	if p.routing != nil {
-		var routeErr error
-		routedIssues, routeErr = selectRoutedCandidates(issues, *p.routing)
-		if routeErr != nil {
-			pollErr = errors.Join(pollErr, routeErr)
-		}
-	}
 	var reconciledInactive map[string]tracker.Issue
 	if p.reconcileKnown && activeErr == nil {
 		var err error
-		reconciledInactive, err = p.reconcileTick(ctx, routedIssues)
+		reconciledInactive, err = p.reconcileTick(ctx, issues)
 		if err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, routedIssues), p.reconcile.TerminalStates)
+	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates)
 	if len(reconciledInactive) > 0 {
 		candidates = filterIssuesNotInMap(candidates, reconciledInactive)
 	}
@@ -225,7 +216,13 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		fetchErr = errors.Join(fetchErr, err)
 	}
 	mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID, activeStateKeys)
-	if err := p.reconcileActiveRunsPartB(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys); err != nil {
+	// The active listing may be partial (pagination caps), so absence from it
+	// is "no information," not inactivity: refresh stored issue metadata for the
+	// runs we DO see (so per-state capacity gates observe the latest tracker
+	// state) and leave cancellation to the terminal/inactive pass below, which
+	// acts only on explicit terminal/inactive observations (SPEC §11.2 narrow
+	// refresh + §16.3) rather than treating an unlisted issue as gone.
+	if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
 		return nil, err
 	}
 	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys)
@@ -250,33 +247,6 @@ func mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID map[string
 			delete(activeIssuesByID, id)
 		}
 	}
-}
-
-// reconcileActiveRunsPartB runs SPEC §16.3 Part B: revalidate active runs
-// against the freshly refreshed active set. The error it returns is fatal to
-// the tick (reconcileTick returns it with a nil map), matching the inline
-// behavior before #521. It mutates activeIssuesByID by reference and treats
-// refreshedIssuesByID as read-only.
-func (p *Poller) reconcileActiveRunsPartB(ctx context.Context, activeIssuesByID, refreshedIssuesByID map[string]tracker.Issue, activeStateKeys map[string]struct{}) error {
-	if p.routing != nil {
-		// Routing-aware listings are complete for their scope, so absence from
-		// the active set is real evidence of inactivity and may cancel runs.
-		//
-		// This pass cancels (and waits for) a routed running issue the moment it
-		// drops out of the active set — before the terminal-aware inactive pass
-		// below runs — so the SPEC §18.1 active-transition workspace cleanup
-		// signal must be computed here. Hand it the terminal-state set plus the
-		// refreshed post-transition states (which activeIssuesByID no longer
-		// holds for now-inactive/terminal issues) so a routed terminal run/blocked
-		// entry fires before_remove + reconcile_workspace reason=terminal mid-run,
-		// while a route-change or non-terminal inactive cancel keeps the workspace
-		// for reuse (#340).
-		return p.orchestrator.ReconcileTrackerIssuesAndWait(ctx, activeIssuesByID, activeStateKeys, normalizedStates(p.reconcile.TerminalStates), refreshedIssuesByID, p.reconcile.WorkerExitTimeout)
-	}
-	// Without routing the active listing may be partial; still refresh
-	// stored issue metadata for runs we DO see so per-state capacity gates
-	// observe the latest tracker state without treating absence as inactive.
-	return p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys)
 }
 
 // deriveInactiveIssues builds the SPEC §16.3 inactive/terminal set for the
@@ -554,95 +524,6 @@ func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
 	return candidates
 }
 
-func selectRoutedCandidates(issues []tracker.Issue, cfg workflow.Config) ([]tracker.Issue, error) { //nolint:gocognit // baseline (#521)
-	if len(cfg.Services) == 0 {
-		return issues, nil
-	}
-	out := make([]tracker.Issue, 0, len(issues))
-	var routeErr error
-	for _, issue := range issues {
-		matches := matchingServices(issue, cfg)
-		switch len(matches) {
-		case 0:
-			if strings.TrimSpace(cfg.Repo.CloneURL) != "" && issueInRootTrackerProject(issue, cfg) {
-				out = append(out, issue)
-				continue
-			}
-			log.Printf("event=tracker_route_skipped issue_id=%s issue_identifier=%s reason=%q", issue.ID, issue.Identifier, "no configured service matched")
-		case 1:
-			issue.ServiceName = matches[0].Name
-			out = append(out, issue)
-		default:
-			names := make([]string, 0, len(matches))
-			for _, service := range matches {
-				names = append(names, service.Name)
-			}
-			routeErr = errors.Join(routeErr, fmt.Errorf("ambiguous route for issue %s: matched services %s", issue.ID, strings.Join(names, ", ")))
-		}
-	}
-	return out, routeErr
-}
-
-func issueInRootTrackerProject(issue tracker.Issue, cfg workflow.Config) bool {
-	rootProject := strings.TrimSpace(cfg.Tracker.ProjectSlug)
-	if rootProject == "" {
-		return false
-	}
-	return strings.EqualFold(rootProject, strings.TrimSpace(issue.ProjectSlug))
-}
-
-func matchingServices(issue tracker.Issue, cfg workflow.Config) []workflow.ServiceConfig {
-	matches := make([]workflow.ServiceConfig, 0, len(cfg.Services))
-	for _, service := range cfg.Services {
-		if serviceMatchesIssue(service, cfg.Tracker, issue) {
-			matches = append(matches, service)
-		}
-	}
-	return matches
-}
-
-func serviceMatchesIssue(service workflow.ServiceConfig, defaults workflow.TrackerConfig, issue tracker.Issue) bool { //nolint:gocognit // baseline (#521)
-	route := service.Tracker
-	if !hasExplicitServiceRoute(route) {
-		return false
-	}
-	projectSlug := strings.TrimSpace(route.ProjectSlug)
-	if projectSlug == "" {
-		projectSlug = strings.TrimSpace(defaults.ProjectSlug)
-	}
-	if projectSlug != "" && !strings.EqualFold(projectSlug, strings.TrimSpace(issue.ProjectSlug)) {
-		return false
-	}
-	if route.TeamKey != "" && !strings.EqualFold(strings.TrimSpace(route.TeamKey), strings.TrimSpace(issue.TeamKey)) {
-		return false
-	}
-	issueLabels := make(map[string]struct{}, len(issue.Labels))
-	for _, label := range issue.Labels {
-		if label = strings.ToLower(strings.TrimSpace(label)); label != "" {
-			issueLabels[label] = struct{}{}
-		}
-	}
-	for _, label := range route.Labels {
-		if _, ok := issueLabels[strings.ToLower(strings.TrimSpace(label))]; !ok {
-			return false
-		}
-	}
-	for key, want := range route.CustomFields {
-		got, ok := issue.CustomFields[key]
-		if !ok || strings.TrimSpace(got) != strings.TrimSpace(want) {
-			return false
-		}
-	}
-	return true
-}
-
-func hasExplicitServiceRoute(route workflow.ServiceTrackerRouteConfig) bool {
-	return strings.TrimSpace(route.ProjectSlug) != "" ||
-		strings.TrimSpace(route.TeamKey) != "" ||
-		len(route.Labels) > 0 ||
-		len(route.CustomFields) > 0
-}
-
 // TaskBuilder converts a tracker candidate into the task shape consumed by the
 // existing worker runner.
 type TaskBuilder func(issue tracker.Issue) (task.Task, error)
@@ -722,13 +603,6 @@ func (d WorkerTaskDispatcher) buildTaskWithAttempt(issue tracker.Issue, attempt 
 // tracker candidate. Dedupe/claiming lives in OrchestratorState, not in this
 // task ID: the ID is only a stable per-run/workspace identifier.
 func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) {
-	if issue.ServiceName != "" {
-		serviceCfg, ok := serviceConfigByName(cfg, issue.ServiceName)
-		if !ok {
-			return task.Task{}, fmt.Errorf("service %q not found in WORKFLOW.md", issue.ServiceName)
-		}
-		cfg.Repo = serviceCfg.Repo
-	}
 	if cfg.Repo.CloneURL == "" {
 		return task.Task{}, fmt.Errorf("repo.clone_url missing in WORKFLOW.md")
 	}
@@ -740,9 +614,7 @@ func TaskFromIssue(issue tracker.Issue, cfg workflow.Config) (task.Task, error) 
 	if sourceEventID == "" {
 		return task.Task{}, fmt.Errorf("tracker issue id is required")
 	}
-	if issue.ServiceName != "" {
-		sourceEventID += "|service|" + issue.ServiceName
-	} else if issue.Identifier != "" {
+	if issue.Identifier != "" {
 		sourceEventID = issue.Identifier
 	}
 	return task.Task{
@@ -799,15 +671,6 @@ func IssueRenderVars(issue tracker.Issue) map[string]any {
 		"created_at":  issue.CreatedAt,
 		"updated_at":  issue.UpdatedAt,
 	}
-}
-
-func serviceConfigByName(cfg workflow.Config, name string) (workflow.ServiceConfig, bool) {
-	for _, service := range cfg.Services {
-		if service.Name == name {
-			return service, true
-		}
-	}
-	return workflow.ServiceConfig{}, false
 }
 
 // RunPollLoop repeatedly polls the tracker until ctx is canceled.

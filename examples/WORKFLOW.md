@@ -46,27 +46,6 @@ server:
 polling:
   interval_ms: 30000
 
-# Optional multi-service routing (tracked as D25/#143 until the extension schema
-# is fully documented). Omit `services` for the default single-service mode
-# above. When present for Linear workflows, candidate selection matches
-# project/team, labels, and custom fields, then dispatches the issue with that
-# service's repo. Unmatched issues are skipped locally; ambiguous matches fail
-# the poll tick. This is read-only routing: ticket writes remain agent/tool-side
-# per SPEC §1.
-# services:
-#   - name: api
-#     repo:
-#       owner: your-gitea-user
-#       name: api
-#       clone_url: git@gitea.local:your-gitea-user/api.git
-#       default_branch: main
-#     tracker:
-#       project_slug: api-platform
-#       team_key: ENG
-#       labels: [backend]
-# `tracker.custom_fields:` is currently rejected at workflow load —
-# Linear's GraphQL schema does not expose Issue custom fields. See #326.
-
 workspace:
   root: ~/aiops-workspaces/personal
 

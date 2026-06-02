@@ -63,21 +63,17 @@ func TestValidateDispatchPreflight_UnsupportedTrackerKind(t *testing.T) {
 	}
 }
 
-func TestValidateDispatchPreflight_LinearProjectSlugMissingFailsButServiceRouteCovers(t *testing.T) {
+func TestValidateDispatchPreflight_LinearProjectSlugMissingFails(t *testing.T) {
 	missing := workflow.Config{
 		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx"},
 		Codex:   workflow.CommandConfig{Command: "codex app-server"},
 	}
-	if err := validateDispatchPreflight(missing); err == nil {
+	err := validateDispatchPreflight(missing)
+	if err == nil {
 		t.Fatalf("expected error for missing linear project_slug")
 	}
-	covered := workflow.Config{
-		Tracker:  workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx"},
-		Codex:    workflow.CommandConfig{Command: "codex app-server"},
-		Services: []workflow.ServiceConfig{{Tracker: workflow.ServiceTrackerRouteConfig{ProjectSlug: "service-x"}}},
-	}
-	if err := validateDispatchPreflight(covered); err != nil {
-		t.Fatalf("service-routed project_slug should satisfy preflight: %v", err)
+	if !strings.Contains(err.Error(), "tracker.project_slug required for linear") {
+		t.Errorf("unexpected reason: %v", err)
 	}
 }
 

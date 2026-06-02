@@ -2,7 +2,6 @@ package doctor
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -59,36 +58,6 @@ func TestBuildReportRealModeAuthenticatesLinearProject(t *testing.T) {
 	}
 	if got := findCheck(t, report, "Codex auth").Status; got != Pass {
 		t.Fatalf("Codex auth status = %s; want PASS", got)
-	}
-}
-
-func TestBuildReportRealModeAuthenticatesServiceLinearProject(t *testing.T) {
-	installFakeCodex(t)
-	var gotSlugs []string
-	linear := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body struct {
-			Variables map[string]string `json:"variables"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatalf("decode Linear probe: %v", err)
-		}
-		gotSlugs = append(gotSlugs, body.Variables["projectSlug"])
-		_, _ = w.Write([]byte(`{"data":{"viewer":{"id":"u","name":"Ada"},"projects":{"nodes":[{"id":"p","slugId":"api-platform","name":"API"}]}}}`))
-	}))
-	defer linear.Close()
-	path := writeServiceLinearWorkflow(t, linear.URL)
-	t.Setenv("AIOPS_TEST_LINEAR_KEY", "lin-test")
-	report := BuildReport(context.Background(), Options{
-		WorkflowPath: path,
-		Mode:         "real",
-		Runner:       fakeRealRunner,
-	})
-
-	if got := findCheck(t, report, "Linear auth").Status; got != Pass {
-		t.Fatalf("Linear auth status = %s; want PASS", got)
-	}
-	if len(gotSlugs) != 1 || gotSlugs[0] != "api-platform" {
-		t.Fatalf("Linear probe project slugs = %#v; want service project slug only", gotSlugs)
 	}
 }
 
@@ -709,177 +678,23 @@ func TestSafeCommandFailureOmitsCommandOutput(t *testing.T) {
 	}
 }
 
-func TestSelectGitHubRepoRequiresExplicitTargetForMultiRepoWorkflow(t *testing.T) {
-	cfg := workflow.Config{
-		Repo: workflow.RepoConfig{
-			Owner:    "owner",
-			Name:     "primary",
-			CloneURL: "https://github.com/owner/primary.git",
-		},
-		Services: []workflow.ServiceConfig{{
-			Repo: workflow.RepoConfig{
-				Owner:    "owner",
-				Name:     "service",
-				CloneURL: "https://github.com/owner/service.git",
-			},
-		}},
-	}
-
-	if _, err := selectGitHubRepo(cfg, ""); err == nil || !strings.Contains(err.Error(), "multiple GitHub repos") {
-		t.Fatalf("selectGitHubRepo without target error = %v; want multiple repo error", err)
-	}
-	repo, err := selectGitHubRepo(cfg, "owner/service")
-	if err != nil {
-		t.Fatalf("selectGitHubRepo explicit target: %v", err)
-	}
-	if repo.fullName() != "owner/service" {
-		t.Fatalf("selected repo = %q; want owner/service", repo.fullName())
-	}
-}
-
-func TestSelectGitHubRepoDeduplicatesIdenticalRepoEntries(t *testing.T) {
-	cfg := workflow.Config{
-		Repo: workflow.RepoConfig{
-			Owner:    "owner",
-			Name:     "primary",
-			CloneURL: "https://github.com/owner/primary.git",
-		},
-		Services: []workflow.ServiceConfig{
-			{
-				Repo: workflow.RepoConfig{
-					Owner:    "Owner",
-					Name:     "Primary",
-					CloneURL: "https://github.com/Owner/Primary.git",
-				},
-			},
-			{
-				Repo: workflow.RepoConfig{
-					Owner:    "owner",
-					Name:     "primary",
-					CloneURL: "https://github.com/owner/primary.git",
-				},
-			},
-		},
-	}
-
-	repo, err := selectGitHubRepo(cfg, "")
-	if err != nil {
-		t.Fatalf("selectGitHubRepo(cfg, \"\") = %v; want single repo after dedup", err)
-	}
-	if repo.fullName() != "owner/primary" {
-		t.Fatalf("selectGitHubRepo full name = %q; want owner/primary", repo.fullName())
-	}
-}
-
-func TestSelectGitHubRepoDisambiguatesSameOwnerNameByCloneURL(t *testing.T) {
-	const (
-		httpsURL = "https://github.com/owner/repo.git"
-		sshURL   = "git@github.com:owner/repo.git"
-	)
-	cfg := workflow.Config{
-		Repo: workflow.RepoConfig{
-			Owner:    "owner",
-			Name:     "repo",
-			CloneURL: httpsURL,
-		},
-		Services: []workflow.ServiceConfig{{
-			Repo: workflow.RepoConfig{
-				Owner:    "owner",
-				Name:     "repo",
-				CloneURL: sshURL,
-			},
-		}},
-	}
-
-	// Distinct clone URLs for one owner/name must survive dedup; collapsing
-	// them would hide the URL TaskFromIssue swaps in for service-routed work.
-	if repos := githubRepos(cfg); len(repos) != 2 {
-		t.Fatalf("githubRepos(...) kept %d repos; want 2 (distinct clone URLs)", len(repos))
-	}
-
-	_, err := selectGitHubRepo(cfg, "owner/repo")
-	if err == nil || !strings.Contains(err.Error(), "multiple clone URLs") {
-		t.Fatalf("selectGitHubRepo(cfg, %q) error = %v; want ambiguous clone URL error", "owner/repo", err)
-	}
-	if !strings.Contains(err.Error(), httpsURL) || !strings.Contains(err.Error(), sshURL) {
-		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; want both clone URLs listed", "owner/repo", err)
-	}
-
-	repo, err := selectGitHubRepo(cfg, sshURL)
-	if err != nil {
-		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want SSH service repo", sshURL, err)
-	}
-	if repo.CloneURL != sshURL {
-		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", sshURL, repo.CloneURL, sshURL)
-	}
-
-	repo, err = selectGitHubRepo(cfg, httpsURL)
-	if err != nil {
-		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want HTTPS fallback repo", httpsURL, err)
-	}
-	if repo.CloneURL != httpsURL {
-		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", httpsURL, repo.CloneURL, httpsURL)
-	}
-}
-
-func TestSelectGitHubRepoAmbiguityErrorMasksCloneURLCredentials(t *testing.T) {
-	const secret = "ghp_supersecrettoken"
-	cfg := workflow.Config{
-		Repo: workflow.RepoConfig{
-			Owner:    "owner",
-			Name:     "repo",
-			CloneURL: "https://x-access-token:" + secret + "@github.com/owner/repo.git",
-		},
-		Services: []workflow.ServiceConfig{{
-			Repo: workflow.RepoConfig{
-				Owner:    "owner",
-				Name:     "repo",
-				CloneURL: "https://oauth2:" + secret + "@github.com/owner/repo.git",
-			},
-		}},
-	}
-
-	_, err := selectGitHubRepo(cfg, "owner/repo")
-	if err == nil {
-		t.Fatalf("selectGitHubRepo(cfg, %q) error = nil; want ambiguity error", "owner/repo")
-	}
-	if strings.Contains(err.Error(), secret) {
-		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; must not leak clone_url credentials", "owner/repo", err)
-	}
-	if !strings.Contains(err.Error(), "github.com/owner/repo.git") {
-		t.Fatalf("selectGitHubRepo(cfg, %q) error = %q; want masked clone URLs listed", "owner/repo", err)
-	}
-}
-
 func TestSelectGitHubRepoAcceptsMaskedCloneURLForSelection(t *testing.T) {
 	const secret = "ghp_supersecrettoken"
 	credURL := "https://x-access-token:" + secret + "@github.com/owner/repo.git"
 	maskedURL := "https://github.com/owner/repo.git"
-	sshURL := "git@github.com:owner/repo.git"
 	cfg := workflow.Config{
 		Repo: workflow.RepoConfig{Owner: "owner", Name: "repo", CloneURL: credURL},
-		Services: []workflow.ServiceConfig{{
-			Repo: workflow.RepoConfig{Owner: "owner", Name: "repo", CloneURL: sshURL},
-		}},
 	}
 
-	// The masked URL is what the ambiguity error shows the operator; selecting
-	// the credentialed HTTPS path with it must work without retyping the token.
+	// The masked URL is the credential-free form an operator can copy from a
+	// report; passing it to --github-repo must select the credentialed repo
+	// without retyping the embedded token.
 	repo, err := selectGitHubRepo(cfg, maskedURL)
 	if err != nil {
 		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want the credentialed HTTPS repo", maskedURL, err)
 	}
 	if repo.CloneURL != credURL {
 		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", maskedURL, repo.CloneURL, credURL)
-	}
-
-	// The SSH path is still selectable by its own (already credential-free) form.
-	repo, err = selectGitHubRepo(cfg, sshURL)
-	if err != nil {
-		t.Fatalf("selectGitHubRepo(cfg, %q) = %v; want the SSH repo", sshURL, err)
-	}
-	if repo.CloneURL != sshURL {
-		t.Fatalf("selectGitHubRepo(cfg, %q).CloneURL = %q; want %q", sshURL, repo.CloneURL, sshURL)
 	}
 }
 
@@ -1159,34 +974,6 @@ func writeWorkflowWithEndpoint(t *testing.T, endpoint, agent string) string {
 	t.Helper()
 	body := "\n  endpoint: " + endpoint
 	return writeWorkflowBody(t, "linear", "$AIOPS_TEST_LINEAR_KEY", agent, body)
-}
-
-func writeServiceLinearWorkflow(t *testing.T, endpoint string) string {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "WORKFLOW.md")
-	body := `---
-tracker:
-  kind: linear
-  api_key: $AIOPS_TEST_LINEAR_KEY
-  endpoint: ` + endpoint + `
-services:
-  - name: api
-    repo:
-      owner: o
-      name: r
-      clone_url: https://example.invalid/o/r.git
-    tracker:
-      project_slug: api-platform
-agent:
-  default: codex-app-server
----
-prompt
-`
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write service workflow: %v", err)
-	}
-	return path
 }
 
 func writeWorkflowWithCloneURL(t *testing.T, cloneURL string) string {

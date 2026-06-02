@@ -302,33 +302,27 @@ func logStartupReconcileWorkflow(resolution *workflow.Resolution, wf *workflow.W
 	log.Printf("startup reconciliation: workflow source=%s path=%s tracker.kind=%s", resolution.Source, resolution.Path, wf.Config.Tracker.Kind)
 }
 func validateWorkflowForRuntime(path string, source workflow.Source, cfg workflow.Config) error {
-	if cfg.Repo.CloneURL == "" && len(cfg.Services) == 0 {
+	if cfg.Repo.CloneURL == "" {
 		if source == workflow.SourceDefault {
 			path = "built-in workflow defaults"
 		}
 		return fmt.Errorf("%s: repo.clone_url is required for poll-based worker runtime", path)
-	}
-	for i, service := range cfg.Services {
-		if service.Repo.CloneURL == "" {
-			return fmt.Errorf("%s: services[%d].repo.clone_url is required for poll-based worker runtime", path, i)
-		}
 	}
 	return nil
 }
 func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker.ReconcileTracker) worker.ReconcileConfig {
 	hooks := cfg.WorkspaceHooks()
 	return worker.ReconcileConfig{
-		WorkspaceRoot:       worker.EffectiveWorkspaceRoot(worker.LoadConfigFromEnv(), cfg),
-		ActiveStates:        cfg.Tracker.ActiveStates,
-		TerminalStates:      cfg.Tracker.TerminalStates,
-		TrackerKind:         cfg.Tracker.Kind,
-		Tracker:             trackerClient,
-		Emitter:             worker.LogEventEmitter{},
-		ReconcileTaskID:     "reconcile-startup",
-		BeforeRemoveHook:    hooks.BeforeRemove,
-		HookTimeoutMillis:   hooks.TimeoutMs,
-		HookEnvPassthrough:  hooks.EnvPassthrough,
-		ActiveWorkspaceKeys: worker.ActiveWorkspaceKeysForWorkflow(cfg),
+		WorkspaceRoot:      worker.EffectiveWorkspaceRoot(worker.LoadConfigFromEnv(), cfg),
+		ActiveStates:       cfg.Tracker.ActiveStates,
+		TerminalStates:     cfg.Tracker.TerminalStates,
+		TrackerKind:        cfg.Tracker.Kind,
+		Tracker:            trackerClient,
+		Emitter:            worker.LogEventEmitter{},
+		ReconcileTaskID:    "reconcile-startup",
+		BeforeRemoveHook:   hooks.BeforeRemove,
+		HookTimeoutMillis:  hooks.TimeoutMs,
+		HookEnvPassthrough: hooks.EnvPassthrough,
 	}
 }
 func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen // baseline (#521)
@@ -498,15 +492,7 @@ type trackerRuntimeClient interface {
 func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error) {
 	switch cfg.Tracker.Kind {
 	case "linear":
-		projectConfigs := orchestrator.TrackerProjectConfigs(cfg)
-		if len(projectConfigs) == 1 {
-			return tracker.NewLinearClient(projectConfigs[0].Tracker), nil
-		}
-		clients := make([]trackerRuntimeClient, 0, len(projectConfigs))
-		for _, projectCfg := range projectConfigs {
-			clients = append(clients, tracker.NewLinearClient(projectCfg.Tracker))
-		}
-		return multiTrackerRuntimeClient{trackers: clients}, nil
+		return tracker.NewLinearClient(cfg.Tracker), nil
 	case "gitea":
 		baseURL := gitea.BaseURLFromTrackerConfig(cfg.Tracker, env("GITEA_BASE_URL", "http://localhost:3000"))
 		client := gitea.NewTrackerClient(cfg.Tracker, baseURL, cfg.Repo.Owner, cfg.Repo.Name)
@@ -525,39 +511,6 @@ func trackerClientForWorkflow(cfg workflow.Config) (trackerRuntimeClient, error)
 	}
 }
 
-type multiTrackerRuntimeClient struct {
-	trackers []trackerRuntimeClient
-}
-
-func (c multiTrackerRuntimeClient) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
-	var issues []tracker.Issue
-	var errOut error
-	for _, stateTracker := range c.trackers {
-		got, err := stateTracker.ListActiveIssues(ctx)
-		if err != nil {
-			errOut = errors.Join(errOut, err)
-			continue
-		}
-		issues = append(issues, got...)
-	}
-	return issues, errOut
-}
-func (c multiTrackerRuntimeClient) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
-	var issues []tracker.Issue
-	var errOut error
-	for _, stateTracker := range c.trackers {
-		got, err := stateTracker.ListIssuesByStates(ctx, states)
-		if err != nil {
-			errOut = errors.Join(errOut, err)
-			continue
-		}
-		issues = append(issues, got...)
-	}
-	return issues, errOut
-}
-func (c multiTrackerRuntimeClient) Trackers() []trackerRuntimeClient {
-	return append([]trackerRuntimeClient(nil), c.trackers...)
-}
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v

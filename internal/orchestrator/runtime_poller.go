@@ -16,8 +16,6 @@ import (
 
 type RuntimePoller struct {
 	trackerFactory func(workflow.Config) (IssueStateLister, error)
-	tracker        IssueStateLister
-	trackers       []IssueStateLister
 	orchestrator   *Orchestrator
 	runtime        *WorkflowRuntime
 	config         worker.Config
@@ -118,42 +116,35 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	if p.poller != nil && p.lastSnapshotKey == key {
 		return p.poller, nil
 	}
-	trackerClients, err := p.trackerClientsForSnapshot(snap)
+	trackerClient, err := p.trackerClientForSnapshot(snap)
 	if err != nil {
 		return nil, err
 	}
-	if len(trackerClients) == 0 {
-		return nil, errors.New("runtime poller tracker factory returned no trackers")
+	if trackerClient == nil {
+		return nil, errors.New("runtime poller tracker factory returned nil tracker")
 	}
-	p.tracker = trackerClients[0]
-	p.trackers = trackerClients
 	p.lastSnapshotKey = key
-	multiLister := multiIssueStateLister{trackers: trackerClients}
-	p.currentRefresher = multiLister
+	// Concrete tracker clients (Linear/Gitea/GitHub) implement IssueStateRefresher;
+	// a bare lister (e.g. a test fake) does not, in which case the §11.2/§16.5
+	// refresh hooks no-op on a nil refresher.
+	refresher, _ := trackerClient.(IssueStateRefresher)
+	p.currentRefresher = refresher
 	if p.dispatcher != nil {
-		p.dispatcher.SetIssueStateRefresher(multiLister)
+		p.dispatcher.SetIssueStateRefresher(refresher)
 	}
-	poller := NewPollerWithReconciliation(multiLister, p.orchestrator, snap.Reconciliation)
-	if snap.Workflow.Config.Tracker.Kind == "linear" && len(snap.Workflow.Config.Services) > 0 {
-		poller.routing = &snap.Workflow.Config
-	}
+	poller := NewPollerWithReconciliation(trackerClient, p.orchestrator, snap.Reconciliation)
 	preflightCfg := snap.Workflow.Config
 	poller.preflight = &preflightCfg
 	// Feed the orchestrator the same lister the poll loop uses so a
 	// fired failure-retry timer can run the SPEC §16.6 candidate fetch
 	// against the same active-state vocabulary. The lister must mirror
 	// every filter the poll loop applies between ListActiveIssues and
-	// dispatch (poller.go:152): service routing (selectRoutedCandidates)
-	// when configured, plus filterEligibleCandidates' required-field
-	// and Todo-blocked-by-non-terminal checks. Mirror order matches the
-	// poll loop: active → routed → eligible. Skipping any of these
-	// means a retry can dispatch an issue the poll loop would refuse.
+	// dispatch: filterEligibleCandidates' required-field and
+	// Todo-blocked-by-non-terminal checks. Skipping them means a retry
+	// can dispatch an issue the poll loop would refuse.
 	var retryLister ActiveIssueLister = activeIssueListerFromStates{
-		tracker: multiLister,
+		tracker: trackerClient,
 		states:  snap.Reconciliation.ActiveStates,
-	}
-	if poller.routing != nil {
-		retryLister = routedActiveIssueLister{inner: retryLister, cfg: *poller.routing}
 	}
 	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates}
 	p.orchestrator.SetCandidateLister(retryLister)
@@ -162,150 +153,23 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	// from a deleted issue. Give the retry-fire path the same state reader and
 	// terminal set the reconcile pass uses so its found==nil branch can clean a
 	// terminal workspace through the §18.1 seam instead of leaking it (#341).
-	p.orchestrator.SetRetryTerminalStateResolver(multiLister, snap.Reconciliation.TerminalStates)
+	p.orchestrator.SetRetryTerminalStateResolver(refresher, snap.Reconciliation.TerminalStates)
 	return poller, nil
 }
 
-func (p *RuntimePoller) trackerClientsForSnapshot(snap WorkflowSnapshot) ([]IssueStateLister, error) {
-	if snap.Workflow == nil {
-		trackerClient, err := p.trackerFactory(workflow.Config{})
-		if err != nil {
-			return nil, err
-		}
-		if trackerClient == nil {
-			return nil, errors.New("runtime poller tracker factory returned nil tracker")
-		}
-		return []IssueStateLister{trackerClient}, nil
+func (p *RuntimePoller) trackerClientForSnapshot(snap WorkflowSnapshot) (IssueStateLister, error) {
+	cfg := workflow.Config{}
+	if snap.Workflow != nil {
+		cfg = snap.Workflow.Config
 	}
-	cfg := snap.Workflow.Config
-	projectConfigs := trackerProjectConfigs(cfg)
-	clients := make([]IssueStateLister, 0, len(projectConfigs))
-	for _, projectCfg := range projectConfigs {
-		trackerClient, err := p.trackerFactory(projectCfg)
-		if err != nil {
-			return nil, err
-		}
-		if trackerClient == nil {
-			return nil, errors.New("runtime poller tracker factory returned nil tracker")
-		}
-		clients = append(clients, trackerClient)
+	trackerClient, err := p.trackerFactory(cfg)
+	if err != nil {
+		return nil, err
 	}
-	return clients, nil
-}
-
-// TrackerProjectConfigs returns one workflow config per Linear project that a
-// poll/reconcile pass must query for a service-routed workflow.
-func TrackerProjectConfigs(cfg workflow.Config) []workflow.Config {
-	return trackerProjectConfigs(cfg)
-}
-
-func trackerProjectConfigs(cfg workflow.Config) []workflow.Config {
-	if cfg.Tracker.Kind != "linear" {
-		return []workflow.Config{cfg}
+	if trackerClient == nil {
+		return nil, errors.New("runtime poller tracker factory returned nil tracker")
 	}
-	seen := map[string]struct{}{}
-	add := func(project string, out *[]workflow.Config) {
-		project = strings.TrimSpace(project)
-		if project == "" {
-			return
-		}
-		key := strings.ToLower(project)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		projectCfg := cfg
-		projectCfg.Tracker.ProjectSlug = project
-		projectCfg.Services = nil
-		*out = append(*out, projectCfg)
-	}
-	out := make([]workflow.Config, 0, len(cfg.Services)+1)
-	add(cfg.Tracker.ProjectSlug, &out)
-	for _, service := range cfg.Services {
-		add(service.Tracker.ProjectSlug, &out)
-	}
-	if len(out) == 0 {
-		out = append(out, cfg)
-	}
-	return out
-}
-
-type multiIssueStateLister struct {
-	trackers []IssueStateLister
-}
-
-func (l multiIssueStateLister) ListIssuesByStates(ctx context.Context, states []string) ([]tracker.Issue, error) {
-	var issues []tracker.Issue
-	var errOut error
-	for _, stateTracker := range l.trackers {
-		got, err := stateTracker.ListIssuesByStates(ctx, states)
-		if err != nil {
-			errOut = errors.Join(errOut, err)
-			continue
-		}
-		issues = append(issues, got...)
-	}
-	return issues, errOut
-}
-
-func (l multiIssueStateLister) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
-	return l.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
-}
-
-func (l multiIssueStateLister) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
-	out := make(map[string]string, len(issueRefs))
-	remaining := append([]tracker.IssueRef(nil), issueRefs...)
-	var errOut error
-	for _, stateTracker := range l.trackers {
-		refresher, ok := stateTracker.(IssueStateRefresher)
-		if !ok {
-			continue
-		}
-		got, err := fetchIssueStates(ctx, refresher, remaining)
-		if err != nil {
-			errOut = errors.Join(errOut, err)
-		}
-		if len(got) == 0 {
-			continue
-		}
-		next := remaining[:0]
-		for _, ref := range remaining {
-			if state, ok := got[ref.ID]; ok {
-				out[ref.ID] = state
-				continue
-			}
-			next = append(next, ref)
-		}
-		remaining = next
-		if len(remaining) == 0 {
-			return out, nil
-		}
-	}
-	return out, errOut
-}
-
-// routedActiveIssueLister wraps an ActiveIssueLister with the same
-// service-routing filter the poll loop applies in (*Poller).runOnce
-// (see poller.go selectRoutedCandidates). SPEC §16.6's on_retry_timer
-// only knows about candidate fetch; service routing is an
-// aiops-platform extension layered on top, and the retry-fire path
-// must mirror the poll loop's filter so a queued retry whose issue
-// has since routed to another service cannot bypass the gate. Routing
-// errors are propagated so a fetch that resolves to an ambiguous
-// route is treated as a fetch failure (reschedule via "retry poll
-// failed"), not as a silent absence (release claim).
-type routedActiveIssueLister struct {
-	inner ActiveIssueLister
-	cfg   workflow.Config
-}
-
-func (l routedActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
-	issues, fetchErr := l.inner.ListActiveIssues(ctx)
-	routed, routeErr := selectRoutedCandidates(issues, l.cfg)
-	if fetchErr != nil || routeErr != nil {
-		return routed, errors.Join(fetchErr, routeErr)
-	}
-	return routed, nil
+	return trackerClient, nil
 }
 
 // eligibleActiveIssueLister wraps an ActiveIssueLister with the same
@@ -486,11 +350,7 @@ func taskIssueIdentifier(t task.Task) string {
 	if identifier, ok := t.IssueRender["identifier"].(string); ok && strings.TrimSpace(identifier) != "" {
 		return strings.TrimSpace(identifier)
 	}
-	sourceEventID := strings.TrimSpace(t.SourceEventID)
-	if strings.Contains(sourceEventID, "|service|") {
-		return ""
-	}
-	return sourceEventID
+	return strings.TrimSpace(t.SourceEventID)
 }
 
 func normalizedStateSet(states []string) map[string]struct{} {

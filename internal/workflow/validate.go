@@ -6,12 +6,6 @@ import (
 	"strings"
 )
 
-func hasExplicitServiceRoute(route ServiceTrackerRouteConfig) bool {
-	return strings.TrimSpace(route.ProjectSlug) != "" ||
-		strings.TrimSpace(route.TeamKey) != "" ||
-		len(route.Labels) > 0
-}
-
 // validateConfig enforces the required-field and enum constraints that the
 // typed YAML decoder cannot express on its own. It runs after expandConfig so
 // env-var indirections (e.g. `clone_url: $REPO_URL`) are evaluated before
@@ -28,8 +22,7 @@ func hasExplicitServiceRoute(route ServiceTrackerRouteConfig) bool {
 func validateConfig(path string, cfg Config) error {
 	for _, validate := range []func(string, Config) error{
 		validateTrackerAndRepo,
-		validateLinearServiceRoutes,
-		validateServices,
+		validateLinearProjectSlug,
 		validateSupportedValues,
 		validateSandbox,
 		validateServerPort,
@@ -53,82 +46,21 @@ func validateTrackerAndRepo(path string, cfg Config) error {
 	if strings.TrimSpace(cfg.Tracker.Kind) == "" {
 		return fmt.Errorf("%s: tracker.kind is required per SPEC §6.4 (allowed: gitea, github, linear)", path)
 	}
-	if strings.TrimSpace(cfg.Repo.CloneURL) != "" {
-		return nil
-	}
-	if len(cfg.Services) == 0 {
+	if strings.TrimSpace(cfg.Repo.CloneURL) == "" {
 		return fmt.Errorf("%s: repo.clone_url is required", path)
 	}
-	if cfg.Tracker.Kind != "linear" {
-		return fmt.Errorf("%s: repo.clone_url is required unless tracker.kind is linear and services provide routed repos", path)
-	}
-	for i, service := range cfg.Services {
-		if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
-			return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for service-only Linear workflows", path, i)
-		}
-	}
 	return nil
 }
 
-// validateLinearServiceRoutes enforces the Linear-only routing predicates so
-// a misconfigured service is rejected at load time rather than silently
-// dropping work (AGENTS.md "Failures are configuration problems").
-func validateLinearServiceRoutes(path string, cfg Config) error {
+// validateLinearProjectSlug enforces SPEC §11.2's single-project filter: a
+// Linear workflow must name the project to poll. Non-Linear trackers carry no
+// project_slug requirement.
+func validateLinearProjectSlug(path string, cfg Config) error {
 	if cfg.Tracker.Kind != "linear" {
 		return nil
 	}
-	if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && len(cfg.Services) == 0 {
+	if strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
 		return fmt.Errorf("%s: tracker.project_slug is required when tracker.kind is linear", path)
-	}
-	for i := range cfg.Services {
-		if err := validateLinearServiceRoute(path, cfg, i); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// validateLinearServiceRoute validates a single Linear service route: it must
-// resolve a project slug (its own or the top-level one), declare at least one
-// route predicate, and must not rely on custom_fields.
-func validateLinearServiceRoute(path string, cfg Config, i int) error {
-	service := cfg.Services[i]
-	topLevelProjectSlug := strings.TrimSpace(cfg.Tracker.ProjectSlug)
-	if topLevelProjectSlug == "" && strings.TrimSpace(service.Tracker.ProjectSlug) == "" {
-		return fmt.Errorf("%s: services[%d].tracker.project_slug or tracker.project_slug is required for Linear service routing", path, i)
-	}
-	if !hasExplicitServiceRoute(service.Tracker) {
-		return fmt.Errorf("%s: services[%d].tracker must define at least one Linear route predicate (project_slug, team_key, or labels)", path, i)
-	}
-	// Linear's GraphQL schema does not expose any custom-field data on Issue
-	// (introspection: only `customerTicketCount` matches `custom*`); the
-	// upstream Elixir reference omits the fragment for the same reason. A
-	// `custom_fields:` predicate can never match a polled issue and would
-	// silently drop work, so reject it at load time per AGENTS.md "Failures
-	// are configuration problems". See #326.
-	if len(service.Tracker.CustomFields) > 0 {
-		return fmt.Errorf("%s: services[%d].tracker.custom_fields is not supported — Linear's GraphQL schema does not expose Issue custom fields (see #326)", path, i)
-	}
-	return nil
-}
-
-// validateServices enforces non-empty, case-insensitively unique service
-// names and a per-service repo.clone_url.
-func validateServices(path string, cfg Config) error {
-	seenServiceNames := make(map[string]int, len(cfg.Services))
-	for i, service := range cfg.Services {
-		name := strings.TrimSpace(service.Name)
-		if name == "" {
-			return fmt.Errorf("%s: services[%d].name is required", path, i)
-		}
-		nameKey := strings.ToLower(name)
-		if first, ok := seenServiceNames[nameKey]; ok {
-			return fmt.Errorf("%s: services[%d].name %q duplicates services[%d].name", path, i, service.Name, first)
-		}
-		seenServiceNames[nameKey] = i
-		if strings.TrimSpace(service.Repo.CloneURL) == "" {
-			return fmt.Errorf("%s: services[%d].repo.clone_url is required", path, i)
-		}
 	}
 	return nil
 }

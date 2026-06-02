@@ -40,28 +40,13 @@ func validateDispatchPreflight(cfg workflow.Config) error {
 	if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
 		errs = append(errs, errors.New("tracker.api_key empty after $VAR resolution"))
 	}
-	if kind == "linear" && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" && !linearRouteCoversProjectSlug(cfg) {
+	if kind == "linear" && strings.TrimSpace(cfg.Tracker.ProjectSlug) == "" {
 		errs = append(errs, errors.New("tracker.project_slug required for linear"))
 	}
 	if strings.TrimSpace(cfg.Codex.Command) == "" {
 		errs = append(errs, errors.New("codex.command empty"))
 	}
 	return errors.Join(errs...)
-}
-
-// linearRouteCoversProjectSlug reports whether one of the workflow's
-// service routes provides its own Linear `project_slug`. The check mirrors
-// the loader's "missing root project_slug is ok when services route it"
-// rule (services-routing extension D25); a per-tick preflight that fired
-// on every multi-service workflow would block dispatch even though the
-// loader accepted the config.
-func linearRouteCoversProjectSlug(cfg workflow.Config) bool {
-	for _, svc := range cfg.Services {
-		if strings.TrimSpace(svc.Tracker.ProjectSlug) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // recordPreflightFailed submits an actor-serialized op that appends a

@@ -323,7 +323,7 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "project { slugId }", "team { key }", "labels(first: 50)"} {
+		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "labels(first: 50)"} {
 			if !strings.Contains(payload.Query, fragment) {
 				t.Fatalf("ListIssues query = %s, want fragment %q", payload.Query, fragment)
 			}
@@ -336,7 +336,7 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"branchName":"agent/lin-1","createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[{"name":"Backend"},{"name":"Customer"}]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -349,9 +349,6 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 		t.Fatalf("issues = %d, want 1", len(issues))
 	}
 	issue := issues[0]
-	if issue.ProjectSlug != "api-platform" || issue.TeamKey != "ENG" {
-		t.Fatalf("issue route = project %q team %q, want api-platform/ENG", issue.ProjectSlug, issue.TeamKey)
-	}
 	if issue.Priority != 1 || issue.BranchName != "agent/lin-1" {
 		t.Fatalf("issue priority/branch = %d/%q, want 1/agent/lin-1", issue.Priority, issue.BranchName)
 	}
@@ -362,9 +359,6 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 	}
 	if got := strings.Join(issue.Labels, ","); got != "backend,customer" {
 		t.Fatalf("labels = %q, want lower-cased backend,customer", got)
-	}
-	if len(issue.CustomFields) != 0 {
-		t.Fatalf("CustomFields = %#v, want empty — Linear GraphQL does not expose Issue custom fields (#326)", issue.CustomFields)
 	}
 }
 
@@ -396,7 +390,7 @@ func TestListIssuesByStatesUsesLinearSupportedQueryShape(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","project":{"slugId":"api-platform"},"team":{"key":"ENG"},"labels":{"nodes":[]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","labels":{"nodes":[]},"state":{"name":"In Progress"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "api-platform"})
@@ -407,9 +401,6 @@ func TestListIssuesByStatesUsesLinearSupportedQueryShape(t *testing.T) {
 	}
 	if len(issues) != 1 {
 		t.Fatalf("issues = %d, want 1", len(issues))
-	}
-	if len(issues[0].CustomFields) != 0 {
-		t.Fatalf("CustomFields = %#v, want empty — Linear GraphQL does not expose Issue custom fields (#326)", issues[0].CustomFields)
 	}
 }
 

@@ -15,24 +15,21 @@ import (
 
 // TestRefreshActiveTrackerIssuesOpApply pins that the refresh pass updates the
 // stored issue + ClaimedIssues snapshot for every in-process entry still
-// observed active on the same route (running/retry/blocked), and leaves a
-// route-changed entry untouched.
+// observed active (running/retry/blocked), and leaves an entry absent from the
+// (possibly partial) refresh listing untouched.
 func TestRefreshActiveTrackerIssuesOpApply(t *testing.T) {
 	st := NewOrchestratorState(15000, 10)
-	st.Running[IssueID("R1")] = &RunningEntry{Identifier: "R1", Issue: tracker.Issue{ID: "R1", Identifier: "R1", State: "In Progress", ServiceName: "api"}}
-	st.RetryAttempts[IssueID("T1")] = &RetryEntry{IssueID: IssueID("T1"), Identifier: "T1", Issue: tracker.Issue{ID: "T1", Identifier: "T1", State: "In Progress", ServiceName: "api"}}
-	st.Blocked[IssueID("B1")] = &BlockedEntry{Identifier: "B1", Issue: tracker.Issue{ID: "B1", Identifier: "B1", State: "In Progress", ServiceName: "api"}}
-	// Same active state but a different service route: must be left untouched.
-	st.Running[IssueID("R2")] = &RunningEntry{Identifier: "R2", Issue: tracker.Issue{ID: "R2", Identifier: "R2", State: "In Progress", ServiceName: "api"}}
+	st.Running[IssueID("R1")] = &RunningEntry{Identifier: "R1", Issue: tracker.Issue{ID: "R1", Identifier: "R1", State: "In Progress"}}
+	st.RetryAttempts[IssueID("T1")] = &RetryEntry{IssueID: IssueID("T1"), Identifier: "T1", Issue: tracker.Issue{ID: "T1", Identifier: "T1", State: "In Progress"}}
+	st.Blocked[IssueID("B1")] = &BlockedEntry{Identifier: "B1", Issue: tracker.Issue{ID: "B1", Identifier: "B1", State: "In Progress"}}
 	// Absent from the (possibly partial) refresh listing: "no information", not
-	// inactive — must be left untouched, distinct from the route-changed miss.
-	st.Running[IssueID("R3")] = &RunningEntry{Identifier: "R3", Issue: tracker.Issue{ID: "R3", Identifier: "R3", State: "In Progress", ServiceName: "api"}}
+	// inactive — must be left untouched.
+	st.Running[IssueID("R3")] = &RunningEntry{Identifier: "R3", Issue: tracker.Issue{ID: "R3", Identifier: "R3", State: "In Progress"}}
 
 	refreshed := map[string]tracker.Issue{
-		"R1": {ID: "R1", Identifier: "R1", State: "Rework", ServiceName: "api"},
-		"T1": {ID: "T1", Identifier: "T1", State: "Rework", ServiceName: "api"},
-		"B1": {ID: "B1", Identifier: "B1", State: "Rework", ServiceName: "api"},
-		"R2": {ID: "R2", Identifier: "R2", State: "Rework", ServiceName: "web"}, // route changed
+		"R1": {ID: "R1", Identifier: "R1", State: "Rework"},
+		"T1": {ID: "T1", Identifier: "T1", State: "Rework"},
+		"B1": {ID: "B1", Identifier: "B1", State: "Rework"},
 		// R3 intentionally omitted (absent from the listing).
 	}
 	done := make(chan struct{}, 1)
@@ -53,16 +50,11 @@ func TestRefreshActiveTrackerIssuesOpApply(t *testing.T) {
 	if got := st.Blocked[IssueID("B1")].Issue.State; got != "Rework" {
 		t.Errorf("blocked B1 Issue.State = %q; want Rework (refresh must update it)", got)
 	}
-	for _, miss := range []struct {
-		id  IssueID
-		why string
-	}{{"R2", "route changed"}, {"R3", "absent from listing"}} {
-		if got := st.Running[miss.id].Issue.State; got != "In Progress" {
-			t.Errorf("running %s Issue.State = %q; want In Progress (%s -> untouched)", miss.id, got, miss.why)
-		}
-		if _, ok := st.ClaimedIssues[miss.id]; ok {
-			t.Errorf("ClaimedIssues[%s] was set; want untouched (%s)", miss.id, miss.why)
-		}
+	if got := st.Running[IssueID("R3")].Issue.State; got != "In Progress" {
+		t.Errorf("running R3 Issue.State = %q; want In Progress (absent from listing -> untouched)", got)
+	}
+	if _, ok := st.ClaimedIssues[IssueID("R3")]; ok {
+		t.Errorf("ClaimedIssues[R3] was set; want untouched (absent from listing)")
 	}
 	select {
 	case <-done:
