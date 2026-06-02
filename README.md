@@ -257,7 +257,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 |---------|---------|--------|
 | `agent.default` | `mock` | implementation (SPEC defers to operator) |
 | `agent.max_concurrent_agents` | `10` | SPEC §6.4 |
-| `agent.max_turns` | `20` clean turns per issue before continuation stops | SPEC §6.4 |
+| `agent.max_turns` | `20` per-session turn budget — the codex app-server runner's in-session loop (SPEC §5.3.5); not a continuation-spawn cap, since continuation worker spawns are unbounded (§7.1, #576) | SPEC §6.4 |
 | `agent.timeout` | `30m` | implementation (#215) |
 | `agent.max_retry_attempts` | unbounded (SPEC §8.4 retry-until-tracker-changes); explicit positive integer opts into the §15.5 harness-hardening cap, explicit `0` disables failure retries | SPEC §8.4 / §16.6 default; opt-in cap tracked under DEVIATIONS D29 |
 | `agent.max_timeout_retries` | unbounded (SPEC §8.4 backoff-only); explicit positive integer opts into the §15.5 cap, explicit `0` disables runner-timeout re-queues | SPEC §8.4 default; opt-in cap tracked under DEVIATIONS D29 |

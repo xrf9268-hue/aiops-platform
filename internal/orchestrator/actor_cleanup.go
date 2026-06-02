@@ -203,15 +203,6 @@ func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continu
 		o.queuePollWake()
 		return
 	}
-	if !o.runnerEnforcesMaxTurns && continuation.attempt >= o.maxTurns {
-		_ = o.submit(o.runCtx, &continuationBudgetExhaustedOp{
-			o:          o,
-			id:         IssueID(continuation.issue.ID),
-			issue:      continuation.issue,
-			identifier: continuation.identifier,
-		})
-		return
-	}
 	_ = o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.workspace)
 }
 func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
