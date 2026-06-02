@@ -995,6 +995,46 @@ func TestRuntimeEventForwardingEmitterPreservesBaseEmitterAndUpdatesOrchestrator
 	}
 }
 
+// TestRuntimeEventForwardingEmitterDropsNotificationFromOperatorLog pins #559:
+// the high-frequency per-notification stream must reach the live state surface
+// (/api/v1/state + TUI) via RecordRuntimeEvent but must NOT be echoed to the
+// worker's process log (the wrapped EventEmitter), where it otherwise drowns
+// the orchestrator lifecycle events. A non-notification event is still
+// delegated to the log, so the suppression is scoped to EventNotification only.
+func TestRuntimeEventForwardingEmitterDropsNotificationFromOperatorLog(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-559")
+	defer cancel()
+
+	base := &recordingWorkerEmitter{}
+	emitter := runtimeEventForwardingEmitter{EventEmitter: base, Orchestrator: o, IssueID: issueID}
+
+	notif := map[string]any{"message": "Working on it..."}
+	if err := emitter.AddEventWithPayload(context.Background(), "task-1", task.EventNotification, task.EventNotification, notif); err != nil {
+		t.Fatalf("AddEventWithPayload(notification): %v", err)
+	}
+	// A non-notification event must still be logged.
+	if err := emitter.AddEventWithPayload(context.Background(), "task-1", task.EventTurnCompleted, task.EventTurnCompleted, map[string]any{"usage": map[string]any{"total_tokens": 3}}); err != nil {
+		t.Fatalf("AddEventWithPayload(turn_completed): %v", err)
+	}
+
+	// Operator log: notification suppressed, turn_completed delegated.
+	if len(base.kinds) != 1 || base.kinds[0] != task.EventTurnCompleted {
+		t.Fatalf("operator-log kinds = %v; want only [%s] (notification must not reach the process log, #559)", base.kinds, task.EventTurnCompleted)
+	}
+
+	// Live state surface: the suppressed notification still updated the running row.
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].LastMessage; got != "Working on it..." {
+		t.Errorf("Running[0].LastMessage = %q; want %q (notification still forwarded to /api/v1/state despite being dropped from the log)", got, "Working on it...")
+	}
+}
+
 // TestRecordRuntimeEventPropagatesCodexAppServerPID pins the SPEC §4.1.6 /
 // §10.4 round-trip: a `session_started` event carrying
 // `codex_app_server_pid` populates RunningView.CodexAppServerPID so

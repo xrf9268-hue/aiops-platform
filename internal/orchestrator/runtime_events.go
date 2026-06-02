@@ -334,6 +334,17 @@ func (e runtimeEventForwardingEmitter) AddEventWithPayload(ctx context.Context, 
 	if _, ok := runtimeEventKinds[typ]; ok && e.Orchestrator != nil && e.IssueID != "" {
 		_ = e.Orchestrator.RecordRuntimeEvent(ctx, e.IssueID, task.RuntimeEvent{Event: typ, Payload: payload})
 	}
+	// The generic per-notification stream (SPEC §10.4 agent-driven notifications:
+	// delta, reasoning, exec output, token_usage, rate_limits, …) is high-frequency
+	// and already surfaced live through RecordRuntimeEvent → /api/v1/state + TUI —
+	// the same recipient upstream feeds via send_codex_update. Upstream keeps it out
+	// of the operator log (Logger.debug, method name only, filtered at the default
+	// level); the worker's stdlib log has no levels, so echoing every notification
+	// payload here drowned the orchestrator lifecycle events (~80:1 on a trivial
+	// issue, #559). Forward it to the live state surface only, not the process log.
+	if typ == task.EventNotification {
+		return nil
+	}
 	if e.EventEmitter == nil {
 		return nil
 	}
