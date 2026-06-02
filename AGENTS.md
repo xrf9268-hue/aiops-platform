@@ -270,8 +270,8 @@ Rules for agents working on this repo:
    working Elixir reference. If you are unsure how a subsystem should behave,
    read the corresponding Elixir module first; the answer is usually there.
 
-The current set of tracked deviations is in `DEVIATIONS.md` (D1–D24, with
-status showing whether each row is open, partial, reverting, or closed). Any
+The current set of tracked deviations is in `DEVIATIONS.md` (each row carries a
+status showing whether it is open, partial, reverting, or closed). Any
 new SPEC-violating change you make must either (a) close an existing deviation,
 (b) be tracked as a new deviation with an issue, or (c) be reverted.
 

@@ -29,6 +29,7 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
    - 跨模块一致性漏镜像（grep 同概念其他 consumer，列出 aiops-platform 扩展 routing / fan-out / capacity caps / eligibility filter 是否都镜像了）
    - Go 运行时硬化（followup goroutine 是否 `context.WithTimeout` / `defer recoverPanic` / `Timer.Stop()`——Elixir BEAM 隐式给的保证 Go 必须显式补）
    - 测试是否安慰剂（assertion 真的读到新代码改的字段吗？）
+   - 错位机制（在 §1 scheduler/runner 边界的错误一侧）：worker/orchestrator 侧「消费 agent 产物」的 phase/gate/artifact/config，先 grep Elixir 有没有等价物——没有就是过度设计信号，判**删除**（非搬进 prompt、非只记 DEVIATIONS），归宿默认是 WORKFLOW prompt（worker post-turn phase 在 push 后只能 flag 不能 prevent，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此；AGENTS.md 原则 6；#557/#561 拆的就是这类）
 
 2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，HIGH/MEDIUM/Critical 先修再 amend 重审；一般 2–3 轮收敛。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
 

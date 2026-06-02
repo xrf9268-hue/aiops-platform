@@ -35,7 +35,8 @@ metadata:
 ### 2. SPEC / upstream 调研（写代码之前）
 - 读 SPEC.md 相关章节 + 对应 Elixir 模块（`orchestrator.ex` / `codex/app_server.ex` / `tracker.ex` / `config/schema.ex`），歧义以 Elixir 为准。
 - **审查相邻路径**（AGENTS.md「Cross-cutting checklist」item 1）：grep 你要改的 SPEC 概念符号，列出其它 consumer；aiops 扩展（service routing `selectRoutedCandidates`、multi-tracker fan-out、per-state capacity caps、eligibility filter、reconcile hooks）要么也在你的新路径生效，要么写明为何不同。**踩坑实例**：blocked vs running 清理路径只兑现了一半契约。
-- **DEVIATIONS.md 决策门**（D1–D30）：本 issue 是关闭既有 deviation、需新开 deviation、还是回退？不要为了让差异消失而新造「deliberate extension」。
+- **要在 worker/orchestrator 侧新增「消费 agent 产物」的 phase/gate/artifact/config（verify、secret-scan、run-summary、diff policy、push、PR、tracker 写…）前，先 grep Elixir 参考有没有等价物**（AGENTS.md 原则 6）。**upstream 没有 = 过度设计信号，不是功能缺口**：默认删除，别搬进 prompt 也别只记一行 DEVIATIONS。「交接前检查 agent 产物」的归宿是 WORKFLOW prompt（agent 自有、push 前、预防式），不是 worker post-turn phase（push 后只能 flag，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此）。本仓库已建了又拆 6+ 次（#73/#407、#74、#76、#557/#561）。
+- **DEVIATIONS.md 决策门**：研究到结论再提（AGENTS.md 原则 7）——别把「关闭既有 / 新开 / 回退」当多选题甩给用户，SPEC + Elixir 参考通常已能定论（最常见结论：upstream 缺失且 SPEC 归在别处的扩展应删除）。别为了让差异消失而新造「deliberate extension」。
 
 ### 3. 分支 + 实现
 - 从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
@@ -89,4 +90,4 @@ go build ./cmd/worker ./cmd/tui
 - 中文回复，简洁；每次只汇报变化，不复述。
 - worker 永不 push/合并 PR 或写 tracker 状态（D8/#76）。
 - Go 版本由 go.mod 锁定，别顺手改 `go` 指令。
-- **批处理多个 issue 时**（`/goal` over a set）：独立 issue **默认并行**开分支推进，只在有真实依赖（共享文件 / migration 顺序 / 后者消费前者的 API）时串行；决定某条 acceptance criterion 延后时**当场**告知用户并立即开 follow-up issue。完整批处理纪律见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
+- **批处理多个 issue 时**（`/goal` over a set）：并行/串行依赖判定、deferral 时机、live ledger、pause/resume、opt-in 授权合并等批处理纪律全部见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)，不在此复述（与本 skill 顶部「不复述共享协议」一致，避免内联规则与 runbook 漂移）。
