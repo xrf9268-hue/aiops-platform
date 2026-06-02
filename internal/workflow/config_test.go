@@ -22,10 +22,6 @@ func writeTempWorkflow(t *testing.T, body string) string {
 	return path
 }
 
-// TestLoad_PRDraftFromFrontMatter verifies the YAML key `pr.draft` is parsed
-// into Config.PR.Draft. This is the schema knob #41 wires through to
-// gitea.CreatePullRequest.
-
 func TestLoadParsesServerPort(t *testing.T) {
 	path := writeTempWorkflow(t, `---
 server:
@@ -400,7 +396,7 @@ func TestKnownTopLevelWorkflowKeysMatchConfigYAMLTags(t *testing.T) {
 	}
 }
 
-func TestLoad_PRDraftFromFrontMatter(t *testing.T) {
+func TestLoad_RejectsRemovedPRBlock(t *testing.T) {
 	body := `---
 repo:
   owner: o
@@ -418,21 +414,42 @@ prompt body
 	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
 		t.Fatalf("write workflow: %v", err)
 	}
-	wf, err := Load(p)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load(pr:) = nil error; want rejection of removed pr block (#578)")
 	}
-	if !wf.Config.PR.Draft {
-		t.Fatalf("expected PR.Draft=true, got false")
+	if !strings.Contains(err.Error(), "pr.*") || !strings.Contains(err.Error(), "#578") {
+		t.Fatalf("Load(pr:) error = %q; want it to name pr.* and #578", err)
 	}
 }
 
-// TestDefaultConfig_PRDraftDefaultsFalse pins the contract that the
-// built-in default for `PR.Draft` is false. Prior to PR #42, the worker
-// did not forward draft to Gitea at all, so workflows that omit
-// `pr.draft` got ready-for-review PRs. Keeping the default at false
-// preserves that behavior; profiles like `company-cautious-WORKFLOW.md`
-// must opt in explicitly with `pr.draft: true`.
+func TestLoad_RejectsRemovedSafetyBlock(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+safety:
+  allowed_networks:
+    - git remote for this repository
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load(safety:) = nil error; want rejection of removed safety block (#578)")
+	}
+	if !strings.Contains(err.Error(), "safety.*") || !strings.Contains(err.Error(), "#578") {
+		t.Fatalf("Load(safety:) error = %q; want it to name safety.* and #578", err)
+	}
+}
 
 func TestLoadParsesAgentMaxConcurrentAgentsByStateWithNormalizedKeys(t *testing.T) {
 	path := writeTempWorkflow(t, `---
@@ -547,12 +564,6 @@ Prompt body
 				t.Fatalf("Load error = %v, want %q", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestDefaultConfig_PRDraftDefaultsFalse(t *testing.T) {
-	if got := DefaultConfig().PR.Draft; got != false {
-		t.Fatalf("DefaultConfig().PR.Draft: got %v want false (would regress non-draft default)", got)
 	}
 }
 
@@ -886,60 +897,6 @@ prompt body
 	}
 	if !strings.Contains(err.Error(), `services[1].name "API" duplicates services[0].name`) {
 		t.Fatalf("Load error = %q, want duplicate service name guidance", err)
-	}
-}
-
-func TestLoad_PRDraftDefaultsAndExplicitFalse(t *testing.T) {
-	cases := map[string]struct {
-		front string
-		want  bool
-	}{
-		"explicit false": {
-			front: `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-pr:
-  draft: false
-tracker:
-  kind: gitea
----
-body
-`,
-			want: false,
-		},
-		"unset stays at default": {
-			front: `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-tracker:
-  kind: gitea
----
-body
-`,
-			// DefaultConfig() sets PR.Draft=false, so workflows that omit
-			// `pr.draft` keep the historical ready-for-review behavior.
-			want: DefaultConfig().PR.Draft,
-		},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			p := filepath.Join(dir, "WORKFLOW.md")
-			if err := os.WriteFile(p, []byte(tc.front), 0o644); err != nil {
-				t.Fatalf("write workflow: %v", err)
-			}
-			wf, err := Load(p)
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
-			if wf.Config.PR.Draft != tc.want {
-				t.Fatalf("PR.Draft: got %v want %v", wf.Config.PR.Draft, tc.want)
-			}
-		})
 	}
 }
 
@@ -2509,44 +2466,6 @@ prompt
 	}
 	if got != want {
 		t.Fatalf("Tracker.Statuses = %#v, want %#v", got, want)
-	}
-}
-
-func TestLoad_PreservesSafetyPolicyForOperatorInspection(t *testing.T) {
-	t.Parallel()
-	path := writeTempWorkflow(t, `---
-repo:
-  clone_url: file:///tmp/repo
-tracker:
-  kind: linear
-  project_slug: platform
-safety:
-  allowed_networks:
-    - git remote for this repository
-  allowed_paths:
-    - repository workspace for this task
-  allowed_commands:
-    - go test ./...
-  forbidden:
-    - reading host files outside the workspace
----
-prompt
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got, want := wf.Config.Safety.AllowedNetworks, []string{"git remote for this repository"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Safety.AllowedNetworks = %#v, want %#v", got, want)
-	}
-	if got, want := wf.Config.Safety.AllowedPaths, []string{"repository workspace for this task"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Safety.AllowedPaths = %#v, want %#v", got, want)
-	}
-	if got, want := wf.Config.Safety.AllowedCommands, []string{"go test ./..."}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Safety.AllowedCommands = %#v, want %#v", got, want)
-	}
-	if got, want := wf.Config.Safety.Forbidden, []string{"reading host files outside the workspace"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Safety.Forbidden = %#v, want %#v", got, want)
 	}
 }
 

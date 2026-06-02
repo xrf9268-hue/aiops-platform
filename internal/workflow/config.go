@@ -57,10 +57,8 @@ type Config struct {
 	Codex                 CommandConfig `yaml:"codex" json:"codex"`
 	Claude                CommandConfig `yaml:"claude" json:"claude"`
 	Policy                PolicyConfig  `yaml:"policy" json:"policy"`
-	Safety                SafetyConfig  `yaml:"safety" json:"safety"`
 	Sandbox               SandboxConfig `yaml:"sandbox" json:"sandbox"`
 	Verify                VerifyConfig  `yaml:"verify" json:"verify"`
-	PR                    PRConfig      `yaml:"pr" json:"pr"`
 }
 
 type ServerConfig struct {
@@ -423,16 +421,6 @@ type PolicyConfig struct {
 	Mode string `yaml:"mode" json:"mode"`
 }
 
-// SafetyConfig documents the policy envelope operators expect agents and
-// reviewers to honor. It remains descriptive and operator-facing; SandboxConfig
-// carries the opt-in worker-enforced controls.
-type SafetyConfig struct {
-	AllowedNetworks []string `yaml:"allowed_networks" json:"allowed_networks"`
-	AllowedPaths    []string `yaml:"allowed_paths" json:"allowed_paths"`
-	AllowedCommands []string `yaml:"allowed_commands" json:"allowed_commands"`
-	Forbidden       []string `yaml:"forbidden" json:"forbidden"`
-}
-
 // SandboxConfig controls optional worker-side process hardening around agent
 // invocation. It is disabled by default because Symphony does not mandate one
 // universal sandbox posture; operators opt in per workflow when the host has a
@@ -453,12 +441,6 @@ type SandboxConfig struct {
 // by the worker.
 type VerifyConfig struct {
 	Commands []string `yaml:"commands" json:"commands"`
-}
-
-type PRConfig struct {
-	Draft     bool     `yaml:"draft" json:"draft"`
-	Labels    []string `yaml:"labels" json:"labels"`
-	Reviewers []string `yaml:"reviewers" json:"reviewers"`
 }
 
 func DefaultConfig() Config {
@@ -534,10 +516,5 @@ func DefaultConfig() Config {
 		Policy:  PolicyConfig{Mode: "draft_pr"},
 		Sandbox: SandboxConfig{Backend: "none", NetworkMode: "none"},
 		Verify:  VerifyConfig{Commands: []string{}},
-		// PR.Draft defaults to false so workflows that omit `pr.draft` keep
-		// the historical worker behavior of opening ready-for-review PRs.
-		// Profiles that want draft PRs (e.g. company-cautious) opt in by
-		// setting `pr.draft: true` in their WORKFLOW.md front matter.
-		PR: PRConfig{Draft: false, Labels: []string{"ai-generated", "needs-review"}},
 	}
 }

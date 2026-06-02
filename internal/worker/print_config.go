@@ -169,7 +169,6 @@ type configView struct {
 	Claude    workflow.CommandConfig   `json:"claude"`
 	Policy    workflow.PolicyConfig    `json:"policy"`
 	Verify    workflow.VerifyConfig    `json:"verify"`
-	PR        workflow.PRConfig        `json:"pr"`
 	Sandbox   workflow.SandboxConfig   `json:"sandbox"`
 }
 
@@ -205,7 +204,6 @@ func newConfigView(cfg workflow.Config) configView {
 		Claude:  cfg.Claude,
 		Policy:  cfg.Policy,
 		Verify:  cfg.Verify,
-		PR:      cfg.PR,
 		Sandbox: cfg.Sandbox,
 	}
 }

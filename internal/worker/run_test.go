@@ -84,7 +84,7 @@ func TestEmitNilEmitterIsNoop(t *testing.T) {
 
 func TestEmitLogsEmitterError(t *testing.T) {
 	ev := &fakeEmitter{err: errors.New("db down")}
-	worker.Emit(context.Background(), ev, "tsk_1", "", task.EventPush, "push", nil)
+	worker.Emit(context.Background(), ev, "tsk_1", "", task.EventRunnerStart, "runner_start", nil)
 	if len(ev.events) != 1 {
 		t.Fatalf("event should still be recorded by fake even when error returned")
 	}
@@ -230,8 +230,6 @@ func TestEventKindConstantsAreSnakeCase(t *testing.T) {
 		task.EventRunnerStart,
 		task.EventRunnerEnd,
 		task.EventRunnerTimeout,
-		task.EventPush,
-		task.EventPRCreated,
 		task.EventPRReused,
 		task.EventTrackerTransition,
 		task.EventTrackerTransitionError,

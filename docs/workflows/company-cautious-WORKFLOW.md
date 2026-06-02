@@ -54,27 +54,11 @@ policy:
   # `sandbox:` block. The worker path/diffstat gate was removed in #561 —
   # `deny_paths` / `max_changed_*` are no longer accepted here.
 
-# Safety policy for cautious company runs. These entries are descriptive: they
-# make the expected network/path/command envelope explicit for the agent and
-# reviewers. Worker-enforced process hardening lives under `sandbox:`.
-safety:
-  allowed_networks:
-    - company Git host for this repository
-    - configured Linear/Gitea tracker API
-    - configured pull-request host
-    - package registries required by the repository lockfiles
-  allowed_paths:
-    - repository workspace for this task
-    - tool caches without shared credentials
-  allowed_commands:
-    - repository build, test, lint, and formatting commands
-    - git commands for the work branch
-    - tracker/PR tool calls needed for draft handoff
-  forbidden:
-    - reading files outside the workspace unless explicitly required
-    - using production, customer, or personal credentials
-    - contacting unrelated external services
-    - modifying denied policy paths
+# The cautious safety envelope (allowed networks/paths/commands, forbidden
+# actions) is expressed in the prompt body below (SPEC §3.2) — see the Process
+# and Rules sections. The descriptive `safety:` front-matter block was removed in
+# #578 because an inert struct that enforced nothing falsely implied it did;
+# worker-enforced process hardening lives under `sandbox:`.
 
 # Optional worker-enforced process hardening. Keep disabled while validating the
 # mock runner; enable only on worker hosts where the selected backend is
@@ -93,17 +77,10 @@ verify:
   commands:
     - go test ./...
 
-pr:
-  # draft: true tells the agent/tooling to open the PR as a draft. For Gitea,
-  # this may be represented by a `WIP: ` title prefix (Gitea's canonical draft
-  # signal) when the PR tool/CLI creates the handoff.
-  draft: true
-  labels:
-    - ai-generated
-    - needs-review
-    - cautious-mode
-  reviewers:
-    - your-company-reviewer
+# PR handoff (draft state, labels, reviewers) is the agent's responsibility via
+# its tool surface (SPEC §1, #76) — see Process step 5 below, which tells the
+# agent to open a draft PR, apply the cautious-mode labels, and request the
+# company reviewer. The `pr:` front-matter block was removed in #578.
 ---
 You are working on a company AI coding task under cautious mode.
 
@@ -130,7 +107,9 @@ Process:
    that respects the off-limits paths stated in the prompt and keeps the diff
    small (≤12 files / ≤300 LOC review guideline).
 4. Run the verification commands and capture results.
-5. Summarize what you changed, why, and how you verified it in the pull request description.
+5. Open the PR as a draft, label it `ai-generated`, `needs-review`, and
+   `cautious-mode`, and request review from your-company-reviewer. Summarize what
+   you changed, why, and how you verified it in the pull request description.
 6. Stop and explain the blocker if the task is ambiguous, exceeds
    policy limits, or touches a denied path.
 
@@ -162,9 +141,10 @@ has produced a clean audit trail:
 
 2. **Claude with draft PRs** (`claude`).
    When you are ready to let a model author code, switch
-   `agent.default` to `claude` while keeping `policy.mode: draft_pr` and
-   `pr.draft: true`. State the off-limits paths and a tight size budget in the
-   prompt, and keep the `sandbox:` write restrictions conservative.
+   `agent.default` to `claude` while keeping `policy.mode: draft_pr` and a
+   prompt that tells the agent to open draft PRs. State the off-limits paths and
+   a tight size budget in the prompt, and keep the `sandbox:` write restrictions
+   conservative.
 
 3. **Codex with draft PRs** (`codex-app-server`).
    Once the Claude loop looks healthy, swap `agent.default` to `codex-app-server`

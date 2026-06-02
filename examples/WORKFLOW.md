@@ -105,26 +105,11 @@ policy:
   # belongs to the `sandbox:` write restrictions. The worker path/diffstat gate
   # was removed in #561 — `deny_paths` / `max_changed_*` are no longer accepted.
 
-# Safety policy for the agent and human reviewers. This block is descriptive:
-# it documents the expected envelope but does not itself enforce network/path or
-# command controls. Worker-enforced process hardening lives under `sandbox:`.
-safety:
-  allowed_networks:
-    - git remote for this repository
-    - configured issue tracker API
-    - configured pull-request host
-  allowed_paths:
-    - repository workspace for this task
-    - language/tool caches that do not contain shared credentials
-  allowed_commands:
-    - repository build, test, lint, and formatting commands
-    - git commands needed to commit and push the work branch
-    - tracker/PR tool calls needed for the workflow handoff
-  forbidden:
-    - reading host files outside the workspace unless explicitly required
-    - using shared production secrets or personal credentials
-    - contacting unrelated external services
-    - changing deployment, infrastructure, migration, or secret paths
+# The agent's safety envelope (allowed networks/paths/commands, what is
+# forbidden) is expressed in the prompt body below (SPEC §3.2) — see the Process
+# and Rules sections. The descriptive `safety:` front-matter block was removed in
+# #578 because an inert struct that enforced nothing falsely implied it did;
+# worker-enforced process hardening lives under `sandbox:`.
 
 # Optional worker-enforced process hardening. Disabled by default so personal
 # workflows continue to rely on the selected coding agent's own sandbox. Enable
@@ -144,14 +129,10 @@ verify:
   commands:
     - go test ./...
 
-pr:
-  # draft: true tells the agent/tooling to open the PR as a draft. For Gitea,
-  # this may be represented by a `WIP: ` title prefix (Gitea's canonical draft
-  # signal) when the PR tool/CLI creates the handoff.
-  draft: true
-  labels:
-    - ai-generated
-    - needs-review
+# PR handoff (draft state, labels, reviewers) is the agent's responsibility via
+# its tool surface (SPEC §1, #76) — see Process step 5 below, which tells the
+# agent to open a draft PR. The `pr:` front-matter block configured a worker
+# capability that no longer exists and was removed in #578.
 ---
 You are working on a personal AI coding task.
 

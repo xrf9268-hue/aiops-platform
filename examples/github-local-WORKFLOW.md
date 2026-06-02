@@ -64,22 +64,9 @@ policy:
   # prevention belongs to `sandbox:` write restrictions. The worker path/diffstat
   # gate was removed in #561 — `deny_paths` / `max_changed_*` are not accepted.
 
-safety:
-  allowed_networks:
-    - github.com
-    - api.github.com
-    - configured language package registries needed by tests
-  allowed_paths:
-    - repository workspace for this task
-    - local tool caches that do not contain shared credentials
-  allowed_commands:
-    - repository build, test, lint, and formatting commands
-    - git commands needed to commit and push the work branch
-    - gh commands needed to open and update PRs
-    - codex and claude local review commands
-  forbidden:
-    - exposing tokens, API keys, or local credential files in logs, PR bodies, or comments
-    - changing secrets or personal credential files
+# The agent's safety envelope (allowed networks/paths/commands, forbidden
+# actions) is expressed in the prompt body below (SPEC §3.2). The descriptive
+# `safety:` front-matter block was removed in #578 (it enforced nothing).
 
 sandbox:
   enabled: false
@@ -93,11 +80,9 @@ verify:
     - go test -race -covermode=atomic ./...
     - go build ./cmd/worker ./cmd/tui
 
-pr:
-  draft: true
-  labels:
-    - ai-generated
-    - needs-review
+# PR handoff (draft state, labels, reviewers) is the agent's responsibility via
+# its tool surface (SPEC §1, #76) — see the prompt below, which tells the agent
+# to open a draft PR. The `pr:` front-matter block was removed in #578.
 ---
 You are autonomously resolving one GitHub issue in github.com/xrf9268-hue/aiops-platform.
 

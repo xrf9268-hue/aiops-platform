@@ -190,8 +190,9 @@ repository:
    workflow.
 2. Keep branch protection enabled on the default branch. Require human review and
    passing CI before merge.
-3. Keep `policy.mode: draft_pr` and `pr.draft: true` until several runs have
-   been reviewed cleanly.
+3. Keep `policy.mode: draft_pr` and instruct the agent to open draft PRs in the
+   WORKFLOW prompt (PR handoff is agent-side per SPEC §1, #76) until several runs
+   have been reviewed cleanly.
 4. Start with `agent.default: mock`. Only switch to a real coding agent after the
    mock loop has proven clone, branch, PR, label, and policy behavior.
 5. Do not pass shared production secrets, broad cloud credentials, personal
@@ -231,7 +232,7 @@ lands:
 
 - `agent.default: mock` for initial validation;
 - `policy.mode: draft_pr`;
-- `pr.draft: true`;
+- a WORKFLOW prompt that tells the agent to open draft PRs (SPEC §1, #76);
 - conservative changed-file and changed-LOC limits;
 - explicit denied paths for sensitive directories;
 - low-privilege bot credentials;

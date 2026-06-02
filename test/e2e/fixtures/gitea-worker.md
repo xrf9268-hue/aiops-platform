@@ -18,10 +18,5 @@ tracker:
     - Canceled
 polling:
   interval_ms: 5000
-pr:
-  draft: true
-  labels:
-    - ai-generated
-    - needs-review
 ---
 Run mock task {{ task.id }} for {{ repo.owner }}/{{ repo.name }}.

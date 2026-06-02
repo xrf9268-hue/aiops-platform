@@ -47,11 +47,9 @@ verify:
   commands:
     - go test ./...
 
-pr:
-  draft: true
-  labels:
-    - ai-generated
-    - needs-review
+# PR handoff (draft state, labels, reviewers) is the agent's responsibility via
+# its tool surface (SPEC §1, #76); express it in the prompt body below. The
+# `pr:` front-matter block was removed in #578.
 ---
 You are working on a personal AI coding task from Gitea.
 

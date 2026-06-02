@@ -873,8 +873,6 @@ func TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		task.EventPush,
-		task.EventPRCreated,
 		task.EventPRReused,
 		task.EventTrackerTransition,
 		task.EventTrackerTransitionError,

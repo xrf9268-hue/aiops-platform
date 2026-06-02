@@ -349,6 +349,20 @@ func rejectRemovedFields(front []byte) error {
 	if err := rejectRemovedPolicyFields(raw); err != nil {
 		return err
 	}
+	return rejectRemovedMiscFields(raw)
+}
+
+// rejectRemovedMiscFields surfaces clear errors for removed keys that do not
+// have their own dedicated helper: the nested `claude.profile` / `agent.fallback`
+// keys removed earlier, and the top-level `pr:` / `safety:` blocks removed under
+// #578. Collecting them here keeps rejectRemovedFields a flat list of helper
+// calls (gocognit). Like the verify.*/policy.*/codex.* rejects, each fails loud
+// instead of being silently dropped. The `pr:`/`safety:` blocks configured
+// capabilities that no longer exist — the worker does not open/label PRs (PR
+// handoff is agent-side per SPEC §1, #76), and `safety:` was a descriptive
+// struct the worker never enforced — so their intent belongs in the WORKFLOW
+// prompt (SPEC §3.2), not front matter.
+func rejectRemovedMiscFields(raw map[string]any) error {
 	if claude, ok := raw["claude"].(map[string]any); ok {
 		if _, present := claude["profile"]; present {
 			return fmt.Errorf("claude.profile is not supported; the codex-only `profile` field was removed in issue #541 and Claude never had runner profiles. Remove it")
@@ -358,6 +372,12 @@ func rejectRemovedFields(front []byte) error {
 		if _, present := agent["fallback"]; present {
 			return fmt.Errorf("agent.fallback is no longer supported (issue #40); the worker never read this field. Remove it and set agent.default to a more reliable runner if you need a different default")
 		}
+	}
+	if _, present := raw["pr"]; present {
+		return fmt.Errorf("pr.* is no longer supported (#578): the worker does not open, label, or assign reviewers to PRs — PR creation is the coding agent's responsibility (SPEC §1, #76). Express draft/labels/reviewers in the agent's WORKFLOW prompt or tool surface, and remove the `pr:` block")
+	}
+	if _, present := raw["safety"]; present {
+		return fmt.Errorf("safety.* is no longer supported (#578): it was a descriptive struct the worker never enforced, which falsely implied enforcement. Express the safety envelope in the WORKFLOW prompt/README, and use `sandbox:` for worker-enforced write/network restrictions. Remove the `safety:` block")
 	}
 	return nil
 }
@@ -456,9 +476,7 @@ var knownTopLevelWorkflowKeys = map[string]struct{}{
 	"hooks":     {},
 	"policy":    {},
 	"polling":   {},
-	"pr":        {},
 	"repo":      {},
-	"safety":    {},
 	"sandbox":   {},
 	"server":    {},
 	"services":  {},
