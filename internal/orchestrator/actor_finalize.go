@@ -118,10 +118,11 @@ func (f *finalizeRunOp) applyExternalBlocked(st *OrchestratorState, elapsed time
 	}, true
 }
 
-// applyCleanExit handles a normal (Err==nil) worker exit: reconciled-cleanup
-// continuation, the orchestrator-side continuation cap, or a normal
-// continuation retry. It always handles the exit, so it returns the followup
-// directly.
+// applyCleanExit handles a normal (Err==nil) worker exit: a reconciled-cleanup
+// continuation or a normal continuation retry. Per SPEC §7.1 continuation spawns
+// are unbounded (the cap was removed in #576), so a still-active issue always
+// schedules another continuation. It always handles the exit, so it returns the
+// followup directly.
 func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Duration) func() {
 	nextContinuationAttempt := f.entry.ContinuationAttempt + 1
 	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
@@ -134,12 +135,12 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 		close(f.done)
 		return cleanup
 	}
-	// SPEC §7.1 leaves continuation worker spawns unbounded; only apply
-	// the orchestrator-side cap for runners that cannot enforce
-	// agent.max_turns inside their own session. See issue #216.
-	if !f.o.runnerEnforcesMaxTurns && nextContinuationAttempt >= f.o.maxTurns {
-		return f.applyContinuationBudgetExhausted(st, elapsed)
-	}
+	// SPEC §7.1 leaves continuation worker spawns unbounded: an active issue
+	// keeps getting fresh sessions until tracker state changes (reconcile /
+	// §16.5 self-stop). The in-session turn budget (SPEC §5.3.5) is the runner's
+	// job (codex app-server honors agent.max_turns per session); the orchestrator
+	// no longer caps continuation spawns (the legacy cap for non-app-server
+	// runners was removed in issue #576 / DEVIATIONS D30).
 	if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil
@@ -169,23 +170,6 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	return func() {
 		_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, workspace)
 	}
-}
-
-// applyContinuationBudgetExhausted is the terminal failure for a clean exit that
-// would exceed the orchestrator-side continuation cap (#216).
-func (f *finalizeRunOp) applyContinuationBudgetExhausted(st *OrchestratorState, elapsed time.Duration) func() {
-	if !st.FinishRunNonRetryableFailed(f.id, f.entry, elapsed) {
-		close(f.done)
-		return nil
-	}
-	msg := "clean continuation budget exhausted after " + strconv.Itoa(f.o.maxTurns) + " turns while tracker issue remained active"
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: f.id, Identifier: f.identifier, Message: msg})
-	// SPEC §13.1: the failed outcome must be expressible on stderr, not only in
-	// the in-memory recent_events ring. Operators tailing stderr otherwise see a
-	// run of "Succeeded" lines then silence.
-	log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=continuation_budget_exhausted budget=%d", f.id, f.identifier, f.o.maxTurns)
-	close(f.done)
-	return nil
 }
 
 // applyReconciledCancelCleanup cleans the workspace of a run that reconciliation

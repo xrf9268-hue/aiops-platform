@@ -7,8 +7,6 @@ package orchestrator
 
 import (
 	"context"
-	"log"
-	"strconv"
 	"strings"
 	"time"
 
@@ -109,9 +107,9 @@ type continuationAfterSkippedCleanup struct {
 // continuationForRetry returns the continuation to resume when a queued
 // continuation retry's terminal-cleanup recheck (verifyReconciledWorkspaceStillTerminal)
 // finds the issue active again. Only RetryKindContinuation entries carry a
-// continuation attempt and max-turn budget worth preserving; for every other
-// retry kind it returns nil so the recheck falls back to a plain poll wake
-// (their re-dispatch does not depend on a preserved ContinuationAttempt). The
+// continuation attempt worth preserving; for every other retry kind it returns
+// nil so the recheck falls back to a plain poll wake (their re-dispatch does not
+// depend on a preserved ContinuationAttempt). The
 // reconcile pass builds this before ReleaseClaim drops the entry so the
 // off-actor cleanup can reschedule the same attempt + workspace instead of
 // resetting ContinuationAttempt to 0 on the next poll (Codex review, PR #455).
@@ -125,22 +123,6 @@ func continuationForRetry(retry *RetryEntry) *continuationAfterSkippedCleanup {
 		attempt:    retry.Attempt,
 		workspace:  retry.Workspace,
 	}
-}
-
-type continuationBudgetExhaustedOp struct {
-	o          *Orchestrator
-	id         IssueID
-	issue      tracker.Issue
-	identifier string
-}
-
-func (c *continuationBudgetExhaustedOp) apply(st *OrchestratorState) func() {
-	st.ReleaseClaim(c.id)
-	st.recordFailed(c.id, FailedEntry{State: c.issue.State, UpdatedAt: c.issue.UpdatedAt})
-	msg := "clean continuation budget exhausted after " + strconv.Itoa(c.o.maxTurns) + " turns while tracker issue remained active"
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: c.id, Identifier: c.identifier, Message: msg})
-	log.Printf("event=run_failed issue_id=%s issue_identifier=%s reason=continuation_budget_exhausted budget=%d", c.id, c.identifier, c.o.maxTurns)
-	return nil
 }
 
 // ScheduleRetry enters the SPEC §7.1 retry-queued substate for issue.

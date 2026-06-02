@@ -1259,105 +1259,6 @@ func TestFinalize_NormalExitRecordsCompletedEvent(t *testing.T) {
 	}
 }
 
-func TestFinalize_NormalExitStopsAfterMaxTurns(t *testing.T) {
-	disp := &fakeDispatcher{}
-	maxTurns := 2
-	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
-		MaxTurns:   &maxTurns,
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-CLEAN-BUDGET", Identifier: "ENG-CLEAN-BUDGET", Title: "clean budget"}
-	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == 1 &&
-			!v.Retrying[0].DueAt.After(time.Now())
-	}, time.Second)
-
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
-		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-
-	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Running) == 0 && len(v.Retrying) == 0 && len(v.Failed) == 1
-	}, time.Second)
-
-	v, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(v.Retrying) != 0 {
-		t.Fatalf("retrying entries after clean budget exhausted = %+v, want none", v.Retrying)
-	}
-	if got := disp.count(); got != 2 {
-		t.Fatalf("Dispatcher.Spawn calls = %d, want no additional continuation after max turns", got)
-	}
-}
-
-// TestFinalize_ContinuationBudgetExhaustedEmitsStderrLine covers SPEC §13.1
-// (issue #332): the continuation-budget-exhausted terminal failure must emit
-// a structured stderr line, not only a RecordEvent into the in-memory ring.
-// Operators tailing stderr otherwise see a run of "Succeeded" lines followed
-// by silence when an issue is permanently suppressed.
-func TestFinalize_ContinuationBudgetExhaustedEmitsStderrLine(t *testing.T) {
-	disp := &fakeDispatcher{}
-	maxTurns := 2
-	o, cancel := startActor(t, Deps{
-		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
-		MaxTurns:   &maxTurns,
-	})
-	defer cancel()
-
-	iss := tracker.Issue{ID: "ENG-CLEAN-BUDGET", Identifier: "ENG-CLEAN-BUDGET", Title: "clean budget"}
-	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
-		t.Fatalf("RequestDispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
-
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	waitFor(t, func() bool {
-		v, err := o.Snapshot(context.Background())
-		return err == nil && len(v.Retrying) == 1 && !v.Retrying[0].DueAt.After(time.Now())
-	}, time.Second)
-	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
-		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
-	}
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-
-	// The Snapshot op is serviced strictly after the finalize apply returns,
-	// so observing Failed guarantees the in-apply log.Printf already ran.
-	got := captureOrchestratorLog(t, func() {
-		disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
-		waitFor(t, func() bool {
-			v, err := o.Snapshot(context.Background())
-			return err == nil && len(v.Failed) == 1
-		}, time.Second)
-	})
-	for _, want := range []string{
-		"event=run_failed",
-		"issue_id=ENG-CLEAN-BUDGET",
-		"issue_identifier=ENG-CLEAN-BUDGET",
-		"reason=continuation_budget_exhausted",
-		"budget=2",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("continuation-budget stderr line missing %q in:\n%s", want, got)
-		}
-	}
-}
-
 // TestFinalize_NonRetryableErrorEmitsStderrLine covers SPEC §13.1 (issue #332)
 // for the explicit non-retryable runner-error terminal path.
 func TestFinalize_NonRetryableErrorEmitsStderrLine(t *testing.T) {
@@ -1434,34 +1335,38 @@ func TestFinalize_FailureRetryBudgetExhaustedEmitsStderrLine(t *testing.T) {
 	}
 }
 
-// TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap covers SPEC
-// §7.1 + §5.3.5 (issue #216): when the agent runner enforces agent.max_turns
-// inside its own session loop (codex app-server), the orchestrator must not
-// reuse the same value as a continuation-spawn budget. The clean-continuation
-// loop should keep dispatching fresh sessions past max_turns until tracker
-// state changes.
-func TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap(t *testing.T) {
+// TestFinalize_ContinuationSpawnsAreUnbounded covers SPEC §7.1 (issue #576 /
+// DEVIATIONS D30): the orchestrator no longer caps continuation spawns. Every
+// clean exit on a still-active issue schedules another continuation; the issue
+// never lands in Failed for "too many turns". The in-session turn budget
+// (agent.max_turns, SPEC §5.3.5) is the runner's job, not a cross-worker cap.
+// This fails if the legacy continuation-spawn cap is reintroduced (it routed an
+// active issue into Failed once the continuation count reached max_turns).
+func TestFinalize_ContinuationSpawnsAreUnbounded(t *testing.T) {
 	disp := &fakeDispatcher{}
-	maxTurns := 2
-	enforces := true
+	// Drive more clean continuation cycles than the old default max_turns (20)
+	// so reintroducing the cap at ANY value up to that default — not just a tiny
+	// one — would route the issue into Failed and break this test.
+	const cycles = 22
+	delays := make([]time.Duration, cycles+2)
+	for i := range delays {
+		delays[i] = time.Millisecond
+	}
 	o, cancel := startActor(t, Deps{
-		Dispatcher:             disp,
-		Scheduler:              &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond}},
-		MaxTurns:               &maxTurns,
-		RunnerEnforcesMaxTurns: &enforces,
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: delays},
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-APPSERVER-CONT", Identifier: "ENG-APPSERVER-CONT", Title: "app-server continuation"}
+	iss := tracker.Issue{ID: "ENG-CONT-UNBOUNDED", Identifier: "ENG-CONT-UNBOUNDED", Title: "unbounded continuation"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	// Drive several clean continuation cycles past max_turns. With the
-	// app-server runner gating in place each clean exit must schedule another
-	// continuation rather than landing in Failed.
-	for cycle := 0; cycle < 4; cycle++ {
+	// Each clean exit must schedule another continuation rather than landing in
+	// Failed (SPEC §7.1 unbounded continuation spawns, #576 / D30).
+	for cycle := 0; cycle < cycles; cycle++ {
 		disp.finishAt(cycle, WorkerResult{Elapsed: time.Millisecond})
 		expectedAttempt := cycle + 1
 		waitFor(t, func() bool {
@@ -1480,10 +1385,10 @@ func TestFinalize_RunnerEnforcedMaxTurnsSkipsContinuationSpawnCap(t *testing.T) 
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if len(v.Failed) != 0 {
-		t.Fatalf("Failed entries with runner-enforced max_turns = %+v, want none", v.Failed)
+		t.Fatalf("Failed entries after %d clean continuations = %+v, want none (continuations are unbounded, #576)", cycles, v.Failed)
 	}
-	if got := disp.count(); got <= maxTurns {
-		t.Fatalf("Dispatcher.Spawn calls = %d, want strictly more than max_turns=%d continuation spawns", got, maxTurns)
+	if got, want := disp.count(), cycles+1; got != want {
+		t.Fatalf("Dispatcher.Spawn calls = %d, want %d (1 initial + %d unbounded continuations past the old max_turns=20 default)", got, want, cycles)
 	}
 }
 
@@ -2637,52 +2542,6 @@ func TestReconcileWorkspaceCleanupRechecksStateUnderReservation(t *testing.T) {
 		return o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil) == nil
 	}, time.Second)
 	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
-	if calls := cleaner.snapshot(); len(calls) != 0 {
-		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
-	}
-}
-
-func TestReconcileWorkspaceCleanupActiveRecheckHonorsContinuationBudget(t *testing.T) {
-	disp := &fakeDispatcher{}
-	cleaner := &recordingWorkspaceCleaner{}
-	maxTurns := 1
-	o, cancel := startActor(t, Deps{
-		Dispatcher:       disp,
-		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
-		WorkspaceCleaner: cleaner,
-		MaxTurns:         &maxTurns,
-	})
-	defer cancel()
-	o.SetRetryTerminalStateResolver(staticStateRefresher{"ENG-TC5": "In Progress"}, []string{"Done"})
-
-	issue := tracker.Issue{ID: "ENG-TC5", Identifier: "ENG-TC5", State: "In Progress"}
-	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-TC5"
-	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
-	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
-		t.Fatalf("RecordRuntimeEvent: %v", err)
-	}
-	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
-		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
-	}, map[string]struct{}{"done": {}}, 0); err != nil {
-		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
-	}
-
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-
-	waitFor(t, func() bool {
-		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Failed) == 1
-	}, time.Second)
-	view, err := o.Snapshot(context.Background())
-	if err != nil {
-		t.Fatalf("Snapshot: %v", err)
-	}
-	if len(view.Retrying) != 0 {
-		t.Fatalf("retrying after stale terminal active recheck exhausted budget = %+v, want none", view.Retrying)
-	}
-	if got := disp.count(); got != 1 {
-		t.Fatalf("dispatcher spawn count = %d, want no continuation beyond max_turns=%d", got, maxTurns)
-	}
 	if calls := cleaner.snapshot(); len(calls) != 0 {
 		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
 	}

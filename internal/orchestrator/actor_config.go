@@ -179,52 +179,6 @@ func (o *Orchestrator) UpdateMaxFailureRetries(ctx context.Context, maxFailureRe
 	}
 }
 
-// UpdateMaxTurns applies the reloaded clean-continuation budget through the
-// actor. Values below one are clamped to one so a normal first run can finish
-// but will not schedule any continuation.
-func (o *Orchestrator) UpdateMaxTurns(ctx context.Context, maxTurns int) error {
-	if maxTurns < 1 {
-		maxTurns = 1
-	}
-	done := make(chan struct{}, 1)
-	op := opFunc(func(*OrchestratorState) func() {
-		o.maxTurns = maxTurns
-		done <- struct{}{}
-		return nil
-	})
-	if err := o.submit(ctx, op); err != nil {
-		return err
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// UpdateRunnerEnforcesMaxTurns toggles whether the continuation-spawn cap
-// applies. The runtime poller calls this on every tick with the result of
-// runner.EnforcesMaxTurnsInternally for the workflow's configured agent so a
-// hot-reloaded agent.default flips the gate without an orchestrator restart.
-// See the maxTurns field comment for the SPEC §5.3.5 / §7.1 split this gates.
-func (o *Orchestrator) UpdateRunnerEnforcesMaxTurns(ctx context.Context, enforces bool) error {
-	done := make(chan struct{}, 1)
-	op := opFunc(func(*OrchestratorState) func() {
-		o.runnerEnforcesMaxTurns = enforces
-		done <- struct{}{}
-		return nil
-	})
-	if err := o.submit(ctx, op); err != nil {
-		return err
-	}
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
 func (o *Orchestrator) RunningRetryingAndBlockedIssueIDs(ctx context.Context) []string {
 	reply := make(chan []string, 1)
 	if err := o.submit(ctx, &runningRetryingAndBlockedIssueIDsOp{result: reply}); err != nil {

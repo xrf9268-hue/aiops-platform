@@ -16,7 +16,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/doctor"
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
-	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -380,14 +379,10 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 		return err
 	}
 	maxFailureRetries := wf.Config.Agent.MaxRetryAttemptsValue()
-	maxTurns := wf.Config.Agent.MaxTurns
-	runnerEnforcesMaxTurns := runner.EnforcesMaxTurnsInternally(wf.Config.Agent.Default)
 	orch := orchestrator.New(state, orchestrator.Deps{
-		Dispatcher:             dispatcher,
-		Scheduler:              orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
-		MaxFailureRetries:      &maxFailureRetries,
-		MaxTurns:               &maxTurns,
-		RunnerEnforcesMaxTurns: &runnerEnforcesMaxTurns,
+		Dispatcher:        dispatcher,
+		Scheduler:         orchestrator.RetryScheduler{MaxBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond},
+		MaxFailureRetries: &maxFailureRetries,
 		// SPEC §18.1 active-transition cleanup: the dispatcher removes the
 		// workspace (firing before_remove against the live workflow snapshot)
 		// when a running issue moves to a terminal state mid-run.

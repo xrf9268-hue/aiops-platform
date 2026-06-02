@@ -72,13 +72,6 @@ type Deps struct {
 	// leave the SPEC §8.4 unbounded behavior in place; a non-negative
 	// integer applies the harness-hardening cap.
 	MaxFailureRetries *int
-	MaxTurns          *int
-	// RunnerEnforcesMaxTurns reports whether the configured agent runner
-	// applies agent.max_turns inside its own session loop (SPEC §5.3.5). When
-	// true, the actor must not also reuse max_turns as a continuation-spawn
-	// budget. Wired from workflow config via runner.EnforcesMaxTurnsInternally.
-	// nil defaults to false (legacy one-shot runners).
-	RunnerEnforcesMaxTurns *bool
 	// CandidateLister, when set, enables the SPEC §16.6 retry-fire
 	// candidate-fetch step. A fired failure-retry timer fetches the
 	// active candidate list, confirms the issue is still present,
@@ -113,19 +106,7 @@ type Orchestrator struct {
 	// Non-negative values opt into the SPEC §15.5 harness-hardening cap and
 	// pin the issue under OrchestratorState.Failed once exceeded.
 	maxFailureRetries int
-	// maxTurns bounds clean continuation dispatches only for runners that
-	// cannot enforce agent.max_turns inside their own session loop (shell-based
-	// claude, mocks). For those runners the cap is a worker-spawn safety net,
-	// not the SPEC §5.3.5 in-session budget.
-	//
-	// When runnerEnforcesMaxTurns is true (codex app-server, which already
-	// caps turns per session per SPEC §5.3.5), the orchestrator does not apply
-	// this cap: SPEC §7.1 leaves continuation worker spawns unbounded and an
-	// active issue should keep getting fresh sessions until tracker state
-	// changes. See issue #216.
-	maxTurns               int
-	runnerEnforcesMaxTurns bool
-	retryWake              chan struct{}
+	retryWake         chan struct{}
 
 	// workspaceCleaner removes the workspace of a terminal-state run after its
 	// worker exits (SPEC §18.1 active transition). nil disables the active
@@ -174,29 +155,16 @@ func New(state *OrchestratorState, deps Deps) *Orchestrator {
 			maxFailureRetries = UnboundedFailureRetries
 		}
 	}
-	maxTurns := 20
-	if deps.MaxTurns != nil {
-		maxTurns = *deps.MaxTurns
-		if maxTurns < 1 {
-			maxTurns = 1
-		}
-	}
-	runnerEnforcesMaxTurns := false
-	if deps.RunnerEnforcesMaxTurns != nil {
-		runnerEnforcesMaxTurns = *deps.RunnerEnforcesMaxTurns
-	}
 	o := &Orchestrator{
-		ops:                    make(chan stateOp),
-		state:                  state,
-		dispatcher:             deps.Dispatcher,
-		scheduler:              deps.Scheduler,
-		maxFailureRetries:      maxFailureRetries,
-		maxTurns:               maxTurns,
-		runnerEnforcesMaxTurns: runnerEnforcesMaxTurns,
-		retryWake:              make(chan struct{}, 1),
-		candidateLister:        deps.CandidateLister,
-		workspaceCleaner:       deps.WorkspaceCleaner,
-		started:                make(chan struct{}),
+		ops:               make(chan stateOp),
+		state:             state,
+		dispatcher:        deps.Dispatcher,
+		scheduler:         deps.Scheduler,
+		maxFailureRetries: maxFailureRetries,
+		retryWake:         make(chan struct{}, 1),
+		candidateLister:   deps.CandidateLister,
+		workspaceCleaner:  deps.WorkspaceCleaner,
+		started:           make(chan struct{}),
 	}
 	if aware, ok := deps.Dispatcher.(interface{ AttachOrchestrator(*Orchestrator) }); ok {
 		aware.AttachOrchestrator(o)

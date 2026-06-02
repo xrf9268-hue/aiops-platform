@@ -20,10 +20,12 @@ This runbook wires the local macOS operator flow for resolving
   `Issue #...`). This keeps a worker restart or retry from dispatching a second
   agent for an issue whose PR is already in review, without suppressing casual
   `see also #...` mentions.
-- Clean worker exits are bounded by `agent.max_turns`. If an issue remains in an
-  active tracker state after that many clean turns, the orchestrator records a
-  non-retryable failure for the unchanged issue instead of dispatching another
-  full agent run.
+- Clean continuation spawns are unbounded (SPEC §7.1): while an issue stays in an
+  active tracker state, the orchestrator keeps dispatching fresh sessions until
+  the tracker takes it out of active work. `agent.max_turns` bounds turns WITHIN a
+  session (the codex app-server in-session loop, SPEC §5.3.5), not the number of
+  continuation worker spawns — the orchestrator-side continuation cap was removed
+  in #576.
 - Failure-driven worker retries follow SPEC §8.4 by default: unbounded, with
   the exponential-backoff ceiling at `agent.max_retry_backoff_ms` (default
   5 minutes), released only when the tracker takes the issue out of active
