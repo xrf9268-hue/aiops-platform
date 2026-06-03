@@ -338,6 +338,15 @@ After a successful smoke, close or merge the disposable draft PR according to
 the normal PR follow-through gate, then close any intentionally disposable
 GitHub/Linear test issue that is not closed by the PR.
 
+## 7. Run a concurrent Linear lifecycle smoke
+
+After the single-issue path is healthy, use
+[`concurrent-linear-codex-e2e.md`](concurrent-linear-codex-e2e.md) to validate
+the local binary path with `max_concurrent_agents: 2`, the five visible Linear
+states, agent-owned `Todo -> In Progress -> In Review` transitions, dashboard
+`/api/v1/state`, and `cmd/tui --raw`. Keep that run generic and issue-body
+driven; do not copy disposable issue text into `WORKFLOW.md`.
+
 ## Troubleshooting
 
 | Symptom | Next action |
