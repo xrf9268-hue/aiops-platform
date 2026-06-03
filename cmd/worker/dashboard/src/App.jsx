@@ -1,712 +1,636 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+// Lean Worker-status dashboard — a read-only view of GET /api/v1/state.
+// Ported pixel-for-pixel from the Claude Design "lean/Worker Status.html"
+// handoff; the styling lives in styles.css. The mock data the prototype
+// shipped with is replaced here by the real /api/v1/state contract
+// (cmd/worker/stateapi.go · apiStateResponse), which it mirrors field-for-field.
 
 const REFRESH_MS = 5000;
 
-function formatCount(value) {
-  return new Intl.NumberFormat().format(Number(value || 0));
-}
-
-function formatDate(value) {
-  if (!value) return 'n/a';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString();
-}
-
-function formatRuntime(seconds) {
-  const total = Math.max(0, Math.floor(Number(seconds || 0)));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const secs = total % 60;
-  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
-}
-
-function issueLabel(row) {
-  return row.issue_identifier || row.issue_id || 'unknown issue';
-}
-
-function jsonDetailsPath(row) {
-  const id = row.issue_identifier || row.issue_id;
-  return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
-}
-
+// ── state API URL ────────────────────────────────────────────────────────────
+// Build the absolute endpoint from the page origin; never carry credentials in
+// the URL (origin === 'null' happens for file:// / sandboxed iframes).
 export function stateAPIURL(locationLike = window.location) {
   const origin = locationLike?.origin;
   if (!origin || origin === 'null') return '/api/v1/state';
   return new URL('/api/v1/state', origin).toString();
 }
 
-// compactSession mirrors the TUI's compact_session_id: long IDs render as 4…6.
-function compactSession(id) {
-  if (!id) return 'n/a';
-  if (id.length > 10) return `${id.slice(0, 4)}…${id.slice(-6)}`;
-  return id;
+// ── formatters ───────────────────────────────────────────────────────────────
+const nf = new Intl.NumberFormat('en-US');
+const compact = (n) => {
+  const v = Number(n || 0);
+  if (v >= 1_000_000) return (v / 1e6).toFixed(v >= 1e7 ? 0 : 1).replace(/\.0$/, '') + 'M';
+  if (v >= 1_000) return (v / 1e3).toFixed(v >= 1e4 ? 0 : 1).replace(/\.0$/, '') + 'k';
+  return nf.format(v);
+};
+
+function dur(sec) {
+  const total = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
-function toNumber(value) {
-  if (value === null || value === undefined || value === '') return null;
-  const n = Number(value);
-  return Number.isNaN(n) ? null : n;
+// Relative-time helpers tolerate missing / malformed timestamps (the API marks
+// started_at / last_event_at / blocked_at / due_at omitempty) — the prototype
+// assumed every field was present; real snapshots don't guarantee it.
+function sinceISO(iso) {
+  if (!iso) return '—';
+  const ms = new Date(iso).getTime();
+  if (Number.isNaN(ms)) return '—';
+  return dur((Date.now() - ms) / 1000);
 }
 
-function resolveInitialTheme() {
-  if (typeof window === 'undefined') return 'dark';
-  try {
-    const stored = window.localStorage.getItem('theme');
-    if (stored === 'light' || stored === 'dark') return stored;
-  } catch {
-    /* localStorage unavailable */
-  }
+function issueLabel(row) {
+  return row.issue_identifier || row.issue_id || 'unknown issue';
+}
+function detailPath(row) {
+  const id = row.issue_identifier || row.issue_id;
+  return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
+}
+
+// ── tiny icons ───────────────────────────────────────────────────────────────
+const I = {
+  refresh: (
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" /><polyline points="21 3 21 9 15 9" />
+    </svg>
+  ),
+  gear: (
+    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
+  check: (
+    <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+    </svg>
+  ),
+};
+
+// ── display settings (brand / theme / density) ───────────────────────────────
+// Production replacement for the prototype's design-tool Tweaks panel. Values
+// persist to localStorage and drive <html data-brand|theme|density>; the
+// .theme-swapping class suppresses transitions for one frame so var()-driven
+// colors snap to the new token layer instead of getting stuck mid-transition.
+const BRANDS = ['linen', 'anthropic'];
+const THEMES = ['light', 'dark'];
+const DENSITIES = ['compact', 'comfy'];
+
+function systemTheme() {
+  if (typeof window === 'undefined' || !window.matchMedia) return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function useTheme() {
-  const [theme, setTheme] = useState(resolveInitialTheme);
+function readSetting(key, allowed, fallback) {
+  try {
+    const v = window.localStorage.getItem(`dashboard.${key}`);
+    if (allowed.includes(v)) return v;
+  } catch {
+    /* localStorage unavailable */
+  }
+  return fallback;
+}
+
+function useSettings() {
+  const [brand, setBrand] = useState(() => readSetting('brand', BRANDS, 'linen'));
+  const [theme, setTheme] = useState(() => readSetting('theme', THEMES, systemTheme()));
+  const [density, setDensity] = useState(() => readSetting('density', DENSITIES, 'compact'));
+
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.toggle('dark', theme === 'dark');
+    root.classList.add('theme-swapping');
+    root.dataset.brand = brand;
+    root.dataset.theme = theme;
+    root.dataset.density = density;
     try {
-      window.localStorage.setItem('theme', theme);
+      window.localStorage.setItem('dashboard.brand', brand);
+      window.localStorage.setItem('dashboard.theme', theme);
+      window.localStorage.setItem('dashboard.density', density);
     } catch {
       /* ignore persistence failures */
     }
-  }, [theme]);
-  const toggle = () => setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
-  return [theme, toggle];
+    void root.offsetWidth; // force reflow → commit new colors with no transition
+    const id = requestAnimationFrame(() => root.classList.remove('theme-swapping'));
+    return () => cancelAnimationFrame(id);
+  }, [brand, theme, density]);
+
+  return { brand, setBrand, theme, setTheme, density, setDensity };
 }
 
-function ThemeToggle({ theme, onToggle }) {
-  const next = theme === 'dark' ? 'light' : 'dark';
+function Seg({ label, value, options, onChange }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      aria-label={`Switch to ${next} theme`}
-      title={`Switch to ${next} theme`}
-      className="inline-flex items-center justify-center w-9 h-9 rounded-full bg-inset border border-line text-muted hover:text-fg hover:border-accent-ink/60 transition-colors"
-    >
-      {theme === 'dark' ? (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-        </svg>
-      ) : (
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-        </svg>
-      )}
-    </button>
-  );
-}
-
-// Brand lockup: a hub-and-spoke mark (orchestrator + agents) on a terracotta
-// tile, paired with the wordmark. Doubles as the hero's bold orange moment.
-function Wordmark() {
-  return (
-    <div className="flex items-center gap-2.5 mb-3">
-      <span className="inline-flex items-center justify-center w-[30px] h-[30px] rounded-md bg-accent text-white shrink-0">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M12 12V5M12 12 6 18.5M12 12l6 6.5" />
-          <circle cx="12" cy="12" r="2.9" fill="currentColor" stroke="none" />
-          <circle cx="12" cy="4.5" r="2.3" fill="currentColor" stroke="none" />
-          <circle cx="5.5" cy="19" r="2.3" fill="currentColor" stroke="none" />
-          <circle cx="18.5" cy="19" r="2.3" fill="currentColor" stroke="none" />
-        </svg>
-      </span>
-      <span className="text-accent-ink uppercase text-label tracking-widest font-bold font-display">
-        aiops-platform
-      </span>
+    <div className="set-row">
+      <div className="set-lbl">{label}</div>
+      <div className="seg" role="group" aria-label={label}>
+        {options.map((o) => (
+          <button key={o.value} type="button" aria-pressed={value === o.value} onClick={() => onChange(o.value)}>
+            {o.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
 
-const BADGE_TONES = {
-  default: 'bg-inset text-muted border-line',
-  active: 'bg-good-bg text-good border-good-line',
-  warning: 'bg-warn-bg text-warn border-warn-line',
-  danger: 'bg-danger-bg text-danger border-danger-line',
-};
+function SettingsControl({ settings }) {
+  const { brand, setBrand, theme, setTheme, density, setDensity } = settings;
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
 
-function StateBadge({ value, type = 'default' }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${BADGE_TONES[type]}`}>
-      {value}
-    </span>
-  );
-}
-
-// Severity tones escalate beyond a tinted border: warn/danger get a tinted
-// card background + a leading dot so anomalies read as alerts at a glance.
-const METRIC_TONES = {
-  default: { card: 'bg-surface border-line', value: 'text-fg', dot: '' },
-  good: { card: 'bg-surface border-good-line', value: 'text-good', dot: '' },
-  warn: { card: 'bg-warn-bg border-warn-line', value: 'text-warn', dot: 'bg-warn' },
-  danger: { card: 'bg-danger-bg border-danger-line', value: 'text-danger', dot: 'bg-danger' },
-};
-
-function MetricCard({ label, value, hint, tone = 'default', loading = false }) {
-  const t = METRIC_TONES[tone] || METRIC_TONES.default;
-  return (
-    <article className={`p-4 rounded-2xl border flex flex-col min-w-0 ${t.card}`}>
-      <span className="flex items-center gap-1.5 text-label font-semibold uppercase tracking-wide text-muted font-display">
-        {t.dot && <span className={`w-1.5 h-1.5 rounded-full ${t.dot}`} aria-hidden="true" />}
-        {label}
-      </span>
-      {loading ? (
-        <span className="block my-2 h-8 w-20 rounded bg-muted/20 animate-pulse" aria-hidden="true" />
-      ) : (
-        <strong className={`block my-2 text-lg min-[360px]:text-xl min-[400px]:text-2xl sm:text-3xl font-bold tracking-tight tabular-nums leading-tight ${t.value}`}>{value}</strong>
+    <div className="settings-wrap" ref={wrapRef}>
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="Display settings"
+        aria-haspopup="true"
+        aria-expanded={open}
+        title="Display settings"
+        onClick={() => setOpen((o) => !o)}
+      >
+        {I.gear}
+      </button>
+      {open && (
+        <div className="settings-pop" role="dialog" aria-label="Display settings">
+          <Seg label="Brand" value={brand} onChange={setBrand} options={[{ value: 'linen', label: 'Linen' }, { value: 'anthropic', label: 'Anthropic' }]} />
+          <Seg label="Theme" value={theme} onChange={setTheme} options={[{ value: 'light', label: 'Light' }, { value: 'dark', label: 'Dark' }]} />
+          <Seg label="Density" value={density} onChange={setDensity} options={[{ value: 'compact', label: 'Compact' }, { value: 'comfy', label: 'Comfy' }]} />
+        </div>
       )}
-      <small className="text-muted text-xs">{hint}</small>
-    </article>
+    </div>
   );
 }
 
-// Brand accent for the small rule above each panel title. Neutral panels use
-// the brand orange/blue/green cycle; the bar is decorative chrome — severity is
-// still carried by the status colours inside each panel.
-const PANEL_ACCENTS = {
-  orange: 'bg-accent',
-  blue: 'bg-brand-blue',
-  green: 'bg-brand-green',
-};
-
-function Panel({ title, subtitle, accent = 'orange', children }) {
+// ── KPI card ─────────────────────────────────────────────────────────────────
+function Kpi({ label, value, sub, flag, status }) {
   return (
-    <section className="rounded-2xl bg-surface border border-line p-5 overflow-hidden">
-      <span className={`block h-1 w-8 rounded-full mb-2 ${PANEL_ACCENTS[accent] || PANEL_ACCENTS.orange}`} aria-hidden="true" />
-      <div className="flex justify-between gap-4 items-baseline mb-4 flex-wrap">
-        <h2 className="text-section font-semibold tracking-tight">{title}</h2>
-        {subtitle && <span className="text-muted text-sm">{subtitle}</span>}
-      </div>
-      {children}
-    </section>
+    <div className="kpi">
+      {status ? <div className={'stripe ' + status} /> : null}
+      <div className="kpi-label"><span className={'kpi-dot' + (status ? ' ' + status : '')} />{label}</div>
+      <div className="kpi-value tnum">{value}</div>
+      {sub != null && <div className="kpi-sub">{sub}</div>}
+      {flag != null && (
+        <div className="kpi-sub" style={{ color: 'var(--warning)', fontWeight: 600, marginTop: '1px' }}>{flag}</div>
+      )}
+    </div>
   );
 }
 
-// ResponsiveTable renders a table on lg+ screens and a stacked card list on
-// smaller screens, driven by a single column config so the two never drift.
-function ResponsiveTable({ columns, rows, emptyText }) {
-  if (!rows || rows.length === 0) {
-    return <p className="text-center text-faint py-6 font-serif">{emptyText}</p>;
+// ── rate-limit window cell ─────────────────────────────────────────────────
+// Modern Codex token_count rate-limit window: { used_percent (0-100 float),
+// window_minutes (int|null), resets_at (unix seconds) | resets_in_seconds }.
+// Percent-of-window — never a per-category quota.
+function RateWindow({ label, win }) {
+  const pct = Math.max(0, Math.min(100, Number(win.used_percent) || 0));
+  const cls = pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : 'ok';
+  const winLabel = win.window_minutes != null ? `${win.window_minutes}-minute window` : 'window';
+  let resetSecs = null;
+  if (win.resets_at != null) resetSecs = Number(win.resets_at) - Math.floor(Date.now() / 1000);
+  else if (win.resets_in_seconds != null) resetSecs = Number(win.resets_in_seconds);
+  else if (win.reset_in_seconds != null) resetSecs = Number(win.reset_in_seconds);
+  return (
+    <div className="rate-cell">
+      <div className="rate-k">{label}</div>
+      <div className="rate-v tnum">{pct.toFixed(pct < 10 ? 1 : 0)}<small> % used</small></div>
+      <div className="rate-bar"><i className={cls} style={{ width: pct + '%' }} /></div>
+      <span className="sr-only">{cls === 'bad' ? 'over limit' : cls === 'warn' ? 'approaching limit' : 'within limit'}</span>
+      <div className="rate-meta">{winLabel}{resetSecs != null && Number.isFinite(resetSecs) ? ` · resets in ${dur(resetSecs)}` : ''}</div>
+    </div>
+  );
+}
+
+// A window is "percent-shaped" (renderable as a RateWindow) when it carries a
+// numeric used_percent. Anything else falls back to a raw JSON dump so the
+// operator never loses data when the runner reports an unfamiliar shape.
+function isPercentWindow(win) {
+  return win && typeof win === 'object' && typeof win.used_percent === 'number';
+}
+
+// Keys the percent-window path renders explicitly (windows + tier label); any
+// other key in the snapshot is surfaced as raw JSON so nothing is dropped.
+const RATE_LIMIT_KNOWN_KEYS = new Set(['primary', 'secondary', 'plan_type', 'limit_name']);
+
+function RateLimits({ rl }) {
+  if (rl == null) {
+    return (
+      <div className="empty">
+        <div className="em-t">No rate-limit data yet</div>
+        <div className="em-s">The runner hasn&apos;t reported a rate-limit snapshot — common on a Claude runner, or before the first rate-limit event.</div>
+      </div>
+    );
   }
-  const rowKey = (row, i) => row.issue_id || row.issue_identifier || i;
+  // rate_limits is a raw map[string]any passthrough of the runner's payload
+  // (orchestrator.RateLimitSnapshot); the worker never normalizes it. Take the
+  // Codex percent-window path only when EVERY window key present is percent-
+  // shaped — if any present window is an unfamiliar shape, dump the whole
+  // snapshot as raw JSON rather than rendering some windows and silently
+  // dropping the rest (keep-data-visible).
+  const windowKeys = ['primary', 'secondary'].filter((k) => rl[k] != null && typeof rl[k] === 'object');
+  const allPercent = windowKeys.length > 0 && windowKeys.every((k) => isPercentWindow(rl[k]));
+  if (!allPercent) {
+    return <pre className="rate-raw">{JSON.stringify(rl, null, 2)}</pre>;
+  }
+  const tier = rl.plan_type || rl.limit_name;
+  // Any key outside the recognized window/tier vocabulary (e.g. a `credits`
+  // object) is still surfaced verbatim below the cards so the percent-window
+  // path never silently drops part of the passthrough payload.
+  const extras = Object.fromEntries(Object.entries(rl).filter(([k]) => !RATE_LIMIT_KNOWN_KEYS.has(k)));
+  const hasExtras = Object.keys(extras).length > 0;
   return (
     <>
-      <div className="hidden lg:block overflow-x-auto">
-        <table className="w-full border-collapse text-sm min-w-[640px]">
-          <thead>
-            <tr>
-              {columns.map((col) => (
-                <th
-                  key={col.header}
-                  className={`text-label font-semibold uppercase tracking-wider text-muted font-display border-b border-line pb-3 pr-3 first:pl-0 last:pr-0 ${
-                    col.align === 'right' ? 'text-right' : 'text-left'
-                  }`}
-                >
-                  {col.header}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={rowKey(row, i)} className="border-b border-line last:border-0">
-                {columns.map((col) => (
-                  <td
-                    key={col.header}
-                    className={`py-3 pr-3 align-top first:pl-0 last:pr-0 ${
-                      col.align === 'right' ? 'text-right tabular-nums' : ''
-                    }`}
-                  >
-                    {col.cell(row)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {tier ? (
+        <div className="rate-tier"><span className="tier-badge">{tier}</span><span>Codex plan · percent of each rolling window</span></div>
+      ) : null}
+      <div className="rate-grid">
+        {isPercentWindow(rl.primary) ? <RateWindow label="Primary window" win={rl.primary} /> : null}
+        {isPercentWindow(rl.secondary) ? <RateWindow label="Secondary window" win={rl.secondary} /> : null}
       </div>
-
-      <ul className="lg:hidden flex flex-col gap-3">
-        {rows.map((row, i) => (
-          <li key={rowKey(row, i)} className="rounded-xl border border-line bg-inset p-4">
-            <div className="mb-3">{columns[0].cell(row)}</div>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-              {columns.slice(1).map((col) => (
-                <div key={col.header} className="flex flex-col min-w-0">
-                  <dt className="text-[11px] font-semibold uppercase tracking-wider text-faint font-display">{col.header}</dt>
-                  <dd className="text-sm text-fg mt-0.5 tabular-nums">{col.cell(row)}</dd>
-                </div>
-              ))}
-            </dl>
-          </li>
-        ))}
-      </ul>
+      {hasExtras ? (
+        <pre className="rate-raw" style={{ marginTop: 'var(--gap)' }}>{JSON.stringify(extras, null, 2)}</pre>
+      ) : null}
     </>
   );
 }
 
-// UsageBar fills with consumed fraction (used/limit) and trends toward red as
-// headroom shrinks — the intuitive "filling up toward danger" model.
-function UsageBar({ remaining, limit, label = 'quota' }) {
-  if (remaining === null || limit === null || limit <= 0) return null;
-  const used = Math.max(0, Math.min(limit, limit - remaining));
-  const ratio = used / limit;
-  const pct = Math.round(ratio * 100);
-  const tone = ratio >= 0.8 ? 'bg-danger' : ratio >= 0.5 ? 'bg-warn' : 'bg-good';
+// ── badge / empty / issue link ───────────────────────────────────────────────
+const Badge = ({ kind, children }) => (
+  <span className={'badge ' + kind}><span className="bd" />{children}</span>
+);
+
+const Empty = ({ title, sub }) => (
+  <div className="empty">
+    <div className="ico">{I.check}</div>
+    <div className="em-t">{title}</div>
+    <div className="em-s">{sub}</div>
+  </div>
+);
+
+const IssueLink = ({ row }) => (
+  <a className="issue-id" href={detailPath(row)}>{issueLabel(row)}</a>
+);
+
+// ── running table ──────────────────────────────────────────────────────────
+function RunningTable({ rows }) {
+  if (!rows.length) return <Empty title="No active sessions" sub="The worker is polling and idle — nothing is running right now." />;
   return (
-    <div
-      className="mt-2 h-1.5 w-full rounded-full bg-black/10 dark:bg-white/10 overflow-hidden"
-      role="progressbar"
-      aria-label={`${label} used`}
-      aria-valuenow={pct}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuetext={`${pct}% used`}
-    >
-      <div className={`h-full rounded-full ${tone}`} style={{ width: `${pct}%` }} />
+    <div className="table-wrap">
+      <table className="sessions">
+        <caption className="sr-only">Running sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Runtime</th>
+          <th scope="col">Latest activity</th><th scope="col" className="r">Tokens (in / out)</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.issue_id}>
+              <td className="issue-cell">
+                <div className="issue">
+                  <IssueLink row={r} />
+                  <div className="upd" style={{ maxWidth: '38ch' }} title={r.last_message}>{r.last_message}</div>
+                  <span className="wp">{r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ''}</span>
+                </div>
+              </td>
+              <td data-label="State"><Badge kind="running">{r.state}</Badge><div className="dim">turn {r.turn_count}</div></td>
+              <td data-label="Runtime"><span className="runtime tnum">{sinceISO(r.started_at)}</span><div className="dim">started</div></td>
+              <td data-label="Latest activity"><span className="mono" style={{ fontSize: '11.5px' }}>{r.last_event}</span><div className="dim">{sinceISO(r.last_event_at)} ago</div></td>
+              <td className="tok" data-label="Tokens in / out"><b>{compact(r.tokens?.input_tokens)}</b> / {compact(r.tokens?.output_tokens)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function RateLimitBucket({ label, bucket }) {
-  const remaining = bucket ? toNumber(bucket.remaining) : null;
-  const limit = bucket ? toNumber(bucket.limit) : null;
-
-  let headline = 'n/a';
-  if (remaining !== null && limit !== null) headline = `${formatCount(remaining)} / ${formatCount(limit)}`;
-  else if (remaining !== null) headline = `${formatCount(remaining)} left`;
-  else if (limit !== null) headline = `limit ${formatCount(limit)}`;
-
-  const usedPct =
-    remaining !== null && limit !== null && limit > 0
-      ? Math.round((Math.max(0, limit - remaining) / limit) * 100)
-      : null;
-
-  let reset = null;
-  if (bucket) {
-    for (const key of ['reset_in_seconds', 'resetInSeconds', 'reset_at', 'resetAt', 'resets_at']) {
-      if (bucket[key] !== undefined && bucket[key] !== null) {
-        const rv = bucket[key];
-        reset = typeof rv === 'number' ? `resets in ${Math.round(rv)}s` : `resets ${rv}`;
-        break;
-      }
-    }
-  }
-
-  const caption = [usedPct !== null ? `${usedPct}% used` : null, reset].filter(Boolean).join(' · ');
-
+// ── retry table ──────────────────────────────────────────────────────────────
+function RetryTable({ rows }) {
+  if (!rows.length) return <Empty title="No sessions retrying" sub="Nothing has hit a transient failure. Backoff queue is empty." />;
   return (
-    <div className="rounded-xl bg-inset border border-line p-4">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted font-display">{label}</div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
-        {headline}
-        {remaining !== null && limit !== null && <span className="text-xs font-normal text-faint"> remaining</span>}
-      </div>
-      <UsageBar remaining={remaining} limit={limit} label={label} />
-      {caption && <div className="mt-2 text-xs text-muted tabular-nums">{caption}</div>}
+    <div className="table-wrap narrow">
+      <table className="sessions">
+        <caption className="sr-only">Retrying sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">Attempt</th><th scope="col">Next retry</th><th scope="col">Error</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => {
+            const secs = r.due_at ? (new Date(r.due_at).getTime() - Date.now()) / 1000 : NaN;
+            const next = !Number.isFinite(secs) ? '—' : secs > 0 ? 'in ' + dur(secs) : 'due now';
+            return (
+              <tr key={r.issue_id}>
+                <td className="issue-cell">
+                  <div className="issue">
+                    <IssueLink row={r} />
+                    <span className="wp">{r.kind}</span>
+                  </div>
+                </td>
+                <td data-label="Attempt"><span className="attempt"><span className="bd" />attempt {r.attempt}</span></td>
+                <td data-label="Next retry"><span className="runtime tnum">{next}</span><div className="dim">backoff</div></td>
+                <td data-label="Error"><div className="upd err" title={r.error}>{r.error}</div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-function formatCredits(credits) {
-  if (!credits || typeof credits !== 'object') return { text: 'n/a', tone: 'text-muted' };
-  if (credits.unlimited) return { text: 'Unlimited', tone: 'text-good' };
-  if (credits.has_credits) {
-    const balance = toNumber(credits.balance);
-    return { text: balance !== null ? balance.toFixed(2) : 'Available', tone: 'text-good' };
-  }
-  return { text: 'None', tone: 'text-danger' };
-}
-
-function RateLimits({ rateLimits, loading }) {
-  if (loading) {
-    return <div className="h-24 rounded-xl bg-muted/20 animate-pulse" aria-hidden="true" />;
-  }
-  if (!rateLimits || typeof rateLimits !== 'object') {
-    return <p className="text-faint text-sm py-2 font-serif">No rate-limit snapshot reported.</p>;
-  }
-
-  const tier = rateLimits.limit_id || rateLimits.limit_name || 'unknown tier';
-  const hasShape =
-    rateLimits.primary !== undefined ||
-    rateLimits.secondary !== undefined ||
-    rateLimits.credits !== undefined;
-
-  // Unknown payload shape — keep the data visible rather than guessing layout.
-  if (!hasShape) {
-    return (
-      <pre className="overflow-auto rounded-xl p-4 bg-inset text-fg text-xs leading-relaxed">
-        {JSON.stringify(rateLimits, null, 2)}
-      </pre>
-    );
-  }
-
-  const credits = formatCredits(rateLimits.credits);
-
+// ── blocked table ────────────────────────────────────────────────────────────
+function BlockedTable({ rows }) {
+  if (!rows.length) return <Empty title="Nothing blocked" sub="No sessions are waiting on a human or external dependency." />;
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-2 text-sm">
-        <span className="text-muted">Tier</span>
-        <StateBadge value={tier} type="default" />
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <RateLimitBucket label="Primary" bucket={rateLimits.primary} />
-        <RateLimitBucket label="Secondary" bucket={rateLimits.secondary} />
-        <div className="rounded-xl bg-inset border border-line p-4">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted font-display">Credits</div>
-          <div className={`mt-1 text-lg font-semibold tabular-nums ${credits.tone}`}>{credits.text}</div>
-        </div>
-      </div>
+    <div className="table-wrap narrow">
+      <table className="sessions">
+        <caption className="sr-only">Blocked sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Waiting</th><th scope="col">Detail</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.issue_id}>
+              <td className="issue-cell">
+                <div className="issue">
+                  <IssueLink row={r} />
+                  <span className="wp">{r.workspace_path}{r.session_id ? ` · ${r.session_id}` : ''}</span>
+                </div>
+              </td>
+              <td data-label="State"><Badge kind="blocked">{r.state}</Badge>{r.method ? <div className="dim">{r.method}</div> : null}</td>
+              <td data-label="Waiting"><span className="runtime tnum">{sinceISO(r.blocked_at)}</span><div className="dim">since blocked</div></td>
+              <td data-label="Detail"><div className="upd" title={r.error}>{r.error}</div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
+// ── topbar (shared by loading + loaded states) ───────────────────────────────
+function Topbar({ status, generatedAt, onRefresh, settings }) {
+  const pill = { live: 'live', offline: 'offline', connecting: 'conn' }[status];
+  const pillLabel = { live: 'Live', offline: 'Disconnected', connecting: 'Connecting…' }[status];
+  return (
+    <div className="topbar">
+      <div className="brand">
+        <div className="brand-mark"><span>a</span></div>
+        <div className="brand-name">aiops</div>
+      </div>
+      <span className="crumb">GET <b>/api/v1/state</b></span>
+      <div className="spacer" />
+      {generatedAt ? <span className="meta-inline">updated {sinceISO(generatedAt)} ago</span> : null}
+      <span className={'live-pill ' + pill}><span className="dot" />{pillLabel}</span>
+      <button type="button" className="icon-btn" aria-label="Refresh now" title="Refresh now" onClick={onRefresh}>{I.refresh}</button>
+      <SettingsControl settings={settings} />
+    </div>
+  );
+}
+
+// Reconcile roll-up bucket descriptions — single source of truth, used both as
+// the hover title (sighted mouse users) and as sr-only text inside each cell
+// (screen-reader / keyboard users), since `title` on a non-focusable element is
+// reachable by neither. The visible label/count/chips already carry the data;
+// these explain why each bucket is informational vs worth inspecting.
+const STOPPED_DESC = 'Runs reaped by reconcile after making progress — worth inspecting, not a guaranteed success.';
+const HANDOFF_DESC = 'Runs the reconcile loop stopped after the agent had already completed its handoff (opened its PR / wrote back to the tracker) — finished before being reaped; informational, not an error.';
+
+// ── main app ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [theme, toggleTheme] = useTheme();
+  const settings = useSettings();
   const [state, setState] = useState(null);
   const [error, setError] = useState(null);
   const [loadedAt, setLoadedAt] = useState(null);
-  const [nowTs, setNowTs] = useState(() => Date.now());
+  const [, setTick] = useState(0);
+  const mounted = useRef(true);
+
+  const loadState = useCallback(async () => {
+    try {
+      const response = await fetch(stateAPIURL(), { headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error(`GET /api/v1/state returned ${response.status}`);
+      const payload = await response.json();
+      if (!mounted.current) return;
+      setState(payload);
+      setError(null);
+      setLoadedAt(new Date());
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    async function loadState() {
-      try {
-        const response = await fetch(stateAPIURL(), { headers: { Accept: 'application/json' } });
-        if (!response.ok) throw new Error(`GET /api/v1/state returned ${response.status}`);
-        const payload = await response.json();
-        if (!cancelled) {
-          setState(payload);
-          setError(null);
-          setLoadedAt(new Date());
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
-      }
-    }
+    mounted.current = true;
     loadState();
     const timer = window.setInterval(loadState, REFRESH_MS);
     return () => {
-      cancelled = true;
+      mounted.current = false;
       window.clearInterval(timer);
     };
+  }, [loadState]);
+
+  // Tick once a second so relative times ("updated Xs ago", running runtimes)
+  // advance smoothly instead of jumping on each 5s data refresh.
+  useEffect(() => {
+    const t = window.setInterval(() => setTick((v) => v + 1), 1000);
+    return () => window.clearInterval(t);
   }, []);
 
-  // Tick once a second so running-session runtimes count up smoothly instead
-  // of jumping on each 5s data refresh. Only runs while sessions are active.
-  const runningCount = state?.running?.length ?? 0;
-  useEffect(() => {
-    if (runningCount === 0) return undefined;
-    const tick = window.setInterval(() => setNowTs(Date.now()), 1000);
-    return () => window.clearInterval(tick);
-  }, [runningCount]);
-
-  const loading = state === null && !error;
-  const totals = state?.codex_totals || {};
-  const counts = state?.counts || {};
-  const totalRuntime = Number(totals.seconds_running || 0);
-  const maxAgents = state?.max_concurrent_agents ?? '—';
-
-  const completed = Number(counts.completed_total ?? counts.completed ?? 0);
-  const agentHandoff = Number(counts.agent_handoff_reconcile_stopped_total ?? counts.agent_handoff_reconcile_stopped ?? 0);
-  const blocked = Number(counts.blocked ?? 0);
-  const retrying = Number(counts.retrying ?? 0);
-
   const status = error ? 'offline' : loadedAt ? 'live' : 'connecting';
-  const statusStyles = {
-    live: 'bg-good-bg text-good border-good-line',
-    offline: 'bg-danger-bg text-danger border-danger-line',
-    connecting: 'bg-inset text-muted border-line',
-  };
-  const statusLabel = { live: 'Live', offline: 'Offline', connecting: 'Connecting…' };
 
-  const runningColumns = [
-    {
-      header: 'Issue',
-      cell: (row) => (
-        <div>
-          <div className="font-semibold">
-            <a href={jsonDetailsPath(row)}>{issueLabel(row)}</a>
+  // Before the first successful fetch: a slim shell rather than a misleading
+  // "idle" render (which would claim the worker is healthy and empty).
+  if (!state) {
+    return (
+      <div className="app">
+        <Topbar status={status} generatedAt={null} onRefresh={loadState} settings={settings} />
+        <div className="title-row">
+          <div>
+            <h1 className="page-title">Worker <em>status</em></h1>
+            <p className="page-sub">{error ? 'Could not reach the worker — retrying every 5s.' : 'Connecting to the worker state API…'}</p>
           </div>
-          {row.workspace_path && (
-            <div className="text-xs text-faint mt-0.5 truncate max-w-[12rem]" title={row.workspace_path}>
-              {row.workspace_path}
+        </div>
+        {error ? <div className="err-banner" role="alert">GET /api/v1/state — {error}</div> : null}
+        <div className="kpi-row">
+          {['Running', 'Retrying', 'Blocked', 'Completed'].map((label) => (
+            <div className="kpi" key={label}>
+              <div className="kpi-label"><span className="kpi-dot" />{label}</div>
+              <div className="skel" style={{ height: 'var(--kpi-size)', width: '2.4ch', margin: '5px 0 2px' }} aria-hidden="true" />
+              <div className="kpi-sub">{error ? 'unavailable' : 'loading…'}</div>
             </div>
-          )}
+          ))}
         </div>
-      ),
-    },
-    {
-      header: 'State',
-      cell: (row) => (
-        <StateBadge
-          value={row.state || 'running'}
-          type={row.state === 'blocked' ? 'danger' : row.state === 'running' ? 'active' : 'default'}
-        />
-      ),
-    },
-    {
-      header: 'Session',
-      cell: (row) => (
-        <span className="font-mono text-xs text-muted" title={row.session_id || undefined}>
-          {compactSession(row.session_id)}
-        </span>
-      ),
-    },
-    {
-      header: 'Runtime / turns',
-      align: 'right',
-      cell: (row) => {
-        const startedTs = row.started_at ? new Date(row.started_at).getTime() : NaN;
-        const runtimeSecs = Number.isNaN(startedTs) ? 0 : (nowTs - startedTs) / 1000;
-        return (
-          <span className="tabular-nums text-muted">
-            {formatRuntime(runtimeSecs)} / {formatCount(row.turn_count)}
-          </span>
-        );
-      },
-    },
-    {
-      header: 'Last update',
-      cell: (row) => (
-        <div className="max-w-[18rem]">
-          <div className="line-clamp-2 text-fg">{row.last_message || row.last_event || 'n/a'}</div>
-          <div className="text-xs text-faint mt-0.5">{formatDate(row.last_event_at)}</div>
-        </div>
-      ),
-    },
-    {
-      header: 'Tokens',
-      align: 'right',
-      cell: (row) => (
-        <div className="tabular-nums text-muted">
-          <div>Total {formatCount(row.tokens?.total_tokens)}</div>
-          <div className="text-xs text-faint">
-            In {formatCount(row.tokens?.input_tokens)} / Out {formatCount(row.tokens?.output_tokens)}
-          </div>
-        </div>
-      ),
-    },
-  ];
+      </div>
+    );
+  }
 
-  const blockedColumns = [
-    {
-      header: 'Issue',
-      cell: (row) => (
-        <a href={jsonDetailsPath(row)} className="font-semibold">
-          {issueLabel(row)}
-        </a>
-      ),
-    },
-    { header: 'State', cell: (row) => <StateBadge value={row.state || 'blocked'} type="danger" /> },
-    {
-      header: 'Session',
-      cell: (row) => (
-        <span className="font-mono text-xs text-muted" title={row.session_id || undefined}>
-          {compactSession(row.session_id)}
-        </span>
-      ),
-    },
-    { header: 'Blocked at', cell: (row) => <span className="text-muted">{formatDate(row.blocked_at)}</span> },
-    { header: 'Method', cell: (row) => <span className="text-muted">{row.method || 'n/a'}</span> },
-    {
-      header: 'Error',
-      cell: (row) => (
-        <span className="text-danger block max-w-[16rem] line-clamp-2" title={row.error || undefined}>
-          {row.error || 'n/a'}
-        </span>
-      ),
-    },
-  ];
-
-  const retryColumns = [
-    {
-      header: 'Issue',
-      cell: (row) => (
-        <a href={jsonDetailsPath(row)} className="font-semibold">
-          {issueLabel(row)}
-        </a>
-      ),
-    },
-    {
-      header: 'Kind',
-      cell: (row) => {
-        const kind = row.kind || 'failure';
-        const tone = kind === 'quota_backoff' ? 'warning' : 'default';
-        return <StateBadge value={kind} type={tone} />;
-      },
-    },
-    {
-      header: 'Attempt',
-      align: 'right',
-      cell: (row) => (
-        <span className="inline-flex items-center gap-1 tabular-nums text-warn">
-          <span className="w-1.5 h-1.5 rounded-full bg-warn" aria-hidden="true" />#{formatCount(row.attempt)}
-        </span>
-      ),
-    },
-    { header: 'Due at', cell: (row) => <span className="text-muted">{formatDate(row.due_at)}</span> },
-    {
-      header: 'Error',
-      cell: (row) => (
-        <span className="text-danger block max-w-[22rem] line-clamp-2" title={row.error || undefined}>
-          {row.error || 'n/a'}
-        </span>
-      ),
-    },
-  ];
+  const s = state;
+  const c = s.counts || {};
+  const ct = s.codex_totals || {};
+  const rl = s.rate_limits;
+  const total = (c.running || 0) + (c.retrying || 0) + (c.blocked || 0);
+  const pollSec = Math.round((s.poll_interval_ms || 0) / 1000);
+  const maxConc = s.max_concurrent_agents ?? '—';
+  const byState = s.max_concurrent_agents_by_state;
+  const byStateStr = byState && Object.keys(byState).length
+    ? ' · ' + Object.entries(byState).map(([k, v]) => `${k} ${v}`).join(', ')
+    : '';
+  const stopped = s.reconcile_stopped_with_progress || [];
+  const handoff = s.agent_handoff_reconcile_stopped || [];
+  const online = status === 'live';
 
   return (
-    <main className="w-full max-w-[1280px] mx-auto px-4 py-8">
-      {/* Hero */}
-      <header className="flex justify-between gap-6 items-start flex-wrap mb-6 p-6 sm:p-7 border border-line-strong rounded-3xl bg-surface shadow-[0_20px_60px_rgba(20,20,19,0.1)] dark:shadow-[0_24px_80px_rgba(0,0,0,0.3)]">
+    <div className="app">
+      {/* polite live region — announces connection + workload changes only.
+          Excludes the per-second clock so it doesn't spam. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {online ? 'Connected, live.' : status === 'offline' ? 'Disconnected.' : 'Connecting.'}{' '}
+        {total > 0
+          ? `${total} ${total === 1 ? 'session' : 'sessions'} in flight: ${c.running} running, ${c.retrying} retrying, ${c.blocked} blocked.`
+          : 'Worker idle, nothing in flight.'}
+      </div>
+
+      <Topbar status={status} generatedAt={s.generated_at} onRefresh={loadState} settings={settings} />
+
+      {error ? <div className="err-banner" role="alert">Showing last snapshot — refresh failed: {error}</div> : null}
+
+      {/* title */}
+      <div className="title-row">
         <div>
-          <Wordmark />
-          <h1 className="text-h1 sm:text-display font-bold tracking-tight mb-3">
-            Operations Dashboard
-          </h1>
-          <p className="text-muted max-w-2xl font-serif">
-            Human-readable runtime state from{' '}
-            <a href="/api/v1/state">/api/v1/state</a>. Refreshes every{' '}
-            {REFRESH_MS / 1000}s.
+          <h1 className="page-title">Worker <em>status</em></h1>
+          <p className="page-sub">
+            {total > 0
+              ? <>Read-only view of <b>{total}</b> {total === 1 ? 'session' : 'sessions'} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
+              : <>The worker is healthy and <b>idle</b> — polling with nothing in flight.</>}
           </p>
         </div>
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          <div className="flex items-center gap-2">
-            <span
-              aria-live="polite"
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-bold border ${statusStyles[status]}`}
-            >
-              <span
-                className={`w-2 h-2 rounded-full bg-current ${status === 'live' ? 'animate-pulse' : ''}`}
-              />
-              {statusLabel[status]}
-            </span>
-            <ThemeToggle theme={theme} onToggle={toggleTheme} />
-          </div>
-          {maxAgents !== '—' && (
-            <span className="text-xs text-muted">
-              Max {maxAgents} concurrent agents
-            </span>
-          )}
+        <div className="title-meta">
+          <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
+          <div className="row"><span>concurrency</span><b>{maxConc} max{byStateStr}</b></div>
         </div>
-      </header>
+      </div>
 
-      {/* Error banner */}
-      {error && (
-        <div role="alert" className="mb-6 px-5 py-4 rounded-2xl bg-danger-bg border border-danger-line text-danger">
-          <strong>Error:</strong> {error}
-        </div>
-      )}
-
-      {/* Metrics row */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6">
-        <h2 className="sr-only">Session status counts</h2>
-        <MetricCard label="Running" value={formatCount(counts.running)} hint="Active sessions" loading={loading} />
-        <MetricCard
-          label="Retrying"
-          value={formatCount(retrying)}
-          hint="In retry backoff"
-          tone={retrying > 0 ? 'warn' : 'default'}
-          loading={loading}
-        />
-        <MetricCard
-          label="Blocked"
-          value={formatCount(blocked)}
-          hint="Awaiting operator"
-          tone={blocked > 0 ? 'danger' : 'default'}
-          loading={loading}
-        />
-        <MetricCard
+      {/* KPI strip */}
+      <div className="kpi-row">
+        <Kpi label="Running" value={c.running || 0} sub={`${maxConc} max concurrent`} status={c.running ? 'running' : null} />
+        <Kpi label="Retrying" value={c.retrying || 0} sub="in backoff queue" status={c.retrying ? 'retry' : null} />
+        <Kpi label="Blocked" value={c.blocked || 0} sub="awaiting external gate" status={c.blocked ? 'blocked' : null} />
+        <Kpi
           label="Completed"
-          value={formatCount(completed)}
-          hint={`Recent: ${formatCount(counts.completed)}`}
-          tone={completed > 0 ? 'good' : 'default'}
-          loading={loading}
+          value={c.completed || 0}
+          sub={`${compact(c.completed_total)} lifetime`}
+          flag={c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : null}
+          status="done"
         />
-        <MetricCard
-          label="Agent handoff"
-          value={formatCount(agentHandoff)}
-          hint={`Recent: ${formatCount(counts.agent_handoff_reconcile_stopped)}`}
-          tone={agentHandoff > 0 ? 'good' : 'default'}
-          loading={loading}
-        />
-      </section>
-
-      {/* Token / runtime metrics row */}
-      <section className="grid grid-cols-2 lg:grid-cols-4 gap-3.5 mb-6">
-        <h2 className="sr-only">Token and runtime metrics</h2>
-        <MetricCard
-          label="Total tokens"
-          value={formatCount(totals.total_tokens)}
-          hint={`In ${formatCount(totals.input_tokens)} / Out ${formatCount(totals.output_tokens)}`}
-          loading={loading}
-        />
-        <MetricCard
-          label="Runtime"
-          value={formatRuntime(totalRuntime)}
-          hint="Completed + active Codex time"
-          loading={loading}
-        />
-        <MetricCard
-          label="Poll interval"
-          value={`${formatCount(state?.poll_interval_ms)}ms`}
-          hint="Tracker poll cadence"
-          loading={loading}
-        />
-        <MetricCard
-          label="Snapshot"
-          value={loadedAt ? loadedAt.toLocaleTimeString() : '—'}
-          hint={state?.generated_at ? `API: ${formatDate(state.generated_at)}` : 'Fetching…'}
-          loading={loading}
-        />
-      </section>
-
-      {/* Rate limits */}
-      <Panel title="Rate limits" subtitle="Latest upstream snapshot" accent="orange">
-        <RateLimits rateLimits={state?.rate_limits} loading={loading} />
-      </Panel>
-
-      {/* Running sessions */}
-      <div className="mt-4">
-        <Panel title="Running sessions" subtitle="Current active issue work" accent="blue">
-          <ResponsiveTable
-            columns={runningColumns}
-            rows={state?.running || []}
-            emptyText={loading ? 'Loading…' : 'No active sessions.'}
-          />
-        </Panel>
       </div>
 
-      {/* Blocked sessions */}
-      <div className="mt-4">
-        <Panel title="Blocked sessions" subtitle="Operator input and error indicators" accent="green">
-          <ResponsiveTable
-            columns={blockedColumns}
-            rows={state?.blocked || []}
-            emptyText={loading ? 'Loading…' : 'No blocked sessions.'}
-          />
-        </Panel>
+      {/* codex totals strip (cumulative since process start) */}
+      <div className="meta-strip">
+        <div className="meta-cell"><div className="meta-k">Input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">since process start</div></div>
+        <div className="meta-cell"><div className="meta-k">Output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">generated</div></div>
+        <div className="meta-cell"><div className="meta-k">Total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">input + output</div></div>
+        <div className="meta-cell"><div className="meta-k">Runtime total</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
       </div>
 
-      {/* Retry queue */}
-      <div className="mt-4">
-        <Panel title="Retry queue" subtitle="Backoff delays before redispatch" accent="orange">
-          <ResponsiveTable
-            columns={retryColumns}
-            rows={state?.retrying || []}
-            emptyText={loading ? 'Loading…' : 'No issues are currently backing off.'}
-          />
-        </Panel>
+      {/* Live work (Running) in the wider left column; system context (Rate
+          limits + the conditional Reconcile roll-up) stacks in the narrower
+          right column. Splitting the lower half into two columns roughly halves
+          its height so the dashboard fits one screen without clipping or inner
+          scrollbars; collapses to one column ≤980px (see styles.css). */}
+      <div className="body-grid">
+        <div className="body-main">
+          {/* running */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Running<Badge kind="running">{c.running || 0}</Badge></div>
+              <div className="panel-meta"><b>{c.running || 0}</b> / {maxConc} concurrent</div>
+            </div>
+            <RunningTable rows={s.running || []} />
+          </div>
+        </div>
+
+        <div className="body-side">
+          {/* rate limits — raw Codex snapshot, may be null */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Rate limits</div>
+              <div className="panel-meta">{rl ? <>Codex usage snapshot{rl.limit_name ? <> · <b>{rl.limit_name}</b></> : null}</> : 'no snapshot yet'}</div>
+            </div>
+            <RateLimits rl={rl} />
+          </div>
+
+          {/* Reconcile roll-up — Stopped-with-progress (#557) + Agent-handoff
+              (#617) folded from two full panels into one compact strip; each
+              bucket's explanatory prose is exposed via a hover title + an
+              sr-only span (STOPPED_DESC / HANDOFF_DESC) so it costs no visible
+              vertical budget. Hidden when both buckets are empty. */}
+          {(stopped.length > 0 || handoff.length > 0) ? (
+            <div className="panel">
+              <div className="panel-head">
+                <div className="panel-title"><span className="accent-stroke" />Reconcile roll-up</div>
+                <div className="panel-meta">reaped by the reconcile loop</div>
+              </div>
+              <div className="rollup-grid">
+                {stopped.length > 0 ? (
+                  <div className="rollup-cell" title={STOPPED_DESC}>
+                    <span className="rollup-k"><span className="kpi-dot retry" />Stopped w/ progress</span>
+                    <span className="rollup-v">{c.reconcile_stopped_with_progress}<small> this window · {c.reconcile_stopped_with_progress_total} total</small></span>
+                    <span className="rollup-ids">{stopped.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
+                    <span className="sr-only">{STOPPED_DESC}</span>
+                  </div>
+                ) : null}
+                {handoff.length > 0 ? (
+                  <div className="rollup-cell" title={HANDOFF_DESC}>
+                    <span className="rollup-k"><span className="kpi-dot done" />Agent handoff</span>
+                    <span className="rollup-v">{c.agent_handoff_reconcile_stopped}<small> this window · {c.agent_handoff_reconcile_stopped_total} total</small></span>
+                    <span className="rollup-ids">{handoff.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
+                    <span className="sr-only">{HANDOFF_DESC}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </div>
 
-      <footer className="mt-8 text-center text-xs text-faint">
-        API snapshot: {formatDate(state?.generated_at)} · Last refreshed: {formatDate(loadedAt)}
-      </footer>
-    </main>
+      {/* retrying + blocked — full-width row spanning the page below the two columns */}
+      <div className="grid-2">
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title"><span className="accent-stroke" />Retrying<Badge kind="retry">{c.retrying || 0}</Badge></div>
+            <div className="panel-meta">backoff queue</div>
+          </div>
+          <RetryTable rows={s.retrying || []} />
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <div className="panel-title"><span className="accent-stroke" />Blocked<Badge kind="blocked">{c.blocked || 0}</Badge></div>
+            <div className="panel-meta">needs attention</div>
+          </div>
+          <BlockedTable rows={s.blocked || []} />
+        </div>
+      </div>
+    </div>
   );
 }

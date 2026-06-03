@@ -1,160 +1,556 @@
-@import "tailwindcss";
+/* ============================================================
+   aiops-platform · lean Worker status dashboard
+   Ported from the Claude Design "lean/Worker Status.html" handoff.
+   Two brands (anthropic / linen) × two themes (light / dark)
+   driven off <html data-brand data-theme data-density>.
+   One semantic variable layer; components never name a brand.
 
-/* Ensure utility classes used only in the static shell aren't purged. */
-@source "../index.html";
+   Self-contained, plain CSS (no Tailwind): the worker embeds this
+   verbatim and serves it on loopback, so there is no build-time
+   utility layer and no external font CDN — fonts are self-hosted
+   from /fonts (public/) below.
+   ============================================================ */
 
-/* Self-hosted brand fonts (latin subset, woff2) served from /fonts (public/). */
-@font-face { font-family: "Poppins"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/poppins-400.woff2") format("woff2"); }
-@font-face { font-family: "Poppins"; font-style: normal; font-weight: 500; font-display: swap; src: url("/fonts/poppins-500.woff2") format("woff2"); }
-@font-face { font-family: "Poppins"; font-style: normal; font-weight: 600; font-display: swap; src: url("/fonts/poppins-600.woff2") format("woff2"); }
-@font-face { font-family: "Poppins"; font-style: normal; font-weight: 700; font-display: swap; src: url("/fonts/poppins-700.woff2") format("woff2"); }
-@font-face { font-family: "Lora"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/lora-400.woff2") format("woff2"); }
+/* ─── Self-hosted brand fonts (woff2, latin subset) ────────────
+   No Google Fonts CDN: the dashboard is served on loopback and may
+   run in airgapped / CSP-restricted operator environments. Linen brand
+   = Newsreader (display/num/prose) + Geist (UI) + Geist Mono; Anthropic
+   brand = Poppins + Lora. Geist/Geist Mono/Newsreader ship as variable
+   woff2 (one file spans the weight range); Poppins/Lora are static. */
+@font-face { font-family:"Geist"; font-style:normal; font-weight:100 900; font-display:swap; src:url("/fonts/geist.woff2") format("woff2"); }
+@font-face { font-family:"Geist Mono"; font-style:normal; font-weight:100 900; font-display:swap; src:url("/fonts/geist-mono.woff2") format("woff2"); }
+@font-face { font-family:"Newsreader"; font-style:normal; font-weight:200 800; font-display:swap; src:url("/fonts/newsreader.woff2") format("woff2"); }
+@font-face { font-family:"Newsreader"; font-style:italic; font-weight:200 800; font-display:swap; src:url("/fonts/newsreader-italic.woff2") format("woff2"); }
+@font-face { font-family:"Poppins"; font-style:normal; font-weight:400; font-display:swap; src:url("/fonts/poppins-400.woff2") format("woff2"); }
+@font-face { font-family:"Poppins"; font-style:normal; font-weight:500; font-display:swap; src:url("/fonts/poppins-500.woff2") format("woff2"); }
+@font-face { font-family:"Poppins"; font-style:normal; font-weight:600; font-display:swap; src:url("/fonts/poppins-600.woff2") format("woff2"); }
+@font-face { font-family:"Poppins"; font-style:normal; font-weight:700; font-display:swap; src:url("/fonts/poppins-700.woff2") format("woff2"); }
+@font-face { font-family:"Poppins"; font-style:italic; font-weight:500; font-display:swap; src:url("/fonts/poppins-500-italic.woff2") format("woff2"); }
+@font-face { font-family:"Lora"; font-style:normal; font-weight:400; font-display:swap; src:url("/fonts/lora-400.woff2") format("woff2"); }
 
-/* Drive the dark: variant from a .dark class on <html> (Tailwind v4 docs). */
-@custom-variant dark (&:where(.dark, .dark *));
-
-/* Brand typography tokens → font-display / font-serif utilities, plus a
-   modular type scale (≈1.2 ratio) exposed as text-label / text-section /
-   text-h1 / text-display utilities so heading sizes are systematic. */
-@theme {
+/* ─── Fonts per brand ──────────────────────────────────────── */
+:root[data-brand="linen"] {
+  --font-display: "Newsreader", Georgia, serif;
+  --font-num:     "Newsreader", Georgia, serif;
+  --font-ui:      "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-prose:   "Newsreader", Georgia, serif;
+  --font-mono:    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --num-feat:     "tnum" 1;
+  --grain:        var(--grain-op, 0);
+}
+:root[data-brand="anthropic"] {
   --font-display: "Poppins", Arial, sans-serif;
-  --font-serif: "Lora", Georgia, serif;
-
-  --text-label: 0.75rem;
-  --text-label--line-height: 1rem;
-  --text-section: 1.25rem;
-  --text-section--line-height: 1.75rem;
-  --text-h1: 2.25rem;
-  --text-h1--line-height: 2.5rem;
-  --text-display: 3rem;
-  --text-display--line-height: 1.05;
+  --font-num:     "Poppins", Arial, sans-serif;
+  --font-ui:      "Poppins", Arial, sans-serif;
+  --font-prose:   "Lora", Georgia, serif;
+  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --num-feat:     "tnum" 1;
+  --grain:        0;
 }
 
-/* Semantic colour tokens. `inline` makes utilities reference the raw vars at
-   the use site, so redefining them under .dark cascades. Anthropic brand:
-   warm cream / ink neutrals + terracotta accent. accent = decorative fill,
-   accent-ink = text/links (AA-safe on cream). */
-@theme inline {
-  --color-canvas: var(--c-canvas);
-  --color-surface: var(--c-surface);
-  --color-inset: var(--c-inset);
-  --color-line: var(--c-line);
-  --color-line-strong: var(--c-line-strong);
-  --color-fg: var(--c-fg);
-  --color-muted: var(--c-muted);
-  --color-faint: var(--c-faint);
-  --color-accent: var(--c-accent);
-  --color-accent-ink: var(--c-accent-ink);
-  --color-brand-blue: var(--c-brand-blue);
-  --color-brand-green: var(--c-brand-green);
-
-  --color-good: var(--c-good);
-  --color-good-bg: var(--c-good-bg);
-  --color-good-line: var(--c-good-line);
-  --color-warn: var(--c-warn);
-  --color-warn-bg: var(--c-warn-bg);
-  --color-warn-line: var(--c-warn-line);
-  --color-danger: var(--c-danger);
-  --color-danger-bg: var(--c-danger-bg);
-  --color-danger-line: var(--c-danger-line);
+/* ─── Warm Linen — light ───────────────────────────────────── */
+:root[data-brand="linen"][data-theme="light"] {
+  --canvas:#E8E2D3; --canvas-2:#DED7C5; --panel:#F5F0E2; --panel-2:#FAF5E7;
+  --inset:#EFE9DA; --elevated:#FCF8EC;
+  --ink:#211C14; --ink-soft:#574E40; --ink-mute:#655D4E; --ink-faint:#B4AC9B;
+  --hairline:rgba(33,28,20,.10); --hairline-2:rgba(33,28,20,.055);
+  --shadow:rgba(33,28,20,.08); --edge:rgba(255,255,255,.5);
+  --accent:#C25E36; --accent-text:#9D4C2C; --accent-bg:#F4DECF;
+  --running:#385E7F; --running-soft:#C8D6E2;
+  --success:#416143; --success-soft:#C8D6C2;
+  --warning:#74561D; --warning-soft:#E6D4A5;
+  --danger:#913A26;  --danger-soft:#E8C5B8;
+  --info:#606046;    --info-soft:#DDDCBE;
+  --grain-op:.5;
+}
+/* ─── Warm Linen — dark ────────────────────────────────────── */
+:root[data-brand="linen"][data-theme="dark"] {
+  --canvas:#14110D; --canvas-2:#0D0B08; --panel:#1C1812; --panel-2:#221E17;
+  --inset:#191510; --elevated:#2A251D;
+  --ink:#ECE5D2; --ink-soft:#A39C8B; --ink-mute:#9A9384; --ink-faint:#888070;
+  --hairline:rgba(236,229,210,.11); --hairline-2:rgba(236,229,210,.055);
+  --shadow:rgba(0,0,0,.4); --edge:rgba(255,255,255,.04);
+  --accent:#D97757; --accent-text:#E0875C; --accent-bg:#3A2519;
+  --running:#80A7C7; --running-soft:#2A3A48;
+  --success:#8AAE85; --success-soft:#22301F;
+  --warning:#D9B14D; --warning-soft:#352B16;
+  --danger:#D17A60;  --danger-soft:#3A2520;
+  --info:#B5B395;    --info-soft:#2A2A1E;
+  --grain-op:.18;
 }
 
-@layer base {
-  :root {
-    color-scheme: light;
+/* ─── Anthropic brand — light ──────────────────────────────── */
+:root[data-brand="anthropic"][data-theme="light"] {
+  --canvas:#EFECE3; --canvas-2:#E8E6DC; --panel:#FAF9F5; --panel-2:#FFFDF8;
+  --inset:#F2F0E8; --elevated:#FFFFFF;
+  --ink:#141413; --ink-soft:#55534C; --ink-mute:#6E6C63; --ink-faint:#B0AEA5;
+  --hairline:rgba(20,20,19,.11); --hairline-2:rgba(20,20,19,.06);
+  --shadow:rgba(20,20,19,.07); --edge:rgba(255,255,255,.7);
+  --accent:#D97757; --accent-text:#A8492C; --accent-bg:#F6E2D8;
+  --running:#3F6EA3; --running-soft:#DBE7F4;
+  --success:#3F7D4F; --success-soft:#D7E8D9;
+  --warning:#8A5A12; --warning-soft:#F4E4C2;
+  --danger:#B23B2E;  --danger-soft:#F5DAD3;
+  --info:#646257;    --info-soft:#E8E6DC;
+  --grain-op:0;
+}
+/* ─── Anthropic brand — dark ───────────────────────────────── */
+:root[data-brand="anthropic"][data-theme="dark"] {
+  --canvas:#1F1E1B; --canvas-2:#191815; --panel:#2A2825; --panel-2:#312F2B;
+  --inset:#232121; --elevated:#36332E;
+  --ink:#F2EFE6; --ink-soft:#B8B5AB; --ink-mute:#A3A097; --ink-faint:#959084;
+  --hairline:rgba(250,249,245,.12); --hairline-2:rgba(250,249,245,.06);
+  --shadow:rgba(0,0,0,.4); --edge:rgba(255,255,255,.05);
+  --accent:#D97757; --accent-text:#E89478; --accent-bg:#3A2A22;
+  --running:#7EA8D4; --running-soft:#2B3947;
+  --success:#88B189; --success-soft:#29382A;
+  --warning:#D9B15A; --warning-soft:#3A3019;
+  --danger:#D98570;  --danger-soft:#3A261F;
+  --info:#B0AEA5;    --info-soft:#2E2C28;
+  --grain-op:0;
+}
 
-    --c-canvas: #f0ede4;
-    --c-surface: #faf9f5;
-    --c-inset: #e8e6dc;
-    --c-line: rgb(20 20 19 / 0.1);
-    --c-line-strong: rgb(20 20 19 / 0.18);
-    --c-fg: #1f1e1c;
-    --c-muted: #5f5d54;
-    --c-faint: #6b695f;
-    --c-accent: #d97757;
-    --c-accent-ink: #a8492c;
-    --c-brand-blue: #6a9bcc;
-    --c-brand-green: #788c5d;
+/* ─── Density (compact default, comfy loosens) ─────────────── */
+:root, :root[data-density="compact"] {
+  --gap:10px; --card-pad:11px 13px; --row-pad:7px 10px;
+  --kpi-size:30px; --title-size:30px; --panel-pad:11px 13px;
+  --shell-pad:14px 18px;
+}
+:root[data-density="comfy"] {
+  --gap:16px; --card-pad:16px 18px; --row-pad:11px 14px;
+  --kpi-size:38px; --title-size:38px; --panel-pad:15px 18px;
+  --shell-pad:22px 26px;
+}
 
-    --c-good: #047857;
-    --c-good-bg: #e7f1ea;
-    --c-good-line: rgb(16 185 129 / 0.4);
-    --c-warn: #92400e;
-    --c-warn-bg: #f6ecda;
-    --c-warn-line: rgb(245 158 11 / 0.45);
-    --c-danger: #b91c1c;
-    --c-danger-bg: #f6e7e3;
-    --c-danger-line: rgb(239 68 68 / 0.4);
+:root {
+  --radius-xs:4px; --radius-sm:6px; --radius-md:8px; --radius-lg:12px; --pill:999px;
+  --ls:.08em; --ease:cubic-bezier(.2,.7,.2,1);
+}
+
+/* Theme/brand swap: kill ALL transitions for one frame while the token layer
+   changes. Without this, any element transitioning a var()-driven color
+   (body, .kpi, .icon-btn) gets stuck at its pre-toggle value when --canvas /
+   --panel change — Chromium can't interpolate a transition triggered solely by
+   a custom-property change, so it never reaches the new color. Swap is instant;
+   hover transitions are untouched. */
+:root.theme-swapping * { transition:none !important; }
+
+/* ─── Base ─────────────────────────────────────────────────── */
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body {
+  background:var(--canvas); color:var(--ink);
+  font-family:var(--font-ui); font-size:13px; line-height:1.45;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  font-variant-numeric:tabular-nums;
+  min-height:100vh; position:relative;
+  transition:background-color .3s var(--ease);
+}
+/* paper grain — linen only */
+body::before {
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  opacity:var(--grain);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode:multiply;
+}
+:root[data-theme="dark"] body::before { mix-blend-mode:screen; }
+a { color:inherit; text-decoration:none; }
+
+/* Visible keyboard focus on every interactive control (WCAG 2.4.7).
+   :focus-visible keeps the ring keyboard-only so mouse clicks stay clean. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--radius-sm);
+}
+
+/* Screen-reader-only: visually hidden but available to assistive tech. */
+.sr-only {
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+
+.app { position:relative; z-index:1; max-width:1240px; margin:0 auto; padding:var(--shell-pad); }
+.tnum { font-variant-numeric:tabular-nums; }
+.mono { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+
+/* ─── Topbar ───────────────────────────────────────────────── */
+.topbar {
+  display:flex; align-items:center; gap:14px;
+  padding:4px 2px 12px; border-bottom:1px solid var(--hairline); margin-bottom:14px;
+}
+.brand { display:flex; align-items:center; gap:9px; }
+.brand-mark {
+  width:26px; height:26px; border-radius:7px; background:var(--ink);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  box-shadow:0 1px 2px var(--shadow);
+}
+.brand-mark span {
+  font-family:var(--font-display); font-style:italic; font-weight:500;
+  font-size:15px; color:var(--canvas); line-height:1;
+}
+.brand-name { font-weight:600; font-size:13px; letter-spacing:.01em; }
+.crumb { color:var(--ink-mute); font-family:var(--font-mono); font-size:12px; }
+.crumb b { color:var(--ink-soft); font-weight:500; }
+.spacer { flex:1; }
+
+.live-pill {
+  display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px 0 8px;
+  border-radius:var(--pill); font-size:11px; font-weight:600; letter-spacing:.01em;
+  border:1px solid; white-space:nowrap;
+}
+.live-pill.live   { color:var(--success); background:var(--success-soft); border-color:transparent; }
+.live-pill.offline{ color:var(--danger);  background:var(--danger-soft);  border-color:transparent; }
+.live-pill.conn   { color:var(--ink-mute); background:var(--inset); border-color:var(--hairline); }
+.dot { width:7px; height:7px; border-radius:50%; background:currentColor; position:relative; }
+.live .dot::after {
+  content:""; position:absolute; inset:-4px; border-radius:50%;
+  background:currentColor; opacity:.35; animation:halo 1.8s var(--ease) infinite;
+}
+@keyframes halo { 0%{transform:scale(.6);opacity:.45} 70%{transform:scale(1.7);opacity:0} 100%{opacity:0} }
+
+.meta-inline { color:var(--ink-mute); font-size:11.5px; font-family:var(--font-mono); white-space:nowrap; }
+.icon-btn {
+  width:28px; height:28px; border-radius:var(--radius-md); border:1px solid var(--hairline);
+  background:var(--panel); color:var(--ink-mute); display:inline-flex; align-items:center;
+  justify-content:center; cursor:pointer; transition:color var(--ease) .14s, border-color .14s, background .14s;
+}
+.icon-btn:hover { color:var(--ink); border-color:var(--accent-text); background:var(--elevated); }
+.icon-btn[aria-expanded="true"] { color:var(--ink); border-color:var(--accent-text); background:var(--elevated); }
+
+/* ─── Settings popover ─────────────────────────────────────────
+   Production replacement for the design-tool Tweaks panel: carries the
+   brand / theme / density runtime toggles, persisted to localStorage. */
+.settings-wrap { position:relative; display:inline-flex; }
+.settings-pop {
+  position:absolute; top:calc(100% + 8px); right:0; z-index:50; width:228px;
+  background:var(--elevated); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  box-shadow:0 1px 0 var(--edge) inset, 0 12px 32px var(--shadow);
+  padding:12px; display:flex; flex-direction:column; gap:12px;
+}
+.set-row { display:flex; flex-direction:column; gap:6px; }
+.set-lbl { font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.seg {
+  display:flex; gap:2px; padding:2px; border-radius:var(--radius-md);
+  background:var(--inset); border:1px solid var(--hairline-2);
+}
+.seg button {
+  flex:1; appearance:none; border:0; background:transparent; cursor:pointer;
+  font:inherit; font-size:11.5px; font-weight:500; color:var(--ink-mute);
+  padding:4px 6px; border-radius:var(--radius-sm); line-height:1.2;
+  transition:background .14s var(--ease), color .14s;
+}
+.seg button:hover { color:var(--ink); }
+.seg button[aria-pressed="true"] {
+  background:var(--panel); color:var(--ink);
+  box-shadow:0 1px 2px var(--shadow);
+}
+
+/* ─── Title row ────────────────────────────────────────────── */
+.title-row { display:flex; justify-content:space-between; align-items:flex-end; gap:24px; flex-wrap:wrap; margin-bottom:14px; }
+.title-row > div:first-child { min-width:0; }
+.page-title { font-family:var(--font-display); font-size:var(--title-size); font-weight:600; line-height:1.04; letter-spacing:-.01em; margin:0; }
+.page-title em { font-style:italic; color:var(--accent-text); font-weight:500; }
+.page-sub { color:var(--ink-mute); font-family:var(--font-prose); font-size:14px; margin-top:6px; max-width:62ch; }
+.page-sub b { color:var(--ink-soft); font-weight:600; }
+.title-meta { text-align:right; display:flex; flex-direction:column; gap:3px; flex-shrink:0; }
+.title-meta .row { display:flex; gap:7px; justify-content:flex-end; color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.title-meta b { color:var(--ink-soft); font-weight:500; }
+
+/* ─── KPI strip ────────────────────────────────────────────── */
+.kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--gap); margin-bottom:var(--gap); }
+.kpi {
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  padding:var(--card-pad); position:relative; overflow:hidden;
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow);
+  transition:background .25s var(--ease), border-color .25s;
+}
+/* status carried by a hairline top stripe + a dot — the tile and the number
+   stay neutral. Borrowed from the canonical KPI treatment: calmer, far less
+   saturated area (easier on the eyes), and aligned to the domain-state colors
+   so a KPI and its matching badge never disagree. */
+.stripe { position:absolute; top:0; left:13px; right:13px; height:2px; border-radius:0 0 3px 3px; background:transparent; }
+.stripe.running { background:var(--running); }
+.stripe.retry   { background:var(--warning); }
+.stripe.blocked { background:var(--info); }
+.stripe.done    { background:var(--success); }
+.kpi-label { display:flex; align-items:center; gap:6px; font-size:10.5px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.kpi-dot { width:6px; height:6px; border-radius:50%; background:var(--ink-faint); flex-shrink:0; }
+.kpi-dot.running { background:var(--running); }
+.kpi-dot.retry   { background:var(--warning); }
+.kpi-dot.blocked { background:var(--info); }
+.kpi-dot.done    { background:var(--success); }
+.kpi-value { font-family:var(--font-num); font-size:var(--kpi-size); font-weight:600; line-height:1.05; letter-spacing:-.01em; margin:5px 0 2px; font-variant-numeric:tabular-nums; color:var(--ink); }
+.kpi-sub { color:var(--ink-mute); font-size:11px; }
+
+/* ─── Meta strip (token/runtime stats) ─────────────────────── */
+.meta-strip {
+  display:grid; grid-template-columns:repeat(4,1fr);
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow); margin-bottom:var(--gap); overflow:hidden;
+}
+.meta-cell { padding:var(--card-pad); border-left:1px solid var(--hairline-2); }
+.meta-cell:first-child { border-left:0; }
+.meta-k { font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.meta-v { font-family:var(--font-num); font-size:19px; font-weight:600; margin-top:3px; font-variant-numeric:tabular-nums; }
+.meta-sub { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:1px; }
+
+/* ─── Panels ───────────────────────────────────────────────── */
+.panel {
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow);
+  padding:var(--panel-pad); margin-bottom:var(--gap);
+}
+.panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; }
+.panel-title { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; white-space:nowrap; }
+.accent-stroke { width:13px; height:2px; border-radius:2px; background:var(--accent); flex-shrink:0; }
+.panel-meta { color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.panel-meta b { color:var(--ink-soft); font-weight:500; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); align-items:start; }
+
+/* ─── Rate limits ──────────────────────────────────────────── */
+.rate-tier { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; color:var(--ink-mute); flex-wrap:wrap; }
+.tier-badge { font-family:var(--font-mono); font-size:11px; padding:2px 8px; border-radius:var(--pill); background:var(--inset); border:1px solid var(--hairline); color:var(--ink-soft); white-space:nowrap; }
+.rate-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:var(--gap); }
+.rate-cell { background:var(--inset); border:1px solid var(--hairline-2); border-radius:var(--radius-md); padding:10px 11px; }
+.rate-k { font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.rate-v { font-family:var(--font-num); font-size:17px; font-weight:600; margin-top:4px; font-variant-numeric:tabular-nums; }
+.rate-v small { font-family:var(--font-ui); font-size:10.5px; font-weight:400; color:var(--ink-mute); }
+.rate-bar { height:5px; border-radius:var(--pill); background:var(--hairline); overflow:hidden; margin-top:8px; }
+.rate-bar i { display:block; height:100%; border-radius:var(--pill); transition:width .5s var(--ease); }
+.rate-bar i.ok   { background:var(--success); }
+.rate-bar i.warn { background:var(--warning); }
+.rate-bar i.bad  { background:var(--danger); }
+.rate-meta { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:6px; }
+/* raw-JSON fallback when the runner reports an unrecognized rate-limit shape */
+.rate-raw { overflow:auto; margin:0; border-radius:var(--radius-md); padding:11px 12px;
+  background:var(--inset); border:1px solid var(--hairline-2);
+  font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:var(--ink-soft); }
+
+/* ─── Tables ───────────────────────────────────────────────── */
+.table-wrap { overflow-x:auto; margin:0 calc(var(--gap) * -1) calc(var(--gap) * -1); padding:0 var(--gap) 0; }
+table.sessions { width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px; }
+/* narrow tables (Retrying / Blocked) sit two-up in .grid-2 — don't force the
+   wide min-width that the full-bleed Running table needs, or they overflow
+   their half-column and clip the last cell. */
+.table-wrap.narrow table.sessions { min-width:360px; }
+table.sessions th {
+  text-align:left; font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--ink-mute); padding:0 12px 8px 0; border-bottom:1px solid var(--hairline);
+}
+table.sessions th.r, table.sessions td.r { text-align:right; }
+table.sessions td { padding:var(--row-pad); padding-left:0; padding-right:12px; border-bottom:1px solid var(--hairline-2); vertical-align:top; }
+table.sessions tr:last-child td { border-bottom:0; }
+.issue { display:flex; flex-direction:column; gap:1px; }
+.issue-id { font-family:var(--font-mono); font-size:11.5px; font-weight:500; color:var(--accent-text); }
+.issue-title { color:var(--ink-soft); font-size:12px; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wp { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); margin-top:1px; }
+.sess-id { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); }
+.runtime { font-family:var(--font-num); font-size:13px; font-variant-numeric:tabular-nums; }
+.dim { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:1px; }
+.upd { color:var(--ink); max-width:34ch; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.upd.err { color:var(--danger); }
+.tok { font-family:var(--font-mono); font-size:11.5px; text-align:right; font-variant-numeric:tabular-nums; }
+.tok b { font-weight:600; }
+
+/* ─── Badges (domain-state axis) ───────────────────────────── */
+.badge {
+  display:inline-flex; align-items:center; gap:5px; height:21px; padding:0 8px 0 7px;
+  border-radius:var(--pill); font-size:11px; font-weight:600; white-space:nowrap;
+}
+.badge .bd { width:6px; height:6px; border-radius:50%; background:currentColor; }
+.badge.running { color:var(--running); background:var(--running-soft); }
+.badge.retry   { color:var(--warning); background:var(--warning-soft); }
+.badge.blocked { color:var(--info);    background:var(--info-soft); }
+.badge.done    { color:var(--success); background:var(--success-soft); }
+.badge.failed  { color:var(--danger);  background:var(--danger-soft); }
+.badge.running .bd { animation:breathe 2.4s var(--ease) infinite; }
+@keyframes breathe { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.attempt { display:inline-flex; align-items:center; gap:5px; color:var(--warning); font-family:var(--font-mono); font-size:11.5px; }
+.attempt .bd { width:6px; height:6px; border-radius:50%; background:currentColor; }
+
+/* ─── Empty state ──────────────────────────────────────────── */
+.empty { text-align:center; padding:26px 16px; color:var(--ink-mute); }
+.empty .ico { color:var(--ink-faint); margin-bottom:8px; display:inline-flex; }
+.empty .em-t { font-family:var(--font-prose); font-size:14px; color:var(--ink-soft); }
+.empty .em-s { font-size:11.5px; color:var(--ink-mute); margin-top:3px; }
+
+/* ─── Skeleton (loading) ───────────────────────────────────── */
+.skel { background:var(--hairline); border-radius:5px; animation:pulse 1.4s var(--ease) infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+/* error banner — shown when the state fetch fails */
+.err-banner {
+  margin-bottom:14px; padding:10px 13px; border-radius:var(--radius-md);
+  background:var(--danger-soft); color:var(--danger); border:1px solid transparent;
+  font-size:12px; font-family:var(--font-mono);
+}
+
+/* ─── Reconcile roll-up (folds Stopped-with-progress + Agent-handoff
+   from two full panels into one compact strip). Each bucket is a single
+   inset row: dot + label · count · window/total · issue-id chips. The
+   explanatory prose the old panels carried is now exposed via a hover
+   `title` plus an sr-only span (App.jsx) so no visible vertical budget is
+   spent on it. ───────────────────────────────────────────────────── */
+.rollup-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:var(--gap); }
+.rollup-cell {
+  display:flex; align-items:center; gap:9px; flex-wrap:wrap;
+  background:var(--inset); border:1px solid var(--hairline-2);
+  border-radius:var(--radius-md); padding:9px 12px;
+}
+.rollup-k { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; letter-spacing:.01em; color:var(--ink-soft); white-space:nowrap; }
+.rollup-v { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--ink); white-space:nowrap; }
+.rollup-v small { font-family:var(--font-ui); font-weight:400; font-size:10.5px; color:var(--ink-mute); }
+.rollup-ids { display:flex; gap:5px; flex-wrap:wrap; margin-left:auto; }
+
+/* ─── Two-column body — the real compaction that gets the dashboard onto
+   one screen WITHOUT clipping or inner scrollbars. The live focus (Running)
+   takes the wider left column; system context (Rate limits + the conditional
+   Reconcile roll-up) stacks in the narrower right column. Retrying + Blocked
+   sit in a full-width row below (see .grid-2). Splitting the lower half this
+   way roughly halves its height, so the whole page falls under a normal
+   display height naturally — content is never cut off, and short screens just
+   scroll. Collapses to one column ≤980px (the ≤820px rules below take over). */
+.body-grid { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(330px,1fr); gap:var(--gap); align-items:start; margin-bottom:var(--gap); }
+.body-main, .body-side { display:flex; flex-direction:column; gap:var(--gap); min-width:0; }
+.body-grid .panel, .body-grid .grid-2 { margin-bottom:0; }
+/* Tables were tuned for the old full-width stack — full-bleed negative margins
+   and wide min-widths overflow a column. Inside the two-column body, drop the
+   bleed and let each table fit its (narrower) panel. */
+.body-grid .table-wrap { margin:0; padding:0; }
+.body-grid table.sessions, .body-grid .table-wrap.narrow table.sessions { min-width:0; }
+@media (max-width:980px) { .body-grid { grid-template-columns:1fr; } }
+
+/* Full-width Retrying/Blocked row: each table fits its half comfortably. Clip
+   the wrap so the per-second countdown re-render can't flash a transient
+   horizontal scrollbar. To keep that clip from hiding real data, force the
+   long free-text cells (workspace paths, error/detail strings) to break rather
+   than overflow — an unbreakable token (URL, hash) would otherwise be clipped
+   instead of scrolled. (≤640px the global card rule restores stacked layout.) */
+@media (min-width:641px) {
+  .app > .grid-2 .table-wrap { overflow:hidden; }
+  .app > .grid-2 .wp, .app > .grid-2 .upd { overflow-wrap:anywhere; }
+}
+
+/* ─── Responsive ───────────────────────────────────────────── */
+@media (max-width:820px) {
+  .kpi-row { grid-template-columns:repeat(2,1fr); }
+  .meta-strip { grid-template-columns:repeat(2,1fr); }
+  .meta-cell:nth-child(3) { border-left:0; }
+  .meta-cell:nth-child(n+3) { border-top:1px solid var(--hairline-2); }
+  .grid-2 { grid-template-columns:1fr; }
+  .rate-grid { grid-template-columns:1fr; }
+  .title-meta { text-align:left; }
+  .title-meta .row { justify-content:flex-start; }
+}
+
+/* phone: collapse tables → stacked cards, tighten chrome */
+@media (max-width:640px) {
+  .app { padding:12px 13px; }
+  .topbar { flex-wrap:wrap; gap:8px 10px; }
+  /* let a long title + meta drop the meta to a second line instead of
+     overflowing — both halves are nowrap with no wrap on the head. */
+  .panel-head { flex-wrap:wrap; gap:4px 12px; }
+  .panel-title { min-width:0; }
+  .topbar .meta-inline { order:5; flex-basis:100%; }
+  .page-title { font-size:26px; }
+  .title-row { gap:12px; }
+  .kpi-value { font-size:26px; }
+
+  /* table → cards */
+  .table-wrap { overflow-x:visible; margin:0; padding:0; }
+  /* the .narrow tables (Retrying / Blocked) carry a 360px min-width for their
+     two-up desktop layout via a 2-class selector — which out-specifies a plain
+     `table.sessions` reset and would keep them 360px wide in card mode, blowing
+     past the phone viewport. Match that specificity here so they collapse too. */
+  table.sessions, .table-wrap.narrow table.sessions { min-width:0; display:block; }
+  table.sessions thead { display:none; }
+  table.sessions tbody { display:block; }
+  table.sessions tr {
+    display:block; background:var(--inset); border:1px solid var(--hairline-2);
+    border-radius:var(--radius-md); padding:10px 12px; margin-bottom:9px;
   }
-
-  :where(.dark) {
-    color-scheme: dark;
-
-    --c-canvas: #1a1916;
-    --c-surface: rgb(48 46 42 / 0.82);
-    --c-inset: rgb(20 20 19 / 0.5);
-    --c-line: rgb(120 118 110 / 0.26);
-    --c-line-strong: rgb(176 174 165 / 0.22);
-    --c-fg: #faf9f5;
-    --c-muted: #b0aea5;
-    --c-faint: #8a887e;
-    --c-accent: #d97757;
-    --c-accent-ink: #e89478;
-    --c-brand-blue: #8fb6dd;
-    --c-brand-green: #9cb07d;
-
-    --c-good: #6ee7b7;
-    --c-good-bg: rgb(6 78 59 / 0.38);
-    --c-good-line: rgb(4 120 87 / 0.4);
-    --c-warn: #fcd34d;
-    --c-warn-bg: rgb(120 53 15 / 0.38);
-    --c-warn-line: rgb(180 83 9 / 0.45);
-    --c-danger: #fca5a5;
-    --c-danger-bg: rgb(127 29 29 / 0.38);
-    --c-danger-line: rgb(185 28 28 / 0.45);
+  table.sessions tr:last-child { margin-bottom:0; }
+  table.sessions td {
+    display:flex; justify-content:space-between; align-items:baseline; gap:14px;
+    padding:6px 0; border-bottom:1px dashed var(--hairline-2); text-align:right;
   }
-
-  body {
-    @apply min-h-screen bg-canvas text-fg;
-    background-image: radial-gradient(circle at top left, #faf6ec 0%, #f0ede4 45%);
-    transition: background-color 0.2s ease, color 0.2s ease;
+  table.sessions td:last-child { border-bottom:0; padding-bottom:0; }
+  table.sessions td[data-label]::before {
+    content:attr(data-label); flex:0 0 auto; text-align:left;
+    font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase;
+    color:var(--ink-mute); white-space:nowrap; padding-top:1px;
   }
-
-  .dark body {
-    background-image: radial-gradient(circle at top left, #2a2723 0%, #1a1916 48%);
+  /* issue cell becomes the card header — full width, no label, left aligned */
+  table.sessions td.issue-cell {
+    display:block; text-align:left; padding-top:0;
+    border-bottom:1px solid var(--hairline); margin-bottom:3px; padding-bottom:8px;
   }
+  .issue-title { white-space:normal; max-width:none; }
+  .upd { -webkit-line-clamp:unset; max-width:none; text-align:right; }
+  table.sessions td.tok { text-align:right; }
+}
 
-  /* Headings use the brand display face; data/body stay in the default sans. */
-  h1,
-  h2 {
-    font-family: var(--font-display);
-  }
+@media (max-width:440px) {
+  .kpi-row { grid-template-columns:1fr 1fr; gap:8px; }
+  .meta-strip { grid-template-columns:1fr 1fr; }
+}
 
-  a {
-    @apply text-accent-ink transition-colors;
-  }
+@media (prefers-reduced-motion:reduce) {
+  *, *::after { animation:none !important; }
+}
 
-  a:hover {
-    opacity: 0.82;
-    text-decoration: underline;
+/* ─── Print ────────────────────────────────────────────────────
+   The dashboard can be live in DARK mode (Settings → Theme). Printing a
+   near-black canvas either floods ink ("Background graphics" on) or drops
+   cream-on-white to invisible ("Background graphics" off). So for print we
+   force an ink-safe light palette regardless of the active theme/brand,
+   kill the grain overlay, hold every animation at its visible state, and
+   keep cards/rows whole across page breaks. ─────────────────────── */
+@media print {
+  /* ink-safe light palette, no matter which theme/brand is selected */
+  :root, :root[data-theme="dark"], :root[data-theme="light"],
+  :root[data-brand="linen"][data-theme="dark"],
+  :root[data-brand="anthropic"][data-theme="dark"] {
+    --canvas:#fff; --canvas-2:#fff; --panel:#fff; --panel-2:#fff;
+    --inset:#f5f3ed; --elevated:#fff;
+    --ink:#000; --ink-soft:#2a2620; --ink-mute:#4a463d; --ink-faint:#8a8474;
+    --hairline:rgba(0,0,0,.24); --hairline-2:rgba(0,0,0,.12);
+    --shadow:transparent; --edge:transparent; --grain-op:0;
+    --accent:#C25E36; --accent-text:#9D4C2C; --accent-bg:#F4DECF;
+    /* light-theme semantic pairs so badges/stripes print on light fills */
+    --running:#385E7F; --running-soft:#C8D6E2;
+    --success:#416143; --success-soft:#C8D6C2;
+    --warning:#74561D; --warning-soft:#E6D4A5;
+    --danger:#913A26;  --danger-soft:#E8C5B8;
+    --info:#606046;    --info-soft:#DDDCBE;
   }
+  html, body { background:#fff !important; }
+  body::before { display:none !important; }                 /* paper grain off */
 
-  :focus-visible {
-    @apply outline-none ring-2 ring-accent-ink ring-offset-2 ring-offset-canvas rounded-sm;
-  }
+  /* hold animations/transitions at their visible end-state — nothing
+     prints frozen mid-fade */
+  *, *::before, *::after { animation:none !important; transition:none !important; }
 
-  code,
-  pre {
-    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  }
+  /* render the small semantic fills (badges, KPI stripes, rate bars) faithfully
+     even though the page background is forced white */
+  * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
 
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      animation-duration: 0.001ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 0.001ms !important;
-    }
-  }
+  /* on-screen-only chrome */
+  .settings-pop, .icon-btn { display:none !important; }
+
+  /* keep cards and table rows from splitting across pages */
+  .kpi, .meta-strip, .panel, .rate-cell, .empty,
+  table.sessions tr { break-inside:avoid; page-break-inside:avoid; }
+  .panel-head, .title-row { break-after:avoid; page-break-after:avoid; }
+  table.sessions thead { display:table-header-group; }      /* repeat header if a table spans pages */
+
+  /* tables can't scroll on paper — let them fit the page and wrap long cells
+     instead of clipping under overflow-x:auto */
+  .table-wrap { overflow:visible !important; margin:0 !important; padding:0 !important; }
+  table.sessions, .table-wrap.narrow table.sessions { min-width:0 !important; }
+  .issue-title, .upd { white-space:normal !important; max-width:none !important;
+    -webkit-line-clamp:unset !important; overflow:visible !important; }
+
+  .app { max-width:none; padding:0; }
+  @page { margin:14mm; }
 }

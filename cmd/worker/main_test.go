@@ -470,7 +470,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 		t.Fatalf("content type = %q, want text/html", got)
 	}
 	html := w.Body.String()
-	for _, want := range []string{"<title>aiops-platform dashboard</title>", `id="root"`, "Operations Dashboard", "/api/v1/state"} {
+	for _, want := range []string{"<title>aiops · Worker status</title>", `id="root"`, "/api/v1/state"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("dashboard HTML missing %q:\n%s", want, html)
 		}
@@ -490,7 +490,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retry queue", "Blocked sessions", "Total tokens", "Rate limits"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked sessions", "Total tokens", "Rate limits"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}
@@ -505,6 +505,62 @@ func firstScriptAssetPath(html string) (string, bool) {
 		return "", false
 	}
 	return match[1], true
+}
+
+func TestDashboardServesReferencedFonts(t *testing.T) {
+	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
+		return orchestrator.StateView{}, nil
+	})
+	serve := func(path string) *httptest.ResponseRecorder {
+		req := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000"+path, nil)
+		w := httptest.NewRecorder()
+		server.Handler.ServeHTTP(w, req)
+		return w
+	}
+
+	// The Vite build emits public/ fonts at the dist root (/fonts/*), not under
+	// /assets/. Pull the served stylesheet and confirm every /fonts/* face it
+	// references actually resolves through the server — otherwise the self-hosted
+	// brand fonts 404 and the UI silently falls back to system faces.
+	html := serve("/").Body.String()
+	cssHref := regexp.MustCompile(`href="(/assets/[^"]+\.css)"`).FindStringSubmatch(html)
+	if cssHref == nil {
+		// Without `npm run build` the embedded dist has no index/stylesheet and
+		// the worker serves fallback.html instead — there are no /fonts/ faces to
+		// check. Skip rather than fail so `go test ./...` does not require a
+		// dashboard build (mirrors the asset-label guard in the test above; dist/
+		// is gitignored and CI builds it before the Go tests run).
+		t.Skip("dashboard dist not built; served fallback has no /assets stylesheet")
+	}
+	cssResp := serve(cssHref[1])
+	if cssResp.Code != http.StatusOK {
+		t.Fatalf("GET %s = %d; want %d", cssHref[1], cssResp.Code, http.StatusOK)
+	}
+	fontRefs := regexp.MustCompile(`/fonts/[\w.-]+\.woff2`).FindAllString(cssResp.Body.String(), -1)
+	if len(fontRefs) == 0 {
+		t.Fatalf("stylesheet %s references no /fonts/*.woff2 faces", cssHref[1])
+	}
+	seen := map[string]bool{}
+	for _, ref := range fontRefs {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		resp := serve(ref)
+		if resp.Code != http.StatusOK {
+			t.Errorf("GET %s = %d; want %d (referenced by %s)", ref, resp.Code, http.StatusOK, cssHref[1])
+			continue
+		}
+		// wOF2 magic proves the font bytes were served, not an HTML fallback.
+		if got := resp.Body.String(); !strings.HasPrefix(got, "wOF2") {
+			t.Errorf("GET %s served non-woff2 body (first bytes %q); want the embedded font", ref, got[:min(4, len(got))])
+		}
+	}
+
+	// A missing font path must still 404 rather than fall through to the index.
+	if got := serve("/fonts/does-not-exist.woff2").Code; got != http.StatusNotFound {
+		t.Errorf("GET /fonts/does-not-exist.woff2 = %d; want %d", got, http.StatusNotFound)
+	}
 }
 
 func TestRootDashboardAllowsHeadProbes(t *testing.T) {

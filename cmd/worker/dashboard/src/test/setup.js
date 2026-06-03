@@ -25,8 +25,15 @@ afterEach(() => {
   localStorageStore.clear();
 });
 
-// jsdom does not implement matchMedia, which useTheme relies on for the
-// system-preference default.
+// jsdom does not implement requestAnimationFrame, which useSettings uses to
+// drop the one-frame .theme-swapping class after applying the token layer.
+if (!window.requestAnimationFrame) {
+  window.requestAnimationFrame = (cb) => window.setTimeout(() => cb(Date.now()), 0);
+  window.cancelAnimationFrame = (id) => window.clearTimeout(id);
+}
+
+// jsdom does not implement matchMedia, which useSettings relies on for the
+// system-preference theme default.
 if (!window.matchMedia) {
   window.matchMedia = (query) => ({
     matches: false,

@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="aiops-platform runtime state dashboard backed by /api/v1/state" />
-    <title>aiops-platform dashboard</title>
+    <meta name="description" content="aiops-platform worker status — read-only view of /api/v1/state" />
+    <title>aiops · Worker status</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -74,8 +74,8 @@
   <body>
     <div id="root">
       <main>
-        <h1>Operations Dashboard</h1>
-        <p>Runtime state from <code>/api/v1/state</code>.</p>
+        <h1>Worker status</h1>
+        <p>Read-only runtime state from <code>/api/v1/state</code>. (Minimal fallback — the full dashboard build was not embedded.)</p>
         <section class="grid" aria-label="runtime counts">
           <div class="tile"><span class="label">Running</span><span class="value" id="running">-</span></div>
           <div class="tile"><span class="label">Retrying</span><span class="value" id="retrying">-</span></div>

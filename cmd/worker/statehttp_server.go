@@ -268,7 +268,15 @@ func newStateHTTPServerWithAuthTokenAndReadiness(host string, port int, authToke
 	mux.Handle("/api/v1/state", stateHTTPHandler(snapshot))
 	mux.Handle("/api/v1/refresh", refreshHTTPHandler(optionalStateRefreshFunc(refresh)))
 	mux.Handle("/api/v1/", issueHTTPHandler(snapshot))
-	mux.Handle("/assets/", dashboardAssetHandler())
+	// Hashed Vite bundles live under /assets/; files from the build's public/
+	// dir (the self-hosted brand fonts referenced by styles.css `@font-face`)
+	// land at the dist root and are requested at /fonts/. Both resolve through
+	// the same dist FileServer — without the /fonts/ prefix they fall to the "/"
+	// handler below and 404, so the fonts never load and the UI silently falls
+	// back to system faces.
+	dashboardAssets := dashboardAssetHandler()
+	mux.Handle("/assets/", dashboardAssets)
+	mux.Handle("/fonts/", dashboardAssets)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
