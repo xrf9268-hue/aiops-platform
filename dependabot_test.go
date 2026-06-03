@@ -58,6 +58,7 @@ func TestDependabotCoversDashboardNPMDependencies(t *testing.T) {
 	}
 	if dashboardNPM == nil {
 		t.Fatal("dependabot config must cover dashboard npm dependencies")
+		return
 	}
 
 	if dashboardNPM.Schedule.Interval != "weekly" ||
