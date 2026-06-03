@@ -398,6 +398,21 @@ failure per the "Earned rules" principle above.
    **Earned by:** repository tests using `t.Errorf("expected ...")` without the
    actual value left reviewers guessing which state transition regressed.
 
+10. **Fix the class, not the instance.** A bug, review comment, or CI failure
+    is usually one visible member of a broader class. Before pushing, name the
+    class and sweep its blast radius. When changing a shared value or contract
+    (version pin granularity, renamed field, removed config, changed default),
+    `grep` every consumer, derivation, fixture, doc, and CI copy and update them
+    atomically. When replacing a mechanism (assertion, gate, guard, retry), list
+    the invariants the old mechanism guaranteed and prove the new one preserves
+    each required invariant, including failure and deadline paths. Do not let
+    `@codex review` discover siblings one push at a time. **Earned by:** a
+    standard-library security bump first updated only the module patch pin, so
+    later review rounds found the matching container base-image pin, lint-cache
+    exposure, and version-doctor granularity one by one; and #602's test
+    refactor replaced an external deadline bound with a typed-error assertion
+    that initially dropped the "did not wait for the outer deadline" invariant.
+
 ## Conventions
 
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing. A PostToolUse hook (`.claude/scripts/format-go.sh`) auto-runs `gofmt -w` on `.go` files edited via the Edit/Write tools; files changed through Bash (e.g. `sed`, heredocs) are not covered, so always verify with `gofmt -l` before pushing — CI's `gofmt -l` gate is the backstop.
