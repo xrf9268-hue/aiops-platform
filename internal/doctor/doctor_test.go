@@ -1168,3 +1168,42 @@ func checkExists(report Report, name string) bool {
 	}
 	return false
 }
+
+func TestGoVersionCompatible(t *testing.T) {
+	const goOutput = "go version %s linux/amd64\n"
+	cases := []struct {
+		name       string
+		host       string // `go version` field, e.g. "go1.25.10"
+		goMod      string // go.mod `go` directive, e.g. "1.25.11"
+		compatible bool
+	}{
+		// go.mod pins an exact patch: the patch gates same-minor hosts.
+		{"exact patch match", "go1.25.11", "1.25.11", true},
+		{"host patch below floor", "go1.25.10", "1.25.11", false},
+		{"host patch above floor", "go1.25.12", "1.25.11", true},
+		{"host patch-zero below floor", "go1.25.0", "1.25.11", false},
+		// Minor differences resolve before the patch is consulted.
+		{"host newer minor ignores patch", "go1.26.0", "1.25.11", true},
+		{"host older minor", "go1.24.99", "1.25.11", false},
+		// go.mod pins only major.minor: the patch is not compared.
+		{"floor major.minor, host same minor", "go1.25.0", "1.25", true},
+		{"floor major.minor, host higher patch", "go1.25.10", "1.25", true},
+		{"floor major.minor, host older minor", "go1.24.9", "1.25", false},
+		// Pre-release suffixes parse to their numeric prefix.
+		{"host rc suffix at floor", "go1.25.11rc1", "1.25.11", true},
+		// Unparseable inputs are never compatible.
+		{"empty host output", "", "1.25.11", false},
+		{"unparseable go.mod", "go1.25.11", "weird", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output := ""
+			if tc.host != "" {
+				output = fmt.Sprintf(goOutput, tc.host)
+			}
+			if got := goVersionCompatible(output, tc.goMod); got != tc.compatible {
+				t.Errorf("goVersionCompatible(%q, %q) = %v; want %v", output, tc.goMod, got, tc.compatible)
+			}
+		})
+	}
+}

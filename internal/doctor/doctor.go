@@ -1175,27 +1175,57 @@ func readGoMod(path string) (string, string) {
 	return modulePath, version
 }
 
-func goVersionCompatible(output, goModVersion string) bool {
-	gotMajor, gotMinor, gotOK := goMajorMinor(output)
-	wantMajor, wantMinor, wantOK := majorMinor(goModVersion)
-	return gotOK && wantOK && (gotMajor > wantMajor || gotMajor == wantMajor && gotMinor >= wantMinor)
+// goVersion is a parsed Go release version. patchSet records whether the source
+// string carried a patch component, so a go.mod `go` directive pinned to
+// major.minor (`go 1.25`) is distinguished from an exact patch (`go 1.25.11`).
+type goVersion struct {
+	major, minor, patch int
+	patchSet            bool
 }
 
-func goMajorMinor(output string) (int, int, bool) {
+// goVersionCompatible reports whether the installed toolchain (from `go version`
+// output) satisfies the go.mod `go` directive, comparing at the precision go.mod
+// declares. When go.mod pins an exact patch (`go 1.25.11`), a host on an older
+// patch of the same minor (`go1.25.10`) is rejected: GOTOOLCHAIN=local cannot
+// build it and GOTOOLCHAIN=auto would silently download the floor, so reporting
+// it compatible would mislead the operator. When go.mod pins only major.minor,
+// the patch is not compared.
+func goVersionCompatible(output, goModVersion string) bool {
+	got, gotOK := goVersionFromOutput(output)
+	want, wantOK := parseGoVersion(goModVersion)
+	if !gotOK || !wantOK {
+		return false
+	}
+	if got.major != want.major {
+		return got.major > want.major
+	}
+	if got.minor != want.minor {
+		return got.minor > want.minor
+	}
+	// Same major.minor: the patch only gates when go.mod declared one.
+	return !want.patchSet || got.patch >= want.patch
+}
+
+func goVersionFromOutput(output string) (goVersion, bool) {
 	for _, field := range strings.Fields(output) {
 		if strings.HasPrefix(field, "go1.") {
-			return majorMinor(strings.TrimPrefix(field, "go"))
+			return parseGoVersion(strings.TrimPrefix(field, "go"))
 		}
 	}
-	return 0, 0, false
+	return goVersion{}, false
 }
 
-func majorMinor(version string) (int, int, bool) {
-	var major, minor int
-	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
-		return 0, 0, false
+// parseGoVersion reads a `major.minor[.patch]` version, tolerating a trailing
+// pre-release suffix (e.g. `1.25rc1`). It requires at least major.minor; a
+// present patch component sets patchSet.
+func parseGoVersion(version string) (goVersion, bool) {
+	var v goVersion
+	n, _ := fmt.Sscanf(version, "%d.%d.%d", &v.major, &v.minor, &v.patch)
+	if n < 2 {
+		return goVersion{}, false
 	}
-	return major, minor, true
+	v.patchSet = n >= 3
+	return v, true
 }
 
 func firstLine(out []byte) string {
