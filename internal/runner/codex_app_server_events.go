@@ -66,6 +66,7 @@ func (c *appServerClient) recordInputRequiredMessage(method string, msg map[stri
 func (c *appServerClient) recordRuntimeEvent(event string, payload map[string]any) {
 	runtimeEvent := task.RuntimeEvent{Event: event, Payload: payload}
 	c.runtimeEvents = append(c.runtimeEvents, runtimeEvent)
+	c.lastRuntimeEvent = event
 	if c.runtimeEventSink != nil {
 		c.runtimeEventSink(runtimeEvent)
 	}

@@ -58,6 +58,7 @@ const (
 
 	EventSessionStarted       = "session_started"
 	EventStartupFailed        = "startup_failed"
+	EventTurnStarted          = "turn_started"
 	EventTurnCompleted        = "turn_completed"
 	EventTurnFailed           = "turn_failed"
 	EventTurnCancelled        = "turn_cancelled"
@@ -106,12 +107,13 @@ const (
 	EventTrackerComment         = "tracker_comment"
 )
 
-// RuntimeEvents returns the SPEC §10.4 app-server event vocabulary this
-// implementation forwards into task events.
+// RuntimeEvents returns the app-server runtime event vocabulary this
+// implementation forwards or synthesizes into task events.
 func RuntimeEvents() []string {
 	return []string{
 		EventSessionStarted,
 		EventStartupFailed,
+		EventTurnStarted,
 		EventTurnCompleted,
 		EventTurnFailed,
 		EventTurnCancelled,
@@ -136,8 +138,9 @@ func PhaseTransitionEvent(from, to RunAttemptPhase) PhaseTransition {
 	return PhaseTransition{Event: EventRunPhaseTransition, From: from, To: to}
 }
 
-// RuntimeEvent is a SPEC §10.4 app-server event emitted by an agent runtime
-// and forwarded into the task event stream by the worker.
+// RuntimeEvent is an app-server event emitted by an agent runtime, or a
+// runner-synthesized marker for the same live session, forwarded into the task
+// event stream by the worker.
 type RuntimeEvent struct {
 	Event   string `json:"event"`
 	Payload any    `json:"payload,omitempty"`

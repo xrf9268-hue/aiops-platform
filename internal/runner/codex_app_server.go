@@ -294,6 +294,7 @@ type appServerClient struct {
 	stallTimeoutMs    int
 	approvalPolicy    any
 	lastTerminal      time.Time
+	lastRuntimeEvent  string
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -409,6 +410,7 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 	if turn == 1 {
 		c.recordFirstTurnStarted(threadID, turnID)
 	}
+	c.recordTurnStarted(threadID, turnID, turn)
 	c.continueRun = false
 	turnCtx := ctx
 	var cancel context.CancelFunc
@@ -496,6 +498,15 @@ func (c *appServerClient) recordFirstTurnStarted(threadID, turnID string) {
 	}
 	c.recordRuntimeEvent(task.EventSessionStarted, payload)
 	c.recordPhaseTransition(task.PhaseInitializingSession, task.PhaseStreamingTurn)
+}
+
+func (c *appServerClient) recordTurnStarted(threadID, turnID string, turn int) {
+	c.recordRuntimeEvent(task.EventTurnStarted, map[string]any{
+		"session_id":  threadID + "-" + turnID,
+		"thread_id":   threadID,
+		"turn_id":     turnID,
+		"turn_number": turn,
+	})
 }
 
 // classifyTurnError maps an awaitTurnCompletion failure to the run's returned
