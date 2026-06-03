@@ -46,6 +46,20 @@ func reconcileCancelRun(t *testing.T, o *Orchestrator, disp *fakeDispatcher, iss
 	}, time.Second)
 }
 
+func recordLinearHandoffMutation(t *testing.T, o *Orchestrator, issueID string) {
+	t.Helper()
+	err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventToolCallMutation,
+		Payload: map[string]any{
+			"tool":            "linear_graphql",
+			"operation_field": "issueUpdate",
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRuntimeEvent(linear_graphql mutation): %v", err)
+	}
+}
+
 // TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress: a reconcile-cancel of
 // a run that completed a turn is surfaced in ReconcileStoppedWithProgress (and the lifetime
 // counter), and is NOT counted as completed.
@@ -69,6 +83,43 @@ func TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress(t *testi
 	}
 }
 
+func TestReconcileCancelAfterLinearHandoffWithoutTurnRecordsAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF4", Identifier: "ENG-RF4", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordLinearHandoffMutation(t, o, iss.ID)
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 1 || v.AgentHandoffReconcileStopped[0] != IssueID(iss.ID) {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want [%s]", v.AgentHandoffReconcileStopped, iss.ID)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 1 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 1", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 0 {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty without turn_completed", v.ReconcileStoppedWithProgress)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty (agent-side handoff reconcile stop is not a clean §16.5 exit)", v.Completed)
+	}
+}
+
 // TestReconcileCancelNoTurnDoesNotRecordReconcileStoppedWithProgress: a reconcile-cancel
 // before any turn completed is a genuine no-progress stop and must not be
 // surfaced as a handoff.
@@ -86,6 +137,9 @@ func TestReconcileCancelNoTurnDoesNotRecordReconcileStoppedWithProgress(t *testi
 	}
 	if v.CumulativeReconcileStoppedWithProgressTotal != 0 {
 		t.Fatalf("CumulativeReconcileStoppedWithProgressTotal = %d; want 0", v.CumulativeReconcileStoppedWithProgressTotal)
+	}
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty without Linear handoff activity", v.AgentHandoffReconcileStopped)
 	}
 }
 

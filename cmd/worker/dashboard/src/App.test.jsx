@@ -6,7 +6,15 @@ const sampleState = {
   generated_at: '2026-05-24T00:00:00.000Z',
   poll_interval_ms: 2000,
   max_concurrent_agents: 10,
-  counts: { running: 2, retrying: 1, blocked: 1, completed_total: 142, completed: 8 },
+  counts: {
+    running: 2,
+    retrying: 1,
+    blocked: 1,
+    completed_total: 142,
+    completed: 8,
+    agent_handoff_reconcile_stopped_total: 3,
+    agent_handoff_reconcile_stopped: 2,
+  },
   codex_totals: { input_tokens: 1234567, output_tokens: 234567, total_tokens: 1469134, seconds_running: 252 },
   rate_limits: {
     limit_id: 'pro-tier',
@@ -89,6 +97,15 @@ describe('Operations Dashboard', () => {
     const completedCard = screen.getByText('Completed').closest('article');
     const value = within(completedCard).getByText('142');
     expect(value.className).toContain('text-good');
+  });
+
+  it('shows agent-side handoff reconcile stops separately from completed', async () => {
+    render(<App />);
+    await screen.findByText('pro-tier');
+
+    const handoffCard = screen.getByText('Agent handoff').closest('article');
+    expect(within(handoffCard).getByText('3')).toBeTruthy();
+    expect(within(handoffCard).getByText('Recent: 2')).toBeTruthy();
   });
 
   it('renders a theme toggle defaulting from system preference', async () => {

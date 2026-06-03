@@ -50,6 +50,7 @@ type apiStateResponse struct {
 	// completed: a reconcile-stopped run is not a clean §16.5 exit, matching
 	// upstream's accounting, so completed stays unchanged.
 	ReconcileStoppedWithProgress []orchestrator.IssueID `json:"reconcile_stopped_with_progress"`
+	AgentHandoffReconcileStopped []orchestrator.IssueID `json:"agent_handoff_reconcile_stopped"`
 	CodexTotals                  apiCodexTotals         `json:"codex_totals"`
 	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
 	// is emitted unconditionally — `null` until a `rate_limit_updated`
@@ -86,6 +87,8 @@ type apiStateCounts struct {
 	// survives FIFO eviction (#557).
 	ReconcileStoppedWithProgress      int   `json:"reconcile_stopped_with_progress"`
 	ReconcileStoppedWithProgressTotal int64 `json:"reconcile_stopped_with_progress_total"`
+	AgentHandoffReconcileStopped      int   `json:"agent_handoff_reconcile_stopped"`
+	AgentHandoffReconcileStoppedTotal int64 `json:"agent_handoff_reconcile_stopped_total"`
 }
 type apiStateRunning struct {
 	IssueID    orchestrator.IssueID `json:"issue_id"`
@@ -368,7 +371,8 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 		ev := view.RecentEvents[i]
 		if ev.Kind != orchestrator.RuntimeEventCompleted &&
 			ev.Kind != orchestrator.RuntimeEventFailed &&
-			ev.Kind != orchestrator.RuntimeEventReconcileStopped {
+			ev.Kind != orchestrator.RuntimeEventReconcileStopped &&
+			ev.Kind != orchestrator.RuntimeEventAgentHandoffReconcileStopped {
 			continue
 		}
 		if !matchesIssueLookup(ev.IssueID, ev.Identifier, normalizedWant) {
@@ -395,6 +399,11 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 	for _, issueID := range view.ReconcileStoppedWithProgress {
 		if matchesIssueLookup(issueID, "", normalizedWant) {
 			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
+		}
+	}
+	for _, issueID := range view.AgentHandoffReconcileStopped {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "agent_handoff_reconcile_stopped"), true
 		}
 	}
 	return apiIssueResponse{}, false
@@ -554,6 +563,10 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(reconcileFinished, func(i, j int) bool {
 		return reconcileFinished[i] < reconcileFinished[j]
 	})
+	agentHandoffFinished := append([]orchestrator.IssueID(nil), view.AgentHandoffReconcileStopped...)
+	sort.Slice(agentHandoffFinished, func(i, j int) bool {
+		return agentHandoffFinished[i] < agentHandoffFinished[j]
+	})
 	return apiStateResponse{
 		GeneratedAt:                  generatedAt,
 		PollIntervalMs:               view.PollIntervalMs,
@@ -565,6 +578,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		Retrying:                     retrying,
 		Completed:                    completed,
 		ReconcileStoppedWithProgress: reconcileFinished,
+		AgentHandoffReconcileStopped: agentHandoffFinished,
 		CodexTotals: apiCodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
@@ -603,6 +617,8 @@ func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 		CompletedTotal:                    view.CumulativeCompletedTotal,
 		ReconcileStoppedWithProgress:      len(view.ReconcileStoppedWithProgress),
 		ReconcileStoppedWithProgressTotal: view.CumulativeReconcileStoppedWithProgressTotal,
+		AgentHandoffReconcileStopped:      len(view.AgentHandoffReconcileStopped),
+		AgentHandoffReconcileStoppedTotal: view.CumulativeAgentHandoffReconcileStoppedTotal,
 	}
 }
 func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {

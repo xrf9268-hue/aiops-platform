@@ -71,6 +71,7 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		}
 	}
 	s.recordSessionFields(run, event)
+	s.recordAgentHandoffFields(run, event)
 	s.recordInputRequiredFields(run, event, now)
 	if usage, ok := tokenUsageFromEvent(event); ok {
 		input, output, total := applyTokenUsage(run, usage)
@@ -80,6 +81,20 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		snap := RateLimitSnapshot(limits)
 		s.RecordRateLimits(&snap)
 	}
+}
+
+func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event task.RuntimeEvent) {
+	if event.Event != task.EventToolCallMutation {
+		return
+	}
+	payload, _ := asStringMap(event.Payload)
+	if tool, ok := stringField(payload, "tool"); ok && isLinearMutationTool(tool) {
+		run.AgentHandoffActivity = true
+	}
+}
+
+func isLinearMutationTool(tool string) bool {
+	return tool == "linear_graphql" || tool == "linear_ai_workpad"
 }
 
 func (s *OrchestratorState) recordInputRequiredFields(run *RunningEntry, event task.RuntimeEvent, now time.Time) {

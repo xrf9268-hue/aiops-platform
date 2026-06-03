@@ -142,6 +142,12 @@ type RunningEntry struct {
 	InputRequiredAt     time.Time
 	InputRequiredMethod string
 
+	// AgentHandoffActivity is set when the agent uses token-isolated Linear
+	// mutation tooling during the run. If reconcile stops the run before a
+	// turn_completed event arrives, operators still need to see that handoff
+	// activity happened without counting the worker as completed.
+	AgentHandoffActivity bool
+
 	// CancelWorker cancels the run's context. The cause distinguishes a
 	// supervised eligibility stop (worker.ErrReconcileCancel — the worker then
 	// records runner_stopped, not runner_failed, #543) from a stall/shutdown
@@ -238,6 +244,10 @@ type OrchestratorState struct {
 	reconcileStoppedWithProgressOrder           []IssueID
 	CumulativeReconcileStoppedWithProgressTotal int64
 
+	AgentHandoffReconcileStopped                map[IssueID]struct{}
+	agentHandoffReconcileStoppedOrder           []IssueID
+	CumulativeAgentHandoffReconcileStoppedTotal int64
+
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
 
@@ -282,6 +292,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		RetryAttempts:                map[IssueID]*RetryEntry{},
 		Completed:                    map[IssueID]struct{}{},
 		ReconcileStoppedWithProgress: map[IssueID]struct{}{},
+		AgentHandoffReconcileStopped: map[IssueID]struct{}{},
 		cleaningWorkspaces:           map[IssueID]struct{}{},
 		MaxRecentCompleted:           DefaultMaxRecentCompleted,
 	}
@@ -377,6 +388,20 @@ func (s *OrchestratorState) recordReconcileStoppedWithProgress(id IssueID) {
 		oldest := s.reconcileStoppedWithProgressOrder[0]
 		s.reconcileStoppedWithProgressOrder = s.reconcileStoppedWithProgressOrder[1:]
 		delete(s.ReconcileStoppedWithProgress, oldest)
+	}
+}
+
+func (s *OrchestratorState) recordAgentHandoffReconcileStopped(id IssueID) {
+	s.CumulativeAgentHandoffReconcileStoppedTotal++
+	if _, ok := s.AgentHandoffReconcileStopped[id]; ok {
+		return
+	}
+	s.AgentHandoffReconcileStopped[id] = struct{}{}
+	s.agentHandoffReconcileStoppedOrder = append(s.agentHandoffReconcileStoppedOrder, id)
+	if s.MaxRecentCompleted > 0 && len(s.agentHandoffReconcileStoppedOrder) > s.MaxRecentCompleted {
+		oldest := s.agentHandoffReconcileStoppedOrder[0]
+		s.agentHandoffReconcileStoppedOrder = s.agentHandoffReconcileStoppedOrder[1:]
+		delete(s.AgentHandoffReconcileStopped, oldest)
 	}
 }
 
@@ -632,8 +657,10 @@ type StateView struct {
 	// CumulativeReconcileStoppedWithProgressTotal is the lifetime monotonic counter
 	// that survives FIFO eviction.
 	ReconcileStoppedWithProgress                []IssueID
+	AgentHandoffReconcileStopped                []IssueID
 	CumulativeCompletedTotal                    int64
 	CumulativeReconcileStoppedWithProgressTotal int64
+	CumulativeAgentHandoffReconcileStoppedTotal int64
 	CodexTotals                                 CodexTotals
 	CodexRateLimits                             *RateLimitSnapshot
 	// RecentEvents is the bounded orchestrator-wide event log (capped at
@@ -776,8 +803,10 @@ func (s *OrchestratorState) Snapshot() StateView {
 		Retrying:                     make([]RetryView, 0, len(s.RetryAttempts)),
 		Completed:                    make([]IssueID, 0, len(s.completedOrder)),
 		ReconcileStoppedWithProgress: make([]IssueID, 0, len(s.reconcileStoppedWithProgressOrder)),
+		AgentHandoffReconcileStopped: make([]IssueID, 0, len(s.agentHandoffReconcileStoppedOrder)),
 		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
 		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
+		CumulativeAgentHandoffReconcileStoppedTotal: s.CumulativeAgentHandoffReconcileStoppedTotal,
 		CodexTotals:     totals,
 		CodexRateLimits: copyRateLimitSnapshot(s.CodexRateLimits),
 		RecentEvents:    append([]RuntimeEvent(nil), s.RecentEvents...),
@@ -813,6 +842,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 	// stably, and the bounded slice matches MaxRecent* exactly.
 	view.Completed = append(view.Completed, s.completedOrder...)
 	view.ReconcileStoppedWithProgress = append(view.ReconcileStoppedWithProgress, s.reconcileStoppedWithProgressOrder...)
+	view.AgentHandoffReconcileStopped = append(view.AgentHandoffReconcileStopped, s.agentHandoffReconcileStoppedOrder...)
 	return view
 }
 

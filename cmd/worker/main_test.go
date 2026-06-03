@@ -117,6 +117,38 @@ func TestApiIssueFromViewResolvesReconcileStoppedFromBucketWhenEventAgedOut(t *t
 	}
 }
 
+func TestApiIssueFromViewFindsAgentHandoffReconcileStoppedByIdentifierAndID(t *testing.T) {
+	view := orchestrator.StateView{
+		AgentHandoffReconcileStopped: []orchestrator.IssueID{"linear-uuid-62"},
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventAgentHandoffReconcileStopped,
+			IssueID:    "linear-uuid-62",
+			Identifier: "AIS-62",
+			Message:    "reconcile stopped run after agent-side Linear handoff activity",
+			At:         time.Unix(1700000000, 0).UTC(),
+		}},
+	}
+	for _, want := range []string{"AIS-62", "linear-uuid-62"} {
+		got, ok := apiIssueFromView(view, want)
+		if !ok {
+			t.Fatalf("apiIssueFromView(%q) ok = false; want true", want)
+		}
+		if got.Status != "agent_handoff_reconcile_stopped" || got.IssueID != "linear-uuid-62" {
+			t.Fatalf("apiIssueFromView(%q) = (%s, %s); want (agent_handoff_reconcile_stopped, linear-uuid-62)", want, got.Status, got.IssueID)
+		}
+	}
+}
+
+func TestApiIssueFromViewResolvesAgentHandoffReconcileStoppedFromBucketWhenEventAgedOut(t *testing.T) {
+	view := orchestrator.StateView{
+		AgentHandoffReconcileStopped: []orchestrator.IssueID{"linear-uuid-62"},
+	}
+	got, ok := apiIssueFromView(view, "linear-uuid-62")
+	if !ok || got.Status != "agent_handoff_reconcile_stopped" {
+		t.Fatalf("apiIssueFromView(linear-uuid-62) = (%v, %s); want (true, agent_handoff_reconcile_stopped)", ok, got.Status)
+	}
+}
+
 // TestApiRunningRowEmitsLastEventAt pins the SPEC §13.7.2 running-row
 // contract: once a runtime event has been observed the row exposes
 // last_event_at as an RFC3339 string; no back-compat alias is emitted.

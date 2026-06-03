@@ -412,6 +412,7 @@ export default function App() {
   const maxAgents = state?.max_concurrent_agents ?? '—';
 
   const completed = Number(counts.completed_total ?? counts.completed ?? 0);
+  const agentHandoff = Number(counts.agent_handoff_reconcile_stopped_total ?? counts.agent_handoff_reconcile_stopped ?? 0);
   const blocked = Number(counts.blocked ?? 0);
   const retrying = Number(counts.retrying ?? 0);
 
@@ -603,7 +604,7 @@ export default function App() {
       )}
 
       {/* Metrics row */}
-      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3.5 mb-6">
+      <section className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5 mb-6">
         <h2 className="sr-only">Session status counts</h2>
         <MetricCard label="Running" value={formatCount(counts.running)} hint="Active sessions" loading={loading} />
         <MetricCard
@@ -625,6 +626,13 @@ export default function App() {
           value={formatCount(completed)}
           hint={`Recent: ${formatCount(counts.completed)}`}
           tone={completed > 0 ? 'good' : 'default'}
+          loading={loading}
+        />
+        <MetricCard
+          label="Agent handoff"
+          value={formatCount(agentHandoff)}
+          hint={`Recent: ${formatCount(counts.agent_handoff_reconcile_stopped)}`}
+          tone={agentHandoff > 0 ? 'good' : 'default'}
           loading={loading}
         />
       </section>
