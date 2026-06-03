@@ -46,6 +46,10 @@ linters:
         linters:
           - funlen
           - gocognit
+      - path: _test\.go
+        linters:
+          - staticcheck
+        text: "SA5011"
 
 formatters:
   enable:
