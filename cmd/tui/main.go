@@ -80,9 +80,12 @@ type stateResponse struct {
 }
 
 type stateCounts struct {
-	Running  int `json:"running"`
-	Blocked  int `json:"blocked"`
-	Retrying int `json:"retrying"`
+	Running                            int   `json:"running"`
+	Blocked                            int   `json:"blocked"`
+	Retrying                           int   `json:"retrying"`
+	CompletedTotal                     int64 `json:"completed_total"`
+	AgentHandoffReconcileStoppedTotal  int64 `json:"agent_handoff_reconcile_stopped_total"`
+	AgentHandoffReconcileStoppedRecent int   `json:"agent_handoff_reconcile_stopped"`
 }
 
 type runningEntry struct {
@@ -443,6 +446,11 @@ func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float6
 			colorize(formatCount(int64(agentCount)), ansiGreen) +
 			colorize("/", ansiGray) +
 			colorize(formatCount(int64(maxAgents)), ansiGray),
+		colorize("│ Handoffs: ", ansiBold) +
+			colorize("completed "+formatCount(state.Counts.CompletedTotal), ansiGreen) +
+			colorize(" | ", ansiGray) +
+			colorize("agent "+formatCount(state.Counts.AgentHandoffReconcileStoppedTotal), ansiGreen) +
+			colorize(" (recent "+formatCount(int64(state.Counts.AgentHandoffReconcileStoppedRecent))+")", ansiGray),
 		colorize("│ Throughput: ", ansiBold) + colorize(formatTPS(tps)+" tps", ansiCyan),
 		colorize("│ Runtime:    ", ansiBold) + colorize(formatRuntimeSecs(state.CodexTotals.SecondsRunning), ansiMagenta),
 		colorize("│ Tokens:     ", ansiBold) +

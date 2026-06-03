@@ -190,6 +190,9 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 	if runHasCompletedTurn(f.entry) {
 		st.recordReconcileStoppedWithProgress(f.id)
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
+	} else if runHasAgentHandoffWithoutCompletedTurn(f.entry) {
+		st.recordAgentHandoffReconcileStopped(f.id)
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventAgentHandoffReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after agent-side Linear handoff activity"})
 	}
 	close(f.done)
 	return cleanup, true

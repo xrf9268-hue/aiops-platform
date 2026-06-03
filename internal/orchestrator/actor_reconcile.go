@@ -399,6 +399,10 @@ func runHasCompletedTurn(run *RunningEntry) bool {
 	return run != nil && run.Session.TurnCount > 0
 }
 
+func runHasAgentHandoffWithoutCompletedTurn(run *RunningEntry) bool {
+	return run != nil && run.AgentHandoffActivity && !runHasCompletedTurn(run)
+}
+
 // refreshRunningIssue updates a still-active run's stored issue and clears any
 // terminal-cleanup flag left by an earlier terminal observation. The issue is
 // active again, so its workspace must be preserved: without this reset a

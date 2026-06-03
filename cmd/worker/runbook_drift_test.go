@@ -102,6 +102,8 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			CompletedTotal:                    12,
 			ReconcileStoppedWithProgress:      1,
 			ReconcileStoppedWithProgressTotal: 2,
+			AgentHandoffReconcileStopped:      3,
+			AgentHandoffReconcileStoppedTotal: 4,
 		},
 		Running: []apiStateRunning{{
 			IssueID:       "issue-1",

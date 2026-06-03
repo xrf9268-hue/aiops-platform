@@ -125,7 +125,9 @@ the shape here without updating the handler — or vice versa — fails the buil
     "completed": 0,
     "completed_total": 12,
     "reconcile_stopped_with_progress": 1,
-    "reconcile_stopped_with_progress_total": 2
+    "reconcile_stopped_with_progress_total": 2,
+    "agent_handoff_reconcile_stopped": 3,
+    "agent_handoff_reconcile_stopped_total": 4
   },
   "running": [
     {
@@ -174,6 +176,7 @@ the shape here without updating the handler — or vice versa — fails the buil
   ],
   "completed": [],
   "reconcile_stopped_with_progress": [],
+  "agent_handoff_reconcile_stopped": [],
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -195,14 +198,17 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
 | `reconcile_stopped_with_progress` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had completed ≥1 agent turn (made progress) before the per-tick reconcile reaped them mid-finalization. Usually the agent's own handoff, but `turn_completed` fires after every turn, so it can also be a run stopped after an intermediate turn — treat it as "reaped after progress, worth inspecting," not a guaranteed success. Surfaced so such a run is visible rather than absent from `completed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
+| `agent_handoff_reconcile_stopped` | Size of the FIFO-bounded recent set of reconcile-stopped runs that observed an agent-side Linear mutation (`linear_graphql` or `linear_ai_workpad`) but did not observe `turn_completed` before reconcile made the issue ineligible. This covers the successful handoff visibility gap where the agent moved/commented the Linear issue and the worker was stopped before a completed-turn event arrived. It does not overlap `completed` or `reconcile_stopped_with_progress`. |
+| `agent_handoff_reconcile_stopped_total` | Monotonic counter of agent-handoff reconcile-stop transitions since process start. |
 
 There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
 backoff (visible under `retrying`), not parked in a suppression bucket — the
 former deterministic-non-retryable suppression was removed in #584 (D29).
 
-`completed` and `reconcile_stopped_with_progress` arrays at the top level publish
-the recent N issue IDs in those sets; for lifetime totals across FIFO eviction
-use the `_total` counters.
+`completed`, `reconcile_stopped_with_progress`, and
+`agent_handoff_reconcile_stopped` arrays at the top level publish the recent N
+issue IDs in those sets; for lifetime totals across FIFO eviction use the
+`_total` counters.
 
 ### `codex_totals.seconds_running` semantics
 

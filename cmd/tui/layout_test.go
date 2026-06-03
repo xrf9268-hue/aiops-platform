@@ -123,7 +123,12 @@ func representativeState(now time.Time) *stateResponse {
 	due := now.Add(30 * time.Second)
 	return &stateResponse{
 		MaxConcurrentAgents: 10,
-		CodexTotals:         codexTotals{InputTokens: 123456, OutputTokens: 654321, TotalTokens: 1_000_000_000, SecondsRunning: 3600},
+		Counts: stateCounts{
+			CompletedTotal:                     12,
+			AgentHandoffReconcileStoppedTotal:  3,
+			AgentHandoffReconcileStoppedRecent: 2,
+		},
+		CodexTotals: codexTotals{InputTokens: 123456, OutputTokens: 654321, TotalTokens: 1_000_000_000, SecondsRunning: 3600},
 		Running: []runningEntry{{
 			Identifier:        "ENG-1234",
 			State:             "running",
@@ -207,6 +212,15 @@ func TestRenderFrame_NoClipWithoutLiveWidth(t *testing.T) {
 	}
 	if strings.HasSuffix(rate, "…"+ansiReset) {
 		t.Errorf("rate-limits line should not be clipped when no live width is measured: %q", visibleString(rate))
+	}
+}
+
+func TestRenderFrame_ShowsAgentHandoffCount(t *testing.T) {
+	now := time.Now()
+	frame := visibleString(renderFrame(representativeState(now), nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
+
+	if !strings.Contains(frame, "Handoffs: completed 12 | agent 3 (recent 2)") {
+		t.Fatalf("renderFrame missing agent handoff count: %q", frame)
 	}
 }
 
