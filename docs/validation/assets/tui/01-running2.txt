@@ -1,0 +1,20 @@
+[1m╭─ AIOPS STATUS[0m
+[1m│ Agents: [0m[32m2[0m[90m/[0m[90m2[0m
+[1m│ Handoffs: [0m[32mcompleted 0[0m[90m | [0m[32magent 0[0m[90m (recent 0)[0m
+[1m│ Throughput: [0m[36m0 tps[0m
+[1m│ Runtime:    [0m[35m2m 10s[0m
+[1m│ Tokens:     [0m[33min 177,410[0m[90m | [0m[33mout 3,463[0m[90m | [0m[33mtotal 180,873[0m
+[1m│ Rate Limits: [0m[33mcodex[0m[90m | [0m[36mprimary n/a reset 1780483876s[0m[90m | [0m[36msecondary n/a reset 1780899686s[0m[90m | [0m[32mcredits n/a[0m
+[1m│ Dashboard:   [0m[36mhttp://127.0.0.1:4104/[0m
+[1m│ Next refresh: [0m[36m0s[0m
+[1m├─ Running[0m
+│
+│   [90mID       STAGE          PID      AGE / TURN       TOKENS SESSION        EVENT                                       [0m
+│   [90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+│ [34m●[0m [36mAIS-61  [0m [34mTodo          [0m [33mn/a     [0m [35m1m 5s       [0m [33m    87,791[0m [36m019e...612f2d [0m [34mnotification                                [0m
+│ [34m●[0m [36mAIS-62  [0m [34mTodo          [0m [33mn/a     [0m [35m1m 5s       [0m [33m    93,082[0m [36m019e...e32329 [0m [34mnotification                                [0m
+│
+[1m├─ Backoff queue[0m
+│
+│  [90mNo queued retries[0m
+[1m╰─[0m
