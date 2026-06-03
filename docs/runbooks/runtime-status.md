@@ -247,8 +247,11 @@ Each entry in the `running` array follows SPEC §13.7.2:
   runner emits a `session_started` event.
 - `turn_count` — running count of `turn_completed` events observed in the
   session.
-- `last_event` — the most-recent runtime event kind (SPEC §10.4 vocabulary,
-  e.g. `turn_completed`, `notification`).
+- `last_event` — the most-recent runner runtime event kind, including
+  app-server events from SPEC §10.4 (for example `notification` and
+  `turn_completed`) plus runner-synthesized markers. `turn_started` means Codex
+  accepted `turn/start` and the runner is waiting for the first streaming
+  app-server update.
 - `last_message` — the most-recent `payload.message` string from a runtime
   event; sticky across later events that do not include one.
 - `started_at` — RFC3339 timestamp the worker spawned at.

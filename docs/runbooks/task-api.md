@@ -59,6 +59,10 @@ log.
 Important task event kinds emitted into the worker log/event emitter include:
 
 - `run_phase_transition` — SPEC run-attempt phase transitions
+- `session_started`, `turn_started`, `notification`, `turn_completed` — Codex
+  runner runtime events; `turn_started` is synthesized after a successful
+  `turn/start` response, while notifications and completions are app-server
+  stream events
 - `runner_start`, `runner_end`, `runner_timeout`
 - `workflow_resolved`, `hook_start`, `hook_end`
 

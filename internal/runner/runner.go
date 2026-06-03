@@ -270,15 +270,21 @@ type StallError struct {
 	Timeout time.Duration
 	// Elapsed is how long the runner was silent since the last event.
 	Elapsed time.Duration
+	// LastEvent is the last runtime event the runner emitted before silence.
+	LastEvent string
 	// Cause is the wrapped underlying error, when available.
 	Cause error
 }
 
 func (e *StallError) Error() string {
-	if e.Cause != nil {
-		return fmt.Sprintf("runner stall timeout after %s without events (budget %s): %v", e.Elapsed, e.Timeout, e.Cause)
+	last := ""
+	if strings.TrimSpace(e.LastEvent) != "" {
+		last = fmt.Sprintf(" after last event %q", e.LastEvent)
 	}
-	return fmt.Sprintf("runner stall timeout after %s without events (budget %s)", e.Elapsed, e.Timeout)
+	if e.Cause != nil {
+		return fmt.Sprintf("runner stall timeout after %s without events%s (budget %s): %v", e.Elapsed, last, e.Timeout, e.Cause)
+	}
+	return fmt.Sprintf("runner stall timeout after %s without events%s (budget %s)", e.Elapsed, last, e.Timeout)
 }
 
 func (e *StallError) Unwrap() error { return e.Cause }

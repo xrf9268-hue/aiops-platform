@@ -31,10 +31,11 @@ func TestRunAttemptPhasesMatchSymphonySpec(t *testing.T) {
 	}
 }
 
-func TestRuntimeEventVocabularyIncludesSpecAppServerEvents(t *testing.T) {
+func TestRuntimeEventVocabularyIncludesRunnerAppServerEvents(t *testing.T) {
 	want := []string{
 		task.EventSessionStarted,
 		task.EventStartupFailed,
+		task.EventTurnStarted,
 		task.EventTurnCompleted,
 		task.EventTurnFailed,
 		task.EventTurnCancelled,

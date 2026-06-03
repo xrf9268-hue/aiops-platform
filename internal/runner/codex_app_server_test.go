@@ -402,8 +402,8 @@ for line in sys.stdin:
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(res.RuntimeEvents) != 3 {
-		t.Fatalf("RuntimeEvents len = %d, want session_started/notification/turn_completed: %#v", len(res.RuntimeEvents), res.RuntimeEvents)
+	if len(res.RuntimeEvents) != 4 {
+		t.Fatalf("RuntimeEvents len = %d, want session_started/turn_started/notification/turn_completed: %#v", len(res.RuntimeEvents), res.RuntimeEvents)
 	}
 	if res.RuntimeEvents[0].Event != task.EventSessionStarted {
 		t.Fatalf("first event = %q, want %q", res.RuntimeEvents[0].Event, task.EventSessionStarted)
@@ -424,13 +424,22 @@ for line in sys.stdin:
 	if n, _ := pid.(int); n <= 0 {
 		t.Fatalf("session_started codex_app_server_pid = %#v, want positive int (real codex subprocess PID)", pid)
 	}
-	if res.RuntimeEvents[1].Event != task.EventNotification {
-		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventNotification)
+	if res.RuntimeEvents[1].Event != task.EventTurnStarted {
+		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventTurnStarted)
 	}
-	if res.RuntimeEvents[2].Event != task.EventTurnCompleted {
-		t.Fatalf("third event = %q, want %q", res.RuntimeEvents[2].Event, task.EventTurnCompleted)
+	if got := runtimeEventField(t, res.RuntimeEvents[1], "session_id"); got != "thread-1-turn-1" {
+		t.Fatalf("turn_started session_id = %#v, want thread-1-turn-1", got)
 	}
-	if got := runtimeEventField(t, res.RuntimeEvents[2], "turn_id"); got != "turn-1" {
+	if got := runtimeEventField(t, res.RuntimeEvents[1], "turn_id"); got != "turn-1" {
+		t.Fatalf("turn_started turn_id = %#v, want turn-1", got)
+	}
+	if res.RuntimeEvents[2].Event != task.EventNotification {
+		t.Fatalf("third event = %q, want %q", res.RuntimeEvents[2].Event, task.EventNotification)
+	}
+	if res.RuntimeEvents[3].Event != task.EventTurnCompleted {
+		t.Fatalf("fourth event = %q, want %q", res.RuntimeEvents[3].Event, task.EventTurnCompleted)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[3], "turn_id"); got != "turn-1" {
 		t.Fatalf("turn_completed turn_id = %#v, want turn-1", got)
 	}
 }
@@ -2091,6 +2100,40 @@ for line in sys.stdin:
 	}
 	if !IsStall(err) {
 		t.Fatalf("Run error = %T %[1]v, want runner.IsStall=true", err)
+	}
+}
+
+func TestCodexAppServerRunnerStallReportsTurnStartedAsLastEvent(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json, time
+for line in sys.stdin:
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        time.sleep(2)
+        break
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	in.Workflow.Config.Codex.StallTimeoutMs = 25
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	_, err := (CodexAppServerRunner{}).Run(ctx, in)
+	var stall *StallError
+	if !errors.As(err, &stall) {
+		t.Fatalf("Run error = %T %[1]v, want *StallError after turn/start", err)
+	}
+	if stall.LastEvent != task.EventTurnStarted {
+		t.Fatalf("StallError.LastEvent = %q; want %q", stall.LastEvent, task.EventTurnStarted)
+	}
+	if !strings.Contains(err.Error(), `after last event "turn_started"`) {
+		t.Fatalf("Run error = %q; want last-event diagnostic context", err.Error())
 	}
 }
 

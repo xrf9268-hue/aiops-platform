@@ -57,7 +57,7 @@ func (c *appServerClient) readTurnMessage(ctx context.Context) (map[string]any, 
 		stallBudget = time.Duration(c.stallTimeoutMs) * time.Millisecond
 		remaining := stallBudget - time.Since(c.lastTerminal)
 		if remaining <= 0 {
-			return nil, nil, stallBudget, &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal)}
+			return nil, nil, stallBudget, &StallError{Timeout: stallBudget, Elapsed: time.Since(c.lastTerminal), LastEvent: c.lastRuntimeEvent}
 		}
 		readCtx, cancel = context.WithTimeout(ctx, remaining)
 	}
@@ -99,7 +99,7 @@ func (c *appServerClient) classifyTurnReadError(ctx context.Context, err error, 
 	elapsed := time.Since(c.lastTerminal)
 	if stallBudget > 0 && ctx.Err() == nil && elapsed >= stallBudget {
 		if errors.Is(err, context.DeadlineExceeded) || isAppServerReadTimeout(err) {
-			return &StallError{Timeout: stallBudget, Elapsed: elapsed, Cause: err}, false
+			return &StallError{Timeout: stallBudget, Elapsed: elapsed, LastEvent: c.lastRuntimeEvent, Cause: err}, false
 		}
 	}
 	return err, false
@@ -194,7 +194,7 @@ func (c *appServerClient) handleTurnNotification(msg map[string]any, method stri
 	if c.stallTimeoutMs > 0 {
 		elapsed := time.Since(c.lastTerminal)
 		if elapsed > time.Duration(c.stallTimeoutMs)*time.Millisecond {
-			return true, &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed}
+			return true, &StallError{Timeout: time.Duration(c.stallTimeoutMs) * time.Millisecond, Elapsed: elapsed, LastEvent: c.lastRuntimeEvent}
 		}
 	}
 	c.lastTerminal = time.Now()

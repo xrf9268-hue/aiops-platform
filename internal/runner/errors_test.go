@@ -67,6 +67,18 @@ func TestTimeoutTypesExposeRunnerCategories(t *testing.T) {
 	}
 }
 
+func TestStallErrorIncludesLastRuntimeEvent(t *testing.T) {
+	err := (&StallError{
+		Timeout:   time.Second,
+		Elapsed:   2 * time.Second,
+		LastEvent: "turn_started",
+		Cause:     context.DeadlineExceeded,
+	}).Error()
+	if !strings.Contains(err, `after last event "turn_started"`) {
+		t.Fatalf("StallError.Error() = %q; want last runtime event context", err)
+	}
+}
+
 func TestCodexAppServerRunnerStillReadsPromptForValidWorkspace(t *testing.T) {
 	wd := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(wd, ".aiops"), 0o755); err != nil {
