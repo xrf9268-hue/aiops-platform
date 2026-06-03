@@ -2257,14 +2257,13 @@ for line in sys.stdin:
 	// the turn deadline preempted promptly, but it is measured from turn start and
 	// cannot see time Run spends AFTER the turn in process termination /
 	// cmd.Wait(): if that cleanup rode the 10s outer ctx to expiry,
-	// classifyAppServerOutcome would wrap the same *TurnTimeoutError in a
+	// classifyAppServerOutcome wraps the same *TurnTimeoutError in a
 	// *TimeoutError (codex_app_server.go), whose Unwrap still satisfies the
-	// errors.As above — so the run could wait the full outer budget yet still pass
-	// the type + elapsed checks. Assert the outer ctx never fired to close that
-	// gap. This is boot-independent: interpreter boot only delays the 25ms turn,
-	// it never advances the 10s deadline, so a healthy run leaves ctx.Err() nil.
-	if ctx.Err() != nil {
-		t.Fatalf("ctx.Err() = %v after Run; want nil — Run waited for the outer context instead of returning on the 25ms turn deadline", ctx.Err())
+	// errors.As above. Rejecting that returned error shape closes the gap without
+	// racing a ctx.Err() read after Run has already returned.
+	var runTimeout *TimeoutError
+	if errors.As(err, &runTimeout) {
+		t.Fatalf("Run error = %T %[1]v, want bare *TurnTimeoutError without outer-run *TimeoutError wrapper", err)
 	}
 	// Assert promptness on TurnTimeoutError.Elapsed, which the runner measures as
 	// time.Since(turnStarted) (codex_app_server.go) — turnStarted is captured
