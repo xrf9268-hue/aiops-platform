@@ -24,7 +24,12 @@ ver="$(codex --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 [ -n "$ver" ] || { echo "could not parse 'codex --version'" >&2; exit 1; }
 major="$(echo "$ver" | cut -d. -f1)"
 minor="$(echo "$ver" | cut -d. -f2)"
-schema_file="codex_app_server_protocol_v${major}_${minor}.v2.schemas.json"
+patch="$(echo "$ver" | cut -d. -f3)"
+# Include the patch in the stamp: codex generates the schema per exact version,
+# so a patch bump must produce a new filename (the parity test asserts the full
+# v<major>_<minor>_<patch> stamp), forcing a regenerate rather than silently
+# reusing a stale patch schema (#629 P2).
+schema_file="codex_app_server_protocol_v${major}_${minor}_${patch}.v2.schemas.json"
 dest="internal/runner/testdata/${schema_file}"
 
 tmp="$(mktemp -d)"

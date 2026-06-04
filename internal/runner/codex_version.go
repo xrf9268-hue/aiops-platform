@@ -17,6 +17,6 @@ const CodexProtocolVersion = "0.137.0"
 // thread/start dynamicTools, which the default (non-experimental) schema export
 // strips — validating against a non-experimental bundle would falsely reject
 // dynamicTools.
-const codexProtocolSchemaFile = "codex_app_server_protocol_v0_137.v2.schemas.json"
+const codexProtocolSchemaFile = "codex_app_server_protocol_v0_137_0.v2.schemas.json"
 
 //go:generate sh -c "cd ../.. && scripts/refresh-codex-schema.sh"

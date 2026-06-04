@@ -22,10 +22,14 @@ func TestCodexVersionPinParity(t *testing.T) {
 		t.Fatalf("CodexProtocolVersion = %q; want major.minor.patch", CodexProtocolVersion)
 	}
 
-	// The vendored schema filename carries a v<major>_<minor> stamp.
-	stamp := "v" + m[1] + "_" + m[2]
+	// The vendored schema filename carries the FULL v<major>_<minor>_<patch>
+	// stamp. The patch must be included: codex generates the schema per exact
+	// version, so a patch bump (0.137.0 -> 0.137.1) that forgets to regenerate
+	// would otherwise keep the same major/minor filename, let this parity check
+	// pass, and leave the contract test validating a stale patch schema (#629 P2).
+	stamp := "v" + m[1] + "_" + m[2] + "_" + m[3]
 	if !strings.Contains(codexProtocolSchemaFile, stamp) {
-		t.Errorf("codexProtocolSchemaFile = %q; want it to contain stamp %q derived from CodexProtocolVersion %q", codexProtocolSchemaFile, stamp, CodexProtocolVersion)
+		t.Errorf("codexProtocolSchemaFile = %q; want it to contain stamp %q derived from CodexProtocolVersion %q (regenerate via scripts/refresh-codex-schema.sh)", codexProtocolSchemaFile, stamp, CodexProtocolVersion)
 	}
 
 	// The vendored bundle exists and is the real generated artifact (title is
