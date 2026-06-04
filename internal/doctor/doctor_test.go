@@ -624,7 +624,7 @@ func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 			return []byte(""), nil
 		case "codex":
 			if len(args) > 0 && args[0] == "--version" {
-				return []byte("codex-cli 0.133.0\n"), nil
+				return []byte("codex-cli 0.136.0\n"), nil
 			}
 			if len(args) > 1 && args[0] == "login" && args[1] == "status" {
 				return []byte("Logged in\n"), nil
@@ -811,7 +811,7 @@ func installFakeCodex(t *testing.T) {
 	path := filepath.Join(dir, "codex")
 	body := `#!/bin/sh
 case "$1" in
-  --version) echo "codex-cli 0.133.0"; exit 0 ;;
+  --version) echo "codex-cli 0.136.0"; exit 0 ;;
   login) echo "Logged in"; exit 0 ;;
   app-server) read line; echo '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'; exit 0 ;;
 esac
@@ -1087,6 +1087,47 @@ func writeGoModule(t *testing.T, version string) string {
 	return dir
 }
 
+func TestCodexVersionFromOutput(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   goVersion
+		wantOK bool
+	}{
+		{"codex-cli line", "codex-cli 0.136.0\n", goVersion{major: 0, minor: 136, patch: 0, patchSet: true}, true},
+		{"bare version", "0.135.2", goVersion{major: 0, minor: 135, patch: 2, patchSet: true}, true},
+		{"v-prefixed", "codex v0.137.0", goVersion{major: 0, minor: 137, patch: 0, patchSet: true}, true},
+		{"no version token", "codex-cli unknown", goVersion{}, false},
+	}
+	for _, tc := range cases {
+		got, ok := codexVersionFromOutput(tc.output)
+		if ok != tc.wantOK || got != tc.want {
+			t.Errorf("codexVersionFromOutput(%q) = (%+v, %v); want (%+v, %v)", tc.output, got, ok, tc.want, tc.wantOK)
+		}
+	}
+}
+
+func TestCodexVersionAtLeast(t *testing.T) {
+	v := func(mj, mn, p int) goVersion { return goVersion{major: mj, minor: mn, patch: p, patchSet: true} }
+	cases := []struct {
+		name      string
+		got, want goVersion
+		atLeast   bool
+	}{
+		{"equal", v(0, 136, 0), v(0, 136, 0), true},
+		{"older minor warns", v(0, 135, 9), v(0, 136, 0), false},
+		{"newer minor ok", v(0, 137, 0), v(0, 136, 0), true},
+		{"older patch warns", v(0, 136, 0), v(0, 136, 1), false},
+		{"newer patch ok", v(0, 136, 2), v(0, 136, 1), true},
+		{"older major warns", v(0, 99, 0), v(1, 0, 0), false},
+	}
+	for _, tc := range cases {
+		if got := codexVersionAtLeast(tc.got, tc.want); got != tc.atLeast {
+			t.Errorf("codexVersionAtLeast(%+v, %+v) = %v; want %v (%s)", tc.got, tc.want, got, tc.atLeast, tc.name)
+		}
+	}
+}
+
 func TestDoctorGoToolchainProbe(t *testing.T) {}
 
 func passingRunner(context.Context, string, []string, []string, io.Reader) ([]byte, error) {
@@ -1119,7 +1160,7 @@ func fakeRealRunner(_ context.Context, name string, args []string, _ []string, _
 		return []byte("Logged in\n"), nil
 	}
 	if name == "codex" && len(args) > 0 && args[0] == "--version" {
-		return []byte("codex-cli 0.133.0\n"), nil
+		return []byte("codex-cli 0.136.0\n"), nil
 	}
 	return []byte("ok\n"), nil
 }

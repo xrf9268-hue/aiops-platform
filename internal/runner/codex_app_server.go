@@ -307,7 +307,6 @@ type codexAppServerTurnStartParams struct {
 	ThreadID       string                      `json:"threadId"`
 	Input          []codexAppServerTextInput   `json:"input"`
 	CWD            string                      `json:"cwd,omitempty"`
-	Title          string                      `json:"title,omitempty"`
 	ApprovalPolicy any                         `json:"approvalPolicy,omitempty"`
 	SandboxPolicy  workflow.CodexSandboxPolicy `json:"sandboxPolicy"`
 }
@@ -375,14 +374,7 @@ func (c *appServerClient) initSession(in RunInput) {
 // thread/start — and returns the started thread id. Mirrors upstream
 // start_session.
 func (c *appServerClient) startThread(ctx context.Context, in RunInput) (string, error) {
-	if _, err := c.request(ctx, "initialize", map[string]any{
-		"capabilities": map[string]any{"experimentalApi": true},
-		"clientInfo": map[string]any{
-			"name":    "aiops-platform",
-			"title":   "AIOps Platform",
-			"version": "0.1.0",
-		},
-	}); err != nil {
+	if _, err := c.request(ctx, "initialize", buildInitializeParams()); err != nil {
 		c.recordStartupFailed("initialize", err)
 		return "", fmt.Errorf("codex app-server initialize: %w", err)
 	}
@@ -390,12 +382,7 @@ func (c *appServerClient) startThread(ctx context.Context, in RunInput) (string,
 		c.recordStartupFailed("initialized", err)
 		return "", err
 	}
-	threadResult, err := c.request(ctx, "thread/start", map[string]any{
-		"approvalPolicy": c.approvalPolicy,
-		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
-		"cwd":            in.Workdir,
-		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
-	})
+	threadResult, err := c.request(ctx, "thread/start", buildThreadStartParams(in, c.approvalPolicy))
 	if err != nil {
 		c.recordStartupFailed("thread/start", err)
 		return "", fmt.Errorf("codex app-server thread/start: %w", err)
@@ -461,14 +448,7 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 // turn is also recorded as a startup failure (the session never produced a
 // turn). Mirrors upstream start_turn.
 func (c *appServerClient) startTurn(ctx context.Context, in RunInput, threadID, prompt string, turn int) (string, error) {
-	turnResult, err := c.request(ctx, "turn/start", codexAppServerTurnStartParams{
-		ThreadID:       threadID,
-		Input:          turnInput(in, prompt, turn),
-		CWD:            in.Workdir,
-		Title:          appServerTurnTitle(in),
-		ApprovalPolicy: c.approvalPolicy,
-		SandboxPolicy:  in.Workflow.Config.Codex.TurnSandboxPolicy,
-	})
+	turnResult, err := c.request(ctx, "turn/start", buildTurnStartParams(in, threadID, prompt, turn, c.approvalPolicy))
 	if err != nil {
 		if turn == 1 {
 			c.recordStartupFailed("turn/start", err)
@@ -497,6 +477,47 @@ func turnInput(in RunInput, prompt string, turn int) []codexAppServerTextInput {
 		Text:         text,
 		TextElements: []any{},
 	}}
+}
+
+// buildInitializeParams is the SPEC §10.1 initialize payload. It is extracted
+// (rather than inlined at the call site) so the schema contract test validates
+// the exact bytes startThread sends. capabilities.experimentalApi opts into the
+// experimental protocol surface, which is what makes thread/start dynamicTools
+// (also experimental) take effect.
+func buildInitializeParams() map[string]any {
+	return map[string]any{
+		"capabilities": map[string]any{"experimentalApi": true},
+		"clientInfo": map[string]any{
+			"name":    "aiops-platform",
+			"title":   "AIOps Platform",
+			"version": "0.1.0",
+		},
+	}
+}
+
+// buildThreadStartParams is the thread/start payload. dynamicTools is an
+// experimental field gated by the experimentalApi capability set in
+// buildInitializeParams; it advertises the SPEC §10.5 client-side tool surface
+// (e.g. linear_graphql) to the agent.
+func buildThreadStartParams(in RunInput, approvalPolicy any) map[string]any {
+	return map[string]any{
+		"approvalPolicy": approvalPolicy,
+		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
+		"cwd":            in.Workdir,
+		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
+	}
+}
+
+// buildTurnStartParams is the turn/start payload, extracted so the schema
+// contract test validates the exact bytes startTurn sends.
+func buildTurnStartParams(in RunInput, threadID, prompt string, turn int, approvalPolicy any) codexAppServerTurnStartParams {
+	return codexAppServerTurnStartParams{
+		ThreadID:       threadID,
+		Input:          turnInput(in, prompt, turn),
+		CWD:            in.Workdir,
+		ApprovalPolicy: approvalPolicy,
+		SandboxPolicy:  in.Workflow.Config.Codex.TurnSandboxPolicy,
+	}
 }
 
 // recordFirstTurnStarted emits the SPEC §10.4 session_started event and the
@@ -727,13 +748,16 @@ func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 	return specs
 }
 
-// appServerTurnTitle builds the Codex turn title following SPEC §10.2:
-// "<issue.identifier>: <issue.title>". Task.SourceEventID is the
-// tracker identifier (e.g. "AIOPS-64", "MT-649"); Task.ID is an
-// internal queue nonce that means nothing to operators reading a
-// Codex session log. Prefer the identifier; fall back to title alone
-// if the identifier is unset; fall back to the task nonce only as a
-// last resort so prompt-only tests still get something to dispatch.
+// appServerTurnTitle builds the SPEC §10.2 human label
+// "<issue.identifier>: <issue.title>" used as the continuation-prompt subject
+// (appServerContinuationPrompt). It is not a wire field: codex 0.136
+// TurnStartParams has no title property even under the experimental schema, so
+// a title sent on turn/start was silently dropped — the label survives only in
+// the prompt the agent reads. Task.SourceEventID is the tracker identifier
+// (e.g. "AIOPS-64", "MT-649"); Task.ID is an internal queue nonce that means
+// nothing to operators. Prefer the identifier; fall back to title alone if the
+// identifier is unset; fall back to the task nonce only as a last resort so
+// prompt-only tests still get something to dispatch.
 func appServerTurnTitle(in RunInput) string {
 	identifier := strings.TrimSpace(in.Task.SourceEventID)
 	title := strings.TrimSpace(in.Task.Title)

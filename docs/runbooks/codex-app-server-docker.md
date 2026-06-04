@@ -35,17 +35,18 @@ The repository Dockerfile now exposes this as the `codex-worker` target:
 docker build --target codex-worker -t aiops-platform:codex-worker .
 ```
 
-The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.133.0`, checks
+The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.136.0`, checks
 the release artifact SHA-256, and runs `codex --version` during the build.
 
 ## Linux ARM64 fallback
 
-The 2026-05-26 validation used Codex CLI `0.133.0`:
+Install the pinned Codex CLI (`0.136.0`) directly when the official installer
+cannot resolve the ARM64 package:
 
 ```bash
 curl -fL -o /tmp/codex.tar.gz \
-  https://github.com/openai/codex/releases/download/rust-v0.133.0/codex-package-aarch64-unknown-linux-musl.tar.gz
-echo '7a77d416f9ce16f18e09fdc57622a15aab6ad131c34e078ab9d55a13bb3d9b05  /tmp/codex.tar.gz' | sha256sum -c -
+  https://github.com/openai/codex/releases/download/rust-v0.136.0/codex-package-aarch64-unknown-linux-musl.tar.gz
+echo '2f332f07b4019bef87a844d4a8c3f4fae268912c5a6e50fd8a0388b61d125d15  /tmp/codex.tar.gz' | sha256sum -c -
 mkdir -p /opt/codex
 tar -xzf /tmp/codex.tar.gz -C /opt/codex
 ln -sf /opt/codex/codex-aarch64-unknown-linux-musl /usr/local/bin/codex
@@ -55,7 +56,7 @@ codex --version
 Expected version output:
 
 ```text
-codex-cli 0.133.0
+codex-cli 0.136.0
 ```
 
 Keep the version and checksum together in any derived Dockerfile so future
@@ -65,27 +66,42 @@ upgrades are reviewable.
 
 `codex app-server` has its own versioned wire protocol. The Symphony Elixir
 config schema is useful for organizing workflow settings, but it is not the
-authority for the Codex `turn/start` JSON shape. For each Codex CLI upgrade,
-refresh the local minimal schema snapshot from the matching upstream Codex
-app-server protocol schema before running live Linear validation.
+authority for the Codex request JSON shapes. The authority is the schema the
+matching Codex binary generates: it is vendored under `internal/runner/testdata/`
+and validated against the exact request payloads the runner sends
+(`internal/runner/codex_app_server_schema_test.go`).
 
-The runner-side contract currently covers the fields aiops-platform emits:
-
-- `TurnStartParams.sandboxPolicy`
-- `UserInput.Text` with `text_elements`
-- `SandboxPolicy` variants such as `workspaceWrite`
-
-Run the schema contract tests before any real issue run:
+For each Codex CLI upgrade, **regenerate** the vendored schema — never hand-edit
+it (hand-curation is what rotted the previous snapshot into a placebo):
 
 ```bash
-go test ./internal/workflow -run 'Codex.*Sandbox|Schema' -count=1
-go test ./internal/runner -run 'CodexAppServer.*TurnStart|Schema' -count=1
+scripts/refresh-codex-schema.sh
 ```
 
-If either test fails after a Codex upgrade, update the typed Go structs and the
-schema snapshot first. Do not add fallback translation for old sandbox fields
-such as `mode`, `access`, or `readOnlyAccess`; this project is pre-release and
-should fail fast on stale workflow shape.
+The script regenerates the bundle with `codex app-server generate-json-schema
+--out <dir> --experimental`, removes the prior vendored bundle, and prints the
+new release SHA-256 plus the exact pins to update. The `--experimental` flag is
+**mandatory**: the runner enables the experimental API
+(`initialize` `capabilities.experimentalApi`) and sends experimental request
+fields such as `thread/start` `dynamicTools`, which the default export strips —
+validating against a non-experimental bundle would falsely reject them.
+
+`CodexProtocolVersion` (in `internal/runner/codex_version.go`) is the single
+source of truth; the Dockerfile `ARG CODEX_CLI_VERSION` + per-arch `codex_sha`,
+the e2e Dockerfile assertion, and the vendored schema filename are pinned to it.
+After updating the pins, both tests must pass:
+
+```bash
+go test ./internal/runner -run 'CodexAppServer.*Schema|CodexVersionPinParity' -count=1
+```
+
+`TestCodexVersionPinParity` fails if the constant, the Dockerfile pin, and the
+vendored schema filename disagree. The schema contract tests fail if any request
+payload the runner sends violates the generated schema — a missing required
+field, a bad enum, or a stale/unknown field (the removed `turn/start` `title` was
+one such field). Do not add fallback translation for old shapes such as `mode`,
+`access`, or `readOnlyAccess`; this project is pre-release and should fail fast
+on stale wire shape.
 
 ## Production auth and model configuration
 
@@ -100,7 +116,7 @@ Two modes are supported. Pick one per deployment; do not mix them.
 
 1. **ChatGPT/Codex login (default).** Codex stores the login in
    `$CODEX_HOME/auth.json`. This file is a secret and is **writable at runtime**
-   because Codex 0.133 refreshes tokens in place. Set it up once with
+   because Codex 0.136 refreshes tokens in place. Set it up once with
    `codex --login` in the same container user / `CODEX_HOME` context, then keep
    `CODEX_HOME` on a restricted writable volume so refreshed tokens persist
    across restarts. A read-only `CODEX_HOME` silently breaks long-lived workers
@@ -130,7 +146,7 @@ Treat `CODEX_HOME` as three concerns with different trust levels:
 | `config.toml` | non-secret, declarative | **read-only** bind from a version-controlled file (see below) |
 | `sessions/`, `log/`, cache | ephemeral | writable; safe to discard between runs |
 
-For Codex CLI 0.133, mount the writable home at `/home/aiops/.codex` for the
+For Codex CLI 0.136, mount the writable home at `/home/aiops/.codex` for the
 default non-root worker image, owned by the worker UID/GID, and set:
 
 ```text

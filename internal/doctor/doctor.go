@@ -332,7 +332,16 @@ func (r *reportBuilder) checkCodex(ctx context.Context, cfg workflow.Config) { /
 		if out, err := r.run(ctx, "codex", []string{"--version"}); err != nil {
 			r.fail("Codex version", trimOutput(out, err), "Fix the Codex installation before dispatching real agents.")
 		} else {
-			r.pass("Codex version", strings.TrimSpace(string(out)))
+			installed := strings.TrimSpace(string(out))
+			got, gotOK := codexVersionFromOutput(installed)
+			want, _ := parseGoVersion(runner.CodexProtocolVersion)
+			if gotOK && !codexVersionAtLeast(got, want) {
+				r.warn("Codex version",
+					fmt.Sprintf("%s (below pinned %s)", installed, runner.CodexProtocolVersion),
+					fmt.Sprintf("The vendored app-server protocol schema targets codex %s; upgrade to avoid silent wire drift.", runner.CodexProtocolVersion))
+			} else {
+				r.pass("Codex version", fmt.Sprintf("%s (pinned %s)", installed, runner.CodexProtocolVersion))
+			}
 		}
 		if out, err := r.run(ctx, "codex", []string{"login", "status"}); err != nil {
 			r.fail("Codex auth", trimOutput(out, err), "Run codex --login in the same CODEX_HOME/container user context.")
@@ -1226,6 +1235,32 @@ func parseGoVersion(version string) (goVersion, bool) {
 	}
 	v.patchSet = n >= 3
 	return v, true
+}
+
+// codexVersionFromOutput extracts the first `major.minor[.patch]` token from
+// `codex --version` output (e.g. "codex-cli 0.136.0"), reusing parseGoVersion's
+// generic numeric parse.
+func codexVersionFromOutput(output string) (goVersion, bool) {
+	for _, field := range strings.Fields(output) {
+		if v, ok := parseGoVersion(strings.TrimPrefix(field, "v")); ok {
+			return v, true
+		}
+	}
+	return goVersion{}, false
+}
+
+// codexVersionAtLeast reports whether the installed codex version is at or above
+// the pinned one. The pin is a soft floor: a newer codex is fine (the schema is
+// forward-compatible — schemars objects default additionalProperties:true), so
+// only an older codex warns.
+func codexVersionAtLeast(got, want goVersion) bool {
+	if got.major != want.major {
+		return got.major > want.major
+	}
+	if got.minor != want.minor {
+		return got.minor > want.minor
+	}
+	return got.patch >= want.patch
 }
 
 func firstLine(out []byte) string {

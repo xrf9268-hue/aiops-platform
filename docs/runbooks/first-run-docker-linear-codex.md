@@ -8,7 +8,7 @@ aiops-platform with Docker, Linear, and `codex app-server`.
 | Area | Stable path | Fallback | Not supported yet / blocker |
 | --- | --- | --- | --- |
 | macOS host development | Run `go run ./cmd/worker --doctor --mode=mock` and `agent.default: mock` from source. | Use host Codex CLI for local `codex-app-server` workflows after `codex --login`. | Host binary mounts into Linux containers are not supported; install Codex in the image. |
-| Linux amd64 Docker worker | Build `Dockerfile` target `codex-worker`; Codex CLI `0.133.0` is installed from a pinned release artifact and checksum. | Use base `worker` target for mock-only validation. | Online installer is not the promoted Docker path until Linux ARM64 checksum behavior is reliable. |
+| Linux amd64 Docker worker | Build `Dockerfile` target `codex-worker`; Codex CLI `0.136.0` is installed from a pinned release artifact and checksum. | Use base `worker` target for mock-only validation. | Online installer is not the promoted Docker path until Linux ARM64 checksum behavior is reliable. |
 | Linux arm64 Docker worker | Build `codex-worker`; uses the pinned `aarch64-unknown-linux-musl` release artifact and checksum. | Same as above. | `curl https://chatgpt.com/codex/install.sh \| sh` failed on 2026-05-26 because the installer could not find the ARM64 package checksum. |
 | Codex auth | ChatGPT/Codex login in a restricted writable `CODEX_HOME` (`/home/aiops/.codex`) so token refresh persists, **or** model API key via `OPENAI_API_KEY` added to `codex.env_passthrough` and sourced from a Docker secret; verify with `worker --doctor --mode=real`. See [`codex-app-server-docker.md`](codex-app-server-docker.md) for the full auth/model lifecycle (setup, rotation, revocation). | Local host development can use the normal host `~/.codex`. | Passing raw bearer/API tokens on command lines or in logs is not supported; tracker/repo tokens are never passed through to the agent. |
 | Codex model config | Declarative, version-controlled `config.toml` (model/provider/reasoning) mounted read-only over `$CODEX_HOME/config.toml`; doctor reports the resolved selection. | `WORKFLOW.md` `codex.*` front matter for sandbox/approval/timeouts. | Copying an opaque host `config.toml` into the image or writable home is discouraged — model selection must be auditable. |
@@ -98,7 +98,7 @@ The Codex overlay reads Linear, GitHub, optional Gitea, and dashboard tokens
 from Docker secret files. The entrypoint converts the GitHub secret into
 `/home/aiops/.config/gh/hosts.yml` with restrictive permissions and clears
 plain `GH_TOKEN`/`GITHUB_TOKEN` environment variables so the preflight matches
-the agent shell. The Codex home is a writable bind because Codex CLI 0.133
+the agent shell. The Codex home is a writable bind because Codex CLI 0.136
 writes while loading configuration and may persist refreshed auth state. Keep
 these directories restricted to the worker UID/GID and do not point them at a
 shared host home unless that is your intended trust boundary.

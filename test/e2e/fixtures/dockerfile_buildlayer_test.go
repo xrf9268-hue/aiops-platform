@@ -114,7 +114,7 @@ func TestDockerfileDefinesCodexWorkerTarget(t *testing.T) {
 
 	for _, want := range []string{
 		"FROM worker AS codex-worker",
-		"ARG CODEX_CLI_VERSION=0.133.0",
+		"ARG CODEX_CLI_VERSION=0.136.0",
 		"x86_64-unknown-linux-musl",
 		"aarch64-unknown-linux-musl",
 		"sha256sum -c -",

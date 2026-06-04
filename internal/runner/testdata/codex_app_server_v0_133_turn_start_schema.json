@@ -1,6 +1,0 @@
-{
-  "source": "openai/codex rust-v0.133.0 codex-rs/app-server-protocol/schema/typescript/v2",
-  "user_input_text_required": ["type", "text", "text_elements"],
-  "sandbox_policy_types": ["dangerFullAccess", "readOnly", "externalSandbox", "workspaceWrite"],
-  "forbidden_legacy_fields": ["mode", "access", "readOnlyAccess"]
-}
