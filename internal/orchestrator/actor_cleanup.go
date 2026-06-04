@@ -216,7 +216,7 @@ func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continu
 		o.queuePollWake()
 		return
 	}
-	_ = o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.continuationTurnCount, continuation.workspace)
+	o.logRescheduleErr(o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.continuationTurnCount, continuation.workspace), IssueID(continuation.issue.ID), continuation.identifier)
 }
 func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
 	safeGo("orchestrator.reconcile_cleanup_retry", func() {
