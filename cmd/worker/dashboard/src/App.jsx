@@ -498,6 +498,8 @@ export default function App() {
     : '';
   const stopped = s.reconcile_stopped_with_progress || [];
   const handoff = s.agent_handoff_reconcile_stopped || [];
+  const deliveredRecent = c.agent_handoff_reconcile_stopped || 0;
+  const deliveredTotal = c.agent_handoff_reconcile_stopped_total || 0;
   const online = status === 'live';
 
   return (
@@ -538,8 +540,8 @@ export default function App() {
         <Kpi label="Blocked" value={c.blocked || 0} sub="needs operator attention" status={c.blocked ? 'blocked' : null} />
         <Kpi
           label="Delivered"
-          value={c.agent_handoff_reconcile_stopped || 0}
-          sub={`${compact(c.agent_handoff_reconcile_stopped_total)} handoffs lifetime · ${compact(c.completed_total)} completed turns`}
+          value={deliveredRecent}
+          sub={`${compact(deliveredTotal)} state handoffs lifetime · ${compact(c.completed_total)} clean exits`}
           flag={c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : null}
           status="done"
         />

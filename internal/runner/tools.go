@@ -27,14 +27,17 @@ const (
 	linearGraphQLMutationRejectedSinkKey
 	linearGraphQLPostStopMutationSinkKey
 	linearGraphQLCurrentIssueHandoffKey
+	linearGraphQLCurrentIssueTerminalHandoffKey
 )
 
 // LinearGraphQLMutationAudit is the non-secret audit fact emitted once a
 // mutation succeeds. It deliberately excludes query text, variables, and state
-// IDs; the current-issue handoff bit is a parsed classification only.
+// IDs; current-issue handoff fields are parsed classifications only.
 type LinearGraphQLMutationAudit struct {
 	OperationField                   string
 	CurrentIssueNonActiveStateUpdate bool
+	CurrentIssueTerminalStateUpdate  bool
+	CurrentIssueTerminalState        string
 }
 
 // LinearGraphQLMutationSink is the audit callback invoked once per
@@ -96,13 +99,26 @@ func linearGraphQLPostStopMutationSinkFrom(ctx context.Context) linearGraphQLMut
 	return sink
 }
 
-func withLinearGraphQLCurrentIssueHandoff(ctx context.Context) context.Context {
-	return context.WithValue(ctx, linearGraphQLCurrentIssueHandoffKey, true)
+func withLinearGraphQLCurrentIssueHandoff(ctx context.Context, handoff currentIssueHandoffClassification) context.Context {
+	ctx = context.WithValue(ctx, linearGraphQLCurrentIssueHandoffKey, true)
+	if state := strings.TrimSpace(handoff.terminalState); state != "" {
+		ctx = context.WithValue(ctx, linearGraphQLCurrentIssueTerminalHandoffKey, state)
+	}
+	return ctx
 }
 
 func linearGraphQLCurrentIssueHandoffFrom(ctx context.Context) bool {
 	v, _ := ctx.Value(linearGraphQLCurrentIssueHandoffKey).(bool)
 	return v
+}
+
+func linearGraphQLCurrentIssueTerminalHandoffFrom(ctx context.Context) bool {
+	return linearGraphQLCurrentIssueTerminalHandoffStateFrom(ctx) != ""
+}
+
+func linearGraphQLCurrentIssueTerminalHandoffStateFrom(ctx context.Context) string {
+	v, _ := ctx.Value(linearGraphQLCurrentIssueTerminalHandoffKey).(string)
+	return strings.TrimSpace(v)
 }
 
 // ToolCall is the JSON-shaped input accepted by the dynamic linear_graphql
@@ -249,10 +265,12 @@ func currentIssueGuardFromOptions(opts dynamicToolOptions, cfg workflow.TrackerC
 		issueID:                    opts.currentIssueID,
 		issueIdentifier:            opts.currentIssueIdentifier,
 		activeStates:               append([]string(nil), cfg.ActiveStates...),
+		terminalStates:             append([]string(nil), cfg.TerminalStates...),
 		teamKey:                    cfg.TeamKey,
 		refresh:                    opts.currentIssueRefresher,
 		operatorTerminalStopLookup: opts.currentIssueOperatorStopLookup,
-		cache:                      &activeStateIDCache{},
+		activeCache:                &workflowStateIDCache{},
+		terminalCache:              &workflowStateIDCache{},
 	}, true
 }
 
@@ -409,8 +427,8 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 				},
 			})
 		}
-		if currentIssueHandoff {
-			ctx = withLinearGraphQLCurrentIssueHandoff(ctx)
+		if currentIssueHandoff.nonActive {
+			ctx = withLinearGraphQLCurrentIssueHandoff(ctx, currentIssueHandoff)
 		}
 	}
 
@@ -521,6 +539,8 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			sink(LinearGraphQLMutationAudit{
 				OperationField:                   op.FieldName,
 				CurrentIssueNonActiveStateUpdate: linearGraphQLCurrentIssueHandoffFrom(ctx),
+				CurrentIssueTerminalStateUpdate:  linearGraphQLCurrentIssueTerminalHandoffFrom(ctx),
+				CurrentIssueTerminalState:        linearGraphQLCurrentIssueTerminalHandoffStateFrom(ctx),
 			})
 		}
 	}

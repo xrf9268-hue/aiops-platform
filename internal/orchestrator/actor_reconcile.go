@@ -327,7 +327,11 @@ func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRun(st *Orchestrator
 	run.Issue = issue
 	run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
 	if run.ReconcileCleanupWorkspace {
-		recordOperatorTerminalStop(st, id, issue)
+		if !agentOwnedTerminalStateMatches(run, issue.State) {
+			recordOperatorTerminalStop(st, id, issue)
+		}
+	} else {
+		clearAgentCurrentIssueTerminalHandoff(run)
 	}
 	run.ReconcileCancel = true
 	return run
@@ -417,8 +421,28 @@ func runHasCompletedTurn(run *RunningEntry) bool {
 	return run != nil && run.Session.TurnCount > 0
 }
 
-func runHasAgentHandoffWithoutCompletedTurn(run *RunningEntry) bool {
-	return run != nil && run.AgentHandoffActivity && !runHasCompletedTurn(run)
+func runHasCurrentIssueHandoff(run *RunningEntry) bool {
+	return run != nil && run.AgentCurrentIssueHandoff
+}
+
+func agentOwnedTerminalStateMatches(run *RunningEntry, state string) bool {
+	if run == nil || !run.AgentCurrentIssueTerminalHandoff {
+		return false
+	}
+	ownedState := strings.TrimSpace(run.AgentCurrentIssueTerminalHandoffState)
+	state = strings.TrimSpace(state)
+	if ownedState == "" || state == "" {
+		return false
+	}
+	return strings.EqualFold(ownedState, state)
+}
+
+func clearAgentCurrentIssueTerminalHandoff(run *RunningEntry) {
+	if run == nil {
+		return
+	}
+	run.AgentCurrentIssueTerminalHandoff = false
+	run.AgentCurrentIssueTerminalHandoffState = ""
 }
 
 // refreshRunningIssue updates a still-active run's stored issue and clears any
@@ -429,4 +453,8 @@ func runHasAgentHandoffWithoutCompletedTurn(run *RunningEntry) bool {
 func refreshRunningIssue(run *RunningEntry, issue tracker.Issue) {
 	run.Issue = issue
 	run.ReconcileCleanupWorkspace = false
+	// An active refresh means any earlier current-issue non-active update did
+	// not settle; a later inactive observation must prove a fresh handoff.
+	run.AgentCurrentIssueHandoff = false
+	clearAgentCurrentIssueTerminalHandoff(run)
 }

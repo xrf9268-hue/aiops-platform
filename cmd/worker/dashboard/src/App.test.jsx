@@ -110,8 +110,8 @@ describe('Worker status dashboard', () => {
 
     const delivered = screen.getByText('Delivered').closest('.kpi');
     expect(within(delivered).getByText('1')).toBeTruthy();
-    expect(within(delivered).getByText(/9 handoffs lifetime/)).toBeTruthy();
-    expect(within(delivered).getByText(/137 completed turns/)).toBeTruthy();
+    expect(within(delivered).getByText(/9 state handoffs lifetime/)).toBeTruthy();
+    expect(within(delivered).getByText(/137 clean exits/)).toBeTruthy();
     expect(screen.queryByText(/^Completed$/)).toBeNull();
 
     // codex token totals strip (5,443,400 → 5.4M) and a compacted running token cell.

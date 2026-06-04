@@ -290,37 +290,55 @@ func (c *appServerClient) resolveDynamicToolResult(ctx context.Context, name str
 // unrelated tools is a no-op.
 func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string) context.Context {
 	ctx = WithLinearGraphQLMutationSink(ctx, func(audit LinearGraphQLMutationAudit) {
-		payload := map[string]any{"tool": name}
-		if audit.OperationField != "" {
-			payload["operation_field"] = audit.OperationField
-		}
-		if audit.CurrentIssueNonActiveStateUpdate {
-			payload["current_issue_non_active_state_update"] = true
-		}
-		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(mutationAuditPayload(name, audit)))
 	})
 	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
-		payload := map[string]any{
-			"tool":     name,
-			"reason":   rejection.Reason,
-			"found":    rejection.Found,
-			"terminal": rejection.Terminal,
-		}
-		if rejection.OperationField != "" {
-			payload["operation_field"] = rejection.OperationField
-		}
-		if rejection.State != "" {
-			payload["state"] = rejection.State
-		}
-		c.recordRuntimeEvent(task.EventToolCallMutationRejected, c.withRuntimeContext(payload))
+		c.recordRuntimeEvent(task.EventToolCallMutationRejected, c.withRuntimeContext(mutationRejectedPayload(name, rejection)))
 	})
 	return WithLinearGraphQLPostStopMutationSink(ctx, func(operationField string) {
-		payload := map[string]any{"tool": name}
-		if operationField != "" {
-			payload["operation_field"] = operationField
-		}
-		c.recordRuntimeEvent(task.EventToolCallMutationPostOperatorTerminalStop, c.withRuntimeContext(payload))
+		c.recordRuntimeEvent(task.EventToolCallMutationPostOperatorTerminalStop, c.withRuntimeContext(postStopMutationPayload(name, operationField)))
 	})
+}
+
+func mutationAuditPayload(tool string, audit LinearGraphQLMutationAudit) map[string]any {
+	payload := map[string]any{"tool": tool}
+	if audit.OperationField != "" {
+		payload["operation_field"] = audit.OperationField
+	}
+	if audit.CurrentIssueNonActiveStateUpdate {
+		payload["current_issue_non_active_state_update"] = true
+	}
+	if audit.CurrentIssueTerminalStateUpdate {
+		payload["current_issue_terminal_state_update"] = true
+	}
+	if audit.CurrentIssueTerminalState != "" {
+		payload["current_issue_terminal_state"] = audit.CurrentIssueTerminalState
+	}
+	return payload
+}
+
+func mutationRejectedPayload(tool string, rejection linearGraphQLMutationRejected) map[string]any {
+	payload := map[string]any{
+		"tool":     tool,
+		"reason":   rejection.Reason,
+		"found":    rejection.Found,
+		"terminal": rejection.Terminal,
+	}
+	if rejection.OperationField != "" {
+		payload["operation_field"] = rejection.OperationField
+	}
+	if rejection.State != "" {
+		payload["state"] = rejection.State
+	}
+	return payload
+}
+
+func postStopMutationPayload(tool, operationField string) map[string]any {
+	payload := map[string]any{"tool": tool}
+	if operationField != "" {
+		payload["operation_field"] = operationField
+	}
+	return payload
 }
 
 // replyDynamicToolOutput returns result to codex: parsed as JSON (falling back

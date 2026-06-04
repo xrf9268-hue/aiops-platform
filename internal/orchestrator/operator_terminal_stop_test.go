@@ -34,12 +34,15 @@ func TestReconcileTerminalRunRecordsOperatorTerminalStopAndSuppressesDispatch(t 
 	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
 	waitFor(t, func() bool {
 		view, _ := o.Snapshot(context.Background())
-		return len(view.Running) == 0 && len(view.OperatorTerminalStops) == 1
+		return len(view.Running) == 0
 	}, time.Second)
 
 	view, err := o.Snapshot(context.Background())
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.OperatorTerminalStops) != 1 {
+		t.Fatalf("OperatorTerminalStops = %+v; want one Canceled stop for %s", view.OperatorTerminalStops, issue.ID)
 	}
 	stop := view.OperatorTerminalStops[0]
 	if stop.IssueID != IssueID(issue.ID) || stop.State != "Canceled" {
@@ -187,6 +190,8 @@ func TestFinalizeAgentOwnedTerminalHandoffDoesNotSuppressFutureRework(t *testing
 			"tool":                                  "linear_graphql",
 			"operation_field":                       "issueUpdate",
 			"current_issue_non_active_state_update": true,
+			"current_issue_terminal_state_update":   true,
+			"current_issue_terminal_state":          "Done",
 		},
 	}); err != nil {
 		t.Fatalf("RecordRuntimeEvent(issueUpdate handoff): %v", err)
@@ -215,10 +220,128 @@ func TestFinalizeAgentOwnedTerminalHandoffDoesNotSuppressFutureRework(t *testing
 	}
 
 	rework := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
-	if err := o.RequestDispatch(context.Background(), rework, nil); err != nil {
-		t.Fatalf("RequestDispatch after agent-owned terminal handoff = %v; want rework dispatch", err)
+	var dispatchErr error
+	dispatched := false
+	waitFor(t, func() bool {
+		if dispatched {
+			return true
+		}
+		dispatchErr = o.RequestDispatch(context.Background(), rework, nil)
+		if dispatchErr == nil {
+			dispatched = true
+			return true
+		}
+		if !errors.Is(dispatchErr, ErrNotDispatched) {
+			t.Fatalf("RequestDispatch after agent-owned terminal handoff = %v; want rework dispatch", dispatchErr)
+		}
+		return false
+	}, time.Second)
+	if !dispatched {
+		t.Fatalf("RequestDispatch after agent-owned terminal handoff = %v; want rework dispatch", dispatchErr)
 	}
 	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func TestTerminalHandoffToDifferentStateRecordsOperatorStop(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-STOP-DIFFERENT", Identifier: "ENG-STOP-DIFFERENT", State: "In Progress", Title: "handoff then cancel"}
+	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueTerminalHandoffMutationState(t, o, issue.ID, "Done")
+
+	canceled := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "Canceled", Title: issue.Title}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: canceled,
+	}, normalizedStates([]string{"Done", "Canceled"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait(Canceled): %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.OperatorTerminalStops) != 1 {
+		t.Fatalf("OperatorTerminalStops = %+v; want one Canceled stop for %s", view.OperatorTerminalStops, issue.ID)
+	}
+	stop := view.OperatorTerminalStops[0]
+	if stop.IssueID != IssueID(issue.ID) || stop.State != "Canceled" {
+		t.Fatalf("operator terminal stop = %+v; want issue %s state Canceled", stop, issue.ID)
+	}
+
+	reactivated := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
+	if err := o.RequestDispatch(context.Background(), reactivated, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("dispatch after operator terminal stop err = %v; want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d; want only original run", got)
+	}
+}
+
+func TestOperatorCancelAfterTerminalHandoffActiveRefreshRecordsStop(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-STOP-REFRESH", Identifier: "ENG-STOP-REFRESH", State: "In Progress", Title: "active refresh before cancel"}
+	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueTerminalHandoffMutationState(t, o, issue.ID, "Done")
+
+	active := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
+	if err := o.RefreshActiveTrackerIssues(context.Background(), map[string]tracker.Issue{
+		issue.ID: active,
+	}, normalizedStates([]string{"In Progress"})); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
+	}
+
+	canceled := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "Canceled", Title: issue.Title}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: canceled,
+	}, normalizedStates([]string{"Done", "Canceled"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait(Canceled): %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.OperatorTerminalStops) != 1 {
+		t.Fatalf("OperatorTerminalStops = %+v; want one Canceled stop for %s", view.OperatorTerminalStops, issue.ID)
+	}
+	stop := view.OperatorTerminalStops[0]
+	if stop.IssueID != IssueID(issue.ID) || stop.State != "Canceled" {
+		t.Fatalf("operator terminal stop = %+v; want issue %s state Canceled", stop, issue.ID)
+	}
+
+	if err := o.RequestDispatch(context.Background(), active, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("dispatch after operator terminal stop err = %v; want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d; want only original run", got)
+	}
 }
 
 func TestFinalizeTerminalSelfStopAfterCommentStillRecordsOperatorStop(t *testing.T) {
@@ -350,6 +473,60 @@ func TestNonTerminalInactiveHandoffDoesNotRecordOperatorTerminalStop(t *testing.
 	}
 	if len(view.OperatorTerminalStops) != 0 {
 		t.Fatalf("OperatorTerminalStops = %+v; want empty for non-terminal inactive handoff", view.OperatorTerminalStops)
+	}
+}
+
+func TestTerminalAfterNonTerminalCurrentIssueHandoffRecordsOperatorStop(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Minute},
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-STOP-5", Identifier: "ENG-STOP-5", State: "In Progress", Title: "operator cancel after handoff"}
+	if err := o.RequestDispatch(context.Background(), issue, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueHandoffMutation(t, o, issue.ID)
+
+	inactive := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Review", Title: issue.Title}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: inactive,
+	}, normalizedStates([]string{"Canceled"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait(In Review): %v", err)
+	}
+	terminal := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "Canceled", Title: issue.Title}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: terminal,
+	}, normalizedStates([]string{"Canceled"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait(Canceled): %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.OperatorTerminalStops) != 1 {
+		t.Fatalf("OperatorTerminalStops = %+v; want one Canceled stop for %s", view.OperatorTerminalStops, issue.ID)
+	}
+	stop := view.OperatorTerminalStops[0]
+	if stop.IssueID != IssueID(issue.ID) || stop.State != "Canceled" {
+		t.Fatalf("operator terminal stop = %+v; want issue %s state Canceled", stop, issue.ID)
+	}
+
+	reactivated := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
+	if err := o.RequestDispatch(context.Background(), reactivated, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("dispatch after operator terminal stop err = %v; want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d; want only original run", got)
 	}
 }
 

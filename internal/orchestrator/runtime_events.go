@@ -88,16 +88,38 @@ func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event ta
 		return
 	}
 	payload, _ := asStringMap(event.Payload)
-	if tool, ok := stringField(payload, "tool"); ok && isLinearMutationTool(tool) {
-		run.AgentHandoffActivity = true
-		if handoff, ok := boolField(payload, "current_issue_non_active_state_update"); ok && handoff {
-			run.AgentCurrentIssueHandoff = true
-		}
+	if !linearMutationPayload(payload) {
+		return
+	}
+	if handoffBool(payload, "current_issue_non_active_state_update") {
+		run.AgentCurrentIssueHandoff = true
+	}
+	if handoffBool(payload, "current_issue_terminal_state_update") {
+		recordCurrentIssueTerminalHandoffState(run, payload)
 	}
 }
 
 func isLinearMutationTool(tool string) bool {
 	return tool == "linear_graphql" || tool == "linear_ai_workpad"
+}
+
+func linearMutationPayload(payload map[string]any) bool {
+	tool, ok := stringField(payload, "tool")
+	return ok && isLinearMutationTool(tool)
+}
+
+func handoffBool(payload map[string]any, key string) bool {
+	v, ok := boolField(payload, key)
+	return ok && v
+}
+
+func recordCurrentIssueTerminalHandoffState(run *RunningEntry, payload map[string]any) {
+	state, ok := stringField(payload, "current_issue_terminal_state")
+	if !ok {
+		return
+	}
+	run.AgentCurrentIssueTerminalHandoffState = strings.TrimSpace(state)
+	run.AgentCurrentIssueTerminalHandoff = run.AgentCurrentIssueTerminalHandoffState != ""
 }
 
 func (s *OrchestratorState) recordInputRequiredFields(run *RunningEntry, event task.RuntimeEvent, now time.Time) {

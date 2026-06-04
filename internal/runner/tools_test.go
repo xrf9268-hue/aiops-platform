@@ -1247,6 +1247,124 @@ func TestLinearGraphQLAllowsCurrentIssueNonActiveHandoffState(t *testing.T) {
 	if !mutationAudits[0].CurrentIssueNonActiveStateUpdate {
 		t.Fatalf("mutation audit = %+v; want current issue non-active handoff", mutationAudits[0])
 	}
+	if mutationAudits[0].CurrentIssueTerminalStateUpdate {
+		t.Fatalf("mutation audit = %+v; want non-terminal handoff", mutationAudits[0])
+	}
+	if mutationAudits[0].CurrentIssueTerminalState != "" {
+		t.Fatalf("mutation audit = %+v; want empty terminal handoff state", mutationAudits[0])
+	}
+}
+
+func TestLinearGraphQLMarksCurrentIssueTerminalHandoffState(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active", "Done": "state-done"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	proxy.currentIssueGuard.terminalStates = []string{"Done"}
+	var mutationAudits []LinearGraphQLMutationAudit
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		mutationAudits = append(mutationAudits, audit)
+	})
+
+	result, err := proxy.call(ctx, ToolCall{
+		Query: `mutation Update {
+  issueUpdate(id: "issue-current", input: { stateId: "state-done" }) { success }
+}`,
+	})
+	if err != nil {
+		t.Fatalf("terminal handoff issueUpdate: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("terminal handoff result = %s; want success", result)
+	}
+	if got := server.issueUpdateRequests(); got != 1 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 1 for terminal handoff", got)
+	}
+	if len(mutationAudits) != 1 || mutationAudits[0].OperationField != "issueUpdate" {
+		t.Fatalf("mutation audits = %+v; want one issueUpdate audit", mutationAudits)
+	}
+	if !mutationAudits[0].CurrentIssueNonActiveStateUpdate || !mutationAudits[0].CurrentIssueTerminalStateUpdate {
+		t.Fatalf("mutation audit = %+v; want current issue terminal handoff", mutationAudits[0])
+	}
+	if mutationAudits[0].CurrentIssueTerminalState != "Done" {
+		t.Fatalf("mutation audit terminal state = %q; want Done", mutationAudits[0].CurrentIssueTerminalState)
+	}
+}
+
+func TestLinearGraphQLMarksTerminalHandoffWhenOtherConfiguredTerminalStatesAreMissing(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active", "Done": "state-done"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	proxy.currentIssueGuard.terminalStates = []string{"Done", "Closed", "Duplicate"}
+	var mutationAudits []LinearGraphQLMutationAudit
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		mutationAudits = append(mutationAudits, audit)
+	})
+
+	result, err := proxy.call(ctx, ToolCall{
+		Query: `mutation Update {
+  issueUpdate(id: "issue-current", input: { stateId: "state-done" }) { success }
+}`,
+	})
+	if err != nil {
+		t.Fatalf("terminal handoff with missing configured states: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("terminal handoff result = %s; want success", result)
+	}
+	if len(mutationAudits) != 1 {
+		t.Fatalf("mutation audits = %+v; want one issueUpdate audit", mutationAudits)
+	}
+	if !mutationAudits[0].CurrentIssueTerminalStateUpdate {
+		t.Fatalf("mutation audit = %+v; want terminal handoff despite missing unrelated terminal states", mutationAudits[0])
+	}
+	if mutationAudits[0].CurrentIssueTerminalState != "Done" {
+		t.Fatalf("mutation audit terminal state = %q; want Done", mutationAudits[0].CurrentIssueTerminalState)
+	}
+}
+
+func TestLinearGraphQLAllowsCurrentIssueHandoffWhenTerminalStateLookupFails(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	proxy.currentIssueGuard.terminalStates = []string{"Done"}
+	var mutationAudits []LinearGraphQLMutationAudit
+	var rejections []linearGraphQLMutationRejected
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		mutationAudits = append(mutationAudits, audit)
+	})
+	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
+		rejections = append(rejections, rejection)
+	})
+
+	result, err := proxy.call(ctx, ToolCall{
+		Query: `mutation Update {
+  issueUpdate(id: "issue-current", input: { stateId: "state-review" }) { success }
+}`,
+	})
+	if err != nil {
+		t.Fatalf("non-active handoff issueUpdate: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("non-active handoff result = %s; want success when terminal lookup fails", result)
+	}
+	if got := server.issueUpdateRequests(); got != 1 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 1 for allowed non-active handoff", got)
+	}
+	if len(rejections) != 0 {
+		t.Fatalf("rejections = %+v; want none when terminal lookup fails after active-state gate passes", rejections)
+	}
+	if len(mutationAudits) != 1 || !mutationAudits[0].CurrentIssueNonActiveStateUpdate {
+		t.Fatalf("mutation audits = %+v; want one current issue non-active audit", mutationAudits)
+	}
+	if mutationAudits[0].CurrentIssueTerminalStateUpdate || mutationAudits[0].CurrentIssueTerminalState != "" {
+		t.Fatalf("mutation audit = %+v; want terminal classification to degrade to false", mutationAudits[0])
+	}
 }
 
 func TestLinearGraphQLNormalMutationAuditDoesNotRefreshCurrentIssueState(t *testing.T) {
