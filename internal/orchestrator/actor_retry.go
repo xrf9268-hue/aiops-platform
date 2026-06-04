@@ -553,6 +553,9 @@ func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
 		// retry and release the claim.
 		identifier := entry.Identifier
 		if r.terminal {
+			issue := entry.Issue
+			issue.State = r.terminalState
+			recordOperatorTerminalStop(st, r.id, issue)
 			// Upstream handle_retry_issue_lookup's terminal branch
 			// (orchestrator.ex:1082-1090): a retry whose issue went terminal
 			// cleans its workspace + releases. The worker already exited before

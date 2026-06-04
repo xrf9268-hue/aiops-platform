@@ -49,9 +49,10 @@ type apiStateResponse struct {
 	// rather than absent from completed (#557). It does not overlap
 	// completed: a reconcile-stopped run is not a clean §16.5 exit, matching
 	// upstream's accounting, so completed stays unchanged.
-	ReconcileStoppedWithProgress []orchestrator.IssueID `json:"reconcile_stopped_with_progress"`
-	AgentHandoffReconcileStopped []orchestrator.IssueID `json:"agent_handoff_reconcile_stopped"`
-	CodexTotals                  apiCodexTotals         `json:"codex_totals"`
+	ReconcileStoppedWithProgress []orchestrator.IssueID    `json:"reconcile_stopped_with_progress"`
+	AgentHandoffReconcileStopped []orchestrator.IssueID    `json:"agent_handoff_reconcile_stopped"`
+	OperatorTerminalStops        []apiOperatorTerminalStop `json:"operator_terminal_stops"`
+	CodexTotals                  apiCodexTotals            `json:"codex_totals"`
 	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
 	// is emitted unconditionally — `null` until a `rate_limit_updated`
 	// notification is observed — so operators can rely on the key always
@@ -89,6 +90,7 @@ type apiStateCounts struct {
 	ReconcileStoppedWithProgressTotal int64 `json:"reconcile_stopped_with_progress_total"`
 	AgentHandoffReconcileStopped      int   `json:"agent_handoff_reconcile_stopped"`
 	AgentHandoffReconcileStoppedTotal int64 `json:"agent_handoff_reconcile_stopped_total"`
+	OperatorTerminalStops             int   `json:"operator_terminal_stops"`
 }
 type apiStateRunning struct {
 	IssueID    orchestrator.IssueID `json:"issue_id"`
@@ -136,6 +138,16 @@ type apiStateRetry struct {
 	DueAt      *time.Time             `json:"due_at,omitempty"`
 	Error      string                 `json:"error,omitempty"`
 	Kind       orchestrator.RetryKind `json:"kind"`
+}
+type apiOperatorTerminalStop struct {
+	IssueID               orchestrator.IssueID `json:"issue_id"`
+	Identifier            string               `json:"issue_identifier,omitempty"`
+	State                 string               `json:"state,omitempty"`
+	StoppedAt             *time.Time           `json:"stopped_at,omitempty"`
+	SuppressedDispatches  int                  `json:"suppressed_dispatches"`
+	FirstSuppressedAt     *time.Time           `json:"first_suppressed_at,omitempty"`
+	FirstSuppressedState  string               `json:"first_suppressed_state,omitempty"`
+	FirstSuppressedReason string               `json:"first_suppressed_reason,omitempty"`
 }
 type apiIssueResponse struct {
 	IssueIdentifier string               `json:"issue_identifier"`
@@ -367,12 +379,18 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 			Tracked:         map[string]any{},
 		}
 	}
+	for _, stop := range view.OperatorTerminalStops {
+		if matchesIssueLookup(stop.IssueID, stop.Identifier, normalizedWant) {
+			return base(stop.IssueID, stop.Identifier, "operator_terminal_stop"), true
+		}
+	}
 	for i := len(view.RecentEvents) - 1; i >= 0; i-- {
 		ev := view.RecentEvents[i]
 		if ev.Kind != orchestrator.RuntimeEventCompleted &&
 			ev.Kind != orchestrator.RuntimeEventFailed &&
 			ev.Kind != orchestrator.RuntimeEventReconcileStopped &&
-			ev.Kind != orchestrator.RuntimeEventAgentHandoffReconcileStopped {
+			ev.Kind != orchestrator.RuntimeEventAgentHandoffReconcileStopped &&
+			ev.Kind != orchestrator.RuntimeEventOperatorTerminalStop {
 			continue
 		}
 		if !matchesIssueLookup(ev.IssueID, ev.Identifier, normalizedWant) {
@@ -567,6 +585,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 	sort.Slice(agentHandoffFinished, func(i, j int) bool {
 		return agentHandoffFinished[i] < agentHandoffFinished[j]
 	})
+	operatorStops := sortedAPIOperatorTerminalStops(view.OperatorTerminalStops)
 	return apiStateResponse{
 		GeneratedAt:                  generatedAt,
 		PollIntervalMs:               view.PollIntervalMs,
@@ -579,6 +598,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		Completed:                    completed,
 		ReconcileStoppedWithProgress: reconcileFinished,
 		AgentHandoffReconcileStopped: agentHandoffFinished,
+		OperatorTerminalStops:        operatorStops,
 		CodexTotals: apiCodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
@@ -619,7 +639,38 @@ func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 		ReconcileStoppedWithProgressTotal: view.CumulativeReconcileStoppedWithProgressTotal,
 		AgentHandoffReconcileStopped:      len(view.AgentHandoffReconcileStopped),
 		AgentHandoffReconcileStoppedTotal: view.CumulativeAgentHandoffReconcileStoppedTotal,
+		OperatorTerminalStops:             len(view.OperatorTerminalStops),
 	}
+}
+
+func sortedAPIOperatorTerminalStops(rows []orchestrator.OperatorTerminalStopView) []apiOperatorTerminalStop {
+	out := make([]apiOperatorTerminalStop, 0, len(rows))
+	for _, row := range rows {
+		var stoppedAt *time.Time
+		if !row.StoppedAt.IsZero() {
+			v := row.StoppedAt
+			stoppedAt = &v
+		}
+		var firstSuppressedAt *time.Time
+		if !row.FirstSuppressedAt.IsZero() {
+			v := row.FirstSuppressedAt
+			firstSuppressedAt = &v
+		}
+		out = append(out, apiOperatorTerminalStop{
+			IssueID:               row.IssueID,
+			Identifier:            row.Identifier,
+			State:                 row.State,
+			StoppedAt:             stoppedAt,
+			SuppressedDispatches:  row.SuppressedDispatches,
+			FirstSuppressedAt:     firstSuppressedAt,
+			FirstSuppressedState:  row.FirstSuppressedState,
+			FirstSuppressedReason: row.FirstSuppressedReason,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].IssueID < out[j].IssueID
+	})
+	return out
 }
 func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {
 	if src == nil {

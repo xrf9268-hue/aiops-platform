@@ -63,6 +63,15 @@ Important task event kinds emitted into the worker log/event emitter include:
   runner runtime events; `turn_started` is synthesized after a successful
   `turn/start` response, while notifications and completions are app-server
   stream events
+- `tool_call_mutation` — successful agent-visible Linear GraphQL mutation; the
+  payload carries only `tool` and `operation_field`, never query text or
+  variables
+- `tool_call_mutation_rejected` — guarded mutation rejected before HTTP
+  dispatch; payload is limited to `tool`, `operation_field`, `reason`, `found`,
+  `state`, and `terminal`
+- `tool_call_mutation_post_operator_terminal_stop` — allowed comment/workpad
+  mutation after Operator Terminal Stop; distinct from `tool_call_mutation` so
+  post-stop audit notes do not count as agent handoff activity
 - `runner_start`, `runner_end`, `runner_timeout`
 - `workflow_resolved`, `hook_start`, `hook_end`
 

@@ -98,11 +98,11 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 
 	writeAppServerArtifact(in.Workdir, buf)
 	res := Result{
-		Summary:            client.summary(),
-		RuntimeEvents:      client.runtimeEvents,
-		IssueLeftActiveSet: client.issueLeftActiveSet,
-		OutputBytes:        int64(len(buf.Bytes())),
-		OutputDropped:      buf.Dropped(),
+		Summary:        client.summary(),
+		RuntimeEvents:  client.runtimeEvents,
+		IssueExitState: client.issueExitState,
+		OutputBytes:    int64(len(buf.Bytes())),
+		OutputDropped:  buf.Dropped(),
 	}
 	head, tail := headTail(buf.Bytes())
 	if len(head) > 0 {
@@ -287,16 +287,16 @@ type appServerClient struct {
 	// Keeping both lets cooperative agents end early (continueRun=false)
 	// while still letting the operator cancel an otherwise-productive
 	// worker by moving the issue out of the active states.
-	continueRun        bool
-	refreshIssueState  IssueStateRefresher
-	tools              DynamicToolSet
-	turnTimeoutMs      int
-	readTimeoutMs      int
-	stallTimeoutMs     int
-	approvalPolicy     any
-	lastTerminal       time.Time
-	lastRuntimeEvent   string
-	issueLeftActiveSet bool
+	continueRun       bool
+	refreshIssueState IssueStateRefresher
+	tools             DynamicToolSet
+	turnTimeoutMs     int
+	readTimeoutMs     int
+	stallTimeoutMs    int
+	approvalPolicy    any
+	lastTerminal      time.Time
+	lastRuntimeEvent  string
+	issueExitState    *IssueStateSnapshot
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -356,7 +356,10 @@ func (c *appServerClient) initSession(in RunInput) {
 	c.nextID = 1
 	c.continueRun = false
 	c.refreshIssueState = in.RefreshIssueState
-	c.tools = DynamicToolsForWorkflow(workflow.Workflow{Config: in.Workflow.Config})
+	c.tools = DynamicToolsForWorkflow(
+		workflow.Workflow{Config: in.Workflow.Config},
+		WithCurrentIssueToolGuard(in.Task.ID, in.Task.SourceEventID, in.RefreshIssueState),
+	)
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
 	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
@@ -432,12 +435,12 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 	// keeps the legacy continueRun-only path for callers (mock runner, tests)
 	// with no tracker hook.
 	if c.refreshIssueState != nil {
-		active, err := c.refreshIssueState(ctx)
+		snapshot, err := c.refreshIssueState(ctx)
 		if err != nil {
 			return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
 		}
-		if !active {
-			c.issueLeftActiveSet = true
+		if !snapshot.Active {
+			c.issueExitState = &snapshot
 			return false, nil
 		}
 	}

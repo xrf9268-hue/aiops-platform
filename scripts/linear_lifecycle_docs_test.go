@@ -21,8 +21,9 @@ func TestConcurrentLinearLifecycleRunbookPinsFiveStateHandoffContract(t *testing
 
 	for _, want := range []string{
 		"Backlog, Todo, In Progress, In Review, Done",
-		"Todo -> In Progress -> In Review",
+		"Todo/In Progress active work -> In Review",
 		"Backlog and Done are schema checks, not required agent transitions",
+		"Do not move an already-active current issue back into In Progress",
 		"projects(filter: { slugId: { eq: $projectSlug } }, first: 1)",
 		"max_concurrent_agents: 2",
 		"Use the issue body as the task source of truth",

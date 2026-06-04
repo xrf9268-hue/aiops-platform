@@ -326,6 +326,9 @@ func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRun(st *Orchestrator
 	st.ReleaseClaim(id)
 	run.Issue = issue
 	run.ReconcileCleanupWorkspace = isTerminalTrackerState(issue.State, r.terminalStates)
+	if run.ReconcileCleanupWorkspace {
+		recordOperatorTerminalStop(st, id, issue)
+	}
 	run.ReconcileCancel = true
 	return run
 }
@@ -349,6 +352,7 @@ func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveRetry(st *Orchestrat
 	if !isTerminalTrackerState(issue.State, r.terminalStates) {
 		return reconciledCleanup{}, false
 	}
+	recordOperatorTerminalStop(st, id, issue)
 	w, okw := terminalWorkspaceForCleanup(id, retry.Identifier, retry.Workspace.Path, retry.Workspace.Root, issue.State)
 	if !okw {
 		return reconciledCleanup{}, false
@@ -371,6 +375,7 @@ func (r *reconcileInactiveTrackerIssuesOp) reconcileInactiveBlocked(st *Orchestr
 	if !isTerminalTrackerState(issue.State, r.terminalStates) {
 		return reconciledCleanup{}, false
 	}
+	recordOperatorTerminalStop(st, id, issue)
 	w, okw := terminalWorkspaceForCleanup(id, blocked.Identifier, blocked.Workspace.Path, blocked.Workspace.Root, issue.State)
 	if !okw {
 		return reconciledCleanup{}, false
@@ -394,6 +399,19 @@ func isTerminalTrackerState(state string, terminalStates map[string]struct{}) bo
 	}
 	_, ok := terminalStates[strings.ToLower(strings.TrimSpace(state))]
 	return ok
+}
+
+func recordOperatorTerminalStop(st *OrchestratorState, id IssueID, issue tracker.Issue) {
+	entry, first := st.RecordOperatorTerminalStop(id, issue, time.Now().UTC())
+	if !first {
+		return
+	}
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventOperatorTerminalStop,
+		IssueID:    id,
+		Identifier: entry.Identifier,
+		Message:    "operator terminal state observed: " + entry.State,
+	})
 }
 func runHasCompletedTurn(run *RunningEntry) bool {
 	return run != nil && run.Session.TurnCount > 0

@@ -15,7 +15,9 @@ const (
 	// RuntimeEventContinuationBudgetBlocked marks D34's local harness-hardening
 	// deviation: a still-active issue exhausted its cumulative clean-turn budget
 	// and was parked in Blocked instead of being re-dispatched indefinitely.
-	RuntimeEventContinuationBudgetBlocked RuntimeEventKind = "continuation_budget_blocked"
+	RuntimeEventContinuationBudgetBlocked              RuntimeEventKind = "continuation_budget_blocked"
+	RuntimeEventOperatorTerminalStop                   RuntimeEventKind = "operator_terminal_stop"
+	RuntimeEventOperatorTerminalStopDispatchSuppressed RuntimeEventKind = "operator_terminal_stop_dispatch_suppressed"
 	// RuntimeEventReconcileStopped marks a run the per-tick reconcile stopped
 	// after it had completed ≥1 agent turn (made progress — usually the agent's
 	// handoff). Recorded so the run appears in the event stream and is drillable

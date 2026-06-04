@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"strings"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -20,7 +22,11 @@ import (
 // can write or read it — agent-controlled paths cannot forge a bypass.
 type linearGraphQLContextKey int
 
-const linearGraphQLMutationSinkKey linearGraphQLContextKey = 1
+const (
+	linearGraphQLMutationSinkKey linearGraphQLContextKey = iota + 1
+	linearGraphQLMutationRejectedSinkKey
+	linearGraphQLPostStopMutationSinkKey
+)
 
 // LinearGraphQLMutationSink is the audit callback invoked once per
 // successful mutation dispatched through the agent-visible linear_graphql
@@ -28,6 +34,16 @@ const linearGraphQLMutationSinkKey linearGraphQLContextKey = 1
 // design intent is operator visibility of WHICH mutation ran, not WHAT
 // values were attached.
 type LinearGraphQLMutationSink func(operationName string)
+
+type linearGraphQLMutationRejected struct {
+	OperationField string `json:"operation_field,omitempty"`
+	Reason         string `json:"reason"`
+	Found          bool   `json:"found"`
+	State          string `json:"state,omitempty"`
+	Terminal       bool   `json:"terminal"`
+}
+
+type linearGraphQLMutationRejectedSink func(linearGraphQLMutationRejected)
 
 // WithLinearGraphQLMutationSink returns a context that the linear_graphql
 // tool consults to surface successful mutations as audit events. The sink
@@ -42,6 +58,30 @@ func WithLinearGraphQLMutationSink(ctx context.Context, sink LinearGraphQLMutati
 
 func linearGraphQLMutationSinkFrom(ctx context.Context) LinearGraphQLMutationSink {
 	sink, _ := ctx.Value(linearGraphQLMutationSinkKey).(LinearGraphQLMutationSink)
+	return sink
+}
+
+func WithLinearGraphQLMutationRejectedSink(ctx context.Context, sink linearGraphQLMutationRejectedSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, linearGraphQLMutationRejectedSinkKey, sink)
+}
+
+func linearGraphQLMutationRejectedSinkFrom(ctx context.Context) linearGraphQLMutationRejectedSink {
+	sink, _ := ctx.Value(linearGraphQLMutationRejectedSinkKey).(linearGraphQLMutationRejectedSink)
+	return sink
+}
+
+func WithLinearGraphQLPostStopMutationSink(ctx context.Context, sink LinearGraphQLMutationSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, linearGraphQLPostStopMutationSinkKey, sink)
+}
+
+func linearGraphQLPostStopMutationSinkFrom(ctx context.Context) LinearGraphQLMutationSink {
+	sink, _ := ctx.Value(linearGraphQLPostStopMutationSinkKey).(LinearGraphQLMutationSink)
 	return sink
 }
 
@@ -96,41 +136,58 @@ func (s DynamicToolSet) Names() []string {
 	return names
 }
 
+type DynamicToolOption func(*dynamicToolOptions)
+
+type dynamicToolOptions struct {
+	currentIssueID         string
+	currentIssueIdentifier string
+	currentIssueRefresher  IssueStateRefresher
+}
+
+func WithCurrentIssueToolGuard(issueID, issueIdentifier string, refresher IssueStateRefresher) DynamicToolOption {
+	return func(opts *dynamicToolOptions) {
+		opts.currentIssueID = strings.TrimSpace(issueID)
+		opts.currentIssueIdentifier = strings.TrimSpace(issueIdentifier)
+		opts.currentIssueRefresher = refresher
+	}
+}
+
 // DynamicToolsForWorkflow builds the SPEC §10.5 client-side tool surface for
 // the runner. linear_graphql is advertised only when Linear auth is configured;
 // the token stays captured in this process and is never copied into tool
 // metadata, agent environment, prompt text, or the GraphQL JSON payload.
-func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
+func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOption) DynamicToolSet {
+	opts := dynamicToolOptions{}
+	for _, apply := range toolOptions {
+		if apply != nil {
+			apply(&opts)
+		}
+	}
 	tools := DynamicToolSet{tools: map[string]DynamicTool{}}
 	trackerCfg := wf.Config.Tracker
 	if strings.EqualFold(trackerCfg.Kind, "linear") && trackerCfg.APIKey != "" {
 		client := linearGraphQLProxy{
 			apiKey:           trackerCfg.APIKey,
-			baseURL:          defaultLinearGraphQLEndpoint,
+			baseURL:          linearGraphQLEndpointFromConfig(trackerCfg),
 			http:             http.DefaultClient,
 			allowMutations:   wf.Config.Codex.LinearGraphQL.AllowMutations,
 			allowedMutations: linearGraphQLAllowSet(wf.Config.Codex.LinearGraphQL.AllowedMutations),
 		}
+		if opts.currentIssueID != "" && opts.currentIssueRefresher != nil {
+			client.currentIssueGuard = currentIssueMutationGuard{
+				issueID:         opts.currentIssueID,
+				issueIdentifier: opts.currentIssueIdentifier,
+				activeStates:    append([]string(nil), trackerCfg.ActiveStates...),
+				teamKey:         trackerCfg.TeamKey,
+				refresh:         opts.currentIssueRefresher,
+				cache:           &activeStateIDCache{},
+			}
+		}
 		tools.tools["linear_graphql"] = DynamicTool{
 			Name:        "linear_graphql",
 			Description: linearGraphQLToolDescription(client),
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "A single Linear GraphQL query or mutation.",
-					},
-					"variables": map[string]any{
-						"type":                 "object",
-						"description":          "Optional GraphQL variables object.",
-						"additionalProperties": true,
-					},
-				},
-				"required":             []string{"query"},
-				"additionalProperties": false,
-			},
-			Call: client.call,
+			InputSchema: linearGraphQLInputSchema(),
+			Call:        client.call,
 		}
 		// The AI Workpad helper composes a fixed mutation around the
 		// token-isolated proxy; it must skip the agent-visible gate
@@ -157,33 +214,56 @@ func DynamicToolsForWorkflow(wf workflow.Workflow) DynamicToolSet {
 		tools.tools["gitea_issue_labels"] = DynamicTool{
 			Name:        "gitea_issue_labels",
 			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]} with exactly one aiops/* label. The Gitea API token is never exposed to the agent process.",
-			InputSchema: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"issue_number": map[string]any{
-						"type":        "integer",
-						"description": "Gitea issue number whose aiops/* state labels should be replaced.",
-					},
-					"labels": map[string]any{
-						"type":        "array",
-						"description": "Complete desired aiops/* state label set for the issue; exactly one label is accepted.",
-						"items":       map[string]any{"type": "string"},
-						"minItems":    1,
-						"maxItems":    1,
-					},
-				},
-				"required":             []string{"issue_number", "labels"},
-				"additionalProperties": false,
-			},
-			Call: client.call,
+			InputSchema: giteaIssueLabelsInputSchema(),
+			Call:        client.call,
 		}
 	}
 	return tools
 }
 
+func linearGraphQLInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"query": map[string]any{
+				"type":        "string",
+				"description": "A single Linear GraphQL query or mutation.",
+			},
+			"variables": map[string]any{
+				"type":                 "object",
+				"description":          "Optional GraphQL variables object.",
+				"additionalProperties": true,
+			},
+		},
+		"required":             []string{"query"},
+		"additionalProperties": false,
+	}
+}
+
+func giteaIssueLabelsInputSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"issue_number": map[string]any{
+				"type":        "integer",
+				"description": "Gitea issue number whose aiops/* state labels should be replaced.",
+			},
+			"labels": map[string]any{
+				"type":        "array",
+				"description": "Complete desired aiops/* state label set for the issue; exactly one label is accepted.",
+				"items":       map[string]any{"type": "string"},
+				"minItems":    1,
+				"maxItems":    1,
+			},
+		},
+		"required":             []string{"issue_number", "labels"},
+		"additionalProperties": false,
+	}
+}
+
 const maxLinearGraphQLResponseBytes = 1 << 20
 
-var defaultLinearGraphQLEndpoint = "https://api.linear.app/graphql"
+const defaultLinearGraphQLEndpoint = tracker.DefaultLinearEndpoint
 
 type linearGraphQLProxy struct {
 	apiKey  string
@@ -199,7 +279,8 @@ type linearGraphQLProxy struct {
 	// the listed top-level Mutation root field names (e.g.
 	// "issueUpdate"). nil/empty means "any mutation" — only meaningful
 	// while allowMutations is true.
-	allowedMutations map[string]struct{}
+	allowedMutations  map[string]struct{}
+	currentIssueGuard currentIssueMutationGuard
 }
 
 // call is the gated entry point exposed to the agent through the
@@ -277,6 +358,21 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 				})
 			}
 		}
+		if rejection, ok := p.rejectCurrentIssueUpdate(ctx, query, call.Variables); ok {
+			if sink := linearGraphQLMutationRejectedSinkFrom(ctx); sink != nil {
+				sink(rejection)
+			}
+			return dynamicToolFailure(map[string]any{
+				"error": map[string]any{
+					"message":         currentIssueMutationRejectMessage(rejection.Reason),
+					"operation_field": rejection.OperationField,
+					"reason":          rejection.Reason,
+					"found":           rejection.Found,
+					"state":           rejection.State,
+					"terminal":        rejection.Terminal,
+				},
+			})
+		}
 	}
 
 	return p.dispatch(ctx, query, op, call.Variables)
@@ -320,16 +416,7 @@ func (p linearGraphQLProxy) callRaw(ctx context.Context, call ToolCall) (string,
 // audit-sink fire lives here so harness-driven and agent-driven
 // mutations share a single source of truth.
 func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) (string, error) { //nolint:gocognit // baseline (#521)
-	endpoint := p.baseURL
-	if endpoint == "" {
-		endpoint = defaultLinearGraphQLEndpoint
-	}
-
-	payload := map[string]any{"query": query}
-	if variables != nil {
-		payload["variables"] = variables
-	}
-	body, err := json.Marshal(payload)
+	body, err := linearGraphQLRequestBody(query, variables)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
@@ -339,7 +426,7 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 		})
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	req, err := p.linearGraphQLRequest(ctx, body)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
@@ -348,14 +435,8 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			},
 		})
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", linearAuthorizationHeader(p.apiKey))
 
-	httpClient := p.http
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
+	resp, err := p.linearHTTPClient().Do(req)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
@@ -365,21 +446,20 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 		})
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var respBody bytes.Buffer
-	n, err := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
+	respBody, err := readLinearGraphQLResponseBody(resp.Body)
 	if err != nil {
+		if errors.Is(err, errLinearGraphQLResponseTooLarge) {
+			return dynamicToolFailure(map[string]any{
+				"error": map[string]any{
+					"message": "Linear GraphQL response exceeded maximum size.",
+					"limit":   maxLinearGraphQLResponseBytes,
+				},
+			})
+		}
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
 				"message": "Linear GraphQL response body could not be read.",
 				"reason":  err.Error(),
-			},
-		})
-	}
-	if n > maxLinearGraphQLResponseBytes {
-		return dynamicToolFailure(map[string]any{
-			"error": map[string]any{
-				"message": "Linear GraphQL response exceeded maximum size.",
-				"limit":   maxLinearGraphQLResponseBytes,
 			},
 		})
 	}
@@ -388,17 +468,73 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			"error": map[string]any{
 				"message": "Linear GraphQL request failed before receiving a successful response.",
 				"status":  resp.Status,
-				"body":    respBody.String(),
+				"body":    string(respBody),
 			},
 		})
 	}
-	result, toolErr := linearGraphQLToolResponse(respBody.Bytes())
+	result, toolErr := linearGraphQLToolResponse(respBody)
 	if toolErr == nil && op.Kind == linearGraphQLOperationMutation && toolResultSucceeded(result) {
-		if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
+		if p.currentIssueGuard.postOperatorTerminalStop(ctx) {
+			if sink := linearGraphQLPostStopMutationSinkFrom(ctx); sink != nil {
+				sink(op.FieldName)
+			}
+		} else if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
 			sink(op.FieldName)
 		}
 	}
 	return result, toolErr
+}
+
+func linearGraphQLRequestBody(query string, variables map[string]any) ([]byte, error) {
+	payload := map[string]any{"query": query}
+	if variables != nil {
+		payload["variables"] = variables
+	}
+	return json.Marshal(payload)
+}
+
+func (p linearGraphQLProxy) linearGraphQLRequest(ctx context.Context, body []byte) (*http.Request, error) {
+	endpoint := linearGraphQLEndpoint(p.baseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", linearAuthorizationHeader(p.apiKey))
+	return req, nil
+}
+
+func linearGraphQLEndpointFromConfig(cfg workflow.TrackerConfig) string {
+	return linearGraphQLEndpoint(cfg.Endpoint)
+}
+
+func linearGraphQLEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return defaultLinearGraphQLEndpoint
+	}
+	return endpoint
+}
+
+func (p linearGraphQLProxy) linearHTTPClient() *http.Client {
+	if p.http != nil {
+		return p.http
+	}
+	return http.DefaultClient
+}
+
+var errLinearGraphQLResponseTooLarge = errors.New("linear GraphQL response exceeded maximum size")
+
+func readLinearGraphQLResponseBody(r io.Reader) ([]byte, error) {
+	var body bytes.Buffer
+	n, err := body.ReadFrom(io.LimitReader(r, maxLinearGraphQLResponseBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if n > maxLinearGraphQLResponseBytes {
+		return nil, fmt.Errorf("%w: %d", errLinearGraphQLResponseTooLarge, maxLinearGraphQLResponseBytes)
+	}
+	return body.Bytes(), nil
 }
 
 func linearAuthorizationHeader(apiKey string) string {

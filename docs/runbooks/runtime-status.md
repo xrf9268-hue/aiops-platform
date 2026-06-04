@@ -21,6 +21,8 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `failed` — run exited abnormally; it is rescheduled on the SPEC §8.4 backoff (no deterministic-failure suppression — removed in #584).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 - `continuation_budget_blocked` — the clean-continuation budget for a still-active issue was exhausted; the run stopped, remains claimed, and is listed in the top-level `blocked` rows with `method: "continuation_budget"`.
+- `operator_terminal_stop` — this worker observed an operator terminal tracker state for the issue and latched that stop locally (D35 / #622).
+- `operator_terminal_stop_dispatch_suppressed` — first later active candidate for a latched issue was suppressed instead of being re-dispatched.
 
 These are observability events. They do not imply the worker changed tracker
 state, pushed a branch, opened a pull request, or posted a comment. Those writes
@@ -95,8 +97,8 @@ The effective port is resolved in this order, per SPEC §13.7:
 3. Otherwise the schema default of `4000`.
 
 - `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
-  retry rows, completed issue IDs, aggregate token/runtime totals,
-  and the current poll/concurrency metadata.
+  retry rows, completed issue IDs, operator terminal stops, aggregate
+  token/runtime totals, and the current poll/concurrency metadata.
 - `GET /api/v1/<issue_identifier>` returns one issue's current runtime row.
   Lookup is case-insensitive and matches either the tracker issue identifier or
   issue ID. Unknown issues return
@@ -143,7 +145,8 @@ the shape here without updating the handler — or vice versa — fails the buil
     "reconcile_stopped_with_progress": 1,
     "reconcile_stopped_with_progress_total": 2,
     "agent_handoff_reconcile_stopped": 3,
-    "agent_handoff_reconcile_stopped_total": 4
+    "agent_handoff_reconcile_stopped_total": 4,
+    "operator_terminal_stops": 1
   },
   "running": [
     {
@@ -193,6 +196,18 @@ the shape here without updating the handler — or vice versa — fails the buil
   "completed": [],
   "reconcile_stopped_with_progress": [],
   "agent_handoff_reconcile_stopped": [],
+  "operator_terminal_stops": [
+    {
+      "issue_id": "issue-4",
+      "issue_identifier": "ENG-4",
+      "state": "Canceled",
+      "stopped_at": "2026-05-21T09:12:00Z",
+      "suppressed_dispatches": 1,
+      "first_suppressed_at": "2026-05-21T09:13:00Z",
+      "first_suppressed_state": "In Progress",
+      "first_suppressed_reason": "active_candidate_after_operator_terminal_stop"
+    }
+  ],
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -216,6 +231,7 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 | `agent_handoff_reconcile_stopped` | Size of the FIFO-bounded recent set of reconcile-stopped runs that observed an agent-side Linear mutation (`linear_graphql` or `linear_ai_workpad`) but did not observe `turn_completed` before reconcile made the issue ineligible. This covers the successful handoff visibility gap where the agent moved/commented the Linear issue and the worker was stopped before a completed-turn event arrived. It does not overlap `completed` or `reconcile_stopped_with_progress`. |
 | `agent_handoff_reconcile_stopped_total` | Monotonic counter of agent-handoff reconcile-stop transitions since process start. |
+| `operator_terminal_stops` | Number of process-local Operator Terminal Stop latches recorded since this worker observed operator terminal tracker state for the issue. A latched issue is not re-dispatched by this process even if the tracker later reads active. |
 
 There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
 backoff (visible under `retrying`), not parked in a suppression bucket — the
@@ -224,7 +240,9 @@ former deterministic-non-retryable suppression was removed in #584 (D29).
 `completed`, `reconcile_stopped_with_progress`, and
 `agent_handoff_reconcile_stopped` arrays at the top level publish the recent N
 issue IDs in those sets; for lifetime totals across FIFO eviction use the
-`_total` counters.
+`_total` counters. `operator_terminal_stops` publishes full rows instead of
+only IDs so operators can see the terminal state, stop time, and first
+suppressed active-candidate evidence.
 
 ### `codex_totals.seconds_running` semantics
 

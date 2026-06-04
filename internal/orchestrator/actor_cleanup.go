@@ -189,6 +189,9 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 		return
 	}
 	if !terminal {
+		if o.hasOperatorTerminalStop(w.IssueID) {
+			return
+		}
 		o.continueAfterSkippedTerminalCleanup(continuation)
 		return
 	}
@@ -199,6 +202,12 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 	defer cancel()
 	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
 }
+
+func (o *Orchestrator) hasOperatorTerminalStop(id IssueID) bool {
+	_, ok, err := o.LookupOperatorTerminalStop(o.runCtx, id)
+	return err != nil || ok
+}
+
 func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continuationAfterSkippedCleanup) {
 	if continuation == nil {
 		o.queuePollWake()

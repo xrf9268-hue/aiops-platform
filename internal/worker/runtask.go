@@ -35,9 +35,9 @@ type RunTaskError struct {
 
 // RunTaskResult carries success-side runner facts needed by the orchestrator.
 type RunTaskResult struct {
-	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
-	// stopped a successful runner session because the issue is no longer active.
-	IssueLeftActiveSet bool
+	// IssueExitState is set when SPEC §16.5's per-turn tracker refresh stopped
+	// a successful runner session because the issue is no longer active.
+	IssueExitState *runner.IssueStateSnapshot
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -212,7 +212,7 @@ func RunTaskWithResult(ctx context.Context, ev EventEmitter, t task.Task, cfg Co
 		return result, rtErr
 	}
 	rs.finalize()
-	return RunTaskResult{IssueLeftActiveSet: rs.res.IssueLeftActiveSet}, nil
+	return RunTaskResult{IssueExitState: rs.res.IssueExitState}, nil
 }
 
 // prepareWorkspace resolves the service workflow, prepares the deterministic

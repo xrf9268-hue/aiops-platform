@@ -149,6 +149,63 @@ func TestApiIssueFromViewResolvesAgentHandoffReconcileStoppedFromBucketWhenEvent
 	}
 }
 
+func TestStateResponseSurfacesOperatorTerminalStops(t *testing.T) {
+	stoppedAt := time.Date(2026, 6, 4, 7, 0, 0, 0, time.UTC)
+	firstSuppressedAt := stoppedAt.Add(time.Minute)
+	view := orchestrator.StateView{
+		OperatorTerminalStops: []orchestrator.OperatorTerminalStopView{{
+			IssueID:               "linear-uuid-70",
+			Identifier:            "AIS-70",
+			State:                 "Canceled",
+			StoppedAt:             stoppedAt,
+			SuppressedDispatches:  2,
+			FirstSuppressedAt:     firstSuppressedAt,
+			FirstSuppressedState:  "In Progress",
+			FirstSuppressedReason: "active_candidate_after_operator_terminal_stop",
+		}},
+	}
+	resp := apiStateFromView(view)
+	if resp.Counts.OperatorTerminalStops != 1 {
+		t.Fatalf("operator terminal stop count = %d, want 1", resp.Counts.OperatorTerminalStops)
+	}
+	if len(resp.OperatorTerminalStops) != 1 {
+		t.Fatalf("operator_terminal_stops = %+v, want one row", resp.OperatorTerminalStops)
+	}
+	row := resp.OperatorTerminalStops[0]
+	if row.IssueID != "linear-uuid-70" || row.Identifier != "AIS-70" || row.State != "Canceled" {
+		t.Fatalf("operator terminal stop row = %+v, want AIS-70 Canceled", row)
+	}
+	if row.StoppedAt == nil || !row.StoppedAt.Equal(stoppedAt) {
+		t.Fatalf("stopped_at = %v, want %s", row.StoppedAt, stoppedAt)
+	}
+	if row.FirstSuppressedAt == nil || !row.FirstSuppressedAt.Equal(firstSuppressedAt) || row.SuppressedDispatches != 2 {
+		t.Fatalf("suppression evidence = %+v, want first suppression time and count 2", row)
+	}
+	if row.FirstSuppressedState != "In Progress" || row.FirstSuppressedReason != "active_candidate_after_operator_terminal_stop" {
+		t.Fatalf("first suppression fields = %+v, want state/reason evidence", row)
+	}
+	got, ok := apiIssueFromView(view, "AIS-70")
+	if !ok || got.Status != "operator_terminal_stop" || got.IssueID != "linear-uuid-70" {
+		t.Fatalf("apiIssueFromView(AIS-70) = (%v, %s, %s), want operator_terminal_stop linear-uuid-70", ok, got.Status, got.IssueID)
+	}
+}
+
+func TestApiIssueFromViewPrefersOperatorTerminalStopLatch(t *testing.T) {
+	view := orchestrator.StateView{
+		Completed: []orchestrator.IssueID{"linear-uuid-70"},
+		OperatorTerminalStops: []orchestrator.OperatorTerminalStopView{{
+			IssueID:    "linear-uuid-70",
+			Identifier: "AIS-70",
+			State:      "Canceled",
+			StoppedAt:  time.Date(2026, 6, 4, 7, 0, 0, 0, time.UTC),
+		}},
+	}
+	got, ok := apiIssueFromView(view, "linear-uuid-70")
+	if !ok || got.Status != "operator_terminal_stop" {
+		t.Fatalf("apiIssueFromView(linear-uuid-70) = (%v, %s); want (true, operator_terminal_stop)", ok, got.Status)
+	}
+}
+
 // TestApiRunningRowEmitsLastEventAt pins the SPEC §13.7.2 running-row
 // contract: once a runtime event has been observed the row exposes
 // last_event_at as an RFC3339 string; no back-compat alias is emitted.

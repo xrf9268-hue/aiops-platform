@@ -569,7 +569,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			}
 			return
 		}
-		out <- WorkerResult{Elapsed: time.Since(start), IssueLeftActiveSet: runResult.IssueLeftActiveSet}
+		out <- WorkerResult{Elapsed: time.Since(start), IssueExitState: runResult.IssueExitState}
 	}()
 	return out
 }

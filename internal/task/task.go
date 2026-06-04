@@ -66,16 +66,24 @@ const (
 	EventTurnInputRequired    = "turn_input_required"
 	EventApprovalAutoApproved = "approval_auto_approved"
 	EventUnsupportedToolCall  = "unsupported_tool_call"
-	// EventToolCallMutation records a Linear GraphQL mutation dispatched
-	// through the agent-visible linear_graphql tool (SPEC §15.5 harness
-	// narrowing, #298). The payload carries the mutation field name only
-	// and NEVER the query body or variables, so prompt-injected query
-	// strings are not echoed onto the operator-visible status surface
-	// (see #295).
+	// EventToolCallMutation records a Linear GraphQL mutation dispatched through
+	// the agent-visible linear_graphql tool (SPEC §15.5 harness narrowing, #298).
+	// The payload carries the mutation field name only and NEVER the query body or
+	// variables, so prompt-injected query strings are not echoed onto the
+	// operator-visible status surface (see #295).
 	EventToolCallMutation = "tool_call_mutation"
-	EventNotification     = "notification"
-	EventOtherMessage     = "other_message"
-	EventMalformed        = "malformed"
+	// EventToolCallMutationRejected records a guarded mutation that was rejected
+	// before HTTP dispatch. The payload is intentionally tiny: tool,
+	// operation_field, reason, found, state, terminal.
+	EventToolCallMutationRejected = "tool_call_mutation_rejected"
+	// EventToolCallMutationPostOperatorTerminalStop records allowed comment /
+	// workpad writes after Operator Terminal Stop. It is distinct from
+	// EventToolCallMutation so post-stop audit notes do not count as handoff
+	// activity.
+	EventToolCallMutationPostOperatorTerminalStop = "tool_call_mutation_post_operator_terminal_stop"
+	EventNotification                             = "notification"
+	EventOtherMessage                             = "other_message"
+	EventMalformed                                = "malformed"
 
 	EventEnqueued           = "enqueued"
 	EventClaimed            = "claimed"
@@ -122,6 +130,8 @@ func RuntimeEvents() []string {
 		EventApprovalAutoApproved,
 		EventUnsupportedToolCall,
 		EventToolCallMutation,
+		EventToolCallMutationRejected,
+		EventToolCallMutationPostOperatorTerminalStop,
 		EventNotification,
 		EventOtherMessage,
 		EventMalformed,

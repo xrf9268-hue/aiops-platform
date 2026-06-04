@@ -21,14 +21,17 @@ Backlog, Todo, In Progress, In Review, Done
 The active handoff path under test is:
 
 ```text
-Todo -> In Progress -> In Review
+Todo/In Progress active work -> In Review
 ```
 
 Backlog and Done are schema checks, not required agent transitions. Create the
-disposable issues in Todo, require the agent to move each issue to In Progress
-when it starts, and require the agent to move each issue to In Review after it
-opens the draft PR and records completion evidence. Do not make the worker, a
-wrapper script, or an operator cleanup step move issues to Done.
+disposable issues in Todo, require the agent to comment when work starts, and
+require the agent to move each issue to In Review after it opens the draft PR
+and records completion evidence. Do not require an already-active current issue
+to be moved back into In Progress; D35 rejects current-issue active-target
+`issueUpdate` writes so an operator terminal stop cannot be reverted by the
+running agent. Do not make the worker, a wrapper script, or an operator cleanup
+step move issues to Done.
 
 ## 1. Prepare disposable work
 
@@ -108,8 +111,8 @@ Do not copy issue-specific task text into WORKFLOW.md.
 
 On start:
 - Read the Linear issue body and comments.
-- Use linear_graphql issueUpdate to move this issue to In Progress.
 - Use linear_graphql commentCreate to record that work started.
+- Do not move an already-active current issue back into In Progress.
 
 While working:
 - Implement only the task described in this issue body.
@@ -125,7 +128,9 @@ On finish:
 
 Keep `tracker.active_states` limited to Todo and In Progress for this run. That
 lets the worker discover new Todo issues and continue already-started In
-Progress issues, while In Review is the agent-owned handoff state.
+Progress issues, while In Review is the agent-owned handoff state. The start
+comment is the start signal; the only required state write in this smoke is the
+final non-active In Review handoff.
 
 ## 3. Protect credentials
 
@@ -301,14 +306,12 @@ concurrency requirement.
 ## 6. Verify Linear lifecycle
 
 For each disposable issue, verify the Linear activity or API history shows the
-agent-owned path Todo -> In Progress -> In Review. The start transition must
-occur before the start comment, and the In Review transition must occur after
-the completion comment and draft PR link.
+agent-owned start comment and final In Review handoff. The In Review transition
+must occur after the completion comment and draft PR link.
 
 Required evidence for each issue:
 
 - the issue started in Todo;
-- the agent moved it to In Progress through `linear_graphql`;
 - the agent posted a start comment;
 - the agent opened a draft PR for the issue body task;
 - the agent posted completion evidence;

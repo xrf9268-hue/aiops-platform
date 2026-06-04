@@ -80,12 +80,12 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 		if fn == nil {
 			t.Fatal("factory returned nil for valid task")
 		}
-		active, err := fn(context.Background())
+		snapshot, err := fn(context.Background())
 		if err != nil {
 			t.Fatalf("refresher err: %v", err)
 		}
-		if !active {
-			t.Fatalf("active = false, want true (state In Progress is in active set)")
+		if !snapshot.Active || !snapshot.Found || snapshot.State != "In Progress" {
+			t.Fatalf("snapshot = %+v, want found active In Progress", snapshot)
 		}
 		if got := stub.calls; len(got) != 1 || len(got[0]) != 1 || got[0][0] != "issue-active" {
 			t.Fatalf("tracker calls = %#v, want exactly [[issue-active]]", got)
@@ -94,23 +94,23 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 
 	t.Run("inactive state stops the run", func(t *testing.T) {
 		fn := cfg.IssueStateRefresher(task.Task{ID: "issue-canceled"}, wcfg)
-		active, err := fn(context.Background())
+		snapshot, err := fn(context.Background())
 		if err != nil {
 			t.Fatalf("refresher err: %v", err)
 		}
-		if active {
-			t.Fatal("active = true, want false (state Canceled is not in active set)")
+		if snapshot.Active || !snapshot.Found || snapshot.State != "Canceled" {
+			t.Fatalf("snapshot = %+v, want found inactive Canceled", snapshot)
 		}
 	})
 
 	t.Run("missing row keeps run alive per SPEC fallback", func(t *testing.T) {
 		fn := cfg.IssueStateRefresher(task.Task{ID: "issue-unknown"}, wcfg)
-		active, err := fn(context.Background())
+		snapshot, err := fn(context.Background())
 		if err != nil {
 			t.Fatalf("refresher err: %v", err)
 		}
-		if !active {
-			t.Fatal("active = false, want true; SPEC §16.5 keeps prior state when refresh returns no row")
+		if !snapshot.Active || snapshot.Found {
+			t.Fatalf("snapshot = %+v, want missing active fallback; SPEC §16.5 keeps prior state when refresh returns no row", snapshot)
 		}
 	})
 
@@ -120,9 +120,9 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 		d.SetIssueStateRefresher(errStub)
 		errCfg := d.configForSnapshot(snap)
 		fn := errCfg.IssueStateRefresher(task.Task{ID: "issue-active"}, wcfg)
-		active, err := fn(context.Background())
-		if active {
-			t.Fatal("active = true on fetch error, want false")
+		snapshot, err := fn(context.Background())
+		if snapshot.Active {
+			t.Fatalf("snapshot = %+v, want inactive zero snapshot on fetch error", snapshot)
 		}
 		if !errors.Is(err, boom) {
 			t.Fatalf("err = %v, want wrapped tracker boom", err)
@@ -145,12 +145,12 @@ func TestRuntimeDispatcherIssueStateRefresherPassesIssueIdentifierFallback(t *te
 		IssueRender:   map[string]any{"identifier": "#7"},
 	}, snap.Workflow.Config)
 
-	active, err := fn(context.Background())
+	snapshot, err := fn(context.Background())
 	if err != nil {
 		t.Fatalf("refresher err: %v", err)
 	}
-	if active {
-		t.Fatal("active = true, want false after ref-aware Done refresh")
+	if snapshot.Active || !snapshot.Found || snapshot.State != "Done" {
+		t.Fatalf("snapshot = %+v, want found inactive Done after ref-aware refresh", snapshot)
 	}
 	if len(stub.refs) != 1 || len(stub.refs[0]) != 1 {
 		t.Fatalf("ref calls = %#v, want one issue ref", stub.refs)
@@ -211,12 +211,12 @@ func TestRuntimePollerAttachDispatcherCarriesCurrentRefresher(t *testing.T) {
 	if fn == nil {
 		t.Fatal("factory returned nil for valid task on external dispatcher")
 	}
-	active, err := fn(context.Background())
+	snapshot, err := fn(context.Background())
 	if err != nil {
 		t.Fatalf("refresher err: %v", err)
 	}
-	if !active {
-		t.Fatal("active = false, want true; external dispatcher should call through to the stub refresher")
+	if !snapshot.Active || !snapshot.Found || snapshot.State != "In Progress" {
+		t.Fatalf("snapshot = %+v, want found active In Progress; external dispatcher should call through to the stub refresher", snapshot)
 	}
 	if len(stub.calls) == 0 {
 		t.Fatal("stub refresher never invoked; external dispatcher is wired to a different tracker")
