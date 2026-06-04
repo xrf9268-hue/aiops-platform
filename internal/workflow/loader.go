@@ -178,6 +178,7 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 			rawStateCaps[state] = limit
 		}
 	}
+	defaultAgentMaxContinuationTurns(&cfg, hasFrontMatter, []byte(front))
 	if err := expandConfigForWorkflowPath(path, &cfg); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
@@ -399,6 +400,16 @@ func rejectRemovedAgentFields(raw map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func defaultAgentMaxContinuationTurns(cfg *Config, hasFrontMatter bool, front []byte) {
+	if cfg == nil {
+		return
+	}
+	if hasFrontMatter && hasNestedKey(front, "agent", "max_continuation_turns") {
+		return
+	}
+	cfg.Agent.MaxContinuationTurns = cfg.Agent.MaxTurns
 }
 
 // rejectRemovedVerifyFields surfaces clear errors for the verify.* keys that

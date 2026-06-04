@@ -36,6 +36,10 @@ type RetryEntry struct {
 	Timer      *time.Timer
 	Error      string
 	Kind       RetryKind
+	// ContinuationTurnCount carries D34's cumulative clean-turn budget across
+	// RetryKindContinuation wake/re-dispatch cycles. It is ignored for failure
+	// and quota retries.
+	ContinuationTurnCount int
 	// Workspace is the on-disk workspace the prior turn used, carried forward
 	// from the finalized RunningEntry so a continuation retry whose issue is
 	// later observed terminal can route the removal through the same

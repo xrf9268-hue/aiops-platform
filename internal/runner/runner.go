@@ -77,8 +77,8 @@ func IsInputRequired(err error) bool {
 
 // NameCodexAppServer is the agent.default value selecting the SPEC §10.1
 // codex app-server runner. It runs its own per-session turn loop bounded by
-// agent.max_turns (SPEC §5.3.5); SPEC §7.1 leaves continuation worker spawns
-// unbounded, so the orchestrator does not cap them (DEVIATIONS D30 / #576).
+// agent.max_turns (SPEC §5.3.5). The orchestrator separately caps cumulative
+// clean still-active continuation turns via D34 / agent.max_continuation_turns.
 const NameCodexAppServer = "codex-app-server"
 
 func New(name string) (Runner, error) {

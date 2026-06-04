@@ -201,6 +201,31 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	}
 }
 
+func TestPrintConfig_ExposesMaxContinuationTurns(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_continuation_turns: 7\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Agent struct {
+				MaxContinuationTurns int `json:"max_continuation_turns"`
+			} `json:"agent"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if got, want := out.Config.Agent.MaxContinuationTurns, 7; got != want {
+		t.Fatalf("agent.max_continuation_turns = %d, want %d\nstdout:\n%s", got, want, stdout.String())
+	}
+}
+
 // TestPrintConfig_TopLevelSourceOmitsLegacyShadowedBy pins the #72
 // SPEC-aligned contract: print-config still reports the effective source
 // at the top level, but legacy alternate paths are ignored rather than

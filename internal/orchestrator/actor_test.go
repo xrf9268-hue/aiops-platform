@@ -815,7 +815,7 @@ func TestContinuationRetryRecheckedDispatchKeepsRetryWhenCapacityFull(t *testing
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	if err := o.scheduleContinuationRetry(context.Background(), issueA, issueA.Identifier, 1, Workspace{}); err != nil {
+	if err := o.scheduleContinuationRetry(context.Background(), issueA, issueA.Identifier, 1, 0, Workspace{}); err != nil {
 		t.Fatalf("schedule continuation retry: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -1233,57 +1233,84 @@ func TestFinalize_WorkerSetupFailureSchedulesBackoffRetry(t *testing.T) {
 	}
 }
 
-// TestFinalize_ContinuationSpawnsAreUnbounded covers SPEC §7.1 (issue #576 /
-// DEVIATIONS D30): the orchestrator no longer caps continuation spawns. Every
-// clean exit on a still-active issue schedules another continuation; the issue
-// is never dropped for "too many turns". The in-session turn budget
-// (agent.max_turns, SPEC §5.3.5) is the runner's job, not a cross-worker cap.
-// This fails if the legacy continuation-spawn cap is reintroduced (it stopped
-// re-dispatching once the continuation count reached max_turns).
-func TestFinalize_ContinuationSpawnsAreUnbounded(t *testing.T) {
+// TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit covers D34 / #621:
+// upstream leaves clean continuation spawns unbounded, but aiops-platform caps
+// cumulative clean turns across re-dispatches so impossible active issues stop
+// burning concurrency and quota.
+func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
 	disp := &fakeDispatcher{}
-	// Drive more clean continuation cycles than the old default max_turns (20)
-	// so reintroducing the cap at ANY value up to that default — not just a tiny
-	// one — would route the issue into Failed and break this test.
-	const cycles = 22
-	delays := make([]time.Duration, cycles+2)
-	for i := range delays {
-		delays[i] = time.Millisecond
-	}
-	o, cancel := startActor(t, Deps{
+	st := NewOrchestratorState(15000, 100)
+	st.MaxContinuationTurns = 3
+	o := New(st, Deps{
 		Dispatcher: disp,
-		Scheduler:  &sequenceScheduler{delays: delays},
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Millisecond}},
 	})
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
 
-	iss := tracker.Issue{ID: "ENG-CONT-UNBOUNDED", Identifier: "ENG-CONT-UNBOUNDED", Title: "unbounded continuation"}
+	iss := tracker.Issue{ID: "ENG-CONT-BUDGET", Identifier: "ENG-CONT-BUDGET", State: "In Progress", Title: "budgeted continuation"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	// Each clean exit must schedule another continuation rather than landing in
-	// Failed (SPEC §7.1 unbounded continuation spawns, #576 / D30).
-	for cycle := 0; cycle < cycles; cycle++ {
-		disp.finishAt(cycle, WorkerResult{Elapsed: time.Millisecond})
-		expectedAttempt := cycle + 1
-		waitFor(t, func() bool {
-			v, err := o.Snapshot(context.Background())
-			return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == expectedAttempt &&
-				!v.Retrying[0].DueAt.After(time.Now())
-		}, time.Second)
-		if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
-			t.Fatalf("tracker-rechecked continuation dispatch cycle %d: %v", cycle, err)
+	for turn := 0; turn < 2; turn++ {
+		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+			t.Fatalf("RecordRuntimeEvent turn %d: %v", turn, err)
 		}
-		waitFor(t, func() bool { return disp.count() == cycle+2 }, time.Second)
 	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt == 1 &&
+			!v.Retrying[0].DueAt.After(time.Now())
+	}, time.Second)
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
 
-	// Every clean exit kept scheduling another continuation past the old
-	// max_turns=20 default rather than dropping the issue (SPEC §7.1, #576 /
-	// D30). The dispatch count is the proof: the legacy cap would have stopped
-	// re-dispatching once the continuation count reached the cap.
-	if got, want := disp.count(), cycles+1; got != want {
-		t.Fatalf("Dispatcher.Spawn calls = %d, want %d (1 initial + %d unbounded continuations past the old max_turns=20 default)", got, want, cycles)
+	// This run records no turn_completed event; budget accounting must still
+	// count a clean worker exit as one turn so zero-event loops cannot bypass D34.
+	disp.finishAt(1, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Blocked) == 1 && len(v.Running) == 0 && len(v.Retrying) == 0
+	}, time.Second)
+	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("budget-blocked issue dispatch err = %v, want ErrNotDispatched", err)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 1 {
+		t.Fatalf("Blocked rows = %d, want 1; view=%+v", len(view.Blocked), view)
+	}
+	blocked := view.Blocked[0]
+	if blocked.IssueID != IssueID(iss.ID) || blocked.Method != "continuation_budget" {
+		t.Fatalf("blocked row = %+v, want issue %s with method continuation_budget", blocked, iss.ID)
+	}
+	for _, want := range []string{"cumulative_turns=3", "max_continuation_turns=3"} {
+		if !strings.Contains(blocked.Error, want) {
+			t.Fatalf("blocked error = %q, want %q", blocked.Error, want)
+		}
+	}
+	var sawBudgetEvent bool
+	for _, ev := range view.RecentEvents {
+		if ev.IssueID == IssueID(iss.ID) && ev.Kind == RuntimeEventContinuationBudgetBlocked {
+			sawBudgetEvent = true
+			if !strings.Contains(ev.Message, "max_continuation_turns=3") {
+				t.Fatalf("budget event message = %q, want budget detail", ev.Message)
+			}
+		}
+	}
+	if !sawBudgetEvent {
+		t.Fatalf("RecentEvents = %+v; want continuation budget block event", view.RecentEvents)
 	}
 }
 

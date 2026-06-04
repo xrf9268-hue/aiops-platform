@@ -116,7 +116,10 @@ type RunningEntry struct {
 	// consumed for this issue. It is separate from RetryAttempt because
 	// continuation dispatches must not render as failure retries in prompts.
 	ContinuationAttempt int
-	Workspace           Workspace
+	// ContinuationTurnCount is the cumulative clean-turn budget consumed
+	// across continuation re-dispatches for this issue (D34 / #621).
+	ContinuationTurnCount int
+	Workspace             Workspace
 
 	Session     LiveSession
 	LastEventAt time.Time // SPEC §8.5 Part A input (D14)
@@ -170,8 +173,10 @@ type RunningEntry struct {
 	ReconcileCleanupWorkspace bool
 }
 
-// BlockedEntry is an input-required run that has stopped executing but remains
-// claimed until tracker reconciliation observes the issue leaving active work.
+// BlockedEntry is a run that has stopped executing but remains claimed until
+// tracker reconciliation observes the issue leaving active work. Most entries
+// come from input-required exits; D34 also uses the same blocked substate for
+// exhausted clean-continuation budgets.
 type BlockedEntry struct {
 	Issue       tracker.Issue
 	Identifier  string
@@ -196,6 +201,7 @@ type OrchestratorState struct {
 	PollIntervalMs             int64
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
+	MaxContinuationTurns       int
 
 	Running       map[IssueID]*RunningEntry
 	Blocked       map[IssueID]*BlockedEntry
@@ -263,6 +269,8 @@ type OrchestratorState struct {
 	RecentEvents []RuntimeEvent
 }
 
+const DefaultMaxContinuationTurns = 20
+
 // DefaultMaxRecentCompleted caps the per-id slice that /api/v1/state and
 // Snapshot() publish. The cap is applied at construction
 // (NewOrchestratorState); transitions evict the oldest entry when the cap is
@@ -285,6 +293,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		PollIntervalMs:               pollIntervalMs,
 		MaxConcurrentAgents:          maxConcurrentAgents,
 		MaxConcurrentAgentsByState:   map[string]int{},
+		MaxContinuationTurns:         DefaultMaxContinuationTurns,
 		Running:                      map[IssueID]*RunningEntry{},
 		Blocked:                      map[IssueID]*BlockedEntry{},
 		Claimed:                      map[IssueID]struct{}{},
@@ -544,6 +553,10 @@ func (s *OrchestratorState) FinishRunReconciledCancelled(id IssueID, run *Runnin
 }
 
 func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt time.Time, runErr string, elapsed time.Duration) bool {
+	return s.BlockRunWithReason(id, run, blockedAt, run.InputRequiredMethod, runErr, elapsed)
+}
+
+func (s *OrchestratorState) BlockRunWithReason(id IssueID, run *RunningEntry, blockedAt time.Time, method, runErr string, elapsed time.Duration) bool {
 	if current, ok := s.Running[id]; !ok || current != run {
 		return false
 	}
@@ -561,7 +574,7 @@ func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt ti
 		Workspace:   run.Workspace,
 		Session:     run.Session,
 		LastEventAt: run.LastEventAt,
-		Method:      run.InputRequiredMethod,
+		Method:      method,
 		Error:       runErr,
 	}
 	s.CodexTotals.AddSeconds(elapsed)

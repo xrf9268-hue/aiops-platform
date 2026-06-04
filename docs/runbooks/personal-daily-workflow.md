@@ -117,7 +117,7 @@ Use when:
 
 - you prefer Claude as the coding agent, or want a second opinion when Codex produced a thin or wrong patch.
 - you want Claude's tool use for a run.
-- Note this runner is **one-shot**: it runs a single `sh -c` invocation per worker session, so multi-turn iteration relies on the orchestrator's continuation retries (the D30 cap), not an in-session turn loop like `codex-app-server`. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
+- Note this runner is **one-shot**: it runs a single `sh -c` invocation per worker session, so multi-turn iteration relies on the orchestrator's continuation retries and D34 `agent.max_continuation_turns` budget, not an in-session turn loop like `codex-app-server`. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
 
 ```yaml
 agent:

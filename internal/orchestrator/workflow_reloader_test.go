@@ -303,6 +303,51 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 	}, time.Second)
 }
 
+func TestRuntimePollerAppliesReloadedMaxContinuationTurnsToCleanContinuationBudget(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	path := writeWorkflowForReloadTest(t, "linear", 30000, withReloadTestMaxContinuationTurns(5))
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"}}}
+	dispatcher := &fakeDispatcher{}
+	st := NewOrchestratorState(30000, 1)
+	st.MaxContinuationTurns = initial.Config.Agent.MaxContinuationTurns
+	orch := New(st, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxContinuationTurns(1))
+	if err := runtime.ReloadOnce(ctx); err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll after continuation budget reload: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	dispatcher.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	waitFor(t, func() bool {
+		view, err := orch.Snapshot(ctx)
+		return err == nil && len(view.Blocked) == 1 && len(view.Retrying) == 0 &&
+			view.Blocked[0].Method == "continuation_budget" &&
+			strings.Contains(view.Blocked[0].Error, "max_continuation_turns=1")
+	}, time.Second)
+}
+
 func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T) {
 	ctx := context.Background()
 	path := writeWorkflowForReloadTest(t, "linear", 30000)
@@ -623,6 +668,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"  default: mock\n" +
 		"  max_concurrent_agents: " + itoaForReloadTest(cfg.maxConcurrentAgents) + "\n" +
 		"  max_retry_backoff_ms: " + itoaForReloadTest(cfg.maxRetryBackoffMs) + "\n" +
+		reloadTestMaxContinuationTurnsYAML(cfg.maxContinuationTurns) +
 		reloadTestMaxConcurrentAgentsByStateYAML(cfg.maxConcurrentAgentsByState) +
 		"---\n" +
 		"Prompt body\n"
@@ -641,6 +687,7 @@ func reloadTestLinearProjectSlugYAML(trackerKind string) string {
 type reloadWorkflowTestConfig struct {
 	maxConcurrentAgents        int
 	maxRetryBackoffMs          int
+	maxContinuationTurns       int
 	maxConcurrentAgentsByState map[string]int
 }
 
@@ -655,6 +702,12 @@ func withReloadTestMaxConcurrentAgents(n int) reloadWorkflowTestOption {
 func withReloadTestMaxRetryBackoffMs(n int) reloadWorkflowTestOption {
 	return func(cfg *reloadWorkflowTestConfig) {
 		cfg.maxRetryBackoffMs = n
+	}
+}
+
+func withReloadTestMaxContinuationTurns(n int) reloadWorkflowTestOption {
+	return func(cfg *reloadWorkflowTestConfig) {
+		cfg.maxContinuationTurns = n
 	}
 }
 
@@ -673,6 +726,13 @@ func reloadTestMaxConcurrentAgentsByStateYAML(caps map[string]int) string {
 		out += "    " + state + ": " + itoaForReloadTest(cap) + "\n"
 	}
 	return out
+}
+
+func reloadTestMaxContinuationTurnsYAML(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return "  max_continuation_turns: " + itoaForReloadTest(n) + "\n"
 }
 
 var osWriteFileForReloadTest = func(path string, data []byte) error {

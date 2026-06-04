@@ -64,6 +64,7 @@ type WorkflowSnapshot struct {
 	PollInterval               time.Duration
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
+	MaxContinuationTurns       int
 	MaxRetryBackoff            time.Duration
 	Reconciliation             ReconciliationConfig
 	Fingerprint                string
@@ -201,6 +202,7 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		PollInterval:               time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
 		MaxConcurrentAgents:        wf.Config.Agent.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(wf.Config.Agent.MaxConcurrentAgentsByState),
+		MaxContinuationTurns:       wf.Config.Agent.MaxContinuationTurns,
 		MaxRetryBackoff:            time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
 		Reconciliation:             reconcile,
 		Fingerprint:                fingerprint,

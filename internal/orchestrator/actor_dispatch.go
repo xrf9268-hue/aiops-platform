@@ -82,7 +82,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrNotDispatched
 		return nil
 	}
-	consumedContinuation, continuationAttempt, deny := resolveDispatchClaim(st, id, d.trackerRechecked)
+	consumedContinuation, continuationAttempt, continuationTurnCount, deny := resolveDispatchClaim(st, id, d.trackerRechecked)
 	if deny {
 		d.result <- ErrNotDispatched
 		return nil
@@ -122,7 +122,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	attempt := d.attempt
 	result := d.result
 	return func() {
-		o.spawn(id, issue, attempt, continuationAttempt)
+		o.spawn(id, issue, attempt, continuationAttempt, continuationTurnCount)
 		result <- nil
 	}
 }
@@ -136,21 +136,21 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 // which stays claimed until retryFireOp re-dispatches it) or not yet due, and —
 // when no such entry exists — when the issue is already claimed. deny is true on
 // every rejection path.
-func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bool) (consumed *RetryEntry, continuationAttempt int, deny bool) {
+func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bool) (consumed *RetryEntry, continuationAttempt, continuationTurnCount int, deny bool) {
 	if !trackerRechecked {
-		return nil, 0, st.IsClaimed(id)
+		return nil, 0, 0, st.IsClaimed(id)
 	}
 	entry, ok := st.RetryAttempts[id]
 	if !ok {
-		return nil, 0, st.IsClaimed(id)
+		return nil, 0, 0, st.IsClaimed(id)
 	}
 	if entry.Kind != RetryKindContinuation {
-		return nil, 0, true
+		return nil, 0, 0, true
 	}
 	if !entry.IsDue(time.Now()) {
-		return nil, 0, true
+		return nil, 0, 0, true
 	}
-	return entry, entry.Attempt, false
+	return entry, entry.Attempt, entry.ContinuationTurnCount, false
 }
 
 // spawn asks the dispatcher for a worker, records the Running entry
@@ -161,18 +161,19 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 //
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
-func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt int) {
+func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount int) {
 	runCtx, cancel := context.WithCancelCause(o.runCtx)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
 	entry := &RunningEntry{
-		Issue:               issue,
-		Identifier:          issue.Identifier,
-		StartedAt:           startedAt,
-		RetryAttempt:        attempt,
-		ContinuationAttempt: continuationAttempt,
-		CancelWorker:        cancel,
-		Done:                workerDone,
+		Issue:                 issue,
+		Identifier:            issue.Identifier,
+		StartedAt:             startedAt,
+		RetryAttempt:          attempt,
+		ContinuationAttempt:   continuationAttempt,
+		ContinuationTurnCount: continuationTurnCount,
+		CancelWorker:          cancel,
+		Done:                  workerDone,
 	}
 	registered := make(chan struct{})
 	if err := o.submit(o.runCtx, opFunc(func(st *OrchestratorState) func() {

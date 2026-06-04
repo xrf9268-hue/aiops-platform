@@ -177,11 +177,12 @@ type configView struct {
 // The remaining fields keep their original JSON tags so external
 // consumers see the same shape.
 type agentConfigView struct {
-	Default             string `json:"default"`
-	MaxConcurrentAgents int    `json:"max_concurrent_agents"`
-	MaxTurns            int    `json:"max_turns"`
-	MaxRetryBackoffMs   int    `json:"max_retry_backoff_ms"`
-	Timeout             string `json:"timeout"`
+	Default              string `json:"default"`
+	MaxConcurrentAgents  int    `json:"max_concurrent_agents"`
+	MaxTurns             int    `json:"max_turns"`
+	MaxContinuationTurns int    `json:"max_continuation_turns"`
+	MaxRetryBackoffMs    int    `json:"max_retry_backoff_ms"`
+	Timeout              string `json:"timeout"`
 }
 
 func newConfigView(cfg workflow.Config) configView {
@@ -190,11 +191,12 @@ func newConfigView(cfg workflow.Config) configView {
 		Tracker:   cfg.Tracker,
 		Workspace: cfg.Workspace,
 		Agent: agentConfigView{
-			Default:             cfg.Agent.Default,
-			MaxConcurrentAgents: cfg.Agent.MaxConcurrentAgents,
-			MaxTurns:            cfg.Agent.MaxTurns,
-			MaxRetryBackoffMs:   cfg.Agent.MaxRetryBackoffMs,
-			Timeout:             cfg.Agent.Timeout.String(),
+			Default:              cfg.Agent.Default,
+			MaxConcurrentAgents:  cfg.Agent.MaxConcurrentAgents,
+			MaxTurns:             cfg.Agent.MaxTurns,
+			MaxContinuationTurns: cfg.Agent.MaxContinuationTurns,
+			MaxRetryBackoffMs:    cfg.Agent.MaxRetryBackoffMs,
+			Timeout:              cfg.Agent.Timeout.String(),
 		},
 		Codex:   cfg.Codex,
 		Claude:  cfg.Claude,

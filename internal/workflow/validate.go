@@ -190,6 +190,9 @@ func validateAgentLimits(path string, cfg Config) error {
 	if cfg.Agent.MaxTurns <= 0 {
 		return fmt.Errorf("%s: agent.max_turns must be positive", path)
 	}
+	if cfg.Agent.MaxContinuationTurns <= 0 {
+		return fmt.Errorf("%s: agent.max_continuation_turns must be positive", path)
+	}
 	if cfg.Agent.MaxConcurrentAgents <= 0 {
 		return fmt.Errorf("%s: agent.max_concurrent_agents must be a positive integer (SPEC §6.4 default 10; explicit 0 is not allowed — Elixir validate_number greater_than: 0)", path)
 	}

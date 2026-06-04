@@ -125,10 +125,11 @@ func (o *Orchestrator) reconciledWorkspaceCleanup(id IssueID, entry *RunningEntr
 }
 func (o *Orchestrator) reconciledWorkspaceCleanupOrContinuation(id IssueID, entry *RunningEntry, attempt int) func() {
 	continuation := &continuationAfterSkippedCleanup{
-		issue:      entry.Issue,
-		identifier: entry.Identifier,
-		attempt:    attempt,
-		workspace:  entry.Workspace,
+		issue:                 entry.Issue,
+		identifier:            entry.Identifier,
+		attempt:               attempt,
+		continuationTurnCount: entry.ContinuationTurnCount + continuationTurnDelta(entry),
+		workspace:             entry.Workspace,
 	}
 	return o.reconciledWorkspaceCleanupFollowup(id, entry, continuation)
 }
@@ -203,7 +204,7 @@ func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continu
 		o.queuePollWake()
 		return
 	}
-	_ = o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.workspace)
+	_ = o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.continuationTurnCount, continuation.workspace)
 }
 func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
 	safeGo("orchestrator.reconcile_cleanup_retry", func() {
