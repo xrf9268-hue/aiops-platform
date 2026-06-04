@@ -547,10 +547,17 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}
+		}
+	} else {
+		if !strings.Contains(html, "Delivered") || !strings.Contains(html, "agent_handoff_reconcile_stopped") {
+			t.Fatalf("dashboard fallback missing delivered handoff KPI wiring:\n%s", html)
+		}
+		if strings.Contains(html, "<span class=\"label\">Completed</span>") {
+			t.Fatalf("dashboard fallback still labels the handoff KPI as Completed: %s", html)
 		}
 	}
 }

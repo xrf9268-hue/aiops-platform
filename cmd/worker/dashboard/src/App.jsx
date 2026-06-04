@@ -473,7 +473,7 @@ export default function App() {
         </div>
         {error ? <div className="err-banner" role="alert">GET /api/v1/state — {error}</div> : null}
         <div className="kpi-row">
-          {['Running', 'Retrying', 'Blocked', 'Completed'].map((label) => (
+          {['Running', 'Retrying', 'Blocked', 'Delivered'].map((label) => (
             <div className="kpi" key={label}>
               <div className="kpi-label"><span className="kpi-dot" />{label}</div>
               <div className="skel" style={{ height: 'var(--kpi-size)', width: '2.4ch', margin: '5px 0 2px' }} aria-hidden="true" />
@@ -537,9 +537,9 @@ export default function App() {
         <Kpi label="Retrying" value={c.retrying || 0} sub="in backoff queue" status={c.retrying ? 'retry' : null} />
         <Kpi label="Blocked" value={c.blocked || 0} sub="needs operator attention" status={c.blocked ? 'blocked' : null} />
         <Kpi
-          label="Completed"
-          value={c.completed || 0}
-          sub={`${compact(c.completed_total)} lifetime`}
+          label="Delivered"
+          value={c.agent_handoff_reconcile_stopped || 0}
+          sub={`${compact(c.agent_handoff_reconcile_stopped_total)} handoffs lifetime · ${compact(c.completed_total)} completed turns`}
           flag={c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : null}
           status="done"
         />

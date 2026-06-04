@@ -104,13 +104,15 @@ describe('Worker status dashboard', () => {
     expect(stateAPIURL({})).toBe('/api/v1/state');
   });
 
-  it('renders the Worker status title and live KPI counts', async () => {
+  it('renders the Worker status title and delivered handoff KPI', async () => {
     render(<App />);
     expect(await screen.findByRole('heading', { name: /Worker status/i })).toBeTruthy();
 
-    const completed = screen.getByText('Completed').closest('.kpi');
-    expect(within(completed).getByText('14')).toBeTruthy();
-    expect(within(completed).getByText(/137 lifetime/)).toBeTruthy();
+    const delivered = screen.getByText('Delivered').closest('.kpi');
+    expect(within(delivered).getByText('1')).toBeTruthy();
+    expect(within(delivered).getByText(/9 handoffs lifetime/)).toBeTruthy();
+    expect(within(delivered).getByText(/137 completed turns/)).toBeTruthy();
+    expect(screen.queryByText(/^Completed$/)).toBeNull();
 
     // codex token totals strip (5,443,400 → 5.4M) and a compacted running token cell.
     expect(screen.getByText('5.4M')).toBeTruthy();
@@ -208,7 +210,7 @@ describe('Worker status dashboard', () => {
     expect(container.querySelector('pre.rate-raw')).toBeNull();
   });
 
-  it('folds stopped-with-progress and agent-handoff into the reconcile roll-up, not extra KPIs', async () => {
+  it('keeps reconcile-stopped details in the roll-up under the delivered KPI', async () => {
     render(<App />);
     const rollup = (await screen.findByText('Reconcile roll-up')).closest('.panel');
 
@@ -224,7 +226,8 @@ describe('Worker status dashboard', () => {
     expect(handoffCell.textContent).toContain('9 total'); // lifetime total
     expect(handoffCell.textContent).toContain('informational, not an error');
 
-    // neither bucket leaks into the lean 4-KPI strip
+    // the handoff details stay in the roll-up; the headline KPI uses a
+    // plain-language Delivered label instead of duplicating this bucket label.
     expect(screen.getAllByText('Agent handoff')).toHaveLength(1);
   });
 

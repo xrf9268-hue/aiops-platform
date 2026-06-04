@@ -80,7 +80,7 @@
           <div class="tile"><span class="label">Running</span><span class="value" id="running">-</span></div>
           <div class="tile"><span class="label">Retrying</span><span class="value" id="retrying">-</span></div>
           <div class="tile"><span class="label">Blocked</span><span class="value" id="blocked">-</span></div>
-          <div class="tile"><span class="label">Completed</span><span class="value" id="completed">-</span></div>
+          <div class="tile"><span class="label">Delivered</span><span class="value" id="delivered">-</span></div>
         </section>
         <pre id="state">Loading...</pre>
       </main>
@@ -93,7 +93,7 @@
           document.getElementById('running').textContent = counts.running ?? 0;
           document.getElementById('retrying').textContent = counts.retrying ?? 0;
           document.getElementById('blocked').textContent = counts.blocked ?? 0;
-          document.getElementById('completed').textContent = counts.completed ?? 0;
+          document.getElementById('delivered').textContent = counts.agent_handoff_reconcile_stopped ?? 0;
           document.getElementById('state').textContent = JSON.stringify(state, null, 2);
         })
         .catch(function (err) {
