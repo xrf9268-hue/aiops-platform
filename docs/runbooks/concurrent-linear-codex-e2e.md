@@ -10,6 +10,29 @@ The worker is still only the scheduler/runner and tracker reader. Linear state
 updates must be performed by the agent through the advertised `linear_graphql`
 tool.
 
+## Operator boundary and upstream comparison
+
+For autonomous validation, the operator prepares the disposable repo, tracker
+issues, workflow, credentials, and capture tools, then observes. Do not edit the
+agent workspace, advance tracker state, merge draft PRs, or patch the worker
+mid-run to "help" the scenario pass. Operator actions after the run, such as
+canceling pathological issues or stopping a temporary worker, belong in the
+closeout report as observations, not hidden cleanup.
+
+When a finding may be inherited from Symphony rather than introduced by this
+port, run the same prep-from-zero flow against a freshly refreshed
+`openai/symphony` checkout and compare behavior before assigning root cause.
+"Upstream does this too" is not the end of the analysis: if the behavior is
+operationally unsafe here, track the accepted hardening as a SPEC deviation
+rather than silently matching the defect.
+
+Interactive Codex approval prompts are environment-sensitive. They were
+observed in the Codex app / CLI-aware local environment used for the June 2026
+run; a plain CLI or upstream reference run may not show the same popup even for
+the same tool choice. Do not classify "no popup appeared" as an aiops/upstream
+behavior difference by itself — compare the tool call, approval policy, runtime
+events, and logs.
+
 ## Contract
 
 The Linear project workflow must expose these visible states:

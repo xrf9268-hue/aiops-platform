@@ -73,6 +73,11 @@ AGENTS.md policy.
 
 Triage:
 
+- **First validate the finding technically.** Compare it against the current
+  head, the issue plan, SPEC/Elixir references, and adjacent code paths before
+  changing code. A wrong review comment should be answered with evidence; a
+  right comment that exposes a plan flaw should update code, tests, and any
+  SPEC/deviation docs in the same review round.
 - **HIGH / MEDIUM / Critical block the push.** Fix, amend, rerun the local
   gate and both reviewers. Keep an unfixed item only if the human explicitly
   signs off on the risk before push.
@@ -92,7 +97,7 @@ Triage:
 Run it **on every pushed head**, not once per PR.
 
 1. `gh pr comment <pr> --body "@codex review"`; record that trigger
-   comment's id.
+   comment's id plus the head SHA, base SHA, and base branch at trigger time.
 2. **Poll** its reactions summary —
    `gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`
    (the issue-comment object carries the `.reactions` counts; no separate
@@ -100,7 +105,14 @@ Run it **on every pushed head**, not once per PR.
    have no watch/subscribe API (REST is GET/POST/DELETE only), so polling is the
    only option. **`eyes==0` alone is not done** (it may not have started): wait
    for 👀 to **appear then disappear**, **and** for a positive completion
-   signal — Codex posted a review/comment for that head, or 👍'd the trigger.
+   signal:
+   - a `chatgpt-codex-connector` `+1` reaction on the trigger,
+   - a `chatgpt-codex-connector` PR review for the recorded head, or
+   - for manual follow-through only, a later `chatgpt-codex-connector` issue
+     comment that the operator reads as a clean review result while the PR head
+     and base still match the recorded trigger refs.
+   Do not automate the last case by parsing Codex natural-language output; an
+   unattended gate that lacks a structured clean signal should fail closed.
 3. **CI green** uses native `gh pr checks <pr> --watch --fail-fast` (blocks to
    completion) — never `sleep`-poll.
 4. Local review **does not replace** this gate: the GitHub Codex bot and the
@@ -119,8 +131,10 @@ holds:
 - the human asked you to handle the PR, the fresh trigger completed, and a
   thread-aware recheck confirms it is no longer actionable.
 
-**Merge requires zero unresolved, non-outdated actionable threads.** After
-merging a PR with non-trivial bot activity, sanity-check the next
+**Merge requires zero unresolved, non-outdated actionable threads.** A resolved
+thread is closed even when it is still non-outdated; do not resurrect it merely
+because the diff line still exists. After merging a PR with non-trivial bot
+activity, sanity-check the next
 `Capture unresolved reviews` workflow run / linked follow-up issues — that
 workflow is a backstop, not a merge substitute.
 
@@ -156,6 +170,13 @@ verification commands, mutation check, CI conclusion/run id, dual-reviewer
 verdicts, `@codex review` trigger id + reaction/thread state, size-gate
 classification (one of the three states; rationale if over budget), and
 deferral/follow-up links. A stale body misleads the merge decision.
+
+The final body edit is itself part of the gate: it can start a fresh
+`PR Metadata` run. After the last body update, re-read the status rollup and
+wait for any new metadata run to reach a terminal passing state before calling
+remote checks final. When you inspect CI/metadata logs for warnings, record the
+warning audit alongside the final head SHA rather than relying on an earlier
+run.
 
 Include a size-gate checklist (exactly one box checked):
 

@@ -36,6 +36,7 @@ metadata:
 - 读 SPEC.md 相关章节 + 对应 Elixir 模块（`orchestrator.ex` / `codex/app_server.ex` / `tracker.ex` / `config/schema.ex`），歧义以 Elixir 为准。
 - **审查相邻路径**（AGENTS.md「Cross-cutting checklist」item 1）：grep 你要改的 SPEC 概念符号，列出其它 consumer；aiops 扩展（service routing `selectRoutedCandidates`、multi-tracker fan-out、per-state capacity caps、eligibility filter、reconcile hooks）要么也在你的新路径生效，要么写明为何不同。**踩坑实例**：blocked vs running 清理路径只兑现了一半契约。
 - **要在 worker/orchestrator 侧新增「消费 agent 产物」的 phase/gate/artifact/config（verify、secret-scan、run-summary、diff policy、push、PR、tracker 写…）前，先 grep Elixir 参考有没有等价物**（AGENTS.md 原则 6）。**upstream 没有 = 过度设计信号，不是功能缺口**：默认删除，别搬进 prompt 也别只记一行 DEVIATIONS。「交接前检查 agent 产物」的归宿是 WORKFLOW prompt（agent 自有、push 前、预防式），不是 worker post-turn phase（push 后只能 flag，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此）。本仓库已建了又拆 6+ 次（#73/#407、#74、#76、#557/#561）。
+- **返工高发区先写短计划再动手**：如果要碰 codex schema / dynamic tools、worker post-turn gates、queue/webhook/PR-push/tracker-write 移除路径等历史上反复返工或删了重做的子系统，先在 worktree 内写清当前上游证据、要保留/删除的不变量、相邻路径 blast radius、测试/变异验证点，再改代码。计划给出技术结论，不把 SPEC 已经能裁定的问题做成多选题。
 - **DEVIATIONS.md 决策门**：研究到结论再提（AGENTS.md 原则 7）——别把「关闭既有 / 新开 / 回退」当多选题甩给用户，SPEC + Elixir 参考通常已能定论（最常见结论：upstream 缺失且 SPEC 归在别处的扩展应删除）。别为了让差异消失而新造「deliberate extension」。
 
 ### 3. 分支 + 实现
@@ -55,12 +56,12 @@ go build ./cmd/worker ./cmd/tui
 **暂存只 add 明确路径，绝不 `git add -A` / `git add .`**（会把 `.codex/` 等本地未跟踪文件卷入 PR）。commit 前 `git status --short` 核对只暂存了预期文件。
 
 ### 5. 提交 → 双审 → 开 PR
-1. 按协议 §2–§3 commit-first + pre-push 双 reviewer，§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
+1. 按协议 §2–§3 commit-first + pre-push 双 reviewer；review finding 先按当前 head、issue 计划、SPEC/Elixir 参考和相邻路径验证技术正确性，再修复 / 反证 / 延后。§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
 2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §7）。
 3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 4. **Deferred 偏差必须开 issue**（AGENTS.md rule 2）：决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 5. **Scope 分离**：治理/文档类改动从 main 开新分支**单独 PR**，不要塞进 fix PR。
-6. 收敛后交给 `gh-pr-follow-through`（私有 `xrf9268-hue/yy-skills`；云端容器通常没装）盯 CI + 线程到 merge-ready。**该 skill 不可用时就地内联**：`gh pr checks <pr> --watch --fail-fast` 等 CI → GraphQL `reviewThreads` 解决所有未决 actionable thread → merge-ready。期间推了修复就对新 head 重跑协议 §3–§5。
+6. 收敛后交给 `gh-pr-follow-through`（私有 `xrf9268-hue/yy-skills`；云端容器通常没装）盯 CI + 线程到 merge-ready。**该 skill 不可用时就地内联**：`gh pr checks <pr> --watch --fail-fast` 等 CI → GraphQL `reviewThreads` 解决所有未决 actionable thread → 最后一次 PR body 更新后等新的 `PR Metadata` 终态并做 warning audit → merge-ready。期间推了修复就对新 head 重跑协议 §3–§5。
 
 ### 6. 合并
 按协议 §8：**必须等用户明确许可**；squash + 删分支，commit message 写最终状态；`--force-with-lease=<branch>:<known-sha>`。批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)。
@@ -88,6 +89,7 @@ go build ./cmd/worker ./cmd/tui
 
 ## 默认行为
 - 中文回复，简洁；每次只汇报变化，不复述。
+- Claude Code 若同一工具动作连续 2 次 malformed / stall / 中断，停止第 3 次原地重试，升级给 `codex:codex-rescue`，附当前 head、目标动作、失败 transcript、已验证事实；这是运行时故障，不是技术 finding 通过或失败。
 - worker 永不 push/合并 PR 或写 tracker 状态（D8/#76）。
 - Go 版本由 go.mod 锁定，别顺手改 `go` 指令。
 - **批处理多个 issue 时**（`/goal` over a set）：并行/串行依赖判定、deferral 时机、live ledger、pause/resume、opt-in 授权合并等批处理纪律全部见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)，不在此复述（与本 skill 顶部「不复述共享协议」一致，避免内联规则与 runbook 漂移）。

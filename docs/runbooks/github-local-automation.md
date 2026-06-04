@@ -250,6 +250,11 @@ scripts/uninstall-local-launchagents.sh
   The completion gate requires a `+1` reaction from
   `chatgpt-codex-connector` on that head/base-bound trigger and no active `eyes`
   reaction; unrelated/manual reactions do not satisfy the gate.
+  This unattended script intentionally fails closed if GitHub Codex instead
+  finishes by posting a clean issue comment; manual follow-through may treat
+  that as a human-audited completion signal per
+  [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md), but automation
+  must not parse Codex natural-language output to decide merge readiness.
 - Merge uses `gh pr merge --match-head-commit <reviewed-head>` so GitHub rejects
   auto-merge setup if the PR branch changes between the last local check and the
   merge request.
