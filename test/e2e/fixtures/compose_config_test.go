@@ -87,7 +87,7 @@ func TestCodexComposeOverlayUsesSecrets(t *testing.T) {
 		t.Fatalf("codex overlay volumes = %#v, want CODEX_HOME mounted", volumes)
 	}
 	if sliceContainsString(volumes, "/home/aiops/.codex:ro") {
-		t.Fatalf("codex overlay volumes = %#v, CODEX_HOME must be writable for Codex CLI 0.136", volumes)
+		t.Fatalf("codex overlay volumes = %#v, CODEX_HOME must be writable for Codex CLI 0.137", volumes)
 	}
 	declared, ok := compose["secrets"].(map[string]any)
 	if !ok {

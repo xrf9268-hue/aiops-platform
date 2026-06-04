@@ -244,10 +244,6 @@
             "null"
           ]
         },
-        "persistExtendedHistory": {
-          "description": "Deprecated and ignored by app-server. Kept only so older clients can continue sending the field while rollout persistence always uses the limited history policy.",
-          "type": "boolean"
-        },
         "personality": {
           "anyOf": [
             {
@@ -1397,10 +1393,6 @@
             "null"
           ]
         },
-        "persistExtendedHistory": {
-          "description": "Deprecated and ignored by app-server. Kept only so older clients can continue sending the field while rollout persistence always uses the limited history policy.",
-          "type": "boolean"
-        },
         "personality": {
           "anyOf": [
             {
@@ -1531,10 +1523,6 @@
             "string",
             "null"
           ]
-        },
-        "persistExtendedHistory": {
-          "description": "Deprecated and ignored by app-server. Kept only so older clients can continue sending the field while rollout persistence always uses the limited history policy.",
-          "type": "boolean"
         },
         "runtimeWorkspaceRoots": {
           "description": "Replace the thread's runtime workspace roots. Relative paths are resolved against the effective cwd for the thread.",
@@ -4137,6 +4125,77 @@
         }
       }
     },
+    "RemoteControlPairingStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlPairingStartParams",
+      "type": "object",
+      "properties": {
+        "manualCode": {
+          "type": "boolean"
+        }
+      }
+    },
+    "RemoteControlClientsListOrder": {
+      "type": "string",
+      "enum": [
+        "asc",
+        "desc"
+      ]
+    },
+    "RemoteControlClientsListParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlClientsListParams",
+      "type": "object",
+      "required": [
+        "environmentId"
+      ],
+      "properties": {
+        "cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environmentId": {
+          "type": "string"
+        },
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "order": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RemoteControlClientsListOrder"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "RemoteControlClientsRevokeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlClientsRevokeParams",
+      "type": "object",
+      "required": [
+        "clientId",
+        "environmentId"
+      ],
+      "properties": {
+        "clientId": {
+          "type": "string"
+        },
+        "environmentId": {
+          "type": "string"
+        }
+      }
+    },
     "CollaborationModeListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "CollaborationModeListParams",
@@ -5994,6 +6053,13 @@
         },
         "name": {
           "description": "Optional user-facing thread title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parentThreadId": {
+          "description": "The ID of the parent thread. This will only be set if this thread is a subagent.",
           "type": [
             "string",
             "null"
@@ -8100,6 +8166,7 @@
         "sessionFlags",
         "plugin",
         "cloudRequirements",
+        "cloudManagedConfig",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
@@ -10161,6 +10228,115 @@
         }
       }
     },
+    "RemoteControlPairingStartResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlPairingStartResponse",
+      "type": "object",
+      "required": [
+        "environmentId",
+        "expiresAt",
+        "pairingCode"
+      ],
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "manualPairingCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pairingCode": {
+          "type": "string"
+        }
+      }
+    },
+    "RemoteControlClient": {
+      "type": "object",
+      "required": [
+        "clientId"
+      ],
+      "properties": {
+        "appVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "deviceModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deviceType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSeenAt": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "osVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RemoteControlClientsListResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlClientsListResponse",
+      "type": "object",
+      "required": [
+        "data"
+      ],
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/RemoteControlClient"
+          }
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RemoteControlClientsRevokeResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "RemoteControlClientsRevokeResponse",
+      "type": "object"
+    },
     "CollaborationModeMask": {
       "description": "EXPERIMENTAL - collaboration mode preset metadata for clients.",
       "type": "object",
@@ -10802,6 +10978,16 @@
             }
           ]
         },
+        "individualLimit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SpendControlLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "limitId": {
           "type": [
             "string",
@@ -10879,6 +11065,31 @@
             "null"
           ],
           "format": "int64"
+        }
+      }
+    },
+    "SpendControlLimitSnapshot": {
+      "type": "object",
+      "required": [
+        "limit",
+        "remainingPercent",
+        "resetsAt",
+        "used"
+      ],
+      "properties": {
+        "limit": {
+          "type": "string"
+        },
+        "remainingPercent": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "resetsAt": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "used": {
+          "type": "string"
         }
       }
     },
@@ -11026,6 +11237,16 @@
     "AppConfig": {
       "type": "object",
       "properties": {
+        "approvals_reviewer": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "default_tools_approval_mode": {
           "anyOf": [
             {
@@ -11455,6 +11676,33 @@
             }
           },
           "title": "SystemConfigLayerSource"
+        },
+        {
+          "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+          "type": "object",
+          "required": [
+            "id",
+            "name",
+            "type"
+          ],
+          "properties": {
+            "id": {
+              "description": "Stable identifier for the delivered layer.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "enterpriseManaged"
+              ],
+              "title": "EnterpriseManagedConfigLayerSourceType"
+            }
+          },
+          "title": "EnterpriseManagedConfigLayerSource"
         },
         {
           "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
@@ -14200,6 +14448,7 @@
     "AccountRateLimitsUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "AccountRateLimitsUpdatedNotification",
+      "description": "Sparse rolling rate-limit update.\n\nClients should merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and does not clear a previously observed value.",
       "type": "object",
       "required": [
         "rateLimits"
@@ -14855,26 +15104,6 @@
         }
       }
     },
-    "FuzzyFileSearchSessionStartParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStartParams",
-      "type": "object",
-      "required": [
-        "roots",
-        "sessionId"
-      ],
-      "properties": {
-        "roots": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
     "FuzzyFileSearchSessionUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "FuzzyFileSearchSessionUpdatedNotification",
@@ -14899,6 +15128,32 @@
         }
       }
     },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "type": "object",
+      "properties": {
+        "experimentalApi": {
+          "description": "Opt into receiving experimental API methods and fields.",
+          "default": false,
+          "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "requestAttestation": {
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
     "FuzzyFileSearchMatchType": {
       "type": "string",
       "enum": [
@@ -14906,9 +15161,9 @@
         "directory"
       ]
     },
-    "FuzzyFileSearchSessionStopParams": {
+    "FuzzyFileSearchSessionCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStopParams",
+      "title": "FuzzyFileSearchSessionCompletedNotification",
       "type": "object",
       "required": [
         "sessionId"
@@ -14957,6 +15212,39 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        }
+      }
+    },
+    "FuzzyFileSearchSessionStopParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStopParams",
+      "type": "object",
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchSessionStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStartParams",
+      "type": "object",
+      "required": [
+        "roots",
+        "sessionId"
+      ],
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sessionId": {
+          "type": "string"
         }
       }
     },
@@ -15018,45 +15306,6 @@
         },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
-        }
-      }
-    },
-    "InitializeCapabilities": {
-      "description": "Client-declared capabilities negotiated during initialize.",
-      "type": "object",
-      "properties": {
-        "experimentalApi": {
-          "description": "Opt into receiving experimental API methods and fields.",
-          "default": false,
-          "type": "boolean"
-        },
-        "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "requestAttestation": {
-          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
-          "default": false,
-          "type": "boolean"
-        }
-      }
-    },
-    "FuzzyFileSearchSessionCompletedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionCompletedNotification",
-      "type": "object",
-      "required": [
-        "sessionId"
-      ],
-      "properties": {
-        "sessionId": {
-          "type": "string"
         }
       }
     },
@@ -16840,6 +17089,78 @@
             }
           },
           "title": "RemoteControl/status/readRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "remoteControl/pairing/start"
+              ],
+              "title": "RemoteControl/pairing/startRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/RemoteControlPairingStartParams"
+            }
+          },
+          "title": "RemoteControl/pairing/startRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "remoteControl/client/list"
+              ],
+              "title": "RemoteControl/client/listRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/RemoteControlClientsListParams"
+            }
+          },
+          "title": "RemoteControl/client/listRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "remoteControl/client/revoke"
+              ],
+              "title": "RemoteControl/client/revokeRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/RemoteControlClientsRevokeParams"
+            }
+          },
+          "title": "RemoteControl/client/revokeRequest"
         },
         {
           "description": "Lists collaboration mode presets.",

@@ -624,7 +624,7 @@ func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 			return []byte(""), nil
 		case "codex":
 			if len(args) > 0 && args[0] == "--version" {
-				return []byte("codex-cli 0.136.0\n"), nil
+				return []byte("codex-cli 0.137.0\n"), nil
 			}
 			if len(args) > 1 && args[0] == "login" && args[1] == "status" {
 				return []byte("Logged in\n"), nil
@@ -811,7 +811,7 @@ func installFakeCodex(t *testing.T) {
 	path := filepath.Join(dir, "codex")
 	body := `#!/bin/sh
 case "$1" in
-  --version) echo "codex-cli 0.136.0"; exit 0 ;;
+  --version) echo "codex-cli 0.137.0"; exit 0 ;;
   login) echo "Logged in"; exit 0 ;;
   app-server) read line; echo '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'; exit 0 ;;
 esac
@@ -1117,7 +1117,7 @@ func TestCodexVersionMatches(t *testing.T) {
 		{"equal", v(0, 136, 0), v(0, 136, 0), true},
 		{"older minor warns", v(0, 135, 9), v(0, 136, 0), false},
 		// A newer codex than the vendored schema must also warn: it can add
-		// required fields the 0.136-pinned contract test cannot see (#629 P2).
+		// required fields the pinned contract test cannot see (#629 P2).
 		{"newer minor warns", v(0, 137, 0), v(0, 136, 0), false},
 		{"older patch warns", v(0, 136, 0), v(0, 136, 1), false},
 		{"newer patch warns", v(0, 136, 2), v(0, 136, 1), false},
@@ -1162,7 +1162,7 @@ func fakeRealRunner(_ context.Context, name string, args []string, _ []string, _
 		return []byte("Logged in\n"), nil
 	}
 	if name == "codex" && len(args) > 0 && args[0] == "--version" {
-		return []byte("codex-cli 0.136.0\n"), nil
+		return []byte("codex-cli 0.137.0\n"), nil
 	}
 	return []byte("ok\n"), nil
 }

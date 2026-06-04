@@ -1238,7 +1238,7 @@ func parseGoVersion(version string) (goVersion, bool) {
 }
 
 // codexVersionFromOutput extracts the first `major.minor[.patch]` token from
-// `codex --version` output (e.g. "codex-cli 0.136.0"), reusing parseGoVersion's
+// `codex --version` output (e.g. "codex-cli 0.137.0"), reusing parseGoVersion's
 // generic numeric parse.
 func codexVersionFromOutput(output string) (goVersion, bool) {
 	for _, field := range strings.Fields(output) {

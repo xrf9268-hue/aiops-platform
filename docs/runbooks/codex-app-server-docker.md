@@ -35,18 +35,18 @@ The repository Dockerfile now exposes this as the `codex-worker` target:
 docker build --target codex-worker -t aiops-platform:codex-worker .
 ```
 
-The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.136.0`, checks
+The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.137.0`, checks
 the release artifact SHA-256, and runs `codex --version` during the build.
 
 ## Linux ARM64 fallback
 
-Install the pinned Codex CLI (`0.136.0`) directly when the official installer
+Install the pinned Codex CLI (`0.137.0`) directly when the official installer
 cannot resolve the ARM64 package:
 
 ```bash
 curl -fL -o /tmp/codex.tar.gz \
-  https://github.com/openai/codex/releases/download/rust-v0.136.0/codex-package-aarch64-unknown-linux-musl.tar.gz
-echo '2f332f07b4019bef87a844d4a8c3f4fae268912c5a6e50fd8a0388b61d125d15  /tmp/codex.tar.gz' | sha256sum -c -
+  https://github.com/openai/codex/releases/download/rust-v0.137.0/codex-package-aarch64-unknown-linux-musl.tar.gz
+echo '8756c80ad058199676d058bbd919812466d796886e7574a57c4e007f766e707c  /tmp/codex.tar.gz' | sha256sum -c -
 mkdir -p /opt/codex
 tar -xzf /tmp/codex.tar.gz -C /opt/codex
 ln -sf /opt/codex/codex-aarch64-unknown-linux-musl /usr/local/bin/codex
@@ -56,7 +56,7 @@ codex --version
 Expected version output:
 
 ```text
-codex-cli 0.136.0
+codex-cli 0.137.0
 ```
 
 Keep the version and checksum together in any derived Dockerfile so future
@@ -116,7 +116,7 @@ Two modes are supported. Pick one per deployment; do not mix them.
 
 1. **ChatGPT/Codex login (default).** Codex stores the login in
    `$CODEX_HOME/auth.json`. This file is a secret and is **writable at runtime**
-   because Codex 0.136 refreshes tokens in place. Set it up once with
+   because Codex 0.137 refreshes tokens in place. Set it up once with
    `codex --login` in the same container user / `CODEX_HOME` context, then keep
    `CODEX_HOME` on a restricted writable volume so refreshed tokens persist
    across restarts. A read-only `CODEX_HOME` silently breaks long-lived workers
@@ -146,7 +146,7 @@ Treat `CODEX_HOME` as three concerns with different trust levels:
 | `config.toml` | non-secret, declarative | **read-only** bind from a version-controlled file (see below) |
 | `sessions/`, `log/`, cache | ephemeral | writable; safe to discard between runs |
 
-For Codex CLI 0.136, mount the writable home at `/home/aiops/.codex` for the
+For Codex CLI 0.137, mount the writable home at `/home/aiops/.codex` for the
 default non-root worker image, owned by the worker UID/GID, and set:
 
 ```text

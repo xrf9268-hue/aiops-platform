@@ -750,7 +750,7 @@ func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 
 // appServerTurnTitle builds the SPEC §10.2 human label
 // "<issue.identifier>: <issue.title>" used as the continuation-prompt subject
-// (appServerContinuationPrompt). It is not a wire field: codex 0.136
+// (appServerContinuationPrompt). It is not a wire field: codex 0.137
 // TurnStartParams has no title property even under the experimental schema, so
 // a title sent on turn/start was silently dropped — the label survives only in
 // the prompt the agent reads. Task.SourceEventID is the tracker identifier
