@@ -203,6 +203,9 @@ func (c *appServerClient) handleTurnNotification(msg map[string]any, method stri
 	return false, nil
 }
 func (c *appServerClient) handleNotification(msg map[string]any) {
+	if msg["method"] == "deprecationNotice" {
+		return
+	}
 	params, _ := msg["params"].(map[string]any)
 	if v, ok := params["continue"].(bool); ok {
 		c.continueRun = v

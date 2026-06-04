@@ -278,6 +278,50 @@ for line in sys.stdin:
 	}
 }
 
+func TestBuildThreadStartParamsDisablesInheritedCodexAppTools(t *testing.T) {
+	in := appServerInput(codexWorkdir(t, "disable app tools"))
+	in.Workflow.Config.Tracker.Kind = "linear"
+	in.Workflow.Config.Tracker.APIKey = "linear-secret"
+	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+
+	payload := buildThreadStartParams(in, approval)
+
+	config, ok := payload["config"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start config = %#v; want object disabling inherited app tools", payload["config"])
+	}
+	apps, ok := config["apps"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start config.apps = %#v; want object", config["apps"])
+	}
+	features, ok := config["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start config.features = %#v; want object", config["features"])
+	}
+	if features["apps"] != false {
+		t.Fatalf("thread/start config.features.apps = %#v; want false", features["apps"])
+	}
+	if features["connectors"] != false {
+		t.Fatalf("thread/start config.features.connectors = %#v; want false", features["connectors"])
+	}
+	defaultApp, ok := apps["_default"].(map[string]any)
+	if !ok {
+		t.Fatalf("thread/start config.apps._default = %#v; want object", apps["_default"])
+	}
+	if defaultApp["enabled"] != false {
+		t.Fatalf("thread/start config.apps._default.enabled = %#v; want false", defaultApp["enabled"])
+	}
+	if defaultApp["open_world_enabled"] != false {
+		t.Fatalf("thread/start config.apps._default.open_world_enabled = %#v; want false", defaultApp["open_world_enabled"])
+	}
+	if defaultApp["destructive_enabled"] != false {
+		t.Fatalf("thread/start config.apps._default.destructive_enabled = %#v; want false", defaultApp["destructive_enabled"])
+	}
+	if tools, _ := payload["dynamicTools"].([]map[string]any); len(tools) == 0 {
+		t.Fatalf("thread/start dynamicTools = %#v; want explicit runner tools still advertised", payload["dynamicTools"])
+	}
+}
+
 func TestCodexAppServerRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 	codexAppServerEnvStubScript(t, `
 import json
@@ -381,6 +425,42 @@ for line in sys.stdin:
 	}
 	if got := runtimeEventField(t, res.RuntimeEvents[3], "turn_id"); got != "turn-1" {
 		t.Fatalf("turn_completed turn_id = %#v, want turn-1", got)
+	}
+}
+
+func TestCodexAppServerRunnerIgnoresDeprecationNoticeForSummary(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'initialized':
+        pass
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'deprecationNotice', 'params': {'summary': 'deprecated connector alias'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "deprecation notice summary")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "codex app-server completed" {
+		t.Fatalf("Summary = %q, want fallback summary instead of deprecation notice", res.Summary)
+	}
+	events := runtimeEventsNamed(res.RuntimeEvents, task.EventNotification)
+	if len(events) != 1 {
+		t.Fatalf("notification events = %d, want deprecation notice preserved as runtime event; events=%#v", len(events), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, events[0], "summary"); got != "deprecated connector alias" {
+		t.Fatalf("notification summary = %#v, want deprecation notice payload preserved", got)
 	}
 }
 
