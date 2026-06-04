@@ -42,7 +42,12 @@ import (
 type WorkerResult struct {
 	Err           error
 	InputRequired bool
-	Elapsed       time.Duration
+	// IssueLeftActiveSet marks a clean SPEC §16.5 self-stop: the runner's
+	// per-turn tracker refresh observed the issue outside active states. The
+	// clean continuation path must preserve the reconcile/cleanup retry seam
+	// instead of treating the exit as a still-active budget exhaustion.
+	IssueLeftActiveSet bool
+	Elapsed            time.Duration
 }
 
 // DispatchOptions carries per-run controls derived by the orchestrator for a

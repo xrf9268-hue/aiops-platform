@@ -51,10 +51,14 @@ type IssueStateRefresher func(ctx context.Context) (active bool, err error)
 type Result struct {
 	Summary       string
 	RuntimeEvents []task.RuntimeEvent
-	OutputBytes   int64  // bytes the runner kept in its capture buffer
-	OutputDropped int64  // bytes dropped because the buffer hit its cap
-	OutputHead    string // up to CodexEventOutputCap bytes from the start of the captured output
-	OutputTail    string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
+	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
+	// observed the linked issue outside the workflow's active states and the
+	// runner stopped cleanly for that reason.
+	IssueLeftActiveSet bool
+	OutputBytes        int64  // bytes the runner kept in its capture buffer
+	OutputDropped      int64  // bytes dropped because the buffer hit its cap
+	OutputHead         string // up to CodexEventOutputCap bytes from the start of the captured output
+	OutputTail         string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
 }
 
 type Runner interface {

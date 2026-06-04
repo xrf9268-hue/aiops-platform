@@ -98,10 +98,11 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 
 	writeAppServerArtifact(in.Workdir, buf)
 	res := Result{
-		Summary:       client.summary(),
-		RuntimeEvents: client.runtimeEvents,
-		OutputBytes:   int64(len(buf.Bytes())),
-		OutputDropped: buf.Dropped(),
+		Summary:            client.summary(),
+		RuntimeEvents:      client.runtimeEvents,
+		IssueLeftActiveSet: client.issueLeftActiveSet,
+		OutputBytes:        int64(len(buf.Bytes())),
+		OutputDropped:      buf.Dropped(),
 	}
 	head, tail := headTail(buf.Bytes())
 	if len(head) > 0 {
@@ -286,15 +287,16 @@ type appServerClient struct {
 	// Keeping both lets cooperative agents end early (continueRun=false)
 	// while still letting the operator cancel an otherwise-productive
 	// worker by moving the issue out of the active states.
-	continueRun       bool
-	refreshIssueState IssueStateRefresher
-	tools             DynamicToolSet
-	turnTimeoutMs     int
-	readTimeoutMs     int
-	stallTimeoutMs    int
-	approvalPolicy    any
-	lastTerminal      time.Time
-	lastRuntimeEvent  string
+	continueRun        bool
+	refreshIssueState  IssueStateRefresher
+	tools              DynamicToolSet
+	turnTimeoutMs      int
+	readTimeoutMs      int
+	stallTimeoutMs     int
+	approvalPolicy     any
+	lastTerminal       time.Time
+	lastRuntimeEvent   string
+	issueLeftActiveSet bool
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -448,6 +450,7 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 			return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
 		}
 		if !active {
+			c.issueLeftActiveSet = true
 			return false, nil
 		}
 	}

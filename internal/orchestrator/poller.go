@@ -560,7 +560,8 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		if d.WorkspacePrepared != nil {
 			d.WorkspacePrepared(ctx, issue, tk, workspacePathForTask(cfg, tk))
 		}
-		if rterr := worker.RunTask(ctx, d.Emitter, tk, cfg); rterr != nil {
+		runResult, rterr := worker.RunTaskWithResult(ctx, d.Emitter, tk, cfg)
+		if rterr != nil {
 			out <- WorkerResult{
 				Err:           rterr.Err,
 				InputRequired: runner.IsInputRequired(rterr.Err),
@@ -568,7 +569,7 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			}
 			return
 		}
-		out <- WorkerResult{Elapsed: time.Since(start)}
+		out <- WorkerResult{Elapsed: time.Since(start), IssueLeftActiveSet: runResult.IssueLeftActiveSet}
 	}()
 	return out
 }

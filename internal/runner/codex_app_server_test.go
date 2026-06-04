@@ -1275,6 +1275,9 @@ for line in sys.stdin:
 	if res.Summary != "turn 2 done" {
 		t.Fatalf("Summary = %q, want last completed turn's message", res.Summary)
 	}
+	if !res.IssueLeftActiveSet {
+		t.Fatalf("IssueLeftActiveSet = false, want true when SPEC §16.5 refresher stops the run")
+	}
 	// The stdin log captures every JSON-RPC message the runner sent to
 	// codex. Counting turn/start requests proves the runner *didn't even
 	// send* a third turn — without this, "only 2 completions" could just

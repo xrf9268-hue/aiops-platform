@@ -1328,6 +1328,62 @@ func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestFinalize_ContinuationBudgetDoesNotBlockSelfStopCleanExit(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.MaxContinuationTurns = 3
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-CONT-SELFSTOP", Identifier: "ENG-CONT-SELFSTOP", State: "In Progress", Title: "self-stop at budget"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	for turn := 0; turn < 3; turn++ {
+		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+			t.Fatalf("RecordRuntimeEvent turn %d: %v", turn, err)
+		}
+	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond, IssueLeftActiveSet: true})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Retrying) == 1 && len(view.Blocked) == 0 && len(view.Running) == 0
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if got := view.Retrying[0].Kind; got != RetryKindContinuation {
+		t.Fatalf("retry kind after self-stop = %q, want %q", got, RetryKindContinuation)
+	}
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("tracker-rechecked exhausted self-stop continuation err = %v, want ErrNotDispatched", err)
+	}
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Blocked) == 1 && len(view.Retrying) == 0 && len(view.Running) == 0
+	}, time.Second)
+	view, err = o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot after recheck: %v", err)
+	}
+	if view.Blocked[0].Method != continuationBudgetBlockMethod {
+		t.Fatalf("blocked method after active recheck = %q, want %q", view.Blocked[0].Method, continuationBudgetBlockMethod)
+	}
+}
+
 func driveNearBudgetContinuation(t *testing.T, o *Orchestrator, disp *fakeDispatcher, iss tracker.Issue) {
 	t.Helper()
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {

@@ -102,7 +102,7 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 		close(f.done)
 		return cleanup
 	}
-	if continuationBudgetExceeded(st.MaxContinuationTurns, nextContinuationTurnCount) {
+	if !f.result.IssueLeftActiveSet && continuationBudgetExceeded(st.MaxContinuationTurns, nextContinuationTurnCount) {
 		runErr := continuationBudgetError(nextContinuationTurnCount, st.MaxContinuationTurns)
 		if !st.BlockRunWithReason(f.id, f.entry, time.Now().UTC(), continuationBudgetBlockMethod, runErr, elapsed) {
 			close(f.done)
