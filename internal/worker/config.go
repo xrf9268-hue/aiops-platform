@@ -1,3 +1,6 @@
+// Package worker claims queued tasks and runs the Symphony-style workflow for
+// each: workflow resolution, runner invocation, verification, and draft-PR
+// handoff.
 package worker
 
 import (
