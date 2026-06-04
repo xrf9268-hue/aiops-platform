@@ -289,10 +289,13 @@ func (c *appServerClient) resolveDynamicToolResult(ctx context.Context, name str
 // writes too. Only the proxy itself fires the sink, so installing it on
 // unrelated tools is a no-op.
 func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string) context.Context {
-	ctx = WithLinearGraphQLMutationSink(ctx, func(operationField string) {
+	ctx = WithLinearGraphQLMutationSink(ctx, func(audit LinearGraphQLMutationAudit) {
 		payload := map[string]any{"tool": name}
-		if operationField != "" {
-			payload["operation_field"] = operationField
+		if audit.OperationField != "" {
+			payload["operation_field"] = audit.OperationField
+		}
+		if audit.CurrentIssueNonActiveStateUpdate {
+			payload["current_issue_non_active_state_update"] = true
 		}
 		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
 	})

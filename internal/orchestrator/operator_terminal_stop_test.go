@@ -76,6 +76,45 @@ func TestReconcileTerminalRunRecordsOperatorTerminalStopAndSuppressesDispatch(t 
 	}
 }
 
+func TestRetryFireDispatchSuppressedAfterOperatorTerminalStop(t *testing.T) {
+	st := NewOrchestratorState(15000, 10)
+	id := IssueID("ENG-STOP-RETRY")
+	active := tracker.Issue{ID: string(id), Identifier: "ENG-STOP-RETRY", State: "In Progress", Title: "retry after stop"}
+	entry := &RetryEntry{
+		Issue:      active,
+		IssueID:    id,
+		Identifier: active.Identifier,
+		Attempt:    2,
+		DueAt:      time.Now().Add(-time.Second),
+		Kind:       RetryKindFailure,
+	}
+	st.ScheduleRetry(entry)
+	st.RecordOperatorTerminalStop(id, tracker.Issue{
+		ID:         active.ID,
+		Identifier: active.Identifier,
+		State:      "Canceled",
+		Title:      active.Title,
+	}, time.Now().UTC())
+
+	followup := retryFireDispatchTail(st, entry, id, entry.Attempt, &Orchestrator{})
+	if followup != nil {
+		t.Fatalf("retryFireDispatchTail returned followup after Operator Terminal Stop; want dispatch suppressed")
+	}
+	if st.IsClaimed(id) {
+		t.Fatalf("issue %s is still claimed after retry-fire suppression; want retry claim released", id)
+	}
+	if _, ok := st.RetryAttempts[id]; ok {
+		t.Fatalf("RetryAttempts[%s] still present after retry-fire suppression", id)
+	}
+	stop, ok := st.LookupOperatorTerminalStop(id)
+	if !ok || stop.SuppressedDispatches != 1 || stop.FirstSuppressedAt.IsZero() {
+		t.Fatalf("operator terminal stop after retry-fire suppression = %+v ok=%v; want one suppression", stop, ok)
+	}
+	if !sawRuntimeEvent(st.Snapshot().RecentEvents, RuntimeEventOperatorTerminalStopDispatchSuppressed, id) {
+		t.Fatalf("RecentEvents = %+v; want retry-fire dispatch suppression event", st.Snapshot().RecentEvents)
+	}
+}
+
 func TestFinalizeTerminalSelfStopRecordsStopAndCleansWithoutContinuation(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
@@ -126,6 +165,106 @@ func TestFinalizeTerminalSelfStopRecordsStopAndCleansWithoutContinuation(t *test
 	}
 	if calls[0].IssueID != IssueID(issue.ID) || calls[0].State != "Done" || calls[0].Path != wsPath {
 		t.Fatalf("cleanup = %+v; want issue %s state Done path %s", calls[0], issue.ID, wsPath)
+	}
+}
+
+func TestFinalizeAgentOwnedTerminalHandoffDoesNotSuppressFutureRework(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-STOP-HANDOFF", Identifier: "ENG-STOP-HANDOFF", State: "In Progress", Title: "handoff"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-STOP-HANDOFF"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
+		Event: task.EventToolCallMutation,
+		Payload: map[string]any{
+			"tool":                                  "linear_graphql",
+			"operation_field":                       "issueUpdate",
+			"current_issue_non_active_state_update": true,
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(issueUpdate handoff): %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{
+		Elapsed: time.Millisecond,
+		IssueExitState: &runner.IssueStateSnapshot{
+			Found:    true,
+			State:    "Done",
+			Active:   false,
+			Terminal: true,
+		},
+	})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0 && len(cleaner.snapshot()) == 1
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.OperatorTerminalStops) != 0 {
+		t.Fatalf("OperatorTerminalStops = %+v; want empty for agent-owned terminal handoff", view.OperatorTerminalStops)
+	}
+
+	rework := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
+	if err := o.RequestDispatch(context.Background(), rework, nil); err != nil {
+		t.Fatalf("RequestDispatch after agent-owned terminal handoff = %v; want rework dispatch", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func TestFinalizeTerminalSelfStopAfterCommentStillRecordsOperatorStop(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-STOP-COMMENT", Identifier: "ENG-STOP-COMMENT", State: "In Progress", Title: "operator stop after comment"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-STOP-COMMENT"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{
+		Event: task.EventToolCallMutation,
+		Payload: map[string]any{
+			"tool":            "linear_graphql",
+			"operation_field": "commentCreate",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(commentCreate): %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{
+		Elapsed: time.Millisecond,
+		IssueExitState: &runner.IssueStateSnapshot{
+			Found:    true,
+			State:    "Canceled",
+			Active:   false,
+			Terminal: true,
+		},
+	})
+	waitFor(t, func() bool {
+		view, _ := o.Snapshot(context.Background())
+		return len(view.Running) == 0 && len(view.OperatorTerminalStops) == 1 && len(cleaner.snapshot()) == 1
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	stop := view.OperatorTerminalStops[0]
+	if stop.IssueID != IssueID(issue.ID) || stop.State != "Canceled" {
+		t.Fatalf("operator terminal stop = %+v; want issue %s state Canceled", stop, issue.ID)
 	}
 }
 

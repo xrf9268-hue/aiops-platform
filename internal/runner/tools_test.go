@@ -586,9 +586,9 @@ func TestLinearGraphQLEmitsAuditEventForSuccessfulMutation(t *testing.T) {
 
 	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
 
-	var sinkCalls []string
-	sink := func(operationField string) {
-		sinkCalls = append(sinkCalls, operationField)
+	var sinkCalls []LinearGraphQLMutationAudit
+	sink := func(audit LinearGraphQLMutationAudit) {
+		sinkCalls = append(sinkCalls, audit)
 	}
 	ctx := WithLinearGraphQLMutationSink(context.Background(), sink)
 
@@ -602,8 +602,8 @@ func TestLinearGraphQLEmitsAuditEventForSuccessfulMutation(t *testing.T) {
 	if len(sinkCalls) != 1 {
 		t.Fatalf("sink fired %d times, want 1; calls=%v", len(sinkCalls), sinkCalls)
 	}
-	if sinkCalls[0] != "issueUpdate" {
-		t.Fatalf("sink received %q, want issueUpdate", sinkCalls[0])
+	if sinkCalls[0].OperationField != "issueUpdate" {
+		t.Fatalf("sink received operation field %q, want issueUpdate", sinkCalls[0].OperationField)
 	}
 }
 
@@ -619,9 +619,9 @@ func TestLinearGraphQLDoesNotEmitAuditOnGraphQLErrors(t *testing.T) {
 	defer httpServer.Close()
 
 	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
-	var sinkCalls []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
-		sinkCalls = append(sinkCalls, name)
+	var sinkCalls []LinearGraphQLMutationAudit
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		sinkCalls = append(sinkCalls, audit)
 	})
 
 	if _, err := proxy.call(ctx, ToolCall{Query: `mutation { issueUpdate(id: "1", input: {}) { success } }`}); err != nil {
@@ -851,8 +851,8 @@ func TestLinearGraphQLWorkpadEmitsAuditEvent(t *testing.T) {
 			workpad := NewLinearWorkpadTool(harnessTool)
 
 			var sinkCalls []string
-			ctx := WithLinearGraphQLMutationSink(context.Background(), func(name string) {
-				sinkCalls = append(sinkCalls, name)
+			ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+				sinkCalls = append(sinkCalls, audit.OperationField)
 			})
 
 			result, err := workpad.Call(ctx, ToolCall{Variables: map[string]any{
@@ -997,6 +997,155 @@ func TestLinearGraphQLRejectsCurrentIssueIdentifierActiveStateUpdateBeforeHTTP(t
 	}
 }
 
+func TestLinearGraphQLRejectsCurrentIssueCaseVariantActiveStateUpdateBeforeHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configure  func(*linearGraphQLProxy)
+		updateID   string
+		wantReason string
+	}{
+		{
+			name: "identifier",
+			configure: func(proxy *linearGraphQLProxy) {
+				proxy.currentIssueGuard.issueIdentifier = "AIS-67"
+			},
+			updateID:   "ais-67",
+			wantReason: "current issue identifier",
+		},
+		{
+			name: "uuid",
+			configure: func(proxy *linearGraphQLProxy) {
+				proxy.currentIssueGuard.issueID = "550E8400-E29B-41D4-A716-446655440000"
+			},
+			updateID:   "550e8400-e29b-41d4-a716-446655440000",
+			wantReason: "current issue UUID",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+			tc.configure(&proxy)
+
+			result, err := proxy.call(context.Background(), ToolCall{
+				Query: `mutation Update($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+}`,
+				Variables: map[string]any{"id": tc.updateID, "stateId": "state-active"},
+			})
+			assertStructuredFailure(t, result, err, "current issue", "active state")
+			if got := server.issueUpdateRequests(); got != 0 {
+				t.Fatalf("issueUpdate HTTP requests = %d; want 0 for case-variant %s", got, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestLinearGraphQLRejectsCurrentIssueActiveStateUpdateWithDuplicateStateNames(t *testing.T) {
+	server := &fakeLinearStateMutationServer{
+		stateIDLists: map[string][]string{"In Progress": {"state-other-team", "state-active"}},
+	}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	result, err := proxy.call(context.Background(), ToolCall{
+		Query: `mutation {
+  issueUpdate(id: "issue-current", input: { stateId: "state-active" }) { success }
+}`,
+	})
+	assertStructuredFailure(t, result, err, "current issue", "active state")
+	if got := server.issueUpdateRequests(); got != 0 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 0 when any duplicate active state ID matches", got)
+	}
+}
+
+func TestWorkflowStateLookupQueryFetchesEnoughDuplicateStateNames(t *testing.T) {
+	for _, teamKey := range []string{"", "ENG"} {
+		query, _ := workflowStateLookupQuery("In Progress", teamKey)
+		if !strings.Contains(query, "first: 50") {
+			t.Fatalf("workflowStateLookupQuery(%q) = %q; want first: 50 to cover duplicate active-state names", teamKey, query)
+		}
+	}
+}
+
+func TestLinearGraphQLRejectsInlineFragmentCurrentIssueActiveStateUpdateBeforeHTTP(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	result, err := proxy.call(context.Background(), ToolCall{
+		Query: `mutation {
+  ... on Mutation {
+    issueUpdate(id: "issue-current", input: { stateId: "state-active" }) { success }
+  }
+}`,
+	})
+	assertStructuredFailure(t, result, err, "current issue", "active state")
+	if got := server.issueUpdateRequests(); got != 0 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 0 for inline-fragment guarded active-state reactivation", got)
+	}
+}
+
+func TestLinearGraphQLRejectsNamedFragmentCurrentIssueActiveStateUpdateBeforeHTTP(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	result, err := proxy.call(context.Background(), ToolCall{
+		Query: `mutation {
+  ...CurrentIssueWrite
+}
+fragment CurrentIssueWrite on Mutation {
+  issueUpdate(id: "issue-current", input: { stateId: "state-active" }) { success }
+}`,
+	})
+	assertStructuredFailure(t, result, err, "current issue", "active state")
+	if got := server.issueUpdateRequests(); got != 0 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 0 for named-fragment guarded active-state reactivation", got)
+	}
+}
+
+func TestLinearGraphQLIgnoresUnusedMutationFragmentDefinition(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	var mutationFields []string
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		mutationFields = append(mutationFields, audit.OperationField)
+	})
+	var rejections []linearGraphQLMutationRejected
+	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
+		rejections = append(rejections, rejection)
+	})
+	result, err := proxy.call(ctx, ToolCall{
+		Query: `fragment CurrentIssueWrite on Mutation {
+  issueUpdate(id: "issue-current", input: { stateId: "state-active" }) { success }
+}
+mutation {
+  commentCreate(input: { issueId: "issue-current", body: "still allowed" }) { success }
+}`,
+	})
+	if err != nil {
+		t.Fatalf("unused mutation fragment call: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("unused mutation fragment result = %s; want success", result)
+	}
+	if len(rejections) != 0 {
+		t.Fatalf("rejections = %+v; want none for unused mutation fragment", rejections)
+	}
+	if len(mutationFields) != 1 || mutationFields[0] != "commentCreate" {
+		t.Fatalf("mutation audit fields = %v; want [commentCreate]", mutationFields)
+	}
+}
+
 func TestLinearGraphQLRejectsCurrentIssueUpdateWhenSnapshotUnsafe(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1073,9 +1222,9 @@ func TestLinearGraphQLAllowsCurrentIssueNonActiveHandoffState(t *testing.T) {
 	defer httpServer.Close()
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
-	var mutationFields []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(field string) {
-		mutationFields = append(mutationFields, field)
+	var mutationAudits []LinearGraphQLMutationAudit
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		mutationAudits = append(mutationAudits, audit)
 	})
 
 	result, err := proxy.call(ctx, ToolCall{
@@ -1092,8 +1241,48 @@ func TestLinearGraphQLAllowsCurrentIssueNonActiveHandoffState(t *testing.T) {
 	if got := server.issueUpdateRequests(); got != 1 {
 		t.Fatalf("issueUpdate HTTP requests = %d; want 1 for non-active handoff", got)
 	}
-	if len(mutationFields) != 1 || mutationFields[0] != "issueUpdate" {
-		t.Fatalf("mutation audit fields = %v; want [issueUpdate]", mutationFields)
+	if len(mutationAudits) != 1 || mutationAudits[0].OperationField != "issueUpdate" {
+		t.Fatalf("mutation audits = %+v; want one issueUpdate audit", mutationAudits)
+	}
+	if !mutationAudits[0].CurrentIssueNonActiveStateUpdate {
+		t.Fatalf("mutation audit = %+v; want current issue non-active handoff", mutationAudits[0])
+	}
+}
+
+func TestLinearGraphQLNormalMutationAuditDoesNotRefreshCurrentIssueState(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	refreshCalls := 0
+	proxy.currentIssueGuard.refresh = func(context.Context) (IssueStateSnapshot, error) {
+		refreshCalls++
+		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+	}
+	var normal, postStop []string
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		normal = append(normal, audit.OperationField)
+	})
+	ctx = WithLinearGraphQLPostStopMutationSink(ctx, func(field string) {
+		postStop = append(postStop, field)
+	})
+
+	result, err := proxy.call(ctx, ToolCall{
+		Query:     `mutation Comment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }`,
+		Variables: map[string]any{"issueId": "issue-current", "body": "normal audit"},
+	})
+	if err != nil {
+		t.Fatalf("normal commentCreate: %v", err)
+	}
+	if !toolResultSucceeded(result) {
+		t.Fatalf("normal commentCreate result = %s; want success", result)
+	}
+	if refreshCalls != 0 {
+		t.Fatalf("current issue refresh calls = %d; want 0 for normal mutation audit", refreshCalls)
+	}
+	if len(normal) != 1 || normal[0] != "commentCreate" || len(postStop) != 0 {
+		t.Fatalf("audit fields normal=%v postStop=%v; want normal [commentCreate] and no post-stop audit", normal, postStop)
 	}
 }
 
@@ -1137,6 +1326,23 @@ func TestLinearGraphQLRejectsAmbiguousIssueUpdateShapeBeforeHTTP(t *testing.T) {
 	}
 }
 
+func TestLinearGraphQLRejectsCurrentIssueMetadataOnlyUpdateBeforeHTTP(t *testing.T) {
+	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
+	httpServer := httptest.NewServer(server.handler())
+	defer httpServer.Close()
+
+	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
+	result, err := proxy.call(context.Background(), ToolCall{
+		Query: `mutation UpdateTitle {
+  issueUpdate(id: "issue-current", input: { title: "metadata-only current issue edit" }) { success }
+}`,
+	})
+	assertStructuredFailure(t, result, err, "unsupported issueUpdate shape")
+	if got := server.issueUpdateRequests(); got != 0 {
+		t.Fatalf("issueUpdate HTTP requests = %d; want 0 for current-issue metadata-only issueUpdate", got)
+	}
+}
+
 func TestLinearGraphQLRejectsMultipleIssueUpdatesBeforeHTTP(t *testing.T) {
 	server := &fakeLinearStateMutationServer{stateIDs: map[string]string{"In Progress": "state-active"}}
 	httpServer := httptest.NewServer(server.handler())
@@ -1168,8 +1374,8 @@ func TestLinearGraphQLPostStopCommentsUseDistinctAudit(t *testing.T) {
 		OperatorTerminalStop: true,
 	})
 	var normal, postStop []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(field string) {
-		normal = append(normal, field)
+	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+		normal = append(normal, audit.OperationField)
 	})
 	ctx = WithLinearGraphQLPostStopMutationSink(ctx, func(field string) {
 		postStop = append(postStop, field)
@@ -1194,9 +1400,10 @@ func TestLinearGraphQLPostStopCommentsUseDistinctAudit(t *testing.T) {
 }
 
 type fakeLinearStateMutationServer struct {
-	mu         sync.Mutex
-	stateIDs   map[string]string
-	issueCalls int
+	mu           sync.Mutex
+	stateIDs     map[string]string
+	stateIDLists map[string][]string
+	issueCalls   int
 }
 
 func (f *fakeLinearStateMutationServer) handler() http.Handler {
@@ -1211,6 +1418,14 @@ func (f *fakeLinearStateMutationServer) handler() http.Handler {
 			}
 			_ = json.Unmarshal(body, &payload)
 			name, _ := payload.Variables["name"].(string)
+			if ids := f.stateIDLists[name]; len(ids) > 0 {
+				var nodes []string
+				for _, id := range ids {
+					nodes = append(nodes, fmt.Sprintf(`{"id":%q,"name":%q}`, id, name))
+				}
+				_, _ = fmt.Fprintf(w, `{"data":{"workflowStates":{"nodes":[%s]}}}`, strings.Join(nodes, ","))
+				return
+			}
 			id := f.stateIDs[name]
 			if id == "" {
 				_, _ = io.WriteString(w, `{"data":{"workflowStates":{"nodes":[]}}}`)
@@ -1249,6 +1464,12 @@ func guardedLinearProxy(httpServer *httptest.Server, snapshot IssueStateSnapshot
 			teamKey:         "ENG",
 			refresh: func(context.Context) (IssueStateSnapshot, error) {
 				return snapshot, nil
+			},
+			operatorTerminalStopLookup: func(context.Context) (IssueStateSnapshot, bool) {
+				if !snapshot.OperatorTerminalStop {
+					return IssueStateSnapshot{}, false
+				}
+				return snapshot, true
 			},
 		},
 	}

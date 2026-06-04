@@ -151,6 +151,11 @@ type RunningEntry struct {
 	// turn_completed event arrives, operators still need to see that handoff
 	// activity happened without counting the worker as completed.
 	AgentHandoffActivity bool
+	// AgentCurrentIssueHandoff is set only when the agent successfully updates
+	// this run's issue into a non-active state through the guarded Linear tool.
+	// D35 uses this structured fact to avoid latching agent-owned terminal
+	// handoffs as operator stops.
+	AgentCurrentIssueHandoff bool
 
 	// CancelWorker cancels the run's context. The cause distinguishes a
 	// supervised eligibility stop (worker.ErrReconcileCancel — the worker then

@@ -21,7 +21,7 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `failed` — run exited abnormally; it is rescheduled on the SPEC §8.4 backoff (no deterministic-failure suppression — removed in #584).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
 - `continuation_budget_blocked` — the clean-continuation budget for a still-active issue was exhausted; the run stopped, remains claimed, and is listed in the top-level `blocked` rows with `method: "continuation_budget"`.
-- `operator_terminal_stop` — this worker observed an operator terminal tracker state for the issue and latched that stop locally (D35 / #622).
+- `operator_terminal_stop` — this worker observed a terminal tracker state for the issue without a structured agent-owned current-issue handoff fact and latched that stop locally (D35 / #622).
 - `operator_terminal_stop_dispatch_suppressed` — first later active candidate for a latched issue was suppressed instead of being re-dispatched.
 
 These are observability events. They do not imply the worker changed tracker
@@ -231,7 +231,7 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 | `agent_handoff_reconcile_stopped` | Size of the FIFO-bounded recent set of reconcile-stopped runs that observed an agent-side Linear mutation (`linear_graphql` or `linear_ai_workpad`) but did not observe `turn_completed` before reconcile made the issue ineligible. This covers the successful handoff visibility gap where the agent moved/commented the Linear issue and the worker was stopped before a completed-turn event arrived. It does not overlap `completed` or `reconcile_stopped_with_progress`. |
 | `agent_handoff_reconcile_stopped_total` | Monotonic counter of agent-handoff reconcile-stop transitions since process start. |
-| `operator_terminal_stops` | Number of process-local Operator Terminal Stop latches recorded since this worker observed operator terminal tracker state for the issue. A latched issue is not re-dispatched by this process even if the tracker later reads active. |
+| `operator_terminal_stops` | Number of process-local Operator Terminal Stop latches recorded since this worker observed terminal tracker state for the issue without a structured agent-owned current-issue handoff fact. A latched issue is not re-dispatched by this process even if the tracker later reads active. |
 
 There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
 backoff (visible under `retrying`), not parked in a suppression bucket — the

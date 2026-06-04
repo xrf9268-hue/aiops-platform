@@ -316,6 +316,15 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config { //nolint:gocognit // baseline (#521)
 	cfg := d.baseConfig
 	cfg.Workflow = snap.Workflow
+	cfg.OperatorTerminalStopLookup = func(t task.Task, _ workflow.Config) runner.OperatorTerminalStopLookup {
+		issueID := strings.TrimSpace(t.ID)
+		if issueID == "" {
+			return nil
+		}
+		return func(ctx context.Context) (runner.IssueStateSnapshot, bool) {
+			return d.operatorTerminalStopSnapshot(ctx, issueID)
+		}
+	}
 	refresher := d.currentRefresher()
 	if refresher != nil {
 		cfg.IssueStateRefresher = func(t task.Task, wcfg workflow.Config) runner.IssueStateRefresher {

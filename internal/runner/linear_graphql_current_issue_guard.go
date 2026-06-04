@@ -27,12 +27,13 @@ const (
 const linearGraphQLStateLookupTimeout = 30 * time.Second
 
 type currentIssueMutationGuard struct {
-	issueID         string
-	issueIdentifier string
-	activeStates    []string
-	teamKey         string
-	refresh         IssueStateRefresher
-	cache           *activeStateIDCache
+	issueID                    string
+	issueIdentifier            string
+	activeStates               []string
+	teamKey                    string
+	refresh                    IssueStateRefresher
+	operatorTerminalStopLookup OperatorTerminalStopLookup
+	cache                      *activeStateIDCache
 }
 
 type activeStateIDCache struct {
@@ -45,58 +46,60 @@ func (g currentIssueMutationGuard) enabled() bool {
 	return strings.TrimSpace(g.issueID) != "" && g.refresh != nil
 }
 
-func (p linearGraphQLProxy) rejectCurrentIssueUpdate(ctx context.Context, query string, variables map[string]any) (linearGraphQLMutationRejected, bool) {
+func (p linearGraphQLProxy) checkCurrentIssueUpdate(ctx context.Context, query string, variables map[string]any) (linearGraphQLMutationRejected, bool, bool) {
 	if !p.currentIssueGuard.enabled() {
-		return linearGraphQLMutationRejected{}, false
+		return linearGraphQLMutationRejected{}, false, false
 	}
 	argumentTexts, err := issueUpdateArgumentTexts(query)
 	if err != nil {
 		if errors.Is(err, errIssueUpdateNotFound) {
-			return linearGraphQLMutationRejected{}, false
+			return linearGraphQLMutationRejected{}, false, false
 		}
-		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectUnsupportedShape}, true
+		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectUnsupportedShape}, true, false
 	}
+	currentIssueHandoff := false
 	for _, args := range argumentTexts {
-		rejection, reject := p.rejectCurrentIssueUpdateArgs(ctx, args, variables)
+		rejection, reject, handoff := p.checkCurrentIssueUpdateArgs(ctx, args, variables)
 		if reject {
-			return rejection, true
+			return rejection, true, false
 		}
+		currentIssueHandoff = currentIssueHandoff || handoff
 	}
-	return linearGraphQLMutationRejected{}, false
+	return linearGraphQLMutationRejected{}, false, currentIssueHandoff
 }
 
-func (p linearGraphQLProxy) rejectCurrentIssueUpdateArgs(ctx context.Context, args string, variables map[string]any) (linearGraphQLMutationRejected, bool) {
+func (p linearGraphQLProxy) checkCurrentIssueUpdateArgs(ctx context.Context, args string, variables map[string]any) (linearGraphQLMutationRejected, bool, bool) {
 	issueID, err := parseIssueUpdateIssueID(args, variables)
 	if err != nil {
-		return currentIssueUnsupportedUpdateRejection(), true
+		return currentIssueUnsupportedUpdateRejection(), true, false
 	}
 	if !p.currentIssueGuard.matchesCurrentIssue(issueID) {
-		return linearGraphQLMutationRejected{}, false
+		return linearGraphQLMutationRejected{}, false, false
 	}
 	change, err := parseIssueUpdateArguments(args, variables)
 	if err != nil {
-		return currentIssueUnsupportedUpdateRejection(), true
+		return currentIssueUnsupportedUpdateRejection(), true, false
 	}
-	return p.rejectCurrentIssueStateChange(ctx, change)
+	return p.checkCurrentIssueStateChange(ctx, change)
 }
 
-func (p linearGraphQLProxy) rejectCurrentIssueStateChange(ctx context.Context, change issueUpdateStateChange) (linearGraphQLMutationRejected, bool) {
+func (p linearGraphQLProxy) checkCurrentIssueStateChange(ctx context.Context, change issueUpdateStateChange) (linearGraphQLMutationRejected, bool, bool) {
 	snapshot, err := p.currentIssueGuard.refresh(ctx)
 	if err != nil {
-		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectRefreshFailed}, true
+		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectRefreshFailed}, true, false
 	}
 	rejection := currentIssueSnapshotRejection("issueUpdate", snapshot)
 	if rejection.Reason != "" {
-		return rejection, true
+		return rejection, true, false
 	}
 	activeIDs, err := p.currentIssueGuard.resolveActiveStateIDs(ctx, p)
 	if err != nil {
-		return currentIssueStateLookupRejection(snapshot), true
+		return currentIssueStateLookupRejection(snapshot), true, false
 	}
 	if _, activeTarget := activeIDs[change.StateID]; activeTarget {
-		return currentIssueActiveStateRejection(snapshot), true
+		return currentIssueActiveStateRejection(snapshot), true, false
 	}
-	return linearGraphQLMutationRejected{}, false
+	return linearGraphQLMutationRejected{}, false, true
 }
 
 func (g currentIssueMutationGuard) matchesCurrentIssue(issueID string) bool {
@@ -105,7 +108,8 @@ func (g currentIssueMutationGuard) matchesCurrentIssue(issueID string) bool {
 		return false
 	}
 	for _, candidate := range []string{g.issueID, g.issueIdentifier} {
-		if issueID == strings.TrimSpace(candidate) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate != "" && strings.EqualFold(issueID, candidate) {
 			return true
 		}
 	}
@@ -183,11 +187,11 @@ func currentIssueMutationRejectMessage(reason string) string {
 }
 
 func (g currentIssueMutationGuard) postOperatorTerminalStop(ctx context.Context) bool {
-	if !g.enabled() {
+	if strings.TrimSpace(g.issueID) == "" || g.operatorTerminalStopLookup == nil {
 		return false
 	}
-	snapshot, err := g.refresh(ctx)
-	if err != nil {
+	snapshot, ok := g.operatorTerminalStopLookup(ctx)
+	if !ok {
 		return false
 	}
 	return snapshot.OperatorTerminalStop
@@ -216,11 +220,13 @@ func (g currentIssueMutationGuard) lookupActiveStateIDs(ctx context.Context, p l
 		if state == "" {
 			continue
 		}
-		id, err := p.lookupWorkflowStateID(ctx, state, g.teamKey)
+		stateIDs, err := p.lookupWorkflowStateIDs(ctx, state, g.teamKey)
 		if err != nil {
 			return nil, err
 		}
-		ids[id] = struct{}{}
+		for _, id := range stateIDs {
+			ids[id] = struct{}{}
+		}
 	}
 	return ids, nil
 }
@@ -249,27 +255,27 @@ func copyStringSet(in map[string]struct{}) map[string]struct{} {
 	return out
 }
 
-func (p linearGraphQLProxy) lookupWorkflowStateID(ctx context.Context, stateName, teamKey string) (string, error) {
+func (p linearGraphQLProxy) lookupWorkflowStateIDs(ctx context.Context, stateName, teamKey string) ([]string, error) {
 	query, vars := workflowStateLookupQuery(stateName, teamKey)
 	body, err := json.Marshal(map[string]any{"query": query, "variables": vars})
 	if err != nil {
-		return "", fmt.Errorf("build Linear workflowStates lookup: %w", err)
+		return nil, fmt.Errorf("build Linear workflowStates lookup: %w", err)
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, linearGraphQLStateLookupTimeout)
 	defer cancel()
 	req, err := p.workflowStateLookupRequest(reqCtx, body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := p.linearHTTPClient().Do(req)
 	if err != nil {
-		return "", fmt.Errorf("send Linear workflowStates lookup: %w", err)
+		return nil, fmt.Errorf("send Linear workflowStates lookup: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("linear workflowStates lookup failed: %s", resp.Status)
+		return nil, fmt.Errorf("linear workflowStates lookup failed: %s", resp.Status)
 	}
-	return decodeWorkflowStateID(resp.Body, stateName)
+	return decodeWorkflowStateIDs(resp.Body, stateName)
 }
 
 func (p linearGraphQLProxy) workflowStateLookupRequest(ctx context.Context, body []byte) (*http.Request, error) {
@@ -287,20 +293,20 @@ func workflowStateLookupQuery(stateName, teamKey string) (string, map[string]any
 	vars := map[string]any{"name": stateName}
 	if strings.TrimSpace(teamKey) == "" {
 		return `query StateByName($name: String!) {
-  workflowStates(filter: { name: { eq: $name } }, first: 5) {
+  workflowStates(filter: { name: { eq: $name } }, first: 50) {
     nodes { id name }
   }
 }`, vars
 	}
 	vars["teamKey"] = strings.TrimSpace(teamKey)
 	return `query StateByName($name: String!, $teamKey: String!) {
-  workflowStates(filter: { name: { eq: $name }, team: { key: { eq: $teamKey } } }, first: 5) {
+  workflowStates(filter: { name: { eq: $name }, team: { key: { eq: $teamKey } } }, first: 50) {
     nodes { id name }
   }
 }`, vars
 }
 
-func decodeWorkflowStateID(r io.Reader, stateName string) (string, error) {
+func decodeWorkflowStateIDs(r io.Reader, stateName string) ([]string, error) {
 	var out struct {
 		Data struct {
 			WorkflowStates struct {
@@ -312,13 +318,20 @@ func decodeWorkflowStateID(r io.Reader, stateName string) (string, error) {
 		Errors []map[string]any `json:"errors"`
 	}
 	if err := json.NewDecoder(r).Decode(&out); err != nil {
-		return "", fmt.Errorf("decode Linear workflowStates lookup: %w", err)
+		return nil, fmt.Errorf("decode Linear workflowStates lookup: %w", err)
 	}
 	if len(out.Errors) > 0 {
-		return "", fmt.Errorf("linear workflowStates lookup returned errors for %q", stateName)
+		return nil, fmt.Errorf("linear workflowStates lookup returned errors for %q", stateName)
 	}
-	if len(out.Data.WorkflowStates.Nodes) == 0 || strings.TrimSpace(out.Data.WorkflowStates.Nodes[0].ID) == "" {
-		return "", fmt.Errorf("no Linear workflow state matches %q", stateName)
+	ids := make([]string, 0, len(out.Data.WorkflowStates.Nodes))
+	for _, node := range out.Data.WorkflowStates.Nodes {
+		id := strings.TrimSpace(node.ID)
+		if id != "" {
+			ids = append(ids, id)
+		}
 	}
-	return strings.TrimSpace(out.Data.WorkflowStates.Nodes[0].ID), nil
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no Linear workflow state matches %q", stateName)
+	}
+	return ids, nil
 }

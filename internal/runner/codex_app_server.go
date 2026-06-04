@@ -359,6 +359,7 @@ func (c *appServerClient) initSession(in RunInput) {
 	c.tools = DynamicToolsForWorkflow(
 		workflow.Workflow{Config: in.Workflow.Config},
 		WithCurrentIssueToolGuard(in.Task.ID, in.Task.SourceEventID, in.RefreshIssueState),
+		WithCurrentIssueOperatorTerminalStopLookup(in.LookupOperatorTerminalStop),
 	)
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs

@@ -29,7 +29,8 @@ disposable issues in Todo, require the agent to comment when work starts, and
 require the agent to move each issue to In Review after it opens the draft PR
 and records completion evidence. Do not require an already-active current issue
 to be moved back into In Progress; D35 rejects current-issue active-target
-`issueUpdate` writes so an operator terminal stop cannot be reverted by the
+`issueUpdate` writes, and fails closed on unsupported current-issue
+`issueUpdate` shapes, so an operator terminal stop cannot be reverted by the
 running agent. Do not make the worker, a wrapper script, or an operator cleanup
 step move issues to Done.
 

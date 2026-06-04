@@ -37,6 +37,11 @@ type RunInput struct {
 	// visible at the next orchestrator poll tick. Nil keeps the legacy
 	// behavior for callers (tests, mock runners) that have no tracker.
 	RefreshIssueState IssueStateRefresher
+	// LookupOperatorTerminalStop reads the process-local Operator Terminal Stop
+	// latch for this run's issue. It is intentionally narrower than
+	// RefreshIssueState so successful mutation auditing does not perform
+	// tracker I/O just to choose an event classification.
+	LookupOperatorTerminalStop OperatorTerminalStopLookup
 }
 
 // IssueStateSnapshot is the structured SPEC §16.5 tracker-refresh fact the
@@ -61,6 +66,10 @@ type IssueStateSnapshot struct {
 // interface so callers can adapt any tracker client (or test fake) without
 // pulling internal/tracker into the runner package.
 type IssueStateRefresher func(ctx context.Context) (IssueStateSnapshot, error)
+
+// OperatorTerminalStopLookup reads the orchestrator-owned stop latch without
+// falling back to tracker refresh. ok=false means no sticky stop is recorded.
+type OperatorTerminalStopLookup func(ctx context.Context) (IssueStateSnapshot, bool)
 
 type Result struct {
 	Summary       string

@@ -90,6 +90,9 @@ func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event ta
 	payload, _ := asStringMap(event.Payload)
 	if tool, ok := stringField(payload, "tool"); ok && isLinearMutationTool(tool) {
 		run.AgentHandoffActivity = true
+		if handoff, ok := boolField(payload, "current_issue_non_active_state_update"); ok && handoff {
+			run.AgentCurrentIssueHandoff = true
+		}
 	}
 }
 
@@ -268,6 +271,11 @@ func mapAtPath(m map[string]any, path []string) map[string]any {
 func stringField(m map[string]any, key string) (string, bool) {
 	v, ok := m[key].(string)
 	return v, ok && v != ""
+}
+
+func boolField(m map[string]any, key string) (bool, bool) {
+	v, ok := m[key].(bool)
+	return v, ok
 }
 
 // intField returns a positive integer from a payload key, accepting Go int,

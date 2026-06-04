@@ -64,8 +64,8 @@ Important task event kinds emitted into the worker log/event emitter include:
   `turn/start` response, while notifications and completions are app-server
   stream events
 - `tool_call_mutation` — successful agent-visible Linear GraphQL mutation; the
-  payload carries only `tool` and `operation_field`, never query text or
-  variables
+  payload carries only `tool`, `operation_field`, and the optional parsed
+  boolean `current_issue_non_active_state_update`, never query text or variables
 - `tool_call_mutation_rejected` — guarded mutation rejected before HTTP
   dispatch; payload is limited to `tool`, `operation_field`, `reason`, `found`,
   `state`, and `terminal`

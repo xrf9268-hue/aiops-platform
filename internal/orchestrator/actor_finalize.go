@@ -94,7 +94,8 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	nextContinuationAttempt := f.entry.ContinuationAttempt + 1
 	nextContinuationTurnCount := f.entry.ContinuationTurnCount + continuationTurnDelta(f.entry)
 	if f.result.IssueExitState != nil && f.result.IssueExitState.Terminal {
-		return f.applyOperatorTerminalSelfStop(st, elapsed)
+		recordStop := f.result.IssueExitState.OperatorTerminalStop || !f.entry.AgentCurrentIssueHandoff
+		return f.applyTerminalSelfStop(st, elapsed, recordStop)
 	}
 	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
 		cleanup := f.o.reconciledWorkspaceCleanupOrContinuation(f.id, f.entry, nextContinuationAttempt)
@@ -159,14 +160,16 @@ func (f *finalizeRunOp) applyContinuationBudgetBlock(st *OrchestratorState, elap
 	return nil
 }
 
-func (f *finalizeRunOp) applyOperatorTerminalSelfStop(st *OrchestratorState, elapsed time.Duration) func() {
+func (f *finalizeRunOp) applyTerminalSelfStop(st *OrchestratorState, elapsed time.Duration, recordStop bool) func() {
 	snapshot := f.result.IssueExitState
 	issue := f.entry.Issue
 	if strings.TrimSpace(snapshot.State) != "" {
 		issue.State = snapshot.State
 		f.entry.Issue = issue
 	}
-	recordOperatorTerminalStop(st, f.id, issue)
+	if recordStop {
+		recordOperatorTerminalStop(st, f.id, issue)
+	}
 	f.entry.ReconcileCleanupWorkspace = true
 	cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
 	if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {

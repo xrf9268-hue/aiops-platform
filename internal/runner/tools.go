@@ -26,14 +26,25 @@ const (
 	linearGraphQLMutationSinkKey linearGraphQLContextKey = iota + 1
 	linearGraphQLMutationRejectedSinkKey
 	linearGraphQLPostStopMutationSinkKey
+	linearGraphQLCurrentIssueHandoffKey
 )
+
+// LinearGraphQLMutationAudit is the non-secret audit fact emitted once a
+// mutation succeeds. It deliberately excludes query text, variables, and state
+// IDs; the current-issue handoff bit is a parsed classification only.
+type LinearGraphQLMutationAudit struct {
+	OperationField                   string
+	CurrentIssueNonActiveStateUpdate bool
+}
 
 // LinearGraphQLMutationSink is the audit callback invoked once per
 // successful mutation dispatched through the agent-visible linear_graphql
 // tool. Implementations must NOT echo the query body or variables — the
 // design intent is operator visibility of WHICH mutation ran, not WHAT
 // values were attached.
-type LinearGraphQLMutationSink func(operationName string)
+type LinearGraphQLMutationSink func(LinearGraphQLMutationAudit)
+
+type linearGraphQLMutationFieldSink func(operationName string)
 
 type linearGraphQLMutationRejected struct {
 	OperationField string `json:"operation_field,omitempty"`
@@ -73,16 +84,25 @@ func linearGraphQLMutationRejectedSinkFrom(ctx context.Context) linearGraphQLMut
 	return sink
 }
 
-func WithLinearGraphQLPostStopMutationSink(ctx context.Context, sink LinearGraphQLMutationSink) context.Context {
+func WithLinearGraphQLPostStopMutationSink(ctx context.Context, sink linearGraphQLMutationFieldSink) context.Context {
 	if sink == nil {
 		return ctx
 	}
 	return context.WithValue(ctx, linearGraphQLPostStopMutationSinkKey, sink)
 }
 
-func linearGraphQLPostStopMutationSinkFrom(ctx context.Context) LinearGraphQLMutationSink {
-	sink, _ := ctx.Value(linearGraphQLPostStopMutationSinkKey).(LinearGraphQLMutationSink)
+func linearGraphQLPostStopMutationSinkFrom(ctx context.Context) linearGraphQLMutationFieldSink {
+	sink, _ := ctx.Value(linearGraphQLPostStopMutationSinkKey).(linearGraphQLMutationFieldSink)
 	return sink
+}
+
+func withLinearGraphQLCurrentIssueHandoff(ctx context.Context) context.Context {
+	return context.WithValue(ctx, linearGraphQLCurrentIssueHandoffKey, true)
+}
+
+func linearGraphQLCurrentIssueHandoffFrom(ctx context.Context) bool {
+	v, _ := ctx.Value(linearGraphQLCurrentIssueHandoffKey).(bool)
+	return v
 }
 
 // ToolCall is the JSON-shaped input accepted by the dynamic linear_graphql
@@ -139,9 +159,10 @@ func (s DynamicToolSet) Names() []string {
 type DynamicToolOption func(*dynamicToolOptions)
 
 type dynamicToolOptions struct {
-	currentIssueID         string
-	currentIssueIdentifier string
-	currentIssueRefresher  IssueStateRefresher
+	currentIssueID                 string
+	currentIssueIdentifier         string
+	currentIssueRefresher          IssueStateRefresher
+	currentIssueOperatorStopLookup OperatorTerminalStopLookup
 }
 
 func WithCurrentIssueToolGuard(issueID, issueIdentifier string, refresher IssueStateRefresher) DynamicToolOption {
@@ -149,6 +170,12 @@ func WithCurrentIssueToolGuard(issueID, issueIdentifier string, refresher IssueS
 		opts.currentIssueID = strings.TrimSpace(issueID)
 		opts.currentIssueIdentifier = strings.TrimSpace(issueIdentifier)
 		opts.currentIssueRefresher = refresher
+	}
+}
+
+func WithCurrentIssueOperatorTerminalStopLookup(lookup OperatorTerminalStopLookup) DynamicToolOption {
+	return func(opts *dynamicToolOptions) {
+		opts.currentIssueOperatorStopLookup = lookup
 	}
 }
 
@@ -173,15 +200,8 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 			allowMutations:   wf.Config.Codex.LinearGraphQL.AllowMutations,
 			allowedMutations: linearGraphQLAllowSet(wf.Config.Codex.LinearGraphQL.AllowedMutations),
 		}
-		if opts.currentIssueID != "" && opts.currentIssueRefresher != nil {
-			client.currentIssueGuard = currentIssueMutationGuard{
-				issueID:         opts.currentIssueID,
-				issueIdentifier: opts.currentIssueIdentifier,
-				activeStates:    append([]string(nil), trackerCfg.ActiveStates...),
-				teamKey:         trackerCfg.TeamKey,
-				refresh:         opts.currentIssueRefresher,
-				cache:           &activeStateIDCache{},
-			}
+		if guard, ok := currentIssueGuardFromOptions(opts, trackerCfg); ok {
+			client.currentIssueGuard = guard
 		}
 		tools.tools["linear_graphql"] = DynamicTool{
 			Name:        "linear_graphql",
@@ -219,6 +239,21 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 		}
 	}
 	return tools
+}
+
+func currentIssueGuardFromOptions(opts dynamicToolOptions, cfg workflow.TrackerConfig) (currentIssueMutationGuard, bool) {
+	if opts.currentIssueID == "" || (opts.currentIssueRefresher == nil && opts.currentIssueOperatorStopLookup == nil) {
+		return currentIssueMutationGuard{}, false
+	}
+	return currentIssueMutationGuard{
+		issueID:                    opts.currentIssueID,
+		issueIdentifier:            opts.currentIssueIdentifier,
+		activeStates:               append([]string(nil), cfg.ActiveStates...),
+		teamKey:                    cfg.TeamKey,
+		refresh:                    opts.currentIssueRefresher,
+		operatorTerminalStopLookup: opts.currentIssueOperatorStopLookup,
+		cache:                      &activeStateIDCache{},
+	}, true
 }
 
 func linearGraphQLInputSchema() map[string]any {
@@ -358,7 +393,8 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 				})
 			}
 		}
-		if rejection, ok := p.rejectCurrentIssueUpdate(ctx, query, call.Variables); ok {
+		rejection, reject, currentIssueHandoff := p.checkCurrentIssueUpdate(ctx, query, call.Variables)
+		if reject {
 			if sink := linearGraphQLMutationRejectedSinkFrom(ctx); sink != nil {
 				sink(rejection)
 			}
@@ -372,6 +408,9 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 					"terminal":        rejection.Terminal,
 				},
 			})
+		}
+		if currentIssueHandoff {
+			ctx = withLinearGraphQLCurrentIssueHandoff(ctx)
 		}
 	}
 
@@ -479,7 +518,10 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 				sink(op.FieldName)
 			}
 		} else if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
-			sink(op.FieldName)
+			sink(LinearGraphQLMutationAudit{
+				OperationField:                   op.FieldName,
+				CurrentIssueNonActiveStateUpdate: linearGraphQLCurrentIssueHandoffFrom(ctx),
+			})
 		}
 	}
 	return result, toolErr

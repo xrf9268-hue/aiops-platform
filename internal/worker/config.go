@@ -28,6 +28,10 @@ type Config struct {
 	// that run out of the refresh (e.g. mock tasks with no tracker row);
 	// the runner then falls back to the agent-driven continue flag.
 	IssueStateRefresher IssueStateRefresherFactory
+	// OperatorTerminalStopLookup, when non-nil, builds a process-local latch
+	// reader for post-stop mutation auditing. Unlike IssueStateRefresher, this
+	// must not fall back to tracker I/O.
+	OperatorTerminalStopLookup OperatorTerminalStopLookupFactory
 }
 
 // IssueStateRefresherFactory builds a per-task refresher closure that the
@@ -36,6 +40,10 @@ type Config struct {
 // active_states vocabulary) and returns either a callable or nil when the
 // task should keep the legacy continue-driven loop.
 type IssueStateRefresherFactory func(t task.Task, cfg workflow.Config) runner.IssueStateRefresher
+
+// OperatorTerminalStopLookupFactory builds a per-task lookup for the
+// orchestrator-owned Operator Terminal Stop latch.
+type OperatorTerminalStopLookupFactory func(t task.Task, cfg workflow.Config) runner.OperatorTerminalStopLookup
 
 // LoadConfigFromEnv reads the worker configuration from the environment.
 //

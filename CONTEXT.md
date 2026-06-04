@@ -29,10 +29,11 @@ Failure and quota retries do not consume or receive this budget.
 _Avoid_: Max-turns override, failure retry cap, quota budget
 
 **Operator Terminal Stop**:
-A process-local latch recording that this worker observed an operator move the
-current issue into a configured terminal tracker state. It makes that terminal
-observation authoritative for this worker process: later active candidates for
-the same issue ID are suppressed, cleanup-time active rechecks do not resume a
-continuation, and current-issue `issueUpdate` calls back into active states are
-rejected before tracker HTTP dispatch.
+A process-local latch recording that this worker observed the current issue in a
+configured terminal tracker state without a structured agent-owned current-issue
+handoff fact. It makes that terminal observation authoritative for this worker
+process: later active candidates for the same issue ID are suppressed,
+cleanup-time active rechecks do not resume a continuation, and current-issue
+`issueUpdate` calls back into active states (or unsupported current-issue
+`issueUpdate` shapes) are rejected before tracker HTTP dispatch.
 _Avoid_: Agent handoff, clean continuation, tracker write ownership
