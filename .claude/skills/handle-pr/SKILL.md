@@ -31,16 +31,17 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
    - 测试是否安慰剂（assertion 真的读到新代码改的字段吗？）
    - 错位机制（在 §1 scheduler/runner 边界的错误一侧）：worker/orchestrator 侧「消费 agent 产物」的 phase/gate/artifact/config，先 grep Elixir 有没有等价物——没有就是过度设计信号，判**删除**（非搬进 prompt、非只记 DEVIATIONS），归宿默认是 WORKFLOW prompt（worker post-turn phase 在 push 后只能 flag 不能 prevent，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此；AGENTS.md 原则 6；#557/#561 拆的就是这类）
 
-2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，HIGH/MEDIUM/Critical 先修再 amend 重审；一般 2–3 轮收敛。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
+2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，HIGH/MEDIUM/Critical 先验证技术正确性，再决定修复 / 反证 / 延后；不要盲从，也不要把 finding 当噪音略过。若 finding 证明计划本身错了，同轮更新代码、测试、SPEC/deviation 文档和 PR body。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
 
 3. **Deferred 偏差必须开 issue**：标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria（AGENTS.md rule 2）。决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 
 4. **Scope 分离**：治理 / 文档改动从 main 开新分支单独 PR，不要塞进 fix PR。
 
-5. **PR body 是活账本**（协议 §7）：每次重大 push 后更新 head SHA、验收项、验证命令、mutation check、CI、双 reviewer、`@codex review`、thread、size-gate 三态 checklist、deferral 状态，避免 stale body 误导合并判断。
+5. **PR body 是活账本**（协议 §7）：每次重大 push 后更新 head SHA、验收项、验证命令、mutation check、CI、双 reviewer、`@codex review`、thread、size-gate 三态 checklist、deferral 状态，避免 stale body 误导合并判断。最后一次 body 更新后重新等 `PR Metadata` 终态；`@codex review` 的 clean issue comment 只作为人工可审计信号，自动化不可解析自然语言。
 
 ## 默认行为
 
 - 工作分支：系统会告诉你具体名字。
+- Claude Code 若同一工具动作连续 2 次 malformed / stall / 中断，停止第 3 次原地重试，升级给 `codex:codex-rescue`，附 PR 号、当前 head/base、目标动作、失败 transcript、已验证事实；这是运行时故障，不是 review finding 的技术裁定。
 - 合并、force-push、auto-merge 门槛、hard stops：全部按协议 §8。merge 前必须等用户明确许可；批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)，授权不跨批次/scope 沿用。
 - 中文回复，简洁；每次只汇报变化不复述。

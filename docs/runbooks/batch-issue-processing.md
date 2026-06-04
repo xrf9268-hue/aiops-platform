@@ -25,6 +25,12 @@ runs:
   thread-aware review closure, the three-state size-gate classification with
   explicit sign-off paths) plus the batch-level pause/resume state recovery and
   follow-up capture for late unresolved review threads.
+- **2026-06 continuation / operator-stop follow-through** (#621 / PR #628 and
+  #622 / PR #631, with the upstream comparison in PR #625). This run sharpened
+  the distinction between "upstream also behaves this way" and "this repo
+  accepts a tracked deviation", and exposed two PR-gate edge cases: Codex may
+  finish a manual review with a bot issue comment rather than a trigger
+  reaction, and a final PR-body update can start a fresh `PR Metadata` run.
 
 Per the "Earned rules" principle in [`AGENTS.md`](../../AGENTS.md), do not
 generalize beyond what those runs actually taught.
@@ -107,7 +113,8 @@ transition:
 ```text
 issue → branch/worktree → PR → head → state
 (triaged | in-progress | draft | CI green | bot-review-pending | review clean |
- threads-resolved | within budget | size-gated: justified overage |
+ threads-resolved | body-updated | metadata-pending | metadata-green |
+ warnings-audited | within budget | size-gated: justified overage |
  size-gated: split recommended | mergeable | merged | merged-by-user |
  deferred→#NNN | skipped)
 ```
@@ -119,15 +126,17 @@ For each PR, also track the per-PR ledger facts the protocol already requires
 ([protocol §7](pr-review-merge-protocol.md#7-pr-body-is-a-living-ledger)) —
 current head SHA, local validation commands, CI conclusion/run id,
 `@codex review` trigger id + reaction state, unresolved review-thread ids (and
-whether each is outdated), size-gate classification, and deferral/follow-up
-links — and keep the PR body in sync as the public copy of the same facts.
+whether each is resolved/outdated), final `PR Metadata` run id, warning-audit
+result, size-gate classification, and deferral/follow-up links — and keep the
+PR body in sync as the public copy of the same facts.
 
 ## Pause, resume, and external merges
 
 Long batches may cross model quota windows or human intervention. Before
 pausing, write down the live ledger: issue, branch/worktree, PR, head SHA, CI
-state, trigger comment id, unresolved thread ids, size-gate state, and next
-action. Schedule the wakeup only after that state exists.
+state, trigger comment id, unresolved thread ids, PR-body freshness,
+`PR Metadata` state, warning-audit state, size-gate state, and next action.
+Schedule the wakeup only after that state exists.
 
 On resume, do not trust the paused snapshot. Re-fetch `origin/main`, refresh
 each live issue/PR with `gh`, and reclassify externally changed work:
