@@ -1,2 +1,3 @@
-// Package gitea implements the Gitea integration: webhook parsing and HMAC signature verification, the issue and pull-request REST client, and the tracker-client adapter.
+// Package gitea implements the Gitea REST integration: the issue and
+// pull-request client, label-to-state mapping, and the tracker-client adapter.
 package gitea

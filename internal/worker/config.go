@@ -1,6 +1,8 @@
-// Package worker claims queued tasks and runs the Symphony-style workflow for
-// each: workflow resolution, runner invocation, verification, and draft-PR
-// handoff.
+// Package worker claims queued tasks and drives the Symphony-style run for
+// each: it resolves the effective WORKFLOW.md and builds the agent prompt
+// (including the verification directive), then invokes the runner. Per SPEC §1
+// source edits, verification, push, PR creation, and tracker writes are the
+// agent's responsibility, not the worker's.
 package worker
 
 import (
