@@ -343,7 +343,7 @@ GitHub/Linear test issue that is not closed by the PR.
 After the single-issue path is healthy, use
 [`concurrent-linear-codex-e2e.md`](concurrent-linear-codex-e2e.md) to validate
 the local binary path with `max_concurrent_agents: 2`, the five visible Linear
-states, agent-owned `Todo -> In Progress -> In Review` transitions, dashboard
+states, agent-owned start comments and final `In Review` handoffs, dashboard
 `/api/v1/state`, and `cmd/tui --raw`. Keep that run generic and issue-body
 driven; do not copy disposable issue text into `WORKFLOW.md`.
 

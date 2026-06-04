@@ -189,6 +189,9 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 		return
 	}
 	if !terminal {
+		if o.hasOperatorTerminalStop(w.IssueID) {
+			return
+		}
 		o.continueAfterSkippedTerminalCleanup(continuation)
 		return
 	}
@@ -199,6 +202,15 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 	defer cancel()
 	o.workspaceCleaner.CleanupReconciledWorkspace(ctx, w)
 }
+
+func (o *Orchestrator) hasOperatorTerminalStop(id IssueID) bool {
+	_, ok, err := o.LookupOperatorTerminalStop(o.runCtx, id)
+	// Cleanup runs off-actor after the worker has already stopped. If the actor
+	// is shutting down and cannot answer, fail closed: do not resume continuation
+	// onto a workspace whose terminal stop status is unknown.
+	return err != nil || ok
+}
+
 func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continuationAfterSkippedCleanup) {
 	if continuation == nil {
 		o.queuePollWake()

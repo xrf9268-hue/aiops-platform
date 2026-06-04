@@ -893,9 +893,6 @@ func TestCodexAppServerRunnerInvokesLinearGraphQLThroughOrchestratorProxy(t *tes
 	linear := &fakeLinearGraphQLServer{}
 	linearServer := httptest.NewServer(linear.handler())
 	defer linearServer.Close()
-	oldEndpoint := defaultLinearGraphQLEndpoint
-	defaultLinearGraphQLEndpoint = linearServer.URL
-	t.Cleanup(func() { defaultLinearGraphQLEndpoint = oldEndpoint })
 
 	secret := "lin_api_secret_should_not_leak_to_agent"
 	t.Setenv("LINEAR_API_KEY", "")
@@ -928,7 +925,7 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret}
+	in.Workflow.Config.Tracker = workflow.TrackerConfig{Kind: "linear", APIKey: secret, Endpoint: linearServer.URL}
 	in.Workflow.Config.Codex.LinearGraphQL = workflow.LinearGraphQLConfig{AllowMutations: true}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
@@ -1191,14 +1188,17 @@ for line in sys.stdin:
 	in.Workflow.Config.Agent.MaxTurns = 8
 
 	var refreshCalls int
-	in.RefreshIssueState = func(ctx context.Context) (bool, error) {
+	in.RefreshIssueState = func(ctx context.Context) (IssueStateSnapshot, error) {
 		refreshCalls++
 		// First turn: issue is still active, runner should request
 		// another turn. Second turn: operator cancelled (issue moved to
 		// "Done"); refresher reports inactive and the runner must exit
 		// before sending the third turn/start even though the agent's
 		// continue=true would otherwise keep the loop running.
-		return refreshCalls < 2, nil
+		if refreshCalls < 2 {
+			return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
+		}
+		return IssueStateSnapshot{Found: true, State: "Done", Active: false, Terminal: true}, nil
 	}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
@@ -1215,8 +1215,8 @@ for line in sys.stdin:
 	if res.Summary != "turn 2 done" {
 		t.Fatalf("Summary = %q, want last completed turn's message", res.Summary)
 	}
-	if !res.IssueLeftActiveSet {
-		t.Fatalf("IssueLeftActiveSet = false, want true when SPEC §16.5 refresher stops the run")
+	if res.IssueExitState == nil || res.IssueExitState.State != "Done" || !res.IssueExitState.Terminal {
+		t.Fatalf("IssueExitState = %+v, want terminal Done snapshot when SPEC §16.5 refresher stops the run", res.IssueExitState)
 	}
 	// The stdin log captures every JSON-RPC message the runner sent to
 	// codex. Counting turn/start requests proves the runner *didn't even
@@ -1255,8 +1255,8 @@ for line in sys.stdin:
 	in := appServerInput(wd)
 	in.Workflow.Config.Agent.MaxTurns = 4
 	refresherErr := errors.New("tracker unreachable")
-	in.RefreshIssueState = func(ctx context.Context) (bool, error) {
-		return false, refresherErr
+	in.RefreshIssueState = func(ctx context.Context) (IssueStateSnapshot, error) {
+		return IssueStateSnapshot{}, refresherErr
 	}
 
 	_, err := (CodexAppServerRunner{}).Run(context.Background(), in)

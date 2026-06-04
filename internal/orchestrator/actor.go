@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -42,12 +43,12 @@ import (
 type WorkerResult struct {
 	Err           error
 	InputRequired bool
-	// IssueLeftActiveSet marks a clean SPEC §16.5 self-stop: the runner's
-	// per-turn tracker refresh observed the issue outside active states. The
-	// clean continuation path must preserve the reconcile/cleanup retry seam
-	// instead of treating the exit as a still-active budget exhaustion.
-	IssueLeftActiveSet bool
-	Elapsed            time.Duration
+	// IssueExitState marks a clean SPEC §16.5 self-stop: the runner's per-turn
+	// tracker refresh observed the issue outside active states. The structured
+	// snapshot lets finalize distinguish terminal self-stop from normal clean
+	// continuation.
+	IssueExitState *runner.IssueStateSnapshot
+	Elapsed        time.Duration
 }
 
 // DispatchOptions carries per-run controls derived by the orchestrator for a
@@ -264,6 +265,35 @@ func (o *Orchestrator) currentRetryTerminalResolver() (IssueStateRefresher, map[
 	o.retryTerminalResolverMu.Lock()
 	defer o.retryTerminalResolverMu.Unlock()
 	return o.retryTerminalResolver, o.retryTerminalStates
+}
+
+func (o *Orchestrator) LookupOperatorTerminalStop(ctx context.Context, id IssueID) (OperatorTerminalStopEntry, bool, error) {
+	reply := make(chan operatorTerminalStopLookupResult, 1)
+	if err := o.submit(ctx, &lookupOperatorTerminalStopOp{id: id, result: reply}); err != nil {
+		return OperatorTerminalStopEntry{}, false, err
+	}
+	select {
+	case res := <-reply:
+		return res.entry, res.ok, nil
+	case <-ctx.Done():
+		return OperatorTerminalStopEntry{}, false, ctx.Err()
+	}
+}
+
+type operatorTerminalStopLookupResult struct {
+	entry OperatorTerminalStopEntry
+	ok    bool
+}
+
+type lookupOperatorTerminalStopOp struct {
+	id     IssueID
+	result chan<- operatorTerminalStopLookupResult
+}
+
+func (op *lookupOperatorTerminalStopOp) apply(st *OrchestratorState) func() {
+	entry, ok := st.LookupOperatorTerminalStop(op.id)
+	op.result <- operatorTerminalStopLookupResult{entry: entry, ok: ok}
+	return nil
 }
 func (o *Orchestrator) queuePollWake() bool {
 	if o == nil || o.retryWake == nil {

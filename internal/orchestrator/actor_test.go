@@ -1354,7 +1354,11 @@ func TestFinalize_ContinuationBudgetDoesNotBlockSelfStopCleanExit(t *testing.T) 
 			t.Fatalf("RecordRuntimeEvent turn %d: %v", turn, err)
 		}
 	}
-	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond, IssueLeftActiveSet: true})
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond, IssueExitState: &runner.IssueStateSnapshot{
+		Found:  true,
+		State:  "In Review",
+		Active: false,
+	}})
 
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
@@ -2077,7 +2081,7 @@ func TestReconcileTerminalRunAfterTurnCompletedErrorDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestReconcileTerminalRunAfterTurnCompletedActiveRefreshSkipsStaleCleanup(t *testing.T) {
+func TestReconcileTerminalRunAfterTurnCompletedRecordsStickyStopAndSkipsStaleCleanup(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
 	o, cancel := startActor(t, Deps{
@@ -2114,7 +2118,10 @@ func TestReconcileTerminalRunAfterTurnCompletedActiveRefreshSkipsStaleCleanup(t 
 
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
-		return err == nil && len(cleaner.snapshot()) == 1 && len(view.Retrying) == 1
+		return err == nil &&
+			len(cleaner.snapshot()) == 1 &&
+			len(view.Retrying) == 0 &&
+			len(view.OperatorTerminalStops) == 2
 	}, time.Second)
 	calls := cleaner.snapshot()
 	if len(calls) != 1 || calls[0].IssueID != IssueID(barrier.ID) || calls[0].Path != barrierPath {
@@ -2124,8 +2131,11 @@ func TestReconcileTerminalRunAfterTurnCompletedActiveRefreshSkipsStaleCleanup(t 
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if got := view.Retrying[0]; got.IssueID != IssueID(blip.ID) || got.Attempt != 1 {
-		t.Fatalf("stale terminal continuation retry = %+v, want issue %s attempt 1", got, blip.ID)
+	if len(view.Retrying) != 0 {
+		t.Fatalf("retrying after stale terminal recheck = %+v, want no continuation under sticky operator stop", view.Retrying)
+	}
+	if !sawRuntimeEvent(view.RecentEvents, RuntimeEventOperatorTerminalStop, IssueID(blip.ID)) {
+		t.Fatalf("RecentEvents = %+v, want operator_terminal_stop for stale terminal issue %s", view.RecentEvents, blip.ID)
 	}
 }
 
@@ -2204,15 +2214,17 @@ func TestReconcileWorkspaceCleanupRechecksStateUnderReservation(t *testing.T) {
 	}
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+		return err == nil && len(view.Retrying) == 0 && len(view.OperatorTerminalStops) == 1
 	}, time.Second)
 	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
-		t.Fatalf("plain dispatch after stale cleanup recheck = %v, want ErrNotDispatched while continuation retry is claimed", err)
+		t.Fatalf("plain dispatch after sticky stop = %v, want ErrNotDispatched", err)
 	}
-	waitFor(t, func() bool {
-		return o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil) == nil
-	}, time.Second)
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("tracker-rechecked dispatch after sticky stop = %v, want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d, want only the original run under sticky stop", got)
+	}
 	if calls := cleaner.snapshot(); len(calls) != 0 {
 		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
 	}
@@ -2380,18 +2392,12 @@ func TestReconcileInactiveContinuationRetryKeepsWorkspace(t *testing.T) {
 	}
 }
 
-// TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation is
-// the regression for PR #455's unresolved review thread (actor.go:1383): when a
-// queued continuation retry is observed terminal by the inactive reconcile pass
-// but the deletion-time recheck (verifyReconciledWorkspaceStillTerminal) finds
-// the issue active again, the retry-cleanup path must resume the continuation —
-// preserving the queued attempt and max-turn budget — instead of only waking
-// polling. Before the fix the retry cleanup recheck carried a nil continuation,
-// so ReleaseClaim dropped the entry and the next poll dispatched a fresh run
-// with ContinuationAttempt reset to 0. Mirrors the running-entry recheck path
-// (TestReconcileWorkspaceCleanupRechecksStateUnderReservation) for the retry
-// branch.
-func TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation(t *testing.T) {
+// TestReconcileTerminalContinuationRetryActiveRecheckKeepsStickyStop pins D35:
+// once the operator's terminal tracker state has been observed for a queued
+// continuation, a later cleanup-time active recheck must not resume that
+// continuation. D34 still covers clean active continuation before any terminal
+// observation; D35 makes the terminal observation process-authoritative.
+func TestReconcileTerminalContinuationRetryActiveRecheckKeepsStickyStop(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
 	o, cancel := startActor(t, Deps{
@@ -2416,8 +2422,8 @@ func TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation(t 
 	}, time.Second)
 
 	// The recheck resolver reports the issue active again (not in the terminal
-	// set), so the deletion-time recheck must skip removal and resume the
-	// continuation rather than delete the workspace or reset the attempt.
+	// set). Under D35 this skips workspace removal but must not resume the
+	// continuation because a terminal operator stop was already recorded.
 	o.SetRetryTerminalStateResolver(staticStateRefresher{issue.ID: "In Progress"}, []string{"Done"})
 
 	// The continuation is still queued when the inactive pass observes terminal.
@@ -2427,20 +2433,19 @@ func TestReconcileTerminalContinuationRetryActiveRecheckPreservesContinuation(t 
 		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
 	}
 
-	// Continuation resumed with the queued attempt preserved (not reset to 0).
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && view.Retrying[0].Attempt == 1
+		return err == nil && len(view.Retrying) == 0 && len(view.OperatorTerminalStops) == 1
 	}, time.Second)
-	// Re-claimed by the resumed continuation, so a plain poll dispatch is denied;
-	// only a tracker-rechecked dispatch consumes it and carries the budget.
 	if err := o.RequestDispatch(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
-		t.Fatalf("RequestDispatch after recheck-active continuation = %v, want ErrNotDispatched while continuation retry is claimed", err)
+		t.Fatalf("RequestDispatch after sticky stop = %v, want ErrNotDispatched", err)
 	}
-	waitFor(t, func() bool {
-		return o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil) == nil
-	}, time.Second)
-	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), issue, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck after sticky stop = %v, want ErrNotDispatched", err)
+	}
+	if got := disp.count(); got != 1 {
+		t.Fatalf("dispatcher spawn count = %d, want no resumed continuation dispatch", got)
+	}
 	if calls := cleaner.snapshot(); len(calls) != 0 {
 		t.Fatalf("cleanup calls = %+v, want none after state rechecked active", calls)
 	}

@@ -35,9 +35,9 @@ type RunTaskError struct {
 
 // RunTaskResult carries success-side runner facts needed by the orchestrator.
 type RunTaskResult struct {
-	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
-	// stopped a successful runner session because the issue is no longer active.
-	IssueLeftActiveSet bool
+	// IssueExitState is set when SPEC §16.5's per-turn tracker refresh stopped
+	// a successful runner session because the issue is no longer active.
+	IssueExitState *runner.IssueStateSnapshot
 }
 
 // ResolveWorkflow emits the workflow_resolved event for the service-level
@@ -212,7 +212,7 @@ func RunTaskWithResult(ctx context.Context, ev EventEmitter, t task.Task, cfg Co
 		return result, rtErr
 	}
 	rs.finalize()
-	return RunTaskResult{IssueLeftActiveSet: rs.res.IssueLeftActiveSet}, nil
+	return RunTaskResult{IssueExitState: rs.res.IssueExitState}, nil
 }
 
 // prepareWorkspace resolves the service workflow, prepares the deterministic
@@ -331,7 +331,21 @@ func (rs *runState) runAgent() *RunTaskError {
 	if rs.cfg.IssueStateRefresher != nil {
 		refreshIssueState = rs.cfg.IssueStateRefresher(rs.t, rs.wcfg)
 	}
-	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, CleanTurnBudget: rs.cfg.CleanTurnBudget, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
+	var operatorStopLookup runner.OperatorTerminalStopLookup
+	if rs.cfg.OperatorTerminalStopLookup != nil {
+		operatorStopLookup = rs.cfg.OperatorTerminalStopLookup(rs.t, rs.wcfg)
+	}
+	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{
+		Task:                       rs.t,
+		Workflow:                   *rs.wf,
+		Workdir:                    rs.workdir,
+		WorkspaceRoot:              rs.workspaceRoot,
+		Prompt:                     rs.prompt,
+		CleanTurnBudget:            rs.cfg.CleanTurnBudget,
+		RefreshIssueState:          refreshIssueState,
+		LookupOperatorTerminalStop: operatorStopLookup,
+		PhaseTransitionSink:        rs.emitPhase,
+	}, rs.wcfg.Agent.Timeout, rs.workflowSource)
 	rs.res = res
 	rs.sessionID = sessionIDFromRuntimeEvents(res.RuntimeEvents)
 	if runErr != nil {

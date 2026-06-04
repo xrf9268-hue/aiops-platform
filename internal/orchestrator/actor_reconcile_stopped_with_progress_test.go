@@ -120,6 +120,61 @@ func TestReconcileCancelAfterLinearHandoffWithoutTurnRecordsAgentHandoff(t *test
 	}
 }
 
+func TestReconcileCancelAfterRejectedAndPostStopMutationsDoesNotRecordAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF5", Identifier: "ENG-RF5", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	for _, ev := range []task.RuntimeEvent{
+		{
+			Event: task.EventToolCallMutationRejected,
+			Payload: map[string]any{
+				"tool":            "linear_graphql",
+				"operation_field": "issueUpdate",
+				"reason":          "current_issue_active_state_update",
+				"found":           true,
+				"state":           "In Progress",
+				"terminal":        false,
+			},
+		},
+		{
+			Event: task.EventToolCallMutationPostOperatorTerminalStop,
+			Payload: map[string]any{
+				"tool":            "linear_ai_workpad",
+				"operation_field": "commentCreate",
+			},
+		},
+	} {
+		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, ev); err != nil {
+			t.Fatalf("RecordRuntimeEvent(%s): %v", ev.Event, err)
+		}
+	}
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty for rejected/post-stop audit events", v.AgentHandoffReconcileStopped)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 0 {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty without completed turn", v.ReconcileStoppedWithProgress)
+	}
+}
+
 // TestReconcileCancelNoTurnDoesNotRecordReconcileStoppedWithProgress: a reconcile-cancel
 // before any turn completed is a genuine no-progress stop and must not be
 // surfaced as a handoff.

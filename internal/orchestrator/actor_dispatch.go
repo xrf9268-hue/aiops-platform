@@ -82,6 +82,18 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrNotDispatched
 		return nil
 	}
+	if st.IsOperatorTerminalStopped(id) {
+		if entry, first := st.RecordOperatorTerminalDispatchSuppressed(id, d.issue, "active_candidate_after_operator_terminal_stop"); first {
+			st.RecordEvent(RuntimeEvent{
+				Kind:       RuntimeEventOperatorTerminalStopDispatchSuppressed,
+				IssueID:    id,
+				Identifier: entry.Identifier,
+				Message:    "dispatch suppressed after Operator Terminal Stop",
+			})
+		}
+		d.result <- ErrNotDispatched
+		return nil
+	}
 	consumedContinuation, continuationAttempt, continuationTurnCount, deny := resolveDispatchClaim(st, id, d.trackerRechecked)
 	if deny {
 		d.result <- ErrNotDispatched

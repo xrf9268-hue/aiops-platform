@@ -37,28 +37,51 @@ type RunInput struct {
 	// visible at the next orchestrator poll tick. Nil keeps the legacy
 	// behavior for callers (tests, mock runners) that have no tracker.
 	RefreshIssueState IssueStateRefresher
+	// LookupOperatorTerminalStop reads the process-local Operator Terminal Stop
+	// latch for this run's issue. It is intentionally narrower than
+	// RefreshIssueState so successful mutation auditing does not perform
+	// tracker I/O just to choose an event classification.
+	LookupOperatorTerminalStop OperatorTerminalStopLookup
+}
+
+// IssueStateSnapshot is the structured SPEC §16.5 tracker-refresh fact the
+// runner hands to callers when a clean turn stops because the issue left the
+// active set. Found=false means the tracker returned no row; per SPEC §16.5 the
+// runner keeps the prior active issue state for self-stop, while tool-time
+// mutation guards can still fail closed on the same unknown.
+type IssueStateSnapshot struct {
+	Found                bool
+	State                string
+	Active               bool
+	Terminal             bool
+	OperatorTerminalStop bool
 }
 
 // IssueStateRefresher is the SPEC §16.5 per-turn tracker hook. The runner
-// invokes it after `awaitTurnCompletion` succeeds; the returned bool reports
-// whether the linked issue is still in an active workflow state. A non-nil
-// error short-circuits the turn loop with the wrapped error (SPEC: "if
+// invokes it after `awaitTurnCompletion` succeeds; Active reports whether the
+// linked issue is still in an active workflow state, while Found/State/Terminal
+// preserve the exact tracker fact for finalize-time cleanup decisions. A
+// non-nil error short-circuits the turn loop with the wrapped error (SPEC: "if
 // refreshed_issue failed: fail"). Defined as a function value rather than an
 // interface so callers can adapt any tracker client (or test fake) without
 // pulling internal/tracker into the runner package.
-type IssueStateRefresher func(ctx context.Context) (active bool, err error)
+type IssueStateRefresher func(ctx context.Context) (IssueStateSnapshot, error)
+
+// OperatorTerminalStopLookup reads the orchestrator-owned stop latch without
+// falling back to tracker refresh. ok=false means no sticky stop is recorded.
+type OperatorTerminalStopLookup func(ctx context.Context) (IssueStateSnapshot, bool)
 
 type Result struct {
 	Summary       string
 	RuntimeEvents []task.RuntimeEvent
-	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
-	// observed the linked issue outside the workflow's active states and the
-	// runner stopped cleanly for that reason.
-	IssueLeftActiveSet bool
-	OutputBytes        int64  // bytes the runner kept in its capture buffer
-	OutputDropped      int64  // bytes dropped because the buffer hit its cap
-	OutputHead         string // up to CodexEventOutputCap bytes from the start of the captured output
-	OutputTail         string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
+	// IssueExitState is set when SPEC §16.5's per-turn tracker refresh observed
+	// the linked issue outside the workflow's active states and the runner
+	// stopped cleanly for that reason.
+	IssueExitState *IssueStateSnapshot
+	OutputBytes    int64  // bytes the runner kept in its capture buffer
+	OutputDropped  int64  // bytes dropped because the buffer hit its cap
+	OutputHead     string // up to CodexEventOutputCap bytes from the start of the captured output
+	OutputTail     string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
 }
 
 type Runner interface {

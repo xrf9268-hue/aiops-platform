@@ -77,11 +77,15 @@ func TestRunAgentPassesCleanTurnBudgetToRunner(t *testing.T) {
 	}
 }
 
-func TestRunAgentCapturesIssueLeftActiveSetResult(t *testing.T) {
+func TestRunAgentCapturesIssueExitStateResult(t *testing.T) {
 	ev := &fakeEmitter{}
 	oldNew := newRunner
 	newRunner = func(string) (runner.Runner, error) {
-		return resultRunner{result: runner.Result{Summary: "ok", IssueLeftActiveSet: true}}, nil
+		return resultRunner{result: runner.Result{Summary: "ok", IssueExitState: &runner.IssueStateSnapshot{
+			Found:  true,
+			State:  "In Review",
+			Active: false,
+		}}}, nil
 	}
 	t.Cleanup(func() { newRunner = oldNew })
 	dir := t.TempDir()
@@ -99,8 +103,8 @@ func TestRunAgentCapturesIssueLeftActiveSetResult(t *testing.T) {
 	if rtErr := rs.runAgent(); rtErr != nil {
 		t.Fatalf("runAgent: %v", rtErr.Err)
 	}
-	if !rs.res.IssueLeftActiveSet {
-		t.Fatal("runAgent result IssueLeftActiveSet = false, want true")
+	if rs.res.IssueExitState == nil || rs.res.IssueExitState.State != "In Review" {
+		t.Fatalf("runAgent result IssueExitState = %+v, want In Review snapshot", rs.res.IssueExitState)
 	}
 }
 

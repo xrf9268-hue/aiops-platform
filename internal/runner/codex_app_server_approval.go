@@ -289,12 +289,37 @@ func (c *appServerClient) resolveDynamicToolResult(ctx context.Context, name str
 // writes too. Only the proxy itself fires the sink, so installing it on
 // unrelated tools is a no-op.
 func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string) context.Context {
-	return WithLinearGraphQLMutationSink(ctx, func(operationField string) {
+	ctx = WithLinearGraphQLMutationSink(ctx, func(audit LinearGraphQLMutationAudit) {
+		payload := map[string]any{"tool": name}
+		if audit.OperationField != "" {
+			payload["operation_field"] = audit.OperationField
+		}
+		if audit.CurrentIssueNonActiveStateUpdate {
+			payload["current_issue_non_active_state_update"] = true
+		}
+		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+	})
+	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
+		payload := map[string]any{
+			"tool":     name,
+			"reason":   rejection.Reason,
+			"found":    rejection.Found,
+			"terminal": rejection.Terminal,
+		}
+		if rejection.OperationField != "" {
+			payload["operation_field"] = rejection.OperationField
+		}
+		if rejection.State != "" {
+			payload["state"] = rejection.State
+		}
+		c.recordRuntimeEvent(task.EventToolCallMutationRejected, c.withRuntimeContext(payload))
+	})
+	return WithLinearGraphQLPostStopMutationSink(ctx, func(operationField string) {
 		payload := map[string]any{"tool": name}
 		if operationField != "" {
 			payload["operation_field"] = operationField
 		}
-		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(payload))
+		c.recordRuntimeEvent(task.EventToolCallMutationPostOperatorTerminalStop, c.withRuntimeContext(payload))
 	})
 }
 

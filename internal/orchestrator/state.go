@@ -12,6 +12,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -150,6 +151,11 @@ type RunningEntry struct {
 	// turn_completed event arrives, operators still need to see that handoff
 	// activity happened without counting the worker as completed.
 	AgentHandoffActivity bool
+	// AgentCurrentIssueHandoff is set only when the agent successfully updates
+	// this run's issue into a non-active state through the guarded Linear tool.
+	// D35 uses this structured fact to avoid latching agent-owned terminal
+	// handoffs as operator stops.
+	AgentCurrentIssueHandoff bool
 
 	// CancelWorker cancels the run's context. The cause distinguishes a
 	// supervised eligibility stop (worker.ErrReconcileCancel — the worker then
@@ -186,6 +192,21 @@ type BlockedEntry struct {
 	LastEventAt time.Time
 	Method      string
 	Error       string
+}
+
+// OperatorTerminalStopEntry is a process-local latch recording that this
+// worker observed an operator move an issue to a terminal tracker state. D35
+// makes that observation authoritative for this worker process so a later
+// agent-side issueUpdate cannot re-activate and re-dispatch the same issue.
+type OperatorTerminalStopEntry struct {
+	Issue                 tracker.Issue
+	Identifier            string
+	State                 string
+	StoppedAt             time.Time
+	SuppressedDispatches  int
+	FirstSuppressedAt     time.Time
+	FirstSuppressedState  string
+	FirstSuppressedReason string
 }
 
 // OrchestratorState is the single authoritative in-memory state owned
@@ -254,6 +275,9 @@ type OrchestratorState struct {
 	agentHandoffReconcileStoppedOrder           []IssueID
 	CumulativeAgentHandoffReconcileStoppedTotal int64
 
+	OperatorTerminalStops     map[IssueID]*OperatorTerminalStopEntry
+	operatorTerminalStopOrder []IssueID
+
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
 
@@ -302,6 +326,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		Completed:                    map[IssueID]struct{}{},
 		ReconcileStoppedWithProgress: map[IssueID]struct{}{},
 		AgentHandoffReconcileStopped: map[IssueID]struct{}{},
+		OperatorTerminalStops:        map[IssueID]*OperatorTerminalStopEntry{},
 		cleaningWorkspaces:           map[IssueID]struct{}{},
 		MaxRecentCompleted:           DefaultMaxRecentCompleted,
 	}
@@ -327,6 +352,67 @@ func (s *OrchestratorState) MarkCleaningWorkspace(id IssueID) {
 // UnmarkCleaningWorkspace clears the cleanup-in-flight mark for id.
 func (s *OrchestratorState) UnmarkCleaningWorkspace(id IssueID) {
 	delete(s.cleaningWorkspaces, id)
+}
+
+func (s *OrchestratorState) RecordOperatorTerminalStop(id IssueID, issue tracker.Issue, at time.Time) (OperatorTerminalStopEntry, bool) {
+	if s.OperatorTerminalStops == nil {
+		s.OperatorTerminalStops = map[IssueID]*OperatorTerminalStopEntry{}
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	identifier := issue.Identifier
+	if identifier == "" {
+		identifier = string(id)
+	}
+	state := issue.State
+	if existing, ok := s.OperatorTerminalStops[id]; ok {
+		if strings.TrimSpace(existing.Identifier) == "" {
+			existing.Identifier = identifier
+		}
+		if strings.TrimSpace(state) != "" {
+			existing.State = state
+			existing.Issue = issue
+		}
+		return *existing, false
+	}
+	entry := &OperatorTerminalStopEntry{
+		Issue:      issue,
+		Identifier: identifier,
+		State:      state,
+		StoppedAt:  at,
+	}
+	s.OperatorTerminalStops[id] = entry
+	s.operatorTerminalStopOrder = append(s.operatorTerminalStopOrder, id)
+	return *entry, true
+}
+
+func (s *OrchestratorState) IsOperatorTerminalStopped(id IssueID) bool {
+	_, ok := s.OperatorTerminalStops[id]
+	return ok
+}
+
+func (s *OrchestratorState) LookupOperatorTerminalStop(id IssueID) (OperatorTerminalStopEntry, bool) {
+	entry, ok := s.OperatorTerminalStops[id]
+	if !ok || entry == nil {
+		return OperatorTerminalStopEntry{}, false
+	}
+	return *entry, true
+}
+
+func (s *OrchestratorState) RecordOperatorTerminalDispatchSuppressed(id IssueID, issue tracker.Issue, reason string) (OperatorTerminalStopEntry, bool) {
+	entry, ok := s.OperatorTerminalStops[id]
+	if !ok || entry == nil {
+		return OperatorTerminalStopEntry{}, false
+	}
+	entry.SuppressedDispatches++
+	first := entry.FirstSuppressedAt.IsZero()
+	if first {
+		entry.FirstSuppressedAt = time.Now().UTC()
+		entry.FirstSuppressedState = issue.State
+		entry.FirstSuppressedReason = reason
+	}
+	return *entry, first
 }
 
 // IsClaimed reports whether id is currently held by any of Running,
@@ -702,6 +788,7 @@ type StateView struct {
 	// that survives FIFO eviction.
 	ReconcileStoppedWithProgress                []IssueID
 	AgentHandoffReconcileStopped                []IssueID
+	OperatorTerminalStops                       []OperatorTerminalStopView
 	CumulativeCompletedTotal                    int64
 	CumulativeReconcileStoppedWithProgressTotal int64
 	CumulativeAgentHandoffReconcileStoppedTotal int64
@@ -767,6 +854,17 @@ type RetryView struct {
 	DueAt      time.Time
 	Error      string
 	Kind       RetryKind
+}
+
+type OperatorTerminalStopView struct {
+	IssueID               IssueID
+	Identifier            string
+	State                 string
+	StoppedAt             time.Time
+	SuppressedDispatches  int
+	FirstSuppressedAt     time.Time
+	FirstSuppressedState  string
+	FirstSuppressedReason string
 }
 
 // Snapshot returns a read-only view of the orchestrator state. The
@@ -848,6 +946,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		Completed:                    make([]IssueID, 0, len(s.completedOrder)),
 		ReconcileStoppedWithProgress: make([]IssueID, 0, len(s.reconcileStoppedWithProgressOrder)),
 		AgentHandoffReconcileStopped: make([]IssueID, 0, len(s.agentHandoffReconcileStoppedOrder)),
+		OperatorTerminalStops:        make([]OperatorTerminalStopView, 0, len(s.operatorTerminalStopOrder)),
 		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
 		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
 		CumulativeAgentHandoffReconcileStoppedTotal: s.CumulativeAgentHandoffReconcileStoppedTotal,
@@ -887,6 +986,22 @@ func (s *OrchestratorState) Snapshot() StateView {
 	view.Completed = append(view.Completed, s.completedOrder...)
 	view.ReconcileStoppedWithProgress = append(view.ReconcileStoppedWithProgress, s.reconcileStoppedWithProgressOrder...)
 	view.AgentHandoffReconcileStopped = append(view.AgentHandoffReconcileStopped, s.agentHandoffReconcileStoppedOrder...)
+	for _, id := range s.operatorTerminalStopOrder {
+		entry, ok := s.LookupOperatorTerminalStop(id)
+		if !ok {
+			continue
+		}
+		view.OperatorTerminalStops = append(view.OperatorTerminalStops, OperatorTerminalStopView{
+			IssueID:               id,
+			Identifier:            entry.Identifier,
+			State:                 entry.State,
+			StoppedAt:             entry.StoppedAt,
+			SuppressedDispatches:  entry.SuppressedDispatches,
+			FirstSuppressedAt:     entry.FirstSuppressedAt,
+			FirstSuppressedState:  entry.FirstSuppressedState,
+			FirstSuppressedReason: entry.FirstSuppressedReason,
+		})
+	}
 	return view
 }
 

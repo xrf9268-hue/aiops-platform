@@ -389,6 +389,9 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	// must see the live state.
 	issue := entry.Issue
 	identifier := entry.Identifier
+	if suppressRetryFireAfterOperatorStop(st, entry, id) {
+		return nil
+	}
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		// Retry timers must obey the same capacity gate as fresh dispatch.
 		// Mirror upstream handle_active_retry (orchestrator.ex:1142-1161):
@@ -414,6 +417,22 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 		}
 		o.spawn(id, issue, retryAttempt, 0, 0, 0)
 	}
+}
+
+func suppressRetryFireAfterOperatorStop(st *OrchestratorState, entry *RetryEntry, id IssueID) bool {
+	if !st.IsOperatorTerminalStopped(id) {
+		return false
+	}
+	if stop, first := st.RecordOperatorTerminalDispatchSuppressed(id, entry.Issue, "retry_fire_after_operator_terminal_stop"); first {
+		st.RecordEvent(RuntimeEvent{
+			Kind:       RuntimeEventOperatorTerminalStopDispatchSuppressed,
+			IssueID:    id,
+			Identifier: stop.Identifier,
+			Message:    "retry dispatch suppressed after Operator Terminal Stop",
+		})
+	}
+	st.ReleaseClaim(id)
+	return true
 }
 
 // capacityDeferRetry mirrors upstream handle_active_retry's no-slots
@@ -553,6 +572,9 @@ func (r *retryFireAfterFetchOp) apply(st *OrchestratorState) func() {
 		// retry and release the claim.
 		identifier := entry.Identifier
 		if r.terminal {
+			issue := entry.Issue
+			issue.State = r.terminalState
+			recordOperatorTerminalStop(st, r.id, issue)
 			// Upstream handle_retry_issue_lookup's terminal branch
 			// (orchestrator.ex:1082-1090): a retry whose issue went terminal
 			// cleans its workspace + releases. The worker already exited before

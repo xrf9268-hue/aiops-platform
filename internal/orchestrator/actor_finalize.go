@@ -7,6 +7,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -92,6 +93,10 @@ const continuationBudgetBlockMethod = "continuation_budget"
 func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Duration) func() {
 	nextContinuationAttempt := f.entry.ContinuationAttempt + 1
 	nextContinuationTurnCount := f.entry.ContinuationTurnCount + continuationTurnDelta(f.entry)
+	if f.result.IssueExitState != nil && f.result.IssueExitState.Terminal {
+		recordStop := f.result.IssueExitState.OperatorTerminalStop || !f.entry.AgentCurrentIssueHandoff
+		return f.applyTerminalSelfStop(st, elapsed, recordStop)
+	}
 	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
 		cleanup := f.o.reconciledWorkspaceCleanupOrContinuation(f.id, f.entry, nextContinuationAttempt)
 		if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
@@ -102,15 +107,8 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 		close(f.done)
 		return cleanup
 	}
-	if !f.result.IssueLeftActiveSet && continuationBudgetExceeded(st.MaxContinuationTurns, nextContinuationTurnCount) {
-		runErr := continuationBudgetError(nextContinuationTurnCount, st.MaxContinuationTurns)
-		if !st.BlockRunWithReason(f.id, f.entry, time.Now().UTC(), continuationBudgetBlockMethod, runErr, elapsed) {
-			close(f.done)
-			return nil
-		}
-		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventContinuationBudgetBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
-		close(f.done)
-		return nil
+	if f.shouldBlockContinuationBudget(st, nextContinuationTurnCount) {
+		return f.applyContinuationBudgetBlock(st, elapsed, nextContinuationTurnCount)
 	}
 	// SPEC §7.1 leaves the clean continuation loop unbounded upstream: an active
 	// issue keeps getting fresh sessions until tracker state changes (reconcile /
@@ -145,6 +143,41 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	return func() {
 		_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, nextContinuationTurnCount, workspace)
 	}
+}
+
+func (f *finalizeRunOp) shouldBlockContinuationBudget(st *OrchestratorState, turnCount int) bool {
+	return f.result.IssueExitState == nil && continuationBudgetExceeded(st.MaxContinuationTurns, turnCount)
+}
+
+func (f *finalizeRunOp) applyContinuationBudgetBlock(st *OrchestratorState, elapsed time.Duration, turnCount int) func() {
+	runErr := continuationBudgetError(turnCount, st.MaxContinuationTurns)
+	if !st.BlockRunWithReason(f.id, f.entry, time.Now().UTC(), continuationBudgetBlockMethod, runErr, elapsed) {
+		close(f.done)
+		return nil
+	}
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventContinuationBudgetBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
+	close(f.done)
+	return nil
+}
+
+func (f *finalizeRunOp) applyTerminalSelfStop(st *OrchestratorState, elapsed time.Duration, recordStop bool) func() {
+	snapshot := f.result.IssueExitState
+	issue := f.entry.Issue
+	if strings.TrimSpace(snapshot.State) != "" {
+		issue.State = snapshot.State
+		f.entry.Issue = issue
+	}
+	if recordStop {
+		recordOperatorTerminalStop(st, f.id, issue)
+	}
+	f.entry.ReconcileCleanupWorkspace = true
+	cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
+	if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
+		close(f.done)
+		return nil
+	}
+	close(f.done)
+	return cleanup
 }
 
 func continuationTurnDelta(run *RunningEntry) int {

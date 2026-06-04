@@ -238,7 +238,7 @@ type stubRunner struct {
 
 func (s stubRunner) Run(ctx context.Context, _ runner.RunInput) (runner.Result, error) {
 	result := s.result
-	if result.Summary == "" && len(result.RuntimeEvents) == 0 && !result.IssueLeftActiveSet && result.OutputBytes == 0 && result.OutputDropped == 0 && result.OutputHead == "" && result.OutputTail == "" {
+	if result.Summary == "" && len(result.RuntimeEvents) == 0 && result.IssueExitState == nil && result.OutputBytes == 0 && result.OutputDropped == 0 && result.OutputHead == "" && result.OutputTail == "" {
 		result = runner.Result{Summary: "ok"}
 	}
 	if s.sleep > 0 {
@@ -377,7 +377,7 @@ func TestRunRunnerWithTimeoutHappyPath(t *testing.T) {
 	}
 }
 
-func TestRunRunnerWithTimeoutPreservesIssueLeftActiveSetResult(t *testing.T) {
+func TestRunRunnerWithTimeoutPreservesIssueExitStateResult(t *testing.T) {
 	t.Parallel()
 	ev := &fakeEmitter{}
 	in := runner.RunInput{
@@ -387,13 +387,17 @@ func TestRunRunnerWithTimeoutPreservesIssueLeftActiveSetResult(t *testing.T) {
 	}
 
 	res, err := worker.RunRunnerWithTimeout(context.Background(), ev, stubRunner{
-		result: runner.Result{Summary: "ok", IssueLeftActiveSet: true},
+		result: runner.Result{Summary: "ok", IssueExitState: &runner.IssueStateSnapshot{
+			Found:  true,
+			State:  "In Review",
+			Active: false,
+		}},
 	}, in, time.Second, "file")
 	if err != nil {
 		t.Fatalf("RunRunnerWithTimeout: %v", err)
 	}
-	if !res.IssueLeftActiveSet {
-		t.Fatal("IssueLeftActiveSet = false, want true")
+	if res.IssueExitState == nil || res.IssueExitState.State != "In Review" {
+		t.Fatalf("IssueExitState = %+v, want In Review snapshot", res.IssueExitState)
 	}
 }
 

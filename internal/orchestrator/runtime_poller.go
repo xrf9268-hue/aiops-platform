@@ -316,6 +316,15 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Config { //nolint:gocognit // baseline (#521)
 	cfg := d.baseConfig
 	cfg.Workflow = snap.Workflow
+	cfg.OperatorTerminalStopLookup = func(t task.Task, _ workflow.Config) runner.OperatorTerminalStopLookup {
+		issueID := strings.TrimSpace(t.ID)
+		if issueID == "" {
+			return nil
+		}
+		return func(ctx context.Context) (runner.IssueStateSnapshot, bool) {
+			return d.operatorTerminalStopSnapshot(ctx, issueID)
+		}
+	}
 	refresher := d.currentRefresher()
 	if refresher != nil {
 		cfg.IssueStateRefresher = func(t task.Task, wcfg workflow.Config) runner.IssueStateRefresher {
@@ -327,11 +336,15 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 			if len(activeStates) == 0 {
 				return nil
 			}
+			terminalStates := normalizedStateSet(wcfg.Tracker.TerminalStates)
 			issueRef := tracker.IssueRef{ID: issueID, Identifier: taskIssueIdentifier(t)}
-			return func(ctx context.Context) (bool, error) {
+			return func(ctx context.Context) (runner.IssueStateSnapshot, error) {
+				if stopped, ok := d.operatorTerminalStopSnapshot(ctx, issueID); ok {
+					return stopped, nil
+				}
 				statesByID, err := fetchIssueStates(ctx, refresher, []tracker.IssueRef{issueRef})
 				if err != nil {
-					return false, err
+					return runner.IssueStateSnapshot{}, err
 				}
 				state, ok := statesByID[issueID]
 				if !ok || strings.TrimSpace(state) == "" {
@@ -339,14 +352,33 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 					// issue": no row means we treat the issue as
 					// still in its prior (active) state rather
 					// than aborting on a benign absence.
-					return true, nil
+					return runner.IssueStateSnapshot{Found: false, Active: true}, nil
 				}
-				_, active := activeStates[strings.ToLower(strings.TrimSpace(state))]
-				return active, nil
+				normalized := strings.ToLower(strings.TrimSpace(state))
+				_, active := activeStates[normalized]
+				_, terminal := terminalStates[normalized]
+				return runner.IssueStateSnapshot{Found: true, State: state, Active: active, Terminal: terminal}, nil
 			}
 		}
 	}
 	return cfg
+}
+
+func (d *RuntimeDispatcher) operatorTerminalStopSnapshot(ctx context.Context, issueID string) (runner.IssueStateSnapshot, bool) {
+	if d == nil || d.orchestrator == nil {
+		return runner.IssueStateSnapshot{}, false
+	}
+	stop, ok, err := d.orchestrator.LookupOperatorTerminalStop(ctx, IssueID(issueID))
+	if err != nil || !ok {
+		return runner.IssueStateSnapshot{}, false
+	}
+	return runner.IssueStateSnapshot{
+		Found:                true,
+		State:                stop.State,
+		Active:               false,
+		Terminal:             true,
+		OperatorTerminalStop: true,
+	}, true
 }
 
 func taskIssueIdentifier(t task.Task) string {
