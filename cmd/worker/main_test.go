@@ -124,7 +124,7 @@ func TestApiIssueFromViewFindsAgentHandoffReconcileStoppedByIdentifierAndID(t *t
 			Kind:       orchestrator.RuntimeEventAgentHandoffReconcileStopped,
 			IssueID:    "linear-uuid-62",
 			Identifier: "AIS-62",
-			Message:    "reconcile stopped run after agent-side Linear handoff activity",
+			Message:    "reconcile stopped run after agent-side current-issue state handoff",
 			At:         time.Unix(1700000000, 0).UTC(),
 		}},
 	}
@@ -146,6 +146,17 @@ func TestApiIssueFromViewResolvesAgentHandoffReconcileStoppedFromBucketWhenEvent
 	got, ok := apiIssueFromView(view, "linear-uuid-62")
 	if !ok || got.Status != "agent_handoff_reconcile_stopped" {
 		t.Fatalf("apiIssueFromView(linear-uuid-62) = (%v, %s); want (true, agent_handoff_reconcile_stopped)", ok, got.Status)
+	}
+}
+
+func TestApiIssueFromViewPrefersAgentHandoffWhenBucketsOverlap(t *testing.T) {
+	view := orchestrator.StateView{
+		ReconcileStoppedWithProgress: []orchestrator.IssueID{"linear-uuid-63"},
+		AgentHandoffReconcileStopped: []orchestrator.IssueID{"linear-uuid-63"},
+	}
+	got, ok := apiIssueFromView(view, "linear-uuid-63")
+	if !ok || got.Status != "agent_handoff_reconcile_stopped" {
+		t.Fatalf("apiIssueFromView(linear-uuid-63) = (%v, %s); want (true, agent_handoff_reconcile_stopped)", ok, got.Status)
 	}
 }
 
@@ -547,10 +558,21 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}
+		}
+	} else {
+		if !strings.Contains(html, "Delivered") ||
+			!strings.Contains(html, "agent_handoff_reconcile_stopped") {
+			t.Fatalf("dashboard fallback missing delivered handoff KPI wiring:\n%s", html)
+		}
+		if strings.Contains(html, "reconcile_stopped_with_progress") {
+			t.Fatalf("dashboard fallback folds progress into Delivered KPI: %s", html)
+		}
+		if strings.Contains(html, "<span class=\"label\">Completed</span>") {
+			t.Fatalf("dashboard fallback still labels the handoff KPI as Completed: %s", html)
 		}
 	}
 }

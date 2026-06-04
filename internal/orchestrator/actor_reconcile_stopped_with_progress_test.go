@@ -60,10 +60,50 @@ func recordLinearHandoffMutation(t *testing.T, o *Orchestrator, issueID string) 
 	}
 }
 
-// TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress: a reconcile-cancel of
-// a run that completed a turn is surfaced in ReconcileStoppedWithProgress (and the lifetime
-// counter), and is NOT counted as completed.
-func TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress(t *testing.T) {
+func recordCurrentIssueHandoffMutation(t *testing.T, o *Orchestrator, issueID string) {
+	t.Helper()
+	err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventToolCallMutation,
+		Payload: map[string]any{
+			"tool":                                  "linear_graphql",
+			"operation_field":                       "issueUpdate",
+			"current_issue_non_active_state_update": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("RecordRuntimeEvent(current issue handoff): %v", err)
+	}
+}
+
+func recordCurrentIssueTerminalHandoffMutation(t *testing.T, o *Orchestrator, issueID string) {
+	t.Helper()
+	recordCurrentIssueTerminalHandoffMutationState(t, o, issueID, "Done")
+}
+
+func recordCurrentIssueTerminalHandoffMutationState(t *testing.T, o *Orchestrator, issueID, state string) {
+	t.Helper()
+	payload := map[string]any{
+		"tool":                                  "linear_graphql",
+		"operation_field":                       "issueUpdate",
+		"current_issue_non_active_state_update": true,
+		"current_issue_terminal_state_update":   true,
+	}
+	if state != "" {
+		payload["current_issue_terminal_state"] = state
+	}
+	err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventToolCallMutation,
+		Payload: payload,
+	})
+	if err != nil {
+		t.Fatalf("RecordRuntimeEvent(current issue terminal handoff): %v", err)
+	}
+}
+
+// TestReconcileCancelAfterProgressRecordsReconcileStoppedWithProgress: a reconcile-cancel
+// of a run that completed a turn is surfaced in ReconcileStoppedWithProgress
+// (and the lifetime counter), and is NOT counted as completed or delivered.
+func TestReconcileCancelAfterProgressRecordsReconcileStoppedWithProgress(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
@@ -81,9 +121,52 @@ func TestReconcileCancelAfterHandoffRecordsReconcileStoppedWithProgress(t *testi
 	if len(v.Completed) != 0 {
 		t.Fatalf("Completed = %v; want empty (a reconcile-stopped run is not a clean §16.5 exit)", v.Completed)
 	}
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty without current-issue handoff", v.AgentHandoffReconcileStopped)
+	}
 }
 
-func TestReconcileCancelAfterLinearHandoffWithoutTurnRecordsAgentHandoff(t *testing.T) {
+func TestReconcileCancelAfterCurrentIssueHandoffWithTurnRecordsAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF6", Identifier: "ENG-RF6", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueHandoffMutation(t, o, iss.ID)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(turn_completed): %v", err)
+	}
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 1 || v.AgentHandoffReconcileStopped[0] != IssueID(iss.ID) {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want [%s]", v.AgentHandoffReconcileStopped, iss.ID)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 1 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 1", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 1 || v.ReconcileStoppedWithProgress[0] != IssueID(iss.ID) {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s]", v.ReconcileStoppedWithProgress, iss.ID)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty (agent handoff reconcile stop is not a clean §16.5 exit)", v.Completed)
+	}
+}
+
+func TestReconcileCancelAfterLinearMutationWithoutCurrentIssueHandoffDoesNotRecordAgentHandoff(t *testing.T) {
 	disp := &fakeDispatcher{}
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
@@ -106,6 +189,43 @@ func TestReconcileCancelAfterLinearHandoffWithoutTurnRecordsAgentHandoff(t *test
 	}, time.Second)
 
 	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty for generic Linear mutation without current-issue handoff", v.AgentHandoffReconcileStopped)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 0 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 0", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 0 {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty without turn_completed", v.ReconcileStoppedWithProgress)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty (reconcile stop is not a clean §16.5 exit)", v.Completed)
+	}
+}
+
+func TestReconcileCancelAfterCurrentIssueHandoffWithoutTurnRecordsAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF8", Identifier: "ENG-RF8", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueHandoffMutation(t, o, iss.ID)
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
 	if len(v.AgentHandoffReconcileStopped) != 1 || v.AgentHandoffReconcileStopped[0] != IssueID(iss.ID) {
 		t.Fatalf("AgentHandoffReconcileStopped = %v; want [%s]", v.AgentHandoffReconcileStopped, iss.ID)
 	}
@@ -116,7 +236,51 @@ func TestReconcileCancelAfterLinearHandoffWithoutTurnRecordsAgentHandoff(t *test
 		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty without turn_completed", v.ReconcileStoppedWithProgress)
 	}
 	if len(v.Completed) != 0 {
-		t.Fatalf("Completed = %v; want empty (agent-side handoff reconcile stop is not a clean §16.5 exit)", v.Completed)
+		t.Fatalf("Completed = %v; want empty (agent handoff reconcile stop is not a clean §16.5 exit)", v.Completed)
+	}
+}
+
+func TestReconcileCancelAfterCurrentIssueHandoffActiveRefreshDoesNotRecordAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF9", Identifier: "ENG-RF9", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueHandoffMutation(t, o, iss.ID)
+
+	active := tracker.Issue{ID: iss.ID, Identifier: iss.Identifier, State: "In Progress"}
+	if err := o.RefreshActiveTrackerIssues(context.Background(), map[string]tracker.Issue{
+		iss.ID: active,
+	}, normalizedStates([]string{"In Progress"})); err != nil {
+		t.Fatalf("RefreshActiveTrackerIssues: %v", err)
+	}
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "In Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty after active refresh cleared the stale handoff", v.AgentHandoffReconcileStopped)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 0 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 0 after active refresh", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 0 {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want empty without turn_completed", v.ReconcileStoppedWithProgress)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty", v.Completed)
 	}
 }
 
@@ -234,6 +398,52 @@ func TestReconcileTerminalCancelAfterHandoffRecordsReconcileStoppedWithProgress(
 	if len(v.Completed) != 0 {
 		t.Fatalf("Completed = %v; want empty", v.Completed)
 	}
+}
+
+func TestReconcileTerminalCancelAfterCurrentIssueHandoffWithTurnRecordsAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-RF7", Identifier: "ENG-RF7", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordCurrentIssueTerminalHandoffMutation(t, o, iss.ID)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(turn_completed): %v", err)
+	}
+
+	terminal := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "Done"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), terminal, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 1 || v.AgentHandoffReconcileStopped[0] != IssueID(iss.ID) {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want [%s]", v.AgentHandoffReconcileStopped, iss.ID)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 1 || v.ReconcileStoppedWithProgress[0] != IssueID(iss.ID) {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s]", v.ReconcileStoppedWithProgress, iss.ID)
+	}
+	if len(v.OperatorTerminalStops) != 0 {
+		t.Fatalf("OperatorTerminalStops = %+v; want empty for agent-owned terminal handoff", v.OperatorTerminalStops)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty", v.Completed)
+	}
+
+	rework := tracker.Issue{ID: iss.ID, Identifier: iss.Identifier, State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), rework, nil); err != nil {
+		t.Fatalf("RequestDispatch after agent-owned terminal handoff = %v; want rework dispatch", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
 }
 
 // TestRecordReconcileStoppedWithProgressCapsAndDedup pins the FIFO cap + dedup + cumulative

@@ -26,80 +26,97 @@ const (
 
 const linearGraphQLStateLookupTimeout = 30 * time.Second
 
+var errWorkflowStateNotFound = errors.New("linear workflow state not found")
+
 type currentIssueMutationGuard struct {
 	issueID                    string
 	issueIdentifier            string
 	activeStates               []string
+	terminalStates             []string
 	teamKey                    string
 	refresh                    IssueStateRefresher
 	operatorTerminalStopLookup OperatorTerminalStopLookup
-	cache                      *activeStateIDCache
+	activeCache                *workflowStateIDCache
+	terminalCache              *workflowStateIDCache
 }
 
-type activeStateIDCache struct {
+type workflowStateIDCache struct {
 	mu     sync.Mutex
 	loaded bool
-	ids    map[string]struct{}
+	ids    map[string]string
 }
 
 func (g currentIssueMutationGuard) enabled() bool {
 	return strings.TrimSpace(g.issueID) != "" && g.refresh != nil
 }
 
-func (p linearGraphQLProxy) checkCurrentIssueUpdate(ctx context.Context, query string, variables map[string]any) (linearGraphQLMutationRejected, bool, bool) {
+type currentIssueHandoffClassification struct {
+	nonActive     bool
+	terminalState string
+}
+
+func (p linearGraphQLProxy) checkCurrentIssueUpdate(ctx context.Context, query string, variables map[string]any) (linearGraphQLMutationRejected, bool, currentIssueHandoffClassification) {
 	if !p.currentIssueGuard.enabled() {
-		return linearGraphQLMutationRejected{}, false, false
+		return linearGraphQLMutationRejected{}, false, currentIssueHandoffClassification{}
 	}
 	argumentTexts, err := issueUpdateArgumentTexts(query)
 	if err != nil {
 		if errors.Is(err, errIssueUpdateNotFound) {
-			return linearGraphQLMutationRejected{}, false, false
+			return linearGraphQLMutationRejected{}, false, currentIssueHandoffClassification{}
 		}
-		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectUnsupportedShape}, true, false
+		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectUnsupportedShape}, true, currentIssueHandoffClassification{}
 	}
-	currentIssueHandoff := false
+	handoff := currentIssueHandoffClassification{}
 	for _, args := range argumentTexts {
-		rejection, reject, handoff := p.checkCurrentIssueUpdateArgs(ctx, args, variables)
+		rejection, reject, argHandoff := p.checkCurrentIssueUpdateArgs(ctx, args, variables)
 		if reject {
-			return rejection, true, false
+			return rejection, true, currentIssueHandoffClassification{}
 		}
-		currentIssueHandoff = currentIssueHandoff || handoff
+		handoff.nonActive = handoff.nonActive || argHandoff.nonActive
+		if argHandoff.terminalState != "" {
+			handoff.terminalState = argHandoff.terminalState
+		}
 	}
-	return linearGraphQLMutationRejected{}, false, currentIssueHandoff
+	return linearGraphQLMutationRejected{}, false, handoff
 }
 
-func (p linearGraphQLProxy) checkCurrentIssueUpdateArgs(ctx context.Context, args string, variables map[string]any) (linearGraphQLMutationRejected, bool, bool) {
+func (p linearGraphQLProxy) checkCurrentIssueUpdateArgs(ctx context.Context, args string, variables map[string]any) (linearGraphQLMutationRejected, bool, currentIssueHandoffClassification) {
 	issueID, err := parseIssueUpdateIssueID(args, variables)
 	if err != nil {
-		return currentIssueUnsupportedUpdateRejection(), true, false
+		return currentIssueUnsupportedUpdateRejection(), true, currentIssueHandoffClassification{}
 	}
 	if !p.currentIssueGuard.matchesCurrentIssue(issueID) {
-		return linearGraphQLMutationRejected{}, false, false
+		return linearGraphQLMutationRejected{}, false, currentIssueHandoffClassification{}
 	}
 	change, err := parseIssueUpdateArguments(args, variables)
 	if err != nil {
-		return currentIssueUnsupportedUpdateRejection(), true, false
+		return currentIssueUnsupportedUpdateRejection(), true, currentIssueHandoffClassification{}
 	}
 	return p.checkCurrentIssueStateChange(ctx, change)
 }
 
-func (p linearGraphQLProxy) checkCurrentIssueStateChange(ctx context.Context, change issueUpdateStateChange) (linearGraphQLMutationRejected, bool, bool) {
+func (p linearGraphQLProxy) checkCurrentIssueStateChange(ctx context.Context, change issueUpdateStateChange) (linearGraphQLMutationRejected, bool, currentIssueHandoffClassification) {
 	snapshot, err := p.currentIssueGuard.refresh(ctx)
 	if err != nil {
-		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectRefreshFailed}, true, false
+		return linearGraphQLMutationRejected{OperationField: "issueUpdate", Reason: currentIssueRejectRefreshFailed}, true, currentIssueHandoffClassification{}
 	}
 	rejection := currentIssueSnapshotRejection("issueUpdate", snapshot)
 	if rejection.Reason != "" {
-		return rejection, true, false
+		return rejection, true, currentIssueHandoffClassification{}
 	}
 	activeIDs, err := p.currentIssueGuard.resolveActiveStateIDs(ctx, p)
 	if err != nil {
-		return currentIssueStateLookupRejection(snapshot), true, false
+		return currentIssueStateLookupRejection(snapshot), true, currentIssueHandoffClassification{}
 	}
 	if _, activeTarget := activeIDs[change.StateID]; activeTarget {
-		return currentIssueActiveStateRejection(snapshot), true, false
+		return currentIssueActiveStateRejection(snapshot), true, currentIssueHandoffClassification{}
 	}
-	return linearGraphQLMutationRejected{}, false, true
+	classification := currentIssueHandoffClassification{nonActive: true}
+	terminalIDs, err := p.currentIssueGuard.resolveTerminalStateIDs(ctx, p)
+	if err == nil {
+		classification.terminalState = terminalIDs[change.StateID]
+	}
+	return linearGraphQLMutationRejected{}, false, classification
 }
 
 func (g currentIssueMutationGuard) matchesCurrentIssue(issueID string) bool {
@@ -198,14 +215,29 @@ func (g currentIssueMutationGuard) postOperatorTerminalStop(ctx context.Context)
 }
 
 func (g currentIssueMutationGuard) resolveActiveStateIDs(ctx context.Context, p linearGraphQLProxy) (map[string]struct{}, error) {
-	cache := g.cache
+	stateIDs, err := g.resolveWorkflowStateIDs(ctx, p, g.activeStates, g.activeCache)
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[string]struct{}, len(stateIDs))
+	for id := range stateIDs {
+		ids[id] = struct{}{}
+	}
+	return ids, nil
+}
+
+func (g currentIssueMutationGuard) resolveTerminalStateIDs(ctx context.Context, p linearGraphQLProxy) (map[string]string, error) {
+	return g.resolveOptionalWorkflowStateIDs(ctx, p, g.terminalStates, g.terminalCache)
+}
+
+func (g currentIssueMutationGuard) resolveWorkflowStateIDs(ctx context.Context, p linearGraphQLProxy, states []string, cache *workflowStateIDCache) (map[string]string, error) {
 	if cache == nil {
-		cache = &activeStateIDCache{}
+		cache = &workflowStateIDCache{}
 	}
 	if ids, ok := cache.copyLoaded(); ok {
 		return ids, nil
 	}
-	ids, err := g.lookupActiveStateIDs(ctx, p)
+	ids, err := g.lookupWorkflowStateIDs(ctx, p, states)
 	if err != nil {
 		return nil, err
 	}
@@ -213,9 +245,24 @@ func (g currentIssueMutationGuard) resolveActiveStateIDs(ctx context.Context, p 
 	return ids, nil
 }
 
-func (g currentIssueMutationGuard) lookupActiveStateIDs(ctx context.Context, p linearGraphQLProxy) (map[string]struct{}, error) {
-	ids := map[string]struct{}{}
-	for _, state := range g.activeStates {
+func (g currentIssueMutationGuard) resolveOptionalWorkflowStateIDs(ctx context.Context, p linearGraphQLProxy, states []string, cache *workflowStateIDCache) (map[string]string, error) {
+	if cache == nil {
+		cache = &workflowStateIDCache{}
+	}
+	if ids, ok := cache.copyLoaded(); ok {
+		return ids, nil
+	}
+	ids, err := g.lookupOptionalWorkflowStateIDs(ctx, p, states)
+	if err != nil {
+		return nil, err
+	}
+	cache.store(ids)
+	return ids, nil
+}
+
+func (g currentIssueMutationGuard) lookupWorkflowStateIDs(ctx context.Context, p linearGraphQLProxy, states []string) (map[string]string, error) {
+	ids := map[string]string{}
+	for _, state := range states {
 		state = strings.TrimSpace(state)
 		if state == "" {
 			continue
@@ -225,32 +272,53 @@ func (g currentIssueMutationGuard) lookupActiveStateIDs(ctx context.Context, p l
 			return nil, err
 		}
 		for _, id := range stateIDs {
-			ids[id] = struct{}{}
+			ids[id] = state
 		}
 	}
 	return ids, nil
 }
 
-func (c *activeStateIDCache) copyLoaded() (map[string]struct{}, bool) {
+func (g currentIssueMutationGuard) lookupOptionalWorkflowStateIDs(ctx context.Context, p linearGraphQLProxy, states []string) (map[string]string, error) {
+	ids := map[string]string{}
+	for _, state := range states {
+		state = strings.TrimSpace(state)
+		if state == "" {
+			continue
+		}
+		stateIDs, err := p.lookupWorkflowStateIDs(ctx, state, g.teamKey)
+		if errors.Is(err, errWorkflowStateNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range stateIDs {
+			ids[id] = state
+		}
+	}
+	return ids, nil
+}
+
+func (c *workflowStateIDCache) copyLoaded() (map[string]string, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.loaded {
 		return nil, false
 	}
-	return copyStringSet(c.ids), true
+	return copyStringMap(c.ids), true
 }
 
-func (c *activeStateIDCache) store(ids map[string]struct{}) {
+func (c *workflowStateIDCache) store(ids map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.ids = copyStringSet(ids)
+	c.ids = copyStringMap(ids)
 	c.loaded = true
 }
 
-func copyStringSet(in map[string]struct{}) map[string]struct{} {
-	out := make(map[string]struct{}, len(in))
-	for key := range in {
-		out[key] = struct{}{}
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
 	}
 	return out
 }
@@ -331,7 +399,7 @@ func decodeWorkflowStateIDs(r io.Reader, stateName string) ([]string, error) {
 		}
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no Linear workflow state matches %q", stateName)
+		return nil, fmt.Errorf("%w: %q", errWorkflowStateNotFound, stateName)
 	}
 	return ids, nil
 }

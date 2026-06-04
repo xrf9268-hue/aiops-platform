@@ -94,7 +94,7 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	nextContinuationAttempt := f.entry.ContinuationAttempt + 1
 	nextContinuationTurnCount := f.entry.ContinuationTurnCount + continuationTurnDelta(f.entry)
 	if f.result.IssueExitState != nil && f.result.IssueExitState.Terminal {
-		recordStop := f.result.IssueExitState.OperatorTerminalStop || !f.entry.AgentCurrentIssueHandoff
+		recordStop := f.result.IssueExitState.OperatorTerminalStop || !agentOwnedTerminalStateMatches(f.entry, f.result.IssueExitState.State)
 		return f.applyTerminalSelfStop(st, elapsed, recordStop)
 	}
 	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
@@ -214,6 +214,9 @@ func (f *finalizeRunOp) applyReconciledCancelCleanup(st *OrchestratorState, elap
 	// drillable by identifier via /api/v1/<issue>, like completed runs.
 	st.recordReconcileStoppedWithProgress(f.id)
 	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
+	if runHasCurrentIssueHandoff(f.entry) {
+		f.recordAgentHandoffReconcileStopped(st)
+	}
 	close(f.done)
 	return cleanup, true
 }
@@ -251,12 +254,19 @@ func (f *finalizeRunOp) applyReconcileCancel(st *OrchestratorState, elapsed time
 	if runHasCompletedTurn(f.entry) {
 		st.recordReconcileStoppedWithProgress(f.id)
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after ≥1 completed turn"})
-	} else if runHasAgentHandoffWithoutCompletedTurn(f.entry) {
-		st.recordAgentHandoffReconcileStopped(f.id)
-		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventAgentHandoffReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after agent-side Linear handoff activity"})
+		if runHasCurrentIssueHandoff(f.entry) {
+			f.recordAgentHandoffReconcileStopped(st)
+		}
+	} else if runHasCurrentIssueHandoff(f.entry) {
+		f.recordAgentHandoffReconcileStopped(st)
 	}
 	close(f.done)
 	return cleanup, true
+}
+
+func (f *finalizeRunOp) recordAgentHandoffReconcileStopped(st *OrchestratorState) {
+	st.recordAgentHandoffReconcileStopped(f.id)
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventAgentHandoffReconcileStopped, IssueID: f.id, Identifier: f.identifier, Message: "reconcile stopped run after agent-side current-issue state handoff"})
 }
 
 // applyFailureRetry is the default terminal route for a retryable runner error:

@@ -146,16 +146,18 @@ type RunningEntry struct {
 	InputRequiredAt     time.Time
 	InputRequiredMethod string
 
-	// AgentHandoffActivity is set when the agent uses token-isolated Linear
-	// mutation tooling during the run. If reconcile stops the run before a
-	// turn_completed event arrives, operators still need to see that handoff
-	// activity happened without counting the worker as completed.
-	AgentHandoffActivity bool
 	// AgentCurrentIssueHandoff is set only when the agent successfully updates
 	// this run's issue into a non-active state through the guarded Linear tool.
-	// D35 uses this structured fact to avoid latching agent-owned terminal
-	// handoffs as operator stops.
+	// It is the delivery signal when reconcile stops the worker before clean
+	// exit, and it avoids latching agent-owned terminal handoffs as operator
+	// stops.
 	AgentCurrentIssueHandoff bool
+	// AgentCurrentIssueTerminalHandoff is the stricter D35 signal: the guarded
+	// current-issue update targeted a configured terminal state. The paired state
+	// is the target state from the agent mutation, so later different terminal
+	// tracker observations can still be latched as operator-owned.
+	AgentCurrentIssueTerminalHandoff      bool
+	AgentCurrentIssueTerminalHandoffState string
 
 	// CancelWorker cancels the run's context. The cause distinguishes a
 	// supervised eligibility stop (worker.ErrReconcileCancel — the worker then
@@ -786,7 +788,11 @@ type StateView struct {
 	// visible rather than absent from Completed (#557).
 	// CumulativeReconcileStoppedWithProgressTotal is the lifetime monotonic counter
 	// that survives FIFO eviction.
-	ReconcileStoppedWithProgress                []IssueID
+	ReconcileStoppedWithProgress []IssueID
+	// AgentHandoffReconcileStopped is the FIFO-bounded recent set of
+	// reconcile-stopped runs that observed a guarded current-issue Linear state
+	// handoff. It may overlap ReconcileStoppedWithProgress when the handoff also
+	// completed a turn before reconcile reaped it.
 	AgentHandoffReconcileStopped                []IssueID
 	OperatorTerminalStops                       []OperatorTerminalStopView
 	CumulativeCompletedTotal                    int64

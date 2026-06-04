@@ -408,20 +408,21 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 			return base(issueID, string(issueID), "completed"), true
 		}
 	}
-	// Keep the per-issue lookup consistent with the aggregate: an ID surfaced in
-	// reconcile_stopped_with_progress must be drillable here instead of returning
-	// issue_not_found (#557). Checked after completed so a later clean exit
-	// for the same id takes precedence. A failed run is surfaced by the
-	// RuntimeEventFailed scan above (failures now retry per SPEC §8.4 rather
-	// than being parked in a suppression set).
-	for _, issueID := range view.ReconcileStoppedWithProgress {
-		if matchesIssueLookup(issueID, "", normalizedWant) {
-			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
-		}
-	}
 	for _, issueID := range view.AgentHandoffReconcileStopped {
 		if matchesIssueLookup(issueID, "", normalizedWant) {
 			return base(issueID, string(issueID), "agent_handoff_reconcile_stopped"), true
+		}
+	}
+	// Keep the per-issue lookup consistent with the aggregate: an ID surfaced in
+	// reconcile_stopped_with_progress must be drillable here instead of returning
+	// issue_not_found (#557). Checked after completed and agent handoff so a later
+	// clean exit or a more-specific delivery signal for the same id takes
+	// precedence. A failed run is surfaced by the RuntimeEventFailed scan above
+	// (failures now retry per SPEC §8.4 rather than being parked in a suppression
+	// set).
+	for _, issueID := range view.ReconcileStoppedWithProgress {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
 		}
 	}
 	return apiIssueResponse{}, false
