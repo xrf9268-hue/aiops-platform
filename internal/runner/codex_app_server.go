@@ -320,11 +320,8 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	if err != nil {
 		return err
 	}
-	maxTurns := in.Workflow.Config.Agent.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 20
-	}
-	for turn := 1; turn <= maxTurns; turn++ {
+	turnLimit, cleanBudgetStop := effectiveTurnLimit(in)
+	for turn := 1; turn <= turnLimit; turn++ {
 		keepGoing, err := c.runSingleTurn(ctx, in, threadID, prompt, turn)
 		if err != nil {
 			return err
@@ -333,7 +330,21 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			return nil
 		}
 	}
-	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
+	if cleanBudgetStop {
+		return nil
+	}
+	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", turnLimit)
+}
+
+func effectiveTurnLimit(in RunInput) (limit int, cleanBudgetStop bool) {
+	maxTurns := in.Workflow.Config.Agent.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 20
+	}
+	if in.CleanTurnBudget > 0 && in.CleanTurnBudget <= maxTurns {
+		return in.CleanTurnBudget, true
+	}
+	return maxTurns, false
 }
 
 // initSession records the run's sinks and caches the per-run codex config off

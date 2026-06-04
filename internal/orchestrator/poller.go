@@ -540,12 +540,13 @@ type WorkerTaskDispatcher struct {
 }
 
 // Spawn implements Dispatcher.
-func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
+func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int, opts DispatchOptions) <-chan WorkerResult {
 	var copiedAttempt *int
 	if attempt != nil {
 		attemptValue := *attempt
 		copiedAttempt = &attemptValue
 	}
+	cfg := configWithDispatchOptions(d.Config, opts)
 	out := make(chan WorkerResult, 1)
 	go func() {
 		defer close(out)
@@ -557,9 +558,9 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 			return
 		}
 		if d.WorkspacePrepared != nil {
-			d.WorkspacePrepared(ctx, issue, tk, workspacePathForTask(d.Config, tk))
+			d.WorkspacePrepared(ctx, issue, tk, workspacePathForTask(cfg, tk))
 		}
-		if rterr := worker.RunTask(ctx, d.Emitter, tk, d.Config); rterr != nil {
+		if rterr := worker.RunTask(ctx, d.Emitter, tk, cfg); rterr != nil {
 			out <- WorkerResult{
 				Err:           rterr.Err,
 				InputRequired: runner.IsInputRequired(rterr.Err),
@@ -570,6 +571,11 @@ func (d WorkerTaskDispatcher) Spawn(ctx context.Context, issue tracker.Issue, at
 		out <- WorkerResult{Elapsed: time.Since(start)}
 	}()
 	return out
+}
+
+func configWithDispatchOptions(cfg worker.Config, opts DispatchOptions) worker.Config {
+	cfg.CleanTurnBudget = opts.CleanTurnBudget
+	return cfg
 }
 
 // workspacePathForTask resolves where the worker will materialize tk's

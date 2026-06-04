@@ -112,9 +112,9 @@ type RunningEntry struct {
 	Identifier   string
 	StartedAt    time.Time
 	RetryAttempt *int // nil on first run (SPEC §4.1.5)
-	// ContinuationAttempt is the number of clean continuation turns already
-	// consumed for this issue. It is separate from RetryAttempt because
-	// continuation dispatches must not render as failure retries in prompts.
+	// ContinuationAttempt is the continuation dispatch number for this issue.
+	// It is separate from RetryAttempt because continuation dispatches must not
+	// render as failure retries in prompts.
 	ContinuationAttempt int
 	// ContinuationTurnCount is the cumulative clean-turn budget consumed
 	// across continuation re-dispatches for this issue (D34 / #621).
@@ -581,6 +581,37 @@ func (s *OrchestratorState) BlockRunWithReason(id IssueID, run *RunningEntry, bl
 	return true
 }
 
+func (s *OrchestratorState) BlockRetryWithReason(id IssueID, retry *RetryEntry, issue tracker.Issue, blockedAt time.Time, method, runErr string) bool {
+	if current, ok := s.RetryAttempts[id]; !ok || current != retry {
+		return false
+	}
+	if blockedAt.IsZero() {
+		blockedAt = time.Now().UTC()
+	}
+	if retry.Timer != nil {
+		retry.Timer.Stop()
+	}
+	if issue.ID == "" {
+		issue = retry.Issue
+	}
+	identifier := issue.Identifier
+	if identifier == "" {
+		identifier = retry.Identifier
+	}
+	delete(s.RetryAttempts, id)
+	s.Claimed[id] = struct{}{}
+	s.ClaimedIssues[id] = issue
+	s.Blocked[id] = &BlockedEntry{
+		Issue:      issue,
+		Identifier: identifier,
+		BlockedAt:  blockedAt,
+		Workspace:  retry.Workspace,
+		Method:     method,
+		Error:      runErr,
+	}
+	return true
+}
+
 func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
 	if current, ok := s.Running[id]; !ok || current != run {
 		return false
@@ -713,7 +744,7 @@ type TokensView struct {
 	TotalTokens  int64
 }
 
-// BlockedView is the public projection of an input-required blocked run.
+// BlockedView is the public projection of a blocked claim.
 type BlockedView struct {
 	IssueID           IssueID
 	Identifier        string

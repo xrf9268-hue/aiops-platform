@@ -20,12 +20,13 @@ import (
 // result channel. Concurrent calls are safe: spawnCount and the
 // results slice are guarded by a mutex.
 type fakeDispatcher struct {
-	mu         sync.Mutex
-	spawnCount int
-	results    []chan WorkerResult
-	contexts   []context.Context
-	issues     []tracker.Issue
-	attempts   []*int
+	mu           sync.Mutex
+	spawnCount   int
+	results      []chan WorkerResult
+	contexts     []context.Context
+	issues       []tracker.Issue
+	attempts     []*int
+	cleanBudgets []int
 
 	// onSpawn, if set, runs synchronously inside Spawn so tests can
 	// inject scheduling pressure or block until they want the worker
@@ -54,7 +55,7 @@ func (d *earlyRuntimeEventDispatcher) AttachOrchestrator(o *Orchestrator) {
 	d.orchestrator = o
 }
 
-func (d *earlyRuntimeEventDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *earlyRuntimeEventDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	_ = d.orchestrator.RecordRuntimeEvent(ctx, issue.ID, task.RuntimeEvent{
 		Event:   task.EventTurnCompleted,
 		Payload: map[string]any{"usage": map[string]any{"total_tokens": 5}},
@@ -112,7 +113,7 @@ func (s *recordingScheduler) lastRequest() (RetryRequest, bool) {
 	return s.requests[len(s.requests)-1], true
 }
 
-func (f *fakeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
+func (f *fakeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int, opts DispatchOptions) <-chan WorkerResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.onSpawn != nil {
@@ -123,6 +124,7 @@ func (f *fakeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt
 	f.contexts = append(f.contexts, ctx)
 	f.issues = append(f.issues, issue)
 	f.attempts = append(f.attempts, attempt)
+	f.cleanBudgets = append(f.cleanBudgets, opts.CleanTurnBudget)
 	f.spawnCount++
 	return ch
 }
@@ -147,6 +149,12 @@ func (f *fakeDispatcher) attemptValueAt(i int) *int {
 	}
 	attempt := *f.attempts[i]
 	return &attempt
+}
+
+func (f *fakeDispatcher) cleanTurnBudgetAt(i int) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cleanBudgets[i]
 }
 
 func (f *fakeDispatcher) context() context.Context {
@@ -1234,7 +1242,7 @@ func TestFinalize_WorkerSetupFailureSchedulesBackoffRetry(t *testing.T) {
 }
 
 // TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit covers D34 / #621:
-// upstream leaves clean continuation spawns unbounded, but aiops-platform caps
+// upstream leaves clean continuation loops unbounded, but aiops-platform caps
 // cumulative clean turns across re-dispatches so impossible active issues stop
 // burning concurrency and quota.
 func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
@@ -1257,6 +1265,9 @@ func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	if got := disp.cleanTurnBudgetAt(0); got != 3 {
+		t.Fatalf("fresh dispatch clean turn budget = %d; want full continuation budget 3", got)
+	}
 
 	for turn := 0; turn < 2; turn++ {
 		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
@@ -1273,6 +1284,9 @@ func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
 		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
 	}
 	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+	if got := disp.cleanTurnBudgetAt(1); got != 1 {
+		t.Fatalf("continuation dispatch clean turn budget = %d; want remaining continuation budget 1", got)
+	}
 
 	// This run records no turn_completed event; budget accounting must still
 	// count a clean worker exit as one turn so zero-event loops cannot bypass D34.
@@ -1307,6 +1321,174 @@ func TestFinalize_ContinuationBudgetBlocksAtConfiguredLimit(t *testing.T) {
 			if !strings.Contains(ev.Message, "max_continuation_turns=3") {
 				t.Fatalf("budget event message = %q, want budget detail", ev.Message)
 			}
+		}
+	}
+	if !sawBudgetEvent {
+		t.Fatalf("RecentEvents = %+v; want continuation budget block event", view.RecentEvents)
+	}
+}
+
+func driveNearBudgetContinuation(t *testing.T, o *Orchestrator, disp *fakeDispatcher, iss tracker.Issue) {
+	t.Helper()
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	for turn := 0; turn < 2; turn++ {
+		if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+			t.Fatalf("RecordRuntimeEvent turn %d: %v", turn, err)
+		}
+	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Kind == RetryKindContinuation &&
+			!v.Retrying[0].DueAt.After(time.Now())
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("tracker-rechecked continuation dispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func TestFinalize_FailureAfterNearBudgetCleanContinuationUsesFailureRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.MaxContinuationTurns = 3
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-CONT-FAIL-BUDGET", Identifier: "ENG-CONT-FAIL-BUDGET", State: "In Progress", Title: "fail near budget"}
+	driveNearBudgetContinuation(t, o, disp, iss)
+
+	disp.finishAt(1, WorkerResult{Err: errors.New("transient"), Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Kind == RetryKindFailure
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 0 {
+		t.Fatalf("Blocked rows = %+v; want none because D34 only caps clean continuation exits", view.Blocked)
+	}
+	if len(view.Retrying) != 1 {
+		t.Fatalf("Retrying rows = %d; want one failure retry", len(view.Retrying))
+	}
+	if got := view.Retrying[0].Attempt; got != 1 {
+		t.Fatalf("failure retry attempt after near-budget clean continuation = %d, want 1", got)
+	}
+	if got := view.Retrying[0].Error; got != "transient" {
+		t.Fatalf("failure retry error = %q; want %q", got, "transient")
+	}
+}
+
+func TestFinalize_QuotaBackoffAfterNearBudgetCleanContinuationUsesQuotaRetry(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.MaxContinuationTurns = 3
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Hour}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-CONT-QUOTA-BUDGET", Identifier: "ENG-CONT-QUOTA-BUDGET", State: "In Progress", Title: "quota near budget"}
+	driveNearBudgetContinuation(t, o, disp, iss)
+
+	quotaErr := &runner.QuotaBackoffError{Message: "usage limit exceeded", RetryAfter: time.Hour}
+	disp.finishAt(1, WorkerResult{Err: quotaErr, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && v.Retrying[0].Kind == RetryKindQuotaBackoff
+	}, time.Second)
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 0 {
+		t.Fatalf("Blocked rows = %+v; want none because D34 only caps clean continuation exits", view.Blocked)
+	}
+	if len(view.Retrying) != 1 {
+		t.Fatalf("Retrying rows = %d; want one quota retry", len(view.Retrying))
+	}
+	if got := view.Retrying[0].Attempt; got != 0 {
+		t.Fatalf("quota retry attempt after near-budget clean continuation = %d, want original attempt 0", got)
+	}
+	if got, want := view.Retrying[0].Error, quotaErr.Error(); got != want {
+		t.Fatalf("quota retry error = %q; want %q", got, want)
+	}
+}
+
+func TestDispatchRecheckBlocksQueuedContinuationWhenReloadedBudgetAlreadyExhausted(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.MaxContinuationTurns = 3
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-CONT-RELOAD", Identifier: "ENG-CONT-RELOAD", State: "In Progress", Title: "reloaded budget"}
+	if err := o.scheduleContinuationRetry(context.Background(), iss, iss.Identifier, 2, 3, Workspace{Path: "/tmp/eng-cont-reload"}); err != nil {
+		t.Fatalf("scheduleContinuationRetry: %v", err)
+	}
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Retrying) == 1 && !v.Retrying[0].DueAt.After(time.Now())
+	}, time.Second)
+
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("tracker-rechecked exhausted continuation err = %v, want ErrNotDispatched", err)
+	}
+	waitFor(t, func() bool {
+		v, err := o.Snapshot(context.Background())
+		return err == nil && len(v.Blocked) == 1 && len(v.Running) == 0 && len(v.Retrying) == 0
+	}, time.Second)
+	if got := disp.count(); got != 0 {
+		t.Fatalf("dispatcher count = %d, want 0 after dispatch-time budget block", got)
+	}
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	blocked := view.Blocked[0]
+	if blocked.Method != "continuation_budget" {
+		t.Fatalf("blocked method = %q, want continuation_budget", blocked.Method)
+	}
+	for _, want := range []string{"cumulative_turns=3", "max_continuation_turns=3"} {
+		if !strings.Contains(blocked.Error, want) {
+			t.Fatalf("blocked error = %q, want %q", blocked.Error, want)
+		}
+	}
+	var sawBudgetEvent bool
+	for _, ev := range view.RecentEvents {
+		if ev.IssueID == IssueID(iss.ID) && ev.Kind == RuntimeEventContinuationBudgetBlocked {
+			sawBudgetEvent = true
 		}
 	}
 	if !sawBudgetEvent {

@@ -18,6 +18,10 @@ type Config struct {
 	WorkspaceRoot string
 	MirrorRoot    string
 	Workflow      *workflow.Workflow
+	// CleanTurnBudget optionally tightens the runner's per-session turn cap for
+	// this dispatch and treats cap exhaustion as a clean budget stop. It is
+	// run-scoped and must not mutate Workflow.Config.
+	CleanTurnBudget int
 	// IssueStateRefresher, when non-nil, is consulted by RunTask to build
 	// the runner-level SPEC §16.5 per-turn refresh hook
 	// (runner.RunInput.RefreshIssueState). Returning nil for a task opts

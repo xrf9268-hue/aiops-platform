@@ -412,7 +412,7 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 			a := attempt
 			retryAttempt = &a
 		}
-		o.spawn(id, issue, retryAttempt, 0, 0)
+		o.spawn(id, issue, retryAttempt, 0, 0, 0)
 	}
 }
 

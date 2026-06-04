@@ -26,7 +26,7 @@ import (
 //     through SPEC §13.3's retrying view so operators can see why an
 //     issue is in backoff.
 //   - Kind — why the retry is queued: ordinary failure backoff, continuation,
-//     quota/rate-limit backoff, or external dependency cooldown.
+//     or quota/rate-limit backoff.
 type RetryEntry struct {
 	Issue      tracker.Issue
 	IssueID    IssueID

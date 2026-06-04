@@ -87,6 +87,11 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrNotDispatched
 		return nil
 	}
+	if d.blockConsumedContinuationIfBudgetExceeded(st, id, consumedContinuation, continuationTurnCount) {
+		d.result <- ErrNotDispatched
+		return nil
+	}
+	cleanTurnBudget := cleanTurnBudgetForContinuationBudget(st.MaxContinuationTurns, continuationTurnCount)
 	if st.RunningCount() >= st.MaxConcurrentAgents {
 		d.result <- ErrCapacityFull
 		return nil
@@ -99,13 +104,7 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrCapacityFull
 		return nil
 	}
-	if consumedContinuation != nil {
-		if consumedContinuation.Timer != nil {
-			consumedContinuation.Timer.Stop()
-		}
-		delete(st.RetryAttempts, id)
-		delete(st.Claimed, id)
-	}
+	consumeContinuationRetry(st, id, consumedContinuation)
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventCandidate,
 		IssueID:    id,
@@ -122,9 +121,41 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	attempt := d.attempt
 	result := d.result
 	return func() {
-		o.spawn(id, issue, attempt, continuationAttempt, continuationTurnCount)
+		o.spawn(id, issue, attempt, continuationAttempt, continuationTurnCount, cleanTurnBudget)
 		result <- nil
 	}
+}
+
+func (d *dispatchOp) blockConsumedContinuationIfBudgetExceeded(st *OrchestratorState, id IssueID, retry *RetryEntry, continuationTurnCount int) bool {
+	if retry == nil || !continuationBudgetExceeded(st.MaxContinuationTurns, continuationTurnCount) {
+		return false
+	}
+	runErr := continuationBudgetError(continuationTurnCount, st.MaxContinuationTurns)
+	if st.BlockRetryWithReason(id, retry, d.issue, time.Now().UTC(), continuationBudgetBlockMethod, runErr) {
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventContinuationBudgetBlocked, IssueID: id, Identifier: continuationBudgetIdentifier(d.issue, retry), Message: runErr})
+	}
+	return true
+}
+
+func continuationBudgetIdentifier(issue tracker.Issue, retry *RetryEntry) string {
+	if issue.Identifier != "" {
+		return issue.Identifier
+	}
+	if retry == nil {
+		return ""
+	}
+	return retry.Identifier
+}
+
+func consumeContinuationRetry(st *OrchestratorState, id IssueID, retry *RetryEntry) {
+	if retry == nil {
+		return
+	}
+	if retry.Timer != nil {
+		retry.Timer.Stop()
+	}
+	delete(st.RetryAttempts, id)
+	delete(st.Claimed, id)
 }
 
 // resolveDispatchClaim decides whether a dispatchOp may proceed past the claim
@@ -153,6 +184,14 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 	return entry, entry.Attempt, entry.ContinuationTurnCount, false
 }
 
+func cleanTurnBudgetForContinuationBudget(maxContinuationTurns, continuationTurnCount int) int {
+	remaining := maxContinuationTurns - continuationTurnCount
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
 // spawn asks the dispatcher for a worker, records the Running entry
 // through the actor, and starts the watcher goroutine that submits
 // finalizeRunOp on worker exit. The caller must already hold the
@@ -161,7 +200,7 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 //
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
-func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount int) {
+func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount, cleanTurnBudget int) {
 	runCtx, cancel := context.WithCancelCause(o.runCtx)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
@@ -193,7 +232,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 		close(workerDone)
 		return
 	}
-	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt)
+	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt, DispatchOptions{CleanTurnBudget: cleanTurnBudget})
 	go func() {
 		defer recoverPanic("orchestrator.spawn_result_fanout")
 		var res WorkerResult

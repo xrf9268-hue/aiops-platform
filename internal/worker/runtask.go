@@ -316,7 +316,7 @@ func (rs *runState) runAgent() *RunTaskError {
 	if rs.cfg.IssueStateRefresher != nil {
 		refreshIssueState = rs.cfg.IssueStateRefresher(rs.t, rs.wcfg)
 	}
-	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
+	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, CleanTurnBudget: rs.cfg.CleanTurnBudget, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
 	rs.res = res
 	rs.sessionID = sessionIDFromRuntimeEvents(res.RuntimeEvents)
 	if runErr != nil {

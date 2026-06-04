@@ -7,10 +7,10 @@ import (
 
 // TestResolveDispatchClaim_Table characterizes every branch of the dispatch
 // claim gate extracted from (*dispatchOp).apply: fresh vs tracker-rechecked,
-// present vs absent retry entry, consumable (due continuation / external
-// blocker) vs non-consumable (wrong kind / not due) entry, and the
-// already-claimed deny paths. The tracker-rechecked + absent + claimed deny had
-// no dedicated coverage before this extraction.
+// present vs absent retry entry, consumable due continuation vs non-consumable
+// (wrong kind / not due) entry, and the already-claimed deny paths. The
+// tracker-rechecked + absent + claimed deny had no dedicated coverage before
+// this extraction.
 func TestResolveDispatchClaim_Table(t *testing.T) {
 	const id = IssueID("ENG-DISP")
 	due := time.Now().Add(-time.Hour)
@@ -67,6 +67,27 @@ func TestResolveDispatchClaim_Table(t *testing.T) {
 			}
 			if contTurnCount != tc.wantContTurnCount {
 				t.Fatalf("resolveDispatchClaim continuationTurnCount = %d; want %d", contTurnCount, tc.wantContTurnCount)
+			}
+		})
+	}
+}
+
+func TestCleanTurnBudgetForContinuationBudget(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxTurns      int
+		consumedTurns int
+		want          int
+	}{
+		{name: "fresh dispatch gets full issue budget", maxTurns: 7, consumedTurns: 0, want: 7},
+		{name: "continuation dispatch gets remaining budget", maxTurns: 7, consumedTurns: 5, want: 2},
+		{name: "exhausted budget has no remaining turn", maxTurns: 7, consumedTurns: 7, want: 0},
+		{name: "overspent budget has no remaining turn", maxTurns: 7, consumedTurns: 9, want: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cleanTurnBudgetForContinuationBudget(tt.maxTurns, tt.consumedTurns); got != tt.want {
+				t.Fatalf("cleanTurnBudgetForContinuationBudget(%d, %d) = %d; want %d", tt.maxTurns, tt.consumedTurns, got, tt.want)
 			}
 		})
 	}

@@ -86,7 +86,7 @@ agent:
 
 ### `codex-app-server`
 
-The SPEC §10 runner (`internal/runner/codex_app_server.go`). It launches `codex app-server` once and drives a long-running JSON-RPC 2.0 session over stdio, running multiple agent turns inside one worker session bounded by `agent.max_turns` (SPEC §5.3.5). PROMPT.md seeds the first turn; combined stdio is captured to `.aiops/CODEX_APP_SERVER_OUTPUT.txt`.
+The SPEC §10 runner (`internal/runner/codex_app_server.go`). It launches `codex app-server` once and drives a long-running JSON-RPC 2.0 session over stdio, running multiple agent turns inside one worker session bounded by `agent.max_turns` (SPEC §5.3.5) and, for fresh/continuation dispatches, the remaining D34 clean-turn budget. PROMPT.md seeds the first turn; combined stdio is captured to `.aiops/CODEX_APP_SERVER_OUTPUT.txt`.
 
 Use when:
 
@@ -146,9 +146,10 @@ prefer Claude / want a second opinion -> claude
 
 `codex-app-server` is the SPEC §10 default real runner and handles the full
 range of code changes — it drives a long-running Codex session of up to
-`agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1), so
-it is not limited to small edits. Pick `claude` when you want a different agent,
-not because the change is larger.
+`agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1),
+also bounded by the remaining D34 clean-turn budget for fresh/continuation
+dispatches. Pick `claude` when you want a different agent, not because the
+change is larger.
 
 ## Handling failed tasks
 

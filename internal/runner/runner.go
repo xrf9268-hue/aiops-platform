@@ -21,6 +21,10 @@ type RunInput struct {
 	// checkout root.
 	WorkspaceRoot string
 	Prompt        string
+	// CleanTurnBudget optionally caps completed turns for this run as a clean
+	// budget stop. It never expands workflow.Config.Agent.MaxTurns; callers use
+	// it to spend an issue-level budget without mutating the workflow snapshot.
+	CleanTurnBudget int
 
 	RuntimeEventSink    func(task.RuntimeEvent)
 	PhaseTransitionSink func(from, to task.RunAttemptPhase)
@@ -77,8 +81,10 @@ func IsInputRequired(err error) bool {
 
 // NameCodexAppServer is the agent.default value selecting the SPEC §10.1
 // codex app-server runner. It runs its own per-session turn loop bounded by
-// agent.max_turns (SPEC §5.3.5). The orchestrator separately caps cumulative
-// clean still-active continuation turns via D34 / agent.max_continuation_turns.
+// agent.max_turns (SPEC §5.3.5), optionally tightened per run by
+// RunInput.CleanTurnBudget. The orchestrator uses that clean budget to enforce
+// D34 / agent.max_continuation_turns before a session can overspend the issue
+// budget.
 const NameCodexAppServer = "codex-app-server"
 
 func New(name string) (Runner, error) {

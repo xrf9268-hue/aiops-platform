@@ -1115,6 +1115,112 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerStopsCleanlyAtCleanTurnBudget(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 8
+	in.CleanTurnBudget = 2
+
+	res, err := runCodexAppServerForTest(t, in)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Summary != "turn 2 done" {
+		t.Fatalf("Summary = %q; want last budgeted clean turn", res.Summary)
+	}
+	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
+	if err != nil {
+		t.Fatalf("read CODEX_STDIN_LOG: %v", err)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 2 {
+		t.Fatalf("turn/start requests sent = %d, want 2 from CleanTurnBudget; stdin=\n%s", got, stdinLog)
+	}
+}
+
+func TestCodexAppServerRunnerErrorsAtMaxTurnsWithoutCleanTurnBudget(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 2
+
+	_, err := runCodexAppServerForTest(t, in)
+	if err == nil || !strings.Contains(err.Error(), "codex app-server exceeded agent.max_turns=2") {
+		t.Fatalf("Run error = %v; want native agent.max_turns=2 exhaustion", err)
+	}
+}
+
+func TestCodexAppServerRunnerDoesNotExpandMaxTurnsWithCleanTurnBudget(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+turns=0
+log=open(os.environ['CODEX_STDIN_LOG'], 'w')
+for line in sys.stdin:
+    log.write(line); log.flush()
+    msg=json.loads(line)
+    if msg.get('method') == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif msg.get('method') == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}}}), flush=True)
+    elif msg.get('method') == 'turn/start':
+        turns += 1
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-%d' % turns}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'lastAssistantMessage': 'turn %d done' % turns, 'continue': True}}), flush=True)
+    elif msg.get('method') == 'initialized':
+        pass
+`)
+	wd := codexWorkdir(t, "x")
+	in := appServerInput(wd)
+	in.Workflow.Config.Agent.MaxTurns = 2
+	in.CleanTurnBudget = 5
+
+	_, err := runCodexAppServerForTest(t, in)
+	if err == nil || !strings.Contains(err.Error(), "codex app-server exceeded agent.max_turns=2") {
+		t.Fatalf("Run error = %v; want native agent.max_turns=2 exhaustion despite larger clean budget", err)
+	}
+	stdinLog, err := os.ReadFile(os.Getenv("CODEX_STDIN_LOG"))
+	if err != nil {
+		t.Fatalf("read CODEX_STDIN_LOG: %v", err)
+	}
+	if got := strings.Count(string(stdinLog), `"method":"turn/start"`); got != 2 {
+		t.Fatalf("turn/start requests sent = %d, want 2 from agent.max_turns; stdin=\n%s", got, stdinLog)
+	}
+}
+
 // TestCodexAppServerRunnerExitsWhenIssueLeavesActiveStateBetweenTurns pins
 // SPEC §16.5: after each turn the runner consults the tracker and exits
 // cleanly when the linked issue is no longer active, even when the agent

@@ -45,13 +45,21 @@ type WorkerResult struct {
 	Elapsed       time.Duration
 }
 
+// DispatchOptions carries per-run controls derived by the orchestrator for a
+// single worker spawn. Zero values keep the workflow-level defaults.
+type DispatchOptions struct {
+	// CleanTurnBudget is the remaining D34 clean-turn budget for this dispatch.
+	// Runner cap exhaustion at this budget is a clean stop, not a failure retry.
+	CleanTurnBudget int
+}
+
 // Dispatcher is the seam through which the actor spawns a per-issue
 // worker goroutine. The returned channel must yield exactly one
 // WorkerResult and then close (or close without yielding to signal
 // cancellation). The actor watches it to drive normal/abnormal exit
 // transitions.
 type Dispatcher interface {
-	Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult
+	Spawn(ctx context.Context, issue tracker.Issue, attempt *int, opts DispatchOptions) <-chan WorkerResult
 }
 
 // Scheduler computes the delay before the next retry request.

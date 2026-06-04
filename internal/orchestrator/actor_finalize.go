@@ -85,8 +85,8 @@ const continuationBudgetBlockMethod = "continuation_budget"
 
 // applyCleanExit handles a normal (Err==nil) worker exit: a reconciled-cleanup
 // continuation, a D34 continuation-budget block, or a normal continuation
-// retry. Upstream/SPEC §7.1 leaves continuation spawns unbounded; D34 caps clean
-// still-active turns locally because #621/PR #625 proved the upstream behavior
+// retry. Upstream/SPEC §7.1 leaves the clean continuation loop unbounded; D34
+// caps clean still-active turns locally because #621/PR #625 proved the upstream behavior
 // can burn quota forever on impossible issues. It always handles the exit, so it
 // returns the followup directly.
 func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Duration) func() {
@@ -112,7 +112,7 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 		close(f.done)
 		return nil
 	}
-	// SPEC §7.1 leaves continuation worker spawns unbounded upstream: an active
+	// SPEC §7.1 leaves the clean continuation loop unbounded upstream: an active
 	// issue keeps getting fresh sessions until tracker state changes (reconcile /
 	// §16.5 self-stop). D34 keeps that loop bounded locally by carrying
 	// nextContinuationTurnCount through the retry entry.
@@ -135,9 +135,9 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	st.Claimed[f.id] = struct{}{}
 	st.ClaimedIssues[f.id] = issue
 	close(f.done)
-	// A clean continuation is a new normal turn. Keep its retry entry
-	// 1-based for the continuation budget, but do not carry it into future
-	// failure backoff; otherwise many successful turns inflate the next
+	// A clean continuation queues a follow-on dispatch. Keep the dispatch
+	// attempt 1-based for prompt/retry identity, but do not carry it into
+	// future failure backoff; otherwise many successful turns inflate the next
 	// transient failure straight to the max backoff.
 	nextAttempt := nextContinuationAttempt
 	o := f.o
