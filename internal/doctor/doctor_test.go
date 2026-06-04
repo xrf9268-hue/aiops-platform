@@ -1107,23 +1107,25 @@ func TestCodexVersionFromOutput(t *testing.T) {
 	}
 }
 
-func TestCodexVersionAtLeast(t *testing.T) {
+func TestCodexVersionMatches(t *testing.T) {
 	v := func(mj, mn, p int) goVersion { return goVersion{major: mj, minor: mn, patch: p, patchSet: true} }
 	cases := []struct {
 		name      string
 		got, want goVersion
-		atLeast   bool
+		match     bool
 	}{
 		{"equal", v(0, 136, 0), v(0, 136, 0), true},
 		{"older minor warns", v(0, 135, 9), v(0, 136, 0), false},
-		{"newer minor ok", v(0, 137, 0), v(0, 136, 0), true},
+		// A newer codex than the vendored schema must also warn: it can add
+		// required fields the 0.136-pinned contract test cannot see (#629 P2).
+		{"newer minor warns", v(0, 137, 0), v(0, 136, 0), false},
 		{"older patch warns", v(0, 136, 0), v(0, 136, 1), false},
-		{"newer patch ok", v(0, 136, 2), v(0, 136, 1), true},
-		{"older major warns", v(0, 99, 0), v(1, 0, 0), false},
+		{"newer patch warns", v(0, 136, 2), v(0, 136, 1), false},
+		{"newer major warns", v(1, 0, 0), v(0, 136, 0), false},
 	}
 	for _, tc := range cases {
-		if got := codexVersionAtLeast(tc.got, tc.want); got != tc.atLeast {
-			t.Errorf("codexVersionAtLeast(%+v, %+v) = %v; want %v (%s)", tc.got, tc.want, got, tc.atLeast, tc.name)
+		if got := codexVersionMatches(tc.got, tc.want); got != tc.match {
+			t.Errorf("codexVersionMatches(%+v, %+v) = %v; want %v (%s)", tc.got, tc.want, got, tc.match, tc.name)
 		}
 	}
 }

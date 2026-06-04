@@ -335,12 +335,12 @@ func (r *reportBuilder) checkCodex(ctx context.Context, cfg workflow.Config) { /
 			installed := strings.TrimSpace(string(out))
 			got, gotOK := codexVersionFromOutput(installed)
 			want, _ := parseGoVersion(runner.CodexProtocolVersion)
-			if gotOK && !codexVersionAtLeast(got, want) {
-				r.warn("Codex version",
-					fmt.Sprintf("%s (below pinned %s)", installed, runner.CodexProtocolVersion),
-					fmt.Sprintf("The vendored app-server protocol schema targets codex %s; upgrade to avoid silent wire drift.", runner.CodexProtocolVersion))
+			if gotOK && codexVersionMatches(got, want) {
+				r.pass("Codex version", fmt.Sprintf("%s (matches pinned %s)", installed, runner.CodexProtocolVersion))
 			} else {
-				r.pass("Codex version", fmt.Sprintf("%s (pinned %s)", installed, runner.CodexProtocolVersion))
+				r.warn("Codex version",
+					fmt.Sprintf("%s (pinned schema is %s)", installed, runner.CodexProtocolVersion),
+					fmt.Sprintf("The vendored app-server schema is generated for codex %s exactly; any other version — older or newer — can add or rename required fields the contract test cannot see. Regenerate via scripts/refresh-codex-schema.sh after a deliberate upgrade, or align the installed codex.", runner.CodexProtocolVersion))
 			}
 		}
 		if out, err := r.run(ctx, "codex", []string{"login", "status"}); err != nil {
@@ -1249,18 +1249,14 @@ func codexVersionFromOutput(output string) (goVersion, bool) {
 	return goVersion{}, false
 }
 
-// codexVersionAtLeast reports whether the installed codex version is at or above
-// the pinned one. The pin is a soft floor: a newer codex is fine (the schema is
-// forward-compatible — schemars objects default additionalProperties:true), so
-// only an older codex warns.
-func codexVersionAtLeast(got, want goVersion) bool {
-	if got.major != want.major {
-		return got.major > want.major
-	}
-	if got.minor != want.minor {
-		return got.minor > want.minor
-	}
-	return got.patch >= want.patch
+// codexVersionMatches reports whether the installed codex version equals the
+// pinned one. The vendored app-server schema is generated for exactly
+// CodexProtocolVersion, so any other version — older OR newer — can drift: a
+// newer release can add required fields or rename enums just as an older one
+// lacks current ones, and the contract test (pinned to the vendored schema)
+// cannot see it. Anything but an exact match warns rather than passes.
+func codexVersionMatches(got, want goVersion) bool {
+	return got.major == want.major && got.minor == want.minor && got.patch == want.patch
 }
 
 func firstLine(out []byte) string {
