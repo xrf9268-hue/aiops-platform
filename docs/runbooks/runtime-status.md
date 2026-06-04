@@ -20,19 +20,35 @@ Recent runtime events use the SPEC-aligned operator vocabulary:
 - `completed` — run exited successfully or reached workflow handoff.
 - `failed` — run exited abnormally; it is rescheduled on the SPEC §8.4 backoff (no deterministic-failure suppression — removed in #584).
 - `input_blocked` — Codex requested operator input or MCP elicitation; the run stopped, remains claimed, and is listed in the top-level `blocked` rows until tracker reconciliation observes the issue outside active states.
+- `continuation_budget_blocked` — the clean-continuation budget for a still-active issue was exhausted; the run stopped, remains claimed, and is listed in the top-level `blocked` rows with `method: "continuation_budget"`.
 
 These are observability events. They do not imply the worker changed tracker
 state, pushed a branch, opened a pull request, or posted a comment. Those writes
 belong to the agent/tool workflow boundary from Symphony SPEC section 1.
 
-Input-blocked rows are in-memory runtime state, not durable queue records. A
-process restart clears them; if the tracker issue is still active after restart,
-the next poll can dispatch it again. Operators should resolve the underlying
-request by moving the tracker issue out of active states or by changing the
-workflow/prompt so the agent no longer needs unavailable input. The read-only
-`/api/v1/state` endpoint also includes top-level `blocked` rows and a
-`counts.blocked` value so input-blocked sessions are visible from the HTTP
-state surface.
+Blocked rows are in-memory blocked claims, not durable queue records. A blocked
+claim has stopped executing and does not consume running-agent concurrency, but
+the orchestrator keeps the issue locally claimed until tracker reconciliation
+observes it outside active states.
+
+For input-required rows, operators should resolve the underlying request by
+moving the tracker issue out of active states or by changing the workflow/prompt
+so the agent no longer needs unavailable input.
+
+For `method: "continuation_budget"`, the agent kept cleanly exiting while the
+tracker issue remained active until `agent.max_continuation_turns` was exhausted.
+The orchestrator passes the remaining clean-turn budget into each fresh or
+continuation dispatch, so a single codex app-server session cannot overspend the
+issue budget; `agent.max_turns` still caps the session and is never expanded.
+Inspect the issue, PR/logs, and workflow prompt, then either move the tracker
+issue out of active states or intentionally reissue the work after changing the
+task/workflow. Raising `agent.max_continuation_turns` later does not
+automatically redrive existing blocked claims; it only affects queued and future
+continuation checks. A process restart clears in-memory blocked claims, so if the
+tracker issue is still active after restart the next poll can dispatch it again.
+
+The read-only `/api/v1/state` endpoint includes top-level `blocked` rows and a
+`counts.blocked` value so blocked claims are visible from the HTTP state surface.
 
 An agent blocked by an external dependency reports it agent-side in its
 PR/tracker comment (SPEC section 1); the worker has no blocker artifact and does

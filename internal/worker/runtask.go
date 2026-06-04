@@ -33,6 +33,13 @@ type RunTaskError struct {
 	Err error
 }
 
+// RunTaskResult carries success-side runner facts needed by the orchestrator.
+type RunTaskResult struct {
+	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
+	// stopped a successful runner session because the issue is no longer active.
+	IssueLeftActiveSet bool
+}
+
 // ResolveWorkflow emits the workflow_resolved event for the service-level
 // WORKFLOW.md that was loaded at process startup. Returning the workflow_source
 // string lets callers stamp it onto the runner_start payload as a quick-look
@@ -179,7 +186,15 @@ func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
 // split across runState phase
 // helpers; RunTask only sequences them and stamps PhaseFailed on the way out
 // of any non-terminal error path.
-func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret *RunTaskError) {
+func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
+	_, rtErr := RunTaskWithResult(ctx, ev, t, cfg)
+	return rtErr
+}
+
+// RunTaskWithResult is RunTask plus success-side metadata needed by the
+// orchestrator. Keep ordinary callers on RunTask so a new metadata field does not
+// force unrelated call sites to change.
+func RunTaskWithResult(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (result RunTaskResult, ret *RunTaskError) {
 	rs := &runState{ctx: ctx, ev: ev, t: t, cfg: cfg}
 	defer func() {
 		if ret != nil && rs.currentPhase != "" && !rs.phaseTerminal {
@@ -188,16 +203,16 @@ func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (ret
 	}()
 
 	if rtErr := rs.prepareWorkspace(); rtErr != nil {
-		return rtErr
+		return result, rtErr
 	}
 	if rtErr := rs.buildPrompt(); rtErr != nil {
-		return rtErr
+		return result, rtErr
 	}
 	if rtErr := rs.runAgent(); rtErr != nil {
-		return rtErr
+		return result, rtErr
 	}
 	rs.finalize()
-	return nil
+	return RunTaskResult{IssueLeftActiveSet: rs.res.IssueLeftActiveSet}, nil
 }
 
 // prepareWorkspace resolves the service workflow, prepares the deterministic
@@ -316,7 +331,7 @@ func (rs *runState) runAgent() *RunTaskError {
 	if rs.cfg.IssueStateRefresher != nil {
 		refreshIssueState = rs.cfg.IssueStateRefresher(rs.t, rs.wcfg)
 	}
-	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
+	res, runErr := RunRunnerWithTimeout(rs.ctx, rs.ev, r, runner.RunInput{Task: rs.t, Workflow: *rs.wf, Workdir: rs.workdir, WorkspaceRoot: rs.workspaceRoot, Prompt: rs.prompt, CleanTurnBudget: rs.cfg.CleanTurnBudget, RefreshIssueState: refreshIssueState, PhaseTransitionSink: rs.emitPhase}, rs.wcfg.Agent.Timeout, rs.workflowSource)
 	rs.res = res
 	rs.sessionID = sessionIDFromRuntimeEvents(res.RuntimeEvents)
 	if runErr != nil {

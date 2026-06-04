@@ -249,6 +249,7 @@ type AgentConfig struct {
 	MaxConcurrentAgents        int            `yaml:"max_concurrent_agents" json:"max_concurrent_agents"`
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state" json:"max_concurrent_agents_by_state"`
 	MaxTurns                   int            `yaml:"max_turns" json:"max_turns"`
+	MaxContinuationTurns       int            `yaml:"max_continuation_turns" json:"max_continuation_turns"`
 	MaxRetryBackoffMs          int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.
@@ -379,11 +380,12 @@ func DefaultConfig() Config {
 		hooksTimeoutDefaulted: true,
 		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
 		Agent: AgentConfig{
-			Default:             "mock",
-			MaxConcurrentAgents: 10,
-			MaxTurns:            20,
-			MaxRetryBackoffMs:   300000,
-			Timeout:             30 * time.Minute,
+			Default:              "mock",
+			MaxConcurrentAgents:  10,
+			MaxTurns:             20,
+			MaxContinuationTurns: 20,
+			MaxRetryBackoffMs:    300000,
+			Timeout:              30 * time.Minute,
 		},
 		Codex: CommandConfig{
 			Command: "codex app-server",

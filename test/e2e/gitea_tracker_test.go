@@ -135,7 +135,7 @@ type fakeE2EDispatcher struct {
 	issues []tracker.Issue
 }
 
-func (f *fakeE2EDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan orchestrator.WorkerResult {
+func (f *fakeE2EDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int, _ orchestrator.DispatchOptions) <-chan orchestrator.WorkerResult {
 	f.mu.Lock()
 	f.issues = append(f.issues, issue)
 	f.mu.Unlock()

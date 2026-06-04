@@ -361,11 +361,11 @@ function RetryTable({ rows }) {
 
 // ── blocked table ────────────────────────────────────────────────────────────
 function BlockedTable({ rows }) {
-  if (!rows.length) return <Empty title="Nothing blocked" sub="No sessions are waiting on a human or external dependency." />;
+  if (!rows.length) return <Empty title="Nothing blocked" sub="No claims need operator attention." />;
   return (
     <div className="table-wrap narrow">
       <table className="sessions">
-        <caption className="sr-only">Blocked sessions</caption>
+        <caption className="sr-only">Blocked claims</caption>
         <thead><tr>
           <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Waiting</th><th scope="col">Detail</th>
         </tr></thead>
@@ -507,7 +507,7 @@ export default function App() {
       <div className="sr-only" role="status" aria-live="polite">
         {online ? 'Connected, live.' : status === 'offline' ? 'Disconnected.' : 'Connecting.'}{' '}
         {total > 0
-          ? `${total} ${total === 1 ? 'session' : 'sessions'} in flight: ${c.running} running, ${c.retrying} retrying, ${c.blocked} blocked.`
+          ? `${total} ${total === 1 ? 'claim' : 'claims'} in flight: ${c.running} running, ${c.retrying} retrying, ${c.blocked} blocked.`
           : 'Worker idle, nothing in flight.'}
       </div>
 
@@ -521,7 +521,7 @@ export default function App() {
           <h1 className="page-title">Worker <em>status</em></h1>
           <p className="page-sub">
             {total > 0
-              ? <>Read-only view of <b>{total}</b> {total === 1 ? 'session' : 'sessions'} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
+              ? <>Read-only view of <b>{total}</b> {total === 1 ? 'claim' : 'claims'} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
               : <>The worker is healthy and <b>idle</b> — polling with nothing in flight.</>}
           </p>
         </div>
@@ -535,7 +535,7 @@ export default function App() {
       <div className="kpi-row">
         <Kpi label="Running" value={c.running || 0} sub={`${maxConc} max concurrent`} status={c.running ? 'running' : null} />
         <Kpi label="Retrying" value={c.retrying || 0} sub="in backoff queue" status={c.retrying ? 'retry' : null} />
-        <Kpi label="Blocked" value={c.blocked || 0} sub="awaiting external gate" status={c.blocked ? 'blocked' : null} />
+        <Kpi label="Blocked" value={c.blocked || 0} sub="needs operator attention" status={c.blocked ? 'blocked' : null} />
         <Kpi
           label="Completed"
           value={c.completed || 0}

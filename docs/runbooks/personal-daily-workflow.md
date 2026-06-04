@@ -86,7 +86,7 @@ agent:
 
 ### `codex-app-server`
 
-The SPEC §10 runner (`internal/runner/codex_app_server.go`). It launches `codex app-server` once and drives a long-running JSON-RPC 2.0 session over stdio, running multiple agent turns inside one worker session bounded by `agent.max_turns` (SPEC §5.3.5). PROMPT.md seeds the first turn; combined stdio is captured to `.aiops/CODEX_APP_SERVER_OUTPUT.txt`.
+The SPEC §10 runner (`internal/runner/codex_app_server.go`). It launches `codex app-server` once and drives a long-running JSON-RPC 2.0 session over stdio, running multiple agent turns inside one worker session bounded by `agent.max_turns` (SPEC §5.3.5) and, for fresh/continuation dispatches, the remaining D34 clean-turn budget. PROMPT.md seeds the first turn; combined stdio is captured to `.aiops/CODEX_APP_SERVER_OUTPUT.txt`.
 
 Use when:
 
@@ -117,7 +117,7 @@ Use when:
 
 - you prefer Claude as the coding agent, or want a second opinion when Codex produced a thin or wrong patch.
 - you want Claude's tool use for a run.
-- Note this runner is **one-shot**: it runs a single `sh -c` invocation per worker session, so multi-turn iteration relies on the orchestrator's continuation retries (the D30 cap), not an in-session turn loop like `codex-app-server`. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
+- Note this runner is **one-shot**: it runs a single `sh -c` invocation per worker session, so multi-turn iteration relies on the orchestrator's continuation retries and D34 `agent.max_continuation_turns` budget, not an in-session turn loop like `codex-app-server`. To switch runner, set `agent.default` in `WORKFLOW.md`. Note: `agent.fallback` was removed in issue #40 — workflows that still carry the key now fail validation at load time.
 
 ```yaml
 agent:
@@ -146,9 +146,10 @@ prefer Claude / want a second opinion -> claude
 
 `codex-app-server` is the SPEC §10 default real runner and handles the full
 range of code changes — it drives a long-running Codex session of up to
-`agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1), so
-it is not limited to small edits. Pick `claude` when you want a different agent,
-not because the change is larger.
+`agent.max_turns` (default 20) back-to-back turns on one thread (SPEC §7.1),
+also bounded by the remaining D34 clean-turn budget for fresh/continuation
+dispatches. Pick `claude` when you want a different agent, not because the
+change is larger.
 
 ## Handling failed tasks
 

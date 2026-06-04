@@ -102,6 +102,9 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 	if err := p.orchestrator.UpdateMaxConcurrentAgentsByState(ctx, snap.MaxConcurrentAgentsByState); err != nil {
 		return err
 	}
+	if err := p.orchestrator.UpdateMaxContinuationTurns(ctx, snap.MaxContinuationTurns); err != nil {
+		return err
+	}
 	if err := p.orchestrator.UpdatePollIntervalMs(ctx, snap.PollInterval.Milliseconds()); err != nil {
 		return err
 	}
@@ -245,7 +248,7 @@ func (d *RuntimeDispatcher) AttachOrchestrator(orchestrator *Orchestrator) {
 	}
 }
 
-func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
+func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int, opts DispatchOptions) <-chan WorkerResult {
 	snap := d.runtime.Current()
 	dispatcher := WorkerTaskDispatcher{
 		BuildTask: func(issue tracker.Issue) (task.Task, error) {
@@ -269,7 +272,7 @@ func (d *RuntimeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, atte
 			}
 		},
 	}
-	return dispatcher.Spawn(ctx, issue, attempt)
+	return dispatcher.Spawn(ctx, issue, attempt, opts)
 }
 
 // CleanupReconciledWorkspace implements WorkspaceCleaner: it removes the

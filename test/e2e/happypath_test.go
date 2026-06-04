@@ -144,7 +144,7 @@ type giteaReconcileBlockingDispatcher struct {
 	canceled chan error
 }
 
-func (d *giteaReconcileBlockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan orchestrator.WorkerResult {
+func (d *giteaReconcileBlockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int, _ orchestrator.DispatchOptions) <-chan orchestrator.WorkerResult {
 	select {
 	case d.started <- issue:
 	default:

@@ -21,6 +21,23 @@ func (r errRunner) Run(_ context.Context, _ runner.RunInput) (runner.Result, err
 	return runner.Result{}, r.err
 }
 
+type captureInputRunner struct {
+	input runner.RunInput
+}
+
+func (r *captureInputRunner) Run(_ context.Context, in runner.RunInput) (runner.Result, error) {
+	r.input = in
+	return runner.Result{Summary: "ok"}, nil
+}
+
+type resultRunner struct {
+	result runner.Result
+}
+
+func (r resultRunner) Run(context.Context, runner.RunInput) (runner.Result, error) {
+	return r.result, nil
+}
+
 func sandboxStartupRunState(t *testing.T, ev *fakeEmitter, runErr error) *runState {
 	t.Helper()
 	oldNew := newRunner
@@ -31,6 +48,59 @@ func sandboxStartupRunState(t *testing.T, ev *fakeEmitter, runErr error) *runSta
 		ctx: context.Background(), ev: ev, t: task.Task{ID: "tsk", Model: "x"}, cfg: Config{},
 		wf: &workflow.Workflow{}, wcfg: workflow.Config{},
 		workdir: dir, workspaceRoot: filepath.Dir(dir),
+	}
+}
+
+func TestRunAgentPassesCleanTurnBudgetToRunner(t *testing.T) {
+	ev := &fakeEmitter{}
+	capture := &captureInputRunner{}
+	oldNew := newRunner
+	newRunner = func(string) (runner.Runner, error) { return capture, nil }
+	t.Cleanup(func() { newRunner = oldNew })
+	dir := t.TempDir()
+	rs := &runState{
+		ctx: context.Background(), ev: ev, t: task.Task{ID: "tsk", Model: "codex-app-server"}, cfg: Config{CleanTurnBudget: 4},
+		wf: &workflow.Workflow{Config: workflow.Config{
+			Agent: workflow.AgentConfig{MaxTurns: 20},
+		}},
+		wcfg: workflow.Config{
+			Agent: workflow.AgentConfig{MaxTurns: 20},
+		},
+		workdir: dir, workspaceRoot: filepath.Dir(dir),
+	}
+
+	if rtErr := rs.runAgent(); rtErr != nil {
+		t.Fatalf("runAgent: %v", rtErr.Err)
+	}
+	if got := capture.input.CleanTurnBudget; got != 4 {
+		t.Fatalf("RunInput.CleanTurnBudget = %d; want 4", got)
+	}
+}
+
+func TestRunAgentCapturesIssueLeftActiveSetResult(t *testing.T) {
+	ev := &fakeEmitter{}
+	oldNew := newRunner
+	newRunner = func(string) (runner.Runner, error) {
+		return resultRunner{result: runner.Result{Summary: "ok", IssueLeftActiveSet: true}}, nil
+	}
+	t.Cleanup(func() { newRunner = oldNew })
+	dir := t.TempDir()
+	rs := &runState{
+		ctx: context.Background(), ev: ev, t: task.Task{ID: "tsk", Model: "codex-app-server"}, cfg: Config{},
+		wf: &workflow.Workflow{Config: workflow.Config{
+			Agent: workflow.AgentConfig{MaxTurns: 20},
+		}},
+		wcfg: workflow.Config{
+			Agent: workflow.AgentConfig{MaxTurns: 20},
+		},
+		workdir: dir, workspaceRoot: filepath.Dir(dir),
+	}
+
+	if rtErr := rs.runAgent(); rtErr != nil {
+		t.Fatalf("runAgent: %v", rtErr.Err)
+	}
+	if !rs.res.IssueLeftActiveSet {
+		t.Fatal("runAgent result IssueLeftActiveSet = false, want true")
 	}
 }
 

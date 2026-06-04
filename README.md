@@ -256,7 +256,8 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 |---------|---------|--------|
 | `agent.default` | `mock` | implementation (SPEC defers to operator) |
 | `agent.max_concurrent_agents` | `10` | SPEC §6.4 |
-| `agent.max_turns` | `20` per-session turn budget — the codex app-server runner's in-session loop (SPEC §5.3.5); not a continuation-spawn cap, since continuation worker spawns are unbounded (§7.1, #576) | SPEC §6.4 |
+| `agent.max_turns` | `20` per-session turn budget — the codex app-server runner's in-session loop (SPEC §5.3.5) | SPEC §6.4 |
+| `agent.max_continuation_turns` | `agent.max_turns` (default `20`) issue-level clean-turn budget across fresh and continuation dispatches. Each dispatch receives the remaining clean-turn budget, capped again by `agent.max_turns`; reaching the budget parks the issue in local `blocked` state (`continuation_budget`) instead of looping forever. Raising the value later does not automatically redrive existing blocked claims. | implementation (accepted deviation D34 / #621) |
 | `agent.timeout` | `30m` | implementation (#215) |
 | `codex.command` | `codex app-server` | SPEC §6.4 |
 | `codex.env_passthrough` / `claude.env_passthrough` | none beyond runner baseline (`PATH`, `HOME`, `USER`, locale, `TZ`, `TERM`); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384) |

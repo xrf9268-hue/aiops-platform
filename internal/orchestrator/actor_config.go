@@ -104,6 +104,30 @@ func (o *Orchestrator) UpdateMaxConcurrentAgentsByState(ctx context.Context, lim
 	}
 }
 
+// UpdateMaxContinuationTurns applies the D34 clean-continuation budget through
+// the actor so clean-exit finalization observes workflow reloads without a
+// process restart.
+func (o *Orchestrator) UpdateMaxContinuationTurns(ctx context.Context, maxContinuationTurns int) error {
+	if maxContinuationTurns <= 0 {
+		return nil
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		st.MaxContinuationTurns = maxContinuationTurns
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // UpdatePollIntervalMs applies reloaded workflow poll cadence metadata through
 // the actor so /api/v1/state reflects the runtime cadence after workflow reload.
 func (o *Orchestrator) UpdatePollIntervalMs(ctx context.Context, pollIntervalMs int64) error {

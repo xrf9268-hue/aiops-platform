@@ -6,6 +6,7 @@ package orchestrator
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
@@ -80,13 +81,17 @@ func (f *finalizeRunOp) applyInputRequiredBlock(st *OrchestratorState, elapsed t
 	return true
 }
 
+const continuationBudgetBlockMethod = "continuation_budget"
+
 // applyCleanExit handles a normal (Err==nil) worker exit: a reconciled-cleanup
-// continuation or a normal continuation retry. Per SPEC §7.1 continuation spawns
-// are unbounded (the cap was removed in #576), so a still-active issue always
-// schedules another continuation. It always handles the exit, so it returns the
-// followup directly.
+// continuation, a D34 continuation-budget block, or a normal continuation
+// retry. Upstream/SPEC §7.1 leaves the clean continuation loop unbounded; D34
+// caps clean still-active turns locally because #621/PR #625 proved the upstream behavior
+// can burn quota forever on impossible issues. It always handles the exit, so it
+// returns the followup directly.
 func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Duration) func() {
 	nextContinuationAttempt := f.entry.ContinuationAttempt + 1
+	nextContinuationTurnCount := f.entry.ContinuationTurnCount + continuationTurnDelta(f.entry)
 	if f.entry.ReconcileCleanupWorkspace && runHasCompletedTurn(f.entry) {
 		cleanup := f.o.reconciledWorkspaceCleanupOrContinuation(f.id, f.entry, nextContinuationAttempt)
 		if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
@@ -97,12 +102,20 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 		close(f.done)
 		return cleanup
 	}
-	// SPEC §7.1 leaves continuation worker spawns unbounded: an active issue
-	// keeps getting fresh sessions until tracker state changes (reconcile /
-	// §16.5 self-stop). The in-session turn budget (SPEC §5.3.5) is the runner's
-	// job (codex app-server honors agent.max_turns per session); the orchestrator
-	// no longer caps continuation spawns (the legacy cap for non-app-server
-	// runners was removed in issue #576 / DEVIATIONS D30).
+	if !f.result.IssueLeftActiveSet && continuationBudgetExceeded(st.MaxContinuationTurns, nextContinuationTurnCount) {
+		runErr := continuationBudgetError(nextContinuationTurnCount, st.MaxContinuationTurns)
+		if !st.BlockRunWithReason(f.id, f.entry, time.Now().UTC(), continuationBudgetBlockMethod, runErr, elapsed) {
+			close(f.done)
+			return nil
+		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventContinuationBudgetBlocked, IssueID: f.id, Identifier: f.identifier, Message: runErr})
+		close(f.done)
+		return nil
+	}
+	// SPEC §7.1 leaves the clean continuation loop unbounded upstream: an active
+	// issue keeps getting fresh sessions until tracker state changes (reconcile /
+	// §16.5 self-stop). D34 keeps that loop bounded locally by carrying
+	// nextContinuationTurnCount through the retry entry.
 	if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil
@@ -122,16 +135,31 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	st.Claimed[f.id] = struct{}{}
 	st.ClaimedIssues[f.id] = issue
 	close(f.done)
-	// A clean continuation is a new normal turn. Keep its retry entry
-	// 1-based for the continuation budget, but do not carry it into future
-	// failure backoff; otherwise many successful turns inflate the next
+	// A clean continuation queues a follow-on dispatch. Keep the dispatch
+	// attempt 1-based for prompt/retry identity, but do not carry it into
+	// future failure backoff; otherwise many successful turns inflate the next
 	// transient failure straight to the max backoff.
 	nextAttempt := nextContinuationAttempt
 	o := f.o
 	identifier := f.identifier
 	return func() {
-		_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, workspace)
+		_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, nextContinuationTurnCount, workspace)
 	}
+}
+
+func continuationTurnDelta(run *RunningEntry) int {
+	if run != nil && run.Session.TurnCount > 0 {
+		return run.Session.TurnCount
+	}
+	return 1
+}
+
+func continuationBudgetExceeded(maxContinuationTurns, cumulativeTurns int) bool {
+	return maxContinuationTurns > 0 && cumulativeTurns >= maxContinuationTurns
+}
+
+func continuationBudgetError(cumulativeTurns, maxContinuationTurns int) string {
+	return fmt.Sprintf("continuation budget exhausted: cumulative_turns=%d max_continuation_turns=%d", cumulativeTurns, maxContinuationTurns)
 }
 
 // applyReconciledCancelCleanup cleans the workspace of a run that reconciliation

@@ -82,10 +82,11 @@ func (s RetryScheduler) NextDelay(req RetryRequest) time.Duration {
 }
 
 type continuationAfterSkippedCleanup struct {
-	issue      tracker.Issue
-	identifier string
-	attempt    int
-	workspace  Workspace
+	issue                 tracker.Issue
+	identifier            string
+	attempt               int
+	continuationTurnCount int
+	workspace             Workspace
 }
 
 // continuationForRetry returns the continuation to resume when a queued
@@ -102,10 +103,11 @@ func continuationForRetry(retry *RetryEntry) *continuationAfterSkippedCleanup {
 		return nil
 	}
 	return &continuationAfterSkippedCleanup{
-		issue:      retry.Issue,
-		identifier: retry.Identifier,
-		attempt:    retry.Attempt,
-		workspace:  retry.Workspace,
+		issue:                 retry.Issue,
+		identifier:            retry.Identifier,
+		attempt:               retry.Attempt,
+		continuationTurnCount: retry.ContinuationTurnCount,
+		workspace:             retry.Workspace,
 	}
 }
 
@@ -129,29 +131,30 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 // retry-poll-failed) thread the existing entry's workspace through so it
 // survives across attempts.
 func (o *Orchestrator) scheduleFailureRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, workspace Workspace) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace)
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace, 0)
 }
 func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, retryAfter time.Duration, workspace Workspace) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace)
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace, 0)
 }
 
 // scheduleContinuationRetry queues the short SPEC §16.6 wake after a clean
 // turn. workspace carries the finalized run's directory so a continuation
 // whose issue is later seen terminal can be cleaned through the §18.1 seam
 // (#341); pass the finalized RunningEntry.Workspace.
-func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, workspace Workspace) error {
-	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace)
+func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt, continuationTurnCount int, workspace Workspace) error {
+	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace, continuationTurnCount)
 }
-func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace) error {
+func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace, continuationTurnCount int) error {
 	op := &scheduleRetryOp{
-		o:          o,
-		issue:      issue,
-		identifier: identifier,
-		attempt:    attempt,
-		runErr:     runErr,
-		kind:       req.Kind,
-		req:        req,
-		workspace:  workspace,
+		o:                     o,
+		issue:                 issue,
+		identifier:            identifier,
+		attempt:               attempt,
+		runErr:                runErr,
+		kind:                  req.Kind,
+		req:                   req,
+		workspace:             workspace,
+		continuationTurnCount: continuationTurnCount,
 	}
 	return o.submit(ctx, op)
 }
@@ -161,14 +164,15 @@ func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, i
 // any prior timer for the same id) and starts a new timer whose
 // callback submits a retryFireOp.
 type scheduleRetryOp struct {
-	o          *Orchestrator
-	issue      tracker.Issue
-	identifier string
-	attempt    int
-	runErr     string
-	kind       RetryKind
-	req        RetryRequest
-	workspace  Workspace
+	o                     *Orchestrator
+	issue                 tracker.Issue
+	identifier            string
+	attempt               int
+	runErr                string
+	kind                  RetryKind
+	req                   RetryRequest
+	workspace             Workspace
+	continuationTurnCount int
 }
 
 func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
@@ -183,14 +187,15 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	// without blocking. ScheduleRetry needs the Timer set on the entry
 	// before storing so a stale prior timer is stopped atomically.
 	entry := &RetryEntry{
-		Issue:      s.issue,
-		IssueID:    id,
-		Identifier: s.identifier,
-		Attempt:    attempt,
-		DueAt:      time.Now().Add(delay),
-		Error:      s.runErr,
-		Kind:       s.kind,
-		Workspace:  s.workspace,
+		Issue:                 s.issue,
+		IssueID:               id,
+		Identifier:            s.identifier,
+		Attempt:               attempt,
+		DueAt:                 time.Now().Add(delay),
+		Error:                 s.runErr,
+		Kind:                  s.kind,
+		ContinuationTurnCount: s.continuationTurnCount,
+		Workspace:             s.workspace,
 	}
 	entry.Timer = time.AfterFunc(delay, func() {
 		defer recoverPanic("orchestrator.retry_timer")
@@ -407,7 +412,7 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 			a := attempt
 			retryAttempt = &a
 		}
-		o.spawn(id, issue, retryAttempt, 0)
+		o.spawn(id, issue, retryAttempt, 0, 0, 0)
 	}
 }
 

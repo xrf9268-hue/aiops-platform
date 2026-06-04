@@ -568,10 +568,9 @@ Prompt body
 }
 
 // TestDefaultConfigAgentTimeout pins the schema-level defaults the
-// platform contract advertises: a 30-minute per-task timeout and
-// SPEC-aligned unbounded retry budgets (the §15.5 harness-hardening
-// caps are opt-in). The exponential-backoff ceiling is 5 minutes per
-// SPEC §6.4.
+// platform contract advertises: a 30-minute per-task timeout, a
+// SPEC-aligned unbounded failure-retry budget, and the D34 clean-continuation
+// budget default. The exponential-backoff ceiling is 5 minutes per SPEC §6.4.
 func TestDefaultConfigAgentTimeout(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.Agent.Timeout != 30*time.Minute {
@@ -579,6 +578,9 @@ func TestDefaultConfigAgentTimeout(t *testing.T) {
 	}
 	if cfg.Agent.MaxRetryBackoffMs != 300000 {
 		t.Fatalf("default Agent.MaxRetryBackoffMs: got %d want 300000", cfg.Agent.MaxRetryBackoffMs)
+	}
+	if cfg.Agent.MaxContinuationTurns != cfg.Agent.MaxTurns {
+		t.Fatalf("default Agent.MaxContinuationTurns: got %d want Agent.MaxTurns %d", cfg.Agent.MaxContinuationTurns, cfg.Agent.MaxTurns)
 	}
 }
 
@@ -601,6 +603,50 @@ prompt body
 	}
 	if wf.Config.Agent.MaxRetryBackoffMs != 45000 {
 		t.Fatalf("Agent.MaxRetryBackoffMs = %d, want 45000", wf.Config.Agent.MaxRetryBackoffMs)
+	}
+}
+
+func TestLoadParsesAgentMaxContinuationTurns(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_continuation_turns: 7
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Agent.MaxContinuationTurns != 7 {
+		t.Fatalf("Agent.MaxContinuationTurns = %d, want 7", wf.Config.Agent.MaxContinuationTurns)
+	}
+}
+
+func TestLoadDefaultsAgentMaxContinuationTurnsFromResolvedMaxTurns(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_turns: 12
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	wf, err := Load(writeTempWorkflow(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if wf.Config.Agent.MaxContinuationTurns != 12 {
+		t.Fatalf("Agent.MaxContinuationTurns = %d, want resolved Agent.MaxTurns 12", wf.Config.Agent.MaxContinuationTurns)
 	}
 }
 
@@ -645,6 +691,32 @@ prompt body
 	}
 	if !strings.Contains(err.Error(), "agent.max_turns must be positive") {
 		t.Fatalf("Load error = %v, want agent.max_turns guidance", err)
+	}
+}
+
+func TestLoadRejectsNonPositiveAgentMaxContinuationTurns(t *testing.T) {
+	for _, value := range []int{0, -1} {
+		t.Run(fmt.Sprintf("value_%d", value), func(t *testing.T) {
+			body := fmt.Sprintf(`---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_continuation_turns: %d
+tracker:
+  kind: gitea
+---
+prompt body
+`, value)
+			_, err := Load(writeTempWorkflow(t, body))
+			if err == nil {
+				t.Fatalf("Load succeeded with agent.max_continuation_turns=%d, want validation error", value)
+			}
+			if !strings.Contains(err.Error(), "agent.max_continuation_turns must be positive") {
+				t.Fatalf("Load error = %v, want agent.max_continuation_turns positivity guidance", err)
+			}
+		})
 	}
 }
 

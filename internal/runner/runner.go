@@ -21,6 +21,10 @@ type RunInput struct {
 	// checkout root.
 	WorkspaceRoot string
 	Prompt        string
+	// CleanTurnBudget optionally caps completed turns for this run as a clean
+	// budget stop. It never expands workflow.Config.Agent.MaxTurns; callers use
+	// it to spend an issue-level budget without mutating the workflow snapshot.
+	CleanTurnBudget int
 
 	RuntimeEventSink    func(task.RuntimeEvent)
 	PhaseTransitionSink func(from, to task.RunAttemptPhase)
@@ -47,10 +51,14 @@ type IssueStateRefresher func(ctx context.Context) (active bool, err error)
 type Result struct {
 	Summary       string
 	RuntimeEvents []task.RuntimeEvent
-	OutputBytes   int64  // bytes the runner kept in its capture buffer
-	OutputDropped int64  // bytes dropped because the buffer hit its cap
-	OutputHead    string // up to CodexEventOutputCap bytes from the start of the captured output
-	OutputTail    string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
+	// IssueLeftActiveSet is true when SPEC §16.5's per-turn tracker refresh
+	// observed the linked issue outside the workflow's active states and the
+	// runner stopped cleanly for that reason.
+	IssueLeftActiveSet bool
+	OutputBytes        int64  // bytes the runner kept in its capture buffer
+	OutputDropped      int64  // bytes dropped because the buffer hit its cap
+	OutputHead         string // up to CodexEventOutputCap bytes from the start of the captured output
+	OutputTail         string // up to CodexEventOutputCap bytes from the end; empty when total <= head cap
 }
 
 type Runner interface {
@@ -77,8 +85,10 @@ func IsInputRequired(err error) bool {
 
 // NameCodexAppServer is the agent.default value selecting the SPEC §10.1
 // codex app-server runner. It runs its own per-session turn loop bounded by
-// agent.max_turns (SPEC §5.3.5); SPEC §7.1 leaves continuation worker spawns
-// unbounded, so the orchestrator does not cap them (DEVIATIONS D30 / #576).
+// agent.max_turns (SPEC §5.3.5), optionally tightened per run by
+// RunInput.CleanTurnBudget. The orchestrator uses that clean budget to enforce
+// D34 / agent.max_continuation_turns before a session can overspend the issue
+// budget.
 const NameCodexAppServer = "codex-app-server"
 
 func New(name string) (Runner, error) {

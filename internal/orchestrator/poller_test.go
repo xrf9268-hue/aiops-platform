@@ -62,7 +62,7 @@ type recordingDispatcher struct {
 	releaseCh chan struct{}
 }
 
-func (d *recordingDispatcher) Spawn(_ context.Context, issue tracker.Issue, attempt *int) <-chan WorkerResult {
+func (d *recordingDispatcher) Spawn(_ context.Context, issue tracker.Issue, attempt *int, _ DispatchOptions) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
 	d.attempts = append(d.attempts, attempt)
@@ -106,7 +106,7 @@ type erroringTaskDispatcher struct {
 	calls int
 }
 
-func (d *erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *erroringTaskDispatcher) Spawn(_ context.Context, _ tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	d.mu.Lock()
 	d.calls++
 	d.mu.Unlock()
@@ -127,7 +127,7 @@ type blockingDispatcher struct {
 	issues []tracker.Issue
 }
 
-func (d *blockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *blockingDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
 	d.mu.Unlock()
@@ -274,7 +274,7 @@ type cancellationDispatcher struct {
 	contexts []context.Context
 }
 
-func (d *cancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *cancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
 	d.contexts = append(d.contexts, ctx)
@@ -308,7 +308,7 @@ type stuckCancellationDispatcher struct {
 	cancellationDispatcher
 }
 
-func (d *stuckCancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int) <-chan WorkerResult {
+func (d *stuckCancellationDispatcher) Spawn(ctx context.Context, issue tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	d.mu.Lock()
 	d.issues = append(d.issues, issue)
 	d.contexts = append(d.contexts, ctx)
@@ -1166,7 +1166,7 @@ func TestWorkerTaskDispatcherReportsWorkspacePathBeforeRun(t *testing.T) {
 		},
 	}
 
-	result := dispatcher.Spawn(context.Background(), tracker.Issue{ID: "issue-183"}, nil)
+	result := dispatcher.Spawn(context.Background(), tracker.Issue{ID: "issue-183"}, nil, DispatchOptions{})
 
 	select {
 	case got := <-reported:
@@ -1177,6 +1177,13 @@ func TestWorkerTaskDispatcherReportsWorkspacePathBeforeRun(t *testing.T) {
 		t.Fatal("workspace path was not reported before worker run")
 	}
 	<-result
+}
+
+func TestConfigWithDispatchOptionsAppliesCleanTurnBudget(t *testing.T) {
+	cfg := configWithDispatchOptions(worker.Config{}, DispatchOptions{CleanTurnBudget: 6})
+	if cfg.CleanTurnBudget != 6 {
+		t.Fatalf("CleanTurnBudget = %d; want 6", cfg.CleanTurnBudget)
+	}
 }
 
 // TestIssueRenderVarsCoversSpec4_1_1FieldSet pins SPEC §4.1.1 + §12.1: the

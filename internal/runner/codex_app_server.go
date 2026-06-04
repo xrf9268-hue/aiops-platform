@@ -98,10 +98,11 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 
 	writeAppServerArtifact(in.Workdir, buf)
 	res := Result{
-		Summary:       client.summary(),
-		RuntimeEvents: client.runtimeEvents,
-		OutputBytes:   int64(len(buf.Bytes())),
-		OutputDropped: buf.Dropped(),
+		Summary:            client.summary(),
+		RuntimeEvents:      client.runtimeEvents,
+		IssueLeftActiveSet: client.issueLeftActiveSet,
+		OutputBytes:        int64(len(buf.Bytes())),
+		OutputDropped:      buf.Dropped(),
 	}
 	head, tail := headTail(buf.Bytes())
 	if len(head) > 0 {
@@ -286,15 +287,16 @@ type appServerClient struct {
 	// Keeping both lets cooperative agents end early (continueRun=false)
 	// while still letting the operator cancel an otherwise-productive
 	// worker by moving the issue out of the active states.
-	continueRun       bool
-	refreshIssueState IssueStateRefresher
-	tools             DynamicToolSet
-	turnTimeoutMs     int
-	readTimeoutMs     int
-	stallTimeoutMs    int
-	approvalPolicy    any
-	lastTerminal      time.Time
-	lastRuntimeEvent  string
+	continueRun        bool
+	refreshIssueState  IssueStateRefresher
+	tools              DynamicToolSet
+	turnTimeoutMs      int
+	readTimeoutMs      int
+	stallTimeoutMs     int
+	approvalPolicy     any
+	lastTerminal       time.Time
+	lastRuntimeEvent   string
+	issueLeftActiveSet bool
 }
 type codexAppServerTextInput struct {
 	Type         string `json:"type"`
@@ -320,11 +322,8 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 	if err != nil {
 		return err
 	}
-	maxTurns := in.Workflow.Config.Agent.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 20
-	}
-	for turn := 1; turn <= maxTurns; turn++ {
+	turnLimit, cleanBudgetStop := effectiveTurnLimit(in)
+	for turn := 1; turn <= turnLimit; turn++ {
 		keepGoing, err := c.runSingleTurn(ctx, in, threadID, prompt, turn)
 		if err != nil {
 			return err
@@ -333,7 +332,21 @@ func (c *appServerClient) run(ctx context.Context, in RunInput, prompt string) e
 			return nil
 		}
 	}
-	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", maxTurns)
+	if cleanBudgetStop {
+		return nil
+	}
+	return fmt.Errorf("codex app-server exceeded agent.max_turns=%d", turnLimit)
+}
+
+func effectiveTurnLimit(in RunInput) (limit int, cleanBudgetStop bool) {
+	maxTurns := in.Workflow.Config.Agent.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 20
+	}
+	if in.CleanTurnBudget > 0 && in.CleanTurnBudget <= maxTurns {
+		return in.CleanTurnBudget, true
+	}
+	return maxTurns, false
 }
 
 // initSession records the run's sinks and caches the per-run codex config off
@@ -437,6 +450,7 @@ func (c *appServerClient) runSingleTurn(ctx context.Context, in RunInput, thread
 			return false, fmt.Errorf("codex app-server refresh issue state: %w", err)
 		}
 		if !active {
+			c.issueLeftActiveSet = true
 			return false, nil
 		}
 	}
