@@ -226,10 +226,24 @@ specific observed failure per the "Earned rules" principle.
    schema for that Codex version. Do not hand-build `turn/start` payloads with
    free `map[string]any`, do not translate legacy sandbox shapes such as
    `mode: workspace-write`, and keep local schema contract tests in step with
-   any Codex CLI upgrade. **Earned by:** Codex CLI 0.133 rejected the old
-   aiops-platform `turn/start` payload because `UserInput.Text` required
+   any Codex CLI upgrade. The contract test
+   (`internal/runner/codex_app_server_schema_test.go`) validates the runner's
+   actual request payloads against a vendored bundle; regenerate it only via
+   `scripts/refresh-codex-schema.sh` and bump the single source of truth
+   `CodexProtocolVersion` (`internal/runner/codex_version.go`) — a parity test
+   fails if it, the Dockerfile `ARG CODEX_CLI_VERSION`, and the vendored schema
+   filename drift. **Generate the bundle with `--experimental`:** the runner
+   enables the experimental API and sends experimental request fields (e.g.
+   `thread/start` `dynamicTools`), which the default `generate-json-schema`
+   export strips — a non-experimental bundle silently drops them and falsely
+   flags a working field as removed. **Earned by:** Codex CLI 0.133 rejected the
+   old aiops-platform `turn/start` payload because `UserInput.Text` required
    `text_elements` and `SandboxPolicy` required typed variants such as
-   `type: workspaceWrite`.
+   `type: workspaceWrite`; the #446 hand-written snapshot it spawned then rotted
+   into a placebo (asserting `text_elements` required at 0.133 while the runtime
+   moved to 0.135/0.136), and a non-`--experimental` regen made `dynamicTools`
+   look removed in 0.136 when the upstream `ThreadStartParams` struct was
+   byte-identical and merely experimental-gated.
 
 4. **Run an adversarial pass on your own diff before asking a human
    to look.** `@codex review` reads SPEC + the Elixir reference +
