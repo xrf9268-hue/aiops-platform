@@ -40,10 +40,6 @@ type RunTaskResult struct {
 	IssueExitState *runner.IssueStateSnapshot
 }
 
-// ResolveWorkflow emits the workflow_resolved event for the service-level
-// WORKFLOW.md that was loaded at process startup. Returning the workflow_source
-// string lets callers stamp it onto the runner_start payload as a quick-look
-// field; the full provenance lives on the workflow_resolved event itself.
 // issueRenderVarsForTask returns the SPEC §4.1.1 normalized issue snapshot
 // for the prompt template's `issue` variable. The orchestrator's
 // TaskFromIssue precomputes IssueRender at dispatch; this helper falls back
