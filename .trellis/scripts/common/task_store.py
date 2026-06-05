@@ -225,9 +225,11 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     if task_dir.exists():
-        print(colored(f"Warning: Task directory already exists: {dir_name}", Colors.YELLOW), file=sys.stderr)
-    else:
-        task_dir.mkdir(parents=True)
+        print(colored(f"Error: Task directory already exists: {dir_name}", Colors.RED), file=sys.stderr)
+        print(f"Existing task: {_repo_relative_path(task_dir, repo_root)}", file=sys.stderr)
+        print("Use a new slug if you intend to create a new task.", file=sys.stderr)
+        return 1
+    task_dir.mkdir(parents=True)
 
     today = datetime.now().strftime("%Y-%m-%d")
 
