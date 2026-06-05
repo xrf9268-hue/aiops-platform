@@ -23,6 +23,7 @@ PR size-gate is human-signed, not CI-blocked):
 - [ ] `size-gated: split recommended` — over budget for scope creep / separable concerns. Split instead.
 
 ## Testing
+- [ ] `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
 - [ ] `go test -race -covermode=atomic ./...`
 - [ ] `gofmt -l` clean + blocking golangci gate (`staticcheck,unparam,unused,…`)
 - [ ] additional validation noted below when needed

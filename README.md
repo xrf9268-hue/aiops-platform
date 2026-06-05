@@ -385,6 +385,7 @@ all changes; PRs should not merge while it is red. It runs three jobs:
 - **`go`** — Node-based GitHub script tests
   (`capture-unresolved-reviews.test.mjs`), `gofmt` check on all tracked Go files,
   a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness,
+  the uncached production Go file-size budget check,
   `go test -race -covermode=atomic ./...`, `go build` for `worker` and `tui`,
   and an upload of those Linux binaries as build artifacts.
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
