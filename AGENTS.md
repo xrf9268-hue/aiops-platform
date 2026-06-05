@@ -145,7 +145,22 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    preserves scaffolding that no longer earns its place (principle 4). Keep a
    piece only if you can name a behavior SPEC's scheduler/runner boundary
    genuinely permits *and* that the prompt cannot replicate — and confirm that
-   bar against SPEC before claiming it. **Earned by:** this port has
+   bar against SPEC before claiming it.
+
+   Narrow exception: upstream absence can also mean the reference is
+   under-hardened, but only after live evidence proves the SPEC/upstream
+   behavior itself is operationally defective. In that case, do not resurrect
+   the deleted mechanism by habit and do not treat the exception as a
+   keep/change/remove menu. Record the defect evidence, prove that the prompt
+   or tracker-state eligibility cannot enforce the needed invariant, add or
+   update a precise `DEVIATIONS.md` row, and implement the smallest
+   scheduler/runner-side hardening that SPEC's boundary still permits.
+   **Exception earned by:** #621 / PR #625 reproduced SPEC §7.1's unbounded clean
+   continuation loop on upstream Symphony; #627 captured the process lesson;
+   PR #628 accepted D34 as a narrow clean-turn budget rather than restoring the
+   removed D29/D30 failure and continuation-spawn caps.
+
+   **Default rule earned by:** this port has
    built-then-unwound the same misplacement repeatedly — Postgres queue
    (#73/#407), Gitea webhook (#74), orchestrator PR/push/tracker-writes (#76),
    and the worker verify / secret-scan / RUN_SUMMARY / policy gates (#557 /

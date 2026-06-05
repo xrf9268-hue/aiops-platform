@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-workflow-guidelines.md", "reason": "Quality check should verify the PR follows issue-to-PR, dependency, and Trellis task rules."}
+{"file": ".trellis/tasks/06-05-issue-627-spec-71-continuation-deviation/research/spec-upstream-continuation-budget.md", "reason": "Quality check should confirm the final docs match the researched issue/upstream/PR ledger facts."}
