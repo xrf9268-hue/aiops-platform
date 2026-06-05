@@ -24,6 +24,7 @@ Checks:
 - checkout with read-only repository permissions
 - setup Go from `go.mod`
 - Go module download
+- standalone `go vet ./...` in the `Security and supply-chain` job
 - `gofmt` check
 - blocking `golangci-lint` gate for all enabled linters in one pass:
   `contextcheck`, `errcheck`, `errorlint`, `funlen`, `gocognit`, `gocritic`,
@@ -57,8 +58,10 @@ A new oversized / over-complex non-test function — or in-place growth of an
 un-annotated one — fails CI. The existing complexity baseline is grandfathered
 in-line with per-function `//nolint:gocognit[,funlen] // baseline (#521)`
 directives (removed as #521 decomposes each), not by a report-only step; test
-files are exempt via `.golangci.yml`. Configuration, action, or runtime
-failures also fail the workflow.
+files are exempt via `.golangci.yml`. Its `govet` analyzer is separate from the
+standalone `go vet ./...` step in the `Security and supply-chain` job; keep both
+listed when describing the CI gate. Configuration, action, or runtime failures
+also fail the workflow.
 
 The file-size budget is enforced by `scripts/file_size_budget_test.go` through
 an explicit `-count=1` CI step before the normal Go test gate. The uncached
@@ -115,6 +118,7 @@ Run:
 ```bash
 go mod tidy
 gofmt -w cmd internal
+go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml
 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'
 cd cmd/worker/dashboard && npm ci && npm test && npm run build && cd -

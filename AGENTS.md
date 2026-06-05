@@ -335,6 +335,11 @@ go test -race -covermode=atomic ./...
 go build ./cmd/worker ./cmd/tui
 ```
 
+The standalone `go vet ./...` line is backed by the CI `Security and
+supply-chain` job. The golangci-lint gate also enables the `govet` analyzer,
+but that analyzer is an additional lint pass, not a replacement for the
+standalone `go vet ./...` step.
+
 E2E (requires Docker, pulls `gitea/gitea:1.26.1-rootless`):
 
 ```bash
