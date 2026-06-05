@@ -55,6 +55,13 @@ opens PRs, or writes tracker state itself. Verification is appended to the
 prompt as a directive the agent runs before handing off, not executed as a
 worker phase.
 
+This boundary is structural, not just convention. A class-hierarchy callgraph
+(Go SSA + CHA) over the module finds no call path from any `worker` or
+`orchestrator` function into the Gitea pull-request client — because CHA
+over-approximates dynamic dispatch, the absence of an edge means the
+irreversible steps are reachable only through the agent's tools in the current
+tree. It is a property you can re-check, not a gate the CI enforces today.
+
 ## Package layout
 
 The `internal/` packages form an acyclic dependency graph. `task` and
