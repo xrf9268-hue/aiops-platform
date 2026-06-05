@@ -415,6 +415,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 
 ## Architecture notes
 
+- [Architecture overview & diagrams](docs/architecture.md)
 - [SPEC deviations (D1–D24/D29)](DEVIATIONS.md)
 - [Decision: continue the Go port here](DECISION.md)
 - [Symphony integration guide](docs/symphony-integration.md)
