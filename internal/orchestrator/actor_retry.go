@@ -7,6 +7,8 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -135,6 +137,22 @@ func (o *Orchestrator) scheduleFailureRetry(ctx context.Context, issue tracker.I
 }
 func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, retryAfter time.Duration, workspace Workspace) error {
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace, 0)
+}
+
+// logRescheduleErr records a dropped reschedule submit from a deferred
+// followup closure. submit returns context.Canceled when the actor is tearing
+// down (the benign shutdown path), so that case is intentionally silent. Any
+// other error means the issue silently fell off the retry chain, so it is
+// surfaced as a structured log line rather than discarded (#636).
+func (o *Orchestrator) logRescheduleErr(err error, id IssueID, identifier string) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if strings.TrimSpace(identifier) == "" {
+		log.Printf("event=reschedule_submit_failed issue_id=%s error=%q", id, err)
+		return
+	}
+	log.Printf("event=reschedule_submit_failed issue_id=%s issue_identifier=%s error=%q", id, identifier, err)
 }
 
 // scheduleContinuationRetry queues the short SPEC §16.6 wake after a clean
@@ -468,10 +486,10 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 		// Carry the workspace across the reschedule so the §18.1 terminal
 		// cleanup gate still has a path on a later attempt (#341).
 		if kind == RetryKindQuotaBackoff {
-			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), id, identifier)
 			return
 		}
-		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
+		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), id, identifier)
 	}
 }
 func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {
@@ -534,10 +552,10 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	})
 	return func() {
 		if r.kind == RetryKindQuotaBackoff {
-			_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace)
+			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), r.id, identifier)
 			return
 		}
-		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
+		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), r.id, identifier)
 	}
 }
 
