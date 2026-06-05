@@ -29,7 +29,8 @@ Checks:
   `contextcheck`, `errcheck`, `errorlint`, `funlen`, `gocognit`, `gocritic`,
   `govet`, `ineffassign`, `revive`, `staticcheck`, `unparam`, and `unused`
 - `go mod tidy` check
-- `go test -race -covermode=atomic ./...`
+- `go test -race -covermode=atomic ./...`, including the production Go
+  file-size baseline test
 - build `worker` and `tui`
 - upload short-lived CI binaries
 - govulncheck
@@ -55,6 +56,12 @@ in-line with per-function `//nolint:gocognit[,funlen] // baseline (#521)`
 directives (removed as #521 decomposes each), not by a report-only step; test
 files are exempt via `.golangci.yml`. Configuration, action, or runtime
 failures also fail the workflow.
+
+The file-size budget is enforced by `scripts/file_size_budget_test.go` inside
+the normal Go test gate. Non-test, non-generated Go files must stay at or below
+800 lines unless they are in the exact oversized-file baseline. If an existing
+oversized file shrinks, update or remove its baseline in the same PR so the
+budget ratchets downward instead of allowing silent regrowth.
 
 When comparing local lint output to CI, use an isolated cache if multiple
 worktrees for this repository are open under the same parent directory:

@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/backend/agent-workflow-guidelines.md", "reason": "Issue-to-PR workflow, dependency invariants, Trellis gates, and dogfood routing for this repo."}
+{"file": ".trellis/tasks/06-05-issue-647-large-file-size-signal/research/file-size-signal.md", "reason": "Live #647, dependency checks, SPEC/upstream scan, and file-size signal implementation verdict."}
