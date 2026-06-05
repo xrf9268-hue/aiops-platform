@@ -142,6 +142,28 @@ func TestLocalPRFollowThroughRequiresTimeoutBinary(t *testing.T) {
 	}
 }
 
+func TestLocalPRFollowThroughRunsUncachedFileSizeGate(t *testing.T) {
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	script := string(body)
+
+	localGate := `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
+	localRaceGate := `      go test -race -covermode=atomic ./...`
+	if !strings.Contains(script, localGate) {
+		t.Fatalf("local-pr-follow-through.sh missing %q", localGate)
+	}
+	if localGateIndex, localRaceIndex := strings.Index(script, localGate), strings.Index(script, localRaceGate); localGateIndex == -1 || localRaceIndex == -1 || localGateIndex > localRaceIndex {
+		t.Fatalf("local file-size gate index = %d; want before race test index %d", localGateIndex, localRaceIndex)
+	}
+
+	dockerGate := `go test -run "^TestProductionGoFilesStayWithinSizeBudget$" -count=1 ./scripts && go test -race -covermode=atomic ./... && go build ./cmd/worker`
+	if !strings.Contains(script, dockerGate) {
+		t.Fatalf("local-pr-follow-through.sh missing Docker gate %q", dockerGate)
+	}
+}
+
 func TestLocalPRFollowThroughCachesReviewsByHeadSHA(t *testing.T) {
 	body, err := os.ReadFile("local-pr-follow-through.sh")
 	if err != nil {

@@ -29,8 +29,9 @@ Checks:
   `contextcheck`, `errcheck`, `errorlint`, `funlen`, `gocognit`, `gocritic`,
   `govet`, `ineffassign`, `revive`, `staticcheck`, `unparam`, and `unused`
 - `go mod tidy` check
-- `go test -race -covermode=atomic ./...`, including the production Go
-  file-size baseline test
+- uncached production Go file-size baseline check:
+  `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
+- `go test -race -covermode=atomic ./...`
 - build `worker` and `tui`
 - upload short-lived CI binaries
 - govulncheck
@@ -57,9 +58,12 @@ directives (removed as #521 decomposes each), not by a report-only step; test
 files are exempt via `.golangci.yml`. Configuration, action, or runtime
 failures also fail the workflow.
 
-The file-size budget is enforced by `scripts/file_size_budget_test.go` inside
-the normal Go test gate. Non-test, non-generated Go files must stay at or below
-800 lines unless they are in the exact oversized-file baseline. If an existing
+The file-size budget is enforced by `scripts/file_size_budget_test.go` through
+an explicit `-count=1` CI step before the normal Go test gate. The uncached
+focused step matters because the test discovers tracked files with `git
+ls-files`, so package test caching could otherwise miss a newly added oversized
+production file. Non-test, non-generated Go files must stay at or below 800
+lines unless they are in the exact oversized-file baseline. If an existing
 oversized file shrinks, update or remove its baseline in the same PR so the
 budget ratchets downward instead of allowing silent regrowth.
 
@@ -111,6 +115,7 @@ go mod tidy
 gofmt -w cmd internal
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml
 cd cmd/worker/dashboard && npm ci && npm test && npm run build && cd -
+go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
 go test ./...
 go build ./cmd/worker ./cmd/tui
 docker build --pull --tag aiops-platform:local .

@@ -407,11 +407,12 @@ failure per the "Earned rules" principle above.
    known-debt function (removed as #521 decomposes it). A new oversized /
    over-complex non-test function — or in-place growth of an un-annotated one —
    fails CI; do not add a new `//nolint` to dodge the gate. CI also
-   machine-enforces the ≤800-line **file** budget with
-   `scripts/file_size_budget_test.go`: existing oversized production Go files
-   are listed with exact line-count baselines, new oversized production files
-   fail, and any reduction of an existing oversized file must lower or remove
-   that baseline in the same PR.
+   machine-enforces the ≤800-line **file** budget with an uncached
+   `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
+   step backed by `scripts/file_size_budget_test.go`: existing oversized
+   production Go files are listed with exact line-count baselines, new
+   oversized production files fail, and any reduction of an existing oversized
+   file must lower or remove that baseline in the same PR.
    **Earned by:** #410 found `RunTask` at 244 lines, `validateConfig` at 186
    lines, and `actor.go` at 2138 lines; PR #342 showed that one concept rename
    had to touch four files partly because large files hid the domain boundary.

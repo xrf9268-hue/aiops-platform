@@ -70,6 +70,28 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 	}
 }
 
+func TestCIEnforcesProductionGoFileSizeBudgetUncached(t *testing.T) {
+	body, err := os.ReadFile("../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatalf("ReadFile(ci.yml): %v", err)
+	}
+
+	text := string(body)
+	step := regexp.MustCompile(`(?s)- name: Check production Go file size budget.*?(?:\n\n|$)`).FindString(text)
+	if step == "" {
+		t.Fatal("CI workflow missing production Go file size budget step")
+	}
+	want := "go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts"
+	if !strings.Contains(step, want) {
+		t.Fatalf("production Go file size budget step missing %q:\n%s", want, step)
+	}
+	sizeStepIndex := strings.Index(text, "- name: Check production Go file size budget")
+	runTestsIndex := strings.Index(text, "- name: Run tests")
+	if sizeStepIndex == -1 || runTestsIndex == -1 || sizeStepIndex > runTestsIndex {
+		t.Fatalf("production Go file size budget step index = %d; want before Run tests index %d", sizeStepIndex, runTestsIndex)
+	}
+}
+
 func TestCIDashboardBuildFeedsGoEmbedWithoutCommittedDist(t *testing.T) {
 	body, err := os.ReadFile("../.github/workflows/ci.yml")
 	if err != nil {

@@ -30,15 +30,20 @@
 - `revive` supports a `file-length-limit` rule, but configured excludes would
   keep current oversized files quiet even if they keep growing. That does not
   close #647's "silently accreting" failure mode.
-- A repo-local Go test can enforce a baseline-aware rule inside the existing
-  `go test -race -covermode=atomic ./...` CI gate: files under or at 800 lines
-  pass, existing oversized files must not exceed their recorded baseline, and
-  new oversized production files fail unless explicitly added to the baseline.
+- A repo-local Go test can enforce a baseline-aware rule: files under or at 800
+  lines pass, existing oversized files must not exceed their recorded baseline,
+  and new oversized production files fail unless explicitly added to the
+  baseline.
+- Subagent review found the test must run through an explicit `-count=1` CI and
+  local follow-through step. If it only rides along in `go test ./scripts`, Go's
+  package test cache can miss newly staged oversized files discovered through
+  `git ls-files`, because no `scripts` package source file changed.
 
 ## Verdict
 
-Implement a small baseline-aware Go test under `scripts/`, then update
-`AGENTS.md` and `docs/runbooks/ci.md` so the machine-enforced file-size signal
-becomes the documented source of truth. Do not add a worker/orchestrator phase,
-workflow key, or post-turn artifact; this is repository CI hygiene, not
-Symphony runtime behavior.
+Implement a small baseline-aware Go test under `scripts/`, run it explicitly in
+CI/local follow-through with `-count=1`, then update `AGENTS.md` and
+`docs/runbooks/ci.md` so the machine-enforced file-size signal becomes the
+documented source of truth. Do not add a worker/orchestrator phase, workflow
+key, or post-turn artifact; this is repository CI hygiene, not Symphony runtime
+behavior.

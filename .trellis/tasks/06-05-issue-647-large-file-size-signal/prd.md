@@ -44,6 +44,8 @@ PR merge.
 - [ ] Existing function-budget behavior remains unchanged: `funlen`/`gocognit`
   stay blocking, with inline `//nolint... baseline (#521)` debt.
 - [ ] `AGENTS.md` and `docs/runbooks/ci.md` describe the new file-size signal.
+- [ ] CI and local follow-through run the file-size check with `-count=1` so
+  new tracked oversized files cannot be hidden by Go's package test cache.
 - [ ] Regression and mutation verification prove the new check is not a
   placebo.
 - [ ] Local handle-issue gates pass before push.
@@ -68,9 +70,11 @@ PR merge.
    counts.
 3. Update `AGENTS.md` clean-code rule 7 from "file budget review-only" to the
    baseline-aware CI rule.
-4. Update `docs/runbooks/ci.md` to mention the file-size test in the CI and
+4. Add an explicit CI and local follow-through file-size step with `-count=1`
+   before the normal race test gate.
+5. Update `docs/runbooks/ci.md` to mention the file-size test in the CI and
    local-gate descriptions.
-5. Run focused tests, mutate the baseline/check to prove failure, commit, then
+6. Run focused tests, mutate the baseline/check to prove failure, commit, then
    run full local gates and pre-push dual reviewers.
 
 ## Grill-With-Docs Review
@@ -93,8 +97,11 @@ PR merge.
 ## Verification Plan
 
 - `go test ./scripts`
+- `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
 - Mutation check: temporarily lower or remove one baseline entry and confirm
   `go test ./scripts` fails with the oversized file and actual line count.
+- Mutation check: temporarily stage a new >800-line production Go file and
+  confirm the uncached focused file-size gate fails.
 - `gofmt -l $(git ls-files '*.go')`
 - `go mod tidy && git diff --exit-code -- go.mod go.sum`
 - `go vet ./...`

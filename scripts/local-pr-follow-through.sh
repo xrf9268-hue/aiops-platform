@@ -510,6 +510,7 @@ run_go_quality_gate() {
   fi
   case "$mode" in
     local)
+      go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
       go test -race -covermode=atomic ./...
       go build ./cmd/worker
       ;;
@@ -535,7 +536,7 @@ run_go_quality_gate_in_docker() {
     -v "$go_mod_cache:/go/pkg/mod" \
     -w /src \
     "$image" \
-    bash -c 'export PATH=/usr/local/go/bin:$PATH; go test -race -covermode=atomic ./... && go build ./cmd/worker'
+    bash -c 'export PATH=/usr/local/go/bin:$PATH; go test -run "^TestProductionGoFilesStayWithinSizeBudget$" -count=1 ./scripts && go test -race -covermode=atomic ./... && go build ./cmd/worker'
 }
 
 validate_review_json() {

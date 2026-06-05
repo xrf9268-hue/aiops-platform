@@ -41,8 +41,7 @@ func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {
 			seenBaseline[file] = true
 			if lines <= productionGoFileLineBudget {
 				t.Errorf("ProductionGoFileLines(%q) = %d; want baseline entry removed because file is <= %d lines", file, lines, productionGoFileLineBudget)
-			}
-			if lines != baseline {
+			} else if lines != baseline {
 				t.Errorf("ProductionGoFileLines(%q) = %d; want recorded baseline %d", file, lines, baseline)
 			}
 			continue
