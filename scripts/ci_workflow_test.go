@@ -92,6 +92,32 @@ func TestCIEnforcesProductionGoFileSizeBudgetUncached(t *testing.T) {
 	}
 }
 
+func TestFileSizeBudgetDocsDescribeRepoPolicy(t *testing.T) {
+	docs := []string{
+		"../AGENTS.md",
+		"../docs/runbooks/ci.md",
+	}
+	for _, doc := range docs {
+		body, err := os.ReadFile(doc)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", doc, err)
+		}
+		text := strings.ToLower(strings.Join(strings.Fields(string(body)), " "))
+		for _, want := range []string{
+			"repo-specific maintainability budget",
+			"not an official Go file-length limit",
+			"raw physical lines",
+			"non-test, non-generated Go files",
+			"baseline/ratchet",
+			"Decompose oversized files by responsibility",
+		} {
+			if !strings.Contains(text, strings.ToLower(want)) {
+				t.Fatalf("%s missing file-size budget policy text %q", doc, want)
+			}
+		}
+	}
+}
+
 func TestCIDashboardBuildFeedsGoEmbedWithoutCommittedDist(t *testing.T) {
 	body, err := os.ReadFile("../.github/workflows/ci.yml")
 	if err != nil {

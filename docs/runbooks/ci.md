@@ -72,6 +72,25 @@ lines unless they are in the exact oversized-file baseline. If an existing
 oversized file shrinks, update or remove its baseline in the same PR so the
 budget ratchets downward instead of allowing silent regrowth.
 
+The 800-line file gate is an aiops-platform repo-specific maintainability
+budget, not an official Go file-length limit. Effective Go delegates formatting
+to `gofmt` and explicitly says Go has no **line length** limit
+(`https://go.dev/doc/effective_go`); that line-length guidance should not be
+misread as a file-length recommendation. The custom test counts raw physical
+lines in each tracked Go file, excluding `_test.go` files and generated files
+with the standard `Code generated` / `DO NOT EDIT` header. A generic linter rule
+would not encode this repository's exact oversized-file baseline/ratchet:
+new unbaselined oversized production files fail, existing oversized files are
+grandfathered only at their recorded line count, and any shrink must ratchet the
+baseline down in the same PR.
+
+Decompose oversized files by responsibility during burn-down rather than keep
+baselines permanently. Split within the same package when that is enough; move
+code into `internal/...` helper packages only when there is a cohesive subsystem
+boundary, matching the Go module layout guidance for server/internal packages
+(`https://go.dev/doc/modules/layout`). Do not introduce public API surface just
+to satisfy the line budget.
+
 When comparing local lint output to CI, use an isolated cache if multiple
 worktrees for this repository are open under the same parent directory:
 
