@@ -9,16 +9,13 @@ tracker:
   kind: github
   api_key: $GITHUB_TOKEN
   # GitHub tracker states map to issue labels unless the state is open/closed/all.
-  # This queue processes priority-labeled open issues first, then any remaining
-  # open issues that have not been triaged with a priority label yet.
+  # This dogfood queue processes only issues explicitly labeled aiops:ready.
+  # Priority labels are triage metadata, not permission to run an issue.
   # Optional: raise this for very large repositories. A cap hit skips only the
   # overflowing state/label scan and logs the diagnostic.
   # pagination_max_pages: 25
   active_states:
-    - priority:p1
-    - priority:p2
-    - priority:p3
-    - open
+    - aiops:ready
   terminal_states:
     - closed
   inactive_states: []
@@ -33,10 +30,7 @@ agent:
   default: codex-app-server
   max_concurrent_agents: 2
   max_concurrent_agents_by_state:
-    priority:p1: 1
-    priority:p2: 1
-    priority:p3: 1
-    open: 1
+    aiops:ready: 2
   max_turns: 12
   timeout: 2h
   # Failure retries are unbounded per SPEC §8.4 / §16.6 (bounded only by the

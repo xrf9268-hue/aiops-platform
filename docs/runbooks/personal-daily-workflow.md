@@ -4,6 +4,22 @@ This runbook describes how to use `aiops-platform` day to day so it stays a usef
 
 The defaults below match `examples/WORKFLOW.md` and the active state list in `internal/workflow/config.go`. `cmd/worker` is the day-to-day scheduler entrypoint: it reads the configured tracker directly, performs startup reconciliation, and dispatches through in-memory orchestrator runtime state.
 
+## Daily entrypoint
+
+Use Trellis as the planning ledger before moving tracker work into the worker's
+active set:
+
+1. Create or update a Trellis task for the planned work. Use a parent task for a
+   batch and one child task per tracker issue.
+2. Write the goal, scope, acceptance criteria, dependency class, and verification
+   in the Trellis task or tracker issue.
+3. Review the plan with `grill-with-docs` against `CONTEXT.md`, ADRs, and the
+   relevant runbook.
+4. Move only ready work through the tracker ready gate.
+
+Trellis does not dispatch work and does not replace tracker state. The worker
+only sees the configured tracker states or labels in `WORKFLOW.md`.
+
 ## Linear states
 
 The worker poll tick reads issues whose state name appears in `tracker.active_states` of your `WORKFLOW.md`. Use a simple lifecycle:
@@ -34,6 +50,10 @@ tracker:
 
 Rule of thumb: if you do not feel comfortable letting an agent open a draft PR for an issue right now, do not move it to `AI Ready`.
 
+For GitHub dogfood, use the dedicated `aiops:ready` label as the ready gate
+instead of an `AI Ready` state. Do not treat `open` or `priority:pN` labels as
+readiness.
+
 ## Writing good issues
 
 The issue title and description are passed to the runner via the `PROMPT.md` template (see `examples/WORKFLOW.md`). Vague issues produce vague diffs.
@@ -46,6 +66,9 @@ Checklist before moving an issue to `AI Ready`:
 - Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt so the agent self-limits; use `sandbox:` write restrictions for hard prevention.
 - Size budget: keep the change small (aim for ≤12 files / ≤300 LOC as a review guideline). If a task realistically needs more, split it.
 - Link to the relevant ADR or research doc when the task involves architecture decisions.
+- Dependency class: mark the issue as a `hard dependency`, `soft overlap`, or
+  `independent issue`. Do not move hard-dependent or soft-overlap work through
+  the ready gate for unattended runs until the blocker is terminal.
 
 Issue template that works well:
 
