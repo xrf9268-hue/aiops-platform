@@ -2,14 +2,17 @@ package scripts
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const productionGoFileLineBudget = 800
+const gitProbeTimeout = 5 * time.Second
 
 var oversizedProductionGoFileBaseline = map[string]int{
 	"internal/doctor/doctor.go":           1294,
@@ -58,26 +61,29 @@ func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {
 
 func gitRepoRoot(t *testing.T) string {
 	t.Helper()
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git rev-parse --show-toplevel: %v", err)
-	}
+	out := gitOutput(t, "rev-parse", "--show-toplevel")
 	return strings.TrimSpace(string(out))
 }
 
 func trackedGoFiles(t *testing.T, root string) []string {
 	t.Helper()
-	cmd := exec.Command("git", "-C", root, "ls-files", "*.go")
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("git ls-files *.go: %v", err)
-	}
+	out := gitOutput(t, "-C", root, "ls-files", "*.go")
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" {
 		return nil
 	}
 	return strings.Split(trimmed, "\n")
+}
+
+func gitOutput(t *testing.T, args ...string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), gitProbeTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", args...).Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return out
 }
 
 func readRepoFile(t *testing.T, root, file string) []byte {
