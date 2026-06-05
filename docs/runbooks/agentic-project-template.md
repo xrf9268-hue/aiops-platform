@@ -40,7 +40,7 @@ Use one clear ready signal per tracker:
 | Tracker | Recommended ready gate |
 | --- | --- |
 | Linear | A dedicated active state such as `AI Ready`, with native blocked-by relations for dependencies |
-| Gitea | A dedicated active label/state plus `Depends on #N` for dependencies |
+| Gitea | A dedicated ready label/state for unblocked work; keep dependent issues in `Todo` or out of active labels until `Depends on #N` blockers are terminal |
 | GitHub | A dedicated `aiops:ready` label; do not use `open` as an unattended active state |
 
 Priority is not readiness. Treat priority as human triage metadata unless the
@@ -60,6 +60,10 @@ Classify candidate issues before applying the ready gate:
 If the target tracker cannot enforce dependencies natively, keep blocked issues
 out of the ready gate. Do not rely on the agent to notice dependency notes after
 dispatch.
+
+For Gitea, `Depends on #N` is dependency metadata, not permission to place the
+dependent issue in an active label. The worker's blocker filter suppresses
+blocked `Todo` issues; non-`Todo` active-state candidates can still dispatch.
 
 ## Minimal issue shape
 

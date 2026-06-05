@@ -138,7 +138,8 @@ Dependency handling is a dispatch gate, not a note-taking exercise:
 Tracker rules:
 
 - Linear: use native blocked-by and keep blocked issues in `Todo`.
-- Gitea: write `Depends on #N` in the issue body.
+- Gitea: write `Depends on #N` in the issue body, but keep dependent issues in
+  `Todo` or out of active labels until blockers are terminal.
 - GitHub: do not apply `aiops:ready` to dependent issues until blockers are
   terminal.
 

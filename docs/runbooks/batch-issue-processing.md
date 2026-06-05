@@ -108,7 +108,9 @@ Prefer preventing that dispatch in the tracker:
 
 - Linear: use native blocked-by and keep blocked issues in `Todo`; the poller
   filters Todo issues whose blockers are not terminal.
-- Gitea: express the dependency with `Depends on #N`.
+- Gitea: express the dependency with `Depends on #N`, but keep dependent issues
+  in `Todo` or out of active labels until blockers are terminal. The poller does
+  not use `BlockedBy` to suppress non-`Todo` active-state candidates.
 - GitHub: do not apply `aiops:ready` until blocker PRs are merged and the worker
   base has refreshed. Do not include `open` in dogfood `active_states`.
 

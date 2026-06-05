@@ -76,7 +76,8 @@ Tracker-specific gates:
 
 - Linear: use native blocked-by relationships and keep blocked issues in `Todo`
   until blockers are terminal.
-- Gitea: express issue dependencies with `Depends on #N`.
+- Gitea: express issue dependencies with `Depends on #N`, but keep dependent
+  issues in `Todo` or out of active labels until blockers are terminal.
 - GitHub: use `aiops:ready` as the unattended queue label. Do not use `open` as
   an active state for dogfood work.
 
