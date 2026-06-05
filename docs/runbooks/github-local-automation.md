@@ -10,9 +10,10 @@ This runbook wires the local macOS operator flow for resolving
   tracker issue from being dispatched twice before a PR exists; the shell
   wrapper adds a workflow/workspace singleton lock so stale local processes do
   not create a second dispatcher.
-- `examples/github-local-WORKFLOW.md` selects open GitHub issues by priority
-  labels (`priority:p1`, `priority:p2`, `priority:p3`) first, then remaining
-  open issues that have not been priority-triaged yet.
+- `examples/github-local-WORKFLOW.md` selects only open GitHub issues labeled
+  `aiops:ready`. Priority labels (`priority:p1`, `priority:p2`,
+  `priority:p3`) are triage metadata; they are not an unattended dispatch
+  signal.
 - Each issue runs in a deterministic per-issue workspace under
   `~/aiops-workspaces/github/xrf9268-hue-aiops-platform`.
 - The GitHub tracker skips open issues that are already named by an open PR's
@@ -55,6 +56,9 @@ This runbook wires the local macOS operator flow for resolving
 
 - `gh auth status -h github.com` must show an account with `repo` and workflow
   access to `xrf9268-hue/aiops-platform`.
+- The repository must have an `aiops:ready` label. Apply it only after the issue
+  has acceptance criteria, no unresolved hard dependency, and no soft overlap
+  that would make unattended dispatch unsafe.
 - `codex`, `claude`, `go`, and `gh` must be on PATH.
 - GNU `timeout` must be on PATH as `timeout` or `gtimeout` (for example from
   Homebrew `coreutils` on macOS), or `AIOPS_TIMEOUT_BIN` must point to an
@@ -73,6 +77,10 @@ This builds `cmd/worker` into
 `~/Library/Application Support/aiops-platform/bin/worker` and runs it with
 `examples/github-local-WORKFLOW.md`.
 
+Before running it against this repository, complete the disposable GitHub smoke
+in [`dogfood-development.md`](dogfood-development.md). That smoke proves the
+`aiops:ready` queue contract before current-repo dogfood.
+
 ## One-shot PR follow-through
 
 ```bash
@@ -86,7 +94,9 @@ scope the run:
 scripts/local-pr-follow-through.sh 173
 ```
 
-Set `AIOPS_AUTO_MERGE=0` to run all gates without merging.
+Set `AIOPS_AUTO_MERGE=0` to run all gates without merging. For dogfood, keep it
+at `0` until the human grants a named, scope-bounded small-PR auto-merge
+authorization.
 
 The script uses a dedicated checkout at
 `~/aiops-workspaces/github/xrf9268-hue-aiops-platform-pr-follow-through` so PR
@@ -204,8 +214,8 @@ This installs:
 - `com.aiops-platform.github-pr-follow-through`: PR gate/auto-merge sweep every
   10 minutes. It installs with `AIOPS_AUTO_MERGE=1` by default, so it merges
   only after the full local Go gate, Claude Code review, Codex review, GitHub
-  checks, and review-thread gates pass. Install with `AIOPS_AUTO_MERGE=0` for a
-  no-merge dry run.
+  checks, and review-thread gates pass. For dogfood, install with
+  `AIOPS_AUTO_MERGE=0` until a named small-PR merge scope is authorized.
 
 Logs are written under `~/Library/Logs/aiops-platform/`.
 
@@ -219,6 +229,9 @@ scripts/uninstall-local-launchagents.sh
 
 - Do not run more than one worker service against the same workflow/workspace
   root.
+- Do not add `open` to `tracker.active_states` for dogfood. Use `aiops:ready`
+  as the sole unattended queue entry, and remove that label when a dependency
+  becomes unresolved.
 - If a duplicate PR is ever created, pause both LaunchAgents, close the
   superseded PR, and inspect the open PR bodies plus linked issue state before
   restarting. The expected steady state is one open PR per active issue.

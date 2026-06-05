@@ -58,13 +58,16 @@ Sequential execution was the single biggest throughput cost of the 2026-05
 run: eight independent issues were processed one after another when most had no
 ordering dependency.
 
-1. **Map dependencies before starting.** For the issue set, sketch which issues
-   touch overlapping paths or have a real ordering constraint (one's fix
-   depends on another's merge). Issues touching disjoint paths are independent
-   — but "disjoint" means more than different files: two issues in the same Go
-   package can still collide through shared types, an atomic rename (Clean-code
-   rule 3 in `AGENTS.md`), or `go.mod`/`go.sum`. Treat shared package/module
-   surface as a dependency, not as independent.
+1. **Map dependencies before starting.** For the issue set, classify each
+   relationship:
+   - `hard dependency`: downstream work needs an upstream merge, API, schema,
+     migration, branch base, or atomic refactor. Serialize it.
+   - `soft overlap`: shared files, package surface, generated artifacts, or
+     `go.mod` / `go.sum` create review or merge risk. Serialize it in
+     unattended runs.
+   - `independent issue`: no branch, contract, path, or review dependency.
+     These may run in parallel.
+   Issues touching disjoint paths are independent only after this check.
 2. **Default to parallel for independent issues.** Open a branch per
    independent issue and progress them concurrently rather than draining them
    in series. Serialize **only** where a dependency is real — a shared file, a
@@ -96,13 +99,23 @@ robbed the human of the chance to weigh in while the context was fresh.
 
 If a worker-run agent cannot proceed only because an external dependency is
 unresolved (for example an overlapping PR has not merged), it surfaces that in
-its PR/tracker comment per the SPEC §1 agent boundary — the worker has no
-blocker artifact to pause on (the `.aiops/BLOCKED.json` external-blocker cooldown
-was removed as over-design in #572). A still-active issue is simply re-dispatched
-on the normal continuation / §8.4 backoff cycle, re-checking tracker state each
-poll. When the dependency is modeled as a tracker "blocked by" relation, the
-poller already holds the issue out of the candidate set until its blockers go
-terminal.
+its PR/tracker comment per the SPEC §1 agent boundary. The worker does not use a
+durable blocker artifact to pause external dependencies. A still-active issue is
+simply re-dispatched on the normal continuation / §8.4 backoff cycle,
+re-checking tracker state each poll.
+
+Prefer preventing that dispatch in the tracker:
+
+- Linear: use native blocked-by and keep blocked issues in `Todo`; the poller
+  filters Todo issues whose blockers are not terminal.
+- Gitea: express the dependency with `Depends on #N`, but keep dependent issues
+  in `Todo` or out of active labels until blockers are terminal. The poller does
+  not use `BlockedBy` to suppress non-`Todo` active-state candidates.
+- GitHub: do not apply `aiops:ready` until blocker PRs are merged and the worker
+  base has refreshed. Do not include `open` in dogfood `active_states`.
+
+`/api/v1/state.blocked` is not a dependency backlog. It is a process-local view
+of blocked claims such as input-required or continuation-budget stops.
 
 ## Keep a live status checklist
 
@@ -112,6 +125,7 @@ transition:
 
 ```text
 issue → branch/worktree → PR → head → state
+(depends_on | dependency_type | ready_gate)
 (triaged | in-progress | draft | CI green | bot-review-pending | review clean |
  threads-resolved | body-updated | metadata-pending | metadata-green |
  warnings-audited | within budget | size-gated: justified overage |

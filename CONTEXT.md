@@ -37,3 +37,49 @@ cleanup-time active rechecks do not resume a continuation, and current-issue
 `issueUpdate` calls back into active states (or unsupported current-issue
 `issueUpdate` shapes) are rejected before tracker HTTP dispatch.
 _Avoid_: Agent handoff, clean continuation, tracker write ownership
+
+**Binary self-hosted development**:
+Using an installed `aiops-platform` worker binary as the orchestrator for work on
+the `aiops-platform` repository itself, after the same workflow has passed a
+disposable repository smoke test.
+_Avoid_: Dogfood, local automation, self-runner
+
+**Workflow-defined mode**:
+An operating mode produced by a repository's `WORKFLOW.md`: tracker source,
+ready gate, agent runner, prompt contract, verification commands, workspace, and
+handoff rules taken together.
+_Avoid_: Fixed development process, hard-coded worker behavior
+
+**Ready gate**:
+The tracker-side signal that an issue is eligible for unattended dispatch.
+Issues without the ready gate remain planning or review material, even if they
+are open and well described.
+_Avoid_: Open issue, priority, backlog
+
+**Hard dependency**:
+An issue dependency where the downstream issue needs an upstream merge, API,
+schema, migration, branch base, or atomic refactor before it can be attempted
+safely.
+_Avoid_: Ordering preference, related issue
+
+**Soft overlap**:
+A batch relationship where two issues share review or merge risk through common
+files, packages, modules, generated artifacts, or dependency manifests, even if
+one does not strictly require the other.
+_Avoid_: Independent work, harmless overlap
+
+**Independent issue**:
+A tracker issue whose implementation and review can proceed without another
+issue's branch, contract, files, or merge result.
+_Avoid_: Parallel task, unrelated ticket
+
+**External worker mode**:
+Running `aiops-platform` outside a target repository while that repository owns
+only its workflow contract, issue readiness rules, and verification commands.
+_Avoid_: Embedded worker, project-local platform
+
+**Small PR auto-merge**:
+Scope-bounded authorization for automation to merge only PRs that remain within
+the review budget and have passed every code, CI, review-thread, and issue
+authorization gate.
+_Avoid_: Standing auto-merge, merge on green
