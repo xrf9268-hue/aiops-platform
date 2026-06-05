@@ -38,7 +38,7 @@ The platform's M4 milestone is "switch from mock to codex for small personal tas
 | `bypass` | `exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check --cd <workdir> -o <workdir>/.aiops/CODEX_LAST_MESSAGE.md` | For operators who run the worker inside an already-isolated environment (container, VM) and need codex to write outside the workspace cap. Documented as opt-in. |
 | `custom` | (n/a — falls back to `ShellRunner` with `sh -lc <codex.command>`) | Escape hatch. Operator-controlled string; no safety promises, but logs/timeout/output capture all still apply. |
 
-`safe` is the default supplied by `expandConfig`. An empty `Codex.Profile` after YAML load is normalized to `safe`. Unknown values fail load with a clear error path/value pair (same pattern as `supportedTrackerKinds` in `loader.go`).
+`safe` is the default supplied by `expandConfig`. An empty `Codex.Profile` after YAML load is normalized to `safe`. Unknown values fail load with a clear error path/value pair (same pattern as `supportedTrackerKinds` in `tracker_kind.go`).
 
 The `codex.command` field is consulted only when `profile=custom`. For `safe`/`bypass` it is ignored — runner-built argv is the source of truth. The default `codex.command: "codex exec"` stays in the schema so existing configs (which set `profile=custom` to keep their wording) keep working.
 
