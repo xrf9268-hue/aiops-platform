@@ -9,16 +9,6 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// supportedTrackerKinds enumerates the tracker.kind values the orchestrator
-// can actually drive a poll tick against. Matches the loader's parse-time
-// validation (internal/workflow/loader.go) so the per-tick preflight does
-// not silently accept kinds the rest of the system rejects.
-var supportedTrackerKinds = map[string]struct{}{
-	"linear": {},
-	"gitea":  {},
-	"github": {},
-}
-
 // validateDispatchPreflight is the SPEC §8.1 step 2 / §6.3 per-tick
 // dispatch-preflight check. Startup loader validation only covers schema
 // shape; this function re-validates the *resolved* runtime view of the
@@ -34,7 +24,7 @@ func validateDispatchPreflight(cfg workflow.Config) error {
 	kind := strings.TrimSpace(cfg.Tracker.Kind)
 	if kind == "" {
 		errs = append(errs, errors.New("tracker.kind missing"))
-	} else if _, ok := supportedTrackerKinds[kind]; !ok {
+	} else if !workflow.IsSupportedTrackerKind(kind) {
 		errs = append(errs, fmt.Errorf("tracker.kind unsupported: %q", kind))
 	}
 	if strings.TrimSpace(cfg.Tracker.APIKey) == "" {
