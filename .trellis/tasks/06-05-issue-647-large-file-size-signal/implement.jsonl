@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-workflow-guidelines.md", "reason": "Issue-to-PR workflow, dependency invariants, Trellis gates, and dogfood routing for this repo."}
+{"file": ".trellis/tasks/06-05-issue-647-large-file-size-signal/research/file-size-signal.md", "reason": "Live #647, dependency checks, SPEC/upstream scan, and file-size signal implementation verdict."}
+{"file": ".github/workflows/ci.yml", "reason": "Subagent review found package test caching could miss newly tracked oversized files; CI now runs the file-size gate with -count=1 before the general race test gate."}
+{"file": "scripts/local-pr-follow-through.sh", "reason": "Local and Docker follow-through gates mirror CI by running the uncached file-size gate before the general Go gate."}
+{"file": "AGENTS.md", "reason": "Codex reviewer found the authoritative local checklist also needs the uncached file-size gate so agents cannot claim CI parity with only the cached aggregate test."}
+{"file": "examples/github-local-WORKFLOW.md", "reason": "The dogfood GitHub workflow template mirrors the new local checklist with the uncached file-size gate before the race gate."}

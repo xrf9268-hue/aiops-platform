@@ -126,6 +126,9 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
+      - name: Check production Go file size budget
+        run: go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
+
       - name: Run tests
         run: go test -race -covermode=atomic ./...
 

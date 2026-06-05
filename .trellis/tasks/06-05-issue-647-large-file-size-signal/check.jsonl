@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/agent-workflow-guidelines.md", "reason": "Quality check should verify the PR follows issue-to-PR, dependency, and Trellis task rules."}
+{"file": ".trellis/tasks/06-05-issue-647-large-file-size-signal/research/file-size-signal.md", "reason": "Quality check should confirm the final code/docs match researched issue and upstream boundary facts."}
+{"file": "scripts/file_size_budget_test.go", "reason": "Focused gate passed with -count=1 and failed under a staged 803-line production Go mutation, proving the new-file path is not hidden by Go test caching."}
+{"file": "scripts/ci_workflow_test.go", "reason": "Regression coverage asserts CI keeps the uncached file-size gate before the general race test gate."}
+{"file": "scripts/local_pr_follow_through_test.go", "reason": "Regression coverage asserts local follow-through local and Docker gates keep the uncached file-size check."}
+{"file": "scripts/workflow_examples_test.go", "reason": "Regression coverage asserts the dogfood GitHub workflow template keeps the uncached file-size check before the race gate."}

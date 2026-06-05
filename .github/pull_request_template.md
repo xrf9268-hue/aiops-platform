@@ -14,14 +14,16 @@ an extension upstream lacks must be cited or tracked, not waved through.
 - [ ] Adds one, justified by an upstream **Elixir reference** — cite the matching file and line from the openai/symphony Elixir tree in the body below (a bare module name does not count; the gate looks for a concrete source path).
 - [ ] Adds one, tracked as a **DEVIATIONS.md row** + an `area:spec-alignment` issue, updated in this PR.
 
-## Size budget (AGENTS.md)
-Classify into exactly one (review discipline; the size-gate is human-signed, not CI-blocked):
+## PR diff size budget (AGENTS.md)
+Classify the production diff into exactly one state (review discipline; this
+PR size-gate is human-signed, not CI-blocked):
 
 - [ ] `within budget` — ≤12 production files / ≤300 production LOC (test files and generated code excluded).
 - [ ] `size-gated: justified overage` — production diff over budget for correctness / regression / race-safety coverage that cannot be split without losing atomicity. **Needs human size-gate sign-off.**
 - [ ] `size-gated: split recommended` — over budget for scope creep / separable concerns. Split instead.
 
 ## Testing
+- [ ] `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
 - [ ] `go test -race -covermode=atomic ./...`
 - [ ] `gofmt -l` clean + blocking golangci gate (`staticcheck,unparam,unused,…`)
 - [ ] additional validation noted below when needed
