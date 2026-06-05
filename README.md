@@ -9,10 +9,9 @@ branch/PR back through its own tools.
 Linear, Gitea, or GitHub issue
   -> cmd/worker  (poll + reconcile + dispatch)
   -> deterministic Git workspace
-  -> WORKFLOW.md policy + prompt
+  -> WORKFLOW.md config front matter + prompt
   -> mock / Codex / Claude runner
-  -> verification
-  -> agent-side branch push + PR handoff
+  -> agent-owned verify + branch push + PR + tracker write-back
 ```
 
 It is a Go implementation of [OpenAI Symphony](https://github.com/openai/symphony).
@@ -20,8 +19,8 @@ The upstream
 [`SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md) is the
 contract; the Elixir reference implementation is the tie-breaker when the SPEC
 text is ambiguous. Why we continue the Go port here rather than forking is
-recorded in [`DECISION.md`](DECISION.md); the D1–D24/D29 deviation tracker lives
-in [`DEVIATIONS.md`](DEVIATIONS.md).
+recorded in [`DECISION.md`](DECISION.md); the current SPEC deviation ledger
+lives in [`DEVIATIONS.md`](DEVIATIONS.md).
 
 The goal is a practical loop, not a heavy enterprise platform: run `cmd/worker`
 as a Go-based, Gitea-friendly, locally customizable Symphony while the open
@@ -58,15 +57,16 @@ brand/UX rationale.
 
 - `internal/orchestrator` — single in-memory runtime state, serialized dispatch
   authority, retry bookkeeping, restart recovery, and the worker spawn bridge.
-- `internal/worker` — per-task run loop wiring the workflow, runner, workspace,
-  and verification together.
+- `internal/worker` — per-task run loop wiring workflow resolution, workspace
+  prep, prompt directives, and runner invocation.
 - `internal/workflow` — loads the repo-owned `WORKFLOW.md` configuration and
   prompt body, with defaults and normalization.
 - `internal/tracker` — tracker abstraction with Linear and GitHub clients.
 - `internal/gitea` — Gitea tracker client plus the Gitea PR-tool exposed through
   the agent/tool surface (not a worker-side PR handoff).
 - `internal/runner` — runner abstraction for `mock`, `codex-app-server`, and `claude`.
-- `internal/workspace` — deterministic Git workspace management and run artifacts.
+- `internal/workspace` — deterministic Git workspace management, task files, and
+  cached artifacts.
 - `internal/task` — task model and shared types.
 
 ## Quick start: worker-owned tracker polling path
@@ -416,7 +416,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 ## Architecture notes
 
 - [Architecture overview & diagrams](docs/architecture.md)
-- [SPEC deviations (D1–D24/D29)](DEVIATIONS.md)
+- [SPEC deviation ledger](DEVIATIONS.md)
 - [Decision: continue the Go port here](DECISION.md)
 - [Symphony integration guide](docs/symphony-integration.md)
 - [Dashboard brand redesign & UX](docs/design/dashboard-brand-redesign.md)

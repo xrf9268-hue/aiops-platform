@@ -33,8 +33,8 @@ flowchart TD
         RUN["Runner<br/>mock · codex · claude"]
     end
 
-    WS["Deterministic Git workspace<br/>clone · checkout · verify · policy checks"]
-    WF["WORKFLOW.md<br/>policy + prompt template"]
+    WS["Deterministic Git workspace<br/>clone · checkout · task files · artifacts"]
+    WF["WORKFLOW.md<br/>config front-matter + prompt template"]
     AGENT["Agent session"]
 
     trackers -->|"active issues"| ORCH
@@ -43,7 +43,7 @@ flowchart TD
     WF -->|"resolved config + prompt"| WORK
     WORK --> RUN
     RUN --> AGENT
-    AGENT -->|"edits · verify · push · draft PR"| WS
+    AGENT -.->|"edits · verify · push · draft PR"| WS
     AGENT -.->|"label / state write-back"| trackers
 
     classDef ext fill:#eef,stroke:#88a;
@@ -60,19 +60,23 @@ This boundary is structural, not just convention. A class-hierarchy callgraph
 `orchestrator` function into the Gitea pull-request client — because CHA
 over-approximates dynamic dispatch, the absence of an edge means the
 irreversible steps are reachable only through the agent's tools in the current
-tree. It is a property you can re-check, not a gate the CI enforces today.
+tree. This is separate from package imports: `runner` imports `gitea` to build
+the agent-visible tool proxy, while worker/orchestrator code does not call the
+PR client directly. It is a property you can re-check, not a gate the CI
+enforces today.
 
 ## Package layout
 
 The `internal/` packages form an acyclic dependency graph. `task` and
-`workflow` are dependency-free leaves; `orchestrator` sits at the top and wires
-everything together behind small, consumer-defined interfaces.
+`workflow` are dependency-free leaves; `orchestrator` is the coordinating
+package that wires everything together behind small, consumer-defined
+interfaces.
 
 ```mermaid
 flowchart BT
     task["task<br/>domain types"]
     workflow["workflow<br/>WORKFLOW.md load/resolve"]
-    tracker["tracker<br/>Linear / GitHub / Gitea clients"]
+    tracker["tracker<br/>Linear / GitHub clients"]
     workspace["workspace<br/>deterministic git workspaces"]
     gitea["gitea<br/>REST client + label/state map"]
     runner["runner<br/>mock / codex / claude"]
@@ -110,29 +114,34 @@ flowchart BT
 
 Each claimed task moves through the SPEC §7.2 run-attempt phases. The terminal
 phases feed back into the orchestrator's retry/backoff/continuation scheduling.
+The diagram keeps terminal edges readable; setup and prompt-building errors are
+also emitted as `Failed` from the phase in progress.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> preparing_workspace
-    preparing_workspace --> building_prompt
-    building_prompt --> launching_agent_process
-    launching_agent_process --> initializing_session
-    initializing_session --> streaming_turn
-    streaming_turn --> finishing
-    finishing --> succeeded
-    streaming_turn --> failed
-    streaming_turn --> timed_out
-    streaming_turn --> stalled
-    streaming_turn --> canceled_by_reconciliation
-    succeeded --> [*]
-    failed --> [*]
-    timed_out --> [*]
-    stalled --> [*]
-    canceled_by_reconciliation --> [*]
+    [*] --> PreparingWorkspace
+    PreparingWorkspace --> BuildingPrompt
+    BuildingPrompt --> LaunchingAgentProcess
+    LaunchingAgentProcess --> InitializingSession
+    InitializingSession --> StreamingTurn
+    StreamingTurn --> Finishing
+    Finishing --> Succeeded
+    StreamingTurn --> Failed
+    StreamingTurn --> TimedOut
+    StreamingTurn --> Stalled
+    StreamingTurn --> CanceledByReconciliation
+    Succeeded --> [*]
+    Failed --> [*]
+    TimedOut --> [*]
+    Stalled --> [*]
+    CanceledByReconciliation --> [*]
 ```
 
-The coarse task status reported externally is simpler: `queued → running →
-{succeeded | failed}`.
+The internal `task.Status` enum is simpler: `queued → running → {succeeded |
+failed}`. Runtime status endpoints expose richer observability buckets such as
+`running`, `retrying`, `blocked`, `completed`, and the handoff /
+reconcile-stopped rows described in the
+[runtime-status runbook](runbooks/runtime-status.md).
 
 ## The orchestrator actor
 
