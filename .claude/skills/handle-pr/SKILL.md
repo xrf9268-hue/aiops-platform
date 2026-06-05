@@ -9,7 +9,7 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
 
 本仓库是 OpenAI Symphony SPEC 的 Go 端口，SPEC 对齐是硬要求。本 skill 覆盖 **已有 PR 的 SPEC 对齐审查轮**。
 
-> **审查 / 合并协议是共享的。** commit-first、pre-push 双 reviewer（含 Codex `codex exec review` 的 flag 互斥与 fallback）、`@codex review` 每 push 收敛、GraphQL review threads 判定、size-gate 三态 + PR-body checklist、合并/auto-merge 门槛与 hard stops、回归+变异测试纪律统一在
+> **审查 / 合并协议是共享的。** commit-first、pre-push 双 reviewer、`@codex review` 每 push 收敛、GraphQL review threads 判定、size-gate 三态 + PR-body checklist、合并/auto-merge 门槛与 hard stops、回归+变异测试纪律统一在
 > [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md)。本 skill 只写 **PR 审查阶段差异**，到 push/审查/合并步骤照那份协议执行。
 
 ## Upstream 已就位
@@ -31,7 +31,7 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
    - 测试是否安慰剂（assertion 真的读到新代码改的字段吗？）
    - 错位机制（在 §1 scheduler/runner 边界的错误一侧）：worker/orchestrator 侧「消费 agent 产物」的 phase/gate/artifact/config，先 grep Elixir 有没有等价物——没有就是过度设计信号，判**删除**（非搬进 prompt、非只记 DEVIATIONS），归宿默认是 WORKFLOW prompt（worker post-turn phase 在 push 后只能 flag 不能 prevent，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此；AGENTS.md 原则 6；#557/#561 拆的就是这类）
 
-2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，HIGH/MEDIUM/Critical 先验证技术正确性，再决定修复 / 反证 / 延后；不要盲从，也不要把 finding 当噪音略过。若 finding 证明计划本身错了，同轮更新代码、测试、SPEC/deviation 文档和 PR body。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
+2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，并先执行协议里的 **subagent-first reviewer routing**；具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。HIGH/MEDIUM/Critical 先验证技术正确性，再决定修复 / 反证 / 延后；不要盲从，也不要把 finding 当噪音略过。若 finding 证明计划本身错了，同轮更新代码、测试、SPEC/deviation 文档和 PR body。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
 
 3. **Deferred 偏差必须开 issue**：标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria（AGENTS.md rule 2）。决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 

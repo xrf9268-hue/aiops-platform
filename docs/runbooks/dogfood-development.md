@@ -57,6 +57,11 @@ right fit: requirements are unclear, dependencies are unresolved, a change is
 too large, a sensitive path is involved, or you want a direct Claude Code/Codex
 session instead of worker dispatch.
 
+Reviewer tooling still follows the PR protocol in direct sessions. Use the
+protocol's subagent-first reviewer routing and keep concrete reviewer mechanics
+in [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) so the dogfood
+runbook does not become a second source of truth.
+
 ### 1. Disposable GitHub smoke
 
 Before using GitHub issue mode on this repository, prove it in a disposable

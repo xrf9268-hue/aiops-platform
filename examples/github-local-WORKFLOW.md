@@ -86,20 +86,9 @@ Hard requirements:
 - Run the configured verify commands before pushing.
 - Before opening or updating a PR, run two independent local reviews of the
   final diff: Codex review and Claude Code review. Both are mandatory gates.
-- Use machine-validated JSON for both local reviews. The expected shape is:
-  `{"blocking_findings":[{"severity":"high|medium|low","file":"path","line":1,"issue":"text"}]}`.
-- For Codex, use `codex exec --ephemeral --output-schema <schema-file> -` with
-  the prompt and diff on stdin. Do not combine `codex exec review --base
-  <branch>` with a custom prompt; that CLI mode treats `--base` and `PROMPT` as
-  mutually exclusive.
-- For Claude Code, use `claude -p --permission-mode bypassPermissions
-  --no-session-persistence --tools "" --output-format json
-  --json-schema '<schema-json>'
-  --max-turns 6` and feed the complete review prompt plus diff on stdin. Claude
-  must review only the supplied diff for this gate. The higher turn budget is
-  still bounded by the outer review timeout and prevents structured-output
-  retries from failing the gate before Claude can emit schema-valid JSON. Read
-  `.structured_output` from Claude's JSON wrapper as the review JSON.
+- Follow `docs/runbooks/pr-review-merge-protocol.md` for subagent-first reviewer
+  routing, machine-validated review shape, Codex/Claude family coverage, and CLI
+  fallback conditions. Do not inline reviewer command mechanics here.
 - Treat non-JSON output, command failure, or any non-empty
   `blocking_findings` list from either local reviewer as blocking. Fix findings
   with tests before push.

@@ -41,16 +41,10 @@ This runbook wires the local macOS operator flow for resolving
 - `scripts/local-pr-follow-through.sh` serializes PR gates and auto-merge:
   local Go gates, independent Codex and Claude Code diff reviews, all GitHub checks,
   unresolved review-thread check, then `gh pr merge --squash --auto`.
-- The local review commands intentionally use structured-output modes:
-  Codex runs `codex exec --output-schema <schema-file> -`, and Claude Code runs
-  `claude -p --tools "" --output-format json --json-schema '<schema-json>'`
-  and reads `.structured_output`. `codex exec review --base` is not used for
-  this gate because the Codex CLI treats `--base` and custom review prompt
-  arguments as mutually exclusive. Claude Code receives the complete diff on
-  stdin and intentionally has no repository tools in this gate, so the
-  unattended run stays bounded to a structured-output review task. Review
-  sessions use Codex `--ephemeral` and Claude Code
-  `--no-session-persistence` to avoid retaining short-lived reviewer history.
+- The local review command contract lives in
+  [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) and is enforced
+  by `scripts/local-pr-follow-through.sh`; keep concrete reviewer mechanics
+  there so this automation runbook does not become a second source of truth.
 
 ## Prerequisites
 
@@ -247,12 +241,10 @@ scripts/uninstall-local-launchagents.sh
 - `AIOPS_PR_SCAN_LIMIT` bounds open-PR scans for duplicate issue claims. If the
   number of returned PRs reaches the limit, the sweep stops before local gates
   or reviews because the duplicate-PR guard may be incomplete.
-- Claude Code review defaults to `AIOPS_CLAUDE_REVIEW_MAX_TURNS=6`, disables
-  tools with `--tools ""`, and uses `--output-format json` with
-  `--json-schema`; the gate extracts `.structured_output` from Claude's JSON
-  wrapper as the review JSON. It reviews only the supplied diff; re-enabling
-  repository tools can make unattended runs hit turn limits before returning
-  JSON.
+- Claude Code review defaults to `AIOPS_CLAUDE_REVIEW_MAX_TURNS=6`; the concrete
+  diff-only reviewer command contract is owned by
+  [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) and
+  `scripts/local-pr-follow-through.sh`.
 - Treat unresolved non-outdated GitHub review threads as blocking. Follow-through
   paginates review threads until `hasNextPage=false`; checking only the first
   100 threads is not sufficient for merge.

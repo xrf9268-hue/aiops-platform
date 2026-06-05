@@ -51,25 +51,50 @@ findings (keep each review ≤700 words) and a final verdict —
 SHA, changed files, intent (issue/PR), relevant SPEC/upstream pointers, and
 AGENTS.md policy.
 
+Reviewer routing is environment-dependent:
+
+- **Claude Code Agent.** Prefer the Agent tool subagents named below for
+  family-specific review. Use the hardened CLI fallback only when the Agent
+  tool or requested subagent is unavailable or fails.
+- **Codex inline.** When the environment hints that subagents or multi-agent
+  tools are available, call `tool_search` for `multi_agent` / `spawn_agent`
+  before CLI fallback. If `spawn_agent` is available, use it for an independent
+  final-diff reviewer or quality-check sidecar only when the current user
+  request explicitly authorizes subagent delegation and the tool contract allows
+  spawning for that request. A workflow prompt or runbook instruction alone is
+  not sufficient authorization to spawn. Record the agent id/verdict in review
+  notes. If subagent use is not authorized for the current session, do not
+  spawn; record that eligibility result and continue with the family reviewer
+  fallback. Do not wait for a human reminder to discover the tool.
+- **codex-sub-agent.** If the current session is already a spawned sub-agent,
+  obey the parent assignment and the sub-agent notice first. Do not recursively
+  spawn reviewers unless the parent task explicitly asks for that; return the
+  requested review or implementation result to the parent.
+- **CLI fallback.** Use CLI reviewers only after the relevant subagent path is
+  unavailable, fails, or is inappropriate for the current role. Record the
+  discovery/fallback evidence in review notes and later in the PR body.
+
+Subagent review complements the two-family gate. It does not replace the
+required Codex-family and Claude-family coverage unless the invoked subagent is
+explicitly the Codex-family or Claude-family reviewer for that environment.
+
 - **Codex reviewer.** When the main agent is Claude Code, **prefer** the
   `codex:codex-rescue` subagent from
   [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) (`Agent` tool,
   `subagent_type: "codex:codex-rescue"`); pass the full brief in the prompt. It
-  wraps `codex exec review`'s CLI flag mutex (`--base` / `--commit` / `PROMPT`
-  are pairwise exclusive — see `codex exec review --help`) and returns
-  structured output via `codex:codex-result-handling`. **Only when** the main
-  agent is Codex itself or the plugin is unavailable, fall back to
-  `codex exec review --base origin/main --title "…"` — the `review` subcommand
-  takes no custom PROMPT and runs Codex's generic review heuristic, so
-  repo-specific context (issue intent, SPEC refs, acceptance criteria) is lost.
-  If the fallback still needs a repo-specific prompt, use plain `codex exec`
-  (free PROMPT, diff as a `<stdin>` block) at the cost of the `review`
-  subcommand's built-in review structure.
+  wraps the Codex CLI review contract and returns structured output via
+  `codex:codex-result-handling`. **Only when** no authorized and appropriate
+  Codex-family subagent path is available, fall back to plain `codex exec
+  --output-schema` with the repo-specific review prompt and diff on stdin.
+  Do not use `codex exec review --base` for this gate: the `review` subcommand
+  cannot accept the repo-specific prompt/schema that the machine-validated local
+  review contract requires.
 - **Claude Code reviewer.** Prefer the `Agent` tool with
   `subagent_type: "feature-dev:code-reviewer"`. In a restricted environment use
   a hardened `claude -p` that receives the diff on stdin and cannot read the
   mutable working tree or inherit the session:
-  `--permission-mode bypassPermissions --no-session-persistence --tools "" --max-turns 2`.
+  `--permission-mode bypassPermissions --no-session-persistence --tools "" --output-format json --json-schema <schema> --max-turns 6`.
+  Read `.structured_output` from Claude's JSON wrapper as the review JSON.
 
 Triage:
 

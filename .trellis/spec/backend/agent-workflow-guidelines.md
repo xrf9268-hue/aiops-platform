@@ -55,6 +55,10 @@ Before changing code or workflow behavior:
 4. Capture settled terminology in `CONTEXT.md` only when it is domain language,
    and capture durable trade-off decisions in `docs/adr/` only when they meet
    the ADR bar.
+5. Before pre-push review, follow
+   [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md)
+   as the single source of truth. Do not restate reviewer-routing mechanics in
+   Trellis specs or task notes.
 
 For small documentation-only edits, the Trellis task may be lightweight, but the
 source-of-truth runbook still wins over task notes.
