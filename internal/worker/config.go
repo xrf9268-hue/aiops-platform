@@ -1,3 +1,7 @@
+// Package worker resolves repo workflows, builds agent prompts for
+// orchestrator-dispatched tasks, and invokes the configured runner. Per SPEC §1
+// source edits, verification, push, PR creation, and tracker writes are the
+// agent's responsibility, not the worker's.
 package worker
 
 import (
