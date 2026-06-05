@@ -420,6 +420,12 @@ failure per the "Earned rules" principle above.
    production Go files are listed with exact line-count baselines, new
    oversized production files fail, and any reduction of an existing oversized
    file must lower or remove that baseline in the same PR.
+   This is an aiops-platform repo-specific maintainability budget, not an
+   official Go file-length limit. The file gate counts raw physical lines in
+   non-test, non-generated Go files and uses the baseline/ratchet to burn down
+   existing debt gradually. Decompose oversized files by responsibility first;
+   introduce `internal` helper packages only when a cohesive package boundary
+   exists, and do not create public API solely to satisfy the line budget.
    **Earned by:** #410 found `RunTask` at 244 lines, `validateConfig` at 186
    lines, and `actor.go` at 2138 lines; PR #342 showed that one concept rename
    had to touch four files partly because large files hid the domain boundary.
