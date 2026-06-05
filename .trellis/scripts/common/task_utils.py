@@ -12,12 +12,90 @@ Provides:
 
 from __future__ import annotations
 
+import os
+import signal
 import shutil
+import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from .paths import get_repo_root, get_tasks_dir
+
+HOOK_TIMEOUT_SECONDS = 30
+HOOK_TERMINATION_GRACE_SECONDS = 1
+
+
+def _run_hook_command(cmd: str, repo_root: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    kwargs: dict[str, object] = {
+        "shell": True,
+        "cwd": repo_root,
+        "env": env,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+    }
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(cmd, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=HOOK_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_hook_process_tree(process)
+        _close_hook_output(process)
+        exc.output = ""
+        exc.stderr = ""
+        raise
+    return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+
+
+def _terminate_hook_process_tree(process: subprocess.Popen[str]) -> None:
+    _terminate_hook_process(process)
+    time.sleep(HOOK_TERMINATION_GRACE_SECONDS)
+    _kill_hook_process_tree(process)
+    _wait_for_hook_process(process)
+
+
+def _terminate_hook_process(process: subprocess.Popen[str]) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            process.terminate()
+    else:
+        process.terminate()
+
+
+def _kill_hook_process_tree(process: subprocess.Popen[str]) -> None:
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        except OSError:
+            process.kill()
+    else:
+        process.kill()
+
+
+def _wait_for_hook_process(process: subprocess.Popen[str]) -> None:
+    try:
+        process.wait(timeout=HOOK_TERMINATION_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        return
+
+
+def _close_hook_output(process: subprocess.Popen[str]) -> None:
+    if process.stdout:
+        process.stdout.close()
+    if process.stderr:
+        process.stderr.close()
 
 
 # =============================================================================
@@ -223,9 +301,6 @@ def run_task_hooks(event: str, task_json_path: Path, repo_root: Path) -> None:
         task_json_path: Absolute path to the task's task.json.
         repo_root: Repository root for cwd and config lookup.
     """
-    import os
-    import subprocess
-
     from .config import get_hooks
     from .log import Colors, colored
 
@@ -237,16 +312,7 @@ def run_task_hooks(event: str, task_json_path: Path, repo_root: Path) -> None:
 
     for cmd in commands:
         try:
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=repo_root,
-                env=env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+            result = _run_hook_command(cmd, repo_root, env)
             if result.returncode != 0:
                 print(
                     colored(f"[WARN] Hook failed ({event}): {cmd}", Colors.YELLOW),
@@ -254,6 +320,14 @@ def run_task_hooks(event: str, task_json_path: Path, repo_root: Path) -> None:
                 )
                 if result.stderr.strip():
                     print(f"  {result.stderr.strip()}", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            print(
+                colored(
+                    f"[WARN] Hook timed out ({event}): {cmd} after {HOOK_TIMEOUT_SECONDS:g}s",
+                    Colors.YELLOW,
+                ),
+                file=sys.stderr,
+            )
         except Exception as e:
             print(
                 colored(f"[WARN] Hook error ({event}): {cmd} — {e}", Colors.YELLOW),

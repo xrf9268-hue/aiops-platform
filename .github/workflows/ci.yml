@@ -57,6 +57,9 @@ jobs:
       - name: Run GitHub script tests
         run: node --test .github/scripts/*.test.mjs
 
+      - name: Run Trellis script tests
+        run: PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'
+
       - name: Install dashboard dependencies
         working-directory: cmd/worker/dashboard
         run: npm ci

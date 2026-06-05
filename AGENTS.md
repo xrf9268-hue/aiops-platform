@@ -329,6 +329,7 @@ gofmt -l $(git ls-files '*.go')         # must be empty
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'
 go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
 go test -race -covermode=atomic ./...
 go build ./cmd/worker ./cmd/tui
