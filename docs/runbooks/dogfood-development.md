@@ -60,16 +60,20 @@ session instead of worker dispatch.
 ### 1. Disposable GitHub smoke
 
 Before using GitHub issue mode on this repository, prove it in a disposable
-repository:
+repository. This smoke validates the GitHub ready-label process, not native
+GitHub dependency filtering: the downstream issue stays idle because it does not
+carry `aiops:ready`.
 
 1. Configure a GitHub workflow that uses `aiops:ready` as the only active issue
    label.
 2. Create two issues: one blocker and one downstream issue that depends on it.
 3. Apply `aiops:ready` only to the blocker issue.
 4. Run the worker with a safe runner first, then the intended real runner.
-5. Confirm the downstream issue is not dispatched until its blocker PR is merged
-   and the label is applied.
-6. Confirm the agent opens or updates exactly one draft PR for the ready issue.
+5. Confirm only the blocker issue dispatches and the downstream issue remains
+   idle while it lacks `aiops:ready`.
+6. Merge or otherwise close the blocker path, refresh the worker base, then
+   apply `aiops:ready` to the downstream issue.
+7. Confirm the agent opens or updates exactly one draft PR for the ready issue.
 
 Do not proceed to current-repo dogfood until this smoke passes.
 
