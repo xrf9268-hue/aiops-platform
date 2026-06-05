@@ -139,9 +139,10 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	// transient failure straight to the max backoff.
 	nextAttempt := nextContinuationAttempt
 	o := f.o
+	id := f.id
 	identifier := f.identifier
 	return func() {
-		_ = o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, nextContinuationTurnCount, workspace)
+		o.logRescheduleErr(o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, nextContinuationTurnCount, workspace), id, identifier)
 	}
 }
 
@@ -310,9 +311,10 @@ func (f *finalizeRunOp) applyFailureRetry(st *OrchestratorState, elapsed time.Du
 	st.ClaimedIssues[f.id] = issue
 	close(f.done)
 	o := f.o
+	id := f.id
 	identifier := f.identifier
 	return func() {
-		_ = o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace)
+		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), id, identifier)
 	}
 }
 
@@ -337,8 +339,9 @@ func (f *finalizeRunOp) applyQuotaBackoff(st *OrchestratorState, elapsed time.Du
 	st.ClaimedIssues[f.id] = issue
 	close(f.done)
 	o := f.o
+	id := f.id
 	identifier := f.identifier
 	return func() {
-		_ = o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, attempt, runErr, quota.RetryAfter, workspace)
+		o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, attempt, runErr, quota.RetryAfter, workspace), id, identifier)
 	}, true
 }
