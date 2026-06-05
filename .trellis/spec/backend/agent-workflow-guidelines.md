@@ -37,6 +37,10 @@ Trellis is not a scheduler lock and is not a replacement for tracker state.
 The worker dispatches from the configured tracker and the runbook-defined ready
 gate.
 
+The selected `WORKFLOW.md` defines the worker's operating mode. Dogfood is one
+mode, not a global rule that every future AI-assisted development session must
+use.
+
 ---
 
 ## Pre-Implementation Gate

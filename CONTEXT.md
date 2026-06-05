@@ -44,6 +44,12 @@ the `aiops-platform` repository itself, after the same workflow has passed a
 disposable repository smoke test.
 _Avoid_: Dogfood, local automation, self-runner
 
+**Workflow-defined mode**:
+An operating mode produced by a repository's `WORKFLOW.md`: tracker source,
+ready gate, agent runner, prompt contract, verification commands, workspace, and
+handoff rules taken together.
+_Avoid_: Fixed development process, hard-coded worker behavior
+
 **Ready gate**:
 The tracker-side signal that an issue is eligible for unattended dispatch.
 Issues without the ready gate remain planning or review material, even if they

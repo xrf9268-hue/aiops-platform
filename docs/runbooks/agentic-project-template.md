@@ -19,6 +19,13 @@ A target repository needs:
 - A PR handoff convention: explicit issue claim, verification commands, risk,
   and any deferrals in the PR body.
 
+The worker's behavior comes from this contract. Different `WORKFLOW.md` files
+can express different operating modes: Linear or GitHub tracking, strict ready
+labels or state-based queues, Codex or Claude runners, lightweight documentation
+flows, conservative company-project flows, and higher-throughput batch flows.
+The common invariant is one tracker item into one isolated workspace and one
+reviewable PR handoff.
+
 Optional but useful:
 
 - `CONTEXT.md` for project-specific domain language.

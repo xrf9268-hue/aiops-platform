@@ -18,6 +18,13 @@ Use this together with:
 
 ## Model
 
+This runbook covers one high-control operating mode: using the worker binary to
+schedule development of this repository. It is not the universal development
+process for every change. `aiops-platform` is workflow-defined: `WORKFLOW.md`
+chooses the tracker, ready gate, agent runner (`codex-app-server`, `claude`,
+`mock`, or another supported runner), prompt contract, verification commands,
+workspace, and PR handoff expectations.
+
 Binary self-hosted development means an installed `worker` binary dispatches
 work against the `aiops-platform` repository itself. It is not a new scheduler
 mode. The same tracker, workflow config, deterministic workspace, agent prompt,
@@ -38,15 +45,17 @@ authority.
 
 ## Rollout stages
 
-### 0. Manual issue or PR work
+### 0. Direct agent-driven issue or PR work
 
 Use the project skills directly:
 
 - `.claude/skills/handle-issue/SKILL.md` for one GitHub issue to one draft PR.
 - `.claude/skills/handle-pr/SKILL.md` plus the PR protocol for an existing PR.
 
-This stage is the fallback whenever requirements are unclear, dependencies are
-unresolved, a change is too large, or a sensitive path is involved.
+This stage is the fallback whenever scheduler-managed automation is not the
+right fit: requirements are unclear, dependencies are unresolved, a change is
+too large, a sensitive path is involved, or you want a direct Claude Code/Codex
+session instead of worker dispatch.
 
 ### 1. Disposable GitHub smoke
 
@@ -116,9 +125,9 @@ Dependency handling is a dispatch gate, not a note-taking exercise:
 
 - Hard dependencies are serialized. The downstream issue gets no ready gate
   until blocker PRs are merged and the worker base has refreshed.
-- Soft overlap is serialized in unattended dogfood. Manual parallel work is
-  allowed only when the branch/base relationship is explicit in the ledger and
-  PR body.
+- Soft overlap is serialized in unattended dogfood. Direct agent-driven parallel
+  work is allowed only when the branch/base relationship is explicit in the
+  ledger and PR body.
 - Independent issues may run in parallel, one issue per branch and one PR per
   issue, within worker and review capacity.
 
