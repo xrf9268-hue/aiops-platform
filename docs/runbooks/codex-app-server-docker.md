@@ -314,6 +314,33 @@ above governs every turn — you no longer have to restate it under
 `turn_sandbox_policy`. Setting `turn_sandbox_policy` explicitly still overrides
 the derived value for callers that need a different per-turn policy (#472).
 
+### Network access for package-manager workflows
+
+`networkAccess` defaults to `false` in the per-turn `sandboxPolicy`, matching
+Codex's safe default. With it off, the agent's own shell/exec commands inside the
+turn sandbox cannot reach the network — so `npm install`, `pip install`,
+`go mod download`, `curl`/`wget` of external docs, and cloning external
+repositories are denied. This does not affect the model's reasoning, the
+`linear_graphql` tool, or tracker polling, which run outside the turn sandbox.
+
+Workflows that run package managers or other commands that resolve external
+hosts should opt in explicitly by setting `networkAccess: true` under
+`codex.turn_sandbox_policy`:
+
+```yaml
+codex:
+  turn_sandbox_policy:
+    type: workspaceWrite
+    networkAccess: true
+```
+
+Keep it off by default and enable it only for workflows that need it: opening
+network from the sandbox widens the attack surface (the agent can exfiltrate or
+fetch from arbitrary hosts), so weigh it against the posture in
+[`docs/security-posture.md`](../security-posture.md). This mirrors upstream
+Symphony, which enables `networkAccess` in its reference `WORKFLOW.md` only for
+its package-installing FSS runs (openai/symphony #65).
+
 ## Validation reference
 
 See `docs/validation/2026-05-26-docker-linear-e2e.md` for the live Linear todo
