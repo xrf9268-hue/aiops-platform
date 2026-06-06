@@ -231,3 +231,70 @@ func TestFindOpenPullRequest_NonSuccessReturnsError(t *testing.T) {
 		t.Fatal("expected error on 500, got nil")
 	}
 }
+
+// ownerRepoEscapeCases pins the wire-escaping of owner/repo path segments so the
+// PR API URLs stay consistent with the already-escaped sibling call sites
+// (gitea_tools.go, tracker_client.go). Expected paths are asserted via
+// r.URL.EscapedPath() so a "/" in a segment is observable as "%2F" rather than
+// silently decoding into an extra path component (#669).
+var ownerRepoEscapeCases = []struct {
+	name     string
+	owner    string
+	repo     string
+	wantPath string
+}{
+	{name: "normal ascii unchanged", owner: "o", repo: "r", wantPath: "/api/v1/repos/o/r/pulls"},
+	{name: "spaces escaped", owner: "my org", repo: "my repo", wantPath: "/api/v1/repos/my%20org/my%20repo/pulls"},
+	{name: "slashes escaped", owner: "a/b", repo: "c/d", wantPath: "/api/v1/repos/a%2Fb/c%2Fd/pulls"},
+	{name: "percent escaped", owner: "a%b", repo: "c%d", wantPath: "/api/v1/repos/a%25b/c%25d/pulls"},
+}
+
+func TestCreatePullRequest_EscapesOwnerRepoPathSegments(t *testing.T) {
+	for _, tc := range ownerRepoEscapeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.EscapedPath()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"number": 1, "html_url": "http://gitea.local/pulls/1", "title": "t"}`))
+			}))
+			defer srv.Close()
+
+			c := Client{BaseURL: srv.URL, Token: "fake"}
+			if _, err := c.CreatePullRequest(context.Background(), CreatePullRequestInput{
+				Owner: tc.owner, Repo: tc.repo, Title: "t", Body: "b", Head: "feat", Base: "main",
+			}); err != nil {
+				t.Fatalf("CreatePullRequest(owner=%q, repo=%q) error = %v; want nil", tc.owner, tc.repo, err)
+			}
+			if gotPath != tc.wantPath {
+				t.Fatalf("CreatePullRequest(owner=%q, repo=%q) request path = %q; want %q", tc.owner, tc.repo, gotPath, tc.wantPath)
+			}
+		})
+	}
+}
+
+func TestFindOpenPullRequest_EscapesOwnerRepoPathSegments(t *testing.T) {
+	for _, tc := range ownerRepoEscapeCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotPath string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath = r.URL.EscapedPath()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`[]`))
+			}))
+			defer srv.Close()
+
+			c := Client{BaseURL: srv.URL, Token: "fake"}
+			if _, err := c.FindOpenPullRequest(context.Background(), FindOpenPullRequestInput{
+				Owner: tc.owner, Repo: tc.repo, Head: "ai/tsk_1",
+			}); err != nil {
+				t.Fatalf("FindOpenPullRequest(owner=%q, repo=%q) error = %v; want nil", tc.owner, tc.repo, err)
+			}
+			if gotPath != tc.wantPath {
+				t.Fatalf("FindOpenPullRequest(owner=%q, repo=%q) request path = %q; want %q", tc.owner, tc.repo, gotPath, tc.wantPath)
+			}
+		})
+	}
+}
