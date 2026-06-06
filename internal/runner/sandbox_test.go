@@ -380,6 +380,58 @@ func TestSandboxAllowsWorkdirUnderRuntimeWorkspaceRootWhenWorkflowRootDiffers(t 
 	}
 }
 
+func TestEnsurePathWithinRoot(t *testing.T) {
+	// EvalSymlinks requires every path to exist, so materialize a real tree.
+	root := t.TempDir()
+	sibling := t.TempDir() // shares root's parent → rel begins with "../"
+
+	child := filepath.Join(root, "child")
+	if err := os.Mkdir(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A descendant whose first component merely begins with ".." is legitimate,
+	// not a parent-directory escape (#670).
+	dotPrefixedChild := filepath.Join(root, "..foo", "inside")
+	if err := os.MkdirAll(dotPrefixedChild, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(sibling, "outside")
+	if err := os.Mkdir(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		path      string
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: "root itself rejected", path: root, wantErr: true, errSubstr: "not the workspace root itself"},
+		{name: "child accepted", path: child, wantErr: false},
+		{name: "dot-dot-prefixed child accepted", path: dotPrefixedChild, wantErr: false},
+		{name: "immediate parent rejected", path: filepath.Dir(root), wantErr: true, errSubstr: "outside workspace root"},
+		{name: "sibling rejected", path: sibling, wantErr: true, errSubstr: "outside workspace root"},
+		{name: "parent-escape path rejected", path: outside, wantErr: true, errSubstr: "outside workspace root"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ensurePathWithinRoot(tt.path, root)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ensurePathWithinRoot(%q, %q) = nil; want error", tt.path, root)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("ensurePathWithinRoot(%q, %q) error = %q; want substring %q", tt.path, root, err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ensurePathWithinRoot(%q, %q) = %v; want nil", tt.path, root, err)
+			}
+		})
+	}
+}
+
 func TestSandboxNetworkAllowlistRequiresFirejail(t *testing.T) {
 	requireLinuxSandboxHost(t)
 	binDir := t.TempDir()

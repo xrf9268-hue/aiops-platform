@@ -80,10 +80,18 @@ func ensurePathWithinRoot(path, root string) error {
 	if rel == "." {
 		return fmt.Errorf("workspace path %q must be under workspace root %q, not the workspace root itself", path, root)
 	}
-	if rel != "" && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
-		return nil
+	// Reject genuine parent-directory escapes: rel is exactly ".." or its first
+	// path component is ".." (rel begins with "../"). A child whose name merely
+	// begins with ".." (e.g. "..foo", "..foo/inside") is a legitimate descendant
+	// and must not be over-rejected (#670). The rel == "" and filepath.IsAbs(rel)
+	// clauses are fail-closed guards: filepath.Rel on two absolute,
+	// symlink-resolved paths returns a non-empty relative path or an error
+	// (already handled above), so they are defensive belt-and-suspenders rather
+	// than reachable branches.
+	if rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("workspace path %q is outside workspace root %q", path, root)
 	}
-	return fmt.Errorf("workspace path %q is outside workspace root %q", path, root)
+	return nil
 }
 
 func scopedEnv(allow []string, cfg workflow.Config) []string {
