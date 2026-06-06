@@ -108,8 +108,11 @@ const (
 	EventWorkflowReloaded     = "workflow_reload"
 	EventWorkflowReloadFailed = "workflow_reload_failed"
 
-	// Tracker transition events are implementation extensions retained for
-	// operator visibility while tracker writes remain tool-driven.
+	// Tracker transition/comment events are never emitted: SPEC §1 makes tracker
+	// writes agent-tool-driven (#76/D8), so the worker only reads the tracker.
+	// These constants name that forbidden vocabulary for the negative-assertion
+	// guard in TestRunTask_SuccessDoesNotPushCreatePROrWriteTracker, which pins
+	// that the worker never emits them.
 	EventTrackerTransition      = "tracker_transition"
 	EventTrackerTransitionError = "tracker_transition_error"
 	EventTrackerComment         = "tracker_comment"
