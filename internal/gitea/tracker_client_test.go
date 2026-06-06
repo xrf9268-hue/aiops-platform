@@ -770,3 +770,168 @@ func mustTime(value string) time.Time {
 	}
 	return parsed
 }
+
+// newSharedBlockerTrackerClient builds a Gitea mock whose issue-list endpoint
+// returns the given source issues and whose per-issue endpoint serves a single
+// shared blocker (#3, "AI Ready"), counting how many times the blocker is
+// fetched. It is the harness for the #677 per-poll-tick blocker-cache tests.
+func newSharedBlockerTrackerClient(t *testing.T, sources []Issue, blockerFetches *int) *TrackerClient {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			_ = json.NewEncoder(w).Encode(sources)
+		case "/api/v1/repos/owner/repo/issues/3":
+			*blockerFetches++
+			_ = json.NewEncoder(w).Encode(Issue{ID: 103, Number: 3, Title: "blocker", HTMLURL: "https://gitea.local/o/r/issues/3", Labels: []Label{{Name: "aiops/todo"}}})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	return client
+}
+
+func TestTrackerClientListIssuesByStatesFetchesSharedBlockerOncePerTick(t *testing.T) {
+	var blockerFetches int
+	client := newSharedBlockerTrackerClient(t, []Issue{
+		{ID: 101, Number: 1, Title: "a", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/todo"}}},
+		{ID: 102, Number: 2, Title: "b", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/2", Labels: []Label{{Name: "aiops/todo"}}},
+	}, &blockerFetches)
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Fatalf("ListIssuesByStates returned %d issues; want 2", len(issues))
+	}
+	if blockerFetches != 1 {
+		t.Fatalf("shared blocker #3 fetched %d times; want 1 (cached across both source issues in one tick)", blockerFetches)
+	}
+	for _, iss := range issues {
+		if len(iss.BlockedBy) != 1 || iss.BlockedBy[0].Identifier != "#3" || iss.BlockedBy[0].State != "AI Ready" {
+			t.Fatalf("issue %s BlockedBy = %#v; want one blocker #3 in state AI Ready", iss.Identifier, iss.BlockedBy)
+		}
+	}
+}
+
+func TestTrackerClientListIssuesByStatesRereadsBlockerOnNextTick(t *testing.T) {
+	var blockerFetches int
+	blockerLabel := "aiops/todo" // "AI Ready" on tick 1
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			_ = json.NewEncoder(w).Encode([]Issue{
+				{ID: 101, Number: 1, Title: "a", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/todo"}}},
+			})
+		case "/api/v1/repos/owner/repo/issues/3":
+			blockerFetches++
+			_ = json.NewEncoder(w).Encode(Issue{ID: 103, Number: 3, Title: "blocker", HTMLURL: "https://gitea.local/o/r/issues/3", Labels: []Label{{Name: blockerLabel}}})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	tick1, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates tick 1: %v", err)
+	}
+	blockerLabel = "aiops/done" // blocker transitions to "Done" between ticks
+	tick2, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates tick 2: %v", err)
+	}
+
+	if blockerFetches != 2 {
+		t.Fatalf("blocker #3 fetched %d times across two ticks; want 2 (once per tick, no cross-tick cache leak)", blockerFetches)
+	}
+	if len(tick1) != 1 || len(tick1[0].BlockedBy) != 1 || tick1[0].BlockedBy[0].State != "AI Ready" {
+		t.Fatalf("tick 1 BlockedBy = %#v; want blocker #3 in state AI Ready", tick1)
+	}
+	if len(tick2) != 1 || len(tick2[0].BlockedBy) != 1 || tick2[0].BlockedBy[0].State != "Done" {
+		t.Fatalf("tick 2 BlockedBy = %#v; want blocker #3 re-read in state Done", tick2)
+	}
+}
+
+// TestCachedIssueByNumberNilCacheFallsBackToDirectFetch pins the defensive
+// fallback for callers that reach buildBlockedBy without ListIssuesByStates
+// installing a cache: with a nil cache, each lookup is a direct getIssueByNumber
+// (no memoization, no nil-map write panic) (#677).
+func TestCachedIssueByNumberNilCacheFallsBackToDirectFetch(t *testing.T) {
+	var blockerFetches int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/v1/repos/owner/repo/issues/3" {
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+		blockerFetches++
+		_ = json.NewEncoder(w).Encode(Issue{ID: 103, Number: 3, Title: "blocker", HTMLURL: "https://gitea.local/o/r/issues/3", Labels: []Label{{Name: "aiops/todo"}}})
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issue, found := client.cachedIssueByNumber(context.Background(), nil, 3)
+	if !found || issue.Number != 3 {
+		t.Fatalf("cachedIssueByNumber(nil cache, 3) = (%#v, %v); want issue #3, true", issue, found)
+	}
+	if _, found = client.cachedIssueByNumber(context.Background(), nil, 3); !found {
+		t.Fatalf("cachedIssueByNumber(nil cache, 3) second call found = false; want true")
+	}
+	if blockerFetches != 2 {
+		t.Fatalf("blocker #3 fetched %d times with a nil cache; want 2 (no memoization without a cache)", blockerFetches)
+	}
+}
+
+func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *testing.T) {
+	var blockerFetches int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			_ = json.NewEncoder(w).Encode([]Issue{
+				{ID: 101, Number: 1, Title: "a", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/todo"}}},
+				{ID: 102, Number: 2, Title: "b", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/2", Labels: []Label{{Name: "aiops/todo"}}},
+			})
+		case "/api/v1/repos/owner/repo/issues/3":
+			blockerFetches++
+			if blockerFetches == 1 {
+				// Transient failure on the first source issue's fetch: must NOT be
+				// cached, so the second source issue still retries (#677).
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(Issue{ID: 103, Number: 3, Title: "blocker", HTMLURL: "https://gitea.local/o/r/issues/3", Labels: []Label{{Name: "aiops/todo"}}})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v; a best-effort blocker error must not abort listing", err)
+	}
+	if blockerFetches != 2 {
+		t.Fatalf("blocker #3 fetched %d times; want 2 (transient error not cached, retried for the second source issue)", blockerFetches)
+	}
+	withBlocker := 0
+	for _, iss := range issues {
+		if len(iss.BlockedBy) == 1 && iss.BlockedBy[0].Identifier == "#3" {
+			withBlocker++
+		}
+	}
+	if withBlocker != 1 {
+		t.Fatalf("issues carrying blocker #3 = %d; want 1 (first source errored+skipped, second retried+found)", withBlocker)
+	}
+}
