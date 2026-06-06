@@ -160,7 +160,9 @@ func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Sched
 	}
 	done := make(chan struct{}, 1)
 	op := opFunc(func(*OrchestratorState) func() {
+		o.schedulerMu.Lock()
 		o.scheduler = scheduler
+		o.schedulerMu.Unlock()
 		done <- struct{}{}
 		return nil
 	})

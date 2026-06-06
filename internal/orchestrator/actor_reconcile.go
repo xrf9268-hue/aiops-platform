@@ -54,7 +54,15 @@ var reconcileWorkspaceCleanupTimeout = 60 * time.Second
 // prevents a stale terminal observation from deleting a workspace after the
 // issue has already returned to active work.
 var terminalCleanupStateFetchTimeout = 45 * time.Second
-var terminalCleanupStateRetryDelay = continuationRetryDelay
+
+// maxReconciledCleanupStateRetries bounds how many times the deletion-time
+// state recheck is rescheduled after a failed/absent tracker refresh before the
+// orchestrator gives up and leaves the orphaned workspace for the next worker
+// start's reconcile sweep. Without a cap, every terminal issue awaiting cleanup
+// would re-probe an already-unhealthy tracker forever during an outage (#675).
+// The retry delay itself comes from RetryScheduler.NextDelay (failure backoff),
+// not a fixed interval. A package var so tests can shrink it.
+var maxReconciledCleanupStateRetries = 8
 
 // ReconcileStalledRuns implements SPEC §8.5 Part A / §16.3
 // reconcile_stalled_runs: for each running issue compute elapsed time

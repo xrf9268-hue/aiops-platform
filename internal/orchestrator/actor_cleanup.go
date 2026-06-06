@@ -171,6 +171,15 @@ func terminalWorkspaceForCleanup(id IssueID, identifier, path, root, state strin
 // hardening). Callers must invoke it from a followup goroutine, never inside
 // an apply.
 func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
+	o.runReconciledWorkspaceCleanupAttempt(w, continuation, 0)
+}
+
+// runReconciledWorkspaceCleanupAttempt is one pass of the deletion-time recheck.
+// attempt is 0 for the initial pass and N for the Nth backed-off retry after a
+// failed or absent tracker state refresh; on an unknown refresh it schedules the
+// next attempt through retryReconciledWorkspaceCleanup (exponential backoff +
+// give-up bound) instead of re-probing on a fixed interval forever (#675).
+func (o *Orchestrator) runReconciledWorkspaceCleanupAttempt(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup, attempt int) {
 	if o.workspaceCleaner == nil || strings.TrimSpace(w.Path) == "" {
 		return
 	}
@@ -185,7 +194,7 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 	defer o.endReconcileWorkspaceCleanup(w.IssueID)
 	currentState, terminal, known := o.verifyReconciledWorkspaceStillTerminal(w)
 	if !known {
-		o.retryReconciledWorkspaceCleanup(w, continuation)
+		o.retryReconciledWorkspaceCleanup(w, continuation, attempt+1)
 		return
 	}
 	if !terminal {
@@ -218,13 +227,41 @@ func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continu
 	}
 	o.logRescheduleErr(o.scheduleContinuationRetry(o.runCtx, continuation.issue, continuation.identifier, continuation.attempt, continuation.continuationTurnCount, continuation.workspace), IssueID(continuation.issue.ID), continuation.identifier)
 }
-func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup) {
+
+// retryReconciledWorkspaceCleanup reschedules the deletion-time state recheck
+// after a failed or absent tracker refresh. It uses the same exponential
+// backoff as the failure-retry path (RetryScheduler.NextDelay with
+// RetryKindFailure) so a persistently unavailable tracker is probed on a growing
+// interval rather than every fixed second, and it gives up after
+// maxReconciledCleanupStateRetries attempts: the orphaned workspace is then left
+// for the next worker start's reconcile sweep to re-discover, which bounds both
+// the goroutine churn and the extra load on an already-unhealthy tracker (#675).
+// attempt is 1-based (the first retry after the initial pass).
+func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup, attempt int) {
+	if attempt > maxReconciledCleanupStateRetries {
+		// Give up rather than probe an unavailable tracker forever. A carried
+		// continuation is deliberately NOT rescheduled here: resuming it would
+		// bypass the deletion-time state recheck this loop could not complete,
+		// defeating the §18.1 stale-terminal-deletion guard and the D35
+		// operator-terminal-stop fail-closed gate. The clean-turn budget is
+		// instead re-derived on the next poll re-dispatch — the same non-durable
+		// recovery as a worker restart (SPEC §14.3). The drop is logged (not
+		// silent) so the budget reset is observable (#675, AGENTS.md "no silent
+		// caps").
+		droppedTurns := 0
+		if continuation != nil {
+			droppedTurns = continuation.continuationTurnCount
+		}
+		log.Printf("event=reconcile_workspace_cleanup_giveup issue_id=%s issue_identifier=%s attempts=%d continuation_dropped=%t continuation_turns=%d reason=state_refresh_unavailable", w.IssueID, w.Identifier, attempt-1, continuation != nil, droppedTurns)
+		return
+	}
+	delay := o.currentScheduler().NextDelay(RetryRequest{Kind: RetryKindFailure, Attempt: attempt})
 	safeGo("orchestrator.reconcile_cleanup_retry", func() {
-		timer := time.NewTimer(terminalCleanupStateRetryDelay)
+		timer := time.NewTimer(delay)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
-			o.runReconciledWorkspaceCleanup(w, continuation)
+			o.runReconciledWorkspaceCleanupAttempt(w, continuation, attempt)
 		case <-o.runCtx.Done():
 		}
 	})

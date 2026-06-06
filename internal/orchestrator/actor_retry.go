@@ -199,7 +199,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	issue := s.issue
 	attempt := s.attempt
 	kind := s.kind
-	delay := o.scheduler.NextDelay(s.req)
+	delay := o.currentScheduler().NextDelay(s.req)
 	// time.AfterFunc schedules immediately and is cheap (no goroutine
 	// until fire), so we can safely create the timer on the actor
 	// without blocking. ScheduleRetry needs the Timer set on the entry

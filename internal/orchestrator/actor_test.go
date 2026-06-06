@@ -113,6 +113,12 @@ func (s *recordingScheduler) lastRequest() (RetryRequest, bool) {
 	return s.requests[len(s.requests)-1], true
 }
 
+func (s *recordingScheduler) snapshotRequests() []RetryRequest {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]RetryRequest(nil), s.requests...)
+}
+
 func (f *fakeDispatcher) Spawn(ctx context.Context, issue tracker.Issue, attempt *int, opts DispatchOptions) <-chan WorkerResult {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -2043,9 +2049,8 @@ func TestReconcileTerminalRunAfterTurnCompletedCancelsWorkerButRecordsSuccess(t 
 func TestReconcileTerminalRunAfterTurnCompletedErrorDoesNotRetry(t *testing.T) {
 	disp := &fakeDispatcher{}
 	cleaner := &recordingWorkspaceCleaner{}
-	oldRetryDelay := terminalCleanupStateRetryDelay
-	terminalCleanupStateRetryDelay = time.Millisecond
-	defer func() { terminalCleanupStateRetryDelay = oldRetryDelay }()
+	// MaxBackoff: time.Millisecond keeps the failure-backoff retry delay tiny so
+	// the single flaky refresh failure is re-probed almost immediately.
 	o, cancel := startActor(t, Deps{
 		Dispatcher:       disp,
 		Scheduler:        RetryScheduler{MaxBackoff: time.Millisecond},
@@ -2139,11 +2144,195 @@ func TestReconcileTerminalRunAfterTurnCompletedRecordsStickyStopAndSkipsStaleCle
 	}
 }
 
+// TestReconcileTerminalCleanupGivesUpAfterPersistentStateRefreshFailure is the
+// #675 regression: when the deletion-time state recheck fails persistently (an
+// unavailable tracker), the cleanup retry must back off and give up after a
+// bounded number of attempts instead of re-probing every fixed second forever.
+// The existing flakyStateRefresher only covers fail-once-then-succeed.
+func TestReconcileTerminalCleanupGivesUpAfterPersistentStateRefreshFailure(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	// The cap is read, never mutated: a retry goroutine reads
+	// maxReconciledCleanupStateRetries off-actor, so writing it from the test
+	// would race the running loop (the -race detector flags exactly that). With
+	// MaxBackoff: time.Millisecond every backed-off retry is near-instant, so
+	// exercising the real default cap completes in milliseconds.
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Millisecond},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	refresher := &countingFailRefresher{}
+	o.SetRetryTerminalStateResolver(refresher, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-GU1", Identifier: "ENG-GU1", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-GU1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	// 1 initial recheck + maxReconciledCleanupStateRetries backed-off retries,
+	// then the loop gives up rather than probing forever.
+	wantCalls := maxReconciledCleanupStateRetries + 1
+	waitFor(t, func() bool { return refresher.count() >= wantCalls }, 2*time.Second)
+	settled := refresher.count()
+	time.Sleep(50 * time.Millisecond)
+	if got := refresher.count(); got != settled {
+		t.Fatalf("resolver kept being probed after give-up: count went %d -> %d; want it to stop", settled, got)
+	}
+	if got := refresher.count(); got != wantCalls {
+		t.Errorf("resolver call count = %d; want %d (1 initial recheck + %d backed-off retries)", got, wantCalls, maxReconciledCleanupStateRetries)
+	}
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Errorf("workspace cleaner called %d times; want 0 (state never confirmed terminal)", len(calls))
+	}
+}
+
+// TestReconcileTerminalCleanupRetryUsesFailureBackoffSchedule asserts the #675
+// acceptance criterion "backoff schedule matches the failure-retry path": each
+// cleanup retry asks the scheduler for RetryKindFailure with an incrementing
+// 1-based attempt (1..cap), i.e. the same exponential schedule as a failure
+// retry — not the fixed-1s RetryKindContinuation delay the old loop used.
+func TestReconcileTerminalCleanupRetryUsesFailureBackoffSchedule(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	scheduler := &recordingScheduler{delay: time.Millisecond}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        scheduler,
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	refresher := &countingFailRefresher{}
+	o.SetRetryTerminalStateResolver(refresher, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-BK1", Identifier: "ENG-BK1", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-BK1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+
+	wantRetries := maxReconciledCleanupStateRetries
+	waitFor(t, func() bool { return refresher.count() >= wantRetries+1 }, 2*time.Second)
+	time.Sleep(50 * time.Millisecond) // let the give-up settle before reading requests
+
+	var failureAttempts []int
+	for _, req := range scheduler.snapshotRequests() {
+		if req.Kind != RetryKindFailure {
+			// This flow carries a non-nil continuation into the give-up (verified:
+			// the giveup log reports continuation_dropped=true). A give-up must
+			// DROP that continuation, never reschedule it — resuming onto a
+			// workspace whose state the recheck never confirmed would defeat the
+			// §18.1 stale-terminal guard and the D35 operator-stop gate (#675).
+			t.Errorf("cleanup retry scheduled a %s request %+v; want only failure-backoff retries (the carried continuation must be dropped on give-up, not resumed)", req.Kind, req)
+			continue
+		}
+		failureAttempts = append(failureAttempts, req.Attempt)
+	}
+	want := make([]int, 0, wantRetries)
+	for i := 1; i <= wantRetries; i++ {
+		want = append(want, i)
+	}
+	if !reflect.DeepEqual(failureAttempts, want) {
+		t.Errorf("cleanup retry scheduler requests = RetryKindFailure attempts %v; want %v (failure backoff schedule, 1..cap)", failureAttempts, want)
+	}
+}
+
+// TestReconcileTerminalCleanupRetryRaceFreeWithSchedulerSwap is the #675
+// race regression: the off-actor cleanup retry reads o.scheduler while
+// UpdateRetryScheduler swaps it on the actor goroutine. Without the schedulerMu
+// guard this fails under -race. The test drives a persistently-failing recheck
+// (so the retry loop runs) while continuously swapping the scheduler.
+func TestReconcileTerminalCleanupRetryRaceFreeWithSchedulerSwap(t *testing.T) {
+	disp := &fakeDispatcher{}
+	cleaner := &recordingWorkspaceCleaner{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:       disp,
+		Scheduler:        RetryScheduler{MaxBackoff: time.Millisecond},
+		WorkspaceCleaner: cleaner,
+	})
+	defer cancel()
+	refresher := &countingFailRefresher{}
+	o.SetRetryTerminalStateResolver(refresher, []string{"Done"})
+
+	issue := tracker.Issue{ID: "ENG-RC1", Identifier: "ENG-RC1", State: "In Progress"}
+	const wsPath = "/var/aiops/workspaces/acme/repo/linear_issue/ENG-RC1"
+	dispatchRunningIssue(t, o, disp, issue, wsPath, 1)
+	if err := o.RecordRuntimeEvent(context.Background(), issue.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), map[string]tracker.Issue{
+		issue.ID: {ID: issue.ID, Identifier: issue.Identifier, State: "Done"},
+	}, map[string]struct{}{"done": {}}, 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+
+	// Continuously swap the scheduler on the actor while the off-actor cleanup
+	// retry loop reads it — maximizing overlap so -race reliably catches an
+	// unsynchronized o.scheduler access.
+	stop := make(chan struct{})
+	swapDone := make(chan struct{})
+	go func() {
+		defer close(swapDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_ = o.UpdateRetryScheduler(context.Background(), RetryScheduler{MaxBackoff: time.Millisecond})
+			}
+		}
+	}()
+
+	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
+	waitFor(t, func() bool { return refresher.count() >= maxReconciledCleanupStateRetries+1 }, 2*time.Second)
+	close(stop)
+	<-swapDone
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Errorf("workspace cleaner called %d times; want 0 (state never confirmed terminal)", len(calls))
+	}
+}
+
 type redispatchDuringCleanupRefresher struct {
 	orch      *Orchestrator
 	issue     tracker.Issue
 	state     string
 	attempted chan error
+}
+
+// countingFailRefresher fails every state refresh and counts calls, so a test
+// can assert the cleanup retry loop is bounded.
+type countingFailRefresher struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (f *countingFailRefresher) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+	f.mu.Lock()
+	f.calls++
+	f.mu.Unlock()
+	return nil, errors.New("persistent tracker refresh failure")
+}
+
+func (f *countingFailRefresher) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 type flakyStateRefresher struct {

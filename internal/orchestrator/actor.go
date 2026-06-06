@@ -104,7 +104,6 @@ type Orchestrator struct {
 
 	state      *OrchestratorState
 	dispatcher Dispatcher
-	scheduler  Scheduler
 	retryWake  chan struct{}
 
 	// workspaceCleaner removes the workspace of a terminal-state run after its
@@ -130,6 +129,15 @@ type Orchestrator struct {
 	retryTerminalResolverMu sync.Mutex
 	retryTerminalResolver   IssueStateRefresher
 	retryTerminalStates     map[string]struct{}
+
+	// scheduler computes retry backoff (SPEC §8.4/§16.6). It is read on every
+	// retry fire — including the off-actor terminal-cleanup state-refresh retry
+	// (#675) — and swapped on-actor by UpdateRetryScheduler when the runtime
+	// poller reloads workflow timing, so a mutex guards the swap (same discipline
+	// as candidateLister / retryTerminalResolver). currentScheduler is the only
+	// read path.
+	schedulerMu sync.Mutex
+	scheduler   Scheduler
 
 	// runCtx is captured by Run so followup goroutines can cancel
 	// their work when the actor stops. Set once at the top of Run
@@ -265,6 +273,15 @@ func (o *Orchestrator) currentRetryTerminalResolver() (IssueStateRefresher, map[
 	o.retryTerminalResolverMu.Lock()
 	defer o.retryTerminalResolverMu.Unlock()
 	return o.retryTerminalResolver, o.retryTerminalStates
+}
+
+// currentScheduler returns the live retry scheduler under schedulerMu so the
+// off-actor terminal-cleanup retry can read it without racing an on-actor
+// UpdateRetryScheduler swap (#675).
+func (o *Orchestrator) currentScheduler() Scheduler {
+	o.schedulerMu.Lock()
+	defer o.schedulerMu.Unlock()
+	return o.scheduler
 }
 
 func (o *Orchestrator) LookupOperatorTerminalStop(ctx context.Context, id IssueID) (OperatorTerminalStopEntry, bool, error) {
