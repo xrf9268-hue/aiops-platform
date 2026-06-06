@@ -72,20 +72,3 @@ type StateIssueLister interface {
 type IssueStateRefresher interface {
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
 }
-
-// Transitioner is the subset of a tracker client that can move an issue or
-// add a human-visible comment. Tool adapters may expose these operations to
-// agents while keeping token handling inside the harness. Implementations must
-// use the supplied context for both deadlines and cancellation.
-type Transitioner interface {
-	// MoveIssueToState updates the issue identified by issueID so its
-	// workflow state matches stateName. The state name is matched as
-	// the human-readable label visible in the tracker UI; resolution
-	// from name to internal ID is the implementation's responsibility.
-	MoveIssueToState(ctx context.Context, issueID, stateName string) error
-	// AddComment attaches a comment to the issue identified by issueID.
-	// Used as the fallback when the worker cannot move the issue to a
-	// configured failure state but still wants the human to see the
-	// failure on the issue.
-	AddComment(ctx context.Context, issueID, body string) error
-}
