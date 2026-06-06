@@ -280,6 +280,28 @@ type OrchestratorState struct {
 	OperatorTerminalStops     map[IssueID]*OperatorTerminalStopEntry
 	operatorTerminalStopOrder []IssueID
 
+	// MaxRecentOperatorTerminalStops caps the retained D35 latch set. Unlike
+	// Completed (SPEC §4.1.8 "bookkeeping only"), this latch is dispatch-gating:
+	// IsOperatorTerminalStopped suppresses re-dispatch/retry-fire (actor_dispatch.go,
+	// actor_retry.go). Evicting the oldest entry is still safe: an evicted issue is
+	// re-dispatched only if it currently reads active in the tracker (the poll
+	// filters terminal issues out regardless of the latch), and by the time an issue
+	// is the oldest of N stops any still-running agent that could have produced the
+	// D35 re-activation race has long exited — so an active reading then is
+	// intentional rework, where dispatch is the desired outcome. The latch is
+	// process-local (a restart clears all of it) and the default bound makes a
+	// personal orchestrator restart long before it sees that many distinct stops. The
+	// lifetime count survives via CumulativeOperatorTerminalStopsTotal; zero disables
+	// the cap, and NewOrchestratorState installs the default.
+	MaxRecentOperatorTerminalStops int
+
+	// CumulativeOperatorTerminalStopsTotal counts every DISTINCT latch created
+	// since process start. It increments only on new-latch creation, not on the
+	// repeat re-observations reconcile can make for an already-latched issue while
+	// the stopped run's goroutine exits (first=false), so it counts stops not poll
+	// ticks, and survives cap-eviction.
+	CumulativeOperatorTerminalStopsTotal int64
+
 	CodexTotals     CodexTotals
 	CodexRateLimits *RateLimitSnapshot // nil until the runner populates it
 
@@ -303,6 +325,12 @@ const DefaultMaxContinuationTurns = 20
 // exceeded. Lifetime totals are preserved via the cumulative counter.
 const DefaultMaxRecentCompleted = 1000
 
+// DefaultMaxRecentOperatorTerminalStops bounds the in-memory D35 latch set (and
+// its /api/v1/state projection). It matches DefaultMaxRecentCompleted but is a
+// separate knob because the latch is dispatch-gating safety state, not §4.1.8
+// bookkeeping (see MaxRecentOperatorTerminalStops for why eviction is safe).
+const DefaultMaxRecentOperatorTerminalStops = 1000
+
 // NewOrchestratorState mirrors the SPEC §16.1 reference initializer:
 //
 //	state = { running: {}, claimed: set(), retry_attempts: {},
@@ -316,21 +344,22 @@ const DefaultMaxRecentCompleted = 1000
 // on a nil-map write.
 func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *OrchestratorState {
 	return &OrchestratorState{
-		PollIntervalMs:               pollIntervalMs,
-		MaxConcurrentAgents:          maxConcurrentAgents,
-		MaxConcurrentAgentsByState:   map[string]int{},
-		MaxContinuationTurns:         DefaultMaxContinuationTurns,
-		Running:                      map[IssueID]*RunningEntry{},
-		Blocked:                      map[IssueID]*BlockedEntry{},
-		Claimed:                      map[IssueID]struct{}{},
-		ClaimedIssues:                map[IssueID]tracker.Issue{},
-		RetryAttempts:                map[IssueID]*RetryEntry{},
-		Completed:                    map[IssueID]struct{}{},
-		ReconcileStoppedWithProgress: map[IssueID]struct{}{},
-		AgentHandoffReconcileStopped: map[IssueID]struct{}{},
-		OperatorTerminalStops:        map[IssueID]*OperatorTerminalStopEntry{},
-		cleaningWorkspaces:           map[IssueID]struct{}{},
-		MaxRecentCompleted:           DefaultMaxRecentCompleted,
+		PollIntervalMs:                 pollIntervalMs,
+		MaxConcurrentAgents:            maxConcurrentAgents,
+		MaxConcurrentAgentsByState:     map[string]int{},
+		MaxContinuationTurns:           DefaultMaxContinuationTurns,
+		Running:                        map[IssueID]*RunningEntry{},
+		Blocked:                        map[IssueID]*BlockedEntry{},
+		Claimed:                        map[IssueID]struct{}{},
+		ClaimedIssues:                  map[IssueID]tracker.Issue{},
+		RetryAttempts:                  map[IssueID]*RetryEntry{},
+		Completed:                      map[IssueID]struct{}{},
+		ReconcileStoppedWithProgress:   map[IssueID]struct{}{},
+		AgentHandoffReconcileStopped:   map[IssueID]struct{}{},
+		OperatorTerminalStops:          map[IssueID]*OperatorTerminalStopEntry{},
+		cleaningWorkspaces:             map[IssueID]struct{}{},
+		MaxRecentCompleted:             DefaultMaxRecentCompleted,
+		MaxRecentOperatorTerminalStops: DefaultMaxRecentOperatorTerminalStops,
 	}
 }
 
@@ -386,6 +415,12 @@ func (s *OrchestratorState) RecordOperatorTerminalStop(id IssueID, issue tracker
 	}
 	s.OperatorTerminalStops[id] = entry
 	s.operatorTerminalStopOrder = append(s.operatorTerminalStopOrder, id)
+	s.CumulativeOperatorTerminalStopsTotal++
+	if s.MaxRecentOperatorTerminalStops > 0 && len(s.operatorTerminalStopOrder) > s.MaxRecentOperatorTerminalStops {
+		oldest := s.operatorTerminalStopOrder[0]
+		s.operatorTerminalStopOrder = s.operatorTerminalStopOrder[1:]
+		delete(s.OperatorTerminalStops, oldest)
+	}
 	return *entry, true
 }
 
@@ -793,11 +828,15 @@ type StateView struct {
 	// reconcile-stopped runs that observed a guarded current-issue Linear state
 	// handoff. It may overlap ReconcileStoppedWithProgress when the handoff also
 	// completed a turn before reconcile reaped it.
-	AgentHandoffReconcileStopped                []IssueID
+	AgentHandoffReconcileStopped []IssueID
+	// OperatorTerminalStops is the FIFO-bounded recent set of D35 latches (oldest
+	// first), capped by MaxRecentOperatorTerminalStops. For the lifetime total that
+	// survives eviction, read CumulativeOperatorTerminalStopsTotal.
 	OperatorTerminalStops                       []OperatorTerminalStopView
 	CumulativeCompletedTotal                    int64
 	CumulativeReconcileStoppedWithProgressTotal int64
 	CumulativeAgentHandoffReconcileStoppedTotal int64
+	CumulativeOperatorTerminalStopsTotal        int64
 	CodexTotals                                 CodexTotals
 	CodexRateLimits                             *RateLimitSnapshot
 	// RecentEvents is the bounded orchestrator-wide event log (capped at
@@ -956,9 +995,10 @@ func (s *OrchestratorState) Snapshot() StateView {
 		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
 		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
 		CumulativeAgentHandoffReconcileStoppedTotal: s.CumulativeAgentHandoffReconcileStoppedTotal,
-		CodexTotals:     totals,
-		CodexRateLimits: copyRateLimitSnapshot(s.CodexRateLimits),
-		RecentEvents:    append([]RuntimeEvent(nil), s.RecentEvents...),
+		CumulativeOperatorTerminalStopsTotal:        s.CumulativeOperatorTerminalStopsTotal,
+		CodexTotals:                                 totals,
+		CodexRateLimits:                             copyRateLimitSnapshot(s.CodexRateLimits),
+		RecentEvents:                                append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
 	view.Running = s.snapshotRunningViews()
 	for id, b := range s.Blocked {

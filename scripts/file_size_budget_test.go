@@ -15,8 +15,12 @@ const productionGoFileLineBudget = 800
 const gitProbeTimeout = 5 * time.Second
 
 var oversizedProductionGoFileBaseline = map[string]int{
-	"internal/doctor/doctor.go":           1294,
-	"internal/orchestrator/state.go":      1020,
+	"internal/doctor/doctor.go": 1294,
+	// state.go's baseline rose from 1020 under #667, which adds the
+	// operator-terminal-stop latch cap that the #661 burn-down comment requires
+	// to land *before* decomposing this file. #661 then splits state.go by
+	// responsibility, dropping it well under budget and removing this baseline.
+	"internal/orchestrator/state.go":      1060,
 	"cmd/tui/main.go":                     904,
 	"internal/runner/codex_app_server.go": 840,
 }
