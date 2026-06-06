@@ -257,3 +257,52 @@ func validateAgentEnvExposure(path, field string, names []string, cfg Config) er
 	}
 	return nil
 }
+
+// supportedAgentDefaults mirrors the runner registry in
+// internal/runner.New. Keeping the two lists in sync at the schema layer
+// turns "unknown runner: X" — which today only surfaces after a task is
+// claimed and the workspace prepared — into a load-time configuration
+// error with the workflow file path attached.
+var supportedAgentDefaults = map[string]struct{}{
+	"mock":             {},
+	"codex-app-server": {},
+	"claude":           {},
+}
+
+var supportedSandboxBackends = map[string]struct{}{
+	"none":       {},
+	"bubblewrap": {},
+	"firejail":   {},
+}
+
+var supportedSandboxNetworks = map[string]struct{}{
+	"none":      {},
+	"allowlist": {},
+}
+
+// isLinearGraphQLMutationName reports whether s is a valid GraphQL Name
+// per the spec (https://spec.graphql.org/October2021/#sec-Names): an ASCII
+// letter or underscore followed by ASCII letters, digits, or underscores.
+// Used by the codex.linear_graphql.allowed_mutations validator so a typo
+// like " issueUpdate" (with leading space) fails at load time rather than
+// at the first attempted mutation.
+func isLinearGraphQLMutationName(s string) bool { //nolint:gocognit // baseline (#521)
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		letter := (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')
+		digit := ch >= '0' && ch <= '9'
+		if i == 0 {
+			if !letter && ch != '_' {
+				return false
+			}
+			continue
+		}
+		if !letter && !digit && ch != '_' {
+			return false
+		}
+	}
+	return true
+}

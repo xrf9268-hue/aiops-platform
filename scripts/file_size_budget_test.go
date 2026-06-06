@@ -18,7 +18,6 @@ var oversizedProductionGoFileBaseline = map[string]int{
 	"internal/doctor/doctor.go":           1294,
 	"internal/orchestrator/state.go":      1020,
 	"cmd/tui/main.go":                     904,
-	"internal/workflow/loader.go":         852,
 	"internal/runner/codex_app_server.go": 840,
 }
 
