@@ -225,13 +225,24 @@ specific observed failure per the "Earned rules" principle.
    - `Process.cancel_timer` is mandatory before reassigning a timer
      → store the `*time.Timer` on state and `Stop()` it before
      replacing.
+   - Elixir's `Port` drains a subprocess's stdout/stderr for you → a
+     Go `exec.Cmd` owner must drain each pipe to EOF *before*
+     `cmd.Wait`. `cmd.Wait` closing the pipe is **not** draining: a
+     child blocked writing to a full OS pipe never exits, so `Wait`
+     never returns and a post-`Wait` drain is never reached. The
+     goroutine that owns the pipe must keep reading until EOF, and the
+     shutdown path must drain (consume the channel) before `Wait`.
 
    A 1:1 port from Elixir without these compensations is a latent
    stuck-state bug. **Earned by:** PR #287 retry-fire fetch had no
    timeout (upstream relied on GenServer's implicit deadline), so a
    tracker client that ignored `ctx` could orphan a claim forever;
    PR #304 had to retrofit `recoverPanic` across actor + timer
-   goroutines after a panic in one path crashed the whole worker.
+   goroutines after a panic in one path crashed the whole worker; and
+   #666/PR #688 drained the codex app-server stdout reader's channel
+   *after* `cmd.Wait` — a latent deadlock whenever the child emits
+   output after the consumer stops reading, fixed by draining to EOF
+   before `Wait` (the `os/exec` `StdoutPipe` idiom).
 
 3. **Treat generated downstream protocol schemas as separate authorities.**
    Symphony's Elixir config schema is the reference for workflow/config shape,
@@ -266,9 +277,14 @@ specific observed failure per the "Earned rules" principle.
    tends to miss. Trigger it on the head commit before marking the
    PR ready, and for each finding either fix it or document in the
    PR body why it's deferred. Treat the agent's first draft as a
-   candidate, not a delivery. **Earned by:** PR #287's HIGH +
-   MEDIUM findings were both surfaced by `@codex review` after
-   submit; both could have been caught one round earlier.
+   candidate, not a delivery. An independent adversarial pass catches
+   what thorough first-party review does not — run it even when your
+   own review found nothing. **Earned by:** PR #287's HIGH + MEDIUM
+   findings were both surfaced by `@codex review` after submit; both
+   could have been caught one round earlier; and #666/PR #688's HIGH
+   stdout-reader deadlock (see checklist item 2) was surfaced by a
+   Codex review *after* an exhaustive first-party review found nothing
+   — the deadlock would otherwise have shipped.
 
 Rules for agents working on this repo:
 
