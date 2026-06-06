@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -121,7 +122,7 @@ func (c Client) FindOpenPullRequest(ctx context.Context, in FindOpenPullRequestI
 	if client == nil {
 		client = http.DefaultClient
 	}
-	base := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
+	base := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", url.PathEscape(in.Owner), url.PathEscape(in.Repo))
 	for page := 1; page <= listPullsMaxPages; page++ {
 		u := fmt.Sprintf("%s?state=open&page=%d&limit=%d", base, page, listPullsPageSize)
 		reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
@@ -182,10 +183,10 @@ func (c Client) CreatePullRequest(ctx context.Context, in CreatePullRequestInput
 		"base":  in.Base,
 	}
 	b, _ := json.Marshal(payload)
-	url := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", in.Owner, in.Repo)
+	endpoint := strings.TrimRight(c.BaseURL, "/") + fmt.Sprintf("/api/v1/repos/%s/%s/pulls", url.PathEscape(in.Owner), url.PathEscape(in.Repo))
 	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}

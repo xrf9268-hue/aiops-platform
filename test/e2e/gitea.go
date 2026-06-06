@@ -208,7 +208,7 @@ func (g *giteaEnv) putFile(ctx context.Context, owner, repo, path string, conten
 		Content string `json:"content"`
 	}
 	resp, body, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", owner, repo, path),
+		fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), path),
 		req{Message: msg, Content: encodeBase64(content)},
 		false)
 	if err != nil {
@@ -226,7 +226,7 @@ func (g *giteaEnv) createIssue(ctx context.Context, owner, repo, title, body str
 		Body  string `json:"body"`
 	}
 	resp, respBody, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/issues", owner, repo),
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues", url.PathEscape(owner), url.PathEscape(repo)),
 		req{Title: title, Body: body}, false)
 	if err != nil {
 		return 0, err
@@ -248,7 +248,7 @@ func (g *giteaEnv) commentIssue(ctx context.Context, owner, repo string, issue i
 		Body string `json:"body"`
 	}
 	resp, respBody, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/comments", owner, repo, issue),
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repo), issue),
 		req{Body: body}, false)
 	if err != nil {
 		return err
@@ -266,7 +266,7 @@ func (g *giteaEnv) ensureLabels(ctx context.Context, owner, repo string, labels 
 	}
 	for _, label := range labels {
 		resp, respBody, err := g.doJSON(ctx, "POST",
-			fmt.Sprintf("/api/v1/repos/%s/%s/labels", owner, repo),
+			fmt.Sprintf("/api/v1/repos/%s/%s/labels", url.PathEscape(owner), url.PathEscape(repo)),
 			req{Name: label, Color: "ededed"}, false)
 		if err != nil {
 			return err
@@ -286,7 +286,7 @@ func (g *giteaEnv) addIssueLabels(ctx context.Context, owner, repo string, issue
 		Labels []string `json:"labels"`
 	}
 	resp, respBody, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", owner, repo, issue),
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", url.PathEscape(owner), url.PathEscape(repo), issue),
 		req{Labels: labels}, false)
 	if err != nil {
 		return err
@@ -302,7 +302,7 @@ func (g *giteaEnv) replaceIssueLabels(ctx context.Context, owner, repo string, i
 		Labels []string `json:"labels"`
 	}
 	resp, respBody, err := g.doJSON(ctx, "PUT",
-		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", owner, repo, issue),
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", url.PathEscape(owner), url.PathEscape(repo), issue),
 		req{Labels: labels}, false)
 	if err != nil {
 		return err
@@ -325,7 +325,7 @@ type prSummary struct {
 
 func (g *giteaEnv) listOpenPRs(ctx context.Context, owner, repo string) ([]prSummary, error) {
 	resp, body, err := g.doJSON(ctx, "GET",
-		fmt.Sprintf("/api/v1/repos/%s/%s/pulls?state=open", owner, repo),
+		fmt.Sprintf("/api/v1/repos/%s/%s/pulls?state=open", url.PathEscape(owner), url.PathEscape(repo)),
 		nil, false)
 	if err != nil {
 		return nil, err
@@ -342,7 +342,7 @@ func (g *giteaEnv) listOpenPRs(ctx context.Context, owner, repo string) ([]prSum
 
 func (g *giteaEnv) getBranch(ctx context.Context, owner, repo, branch string) (bool, error) {
 	resp, _, err := g.doJSON(ctx, "GET",
-		fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", owner, repo, url.PathEscape(branch)),
+		fmt.Sprintf("/api/v1/repos/%s/%s/branches/%s", url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(branch)),
 		nil, false)
 	if err != nil {
 		return false, err
