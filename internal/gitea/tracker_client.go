@@ -106,6 +106,9 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	if len(wantedStates) == 0 {
 		return nil, nil
 	}
+	// Install a per-poll-tick blocker cache so buildBlockedBy fetches each
+	// `Depends on #N` blocker at most once per tick across all source issues (#677).
+	ctx = withBlockerCache(ctx)
 	labelNames := StateLabelNamesForStates(states, DefaultStateLabelMappings())
 	issueState := giteaAPIStateForWorkflowStates(states, c.Config.TerminalStates)
 
@@ -536,18 +539,72 @@ func extractGiteaLabels(labels []Label) []string {
 	return out
 }
 
+// giteaTrackerContextKey scopes context values set by this package so they
+// cannot collide with keys from other packages.
+type giteaTrackerContextKey int
+
+const blockerCacheContextKey giteaTrackerContextKey = iota
+
+// blockerCacheEntry memoizes one getIssueByNumber result so a `Depends on #N`
+// blocker referenced by multiple source issues is fetched at most once per poll
+// tick (#677). Only definitive results — a successful fetch or a 404 not-found —
+// are cached; a transient fetch error is deliberately not cached so a later
+// source issue referencing the same blocker can still retry it within the tick,
+// preserving the original best-effort skip behavior without dropping a blocker
+// on a transient error.
+type blockerCacheEntry struct {
+	issue Issue
+	found bool
+}
+
+// withBlockerCache installs a fresh per-poll-tick blocker memoization cache on
+// ctx. ListIssuesByStates calls it once per tick so buildBlockedBy dedupes
+// blocker fetches across every source issue in the tick; the cache lives only
+// for that context, so each blocker's state is re-read on the next tick.
+func withBlockerCache(ctx context.Context) context.Context {
+	return context.WithValue(ctx, blockerCacheContextKey, map[int]blockerCacheEntry{})
+}
+
+func blockerCacheFrom(ctx context.Context) map[int]blockerCacheEntry {
+	cache, _ := ctx.Value(blockerCacheContextKey).(map[int]blockerCacheEntry)
+	return cache
+}
+
+// cachedIssueByNumber fetches blocker issue n via getIssueByNumber at most once
+// per poll tick. A successful fetch and a definitive 404 are memoized; a
+// transient error returns a miss without caching so a later source issue can
+// retry. When no per-tick cache is installed (non-poll callers), it falls back
+// to a direct fetch.
+func (c *TrackerClient) cachedIssueByNumber(ctx context.Context, cache map[int]blockerCacheEntry, n int) (Issue, bool) {
+	if cache != nil {
+		if entry, ok := cache[n]; ok {
+			return entry.issue, entry.found
+		}
+	}
+	issue, found, err := c.getIssueByNumber(ctx, n)
+	if err != nil {
+		return Issue{}, false
+	}
+	if cache != nil {
+		cache[n] = blockerCacheEntry{issue: issue, found: found}
+	}
+	return issue, found
+}
+
 // buildBlockedBy parses `Depends on #N` references from issue.Body and looks
 // up each blocker's current workflow state via a follow-up Gitea fetch so the
 // §8.2 Todo blocker rule can compare against the blocker's State. Lookup
 // failures are silently skipped (best-effort): a missing or deleted blocker
-// drops out of the list rather than aborting candidate enumeration. Lookups
-// are O(distinct refs) per source issue; this is acceptable for typical
-// workflows (0–3 blockers per issue).
+// drops out of the list rather than aborting candidate enumeration. The
+// per-poll-tick blocker cache (installed by ListIssuesByStates) ensures each
+// distinct blocker is fetched at most once per tick across all source issues,
+// instead of O(distinct refs) per source issue (#677).
 func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []tracker.BlockerRef {
 	matches := dependsOnRegexp.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
 		return nil
 	}
+	cache := blockerCacheFrom(ctx)
 	seen := map[int]struct{}{}
 	var out []tracker.BlockerRef
 	for _, m := range matches {
@@ -559,8 +616,8 @@ func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []track
 			continue
 		}
 		seen[n] = struct{}{}
-		issue, found, err := c.getIssueByNumber(ctx, n)
-		if err != nil || !found {
+		issue, found := c.cachedIssueByNumber(ctx, cache, n)
+		if !found {
 			continue
 		}
 		state, _ := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
