@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,8 +21,9 @@ import (
 // newPipeReaderClient builds a client whose stdout is an in-memory pipe and
 // starts its single long-lived reader. It returns the write end so a test can
 // feed lines, close the stream, or leave it silent. The reader is joined at
-// test end (close the pipe so a Scan-parked reader EOFs, signal readDone for a
-// handoff-parked one, then drain readCh to its deferred close).
+// test end: close the pipe so a Scan-parked reader EOFs, then drain readCh to
+// its deferred close (which also receives any line a reader is parked handing
+// off, after which it loops back to Scan and observes the EOF).
 func newPipeReaderClient(t *testing.T, opts ...func(*appServerClient)) (*appServerClient, *io.PipeWriter) {
 	t.Helper()
 	pr, pw := io.Pipe()
@@ -34,7 +36,6 @@ func newPipeReaderClient(t *testing.T, opts ...func(*appServerClient)) (*appServ
 	c.startStdoutReader()
 	t.Cleanup(func() {
 		_ = pw.Close()
-		close(c.readDone)
 		for range c.readCh { //nolint:revive // drain-to-close joins the reader
 		}
 	})
@@ -112,11 +113,60 @@ func TestStdoutReader_DeliversLineThenEOF(t *testing.T) {
 	}
 }
 
-// TestStdoutReader_ExitsOnShutdownNoLeak is the lifecycle/leak assertion: after
-// a read times out with the reader parked in Scan, the production shutdown
-// sequence (close the stream, signal readDone, drain readCh) must let the reader
-// goroutine exit. If it leaked, the drain never observes the deferred
-// close(readCh) and the 2s guard fires.
+// TestStdoutReader_HoldsLineAcrossTimeoutThenDelivers pins the production timing
+// window the per-read timeout exists for: a line that arrives just after a read
+// times out is held by the reader (parked on the readCh send) and delivered
+// intact to the NEXT read — no loss, no reorder. The old per-read goroutine
+// orphaned such a line; the single reader preserves it.
+func TestStdoutReader_HoldsLineAcrossTimeoutThenDelivers(t *testing.T) {
+	c, pw := newPipeReaderClient(t, func(c *appServerClient) { c.readTimeoutMs = 40 })
+	if _, err := c.readLine(context.Background()); !isAppServerReadTimeout(err) {
+		t.Fatalf("first readLine() err = %v; want a read timeout on the silent stream", err)
+	}
+	go func() { _, _ = pw.Write([]byte("late-line\n")) }()
+	line, err := c.readLine(context.Background())
+	if err != nil {
+		t.Fatalf("second readLine() err = %v; want the late line", err)
+	}
+	if got, want := string(line), "late-line"; got != want {
+		t.Fatalf("second readLine() = %q; want %q (a line held across the first read's timeout must be delivered intact)", got, want)
+	}
+}
+
+// panickingReader is an io.Reader whose Read panics, to drive the stdout
+// reader's panic-recovery path.
+type panickingReader struct{}
+
+func (panickingReader) Read([]byte) (int, error) { panic("scanner boom") }
+
+// TestStdoutReader_PanicInScanSurfacesErrorNotHang pins that a panic in the scan
+// loop is recovered and surfaced as readErr through the closed readCh, so the
+// consumer gets an error instead of hanging on a never-closed channel — the
+// failure class #666 set out to eliminate. It also guards the subtle LIFO-defer
+// ordering (recover publishes readErr before close(readCh)).
+func TestStdoutReader_PanicInScanSurfacesErrorNotHang(t *testing.T) {
+	c := &appServerClient{scanner: bufio.NewScanner(panickingReader{}), out: io.Discard}
+	c.startStdoutReader()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.readLine(context.Background())
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "panic") {
+			t.Fatalf("readLine() err = %v; want a surfaced reader-panic error", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLine() hung after a reader panic — recovery must close readCh")
+	}
+}
+
+// TestStdoutReader_ExitsOnShutdownNoLeak is the lifecycle/leak assertion: after a
+// read times out with the reader parked in Scan, the production shutdown (the
+// child closing stdout, modeled by closing the pipe, then draining readCh) must
+// let the reader goroutine exit. If it leaked, the drain never observes the
+// deferred close(readCh) and the 2s guard fires.
 func TestStdoutReader_ExitsOnShutdownNoLeak(t *testing.T) {
 	pr, pw := io.Pipe()
 	sc := bufio.NewScanner(pr)
@@ -128,12 +178,11 @@ func TestStdoutReader_ExitsOnShutdownNoLeak(t *testing.T) {
 		t.Fatalf("readLine() err = %v; want a read timeout while the reader is parked", err)
 	}
 
-	// Mirror RunCodexAppServer's shutdown: the closed stream EOFs a Scan-parked
-	// reader, close(readDone) releases a handoff-parked one, draining joins it.
+	// Mirror RunCodexAppServer's shutdown: the child closing stdout EOFs the
+	// Scan-parked reader, and draining readCh to its deferred close joins it.
 	_ = pw.Close()
 	joined := make(chan struct{})
 	go func() {
-		close(c.readDone)
 		for range c.readCh { //nolint:revive // drain-to-close joins the reader
 		}
 		close(joined)

@@ -350,12 +350,11 @@ func TestAwaitTurnCompletion_StallTimeoutWhenStreamSilent(t *testing.T) {
 	c := &appServerClient{scanner: sc, out: io.Discard, approvalPolicy: "never", stallTimeoutMs: 50}
 	c.startStdoutReader()
 	// The reader parks in scanner.Scan on the silent pipe; the stall fires via the
-	// consumer's per-read context deadline, not the reader. Close the pipe first so
-	// the parked reader observes EOF, then join it (it cannot reach EOF on its own
-	// here, so the generic drain helper would deadlock).
+	// consumer's per-read context deadline, not the reader. Close the pipe so the
+	// parked reader observes EOF (it cannot reach EOF on its own here), then drain
+	// readCh to join it.
 	t.Cleanup(func() {
 		_ = pw.Close()
-		close(c.readDone)
 		for range c.readCh { //nolint:revive // drain-to-close joins the reader
 		}
 	})

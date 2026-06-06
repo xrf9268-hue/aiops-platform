@@ -2800,14 +2800,13 @@ for line in sys.stdin:
 
 // startReaderForTest starts c's single long-lived stdout reader and joins it at
 // test end so no reader goroutine outlives the test (Go Code Review Comments,
-// "Goroutine Lifetimes"). It mirrors RunCodexAppServer's production drain:
-// close(readDone) releases a reader parked on a handoff, and draining readCh to
-// its deferred close blocks until the reader has returned.
+// "Goroutine Lifetimes"). It mirrors RunCodexAppServer's production drain: these
+// clients scan an in-memory buffer that reaches EOF, so draining readCh to its
+// deferred close receives any unconsumed line and blocks until the reader exits.
 func startReaderForTest(t *testing.T, c *appServerClient) {
 	t.Helper()
 	c.startStdoutReader()
 	t.Cleanup(func() {
-		close(c.readDone)
 		for range c.readCh { //nolint:revive // drain-to-close joins the reader
 		}
 	})

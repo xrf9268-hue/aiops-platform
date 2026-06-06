@@ -28,7 +28,7 @@ var oversizedProductionGoFileBaseline = map[string]int{
 	// #661 then decomposes the file by responsibility, dropping it under budget
 	// and removing this baseline; the #666 reader tests are that split's
 	// characterization harness.
-	"internal/runner/codex_app_server.go": 906,
+	"internal/runner/codex_app_server.go": 907,
 }
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {

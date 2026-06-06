@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -93,17 +94,19 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		terminateProcess(cmd)
 	}
 	_ = stdin.Close()
-	waitErr := cmd.Wait()
-	<-stderrDone
-	// Join the stdout reader so no goroutine outlives this call (Go Code Review
-	// Comments, "Goroutine Lifetimes"). cmd.Wait above has closed the process'
-	// stdout, so a reader parked in scanner.Scan now observes EOF and exits;
-	// close(readDone) releases one parked handing off a line; draining readCh to
-	// its deferred close receives any in-flight line and blocks until the reader
-	// has returned.
-	close(client.readDone)
+	// Drain stdout to EOF BEFORE cmd.Wait — the os/exec idiom (StdoutPipe doc:
+	// "incorrect to call Wait before all reads from the pipe have completed").
+	// The reader keeps scanning as the drain receives, so the child can never
+	// block writing to a full pipe; it finishes, observes the stdin EOF above (or
+	// the kill), exits, and its stdout EOF makes the reader close readCh, ending
+	// the drain. Waiting before draining would deadlock: a reader parked on an
+	// unconsumed send stalls stdout, the child blocks on write and never exits,
+	// and cmd.Wait never returns. Draining also joins the reader so no goroutine
+	// outlives this call (Go Code Review Comments, "Goroutine Lifetimes").
 	for range client.readCh { //nolint:revive // drain-to-close joins the reader goroutine
 	}
+	waitErr := cmd.Wait()
+	<-stderrDone
 	elapsed := time.Since(start)
 
 	writeAppServerArtifact(in.Workdir, buf)
@@ -280,14 +283,12 @@ func validateAppServerWorkdir(workdir string) error {
 type appServerClient struct {
 	stdin   io.Writer
 	scanner *bufio.Scanner
-	// readCh/readDone/readErr connect the single long-lived stdout reader
+	// readCh/readErr connect the single long-lived stdout reader
 	// (startStdoutReader, which documents the lifecycle) to the request/response
-	// consumer. readCh carries lines and is closed only by the reader; readDone is
-	// the go.dev/blog/pipelines "done" channel closed at shutdown; readErr is the
-	// sticky terminal scan error, published before close(readCh) so the close is
-	// the happens-before edge that lets the consumer read it race-free.
+	// consumer. readCh carries lines and is closed only by the reader; readErr is
+	// the sticky terminal scan error, published before close(readCh) so the close
+	// is the happens-before edge that lets the consumer read it race-free.
 	readCh              chan []byte
-	readDone            chan struct{}
 	readErr             error
 	out                 io.Writer
 	nextID              int
@@ -687,21 +688,18 @@ func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]a
 // source stage of https://go.dev/blog/pipelines: one goroutine owns the
 // bufio.Scanner (which is not safe for concurrent use) and continuously scans
 // lines, handing each to the request/response consumer over readCh. Its lifetime
-// is the app-server process: it exits on exactly one of
-//   - scanner.Scan returning false (stdout EOF or error — the process closed
-//     stdout, or cmd.Wait closed the pipe), recording a sticky readErr; or
-//   - readDone being closed at shutdown while it is parked handing off a line,
-//     which the blog prescribes so a sender whose consumer has moved on cannot
-//     "block indefinitely ... a resource leak".
+// is the app-server process: it exits when scanner.Scan returns false (stdout
+// EOF or error — the process closed stdout on exit), recording a sticky readErr.
 //
-// `defer close(readCh)` runs on every exit path, so a consumer waiting on readCh
-// is always released and the close is the happens-before edge that publishes
-// readErr (Go Code Review Comments, "Goroutine Lifetimes"). RunCodexAppServer
-// joins it by draining readCh after cmd.Wait. The channels are created here so
-// the goroutine and its communication state have a single owner.
+// The reader has no separate stop signal: the consumer never abandons readCh, it
+// drains to EOF at shutdown (RunCodexAppServer drains before cmd.Wait), so the
+// reader always keeps the pipe flowing and reaches EOF rather than parking on a
+// send forever (Go Code Review Comments, "Goroutine Lifetimes"). `defer
+// close(readCh)` runs on every exit path, so a consumer waiting on readCh is
+// always released and the close is the happens-before edge that publishes
+// readErr. readCh is created here so the goroutine and its channel have one owner.
 func (c *appServerClient) startStdoutReader() {
 	c.readCh = make(chan []byte)
-	c.readDone = make(chan struct{})
 	go func() {
 		defer close(c.readCh)
 		defer c.recoverReaderPanic()
@@ -709,11 +707,7 @@ func (c *appServerClient) startStdoutReader() {
 			// Scanner.Bytes() is invalidated by the next Scan (bufio docs); copy
 			// before handing the line across the goroutine boundary.
 			line := append([]byte(nil), c.scanner.Bytes()...)
-			select {
-			case c.readCh <- line:
-			case <-c.readDone:
-				return
-			}
+			c.readCh <- line
 		}
 		c.readErr = scanTerminalError(c.scanner)
 	}()
@@ -721,12 +715,19 @@ func (c *appServerClient) startStdoutReader() {
 
 // recoverReaderPanic is the stdout reader's deferred recovery: a panic in the
 // scan loop is published as readErr (so the consumer sees an error rather than
-// hanging on a never-closed readCh) and logged, not swallowed.
+// hanging on a never-closed readCh) and logged with a stack, not swallowed —
+// matching the orchestrator's recoverPanicValue convention (recover.go).
 func (c *appServerClient) recoverReaderPanic() {
-	if r := recover(); r != nil {
-		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %v", r)
-		log.Printf("event=codex_app_server_reader_panic error=%q", r)
+	r := recover()
+	if r == nil {
+		return
 	}
+	if err, ok := r.(error); ok {
+		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %w", err)
+	} else {
+		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %v", r)
+	}
+	log.Printf("event=codex_app_server_reader_panic panic=%v stack=%q", r, debug.Stack())
 }
 
 // scanTerminalError maps a finished scanner to the terminal error the consumer
