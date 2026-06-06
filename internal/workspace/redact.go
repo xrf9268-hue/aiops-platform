@@ -19,6 +19,12 @@ import (
 // `/`?`#`/whitespace that ends it) — matching MaskCloneURL rather than stopping
 // at the first `@` and leaking the password tail. A `@` in a path/query (after
 // the authority delimiter) is therefore never mistaken for basic-auth userinfo.
+//
+// The agreement is on the splitting rule, not every input: MaskCloneURL also
+// fails closed for a *whole-URL* input that url.Parse rejects (a malformed port,
+// a space in the userinfo). That case does not arise here because a URL embedded
+// in free text ends at whitespace — the `\s` in the class is a correct token
+// boundary, so a malformed-userinfo tail is simply outside the matched URL.
 var credentialURLRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#\s]*@`)
 
 // redactCredentials strips basic-auth userinfo from every URL embedded in s so a

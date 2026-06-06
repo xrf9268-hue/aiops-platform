@@ -5,27 +5,65 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
 
 // MaskCloneURL strips embedded basic-auth from a clone URL so it is safe to log
-// or display. URLs that do not parse as net/url (notably the SSH-style
-// git@host:path form) return unchanged, since that form does not carry
-// userinfo. A bare username with no password is also stripped: by convention an
-// embedded user in an HTTPS clone URL is a token alias (e.g. "oauth2",
-// "x-access-token", or the token itself), not a real account name.
+// or display. The SSH-style git@host:path form carries no userinfo and is
+// returned unchanged — url.Parse rejects it (a colon in the first path segment)
+// and the fallback then finds no `scheme://` authority to strip. A bare
+// username with no password is also stripped: by convention an embedded user in
+// an HTTPS clone URL is a token alias (e.g. "oauth2", "x-access-token", or the
+// token itself), not a real account name.
+//
+// Fail closed: a credentialed URL that does not parse as net/url (e.g. a
+// malformed port or a space in the userinfo) must still not leak its credential
+// into a log or error string, so a conservative string strip of
+// `scheme://userinfo@` runs on the url.Parse error path. Returning the raw
+// string there would leak the token — the same masking-must-not-leak class as
+// #469/#483 (#676).
 func MaskCloneURL(raw string) string {
 	if raw == "" {
 		return raw
 	}
-	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if u, err := url.Parse(raw); err == nil {
+		if u.User == nil {
+			return raw
+		}
+		u.User = nil
+		return u.String()
+	}
+	return stripCloneURLUserinfo(raw)
+}
+
+// stripCloneURLUserinfo removes a `userinfo@` prefix from the authority of a
+// scheme://-form URL using only string operations, so it masks even when
+// url.Parse rejects the input. It mirrors url.Parse's rule that userinfo ends at
+// the last `@` in the authority, and it leaves an `@` in the path/query
+// untouched. Inputs without a `scheme://` authority (the SSH scp form
+// git@host:path, or a plain path) carry no basic-auth userinfo and are returned
+// unchanged.
+func stripCloneURLUserinfo(raw string) string {
+	const sep = "://"
+	schemeIdx := strings.Index(raw, sep)
+	if schemeIdx < 0 {
 		return raw
 	}
-	u.User = nil
-	return u.String()
+	authStart := schemeIdx + len(sep)
+	rest := raw[authStart:]
+	authority := rest
+	tail := ""
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		authority, tail = rest[:end], rest[end:]
+	}
+	at := strings.LastIndex(authority, "@")
+	if at < 0 {
+		return raw
+	}
+	return raw[:authStart] + authority[at+1:] + tail
 }
 
 // defaultWorkspaceRoot resolves SPEC §6.4's `<system-temp>/symphony_workspaces`
