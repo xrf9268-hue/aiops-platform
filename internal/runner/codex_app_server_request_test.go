@@ -9,6 +9,7 @@ package runner
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -99,5 +100,128 @@ func TestRequest_ReadErrorPropagates(t *testing.T) {
 	_, err := c.request(context.Background(), "initialize", nil)
 	if err == nil {
 		t.Fatalf("request() err = nil; want a read error on an empty stream")
+	}
+}
+
+func TestNumberID(t *testing.T) {
+	tests := []struct {
+		name   string
+		in     any
+		want   int
+		wantOK bool
+	}{
+		{name: "integral float preserved", in: float64(7), want: 7, wantOK: true},
+		{name: "zero float preserved", in: float64(0), want: 0, wantOK: true},
+		{name: "negative integral float preserved", in: float64(-3), want: -3, wantOK: true},
+		{name: "int preserved", in: 42, want: 42, wantOK: true},
+		{name: "fractional rejected", in: 1.5, want: 0, wantOK: false},
+		{name: "NaN rejected", in: math.NaN(), want: 0, wantOK: false},
+		{name: "positive infinity rejected", in: math.Inf(1), want: 0, wantOK: false},
+		{name: "negative infinity rejected", in: math.Inf(-1), want: 0, wantOK: false},
+		{name: "out-of-range magnitude rejected", in: 1e19, want: 0, wantOK: false},
+		{name: "non-number rejected", in: "0", want: 0, wantOK: false},
+		{name: "nil rejected", in: nil, want: 0, wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := numberID(tt.in)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("numberID(%v) = (%d, %v); want (%d, %v)", tt.in, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestRequest_FractionalIDRejectedNotTruncated(t *testing.T) {
+	// The old numberID truncated id 0.5 to 0 and wrongly matched this request
+	// (id 0), returning the stray result. A fractional id must now be surfaced as
+	// a malformed response instead of truncate-matching the wrong request (#671).
+	c, _ := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":0.5,"result":{"stray":true}}`,
+	})
+	_, err := c.request(context.Background(), "thread/start", nil)
+	if err == nil {
+		t.Fatalf("request() err = nil; want a response error for a fractional id")
+	}
+	if cat, ok := ErrorCategory(err); !ok || cat != CategoryResponseError {
+		t.Errorf("ErrorCategory(%v) = (%v, %v); want (CategoryResponseError, true)", err, cat, ok)
+	}
+}
+
+func TestRequest_OutOfRangeIDReturnsResponseError(t *testing.T) {
+	c, _ := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":1e19,"result":{"ok":true}}`,
+	})
+	_, err := c.request(context.Background(), "thread/start", nil)
+	if err == nil {
+		t.Fatalf("request() err = nil; want a response error for an out-of-range id")
+	}
+	if cat, ok := ErrorCategory(err); !ok || cat != CategoryResponseError {
+		t.Errorf("ErrorCategory(%v) = (%v, %v); want (CategoryResponseError, true)", err, cat, ok)
+	}
+}
+
+// TestResponseForID pins the extracted response-matching helper directly at its
+// own boundary (the request-loop tests above exercise it only indirectly): a
+// matching id returns the result or a CategoryResponseError, a mismatched
+// integer id and an absent id are both skipped as interleaved messages, and a
+// present-but-non-integer id is surfaced as a CategoryResponseError (#671).
+func TestResponseForID(t *testing.T) {
+	const id = 7
+	tests := []struct {
+		name        string
+		msg         map[string]any
+		wantMatched bool
+		wantResult  map[string]any
+		wantErrCat  RunnerErrorCategory // "" => want nil err
+	}{
+		{
+			name:        "matching id returns result",
+			msg:         map[string]any{"id": float64(7), "result": map[string]any{"ok": true}},
+			wantMatched: true,
+			wantResult:  map[string]any{"ok": true},
+		},
+		{
+			name:        "matching id with error member is a response error",
+			msg:         map[string]any{"id": float64(7), "error": map[string]any{"code": float64(-1)}},
+			wantMatched: true,
+			wantErrCat:  CategoryResponseError,
+		},
+		{
+			name:        "mismatched integer id is skipped",
+			msg:         map[string]any{"id": float64(99), "result": map[string]any{"stray": true}},
+			wantMatched: false,
+		},
+		{
+			name:        "absent id is skipped as a notification",
+			msg:         map[string]any{"method": "turn/progress"},
+			wantMatched: false,
+		},
+		{
+			name:        "present non-integer id is a response error",
+			msg:         map[string]any{"id": 1.5, "result": map[string]any{"stray": true}},
+			wantMatched: true,
+			wantErrCat:  CategoryResponseError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, matched, err := responseForID(tt.msg, id)
+			if matched != tt.wantMatched {
+				t.Fatalf("responseForID(%v, %d) matched = %v; want %v", tt.msg, id, matched, tt.wantMatched)
+			}
+			if tt.wantErrCat == "" {
+				if err != nil {
+					t.Fatalf("responseForID(%v, %d) err = %v; want nil", tt.msg, id, err)
+				}
+			} else if cat, ok := ErrorCategory(err); !ok || cat != tt.wantErrCat {
+				t.Fatalf("responseForID(%v, %d) ErrorCategory = (%v, %v); want (%v, true)", tt.msg, id, cat, ok, tt.wantErrCat)
+			}
+			for k, want := range tt.wantResult {
+				if result[k] != want {
+					t.Fatalf("responseForID(%v, %d) result[%q] = %v; want %v", tt.msg, id, k, result[k], want)
+				}
+			}
+		})
 	}
 }
