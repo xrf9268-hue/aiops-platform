@@ -90,7 +90,13 @@ type apiStateCounts struct {
 	ReconcileStoppedWithProgressTotal int64 `json:"reconcile_stopped_with_progress_total"`
 	AgentHandoffReconcileStopped      int   `json:"agent_handoff_reconcile_stopped"`
 	AgentHandoffReconcileStoppedTotal int64 `json:"agent_handoff_reconcile_stopped_total"`
-	OperatorTerminalStops             int   `json:"operator_terminal_stops"`
+	// OperatorTerminalStops is the size of the FIFO-bounded recent D35 latch set
+	// (the same set published as `state.operator_terminal_stops`).
+	// OperatorTerminalStopsTotal is the lifetime monotonic counter that survives
+	// the #667 cap eviction, so a long-running worker that has rotated past the
+	// bound still exposes the true number of distinct operator-terminal-stops.
+	OperatorTerminalStops      int   `json:"operator_terminal_stops"`
+	OperatorTerminalStopsTotal int64 `json:"operator_terminal_stops_total"`
 }
 type apiStateRunning struct {
 	IssueID    orchestrator.IssueID `json:"issue_id"`
@@ -641,6 +647,7 @@ func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 		AgentHandoffReconcileStopped:      len(view.AgentHandoffReconcileStopped),
 		AgentHandoffReconcileStoppedTotal: view.CumulativeAgentHandoffReconcileStoppedTotal,
 		OperatorTerminalStops:             len(view.OperatorTerminalStops),
+		OperatorTerminalStopsTotal:        view.CumulativeOperatorTerminalStopsTotal,
 	}
 }
 

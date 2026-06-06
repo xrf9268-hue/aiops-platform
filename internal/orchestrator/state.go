@@ -415,6 +415,8 @@ func (s *OrchestratorState) RecordOperatorTerminalStop(id IssueID, issue tracker
 	}
 	s.OperatorTerminalStops[id] = entry
 	s.operatorTerminalStopOrder = append(s.operatorTerminalStopOrder, id)
+	// Counted here, after the repeat early-return — intentionally unlike
+	// recordCompleted, which counts every call. A re-observed stop is not a new stop.
 	s.CumulativeOperatorTerminalStopsTotal++
 	if s.MaxRecentOperatorTerminalStops > 0 && len(s.operatorTerminalStopOrder) > s.MaxRecentOperatorTerminalStops {
 		oldest := s.operatorTerminalStopOrder[0]

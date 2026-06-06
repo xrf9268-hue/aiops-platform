@@ -795,6 +795,19 @@ func TestRecordOperatorTerminalStop_CapEdgeCases(t *testing.T) {
 		if got, want := s.CumulativeOperatorTerminalStopsTotal, int64(2); got != want {
 			t.Fatalf("CumulativeOperatorTerminalStopsTotal = %d; want %d", got, want)
 		}
+
+		// An evicted issue re-latches cleanly on a later stop (fresh-entry branch):
+		// it is re-suppressed and the cumulative counts it as a new distinct stop.
+		latch(s, 0)
+		if !s.IsOperatorTerminalStopped("issue-0") {
+			t.Fatalf("issue-0 should be re-latched after a later stop")
+		}
+		if s.IsOperatorTerminalStopped("issue-1") {
+			t.Fatalf("issue-1 should now be evicted (re-latched issue-0 is newest at cap=1)")
+		}
+		if got, want := s.CumulativeOperatorTerminalStopsTotal, int64(3); got != want {
+			t.Fatalf("CumulativeOperatorTerminalStopsTotal after re-latch = %d; want %d", got, want)
+		}
 	})
 
 	t.Run("cap=0 disables eviction", func(t *testing.T) {

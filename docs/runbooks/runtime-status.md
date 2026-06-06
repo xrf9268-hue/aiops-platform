@@ -146,7 +146,8 @@ the shape here without updating the handler — or vice versa — fails the buil
     "reconcile_stopped_with_progress_total": 2,
     "agent_handoff_reconcile_stopped": 3,
     "agent_handoff_reconcile_stopped_total": 4,
-    "operator_terminal_stops": 1
+    "operator_terminal_stops": 1,
+    "operator_terminal_stops_total": 1
   },
   "running": [
     {
@@ -231,7 +232,8 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 | `agent_handoff_reconcile_stopped` | Size of the FIFO-bounded recent set of reconcile-stopped runs that observed the guarded `linear_graphql` current issue move to a non-active state before reconcile made the issue ineligible. This covers the successful delivery visibility gap where the agent moved the issue and the worker was stopped instead of exiting cleanly; generic Linear comments, workpad writes, and unrelated mutations do not count as delivery. It does not overlap `completed`, but it may overlap `reconcile_stopped_with_progress` when the handoff also completed a turn before reconcile reaped it. |
 | `agent_handoff_reconcile_stopped_total` | Monotonic counter of agent-handoff reconcile-stop transitions since process start. |
-| `operator_terminal_stops` | Number of process-local Operator Terminal Stop latches recorded since this worker observed terminal tracker state for the issue without a structured agent-owned current-issue handoff fact. A latched issue is not re-dispatched by this process even if the tracker later reads active. |
+| `operator_terminal_stops` | Size of the FIFO-bounded recent set of process-local Operator Terminal Stop latches (capped by `MaxRecentOperatorTerminalStops`, default 1000, #667). A latch is recorded when this worker observes terminal tracker state for an issue without a structured agent-owned current-issue handoff fact; a latched issue is not re-dispatched by this process even if the tracker later reads active. |
+| `operator_terminal_stops_total` | Monotonic counter of distinct Operator Terminal Stop latches since process start, surviving the #667 cap eviction. Use this, not `operator_terminal_stops`, for a lifetime number once a long-running worker has rotated past the bound; the difference between the two is the count evicted from the bounded set. |
 
 There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
 backoff (visible under `retrying`), not parked in a suppression bucket — the
