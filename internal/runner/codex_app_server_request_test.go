@@ -13,7 +13,7 @@ import (
 )
 
 func TestRequest_ReturnsMatchingResult(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"jsonrpc":"2.0","id":0,"result":{"thread":{"id":"t-1"}}}`,
 	})
 	got, err := c.request(context.Background(), "thread/start", map[string]any{"x": 1})
@@ -27,7 +27,7 @@ func TestRequest_ReturnsMatchingResult(t *testing.T) {
 }
 
 func TestRequest_ErrorResponseReturnsResponseErrorCategory(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"jsonrpc":"2.0","id":0,"error":{"code":-32600,"message":"bad request"}}`,
 	})
 	_, err := c.request(context.Background(), "thread/start", nil)
@@ -40,7 +40,7 @@ func TestRequest_ErrorResponseReturnsResponseErrorCategory(t *testing.T) {
 }
 
 func TestRequest_MissingResultReturnsEmptyMap(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"jsonrpc":"2.0","id":0}`, // matching id, no result field
 	})
 	got, err := c.request(context.Background(), "initialize", nil)
@@ -56,7 +56,7 @@ func TestRequest_MissingResultReturnsEmptyMap(t *testing.T) {
 }
 
 func TestRequest_SkipsInterleavedNotificationThenReturns(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		// A notification (no id) arrives before the response; request must
 		// dispatch it via handleNotification and keep reading.
 		`{"jsonrpc":"2.0","method":"turn/progress","params":{"message":"working"}}`,
@@ -75,7 +75,7 @@ func TestRequest_SkipsInterleavedNotificationThenReturns(t *testing.T) {
 }
 
 func TestRequest_SkipsDifferentIdMessageThenReturns(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		// A message carrying a DIFFERENT numeric id must not be mistaken for this
 		// request's response (id 0); it is dispatched as a notification and the
 		// loop keeps reading for the real response.
@@ -95,7 +95,7 @@ func TestRequest_SkipsDifferentIdMessageThenReturns(t *testing.T) {
 }
 
 func TestRequest_ReadErrorPropagates(t *testing.T) {
-	c, _ := newTurnLoopClient(nil) // empty stream: the read hits EOF before any response
+	c, _ := newTurnLoopClient(t, nil) // empty stream: the read hits EOF before any response
 	_, err := c.request(context.Background(), "initialize", nil)
 	if err == nil {
 		t.Fatalf("request() err = nil; want a read error on an empty stream")

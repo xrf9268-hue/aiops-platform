@@ -33,7 +33,8 @@ import (
 // newline-delimited JSON-RPC lines. Server-request replies and tool-call
 // outputs land in the returned stdin buffer. opts mutate the client before the
 // loop runs (e.g. to set stallTimeoutMs or override the approval policy).
-func newTurnLoopClient(lines []string, opts ...func(*appServerClient)) (*appServerClient, *bytes.Buffer) {
+func newTurnLoopClient(t *testing.T, lines []string, opts ...func(*appServerClient)) (*appServerClient, *bytes.Buffer) {
+	t.Helper()
 	var stdout bytes.Buffer
 	for _, line := range lines {
 		stdout.WriteString(line)
@@ -51,6 +52,7 @@ func newTurnLoopClient(lines []string, opts ...func(*appServerClient)) (*appServ
 	for _, opt := range opts {
 		opt(c)
 	}
+	startReaderForTest(t, c)
 	return c, stdin
 }
 
@@ -63,7 +65,7 @@ func runtimeEventNames(c *appServerClient) []string {
 }
 
 func TestAwaitTurnCompletion_TurnCompletedSuccess(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/completed","params":{"lastAssistantMessage":"all done","continue":false}}`,
 	})
 	if err := c.awaitTurnCompletion(context.Background()); err != nil {
@@ -81,7 +83,7 @@ func TestAwaitTurnCompletion_TurnCompletedSuccess(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_TurnCompletedSetsContinueRun(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/completed","params":{"continue":true,"lastAssistantMessage":"keep going"}}`,
 	})
 	if err := c.awaitTurnCompletion(context.Background()); err != nil {
@@ -93,7 +95,7 @@ func TestAwaitTurnCompletion_TurnCompletedSetsContinueRun(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_TurnCompletedFailedStatusIsTurnFailed(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/completed","params":{"status":"failed","reason":"boom"}}`,
 	})
 	err := c.awaitTurnCompletion(context.Background())
@@ -106,7 +108,7 @@ func TestAwaitTurnCompletion_TurnCompletedFailedStatusIsTurnFailed(t *testing.T)
 }
 
 func TestAwaitTurnCompletion_TurnFailed(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/failed","params":{"reason":"explode"}}`,
 	})
 	err := c.awaitTurnCompletion(context.Background())
@@ -119,7 +121,7 @@ func TestAwaitTurnCompletion_TurnFailed(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_TurnCancelled(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/cancelled","params":{"reason":"user aborted"}}`,
 	})
 	err := c.awaitTurnCompletion(context.Background())
@@ -132,7 +134,7 @@ func TestAwaitTurnCompletion_TurnCancelled(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_UsageLimitIsQuotaBackoff(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"turn/completed","params":{"status":"failed","turn":{"error":{"codexErrorInfo":"usageLimitExceeded","message":"please try again in 30 seconds"}}}}`,
 	})
 	err := c.awaitTurnCompletion(context.Background())
@@ -149,7 +151,7 @@ func TestAwaitTurnCompletion_UsageLimitIsQuotaBackoff(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_NotificationRecordedThenContinues(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"method":"item/agentMessage","params":{"message":"thinking"}}`,
 		`{"method":"turn/completed","params":{}}`,
 	})
@@ -163,7 +165,7 @@ func TestAwaitTurnCompletion_NotificationRecordedThenContinues(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_OtherMessageRecordedThenContinues(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"foo":"bar"}`,
 		`{"method":"turn/completed","params":{}}`,
 	})
@@ -177,7 +179,7 @@ func TestAwaitTurnCompletion_OtherMessageRecordedThenContinues(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_MalformedProtocolLineRecordedThenContinues(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{
+	c, _ := newTurnLoopClient(t, []string{
 		`{"oops": not-valid-json`,
 		`{"method":"turn/completed","params":{}}`,
 	})
@@ -191,7 +193,7 @@ func TestAwaitTurnCompletion_MalformedProtocolLineRecordedThenContinues(t *testi
 }
 
 func TestAwaitTurnCompletion_NonProtocolLineReturnsDecodeError(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{`plain text not json`})
+	c, _ := newTurnLoopClient(t, []string{`plain text not json`})
 	err := c.awaitTurnCompletion(context.Background())
 	// A line that is not even a JSON object is a hard decode failure surfaced
 	// as a CategoryResponseError (classify by category, not by message text —
@@ -205,7 +207,7 @@ func TestAwaitTurnCompletion_NonProtocolLineReturnsDecodeError(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_InputRequiredNotification(t *testing.T) {
-	c, _ := newTurnLoopClient([]string{`{"method":"turn/input_required","params":{}}`})
+	c, _ := newTurnLoopClient(t, []string{`{"method":"turn/input_required","params":{}}`})
 	err := c.awaitTurnCompletion(context.Background())
 	if !IsInputRequired(err) {
 		t.Fatalf("awaitTurnCompletion() = %v; want *InputRequiredError", err)
@@ -221,7 +223,7 @@ func TestAwaitTurnCompletion_InputRequiredNotification(t *testing.T) {
 }
 
 func TestAwaitTurnCompletion_ServerRequestAutoApprovedThenContinues(t *testing.T) {
-	c, stdin := newTurnLoopClient([]string{
+	c, stdin := newTurnLoopClient(t, []string{
 		`{"id":7,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}`,
 		`{"method":"turn/completed","params":{}}`,
 	})
@@ -238,7 +240,7 @@ func TestAwaitTurnCompletion_ServerRequestAutoApprovedThenContinues(t *testing.T
 }
 
 func TestAwaitTurnCompletion_ServerRequestDeclinedIsInputRequired(t *testing.T) {
-	c, stdin := newTurnLoopClient([]string{
+	c, stdin := newTurnLoopClient(t, []string{
 		`{"id":9,"method":"item/commandExecution/requestApproval","params":{"command":"rm -rf /"}}`,
 	}, func(c *appServerClient) { c.approvalPolicy = "on-request" })
 	err := c.awaitTurnCompletion(context.Background())
@@ -254,7 +256,7 @@ func TestAwaitTurnCompletion_ServerRequestDeclinedIsInputRequired(t *testing.T) 
 }
 
 func TestAwaitTurnCompletion_RequestUserInputIsInputRequired(t *testing.T) {
-	c, stdin := newTurnLoopClient([]string{
+	c, stdin := newTurnLoopClient(t, []string{
 		`{"id":3,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q1"}]}}`,
 	})
 	err := c.awaitTurnCompletion(context.Background())
@@ -273,7 +275,7 @@ func TestAwaitTurnCompletion_UnsupportedToolCallRecordedThenContinues(t *testing
 	// With an empty tool set, item/tool/call resolves as an unsupported tool:
 	// the wire still gets a structured failure result and the loop continues,
 	// refreshing the stall clock, to the terminal turn/completed.
-	c, stdin := newTurnLoopClient([]string{
+	c, stdin := newTurnLoopClient(t, []string{
 		`{"id":5,"method":"item/tool/call","params":{"tool":"nope","arguments":{}}}`,
 		`{"method":"turn/completed","params":{}}`,
 	})
@@ -297,7 +299,7 @@ func TestReadTurnMessage_PreReadBudgetExhaustedReturnsStall(t *testing.T) {
 	// directly to pin both the Cause==nil discriminator and the no-read
 	// short-circuit (awaitTurnCompletion resets lastTerminal on entry, so the
 	// branch is unreachable through the full loop).
-	c, _ := newTurnLoopClient([]string{`{"method":"turn/completed","params":{}}`},
+	c, _ := newTurnLoopClient(t, []string{`{"method":"turn/completed","params":{}}`},
 		func(c *appServerClient) { c.stallTimeoutMs = 10 })
 	c.lastTerminal = time.Now().Add(-time.Second) // budget already exhausted
 	msg, raw, stallBudget, err := c.readTurnMessage(context.Background())
@@ -343,10 +345,19 @@ func TestAwaitTurnCompletion_StallTimeoutWhenStreamSilent(t *testing.T) {
 	// surface a *StallError rather than block forever. io.Pipe never delivers a
 	// line, so the per-read stall budget elapses on the first iteration.
 	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
 	sc := bufio.NewScanner(pr)
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 	c := &appServerClient{scanner: sc, out: io.Discard, approvalPolicy: "never", stallTimeoutMs: 50}
+	c.startStdoutReader()
+	// The reader parks in scanner.Scan on the silent pipe; the stall fires via the
+	// consumer's per-read context deadline, not the reader. Close the pipe so the
+	// parked reader observes EOF (it cannot reach EOF on its own here), then drain
+	// readCh to join it.
+	t.Cleanup(func() {
+		_ = pw.Close()
+		for range c.readCh { //nolint:revive // drain-to-close joins the reader
+		}
+	})
 	err := c.awaitTurnCompletion(context.Background())
 	if !IsStall(err) {
 		t.Fatalf("awaitTurnCompletion() = %v; want *StallError when the stream goes silent", err)
