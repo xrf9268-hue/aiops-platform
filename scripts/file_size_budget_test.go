@@ -20,9 +20,15 @@ var oversizedProductionGoFileBaseline = map[string]int{
 	// operator-terminal-stop latch cap. Per #667 (and the #661 burn-down note it
 	// cites), this cap must land *before* #661 decomposes state.go by
 	// responsibility, which then drops it well under budget and removes this baseline.
-	"internal/orchestrator/state.go":      1062,
-	"cmd/tui/main.go":                     904,
-	"internal/runner/codex_app_server.go": 840,
+	"internal/orchestrator/state.go": 1062,
+	"cmd/tui/main.go":                904,
+	// codex_app_server.go's baseline rose from 840 under #666, which replaces the
+	// per-read goroutine with a single long-lived stdout reader (the reader
+	// lifecycle the #661 burn-down comment flags as this file's priority split).
+	// #661 then decomposes the file by responsibility, dropping it under budget
+	// and removing this baseline; the #666 reader tests are that split's
+	// characterization harness.
+	"internal/runner/codex_app_server.go": 906,
 }
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {

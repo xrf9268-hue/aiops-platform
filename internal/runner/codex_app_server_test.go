@@ -2798,6 +2798,21 @@ for line in sys.stdin:
 	}
 }
 
+// startReaderForTest starts c's single long-lived stdout reader and joins it at
+// test end so no reader goroutine outlives the test (Go Code Review Comments,
+// "Goroutine Lifetimes"). It mirrors RunCodexAppServer's production drain:
+// close(readDone) releases a reader parked on a handoff, and draining readCh to
+// its deferred close blocks until the reader has returned.
+func startReaderForTest(t *testing.T, c *appServerClient) {
+	t.Helper()
+	c.startStdoutReader()
+	t.Cleanup(func() {
+		close(c.readDone)
+		for range c.readCh { //nolint:revive // drain-to-close joins the reader
+		}
+	})
+}
+
 // TestAppServerClient_ReadLineRejectsOversizedLine drives readLine directly
 // with a synthesized stdout stream where a single line exceeds the 10 MiB
 // SPEC §10.1 ceiling. The Scanner-bounded reader must surface the cap as a
@@ -2810,6 +2825,7 @@ func TestAppServerClient_ReadLineRejectsOversizedLine(t *testing.T) {
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 
 	c := &appServerClient{scanner: sc}
+	startReaderForTest(t, c)
 	_, err := c.readLine(context.Background())
 	if err == nil {
 		t.Fatal("readLine err = nil, want over-cap error")
@@ -2832,6 +2848,7 @@ func TestAppServerClient_ReadLineAcceptsLineAtCap(t *testing.T) {
 	sc.Buffer(make([]byte, 0, appServerScannerInitialBuf), maxAppServerLineBytes+1)
 
 	c := &appServerClient{scanner: sc}
+	startReaderForTest(t, c)
 	line, err := c.readLine(context.Background())
 	if err != nil {
 		t.Fatalf("readLine at cap err = %v, want nil (10 MiB is the documented inclusive limit)", err)

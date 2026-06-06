@@ -87,6 +87,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		out:               buf,
 		codexAppServerPID: appServerProcessPID(cmd, directCodexExec, sandboxEnabled),
 	}
+	client.startStdoutReader()
 	runErr := client.run(ctx, in, string(prompt))
 	if runErr != nil && ctx.Err() == nil {
 		terminateProcess(cmd)
@@ -94,6 +95,15 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	_ = stdin.Close()
 	waitErr := cmd.Wait()
 	<-stderrDone
+	// Join the stdout reader so no goroutine outlives this call (Go Code Review
+	// Comments, "Goroutine Lifetimes"). cmd.Wait above has closed the process'
+	// stdout, so a reader parked in scanner.Scan now observes EOF and exits;
+	// close(readDone) releases one parked handing off a line; draining readCh to
+	// its deferred close receives any in-flight line and blocks until the reader
+	// has returned.
+	close(client.readDone)
+	for range client.readCh { //nolint:revive // drain-to-close joins the reader goroutine
+	}
 	elapsed := time.Since(start)
 
 	writeAppServerArtifact(in.Workdir, buf)
@@ -268,8 +278,17 @@ func validateAppServerWorkdir(workdir string) error {
 }
 
 type appServerClient struct {
-	stdin               io.Writer
-	scanner             *bufio.Scanner
+	stdin   io.Writer
+	scanner *bufio.Scanner
+	// readCh/readDone/readErr connect the single long-lived stdout reader
+	// (startStdoutReader, which documents the lifecycle) to the request/response
+	// consumer. readCh carries lines and is closed only by the reader; readDone is
+	// the go.dev/blog/pipelines "done" channel closed at shutdown; readErr is the
+	// sticky terminal scan error, published before close(readCh) so the close is
+	// the happens-before edge that lets the consumer read it race-free.
+	readCh              chan []byte
+	readDone            chan struct{}
+	readErr             error
 	out                 io.Writer
 	nextID              int
 	codexAppServerPID   int
@@ -664,52 +683,99 @@ func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]a
 	return msg, line, nil
 }
 
-type readResult struct {
-	line []byte
-	err  error
+// startStdoutReader launches the single long-lived stdout reader. It is the
+// source stage of https://go.dev/blog/pipelines: one goroutine owns the
+// bufio.Scanner (which is not safe for concurrent use) and continuously scans
+// lines, handing each to the request/response consumer over readCh. Its lifetime
+// is the app-server process: it exits on exactly one of
+//   - scanner.Scan returning false (stdout EOF or error — the process closed
+//     stdout, or cmd.Wait closed the pipe), recording a sticky readErr; or
+//   - readDone being closed at shutdown while it is parked handing off a line,
+//     which the blog prescribes so a sender whose consumer has moved on cannot
+//     "block indefinitely ... a resource leak".
+//
+// `defer close(readCh)` runs on every exit path, so a consumer waiting on readCh
+// is always released and the close is the happens-before edge that publishes
+// readErr (Go Code Review Comments, "Goroutine Lifetimes"). RunCodexAppServer
+// joins it by draining readCh after cmd.Wait. The channels are created here so
+// the goroutine and its communication state have a single owner.
+func (c *appServerClient) startStdoutReader() {
+	c.readCh = make(chan []byte)
+	c.readDone = make(chan struct{})
+	go func() {
+		defer close(c.readCh)
+		defer c.recoverReaderPanic()
+		for c.scanner.Scan() {
+			// Scanner.Bytes() is invalidated by the next Scan (bufio docs); copy
+			// before handing the line across the goroutine boundary.
+			line := append([]byte(nil), c.scanner.Bytes()...)
+			select {
+			case c.readCh <- line:
+			case <-c.readDone:
+				return
+			}
+		}
+		c.readErr = scanTerminalError(c.scanner)
+	}()
+}
+
+// recoverReaderPanic is the stdout reader's deferred recovery: a panic in the
+// scan loop is published as readErr (so the consumer sees an error rather than
+// hanging on a never-closed readCh) and logged, not swallowed.
+func (c *appServerClient) recoverReaderPanic() {
+	if r := recover(); r != nil {
+		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %v", r)
+		log.Printf("event=codex_app_server_reader_panic error=%q", r)
+	}
+}
+
+// scanTerminalError maps a finished scanner to the terminal error the consumer
+// should observe once readCh closes. Scanner.Err is nil on io.EOF (bufio docs),
+// so a clean end-of-stream normalizes to io.EOF; an over-cap line keeps the
+// existing wrapped bufio.ErrTooLong contract.
+func scanTerminalError(sc *bufio.Scanner) error {
+	err := sc.Err()
+	if err == nil {
+		return io.EOF
+	}
+	if errors.Is(err, bufio.ErrTooLong) {
+		return fmt.Errorf("codex app-server line exceeded %d bytes: %w", maxAppServerLineBytes, err)
+	}
+	return err
 }
 
 func (c *appServerClient) readLine(ctx context.Context) ([]byte, error) {
-	ch := make(chan readResult, 1)
-	go func() {
-		if c.scanner.Scan() {
-			// scanner.Bytes() is invalidated by the next Scan; copy before
-			// crossing the goroutine boundary.
-			line := append([]byte(nil), c.scanner.Bytes()...)
-			ch <- readResult{line: line, err: nil}
-			return
-		}
-		err := c.scanner.Err()
-		if err == nil {
-			err = io.EOF
-		}
-		if errors.Is(err, bufio.ErrTooLong) {
-			err = fmt.Errorf("codex app-server line exceeded %d bytes: %w", maxAppServerLineBytes, err)
-		}
-		ch <- readResult{err: err}
-	}()
-
 	readTimeout := time.Duration(c.readTimeoutMs) * time.Millisecond
 	deadlineTimeout, hasDeadline := deadlineDuration(ctx)
 	if c.readTimeoutMs <= 0 || (hasDeadline && deadlineTimeout < readTimeout) {
-		return c.readLineOnce(ctx, ch, nil)
+		return c.readLineOnce(ctx, nil)
 	}
-	return c.readLineOnce(ctx, ch, time.After(readTimeout))
+	return c.readLineOnce(ctx, time.After(readTimeout))
 }
-func (c *appServerClient) readLineOnce(ctx context.Context, ch <-chan readResult, timeout <-chan time.Time) ([]byte, error) {
+
+// readLineOnce waits for the next line from the long-lived reader, the
+// per-read timeout, or context cancellation — whichever fires first. A closed
+// readCh means the reader has exited; it surfaces the reader's sticky readErr
+// (io.EOF when it stopped cleanly). The DeadlineExceeded preference is retained
+// so a read that loses the race to an expiring context is classified as the
+// deadline, not as the EOF the dying process subsequently produced.
+func (c *appServerClient) readLineOnce(ctx context.Context, timeout <-chan time.Time) ([]byte, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timeout:
 		return nil, &appServerReadTimeoutError{afterMs: c.readTimeoutMs}
-	case res := <-ch:
-		if res.err != nil {
+	case line, ok := <-c.readCh:
+		if !ok {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, ctx.Err()
 			}
-			return nil, res.err
+			if c.readErr != nil {
+				return nil, c.readErr
+			}
+			return nil, io.EOF
 		}
-		return res.line, nil
+		return line, nil
 	}
 }
 func deadlineDuration(ctx context.Context) (time.Duration, bool) {
