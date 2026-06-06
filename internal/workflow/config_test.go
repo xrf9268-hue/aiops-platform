@@ -2659,3 +2659,51 @@ hello
 		t.Fatalf("deny reason = %q, want tracker.api_key source env protection", reason)
 	}
 }
+
+// TestMaskCloneURL is the #676 direct coverage for the credential-masking
+// primitive guarding mirror.go / print_config.go / doctor.go. Each row asserts
+// the exact masked output and, where a credential is embedded, that the
+// sensitive substring never survives. The fail-closed rows (a malformed port or
+// a space in the userinfo make url.Parse error) cover the leak this coverage
+// exposed: returning the raw string there would leak the token (#469/#483 class).
+func TestMaskCloneURL(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     string
+		want   string
+		secret string // sensitive substring that must be absent from want; "" to skip
+	}{
+		{"https user:token userinfo stripped", "https://user:token@host/r.git", "https://host/r.git", "token"},
+		{"https password containing @", "https://u:p@ss@host/r.git", "https://host/r.git", "p@ss"},
+		{"https bare token-username stripped", "https://oauth2@host/r.git", "https://host/r.git", "oauth2"},
+		{"ssh url-form userinfo stripped", "ssh://git@host/owner/repo.git", "ssh://host/owner/repo.git", ""},
+		{"ssh scp-form unchanged", "git@host:owner/repo.git", "git@host:owner/repo.git", ""},
+		{"empty unchanged", "", "", ""},
+		{"non-url unchanged", "not a url at all", "not a url at all", ""},
+		{"no-userinfo unparseable port unchanged", "https://host:notaport/r.git", "https://host:notaport/r.git", ""},
+		{"at-sign in path not stripped", "https://host/p@th", "https://host/p@th", ""},
+		// Fail closed: url.Parse rejects these (malformed port / space in userinfo),
+		// but the embedded credential must still be stripped, not leaked.
+		{"credentialed bad port fail-closed", "https://user:token@host:notaport/r.git", "https://host:notaport/r.git", "token"},
+		{"credentialed space in userinfo fail-closed", "https://user:tok en@host/r.git", "https://host/r.git", "tok en"},
+		// Fail-closed strip must honor the authority/tail split: the credential is
+		// in the userinfo (stripped) while an @ in the path tail is preserved.
+		{"credentialed fail-closed with @ in path", "https://user:token@host:notaport/p@th", "https://host:notaport/p@th", "token"},
+		// Fail-closed strip with no path/query/fragment tail (the end<0 branch).
+		{"credentialed fail-closed no tail", "https://user:token@host:notaport", "https://host:notaport", "token"},
+		// Password containing @ AND a malformed port: url.Parse fails, so the
+		// fallback must split on the LAST @ in the authority, not the first.
+		{"credentialed password-@ fail-closed last-at", "https://u:p@ss@host:notaport/r.git", "https://host:notaport/r.git", "p@ss"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := MaskCloneURL(tc.in)
+			if got != tc.want {
+				t.Errorf("MaskCloneURL(%q) = %q; want %q", tc.in, got, tc.want)
+			}
+			if tc.secret != "" && strings.Contains(got, tc.secret) {
+				t.Errorf("MaskCloneURL(%q) = %q; leaked credential substring %q", tc.in, got, tc.secret)
+			}
+		})
+	}
+}
