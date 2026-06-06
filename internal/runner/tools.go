@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -316,12 +317,68 @@ func giteaIssueLabelsInputSchema() map[string]any {
 
 const maxLinearGraphQLResponseBytes = 1 << 20
 
+// defaultDynamicToolHTTPTimeout bounds a single dynamic-tool HTTP round trip
+// (linear_graphql, gitea_issue_labels). The surrounding agent-turn context is
+// far larger, so without a tight per-request deadline a hung tracker endpoint
+// would stall the whole turn — exactly the failure class the repo's "all
+// external I/O is timeout-bounded" rule exists to prevent (#287/#405). A proxy
+// may override via its httpTimeout field; zero means use this default.
+const defaultDynamicToolHTTPTimeout = 30 * time.Second
+
+func dynamicToolRequestTimeout(override time.Duration) time.Duration {
+	if override > 0 {
+		return override
+	}
+	return defaultDynamicToolHTTPTimeout
+}
+
+// maxToolErrorBodyRunes caps how much of a diagnostic response body (a non-2xx
+// status or an unparseable success body) is surfaced in an agent-facing tool
+// result. A valid success body is the agent's requested payload and is returned
+// in full (still bounded by maxLinearGraphQLResponseBytes); a diagnostic body
+// is truncated to keep a large error page from flooding agent context.
+const maxToolErrorBodyRunes = 2048
+
+// redactToolSecrets replaces every occurrence of each non-empty secret with a
+// placeholder. EVERY response body placed in an agent-facing tool result —
+// success, failure, or unparseable — passes through it, so a tracker server or
+// a fronting proxy that echoes the Authorization value cannot leak the
+// credential to the agent, which SPEC token isolation (#76/#298) forbids
+// regardless of HTTP status. Real tracker tokens are long, high-entropy
+// strings, so a match means an actual echo, not legitimate response content.
+func redactToolSecrets(s string, secrets ...string) string {
+	for _, secret := range secrets {
+		if secret = strings.TrimSpace(secret); secret != "" {
+			s = strings.ReplaceAll(s, secret, "[REDACTED]")
+		}
+	}
+	return s
+}
+
+// sanitizeToolErrorBody redacts secrets and then truncates to
+// maxToolErrorBodyRunes. It is for diagnostic bodies (non-2xx or unparseable)
+// that are surfaced only to help the agent understand a failure, so unlike a
+// success body they are bounded to keep a large error page from flooding agent
+// context. Redaction runs before truncation so a token straddling the
+// truncation boundary cannot leave an un-redacted head fragment behind.
+func sanitizeToolErrorBody(body []byte, secrets ...string) string {
+	s := redactToolSecrets(string(body), secrets...)
+	if runes := []rune(s); len(runes) > maxToolErrorBodyRunes {
+		return string(runes[:maxToolErrorBodyRunes]) + "…[truncated]"
+	}
+	return s
+}
+
 const defaultLinearGraphQLEndpoint = tracker.DefaultLinearEndpoint
 
 type linearGraphQLProxy struct {
 	apiKey  string
 	baseURL string
 	http    *http.Client
+	// httpTimeout overrides the per-request deadline applied to each Linear
+	// GraphQL round trip. Zero uses defaultDynamicToolHTTPTimeout; tests set a
+	// tiny value to exercise the timeout path.
+	httpTimeout time.Duration
 	// allowMutations toggles the SPEC §15.5 harness narrowing (#298).
 	// When false (the zero value), the proxy refuses every mutation the
 	// agent submits before any HTTP request is built. Harness-internal
@@ -483,7 +540,10 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 		})
 	}
 
-	req, err := p.linearGraphQLRequest(ctx, body)
+	reqCtx, cancel := context.WithTimeout(ctx, dynamicToolRequestTimeout(p.httpTimeout))
+	defer cancel()
+
+	req, err := p.linearGraphQLRequest(reqCtx, body)
 	if err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
@@ -503,9 +563,9 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 		})
 	}
 	defer func() { _ = resp.Body.Close() }()
-	respBody, err := readLinearGraphQLResponseBody(resp.Body)
+	respBody, err := readDynamicToolResponseBody(resp.Body)
 	if err != nil {
-		if errors.Is(err, errLinearGraphQLResponseTooLarge) {
+		if errors.Is(err, errDynamicToolResponseTooLarge) {
 			return dynamicToolFailure(map[string]any{
 				"error": map[string]any{
 					"message": "Linear GraphQL response exceeded maximum size.",
@@ -525,11 +585,11 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			"error": map[string]any{
 				"message": "Linear GraphQL request failed before receiving a successful response.",
 				"status":  resp.Status,
-				"body":    string(respBody),
+				"body":    sanitizeToolErrorBody(respBody, p.apiKey),
 			},
 		})
 	}
-	result, toolErr := linearGraphQLToolResponse(respBody)
+	result, toolErr := linearGraphQLToolResponse(respBody, p.apiKey)
 	if toolErr == nil && op.Kind == linearGraphQLOperationMutation && toolResultSucceeded(result) {
 		if p.currentIssueGuard.postOperatorTerminalStop(ctx) {
 			if sink := linearGraphQLPostStopMutationSinkFrom(ctx); sink != nil {
@@ -585,16 +645,21 @@ func (p linearGraphQLProxy) linearHTTPClient() *http.Client {
 	return http.DefaultClient
 }
 
-var errLinearGraphQLResponseTooLarge = errors.New("linear GraphQL response exceeded maximum size")
+var errDynamicToolResponseTooLarge = errors.New("dynamic tool response exceeded maximum size")
 
-func readLinearGraphQLResponseBody(r io.Reader) ([]byte, error) {
+// readDynamicToolResponseBody reads up to maxLinearGraphQLResponseBytes from r,
+// returning errDynamicToolResponseTooLarge when the cap is exceeded so the
+// caller can fail loud instead of silently truncating an oversized body into a
+// tool result. Shared by the linear_graphql and gitea_issue_labels proxies so
+// the cap is enforced in exactly one place.
+func readDynamicToolResponseBody(r io.Reader) ([]byte, error) {
 	var body bytes.Buffer
 	n, err := body.ReadFrom(io.LimitReader(r, maxLinearGraphQLResponseBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if n > maxLinearGraphQLResponseBytes {
-		return nil, fmt.Errorf("%w: %d", errLinearGraphQLResponseTooLarge, maxLinearGraphQLResponseBytes)
+		return nil, fmt.Errorf("%w: %d", errDynamicToolResponseTooLarge, maxLinearGraphQLResponseBytes)
 	}
 	return body.Bytes(), nil
 }
@@ -658,14 +723,22 @@ func toolResultSucceeded(result string) bool {
 	return envelope.Success
 }
 
-func linearGraphQLToolResponse(body []byte) (string, error) {
+// linearGraphQLToolResponse wraps a 2xx Linear body into a tool result. secret
+// is the workspace token: it is redacted from every body surfaced to the agent
+// — the valid-JSON success/GraphQL-errors payload and the unparseable-body
+// diagnostic alike — so a proxy that echoes the Authorization value in a 200
+// response cannot leak the credential past the token-isolation boundary
+// (#76/#298). The unparseable body is also truncated; a success body is the
+// agent's requested payload and is preserved in full (still bounded by the
+// readDynamicToolResponseBody size cap).
+func linearGraphQLToolResponse(body []byte, secret string) (string, error) {
 	var decoded map[string]any
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return dynamicToolFailure(map[string]any{
 			"error": map[string]any{
 				"message": "Linear GraphQL response was not valid JSON.",
 				"reason":  err.Error(),
-				"body":    string(body),
+				"body":    sanitizeToolErrorBody(body, secret),
 			},
 		})
 	}
@@ -673,7 +746,7 @@ func linearGraphQLToolResponse(body []byte) (string, error) {
 	if errors, ok := decoded["errors"].([]any); ok && len(errors) > 0 {
 		success = false
 	}
-	return dynamicToolResult(success, string(body))
+	return dynamicToolResult(success, redactToolSecrets(string(body), secret))
 }
 
 func dynamicToolFailure(payload any) (string, error) {

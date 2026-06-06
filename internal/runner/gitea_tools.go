@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
@@ -21,6 +23,10 @@ type giteaIssueLabelsProxy struct {
 	owner   string
 	repo    string
 	http    *http.Client
+	// httpTimeout overrides the per-request deadline applied to each Gitea API
+	// round trip. Zero uses defaultDynamicToolHTTPTimeout; tests set a tiny
+	// value to exercise the timeout path.
+	httpTimeout time.Duration
 }
 
 type giteaIssueLabel struct {
@@ -161,7 +167,10 @@ func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.
 	if failure != "" {
 		return "", failure
 	}
-	result, _ := dynamicToolResult(true, string(respBody))
+	// Redact the token from the 2xx body too: SPEC token isolation (#76/#298)
+	// holds regardless of status, so a Gitea/proxy that echoes the
+	// Authorization value in a success response must not reach the agent.
+	result, _ := dynamicToolResult(true, redactToolSecrets(string(respBody), p.token))
 	return result, ""
 }
 
@@ -198,6 +207,8 @@ func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *htt
 }
 
 func (p giteaIssueLabelsProxy) doGiteaRequest(ctx context.Context, client *http.Client, method, endpoint string, body []byte) (int, []byte, string) {
+	ctx, cancel := context.WithTimeout(ctx, dynamicToolRequestTimeout(p.httpTimeout))
+	defer cancel()
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -221,21 +232,26 @@ func (p giteaIssueLabelsProxy) doGiteaRequest(ctx context.Context, client *http.
 		return 0, nil, failure
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var respBody bytes.Buffer
-	_, readErr := respBody.ReadFrom(io.LimitReader(resp.Body, maxLinearGraphQLResponseBytes+1))
+	respBody, readErr := readDynamicToolResponseBody(resp.Body)
 	if readErr != nil {
+		if errors.Is(readErr, errDynamicToolResponseTooLarge) {
+			failure, _ := dynamicToolFailure(map[string]any{
+				"error": map[string]any{"message": "Gitea label response exceeded maximum size", "limit": maxLinearGraphQLResponseBytes},
+			})
+			return resp.StatusCode, nil, failure
+		}
 		failure, _ := dynamicToolFailure(map[string]any{
 			"error": map[string]any{"message": "Gitea label response body could not be read", "reason": readErr.Error()},
 		})
-		return resp.StatusCode, respBody.Bytes(), failure
+		return resp.StatusCode, nil, failure
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		failure, _ := dynamicToolFailure(map[string]any{
-			"error": map[string]any{"message": "Gitea label request failed", "status": resp.Status, "body": respBody.String()},
+			"error": map[string]any{"message": "Gitea label request failed", "status": resp.Status, "body": sanitizeToolErrorBody(respBody, p.token)},
 		})
-		return resp.StatusCode, respBody.Bytes(), failure
+		return resp.StatusCode, respBody, failure
 	}
-	return resp.StatusCode, respBody.Bytes(), ""
+	return resp.StatusCode, respBody, ""
 }
 
 func (p giteaIssueLabelsProxy) decodeIssueLabelsFromToolResult(result, source string) ([]giteaIssueLabel, string) {
