@@ -649,6 +649,186 @@ func TestFinishRunSucceeded_CapsCompletedAndCountsCumulative(t *testing.T) {
 	}
 }
 
+// TestRecordOperatorTerminalStop_CapsLatchAndCountsCumulative pins the #667
+// contract: the OperatorTerminalStops map and operatorTerminalStopOrder slice
+// are bounded by MaxRecentOperatorTerminalStops, evicting the oldest latch from
+// BOTH on overflow (no orphaned map entry, no dangling order id), while
+// CumulativeOperatorTerminalStopsTotal counts every distinct stop and survives
+// eviction. It also pins the D35-specific invariants the completed cap does not
+// have: a repeat re-observation of an existing latch must not double-count the
+// cumulative total or grow the order slice, and per-id suppressed-dispatch
+// bookkeeping must survive for retained entries.
+//
+// Boundary-coverage rule for the "≤ cap" set:
+//   - exactly N (cap) latches → all retained
+//   - N+1 latches → oldest evicted, newest retained, count == N
+//   - cumulative counter == N+1 (paired-edge to the cap)
+func TestRecordOperatorTerminalStop_CapsLatchAndCountsCumulative(t *testing.T) {
+	state := NewOrchestratorState(60_000, 4)
+	const cap = 3
+	state.MaxRecentOperatorTerminalStops = cap
+	at := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+
+	stop := func(i int) IssueID {
+		id := IssueID(fmt.Sprintf("issue-%d", i))
+		iss := tracker.Issue{ID: string(id), Identifier: fmt.Sprintf("ENG-%d", i), State: "Canceled"}
+		if _, first := state.RecordOperatorTerminalStop(id, iss, at); !first {
+			t.Fatalf("RecordOperatorTerminalStop(%s) first = false; want true on initial latch", id)
+		}
+		return id
+	}
+
+	// Add exactly cap distinct latches.
+	for i := 0; i < cap; i++ {
+		stop(i)
+	}
+	if got := len(state.OperatorTerminalStops); got != cap {
+		t.Fatalf("OperatorTerminalStops size at =N: got %d, want %d", got, cap)
+	}
+	if got := len(state.operatorTerminalStopOrder); got != cap {
+		t.Fatalf("operatorTerminalStopOrder size at =N: got %d, want %d", got, cap)
+	}
+	if got := state.CumulativeOperatorTerminalStopsTotal; got != int64(cap) {
+		t.Fatalf("CumulativeOperatorTerminalStopsTotal at =N: got %d, want %d", got, cap)
+	}
+
+	// A repeat re-observation of a retained latch (reconcile re-runs every poll)
+	// must return first=false, must not grow the order slice, and must not
+	// double-count the cumulative total — it counts stops, not poll ticks.
+	retained := IssueID("issue-1")
+	if _, first := state.RecordOperatorTerminalStop(retained, tracker.Issue{ID: string(retained), State: "Canceled"}, at); first {
+		t.Fatalf("RecordOperatorTerminalStop(%s) first = true on repeat; want false", retained)
+	}
+	if got := len(state.operatorTerminalStopOrder); got != cap {
+		t.Fatalf("operatorTerminalStopOrder grew on repeat: got %d, want %d", got, cap)
+	}
+	if got := state.CumulativeOperatorTerminalStopsTotal; got != int64(cap) {
+		t.Fatalf("CumulativeOperatorTerminalStopsTotal double-counted a repeat: got %d, want %d", got, cap)
+	}
+
+	// Suppressed-dispatch bookkeeping recorded on a retained latch must survive
+	// later inserts that do not evict it.
+	if _, firstSuppressed := state.RecordOperatorTerminalDispatchSuppressed(retained, tracker.Issue{ID: string(retained), State: "Canceled"}, "active_candidate_after_operator_terminal_stop"); !firstSuppressed {
+		t.Fatalf("RecordOperatorTerminalDispatchSuppressed(%s) first = false; want true", retained)
+	}
+
+	// Add one more — boundary =N+1 — and assert the oldest (issue-0) is evicted
+	// from both the map and the order slice.
+	overflow := stop(99)
+	if got := len(state.OperatorTerminalStops); got != cap {
+		t.Fatalf("OperatorTerminalStops size at =N+1: got %d, want bounded to %d", got, cap)
+	}
+	if state.IsOperatorTerminalStopped("issue-0") {
+		t.Fatalf("oldest latch (issue-0) should have been evicted from the map")
+	}
+	if !state.IsOperatorTerminalStopped(overflow) {
+		t.Fatalf("newest latch (%s) missing from the map", overflow)
+	}
+	if got, want := state.CumulativeOperatorTerminalStopsTotal, int64(cap+1); got != want {
+		t.Fatalf("CumulativeOperatorTerminalStopsTotal at =N+1: got %d, want %d (cumulative must survive eviction)", got, want)
+	}
+	// No dangling order id: the order slice must not still reference the evicted id.
+	if len(state.operatorTerminalStopOrder) != cap {
+		t.Fatalf("operatorTerminalStopOrder length at =N+1: got %d, want %d", len(state.operatorTerminalStopOrder), cap)
+	}
+	for _, id := range state.operatorTerminalStopOrder {
+		if id == "issue-0" {
+			t.Fatalf("operatorTerminalStopOrder still references evicted id issue-0")
+		}
+	}
+
+	// operatorTerminalStopOrder is the FIFO source of truth for Snapshot. Assert
+	// the eviction trimmed the head, not the tail, the retained latch kept its
+	// suppressed-dispatch bookkeeping, and the cumulative survives in the view.
+	view := state.Snapshot()
+	if len(view.OperatorTerminalStops) != cap {
+		t.Fatalf("view.OperatorTerminalStops length: got %d, want %d", len(view.OperatorTerminalStops), cap)
+	}
+	if got, want := view.OperatorTerminalStops[cap-1].IssueID, overflow; got != want {
+		t.Fatalf("view.OperatorTerminalStops last = %q, want %q", got, want)
+	}
+	var retainedView *OperatorTerminalStopView
+	for i := range view.OperatorTerminalStops {
+		if view.OperatorTerminalStops[i].IssueID == retained {
+			retainedView = &view.OperatorTerminalStops[i]
+		}
+	}
+	if retainedView == nil {
+		t.Fatalf("retained latch %q missing from snapshot", retained)
+	} else if retainedView.SuppressedDispatches != 1 {
+		t.Fatalf("retained latch SuppressedDispatches = %d, want 1 (per-id bookkeeping must survive)", retainedView.SuppressedDispatches)
+	}
+	if got, want := view.CumulativeOperatorTerminalStopsTotal, int64(cap+1); got != want {
+		t.Fatalf("view.CumulativeOperatorTerminalStopsTotal = %d, want %d", got, want)
+	}
+}
+
+// TestRecordOperatorTerminalStop_CapEdgeCases pins the two boundary caps the
+// main test does not exercise: cap=1 (every new latch evicts the prior one, the
+// sharpest eviction corner) and cap=0 (the opt-out guard — eviction is skipped
+// and the set grows unbounded). cap=0 coverage protects the
+// `MaxRecentOperatorTerminalStops > 0` guard against a future edit removing it.
+func TestRecordOperatorTerminalStop_CapEdgeCases(t *testing.T) {
+	at := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	latch := func(s *OrchestratorState, i int) {
+		id := IssueID(fmt.Sprintf("issue-%d", i))
+		s.RecordOperatorTerminalStop(id, tracker.Issue{ID: string(id), State: "Canceled"}, at)
+	}
+
+	t.Run("cap=1 retains only the newest", func(t *testing.T) {
+		s := NewOrchestratorState(60_000, 4)
+		s.MaxRecentOperatorTerminalStops = 1
+		latch(s, 0)
+		latch(s, 1)
+		if got := len(s.OperatorTerminalStops); got != 1 {
+			t.Fatalf("OperatorTerminalStops size = %d; want 1", got)
+		}
+		if got := len(s.operatorTerminalStopOrder); got != 1 {
+			t.Fatalf("operatorTerminalStopOrder size = %d; want 1", got)
+		}
+		if s.IsOperatorTerminalStopped("issue-0") {
+			t.Fatalf("issue-0 should have been evicted at cap=1")
+		}
+		if !s.IsOperatorTerminalStopped("issue-1") {
+			t.Fatalf("issue-1 (newest) should be retained at cap=1")
+		}
+		if got, want := s.CumulativeOperatorTerminalStopsTotal, int64(2); got != want {
+			t.Fatalf("CumulativeOperatorTerminalStopsTotal = %d; want %d", got, want)
+		}
+
+		// An evicted issue re-latches cleanly on a later stop (fresh-entry branch):
+		// it is re-suppressed and the cumulative counts it as a new distinct stop.
+		latch(s, 0)
+		if !s.IsOperatorTerminalStopped("issue-0") {
+			t.Fatalf("issue-0 should be re-latched after a later stop")
+		}
+		if s.IsOperatorTerminalStopped("issue-1") {
+			t.Fatalf("issue-1 should now be evicted (re-latched issue-0 is newest at cap=1)")
+		}
+		if got, want := s.CumulativeOperatorTerminalStopsTotal, int64(3); got != want {
+			t.Fatalf("CumulativeOperatorTerminalStopsTotal after re-latch = %d; want %d", got, want)
+		}
+	})
+
+	t.Run("cap=0 disables eviction", func(t *testing.T) {
+		s := NewOrchestratorState(60_000, 4)
+		s.MaxRecentOperatorTerminalStops = 0
+		const n = 5
+		for i := 0; i < n; i++ {
+			latch(s, i)
+		}
+		if got := len(s.OperatorTerminalStops); got != n {
+			t.Fatalf("OperatorTerminalStops size = %d; want %d (no cap)", got, n)
+		}
+		if got := len(s.operatorTerminalStopOrder); got != n {
+			t.Fatalf("operatorTerminalStopOrder size = %d; want %d (no cap)", got, n)
+		}
+		if !s.IsOperatorTerminalStopped("issue-0") {
+			t.Fatalf("issue-0 should be retained when the cap is disabled")
+		}
+	})
+}
+
 // TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction pins
 // the constructor-layer default per the project's drop-fallback
 // pattern: callers don't have to remember to set MaxRecent* —
@@ -658,6 +838,9 @@ func TestNewOrchestratorState_DefaultsApplyMaxRecentAtConstruction(t *testing.T)
 	state := NewOrchestratorState(60_000, 4)
 	if state.MaxRecentCompleted != DefaultMaxRecentCompleted {
 		t.Fatalf("MaxRecentCompleted = %d, want %d", state.MaxRecentCompleted, DefaultMaxRecentCompleted)
+	}
+	if state.MaxRecentOperatorTerminalStops != DefaultMaxRecentOperatorTerminalStops {
+		t.Fatalf("MaxRecentOperatorTerminalStops = %d, want %d", state.MaxRecentOperatorTerminalStops, DefaultMaxRecentOperatorTerminalStops)
 	}
 }
 

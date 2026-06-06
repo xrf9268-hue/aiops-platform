@@ -174,10 +174,17 @@ func TestStateResponseSurfacesOperatorTerminalStops(t *testing.T) {
 			FirstSuppressedState:  "In Progress",
 			FirstSuppressedReason: "active_candidate_after_operator_terminal_stop",
 		}},
+		// The lifetime total exceeds the one published (bounded) row: this models a
+		// worker that has rotated past the #667 cap, so the API must expose the
+		// surviving cumulative count, not just the capped length.
+		CumulativeOperatorTerminalStopsTotal: 1500,
 	}
 	resp := apiStateFromView(view)
 	if resp.Counts.OperatorTerminalStops != 1 {
 		t.Fatalf("operator terminal stop count = %d, want 1", resp.Counts.OperatorTerminalStops)
+	}
+	if resp.Counts.OperatorTerminalStopsTotal != 1500 {
+		t.Fatalf("operator_terminal_stops_total = %d, want 1500 (lifetime total must survive cap eviction)", resp.Counts.OperatorTerminalStopsTotal)
 	}
 	if len(resp.OperatorTerminalStops) != 1 {
 		t.Fatalf("operator_terminal_stops = %+v, want one row", resp.OperatorTerminalStops)
