@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -468,35 +467,27 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue) []string { //nolint:gocogni
 		if key == "" {
 			continue
 		}
-		// Emit three prefix forms so reconciliation recognizes Rework
+		// Emit two prefix forms so reconciliation recognizes Rework
 		// workspaces from every sanitizer vintage that aiops-platform
 		// has shipped:
 		//   1. `<base>_rework_…` — current SPEC §4.2 sanitizer, which
 		//      maps `|` and `:` to `_` and preserves case.
-		//   2. `<base>-rework-…` — interim layout where the base was
-		//      already case-preserved but the rework separator was the
-		//      dash form left over from an earlier `_rework_`/`-rework-`
-		//      split.
-		//   3. `<lowercased-base>-rework-…` — pre-#229 sanitizer, which
-		//      lowercased the workspace key and collapsed any
-		//      non-letter/digit rune into a `-` separator. For the
-		//      Linear, Gitea, and GitHub trackers shipped today the
-		//      Rework key is composed from `issue.ID` — an
-		//      all-lowercase UUID or numeric value — so form 2 already
-		//      covers every directory shape any released worker actually
-		//      wrote to disk and form 3 is dead defensive code for the
-		//      current set of trackers. It is kept (rather than deleted)
-		//      to absorb a hypothetical future tracker whose `issue.ID`
-		//      contains uppercase letters or characters in
-		//      `[^a-zA-Z0-9._-]` that the pre-#229 sanitizer would have
-		//      collapsed; without form 3 such an in-flight Rework
-		//      workspace would be removed as `unknown` on the first
-		//      reconcile after upgrading past #229.
-		preSpec := sanitizePreSpecWorkspaceKey(key)
+		//   2. `<base>-rework-…` — interim/pre-#229 layout where the base
+		//      was already case-preserved (or already lowercase) and the
+		//      rework separator was the dash form left over from an
+		//      earlier `_rework_`/`-rework-` split.
+		// #679 removed a speculative third `<lowercased-base>-rework-…`
+		// form (the pre-#229 sanitizer lowercased the key): for the Linear,
+		// Gitea, and GitHub trackers shipped today the Rework key is
+		// composed from `issue.ID` — an all-lowercase UUID or numeric value
+		// — so form 2 already covers every directory shape any released
+		// worker actually wrote to disk, and form 3 never matched a real
+		// directory. Re-add it only when a tracker actually emits an
+		// `issue.ID` with uppercase or `[^a-zA-Z0-9._-]` characters (an
+		// earned rule with a real failure behind it).
 		for _, prefix := range []string{
 			key + "_rework_",
 			key + "-rework-",
-			preSpec + "-rework-",
 		} {
 			if _, ok := seen[prefix]; ok {
 				continue
@@ -507,38 +498,6 @@ func reworkWorkspaceKeyPrefixes(issue tracker.Issue) []string { //nolint:gocogni
 	}
 	return prefixes
 }
-
-// sanitizePreSpecWorkspaceKey reproduces the pre-#229 workspace-key
-// sanitizer (lowercased input, only `unicode.IsLetter` and
-// `unicode.IsDigit` runes preserved, any other rune collapsed into a
-// single `-` separator, edge `-` trimmed, 120-rune cap). It exists
-// purely so reconciliation can recognize Rework directories that were
-// created on disk before the SPEC §4.2 realignment landed; nothing in
-// the worker writes new dirs with this name.
-func sanitizePreSpecWorkspaceKey(s string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-	inSeparator := false
-	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-			inSeparator = false
-			continue
-		}
-		if !inSeparator && b.Len() > 0 {
-			b.WriteByte('-')
-			inSeparator = true
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	runes := []rune(out)
-	if len(runes) > maxPreSpecSanitizedLength {
-		out = strings.TrimRight(string(runes[:maxPreSpecSanitizedLength]), "-")
-	}
-	return out
-}
-
-const maxPreSpecSanitizedLength = 120
 
 func nonEmptyStates(states []string) []string {
 	out := make([]string, 0, len(states))

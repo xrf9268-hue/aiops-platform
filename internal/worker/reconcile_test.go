@@ -575,11 +575,11 @@ func TestReconcileStartupKeepsReworkWorkspaceWithLegacyOffsetTimestampSuffix(t *
 func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *testing.T) {
 	issue := tracker.Issue{ID: "issue-3", State: "Rework", UpdatedAt: mustTime("2026-05-08T12:30:00+02:00")}
 
-	// reworkWorkspaceKeyPrefixes emits three prefix forms so
-	// reconciliation matches workspaces from every aiops-platform
-	// sanitizer vintage on disk: the canonical SPEC §4.2 `_rework_`,
-	// the interim case-preserved `-rework-`, and the pre-#229
-	// lowercased-base `-rework-`.
+	// reworkWorkspaceKeyPrefixes emits two prefix forms so reconciliation
+	// matches workspaces from every aiops-platform sanitizer vintage on disk:
+	// the canonical SPEC §4.2 `_rework_` and the interim/pre-#229 case-preserved
+	// `-rework-`. (#679 removed the speculative lowercased-base third form; for
+	// an all-lowercase ID like "issue-3" it was always a duplicate of form 2.)
 	got := reworkWorkspaceKeyPrefixes(issue)
 	want := []string{"issue-3_rework_", "issue-3-rework-"}
 	if !reflect.DeepEqual(got, want) {
@@ -593,7 +593,10 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 // throughout, lowercased timestamp) must still be classified as
 // `active_rework` on the first reconcile after the upgrade, instead of
 // being removed as `unknown` once a terminal fetch unlocks the
-// unknown-removal path.
+// unknown-removal path. The shipped trackers' Rework key is the
+// all-lowercase `issue.ID`, so the case-preserving form 2 (`<id>-rework-`)
+// matches the on-disk directory — this is exactly why #679 could drop the
+// speculative lowercased-base third form without regressing the promise.
 func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	root := t.TempDir()
 	// Pre-#229 actual on-disk shape for a Linear Rework workspace, mirroring
@@ -627,22 +630,27 @@ func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	}
 }
 
-// TestReworkWorkspaceKeyPrefixesIncludesPreSpecLowercaseForm guards the
-// production code that powers the migration test above.
-func TestReworkWorkspaceKeyPrefixesIncludesPreSpecLowercaseForm(t *testing.T) {
+// TestReworkWorkspaceKeyPrefixesOmitsPreSpecLowercaseForm pins #679: the
+// speculative pre-#229 lowercased-base `-rework-` form is no longer emitted, so
+// even an uppercase Identifier yields only the case-preserving SPEC and interim
+// forms. Form 2 already covers every shipped tracker, whose Rework key is built
+// from an all-lowercase `issue.ID`.
+func TestReworkWorkspaceKeyPrefixesOmitsPreSpecLowercaseForm(t *testing.T) {
 	issue := tracker.Issue{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T10:00:00Z")}
 
 	got := reworkWorkspaceKeyPrefixes(issue)
 	for _, want := range []string{
 		"LIN-123_rework_", // SPEC §4.2 form
 		"LIN-123-rework-", // interim dash form
-		"lin-123-rework-", // pre-#229 lowercased form
 		"issue-3_rework_", // SPEC form for ID
-		"issue-3-rework-", // interim form for ID (deduped against pre-spec)
+		"issue-3-rework-", // interim form for ID
 	} {
 		if !containsStringWorker(got, want) {
 			t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, missing %q", got, want)
 		}
+	}
+	if containsStringWorker(got, "lin-123-rework-") {
+		t.Fatalf("reworkWorkspaceKeyPrefixes = %#v, must not emit the removed pre-#229 lowercased form %q", got, "lin-123-rework-")
 	}
 }
 

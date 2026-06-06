@@ -193,21 +193,26 @@ rm -rf "$AIOPS_WORKSPACE_ROOT"/*
 ```
 
 Active *rework* workspaces survive the cutover even without a manual
-sweep: `reworkWorkspaceKeyPrefixes` emits three prefix forms for each
+sweep: `reworkWorkspaceKeyPrefixes` emits two prefix forms for each
 extracted base key so it matches every aiops-platform sanitizer
 vintage that may have written to disk
 (`internal/worker/reconcile.go`):
 
 1. `<base>_rework_…` — current SPEC §4.2 sanitizer.
-2. `<base>-rework-…` — interim case-preserved layout with dash
-   separators.
-3. `<lowercased-pre-spec-base>-rework-…` — pre-#229 sanitizer, which
-   lowercased the workspace key and collapsed non-letter/digit runes
-   into a single `-` separator. This matches dirs named e.g.
+2. `<base>-rework-…` — interim/pre-#229 case-preserved layout with dash
+   separators. Because every shipped tracker builds the Rework key from
+   the all-lowercase `issue.ID` (a UUID or numeric value), this form
+   also matches the pre-#229 lowercased directories, e.g.
    `linear_issue/issue-3-rework-2026-05-16t10-00-00z` produced by an
-   older worker for an active Linear Rework issue, where the base of
-   the dir name was the issue ID (`issue-3`) rather than the
-   human-facing identifier (`LIN-123`).
+   older worker for an active Linear Rework issue, where the base of the
+   dir name was the issue ID (`issue-3`) rather than the human-facing
+   identifier (`LIN-123`).
+
+(#679 removed a speculative third `<lowercased-pre-spec-base>-rework-…`
+form: since form 2 is case-preserving and the shipped trackers' keys are
+already lowercase, it never matched a directory form 2 did not. Re-add it
+only when a tracker actually emits an `issue.ID` containing uppercase or
+`[^a-zA-Z0-9._-]` characters.)
 
 Plain (non-rework) per-issue dirs created under the old sanitizer are
 not back-compat-matched and will be reconciled away.
