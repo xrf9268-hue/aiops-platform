@@ -43,10 +43,16 @@ coverage.out
 # https://code.claude.com/docs/en/skills "Share skills → Project skills".
 # Shared project hooks/settings are version-controlled so web sessions
 # pick them up; everything else under .claude/ stays local.
+# Trellis-generated platform files (commands/agents/hooks) are tracked for the
+# same reason the .codex/ equivalents are — settings.json references the hooks,
+# so they must travel together.
 .claude/*
 !.claude/skills/
 !.claude/scripts/
 !.claude/settings.json
+!.claude/commands/
+!.claude/agents/
+!.claude/hooks/
 
 # Local Codex CLI state stays out of version control. Trellis project
 # integration files under .codex/ are repo policy and should be tracked.
