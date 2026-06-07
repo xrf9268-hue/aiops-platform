@@ -21,6 +21,16 @@ type Issue struct {
 	BlockedBy   []BlockerRef
 }
 
+// IssueState is the narrow SPEC §11.2 state-refresh fact: an issue's current
+// workflow state plus its normalized labels. Labels are carried so the SPEC §6.4
+// required_labels "continue" gate can observe label removal on already-claimed
+// issues that may sit beyond the active-listing page (#682). Producing clients
+// lowercase/trim each label so matching is case-insensitive.
+type IssueState struct {
+	State  string
+	Labels []string
+}
+
 // IssueRef carries the stable tracker ID plus the human identifier captured at
 // dispatch time. GitHub and Gitea need the identifier as a repo issue-number
 // fallback because their REST state-refresh endpoints cannot address issues by
@@ -70,5 +80,5 @@ type StateIssueLister interface {
 // Poll-tick reconciliation uses this to refresh already-running issues without
 // relying on candidate pagination side effects.
 type IssueStateRefresher interface {
-	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
+	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error)
 }

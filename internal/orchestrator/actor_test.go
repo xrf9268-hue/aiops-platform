@@ -2322,7 +2322,7 @@ type countingFailRefresher struct {
 	calls int
 }
 
-func (f *countingFailRefresher) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+func (f *countingFailRefresher) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]tracker.IssueState, error) {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -2340,7 +2340,7 @@ type flakyStateRefresher struct {
 	calls  int
 }
 
-func (f *flakyStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+func (f *flakyStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
 	f.calls++
 	if f.calls == 1 {
 		return nil, errors.New("temporary tracker refresh failure")
@@ -2348,15 +2348,15 @@ func (f *flakyStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []s
 	return f.states.FetchIssueStatesByIDs(ctx, ids)
 }
 
-func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
 	return r.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(ids))
 }
 
-func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByRefs(ctx context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByRefs(ctx context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	r.attempted <- r.orch.RequestDispatch(ctx, r.issue, nil)
-	out := make(map[string]string, len(refs))
+	out := make(map[string]tracker.IssueState, len(refs))
 	for _, ref := range refs {
-		out[ref.ID] = r.state
+		out[ref.ID] = tracker.IssueState{State: r.state}
 	}
 	return out, nil
 }
@@ -3788,11 +3788,11 @@ func TestRetryFire_ReleasesClaimWhenIssueAbsentFromCandidates(t *testing.T) {
 // mutates it after construction.
 type staticStateRefresher map[string]string
 
-func (s staticStateRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]string, error) {
-	out := make(map[string]string, len(ids))
+func (s staticStateRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]tracker.IssueState, error) {
+	out := make(map[string]tracker.IssueState, len(ids))
 	for _, id := range ids {
 		if state, ok := s[id]; ok {
-			out[id] = state
+			out[id] = tracker.IssueState{State: state}
 		}
 	}
 	return out, nil
@@ -3803,16 +3803,16 @@ type recordingRefStateRefresher struct {
 	refs   [][]tracker.IssueRef
 }
 
-func (r *recordingRefStateRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+func (r *recordingRefStateRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]tracker.IssueState, error) {
 	return nil, errors.New("legacy ID-only retry terminal refresh should not be used")
 }
 
-func (r *recordingRefStateRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+func (r *recordingRefStateRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	r.refs = append(r.refs, append([]tracker.IssueRef(nil), refs...))
-	out := make(map[string]string, len(refs))
+	out := make(map[string]tracker.IssueState, len(refs))
 	for _, ref := range refs {
 		if state, ok := r.states[ref.ID]; ok {
-			out[ref.ID] = state
+			out[ref.ID] = tracker.IssueState{State: state}
 		}
 	}
 	return out, nil

@@ -149,7 +149,7 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 		tracker: trackerClient,
 		states:  snap.Reconciliation.ActiveStates,
 	}
-	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates}
+	retryLister = eligibleActiveIssueLister{inner: retryLister, terminalStates: snap.Reconciliation.TerminalStates, requiredLabels: snap.Reconciliation.RequiredLabels}
 	p.orchestrator.SetCandidateLister(retryLister)
 	// The candidate lister above is active-only, so a fired failure-retry whose
 	// issue moved to a terminal state sees found==nil — indistinguishable there
@@ -178,22 +178,24 @@ func (p *RuntimePoller) trackerClientForSnapshot(snap WorkflowSnapshot) (IssueSt
 // eligibleActiveIssueLister wraps an ActiveIssueLister with the same
 // eligibility filter the poll loop applies between routing and dispatch
 // (filterEligibleCandidates in poller.go). The filter drops issues
-// missing required SPEC §4.1.1 fields (ID / Identifier / Title / State)
-// and Todo-state issues whose BlockedBy carries a non-terminal blocker.
-// Without this wrap a queued failure-retry whose Todo issue gained a
-// fresh non-terminal blocker between schedule and fire would still be
-// dispatched, while the poll loop would refuse the same issue on the
-// next tick. The fetch error is propagated unchanged because an empty
-// post-filter result is meaningful (genuine absence) but only if the
-// fetch itself succeeded.
+// missing required SPEC §4.1.1 fields (ID / Identifier / Title / State),
+// Todo-state issues whose BlockedBy carries a non-terminal blocker, and
+// (when requiredLabels is set) issues lacking every configured
+// tracker.required_labels label. Without this wrap a queued failure-retry
+// whose Todo issue gained a fresh non-terminal blocker or lost a required
+// label between schedule and fire would still be dispatched, while the
+// poll loop would refuse the same issue on the next tick. The fetch error
+// is propagated unchanged because an empty post-filter result is meaningful
+// (genuine absence) but only if the fetch itself succeeded.
 type eligibleActiveIssueLister struct {
 	inner          ActiveIssueLister
 	terminalStates []string
+	requiredLabels []string
 }
 
 func (l eligibleActiveIssueLister) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
 	issues, fetchErr := l.inner.ListActiveIssues(ctx)
-	return filterEligibleCandidates(issues, l.terminalStates), fetchErr
+	return filterEligibleCandidates(issues, l.terminalStates, l.requiredLabels), fetchErr
 }
 
 func snapshotWorkflowKey(snap WorkflowSnapshot) string {
@@ -337,6 +339,7 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 				return nil
 			}
 			terminalStates := normalizedStateSet(wcfg.Tracker.TerminalStates)
+			requiredLabels := wcfg.Tracker.RequiredLabels
 			issueRef := tracker.IssueRef{ID: issueID, Identifier: taskIssueIdentifier(t)}
 			return func(ctx context.Context) (runner.IssueStateSnapshot, error) {
 				if stopped, ok := d.operatorTerminalStopSnapshot(ctx, issueID); ok {
@@ -347,17 +350,24 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 					return runner.IssueStateSnapshot{}, err
 				}
 				state, ok := statesByID[issueID]
-				if !ok || strings.TrimSpace(state) == "" {
+				if !ok || strings.TrimSpace(state.State) == "" {
 					// SPEC §16.5 "issue = refreshed_issue[0] or
 					// issue": no row means we treat the issue as
 					// still in its prior (active) state rather
-					// than aborting on a benign absence.
+					// than aborting on a benign absence. Leave this
+					// branch label-blind so a transient empty refresh
+					// never self-stops a healthy run.
 					return runner.IssueStateSnapshot{Found: false, Active: true}, nil
 				}
-				normalized := strings.ToLower(strings.TrimSpace(state))
+				normalized := strings.ToLower(strings.TrimSpace(state.State))
 				_, active := activeStates[normalized]
 				_, terminal := terminalStates[normalized]
-				return runner.IssueStateSnapshot{Found: true, State: state, Active: active, Terminal: terminal}, nil
+				// SPEC §6.4 "continue" gate: an issue still in an active state
+				// but no longer carrying every required label is not routable,
+				// so the runner must self-stop (it stops on !Active). Applied
+				// only on a present row, so absence stays no-information above.
+				routable := active && labelsSatisfyRequired(state.Labels, requiredLabels)
+				return runner.IssueStateSnapshot{Found: true, State: state.State, Active: routable, Terminal: terminal}, nil
 			}
 		}
 	}

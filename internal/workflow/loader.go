@@ -81,7 +81,7 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 			return nil, err
 		}
 	}
-	cfg.Agent.MaxConcurrentAgentsByState = NormalizeStateConcurrencyLimits(cfg.Agent.MaxConcurrentAgentsByState)
+	normalizeLoadedConfig(&cfg)
 	source := SourceFile
 	if !hasFrontMatter {
 		source = SourcePromptOnly

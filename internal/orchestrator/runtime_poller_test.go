@@ -14,18 +14,19 @@ import (
 type stubRefresher struct {
 	calls   [][]string
 	states  map[string]string
+	labels  map[string][]string
 	fetchEr error
 }
 
-func (s *stubRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]string, error) {
+func (s *stubRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]tracker.IssueState, error) {
 	s.calls = append(s.calls, append([]string(nil), ids...))
 	if s.fetchEr != nil {
 		return nil, s.fetchEr
 	}
-	out := map[string]string{}
+	out := map[string]tracker.IssueState{}
 	for _, id := range ids {
 		if state, ok := s.states[id]; ok {
-			out[id] = state
+			out[id] = tracker.IssueState{State: state, Labels: s.labels[id]}
 		}
 	}
 	return out, nil
@@ -36,16 +37,16 @@ type stubRefAwareRefresher struct {
 	states map[string]string
 }
 
-func (s *stubRefAwareRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+func (s *stubRefAwareRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]tracker.IssueState, error) {
 	return nil, errors.New("legacy ID-only refresh should not be used")
 }
 
-func (s *stubRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+func (s *stubRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	s.refs = append(s.refs, append([]tracker.IssueRef(nil), refs...))
-	out := map[string]string{}
+	out := map[string]tracker.IssueState{}
 	for _, ref := range refs {
 		if state, ok := s.states[ref.ID]; ok {
-			out[ref.ID] = state
+			out[ref.ID] = tracker.IssueState{State: state}
 		}
 	}
 	return out, nil
@@ -126,6 +127,73 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 		}
 		if !errors.Is(err, boom) {
 			t.Fatalf("err = %v, want wrapped tracker boom", err)
+		}
+	})
+}
+
+// TestRuntimeDispatcherContinueGateAppliesRequiredLabels pins the SPEC §6.4
+// "continue" gate (P2-a): the per-turn refresher closure must mark an issue
+// that is still in an active state but missing a required label as NOT routable
+// (Active=false), so the runner self-stops instead of starting another
+// continuation turn. A present row with the label stays Active; a missing/absent
+// row stays Active regardless of labels (no-information); an empty required_labels
+// disables the gate. Mutation: dropping the labelsSatisfyRequired clause from the
+// routable computation (or RequiredLabels from the closure) fails the first case.
+func TestRuntimeDispatcherContinueGateAppliesRequiredLabels(t *testing.T) {
+	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
+	stub := &stubRefresher{
+		states: map[string]string{"issue-1": "In Progress"},
+		labels: map[string][]string{"issue-1": {"backend"}},
+	}
+	d.SetIssueStateRefresher(stub)
+	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
+		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}, RequiredLabels: []string{"aiops-ready"}},
+	}}}
+	cfg := d.configForSnapshot(snap)
+	wcfg := snap.Workflow.Config
+
+	t.Run("active state missing required label is not routable", func(t *testing.T) {
+		fn := cfg.IssueStateRefresher(task.Task{ID: "issue-1"}, wcfg)
+		snapshot, err := fn(context.Background())
+		if err != nil {
+			t.Fatalf("refresher err = %v, want nil", err)
+		}
+		if snapshot.Active {
+			t.Fatalf("snapshot.Active = true for active issue missing required label %v; want false (continue gate must self-stop), snapshot=%+v", wcfg.Tracker.RequiredLabels, snapshot)
+		}
+		if !snapshot.Found || snapshot.State != "In Progress" {
+			t.Fatalf("snapshot = %+v, want found In Progress (raw state preserved)", snapshot)
+		}
+	})
+
+	t.Run("active state retaining required label stays routable", func(t *testing.T) {
+		labeled := &stubRefresher{
+			states: map[string]string{"issue-1": "In Progress"},
+			labels: map[string][]string{"issue-1": {"aiops-ready", "backend"}},
+		}
+		d.SetIssueStateRefresher(labeled)
+		fn := d.configForSnapshot(snap).IssueStateRefresher(task.Task{ID: "issue-1"}, wcfg)
+		snapshot, err := fn(context.Background())
+		if err != nil {
+			t.Fatalf("refresher err = %v, want nil", err)
+		}
+		if !snapshot.Active {
+			t.Fatalf("snapshot.Active = false for active issue with required label; want true, snapshot=%+v", snapshot)
+		}
+	})
+
+	t.Run("empty required_labels disables the gate", func(t *testing.T) {
+		offSnap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
+			Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}},
+		}}}
+		d.SetIssueStateRefresher(stub) // labels lack aiops-ready, but no required_labels
+		fn := d.configForSnapshot(offSnap).IssueStateRefresher(task.Task{ID: "issue-1"}, offSnap.Workflow.Config)
+		snapshot, err := fn(context.Background())
+		if err != nil {
+			t.Fatalf("refresher err = %v, want nil", err)
+		}
+		if !snapshot.Active {
+			t.Fatalf("snapshot.Active = false with empty required_labels; want true (gate off), snapshot=%+v", snapshot)
 		}
 	})
 }

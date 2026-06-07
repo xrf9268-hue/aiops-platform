@@ -2029,6 +2029,29 @@ func TestWorkerReconciliationConfigUsesWorkflowInactiveStates(t *testing.T) {
 	}
 }
 
+func TestWorkerReconciliationConfigThreadsRequiredLabels(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.ActiveStates = []string{"AI Ready", "In Progress"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+	cfg.Tracker.RequiredLabels = []string{"aiops-ready", "triaged"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if !reflect.DeepEqual(reconcile.RequiredLabels, cfg.Tracker.RequiredLabels) {
+		t.Fatalf("reconciliationConfigForWorkflow(required_labels=%v).RequiredLabels = %v; want %v", cfg.Tracker.RequiredLabels, reconcile.RequiredLabels, cfg.Tracker.RequiredLabels)
+	}
+}
+
+func TestWorkerReconciliationConfigDefaultsRequiredLabelsEmpty(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if len(reconcile.RequiredLabels) != 0 {
+		t.Fatalf("reconciliationConfigForWorkflow(no required_labels).RequiredLabels = %v; want empty (gate disabled by default)", reconcile.RequiredLabels)
+	}
+}
+
 func containsState(states []string, want string) bool {
 	for _, state := range states {
 		if state == want {

@@ -42,6 +42,63 @@ Prompt body
 	}
 }
 
+func TestLoadParsesAndNormalizesRequiredLabels(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: git@example.com:owner/repo.git
+tracker:
+  kind: linear
+  project_slug: acme
+  required_labels:
+    - "  AIOps-Ready  "
+    - aiops-ready
+    - Needs-Triage
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// trim + lowercase + de-dupe: the padded "AIOps-Ready" and "aiops-ready"
+	// collapse to one entry; "Needs-Triage" lowercases.
+	got := wf.Config.Tracker.RequiredLabels
+	want := []string{"aiops-ready", "needs-triage"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Tracker.RequiredLabels = %#v; want %#v", got, want)
+	}
+}
+
+func TestLoadDefaultsRequiredLabelsEmpty(t *testing.T) {
+	path := writeTempWorkflow(t, `---
+repo:
+  clone_url: git@example.com:owner/repo.git
+tracker:
+  kind: linear
+  project_slug: acme
+---
+Prompt body
+`)
+	wf, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := wf.Config.Tracker.RequiredLabels; len(got) != 0 {
+		t.Fatalf("Tracker.RequiredLabels = %#v; want empty (gate disabled by default)", got)
+	}
+}
+
+func TestNormalizeRequiredLabelsKeepsBlankSoGateBlocksEverything(t *testing.T) {
+	// SPEC: "a blank configured label matches no issue." A blank entry must be
+	// preserved (as "") rather than dropped, so the gate stays active and
+	// blocks every issue instead of silently disabling itself.
+	got := normalizeRequiredLabels([]string{"  ", "Ready"})
+	want := []string{"", "ready"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizeRequiredLabels = %#v; want %#v", got, want)
+	}
+}
+
 func TestDefaultConfigEnablesStateServerOnPrivateLoopbackPort(t *testing.T) {
 	cfg := DefaultConfig()
 	if got := cfg.Server.Port; got != 4000 {

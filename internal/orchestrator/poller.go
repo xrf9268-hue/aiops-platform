@@ -34,16 +34,16 @@ type IssueStateLister interface {
 // When present, reconciliation refreshes in-flight issue states by explicit ID
 // instead of relying on a wide active-state listing.
 type IssueStateRefresher interface {
-	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
+	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]tracker.IssueState, error)
 }
 
 type issueStateRefresherByRefs interface {
-	FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error)
+	FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]tracker.IssueState, error)
 }
 
-func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]string, error) {
+func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	if refresher == nil || len(refs) == 0 {
-		return map[string]string{}, nil
+		return map[string]tracker.IssueState{}, nil
 	}
 	if refRefresher, ok := refresher.(issueStateRefresherByRefs); ok {
 		return refRefresher.FetchIssueStatesByRefs(ctx, refs)
@@ -63,6 +63,14 @@ type ReconciliationConfig struct {
 	ActiveStates   []string
 	TerminalStates []string
 	InactiveStates []string
+
+	// RequiredLabels is the SPEC §6.4 opt-in dispatch gate
+	// (workflow.TrackerConfig.RequiredLabels): an issue must carry every
+	// label here (matched case-insensitively after trimming) to be
+	// dispatched or to keep running. Empty disables the gate. Already
+	// normalized at config load; issueHasRequiredLabels re-normalizes both
+	// sides defensively.
+	RequiredLabels []string
 
 	// WorkerExitTimeout bounds how long a poll tick waits after issuing a
 	// reconciliation cancel. Zero means the poll tick only requests cancellation;
@@ -158,7 +166,7 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
-	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates)
+	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates, p.reconcile.RequiredLabels)
 	if len(reconciledInactive) > 0 {
 		candidates = filterIssuesNotInMap(candidates, reconciledInactive)
 	}
@@ -260,10 +268,7 @@ func (p *Poller) deriveInactiveIssues(ctx context.Context, activeIssuesByID, ref
 	activeByID := issueMapIDSet(activeIssuesByID)
 	inactiveByID := make(map[string]tracker.Issue)
 	for id, issue := range refreshedIssuesByID {
-		if isActiveTrackerState(issue.State, activeStateKeys) {
-			continue
-		}
-		if !p.isConfiguredInactiveState(issue.State) {
+		if !p.refreshedIssueIsInactive(issue, activeStateKeys) {
 			continue
 		}
 		delete(activeByID, id)
@@ -271,6 +276,22 @@ func (p *Poller) deriveInactiveIssues(ctx context.Context, activeIssuesByID, ref
 	}
 	groupErr := p.appendInactiveFromStateGroups(ctx, inactiveByID, activeByID)
 	return inactiveByID, groupErr
+}
+
+// refreshedIssueIsInactive reports whether a narrow-refreshed in-flight issue
+// should be reconciled as inactive. Two SPEC paths converge here: an issue that
+// left the active set for a configured inactive/terminal state (SPEC §16.3), and
+// an issue still in an active state but no longer carrying every required label
+// (SPEC §6.4 "continue" gate). Sourcing the label check from the refreshed set —
+// which the narrow refresh queries by claimed ref — covers running/blocked/retry
+// issues even when they sit beyond the active-listing page, and only acts on
+// rows the tracker actually returned, preserving the no-information-on-absence
+// invariant. The label clause is a no-op when required_labels is empty.
+func (p *Poller) refreshedIssueIsInactive(issue tracker.Issue, activeStateKeys map[string]struct{}) bool {
+	if isActiveTrackerState(issue.State, activeStateKeys) {
+		return !issueHasRequiredLabels(issue, p.reconcile.RequiredLabels)
+	}
+	return p.isConfiguredInactiveState(issue.State)
 }
 
 // appendInactiveFromStateGroups fetches the explicit terminal/inactive
@@ -321,8 +342,8 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		refsByID[ref.ID] = ref
 	}
 	refreshed := make(map[string]tracker.Issue, len(statesByID))
-	for id, state := range statesByID {
-		if strings.TrimSpace(id) == "" || strings.TrimSpace(state) == "" {
+	for id, st := range statesByID {
+		if strings.TrimSpace(id) == "" || strings.TrimSpace(st.State) == "" {
 			continue
 		}
 		issue, ok := activeIssuesByID[id]
@@ -330,7 +351,13 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 			issue = tracker.Issue{ID: id, Identifier: refsByID[id].Identifier}
 		}
 		issue.ID = id
-		issue.State = state
+		issue.State = st.State
+		// Carry refreshed labels so deriveInactiveIssues can observe SPEC §6.4
+		// label removal on in-flight issues that sit beyond the active-listing
+		// page (the narrow refresh queries them by claimed ref, the listing may
+		// not). Only rows the tracker actually returned with a non-empty state
+		// reach here, so absence stays "no information" (never a mass-cancel).
+		issue.Labels = st.Labels
 		refreshed[id] = issue
 	}
 	return refreshed, err
@@ -397,7 +424,7 @@ func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Is
 	return out
 }
 
-func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) []tracker.Issue {
+func filterEligibleCandidates(issues []tracker.Issue, terminalStates, requiredLabels []string) []tracker.Issue {
 	// Honor exactly what the caller supplied per SPEC §5.3.1. Callers that
 	// want the SPEC 5-state default get it from workflow.DefaultConfig at
 	// construction time (NewPoller seeds it; workflow.Load supplies it for
@@ -413,9 +440,41 @@ func filterEligibleCandidates(issues []tracker.Issue, terminalStates []string) [
 		if todoIssueBlockedByOpenDependency(issue, terminal) {
 			continue
 		}
+		if !issueHasRequiredLabels(issue, requiredLabels) {
+			continue
+		}
 		out = append(out, issue)
 	}
 	return out
+}
+
+// issueHasRequiredLabels reports whether issue carries every label in required
+// (SPEC §4.1.1 / §6.4). See labelsSatisfyRequired for the matching semantics.
+func issueHasRequiredLabels(issue tracker.Issue, required []string) bool {
+	return labelsSatisfyRequired(issue.Labels, required)
+}
+
+// labelsSatisfyRequired reports whether labels contains every entry in required
+// (SPEC §4.1.1 / §6.4). Both sides are trimmed and lowercased so matching is
+// case-insensitive regardless of tracker label casing. Empty required disables
+// the gate (returns true); a blank required entry ("") can never match a
+// tracker's non-empty labels, so it blocks every issue as SPEC mandates. Shared
+// by the dispatch/reconcile predicate and the §16.5 per-turn continue gate so
+// they cannot diverge.
+func labelsSatisfyRequired(labels, required []string) bool {
+	if len(required) == 0 {
+		return true
+	}
+	have := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		have[strings.ToLower(strings.TrimSpace(label))] = struct{}{}
+	}
+	for _, label := range required {
+		if _, ok := have[strings.ToLower(strings.TrimSpace(label))]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func issueHasRequiredCandidateFields(issue tracker.Issue) bool {

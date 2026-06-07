@@ -380,6 +380,18 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 	return pulls, githubHasNextPage(resp.Header.Values("Link")), nil
 }
 
+// githubIssueLabels returns the issue's label names lowercased and trimmed
+// (SPEC §11.3 normalization), the form the required_labels gate matches against.
+func githubIssueLabels(issue githubIssue) []string {
+	labels := make([]string, 0, len(issue.Labels))
+	for _, label := range issue.Labels {
+		if name := strings.ToLower(strings.TrimSpace(label.Name)); name != "" {
+			labels = append(labels, name)
+		}
+	}
+	return labels
+}
+
 func mapGitHubIssue(issue githubIssue, mappedState string) (Issue, error) {
 	id := strconv.FormatInt(issue.ID, 10)
 	if id == "0" && issue.Number != 0 {
@@ -393,12 +405,7 @@ func mapGitHubIssue(issue githubIssue, mappedState string) (Issue, error) {
 	if err != nil {
 		return Issue{}, err
 	}
-	labels := make([]string, 0, len(issue.Labels))
-	for _, label := range issue.Labels {
-		if name := strings.ToLower(strings.TrimSpace(label.Name)); name != "" {
-			labels = append(labels, name)
-		}
-	}
+	labels := githubIssueLabels(issue)
 	state := strings.TrimSpace(mappedState)
 	if state == "" {
 		state = strings.TrimSpace(issue.State)
@@ -533,22 +540,22 @@ func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 // matched label is returned (lowercased, matching mapGitHubIssue's
 // normalization). Otherwise the issue's open/closed state is returned. This
 // matches the GitHub convention where workflow position is encoded as labels.
-func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) {
 	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
 }
 
-func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
+func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
 	}
 	if len(issueRefs) == 0 {
-		return map[string]string{}, nil
+		return map[string]IssueState{}, nil
 	}
 	if strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Repo) == "" {
 		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
 	}
 	configuredStates := githubConfiguredStates(c.Config)
-	states := make(map[string]string, len(issueRefs))
+	states := make(map[string]IssueState, len(issueRefs))
 	seen := map[string]struct{}{}
 	for _, issueRef := range issueRefs {
 		issueID := strings.TrimSpace(issueRef.ID)
@@ -584,7 +591,9 @@ func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []I
 		if state == "" {
 			continue
 		}
-		states[issueID] = state
+		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
+		// resolved state so label removal can stop/release already-claimed work.
+		states[issueID] = IssueState{State: state, Labels: githubIssueLabels(issue)}
 	}
 	return states, nil
 }

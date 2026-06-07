@@ -17,6 +17,12 @@ tracker:
   terminal_states:
     - Done
     - Canceled
+  # SPEC §6.4 opt-in dispatch gate: an issue is only picked up once it carries
+  # EVERY label below (matched case-insensitively). Removing the label from a
+  # running issue stops the agent on the next poll. Omit or leave empty to
+  # dispatch every active issue. A blank entry matches no issue.
+  required_labels:
+    - aiops-ready
 
 polling:
   interval_ms: 30000

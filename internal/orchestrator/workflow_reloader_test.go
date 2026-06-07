@@ -461,6 +461,72 @@ func TestRuntimePollerRetryListerWrapsEligibilityFilter(t *testing.T) {
 	}
 }
 
+// TestRuntimePollerRetryListerThreadsRequiredLabels pins the retry-fire
+// (SPEC §16.6 candidate-fetch) routability site for tracker.required_labels:
+// the eligibleActiveIssueLister the orchestrator receives must carry
+// snap.Reconciliation.RequiredLabels so a fired failure/quota retry whose
+// issue lost a required label is refused the same way the poll loop refuses it.
+// Without it the retry-fire gate silently no-ops — the production-no-op class
+// the dispatch + cmd/worker fixes in this PR close. Mutation: drop
+// `requiredLabels:` from runtime_poller.go's eligibleActiveIssueLister literal
+// (or RequiredLabels from ReconciliationConfigFromWorkflow) and this fails.
+func TestRuntimePollerRetryListerThreadsRequiredLabels(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "gitea", 30000)
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	initial.Config.Repo = workflow.RepoConfig{Owner: "acme", Name: "fallback", CloneURL: "git@example.com:acme/fallback.git", DefaultBranch: "main"}
+	initial.Config.Tracker.RequiredLabels = []string{"aiops-ready"}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{}
+	dispatcher := &recordingDispatcher{}
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+
+	lister := orch.currentCandidateLister()
+	if lister == nil {
+		t.Fatal("orchestrator candidate lister not installed by RuntimePoller")
+	}
+
+	// An active-state issue missing the required label must be dropped on the
+	// retry-fire seam: a queued retry whose issue lost the label is ineligible.
+	trackerClient.issues = []tracker.Issue{{
+		ID: "gitea-unlabeled", Identifier: "UNLABELED-1", Title: "missing required label", State: "AI Ready",
+	}}
+	got, err := lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues(unlabeled) error = %v, want nil", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("retry-fire lister.ListActiveIssues(active issue missing %v) = %+v; want none (required-label gate must thread to the retry-fire lister)", initial.Config.Tracker.RequiredLabels, got)
+	}
+
+	// Positive control: the same active issue carrying the required label passes.
+	trackerClient.issues = []tracker.Issue{{
+		ID: "gitea-labeled", Identifier: "LABELED-1", Title: "has required label", State: "AI Ready",
+		Labels: []string{"aiops-ready"},
+	}}
+	got, err = lister.ListActiveIssues(ctx)
+	if err != nil {
+		t.Fatalf("ListActiveIssues(labeled) error = %v, want nil", err)
+	}
+	if len(got) != 1 || got[0].ID != "gitea-labeled" {
+		t.Fatalf("retry-fire lister.ListActiveIssues(active issue with %v) = %+v; want exactly gitea-labeled", initial.Config.Tracker.RequiredLabels, got)
+	}
+}
+
 func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *testing.T) {
 	path := writeWorkflowForReloadTest(t, "linear", 30000)
 	initial, err := workflow.Load(path)

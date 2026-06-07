@@ -426,13 +426,14 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
 }
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {
-	return orchestrator.ReconciliationConfig{
-		ActiveStates:      cfg.Tracker.ActiveStates,
-		TerminalStates:    cfg.Tracker.TerminalStates,
-		InactiveStates:    inferredInactiveStates(cfg.Tracker),
-		WorkerExitTimeout: 30 * time.Second,
-		StallTimeoutMs:    cfg.Codex.StallTimeoutMs,
-	}
+	// Single source of truth for the field list lives in
+	// orchestrator.ReconciliationConfigFromWorkflow; the worker only re-derives
+	// InactiveStates (default candidates minus active/terminal, per
+	// inferredInactiveStates). Delegating here keeps fields such as
+	// RequiredLabels from being silently dropped in production (#682).
+	rc := orchestrator.ReconciliationConfigFromWorkflow(cfg)
+	rc.InactiveStates = inferredInactiveStates(cfg.Tracker)
+	return rc
 }
 func inferredInactiveStates(cfg workflow.TrackerConfig) []string {
 	candidates := cfg.InactiveStates

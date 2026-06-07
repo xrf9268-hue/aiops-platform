@@ -137,6 +137,12 @@ func (c *LinearClient) ListActiveIssues(ctx context.Context) ([]Issue, error) {
 // HTTP 400 GRAPHQL_VALIDATION_FAILED on every poll (#326). The
 // upstream Elixir reference (elixir/lib/symphony_elixir/linear/client.ex)
 // also omits any custom-field fragment for the same reason.
+//
+// labels are projected at first:250 (Linear's connection maximum). The SPEC
+// §6.4 required_labels gate matches against exactly this projection, and the
+// IssueStatesByIDs refresh below now also cancels running work on label
+// removal, so the cap must be high enough that a required label cannot sort
+// past it and look removed (#705). Keep both label projections in step.
 const listLinearIssuesQuery = `query ListIssues($projectSlug: String!, $states: [String!], $first: Int!, $after: String) {
   issues(filter: { project: { slugId: { eq: $projectSlug } }, state: { name: { in: $states } } }, first: $first, after: $after) {
     nodes {
@@ -149,7 +155,7 @@ const listLinearIssuesQuery = `query ListIssues($projectSlug: String!, $states: 
       branchName
       createdAt
       updatedAt
-      labels(first: 50) { nodes { name } }
+      labels(first: 250) { nodes { name } }
       state { name }
     }
     pageInfo { hasNextPage endCursor }
@@ -323,22 +329,28 @@ func parseLinearIssueTime(field, value string) (time.Time, error) {
 	return parsed, nil
 }
 
-func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) { //nolint:gocognit // baseline (#521)
-	if c.APIKey == "" {
-		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
-	}
-	if len(issueIDs) == 0 {
-		return map[string]string{}, nil
-	}
-	query := `query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
+// labels(first:250) mirrors listLinearIssuesQuery: the SPEC §6.4 required_labels
+// gate consults the refresh's label set to stop/release already-claimed work on
+// label removal, so the projection must be wide enough that a required label
+// cannot sort past the cap and look removed (#705).
+const issueStatesByIDsQuery = `query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
   issues(filter: { id: { in: $ids } }, first: $first) {
     nodes {
       id
       state { name }
+      labels(first: 250) { nodes { name } }
     }
   }
 }`
-	states := make(map[string]string, len(issueIDs))
+
+func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
+	if c.APIKey == "" {
+		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
+	}
+	if len(issueIDs) == 0 {
+		return map[string]IssueState{}, nil
+	}
+	states := make(map[string]IssueState, len(issueIDs))
 	for start := 0; start < len(issueIDs); start += linearIssuePageSize {
 		end := start + linearIssuePageSize
 		if end > len(issueIDs) {
@@ -353,19 +365,30 @@ func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 						State struct {
 							Name string `json:"name"`
 						} `json:"state"`
+						Labels struct {
+							Nodes []struct {
+								Name string `json:"name"`
+							} `json:"nodes"`
+						} `json:"labels"`
 					} `json:"nodes"`
 				} `json:"issues"`
 			} `json:"data"`
 			Errors []map[string]any `json:"errors"`
 		}
-		if err := c.graphql(ctx, query, map[string]any{"ids": chunk, "first": len(chunk)}, &out); err != nil {
+		if err := c.graphql(ctx, issueStatesByIDsQuery, map[string]any{"ids": chunk, "first": len(chunk)}, &out); err != nil {
 			return nil, err
 		}
 		if len(out.Errors) > 0 {
 			return nil, linearGraphQLErrors(out.Errors)
 		}
 		for _, n := range out.Data.Issues.Nodes {
-			states[n.ID] = n.State.Name
+			labels := make([]string, 0, len(n.Labels.Nodes))
+			for _, label := range n.Labels.Nodes {
+				if name := strings.ToLower(strings.TrimSpace(label.Name)); name != "" {
+					labels = append(labels, name)
+				}
+			}
+			states[n.ID] = IssueState{State: n.State.Name, Labels: labels}
 		}
 	}
 	return states, nil

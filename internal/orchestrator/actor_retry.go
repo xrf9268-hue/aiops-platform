@@ -389,7 +389,7 @@ func resolveRetryTerminalState(o *Orchestrator, id IssueID, identifier string) (
 	if rerr != nil {
 		return false, ""
 	}
-	s := strings.TrimSpace(statesByID[string(id)])
+	s := strings.TrimSpace(statesByID[string(id)].State)
 	if s == "" || !isTerminalTrackerState(s, terminalStates) {
 		return false, ""
 	}

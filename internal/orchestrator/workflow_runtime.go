@@ -177,6 +177,25 @@ func (r *WorkflowRuntime) emit(ctx context.Context, kind, msg string, payload an
 	}
 }
 
+// ReconciliationConfigFromWorkflow builds the reconciliation config a snapshot
+// carries from a workflow config. It is the single source of truth for which
+// tracker/codex fields flow into ReconciliationConfig, so adding a new field
+// here propagates to every consumer (the inline snapshot default and the
+// cmd/worker production override, which delegates here and re-derives only
+// InactiveStates). Earlier the inline default and the production override each
+// listed the fields independently, so tracker.required_labels was wired into
+// the snapshot path but silently dropped from the live worker (#682).
+func ReconciliationConfigFromWorkflow(cfg workflow.Config) ReconciliationConfig {
+	return ReconciliationConfig{
+		ActiveStates:      cfg.Tracker.ActiveStates,
+		TerminalStates:    cfg.Tracker.TerminalStates,
+		InactiveStates:    cfg.Tracker.InactiveStates,
+		RequiredLabels:    cfg.Tracker.RequiredLabels,
+		WorkerExitTimeout: 30 * time.Second,
+		StallTimeoutMs:    cfg.Codex.StallTimeoutMs,
+	}
+}
+
 func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprints ...string) *WorkflowSnapshot {
 	if wf == nil {
 		return &WorkflowSnapshot{}
@@ -187,13 +206,7 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 	} else if wf.Path != "" && wf.Source != workflow.SourceDefault {
 		fingerprint, _ = workflowFileFingerprint(wf.Path)
 	}
-	reconcile := ReconciliationConfig{
-		ActiveStates:      wf.Config.Tracker.ActiveStates,
-		TerminalStates:    wf.Config.Tracker.TerminalStates,
-		InactiveStates:    wf.Config.Tracker.InactiveStates,
-		WorkerExitTimeout: 30 * time.Second,
-		StallTimeoutMs:    wf.Config.Codex.StallTimeoutMs,
-	}
+	reconcile := ReconciliationConfigFromWorkflow(wf.Config)
 	if r != nil && r.reconciliationConfig != nil {
 		reconcile = r.reconciliationConfig(wf.Config)
 	}

@@ -153,11 +153,11 @@ func (c *TrackerClient) ListIssuesByStates(ctx context.Context, states []string)
 	return out, nil
 }
 
-func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]tracker.IssueState, error) {
 	return c.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
 }
 
-func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]string, error) { //nolint:gocognit // baseline (#521)
+func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]tracker.IssueState, error) { //nolint:gocognit // baseline (#521)
 	if c.BaseURL == "" || c.Token == "" {
 		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
 	}
@@ -165,9 +165,9 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
 	}
 	if len(issueRefs) == 0 {
-		return map[string]string{}, nil
+		return map[string]tracker.IssueState{}, nil
 	}
-	states := make(map[string]string, len(issueRefs))
+	states := make(map[string]tracker.IssueState, len(issueRefs))
 	seen := map[string]struct{}{}
 	for _, issueRef := range issueRefs {
 		issueID := strings.TrimSpace(issueRef.ID)
@@ -200,7 +200,9 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 		if state == "" {
 			continue
 		}
-		states[issueID] = state
+		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
+		// derived state; extractGiteaLabels lowercases/trims to match the gate.
+		states[issueID] = tracker.IssueState{State: state, Labels: extractGiteaLabels(issue.Labels)}
 	}
 	return states, nil
 }

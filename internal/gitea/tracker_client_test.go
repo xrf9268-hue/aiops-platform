@@ -120,7 +120,7 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 			})
 		case "/api/v1/repos/owner/repo/issues/1":
 			_ = json.NewEncoder(w).Encode(Issue{
-				ID: 101, Number: 1, Title: "done", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/done"}},
+				ID: 101, Number: 1, Title: "done", HTMLURL: "https://gitea.local/o/r/issues/1", Labels: []Label{{Name: "aiops/done"}, {Name: "Aiops-Ready"}},
 			})
 		case "/api/v1/repos/owner/repo/issues/2":
 			http.NotFound(w, r)
@@ -143,8 +143,11 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
-	if got, want := states, map[string]string{"101": "Done"}; len(got) != len(want) || got["101"] != want["101"] {
+	if got, want := states, map[string]string{"101": "Done"}; len(got) != len(want) || got["101"].State != want["101"] {
 		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := states["101"].Labels, []string{"aiops/done", "aiops-ready"}; !slices.Equal(got, want) {
+		t.Fatalf("FetchIssueStatesByIDs(101).Labels = %v; want %v", got, want)
 	}
 	if got, want := strings.Join(requestedPaths, ","), "/api/v1/repos/owner/repo/issues,/api/v1/repos/owner/repo/issues/1,/api/v1/repos/owner/repo/issues/2"; got != want {
 		t.Fatalf("requested paths = %s, want %s", got, want)
@@ -174,7 +177,7 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 				Number:  7,
 				Title:   "done",
 				HTMLURL: "https://gitea.local/o/r/issues/7",
-				Labels:  []Label{{Name: "aiops/done"}},
+				Labels:  []Label{{Name: "aiops/done"}, {Name: "Aiops-Ready"}},
 			})
 		default:
 			t.Fatalf("unexpected request path %q", r.URL.Path)
@@ -189,8 +192,11 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs: %v", err)
 	}
-	if got, want := states, map[string]string{"987654": "Done"}; len(got) != len(want) || got["987654"] != want["987654"] {
+	if got, want := states, map[string]string{"987654": "Done"}; len(got) != len(want) || got["987654"].State != want["987654"] {
 		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := states["987654"].Labels, []string{"aiops/done", "aiops-ready"}; !slices.Equal(got, want) {
+		t.Fatalf("FetchIssueStatesByRefs(987654).Labels = %v; want %v", got, want)
 	}
 	if got, want := strings.Join(requestedPaths, ","), "/api/v1/repos/owner/repo/issues/7"; got != want {
 		t.Fatalf("requested paths = %s, want %s", got, want)
@@ -199,7 +205,7 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs after successful ref refresh: %v", err)
 	}
-	if got := states["987654"]; got != "Done" {
+	if got := states["987654"].State; got != "Done" {
 		t.Fatalf("successful ref refresh cache state = %q, want Done", got)
 	}
 
@@ -214,7 +220,7 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs #number ID: %v", err)
 	}
-	if got := states["#7"]; got != "Done" {
+	if got := states["#7"].State; got != "Done" {
 		t.Fatalf("#number fallback state = %q, want Done", got)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "#8", Identifier: "#7"}})
@@ -228,7 +234,7 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs numeric fallback ID: %v", err)
 	}
-	if got := states["7"]; got != "Done" {
+	if got := states["7"].State; got != "Done" {
 		t.Fatalf("numeric fallback ID state = %q, want Done", got)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "5", Identifier: "#7"}})
@@ -251,14 +257,14 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs cached global ID with stale identifier: %v", err)
 	}
-	if got := states["555"]; got != "Done" {
+	if got := states["555"].State; got != "Done" {
 		t.Fatalf("cached global ID state = %q, want Done", got)
 	}
 	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs after fallback cache: %v", err)
 	}
-	if got := states["987654"]; got != "Done" {
+	if got := states["987654"].State; got != "Done" {
 		t.Fatalf("cached fallback state = %q, want Done", got)
 	}
 }

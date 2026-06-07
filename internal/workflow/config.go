@@ -154,11 +154,52 @@ type TrackerConfig struct {
 	// operator pauses such as Backlog/Human Review cancel in-flight workers
 	// without treating issues missing from partial tracker listings as inactive.
 	InactiveStates []string `yaml:"inactive_states" json:"inactive_states"`
+	// RequiredLabels is the SPEC §4.1.1 / §6.4 opt-in dispatch gate
+	// (upstream Symphony #88): an issue MUST carry every configured label
+	// (matched case-insensitively after trimming) to be dispatched or to
+	// keep running; removing a required label stops/releases in-flight work
+	// on the next poll. Default `[]` disables the gate. A blank configured
+	// label matches no issue. Normalized (trim + lowercase + de-dupe) at
+	// load by normalizeRequiredLabels.
+	RequiredLabels []string `yaml:"required_labels" json:"required_labels"`
 	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
 	// selected adapter's default budget.
 	PaginationMaxPages int                 `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
 	Statuses           TrackerStatusConfig `yaml:"statuses" json:"statuses"`
+}
+
+// normalizeLoadedConfig applies the post-parse normalizations that run after
+// front-matter merge regardless of whether front matter was present: the
+// per-state concurrency-limit canonicalization and the SPEC §6.4
+// required-labels trim/lowercase/de-dupe gate normalization.
+func normalizeLoadedConfig(cfg *Config) {
+	cfg.Agent.MaxConcurrentAgentsByState = NormalizeStateConcurrencyLimits(cfg.Agent.MaxConcurrentAgentsByState)
+	cfg.Tracker.RequiredLabels = normalizeRequiredLabels(cfg.Tracker.RequiredLabels)
+}
+
+// normalizeRequiredLabels mirrors the Elixir reference's
+// config/schema.ex update_change for `required_labels`: trim, lowercase, and
+// de-dupe each entry so the gate matches the equally-normalized issue labels.
+// A configured blank is preserved as "" (SPEC: "a blank configured label
+// matches no issue") rather than dropped, so `["" ]` keeps the gate active and
+// blocks every issue instead of silently disabling it. A nil/empty input is
+// returned unchanged so the default `[]` keeps the gate off.
+func normalizeRequiredLabels(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, label := range in {
+		norm := strings.ToLower(strings.TrimSpace(label))
+		if _, dup := seen[norm]; dup {
+			continue
+		}
+		seen[norm] = struct{}{}
+		out = append(out, norm)
+	}
+	return out
 }
 
 type PollingConfig struct {

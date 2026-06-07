@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -97,7 +98,7 @@ func TestListIssuesByStatesMapsSpecDomainFields(t *testing.T) {
 			Query string `json:"query"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "labels(first: 50)"} {
+		for _, fragment := range []string{"priority", "branchName", "createdAt", "updatedAt", "labels(first: 250)"} {
 			if !strings.Contains(payload.Query, fragment) {
 				t.Fatalf("ListIssues query = %s, want fragment %q", payload.Query, fragment)
 			}
@@ -237,7 +238,7 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 		_ = json.Unmarshal(body, &payload)
 		recorded = fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"}},{"id":"issue-2","state":{"name":"Done"}}]}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Aiops-Ready"}]}},{"id":"issue-2","state":{"name":"Done"}}]}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
@@ -246,8 +247,11 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
-	if got, want := states, map[string]string{"issue-1": "Todo", "issue-2": "Done"}; len(got) != len(want) || got["issue-1"] != want["issue-1"] || got["issue-2"] != want["issue-2"] {
+	if got, want := states, map[string]string{"issue-1": "Todo", "issue-2": "Done"}; len(got) != len(want) || got["issue-1"].State != want["issue-1"] || got["issue-2"].State != want["issue-2"] {
 		t.Fatalf("states = %#v, want %#v", got, want)
+	}
+	if got, want := states["issue-1"].Labels, []string{"aiops-ready"}; !slices.Equal(got, want) {
+		t.Fatalf("FetchIssueStatesByIDs(issue-1).Labels = %v; want %v", got, want)
 	}
 	if recorded.OpName != "IssueStatesByIDs" {
 		t.Fatalf("op = %q, want IssueStatesByIDs", recorded.OpName)

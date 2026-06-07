@@ -182,11 +182,11 @@ func (f *fakeIssueStateTracker) ListIssuesByStates(_ context.Context, states []s
 	return defaultTrackerIssueTitles(out), nil
 }
 
-func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
+func (f *fakeIssueStateTracker) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]tracker.IssueState, error) {
 	return f.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
 }
 
-func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]string, error) {
+func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetchRefCalls = append(f.fetchRefCalls, append([]tracker.IssueRef(nil), refs...))
@@ -197,18 +197,20 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs [
 	for _, ref := range refs {
 		wanted[ref.ID] = struct{}{}
 	}
-	out := make(map[string]string, len(refs))
+	out := make(map[string]tracker.IssueState, len(refs))
 	if f.fetchIDStates != nil {
 		for id, state := range f.fetchIDStates {
 			if _, ok := wanted[id]; ok {
-				out[id] = state
+				out[id] = tracker.IssueState{State: state}
 			}
 		}
 		return out, f.fetchIDErr
 	}
+	// Carry the fixture issue's labels into the refresh so reconcile sees the
+	// same labels the real narrow refresh surfaces (SPEC §6.4 gate).
 	for _, issue := range f.issues {
 		if _, ok := wanted[issue.ID]; ok {
-			out[issue.ID] = issue.State
+			out[issue.ID] = tracker.IssueState{State: issue.State, Labels: issue.Labels}
 		}
 	}
 	return out, nil
@@ -1047,7 +1049,7 @@ func TestFilterEligibleCandidatesExplicitEmptyTerminalStatesBlocksAll(t *testing
 	issues := []tracker.Issue{
 		{ID: "todo-done", Identifier: "LIN-1", Title: "Done blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Done"}}},
 	}
-	out := filterEligibleCandidates(issues, []string{})
+	out := filterEligibleCandidates(issues, []string{}, nil)
 	if len(out) != 0 {
 		t.Fatalf("filterEligibleCandidates with explicit [] = %d issues, want 0 (no states are terminal → all blockers open → Todo blocked); got=%#v", len(out), out)
 	}
@@ -1063,12 +1065,58 @@ func TestFilterEligibleCandidatesUsesOnlyConfiguredTerminalSet(t *testing.T) {
 		{ID: "todo-closed", Identifier: "LIN-1", Title: "Closed blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-0", State: "Closed"}}},
 		{ID: "todo-released", Identifier: "LIN-2", Title: "Released blocker", State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blk", Identifier: "LIN-9", State: "Released"}}},
 	}
-	out := filterEligibleCandidates(issues, []string{"Released"})
+	out := filterEligibleCandidates(issues, []string{"Released"}, nil)
 	if len(out) != 1 {
 		t.Fatalf("filterEligibleCandidates = %d issues, want 1; got=%#v", len(out), out)
 	}
 	if out[0].ID != "todo-released" {
 		t.Fatalf("passed issue = %q, want todo-released (its blocker is in operator-configured terminal state)", out[0].ID)
+	}
+}
+
+// TestFilterEligibleCandidatesRequiredLabels pins the SPEC §6.4 opt-in gate:
+// only issues carrying every configured label (case-insensitively) pass.
+func TestFilterEligibleCandidatesRequiredLabels(t *testing.T) {
+	issues := []tracker.Issue{
+		{ID: "has-both", Identifier: "LIN-1", Title: "both", State: "Todo", Labels: []string{"aiops-ready", "backend"}},
+		{ID: "missing-one", Identifier: "LIN-2", Title: "missing", State: "Todo", Labels: []string{"aiops-ready"}},
+		{ID: "case-insensitive", Identifier: "LIN-3", Title: "case", State: "Todo", Labels: []string{"AIOps-Ready", "Backend"}},
+		{ID: "no-labels", Identifier: "LIN-4", Title: "none", State: "Todo"},
+	}
+	out := filterEligibleCandidates(issues, []string{"Done"}, []string{"aiops-ready", "backend"})
+	gotIDs := make([]string, 0, len(out))
+	for _, issue := range out {
+		gotIDs = append(gotIDs, issue.ID)
+	}
+	want := []string{"has-both", "case-insensitive"}
+	if !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("filterEligibleCandidates(requiredLabels) = %v; want %v (only issues with every required label, case-insensitive)", gotIDs, want)
+	}
+}
+
+// TestIssueHasRequiredLabels is the direct unit test for the gate predicate,
+// including the empty-disables and blank-required-blocks-all SPEC rules.
+func TestIssueHasRequiredLabels(t *testing.T) {
+	tests := []struct {
+		name     string
+		labels   []string
+		required []string
+		want     bool
+	}{
+		{name: "empty required disables gate", labels: nil, required: nil, want: true},
+		{name: "all present", labels: []string{"a", "b"}, required: []string{"a", "b"}, want: true},
+		{name: "subset present", labels: []string{"a", "b", "c"}, required: []string{"a", "c"}, want: true},
+		{name: "missing one", labels: []string{"a"}, required: []string{"a", "b"}, want: false},
+		{name: "case and whitespace insensitive", labels: []string{" A ", "B"}, required: []string{"a", "b"}, want: true},
+		{name: "blank required matches no issue", labels: []string{"a"}, required: []string{""}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := issueHasRequiredLabels(tracker.Issue{Labels: tt.labels}, tt.required)
+			if got != tt.want {
+				t.Fatalf("issueHasRequiredLabels(%q, %q) = %v; want %v", tt.labels, tt.required, got, tt.want)
+			}
+		})
 	}
 }
 

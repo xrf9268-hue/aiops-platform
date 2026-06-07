@@ -278,14 +278,14 @@ func (o *Orchestrator) verifyReconciledWorkspaceStillTerminal(w ReconciledWorksp
 		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_refresh_failed error=%q", w.IssueID, w.Identifier, err.Error())
 		return "", false, false
 	}
-	state, ok := states[string(w.IssueID)]
+	st, ok := states[string(w.IssueID)]
 	if !ok {
 		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_missing", w.IssueID, w.Identifier)
 		return "", false, false
 	}
-	if !isTerminalTrackerState(state, terminalStates) {
-		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_not_terminal state=%q", w.IssueID, w.Identifier, state)
-		return state, false, true
+	if !isTerminalTrackerState(st.State, terminalStates) {
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_not_terminal state=%q", w.IssueID, w.Identifier, st.State)
+		return st.State, false, true
 	}
-	return state, true, true
+	return st.State, true, true
 }
