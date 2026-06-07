@@ -44,7 +44,8 @@ aiops-platform is licensed under the [Apache License 2.0](LICENSE).
 
 ### Web dashboard (`cmd/worker/dashboard`)
 
-A React 19 + Vite + Tailwind v4 single-page app, served by the worker at `/`
+A React 19 + Vite single-page app with self-contained, embedded CSS (no
+Tailwind, no external font/CDN), served by the worker at `/`
 (and assets under `/assets/`) on the same loopback listener as the state API.
 It is a read-only operator client for `/api/v1/state` (SPEC §13.7.1) with
 light/dark themes and Anthropic brand styling. The built output is generated in
@@ -381,19 +382,23 @@ in-flight run.
 
 Every push to `main` and every pull request targeting `main` runs
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). CI is the safety net for
-all changes; PRs should not merge while it is red. It runs three jobs:
+all changes; PRs should not merge while it is red. It runs four jobs:
 
-- **`go`** — Node-based GitHub script tests
-  (`capture-unresolved-reviews.test.mjs`), `gofmt` check on all tracked Go files,
-  a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness,
-  the uncached production Go file-size budget check,
-  `go test -race -covermode=atomic ./...`, `go build` for `worker` and `tui`,
-  and an upload of those Linux binaries as build artifacts.
+- **`go`** — Node-based GitHub script tests (`.github/scripts/*.test.mjs`),
+  Trellis Python script tests, the dashboard `npm test` + build with a
+  dist-embed check, a `gofmt` check on all tracked Go files, the blocking
+  golangci-lint gate (including AGENTS.md rule 7's `funlen`/`gocognit` budgets),
+  a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness, the
+  production Go file-size budget check, `go test -race -covermode=atomic ./...`,
+  a short fuzz smoke, `go build` for `worker` and `tui`, and an upload of those
+  Linux binaries as build artifacts.
+- **`security`** — supply-chain checks: standalone `go vet ./...` plus
+  `govulncheck ./...` built against the `go.mod` toolchain floor.
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
   against a real `gitea` container.
 - **`docker`** — a Docker image build of the repository `Dockerfile` (depends on
-  `go`), plus a blocking Trivy scan for fixed CRITICAL/HIGH image
-  vulnerabilities.
+  `go`), a blocking Trivy scan for fixed CRITICAL/HIGH image vulnerabilities, and
+  a CycloneDX SBOM generated and uploaded as a build artifact.
 
 See the [CI/CD runbook](docs/runbooks/ci.md) for triggers, security posture,
 release flow, and local pre-push checks.
