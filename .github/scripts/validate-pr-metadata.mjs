@@ -53,6 +53,18 @@ const closingKeywordPattern =
 // `not_a_real.ex` cannot satisfy the gate.
 const elixirCitationPattern = /elixir\/[\w./-]+\.ex(?::\d+)?/i;
 
+// exemptAuthorLogins are automation accounts whose PRs cannot satisfy the gate
+// and never author SPEC deviations: Dependabot opens dependency bumps with no
+// closing keyword and no SPEC-alignment checklist, so without an exemption the
+// required check blocks every routine update indefinitely. Scoped to the known
+// Dependabot logins rather than any `[bot]` so a future bot has to be added
+// deliberately (earned-rule principle).
+const exemptAuthorLogins = new Set(['dependabot[bot]', 'dependabot-preview[bot]']);
+
+export function isExemptAuthor(login) {
+  return exemptAuthorLogins.has(String(login ?? ''));
+}
+
 export function extractClosingIssueNumbers(body) {
   const numbers = new Set();
   for (const match of String(body ?? '').matchAll(closingKeywordPattern)) {
@@ -202,6 +214,11 @@ async function main() {
   const pullRequest = event.pull_request;
   if (!pullRequest) {
     throw new Error('This script must run from a pull_request_target workflow event.');
+  }
+  const author = pullRequest.user?.login ?? '';
+  if (isExemptAuthor(author)) {
+    console.log(`Skipping SPEC-alignment metadata gate for exempt author ${author}.`);
+    return;
   }
   const owner = process.env.REPO_OWNER ?? event.repository.owner.login;
   const repo = process.env.REPO_NAME ?? event.repository.name;

@@ -6,6 +6,7 @@ import {
   classifySpecSensitivity,
   extractClosingIssueNumbers,
   hasElixirCitation,
+  isExemptAuthor,
   parseSpecAlignmentChecklist,
   touchesDeviations,
   validatePullRequestMetadata,
@@ -28,6 +29,14 @@ function body({ closes = 'Closes #573', selected = 0, extra = '' } = {}) {
 
 const CONFIG = [{ filename: 'internal/workflow/config.go', status: 'modified' }];
 const NON_SENSITIVE = [{ filename: 'internal/tracker/linear.go', status: 'modified' }];
+
+test('isExemptAuthor exempts Dependabot logins but no one else', () => {
+  assert.equal(isExemptAuthor('dependabot[bot]'), true);
+  assert.equal(isExemptAuthor('dependabot-preview[bot]'), true);
+  assert.equal(isExemptAuthor('echo-yvan'), false, 'a human author is never exempt');
+  assert.equal(isExemptAuthor('some-other[bot]'), false, 'an arbitrary bot is not exempt');
+  assert.equal(isExemptAuthor(undefined), false);
+});
 
 test('extractClosingIssueNumbers parses every closing keyword and dedupes', () => {
   assert.deepEqual(
