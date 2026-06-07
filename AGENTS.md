@@ -476,6 +476,21 @@ failure per the "Earned rules" principle above.
     refactor replaced an external deadline bound with a typed-error assertion
     that initially dropped the "did not wait for the outer deadline" invariant.
 
+11. **Mutation-test the wiring seam, not just the leaf.** When a field or
+    behavior is threaded through a construction seam (config →
+    `ReconciliationConfig` → snapshot → lister/closure, or a view → DTO mapper),
+    add a test that drives the *real* construction path and mutation-verify by
+    deleting the field **at the seam**. A leaf predicate can be correct and
+    unit-tested while the production wiring silently drops the field — a no-op the
+    leaf tests still pass. Prefer a compiling mutation (`&&`→`||`, drop the
+    assignment, flip `omitempty`) so the test fails on an assertion, not a build
+    error. When one concept has two builders, collapse to one source of truth
+    (rule 3) so a field cannot be wired in one and dropped in the other. **Earned
+    by:** #682's retry-fire `requiredLabels` thread and the production
+    `reconciliationConfigForWorkflow` builder were both unwired no-ops that the
+    leaf `issueHasRequiredLabels` tests passed; #683's refresh label-carry
+    (`issue.Labels = st.Labels`) had no positive test until one was added.
+
 ## Conventions
 
 - **gofmt is non-negotiable**: CI fails on any diff. Always run before committing. A PostToolUse hook (`.claude/scripts/format-go.sh`) auto-runs `gofmt -w` on `.go` files edited via the Edit/Write tools; files changed through Bash (e.g. `sed`, heredocs) are not covered, so always verify with `gofmt -l` before pushing — CI's `gofmt -l` gate is the backstop.
