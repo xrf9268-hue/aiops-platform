@@ -7,6 +7,24 @@ coding agents read it via thin bridge files: `CLAUDE.md` imports it with
 `@AGENTS.md` for Claude Code. Do not duplicate content in the bridge files —
 update only this file.
 
+Each rule is kept to a scannable imperative; the *provenance* (the observed
+failure that earned it, per [harness principle 2](#harness-engineering-principles))
+lives in [`docs/engineering-rules-rationale.md`](docs/engineering-rules-rationale.md),
+linked per section (and per rule where useful) as `(provenance)`. When you add or
+change a rule here, update its rationale entry there too.
+
+## Index
+
+- [What this project is](#what-this-project-is) — scope, the scheduler/runner boundary, transitional reverts
+- [SPEC alignment is a hard requirement](#spec-alignment-is-a-hard-requirement) — the authoritative sources
+- [Harness engineering principles](#harness-engineering-principles) — how to evaluate components (1–7)
+- [Cross-cutting checklist](#cross-cutting-checklist-when-porting-from-the-elixir-reference) — Elixir-port failure classes + rules for agents
+- [Layout](#layout) · [Build, test, lint](#build-test-lint)
+- [Clean code](#clean-code) — per-PR rules (1–11)
+- [Conventions](#conventions) — gofmt, timeouts, goroutines, secrets, PR size, gates
+- [WORKFLOW.md discovery](#workflowmd-discovery-worker-side) · [Where to read next](#where-to-read-next) · [Safety posture](#safety-posture-for-agents)
+- [`DEVIATIONS.md`](DEVIATIONS.md) — tracked SPEC deviations · [`docs/engineering-rules-rationale.md`](docs/engineering-rules-rationale.md) — rule provenance
+
 ## What this project is
 
 `aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
@@ -130,65 +148,26 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    the temptation to wrap every Gitea / Linear endpoint as a separate
    tool.
 6. **Upstream absence is an over-design signal; delete, don't relocate.**
-   Before adding any worker/orchestrator phase, gate, artifact, or config
-   that acts on the agent's output (verify, secret scan, run summary, diff
-   policy, push, PR, tracker write, …), `grep` the Elixir reference for an
-   equivalent *first*. **Upstream having no equivalent is a strong signal the
-   component is over-design, not a feature gap to fill.** The default home for
-   "check the agent's work before handoff" is the WORKFLOW prompt (agent-owned,
-   pre-push, *preventive*), not a worker post-turn phase — a worker phase runs
-   *after* the agent has already pushed (#76), so it can only flag, never
-   prevent, and it races the D9 reconcile-cancel / §16.5 self-stop, which is
-   exactly what caused #557. When a component is found on the wrong side of the
-   boundary, the fix is to **delete it**, not relocate it (move-to-prompt) or
-   merely document it (a new `DEVIATIONS.md` row); relocating or documenting
-   preserves scaffolding that no longer earns its place (principle 4). Keep a
-   piece only if you can name a behavior SPEC's scheduler/runner boundary
-   genuinely permits *and* that the prompt cannot replicate — and confirm that
-   bar against SPEC before claiming it.
-
-   Narrow exception: upstream absence can also mean the reference is
-   under-hardened, but only after live evidence proves the SPEC/upstream
-   behavior itself is operationally defective. In that case, do not resurrect
-   the deleted mechanism by habit and do not treat the exception as a
-   keep/change/remove menu. Record the defect evidence, prove that the prompt
-   or tracker-state eligibility cannot enforce the needed invariant, add or
-   update a precise `DEVIATIONS.md` row, and implement the smallest
-   scheduler/runner-side hardening that SPEC's boundary still permits.
-   **Exception earned by:** #621 / PR #625 reproduced SPEC §7.1's unbounded clean
-   continuation loop on upstream Symphony; #627 captured the process lesson;
-   PR #628 accepted D34 as a narrow clean-turn budget rather than restoring the
-   removed D29/D30 failure and continuation-spawn caps.
-
-   **Default rule earned by:** this port has
-   built-then-unwound the same misplacement repeatedly — Postgres queue
-   (#73/#407), Gitea webhook (#74), orchestrator PR/push/tracker-writes (#76),
-   and the worker verify / secret-scan / RUN_SUMMARY / policy gates (#557 /
-   #561) — each a dedicated removal on top of the original build, plus the bugs
-   the misplacement itself caused (the #557 reconcile-cancel race was a direct
-   consequence of running verify as a worker post-turn phase). The `policy`
-   path/diffstat gate looked like a legitimate keep because of its
-   violation-retry loop, but SPEC §3.2 homes scope/validation rules in the
-   `WORKFLOW.md` prompt, the loop fired post-push and raced reconcile-cancel,
-   and upstream has no such config — so it is being removed under #561, not
-   kept.
+   Before adding any worker/orchestrator phase, gate, artifact, or config that
+   acts on the agent's output (verify, secret scan, run summary, diff policy,
+   push, PR, tracker write, …), `grep` the Elixir reference for an equivalent
+   *first*. Upstream having no equivalent is a strong signal it is over-design,
+   not a feature gap. The default home for "check the agent's work before
+   handoff" is the WORKFLOW prompt (agent-owned, pre-push, *preventive*), not a
+   worker post-turn phase (which runs after the push and races
+   reconcile-cancel — #557). When a component is on the wrong side of the
+   boundary, **delete it** — don't relocate or merely document it. *Narrow
+   exception:* if live evidence proves the SPEC/upstream behavior itself is
+   defective, record the evidence, prove the prompt/tracker-state can't enforce
+   the invariant, add a `DEVIATIONS.md` row, and add the smallest
+   boundary-permitted hardening (e.g. D34). ([provenance](docs/engineering-rules-rationale.md#harness-principles))
 7. **Research to a verdict before proposing; bring the verdict, not a menu.**
-   Before proposing how to handle a component (keep / change / remove), finish
-   the SPEC + Elixir-reference research that would settle it — including what
-   SPEC says the *correct* home is (e.g. §3.2 places ticket-handling,
-   validation, and scope rules in the operator's `WORKFLOW.md` prompt, not a
-   worker gate). When that research settles the verdict — most often that an
-   extension upstream lacks and SPEC homes elsewhere should be removed — decide
-   and act on it directly; do **not** hand the operator a keep / relocate /
-   document multiple-choice. Such a menu is usually a symptom that the SPEC +
-   reference research which would rule out "keep" was not finished; it
-   re-litigates settled evidence and biases toward preserving the scaffolding.
-   Reserve operator choices for genuine scope, intent, or safety forks SPEC
-   leaves open. **Earned by:** the #561 `policy`-gate decision was first handed
-   back as a keep-vs-remove-vs-document menu *twice*, when SPEC §3.2 + the
-   post-push reconcile-cancel race + the upstream config gap already settled it
-   as a removal — research that should have produced a direct verdict up front,
-   before any option was offered.
+   Finish the SPEC + Elixir-reference research that settles "keep / change /
+   remove" — including what SPEC says the *correct* home is — then decide and
+   act; don't hand the operator a multiple-choice menu (usually a sign the
+   research that would rule out "keep" wasn't finished). Reserve operator
+   choices for genuine scope/intent/safety forks SPEC leaves open.
+   ([provenance](docs/engineering-rules-rationale.md#harness-principles))
 
 ## Cross-cutting checklist when porting from the Elixir reference
 
@@ -207,10 +186,7 @@ specific observed failure per the "Earned rules" principle.
    retries, dispatch, reconcile), `grep` the symbol and list the
    other consumers. Every aiops-platform-specific filter they apply
    must either also apply on your new path or carry a written reason
-   to differ. **Earned by:** PR #287 retry-fire bypassed
-   `selectRoutedCandidates` because SPEC §16.6 has no service-routing
-   concept; the poll loop's filter was missed for several review
-   rounds.
+   to differ. ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
 2. **Replicate Elixir's implicit runtime guarantees explicitly in
    Go.** BEAM gives a few things for free that the SPEC text takes
@@ -234,15 +210,7 @@ specific observed failure per the "Earned rules" principle.
      shutdown path must drain (consume the channel) before `Wait`.
 
    A 1:1 port from Elixir without these compensations is a latent
-   stuck-state bug. **Earned by:** PR #287 retry-fire fetch had no
-   timeout (upstream relied on GenServer's implicit deadline), so a
-   tracker client that ignored `ctx` could orphan a claim forever;
-   PR #304 had to retrofit `recoverPanic` across actor + timer
-   goroutines after a panic in one path crashed the whole worker; and
-   #666/PR #688 drained the codex app-server stdout reader's channel
-   *after* `cmd.Wait` — a latent deadlock whenever the child emits
-   output after the consumer stops reading, fixed by draining to EOF
-   before `Wait` (the `os/exec` `StdoutPipe` idiom).
+   stuck-state bug. ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
 3. **Treat generated downstream protocol schemas as separate authorities.**
    Symphony's Elixir config schema is the reference for workflow/config shape,
@@ -262,14 +230,7 @@ specific observed failure per the "Earned rules" principle.
    enables the experimental API and sends experimental request fields (e.g.
    `thread/start` `dynamicTools`), which the default `generate-json-schema`
    export strips — a non-experimental bundle silently drops them and falsely
-   flags a working field as removed. **Earned by:** Codex CLI 0.133 rejected the
-   old aiops-platform `turn/start` payload because `UserInput.Text` required
-   `text_elements` and `SandboxPolicy` required typed variants such as
-   `type: workspaceWrite`; the #446 hand-written snapshot it spawned then rotted
-   into a placebo (asserting `text_elements` required at 0.133 while the runtime
-   moved to 0.135/0.136), and a non-`--experimental` regen made `dynamicTools`
-   look removed in 0.136 when the upstream `ThreadStartParams` struct was
-   byte-identical and merely experimental-gated.
+   flags a working field as removed. ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
 4. **Run an adversarial pass on your own diff before asking a human
    to look.** `@codex review` reads SPEC + the Elixir reference +
@@ -279,12 +240,7 @@ specific observed failure per the "Earned rules" principle.
    PR body why it's deferred. Treat the agent's first draft as a
    candidate, not a delivery. An independent adversarial pass catches
    what thorough first-party review does not — run it even when your
-   own review found nothing. **Earned by:** PR #287's HIGH + MEDIUM
-   findings were both surfaced by `@codex review` after submit; both
-   could have been caught one round earlier; and #666/PR #688's HIGH
-   stdout-reader deadlock (see checklist item 2) was surfaced by a
-   Codex review *after* an exhaustive first-party review found nothing
-   — the deadlock would otherwise have shipped.
+   own review found nothing. ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
 Rules for agents working on this repo:
 
@@ -372,124 +328,58 @@ Go toolchain: pinned via `go.mod` (Go 1.25). Don't edit `go.mod`'s `go` directiv
 
 ## Clean code
 
-These rules apply to every PR. The project is pre-release — the cost of doing
-it right is at its minimum now. Each rule is earned by a specific observed
-failure per the "Earned rules" principle above.
+These rules apply to every PR. Each is earned by a specific observed failure —
+[provenance & worked examples](docs/engineering-rules-rationale.md#clean-code).
 
-1. **No technical debt by default.** If a decision produces debt (duplicate
-   fields, back-compat shims, dead code paths), fix it before merging or open
-   a tracking issue tagged `area:tech-debt` with concrete acceptance criteria.
-   Do not merge both in the same PR. **Earned by:** PR #338 dual-emitting
-   `last_codex_at` + `last_event_at` and deferring removal; required a
-   separate cleanup PR #342.
-
-2. **No unnecessary backward compatibility.** Pre-release means no external
-   users to protect. Remove old wire names, deprecated fields, and legacy code
-   paths outright rather than aliasing or dual-emitting. If a consumer inside
-   this repo uses an old name, update the consumer in the same PR. **Earned
-   by:** same as rule 1 (#338 / #342).
-
-3. **One source of truth per concept.** Never emit the same data under two
-   keys or store the same value in two fields. When SPEC renames a concept
-   (e.g. `last_codex_at` → `last_event_at`), rename it everywhere — struct
-   field, JSON tag, dashboard, runbook, test — in a single atomic change.
-   **Earned by:** PR #342 audit found that the wire rename in #338 left the
-   internal `LastCodexAt` field untouched across four files, violating the
-   rule the PR itself introduced.
-
-4. **Names must match the domain.** Internal Go identifiers should mirror the
-   SPEC vocabulary, not a historical implementation artefact. If SPEC says
-   `last_event_at`, the struct field is `LastEventAt`, not `LastCodexAt`.
-   **Earned by:** same as rule 3 (#342 audit finding HIGH).
-
-5. **Every comment explains *why*, not *what*.** A comment that restates what
-   the code already says is noise. Back-compat comments ("retained for §13.7…")
-   that outlive the back-compat code are doubly harmful — delete both together.
-   **Earned by:** PR #338 left a five-line comment block explaining a
-   dual-field strategy that PR #342 then deleted.
-
-6. **Tests must assert the new code path.** A test that would pass even if the
-   feature were deleted is a placebo. After writing a test, verify it fails
-   when the production code is broken (mutation or negative assertion). Run that
-   mutation against the committed artifact, not the working tree — commit the
-   fix first, then break it, restore with `git checkout`, and confirm the tree
-   matches HEAD; a passing local test is not proof of the shipped commit when
-   the working tree and HEAD have diverged. **Earned by:** PR #342 audit (LOW)
-   noted the back-compat test asserted `last_codex_at` presence but not its
-   absence after removal; and a #469/PR #483 session where a backup/restore during
-   mutation testing silently reverted the fix, so local tests stayed green while
-   the commit lacked it and only CI caught the regression.
-
-7. **Function and file size budgets.** New code must keep single functions at
-   or below 80 lines and single files at or below 800 lines, excluding test
-   files and generated code. When porting from Elixir, split oversized upstream
-   modules on the Go side instead of preserving a monolith. CI machine-enforces
-   the **per-function** budgets: the blocking golangci-lint gate runs
-   `funlen`/`gocognit` over all code, with the existing baseline grandfathered
-   in-line via `//nolint:gocognit[,funlen] // baseline (#521)` directives on each
-   known-debt function (removed as #521 decomposes it). A new oversized /
-   over-complex non-test function — or in-place growth of an un-annotated one —
-   fails CI; do not add a new `//nolint` to dodge the gate. CI also
-   machine-enforces the ≤800-line **file** budget with an uncached
-   `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
-   step backed by `scripts/file_size_budget_test.go`: existing oversized
-   production Go files are listed with exact line-count baselines, new
-   oversized production files fail, and any reduction of an existing oversized
-   file must lower or remove that baseline in the same PR.
-   This is an aiops-platform repo-specific maintainability budget, not an
-   official Go file-length limit. The file gate counts raw physical lines in
-   non-test, non-generated Go files and uses the baseline/ratchet to burn down
-   existing debt gradually. Decompose oversized files by responsibility first;
-   introduce `internal` helper packages only when a cohesive package boundary
-   exists, and do not create public API solely to satisfy the line budget.
-   **Earned by:** #410 found `RunTask` at 244 lines, `validateConfig` at 186
-   lines, and `actor.go` at 2138 lines; PR #342 showed that one concept rename
-   had to touch four files partly because large files hid the domain boundary.
-
-8. **Errors are wrapped and classified, not string-matched.** Wrap underlying
-   errors with `%w`, classify them with `errors.Is` / `errors.As`, and keep
-   sentinel errors in the package that owns the failure mode. Error strings
-   are lowercase unless they begin with a proper noun or acronym. Never compare
-   error text with `strings.Contains`. **Earned by:** mixed `%w` / `%s` /
-   `errors.New` styles made review-time reasoning about `errors.Is` /
-   `errors.As` unreliable.
-
-9. **Test failures must print the input, actual value, and expected value.**
-   Prefer the Go review-comment shape `Foo(%q) = %v; want %v` over
-   assertion-only text like `"expected X"`. A regression test whose failure
-   message omits the actual state slows down every future investigation.
-   **Earned by:** repository tests using `t.Errorf("expected ...")` without the
-   actual value left reviewers guessing which state transition regressed.
-
-10. **Fix the class, not the instance.** A bug, review comment, or CI failure
-    is usually one visible member of a broader class. Before pushing, name the
-    class and sweep its blast radius. When changing a shared value or contract
-    (version pin granularity, renamed field, removed config, changed default),
-    `grep` every consumer, derivation, fixture, doc, and CI copy and update them
-    atomically. When replacing a mechanism (assertion, gate, guard, retry), list
-    the invariants the old mechanism guaranteed and prove the new one preserves
-    each required invariant, including failure and deadline paths. Do not let
-    `@codex review` discover siblings one push at a time. **Earned by:** a
-    standard-library security bump first updated only the module patch pin, so
-    later review rounds found the matching container base-image pin, lint-cache
-    exposure, and version-doctor granularity one by one; and #602's test
-    refactor replaced an external deadline bound with a typed-error assertion
-    that initially dropped the "did not wait for the outer deadline" invariant.
-
-11. **Mutation-test the wiring seam, not just the leaf.** When a field or
-    behavior is threaded through a construction seam (config →
-    `ReconciliationConfig` → snapshot → lister/closure, or a view → DTO mapper),
-    add a test that drives the *real* construction path and mutation-verify by
-    deleting the field **at the seam**. A leaf predicate can be correct and
-    unit-tested while the production wiring silently drops the field — a no-op the
-    leaf tests still pass. Prefer a compiling mutation (`&&`→`||`, drop the
-    assignment, flip `omitempty`) so the test fails on an assertion, not a build
-    error. When one concept has two builders, collapse to one source of truth
-    (rule 3) so a field cannot be wired in one and dropped in the other. **Earned
-    by:** #682's retry-fire `requiredLabels` thread and the production
-    `reconciliationConfigForWorkflow` builder were both unwired no-ops that the
-    leaf `issueHasRequiredLabels` tests passed; #683's refresh label-carry
-    (`issue.Labels = st.Labels`) had no positive test until one was added.
+1. **No technical debt by default.** Fix debt (duplicate fields, back-compat
+   shims, dead code) before merging, or open an `area:tech-debt` tracking issue
+   with acceptance criteria — never merge both in the same PR.
+2. **No unnecessary backward compatibility.** Pre-release: remove old wire
+   names / deprecated fields / legacy paths outright rather than aliasing or
+   dual-emitting; update in-repo consumers in the same PR.
+3. **One source of truth per concept.** Never emit the same data under two keys
+   or store the same value in two fields; rename a concept everywhere (struct
+   field, JSON tag, dashboard, runbook, test) in one atomic change.
+4. **Names must match the domain.** Internal Go identifiers mirror SPEC
+   vocabulary, not historical artefacts (SPEC `last_event_at` → `LastEventAt`).
+5. **Every comment explains *why*, not *what*.** Delete comments that restate
+   the code; delete back-compat comments together with the back-compat code.
+6. **Tests must assert the new code path.** A test that passes with the feature
+   deleted is a placebo — mutation-verify each new behavior against the
+   **committed artifact** (commit the fix, break it, `git checkout` restore,
+   confirm tree == HEAD; never `git checkout` a file with other uncommitted
+   edits).
+7. **Function and file size budgets.** ≤80 lines/function, ≤800 lines/file
+   (excl. tests/generated) — a repo-specific maintainability budget, not an
+   official Go file-length limit. CI machine-enforces both: the golangci-lint
+   gate (`funlen`/`gocognit`, baseline grandfathered via
+   `//nolint:… // baseline (#521)`; do **not** add new nolints to dodge it) and
+   `TestProductionGoFilesStayWithinSizeBudget` (`scripts/file_size_budget_test.go`),
+   which counts raw physical lines in non-test, non-generated Go files and uses
+   the baseline/ratchet to burn down debt — new oversized files fail; a reduction
+   must lower/remove the baseline in the same PR. Decompose oversized files by
+   responsibility first; introduce `internal` helper packages only when a cohesive
+   boundary exists, and don't add public API solely to satisfy the budget.
+   ([provenance](docs/engineering-rules-rationale.md#clean-code))
+8. **Errors are wrapped and classified, not string-matched.** Wrap with `%w`,
+   classify with `errors.Is`/`errors.As`, keep sentinels in the owning package;
+   lowercase error strings (unless a proper noun/acronym); never
+   `strings.Contains` on error text.
+9. **Test failures print input, actual, and expected.** Use
+   `Foo(%q) = %v; want %v`, not assertion-only text.
+10. **Fix the class, not the instance.** Name the class and sweep its blast
+    radius before pushing; when changing a shared value/contract, `grep` every
+    consumer/derivation/fixture/doc/CI copy and update atomically; when replacing
+    a mechanism, prove the new one preserves each invariant (incl.
+    failure/deadline paths). Don't let `@codex review` find siblings one push at
+    a time.
+11. **Mutation-test the wiring seam, not just the leaf.** When a field is
+    threaded through a construction seam (config → snapshot → lister/closure, or
+    view → DTO), drive the real construction path and mutation-verify by deleting
+    the field *at the seam* — a leaf predicate can be correct while production
+    wiring drops it. Prefer a compiling mutation (`&&`→`||`, drop the assignment,
+    flip `omitempty`) so the test fails on an assertion, not a build error.
+    Collapse two builders of one concept to a single source of truth (rule 3).
 
 ## Conventions
 
@@ -498,69 +388,40 @@ failure per the "Earned rules" principle above.
 - **All external I/O is timeout-bounded**: every function that talks to a
   tracker, repository service, agent runner, subprocess, or network API must
   enforce a per-request deadline with `context.WithTimeout`, even if the
-  underlying client claims to honor `ctx`. This applies to new code, not only
-  Elixir ports. **Earned by:** #287 retry-fire fetch had no timeout on an
-  Elixir-port path, and #405 found the same failure class in the non-port Gitea
-  tracker client.
+  underlying client claims to honor `ctx`. Applies to new code, not only Elixir
+  ports. ([provenance](docs/engineering-rules-rationale.md#conventions))
 - **Goroutine lifetimes are explicit**: every `go func` / `time.AfterFunc`
-  outside of `package main` boot code must use `safeGo` or install
-  `defer recoverPanic("site")`, and the code must make the exit condition
-  obvious. `package main` boot goroutines that intentionally share process
-  lifetime are exempt, but the call site must say so. Direct async launch
-  without panic recovery or a clear stop condition is a stuck-state bug, not
-  style drift. **Earned by:** PR #304 retrofitted panic recovery after one path
-  could crash the worker; #413's audit found most production goroutine launch
-  sites still lacked that guard, so this needs a machine-checkable follow-up
-  rather than reviewer memory.
+  outside `package main` boot code must use `safeGo` or `defer recoverPanic("site")`
+  with an obvious exit condition. Direct async launch without panic recovery or a
+  clear stop condition is a stuck-state bug.
+  ([provenance](docs/engineering-rules-rationale.md#conventions))
 - **Prefer the `gh` CLI over the GitHub MCP server** for GitHub interactions (PRs, issues, CI status, reviews). The SessionStart hook installs `gh` in remote/cloud/web sessions (`.claude/scripts/session-start.sh`); fall back to the GitHub MCP server only when `gh` is unavailable.
 - **Task events**: when adding a new lifecycle event, add the kind as a constant in `internal/task` rather than inlining the string at the call site.
-- **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template. Secret-bearing values that arrive via config or CLI (e.g. `clone_url` basic-auth userinfo) must be masked before they reach any log, error string, or state output — env-var-only redaction does not cover them. Mask clone URLs with `workflow.MaskCloneURL`. **Earned by:** #469/PR #483, where a doctor ambiguity/not-found error echoed a credentialed `clone_url` because `redact()` only scrubbed env-var values.
+- **Secrets**: never commit real credentials. `.env`, `.env.*`, `*.key`, `*.pem` are gitignored; `.env.example` is the only sanctioned env template. Secret-bearing values that arrive via config or CLI (e.g. `clone_url` basic-auth userinfo) must be masked before they reach any log, error string, or state output — env-var-only redaction does not cover them. Mask clone URLs with `workflow.MaskCloneURL`. ([provenance](docs/engineering-rules-rationale.md#conventions))
 - **Keep worker PRs small — ≤12 changed production files / ≤300 changed
   production LOC is a review guideline, not an LOC-reduction mandate.** Test
-  files and generated code are excluded from the count (matching the
-  function/file budgets in the Clean-code rules), so test coverage never by
-  itself pushes a PR into overage. (These were the
-  `policy.max_changed_files` / `policy.max_changed_loc` worker caps; the worker
-  no longer enforces them — the path/diffstat gate was removed in #561 because
-  it ran post-push and raced reconcile-cancel — so the budget is now a review
-  discipline, not config.) Worker PRs are draft + labeled by
-  default; shape them small when you can, but the budget exists to catch scope
-  creep and force explicit handling — not to incentivize deleting necessary
-  tests, weakening state-machine coverage, skipping race coverage, or
-  preferring compact code over clear reliable code when review feedback
-  exposes a real correctness, safety, performance, or coverage gap. Classify
-  every PR into exactly one of three states and surface it in the PR body:
-  - `within budget` — production diff fits the ~12-file / ~300-LOC guideline (tests and generated code excluded).
-  - `size-gated: justified overage` — over the budget because the extra LOC
-    pays for correctness, regression coverage, race/state-machine safety, or
-    other best-practice hardening that cannot be split without losing
-    atomicity. Requires explicit human size-gate sign-off before merge.
-  - `size-gated: split recommended` — over the budget because of scope creep,
-    unrelated cleanup, or genuinely separable concerns. Stop and split into
-    smaller PRs instead of asking for sign-off.
+  files and generated code are excluded from the count, so test coverage never
+  by itself pushes a PR into overage. Never delete meaningful tests or safety
+  checks to fit the budget. Classify every PR into exactly one state in the PR
+  body:
+  - `within budget` — production diff fits the ~12-file / ~300-LOC guideline.
+  - `size-gated: justified overage` — over budget for correctness / regression /
+    race-safety coverage that can't be split without losing atomicity. **Needs
+    explicit human size-gate sign-off before merge.**
+  - `size-gated: split recommended` — over budget for scope creep / separable
+    concerns. Split instead.
 
-  Only reduce LOC when the code is genuinely redundant, over-abstracted,
-  duplicated without purpose, or outside scope. Never delete meaningful tests
-  or safety checks solely to satisfy the budget. **Earned by:** PR #455
-  exceeded the default 300 LOC after multiple valid Codex review findings
-  required additional race/state-machine coverage; the prevailing workflow
-  language nudged the agent toward compressing tests to fit the threshold,
-  which is backwards when the extra lines are paying for correctness. Counting
-  production LOC only (tests/generated excluded) removes that pressure at the
-  source, so a well-tested focused change stays `within budget` instead of
-  defaulting to a sign-off-requiring overage.
-- **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` scans merged PRs for unresolved, non-outdated review discussions and files follow-up GitHub issues keyed by the discussion permalink. This is the only post-merge line of defense for shipped-past bot feedback, not a required merge check; agents should still handle actionable review feedback before merging. After merging a PR with non-trivial bot review activity, sanity-check the next-day `Capture unresolved reviews` Actions history so workflow regressions do not age silently.
+  ([provenance & rationale](docs/engineering-rules-rationale.md#conventions))
+- **Merged PR review feedback is captured non-blockingly**: `.github/workflows/capture-unresolved-reviews.yml` files follow-up issues for unresolved, non-outdated review discussions on merged PRs. This is a post-merge backstop, not a required check; still handle actionable review feedback before merging, and sanity-check the next-day `Capture unresolved reviews` Actions history after a PR with non-trivial bot activity.
 - **SPEC deviations are gated at author time, not audit time**: the `PR Metadata`
   workflow (`.github/workflows/pr-metadata.yml` + `.github/scripts/validate-pr-metadata.mjs`)
   blocks a PR that changes a SPEC-sensitive path (`internal/workflow/config.go`, a
   newly-added `internal/orchestrator/`/`internal/worker/` file) while it claims no
-  new key/phase — the author must cite an upstream Elixir reference or track a
-  `DEVIATIONS.md` row (principle 6/7). Fill the `SPEC alignment` checklist in the
-  PR template. This makes a documented deviation cost something *before* merge
-  instead of being unwound later (the #73/#74/#76/#557/#561/D25 recurrence). The
-  required-check wiring lives in `.github/governance/main-ruleset.json`. **Earned
-  by:** #588 — those removals all shipped despite the rules existing, because the
-  checks were judgment at audit time rather than mechanical at author time.
+  new key/phase — cite an upstream Elixir reference or track a `DEVIATIONS.md` row
+  (principle 6/7). It also requires every PR body to carry a `Closes #N` keyword.
+  Fill the `SPEC alignment` checklist in the PR template; required-check wiring is
+  in `.github/governance/main-ruleset.json`.
+  ([provenance](docs/engineering-rules-rationale.md#conventions))
 
 ## WORKFLOW.md discovery (worker side)
 
