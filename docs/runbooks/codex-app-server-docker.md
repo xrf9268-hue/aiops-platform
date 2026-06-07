@@ -314,6 +314,53 @@ above governs every turn — you no longer have to restate it under
 `turn_sandbox_policy`. Setting `turn_sandbox_policy` explicitly still overrides
 the derived value for callers that need a different per-turn policy (#472).
 
+## Network access for package-manager workflows
+
+The shell commands the **agent runs inside the turn sandbox** — `npm install`,
+`pip install`, `go mod download`, `git clone` of an external repo, `curl`/`wget`
+of remote resources — need network. Whether they get it depends on the per-turn
+sandbox policy:
+
+- **The Docker profile above (`thread_sandbox: danger-full-access`)** already
+  permits network in the turn sandbox, so package-manager commands work with no
+  extra config. **Do not** add a `workspaceWrite` `turn_sandbox_policy` to that
+  workflow to "enable network": it overrides the derived `dangerFullAccess`
+  policy and re-imposes the per-turn sandbox that fails inside the restricted
+  container with the bwrap namespace error shown above. Keep the
+  `danger-full-access` path in the container.
+- **Host-direct `workspace-write` setups** block network in the turn sandbox by
+  default (`networkAccess: false`, matching Codex's safe default and
+  `docs/security-posture.md`). Package-manager workflows need to write (install),
+  so `workspace-write` is the relevant policy — set `networkAccess: true` on it,
+  keeping `type: workspaceWrite`. That policy is fully typed, so the example must
+  carry every field the loader requires (`writableRoots`, `networkAccess`,
+  `excludeTmpdirEnvVar`, `excludeSlashTmp`) or `WORKFLOW.md` fails to load before
+  the worker starts:
+
+  ```yaml
+  codex:
+    turn_sandbox_policy:
+      type: workspaceWrite
+      writableRoots: []
+      networkAccess: true
+      excludeTmpdirEnvVar: false
+      excludeSlashTmp: false
+  ```
+
+  A `read-only` workflow likewise blocks network by default; if it only needs to
+  *fetch* (not install), opt in on its **own** `type: readOnly` policy
+  (`type: readOnly` + `networkAccess: true`) — do not switch it to
+  `workspaceWrite`, which would also grant workspace writes it intentionally
+  forbids.
+
+Scope: `networkAccess` gates **only** commands the agent runs inside the turn
+sandbox. It does not affect the model's reasoning, the `linear_graphql` (and
+equivalent) dynamic tools, or the orchestrator's tracker polling — those run
+outside the sandbox and reach the network regardless. Enabling it widens the
+sandbox's blast radius, so turn it on only for workflows that genuinely need it,
+and prefer running such workflows on an already-isolated worker (container or
+dedicated VM), consistent with the `thread_sandbox` guidance above.
+
 ## Validation reference
 
 See `docs/validation/2026-05-26-docker-linear-e2e.md` for the live Linear todo
