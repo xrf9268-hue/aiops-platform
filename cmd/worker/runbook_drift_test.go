@@ -108,6 +108,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 		Running: []apiStateRunning{{
 			IssueID:       "issue-1",
 			Identifier:    "ENG-1",
+			IssueURL:      "https://tracker.example/issues/ENG-1",
 			State:         "In Progress",
 			SessionID:     "thread-1-turn-1",
 			TurnCount:     7,
@@ -127,6 +128,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 		Blocked: []apiStateBlocked{{
 			IssueID:           "issue-2",
 			Identifier:        "ENG-2",
+			IssueURL:          "https://tracker.example/issues/ENG-2",
 			State:             "AI Ready",
 			BlockedAt:         &blockedAt,
 			WorkspacePath:     "/var/aiops/workspaces/acme/repo/issue-2",
@@ -139,6 +141,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 		Retrying: []apiStateRetry{{
 			IssueID:    "issue-3",
 			Identifier: "ENG-3",
+			IssueURL:   "https://tracker.example/issues/ENG-3",
 			Attempt:    2,
 			DueAt:      &dueAt,
 			Error:      "retry soon",

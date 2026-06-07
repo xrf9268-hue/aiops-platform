@@ -847,72 +847,9 @@ type StateView struct {
 	RecentEvents []RuntimeEvent
 }
 
-// RunningView is the per-running-entry projection in StateView. It
-// omits unexported / non-serializable fields like CancelWorker and Done.
-// SPEC §13.7.2 dictates the exposed field set; State / SessionID /
-// TurnCount / LastEvent / LastMessage / Tokens were added per #209 so
-// operators inspecting `/api/v1/state` or `/api/v1/<id>` can see live
-// coding-agent activity without tailing logs.
-type RunningView struct {
-	IssueID           IssueID
-	Identifier        string
-	State             string
-	SessionID         string
-	TurnCount         int
-	LastEvent         string
-	LastMessage       string
-	StartedAt         time.Time
-	LastEventAt       time.Time
-	RetryAttempt      *int
-	WorkspacePath     string
-	Tokens            TokensView
-	CodexAppServerPID int
-}
-
-// TokensView mirrors the SPEC §13.7.2 per-issue `tokens` object: the
-// input/output/total triple of cumulative codex tokens observed for the
-// active session.
-type TokensView struct {
-	InputTokens  int64
-	OutputTokens int64
-	TotalTokens  int64
-}
-
-// BlockedView is the public projection of a blocked claim.
-type BlockedView struct {
-	IssueID           IssueID
-	Identifier        string
-	State             string
-	BlockedAt         time.Time
-	WorkspacePath     string
-	SessionID         string
-	LastEventAt       time.Time
-	Method            string
-	Error             string
-	CodexAppServerPID int
-}
-
-// RetryView is the per-retry-entry projection in StateView. Omits the
-// *time.Timer handle because it is not meaningful outside the process.
-type RetryView struct {
-	IssueID    IssueID
-	Identifier string
-	Attempt    int
-	DueAt      time.Time
-	Error      string
-	Kind       RetryKind
-}
-
-type OperatorTerminalStopView struct {
-	IssueID               IssueID
-	Identifier            string
-	State                 string
-	StoppedAt             time.Time
-	SuppressedDispatches  int
-	FirstSuppressedAt     time.Time
-	FirstSuppressedState  string
-	FirstSuppressedReason string
-}
+// The StateView projection types (RunningView, BlockedView, RetryView,
+// TokensView, OperatorTerminalStopView) live in views.go; their builders stay
+// here next to Snapshot.
 
 // Snapshot returns a read-only view of the orchestrator state. The
 // returned slices are freshly allocated so the caller may sort or
@@ -934,6 +871,7 @@ func (s *OrchestratorState) snapshotRunningViews() []RunningView {
 		rows = append(rows, RunningView{
 			IssueID:       id,
 			Identifier:    r.Identifier,
+			IssueURL:      r.Issue.URL,
 			State:         r.Issue.State,
 			SessionID:     r.Session.SessionID,
 			TurnCount:     r.Session.TurnCount,
@@ -1007,6 +945,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		view.Blocked = append(view.Blocked, BlockedView{
 			IssueID:           id,
 			Identifier:        b.Identifier,
+			IssueURL:          b.Issue.URL,
 			State:             b.Issue.State,
 			BlockedAt:         b.BlockedAt,
 			WorkspacePath:     b.Workspace.Path,
@@ -1021,6 +960,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		view.Retrying = append(view.Retrying, RetryView{
 			IssueID:    id,
 			Identifier: r.Identifier,
+			IssueURL:   r.Issue.URL,
 			Attempt:    r.Attempt,
 			DueAt:      r.DueAt,
 			Error:      r.Error,

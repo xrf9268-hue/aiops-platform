@@ -153,6 +153,7 @@ the shape here without updating the handler — or vice versa — fails the buil
     {
       "issue_id": "issue-1",
       "issue_identifier": "ENG-1",
+      "issue_url": "https://tracker.example/issues/ENG-1",
       "state": "In Progress",
       "session_id": "thread-1-turn-1",
       "turn_count": 7,
@@ -174,6 +175,7 @@ the shape here without updating the handler — or vice versa — fails the buil
     {
       "issue_id": "issue-2",
       "issue_identifier": "ENG-2",
+      "issue_url": "https://tracker.example/issues/ENG-2",
       "state": "AI Ready",
       "blocked_at": "2026-05-20T06:05:38Z",
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-2",
@@ -188,6 +190,7 @@ the shape here without updating the handler — or vice versa — fails the buil
     {
       "issue_id": "issue-3",
       "issue_identifier": "ENG-3",
+      "issue_url": "https://tracker.example/issues/ENG-3",
       "attempt": 2,
       "kind": "failure",
       "due_at": "2026-05-21T09:11:00Z",
@@ -284,6 +287,8 @@ Two consequences for dashboard authors:
 Each entry in the `running` array follows SPEC §13.7.2:
 
 - `issue_id` / `issue_identifier` — the tracker identity.
+- `issue_url` — the tracker-provided issue URL (SPEC §13.7); present on
+  running/blocked/retrying rows when the tracker supplied one, omitted otherwise.
 - `state` — the tracker state at dispatch (e.g. `In Progress`).
 - `session_id` — the live Codex session id (SPEC §4.1.6); absent until the
   runner emits a `session_started` event.
