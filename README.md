@@ -384,14 +384,11 @@ Every push to `main` and every pull request targeting `main` runs
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml). CI is the safety net for
 all changes; PRs should not merge while it is red. It runs four jobs:
 
-- **`go`** — Node-based GitHub script tests (`.github/scripts/*.test.mjs`),
-  Trellis Python script tests, the dashboard `npm test` + build with a
-  dist-embed check, a `gofmt` check on all tracked Go files, the blocking
-  golangci-lint gate (including AGENTS.md rule 7's `funlen`/`gocognit` budgets),
-  a Dockerfile/`go.mod` Go-version drift check, `go mod tidy` cleanliness, the
-  production Go file-size budget check, `go test -race -covermode=atomic ./...`,
-  a short fuzz smoke, `go build` for `worker` and `tui`, and an upload of those
-  Linux binaries as build artifacts.
+- **`go`** — format and lint gates (`gofmt`, the blocking golangci-lint gate),
+  repo hygiene (`go mod tidy`, Dockerfile/`go.mod` Go-version drift, the Go
+  file-size budget), the test suite (`go test -race`, a short fuzz smoke, and the
+  dashboard / Trellis / GitHub-script tests), and the build (dashboard bundle
+  plus the `worker` and `tui` binaries, uploaded as artifacts).
 - **`security`** — supply-chain checks: standalone `go vet ./...` plus
   `govulncheck ./...` built against the `go.mod` toolchain floor.
 - **`e2e`** — the end-to-end Gitea mock loop (`go test -tags e2e ./test/e2e/...`)
