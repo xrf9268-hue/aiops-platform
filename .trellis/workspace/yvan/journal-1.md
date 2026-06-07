@@ -127,3 +127,50 @@ Per-issue pipeline (don't skip steps):
 Start with #670. Auto-merge the clean, uncontroversial PRs and keep going;
 pause and report only when something is debatable, uncertain, or needs sign-off.
 ```
+
+## 2026-06-07 — SPEC-alignment backports: #682 / #683 / #684
+
+Finished the 2026-06-06 queue's backport tail (the P2 fixes #670–#673/#677–#679
+had already merged). All three closed; `main` advanced to `92c5d67`.
+
+### Shipped
+- **#682 (PR #706)** — `tracker.required_labels` opt-in gate (SPEC §4.1.1/§6.4,
+  upstream #88). First cut gated dispatch/retry/reconcile but had a production
+  no-op (`reconciliationConfigForWorkflow` dropped the field) and, per the Codex
+  bot, two P2 gaps: the §16.5 per-turn **continue** gate and **out-of-page**
+  reconcile couldn't see label removal (labels were sourced only from the active
+  listing). Operator chose "complete it (size-gated)." Final design (verified by a
+  design Workflow's 2 adversarial passes + a Codex plan review, no fatal flaws):
+  new `tracker.IssueState{State,Labels}` refresh contract carries labels across
+  all 3 trackers; continue gate folds the label check into `Active` (no runner
+  change); `appendLabelIneligibleActive` replaced by one `refreshedIssueIsInactive`
+  helper that also covers out-of-page in-flight issues; Linear label cap 50→250.
+  `size-gated: justified overage` (signed off).
+- **#683 (PR #707)** — `issue_url` on running/retrying/blocked state-API rows
+  (SPEC §13.7 SHOULD, upstream #89). Projection-only (URL already in
+  `*Entry.Issue.URL`). Bonus: extracted the StateView projection structs into
+  `internal/orchestrator/views.go`, burning state.go 1062→1002 (a #521/#661 split,
+  baseline ratcheted down). Both reviews clean first pass.
+- **#684 (PR #708)** — docs-only `networkAccess` note (upstream #65). Bot found 4
+  real defects across 3 rounds in the YAML snippet (incomplete `workspaceWrite`
+  fields → load error; wrong for the Docker `danger-full-access` profile;
+  read-only→workspace-write escalation). Fixed snippets verified via
+  `--print-config`.
+
+### Earned this run (durable; also saved to assistant memory)
+1. **Mutation-test the wiring seam, not just the leaf** — #682 retry-fire +
+   production builder and #683's label-carry were unwired no-ops the leaf tests
+   passed. Now AGENTS.md Clean-code rule 11.
+2. **Validate doc config snippets through the real loader** before committing —
+   the #684 3-round bot saga. A docs PR carrying a config snippet is not low-risk.
+3. **Bot review is posted as a PR review + inline comments**, not issue comments —
+   poll `/pulls/<n>/reviews` + `/comments` by head SHA (a wrong endpoint cost a
+   20-min false timeout). Updated the codex-review-every-push memory.
+4. **PR-metadata gate trips on a new orchestrator/worker file even for a pure
+   refactor extraction** (views.go) — satisfy with the Elixir-reference option.
+
+### Follow-up
+- **#705 (open)** — Linear `labels(first:N)` cap could false-cancel an issue with
+  a required label beyond the cap. Mitigated by the 250 raise; kept open for true
+  label pagination.
+- Deferred #464 / #547 untouched, as planned.
