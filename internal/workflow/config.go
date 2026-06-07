@@ -161,6 +161,13 @@ type TrackerConfig struct {
 	// on the next poll. Default `[]` disables the gate. A blank configured
 	// label matches no issue. Normalized (trim + lowercase + de-dupe) at
 	// load by normalizeRequiredLabels.
+	//
+	// Label projection ceiling (#705): the Linear adapter projects labels up
+	// to the API's 250-per-issue single-page maximum (linear.go
+	// listLinearIssuesQuery / issueStatesByIDsQuery). A required label sorted
+	// past that window is outside the gate's evidence; since 250 is the API
+	// page cap and a single issue carrying 250+ labels is pathological, keep
+	// the marker set small rather than relying on labels beyond the ceiling.
 	RequiredLabels []string `yaml:"required_labels" json:"required_labels"`
 	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
