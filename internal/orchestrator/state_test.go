@@ -34,6 +34,62 @@ func runningEntry(t *testing.T, iss tracker.Issue) *RunningEntry {
 	}
 }
 
+// TestSnapshotViewsCarryIssueURL pins SPEC §13.7's issue_url projection: the
+// running / retrying / blocked views surface Entry.Issue.URL (empty when the
+// tracker provided none), and the URL survives the running->blocked transition
+// because the whole tracker.Issue is carried forward — no plumbing drops it.
+// Mutation: dropping IssueURL from any view builder fails this.
+func TestSnapshotViewsCarryIssueURL(t *testing.T) {
+	const runURL = "https://tracker.example/issues/ENG-1"
+	const retryURL = "https://tracker.example/issues/ENG-2"
+	st := NewOrchestratorState(15000, 4)
+
+	run := issue("ENG-1")
+	run.URL = runURL
+	runID := IssueID(run.ID)
+	entry := runningEntry(t, run)
+	st.BeginDispatch(runID, entry)
+
+	ret := issue("ENG-2")
+	ret.URL = retryURL
+	st.ScheduleRetry(&RetryEntry{IssueID: IssueID(ret.ID), Identifier: ret.Identifier, Issue: ret, Attempt: 1, DueAt: time.Unix(1_700_000_000, 0)})
+
+	// A third running issue with NO URL must project an empty IssueURL (the
+	// builder must not fabricate one; omitempty then drops it at the API).
+	noURL := issue("ENG-3")
+	st.BeginDispatch(IssueID(noURL.ID), runningEntry(t, noURL))
+
+	view := st.Snapshot()
+	if got := runningViewURL(view, runID); got != runURL {
+		t.Fatalf("Running[ENG-1].IssueURL = %q; want %q", got, runURL)
+	}
+	if got := runningViewURL(view, IssueID(noURL.ID)); got != "" {
+		t.Fatalf("Running[ENG-3].IssueURL = %q; want empty (no tracker URL)", got)
+	}
+	if len(view.Retrying) != 1 || view.Retrying[0].IssueURL != retryURL {
+		t.Fatalf("Retrying view = %+v; want one row with IssueURL %q", view.Retrying, retryURL)
+	}
+
+	// Survival: running -> blocked carries the whole Issue, so the blocked view
+	// still surfaces the URL.
+	if !st.BlockRun(runID, entry, time.Now().UTC(), "input required", time.Second) {
+		t.Fatal("BlockRun(ENG-1) = false; want it to move the running entry to blocked")
+	}
+	blockedView := st.Snapshot()
+	if len(blockedView.Blocked) != 1 || blockedView.Blocked[0].IssueURL != runURL {
+		t.Fatalf("Blocked view after BlockRun = %+v; want one row with IssueURL %q (URL must survive running->blocked)", blockedView.Blocked, runURL)
+	}
+}
+
+func runningViewURL(view StateView, id IssueID) string {
+	for _, row := range view.Running {
+		if row.IssueID == id {
+			return row.IssueURL
+		}
+	}
+	return "<not found>"
+}
+
 func TestNewOrchestratorState_MatchesSpec16_1Initializer(t *testing.T) {
 	// SPEC §16.1: state = { running: {}, claimed: set(),
 	// retry_attempts: {}, completed: set(), codex_totals: {...},

@@ -54,6 +54,92 @@ func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
 	}
 }
 
+// TestApiStateRowsEmitIssueURLWhenAvailable pins SPEC §13.7's SHOULD-level
+// `issue_url`: running/retrying/blocked rows must surface the tracker-provided
+// URL when present and omit the key (omitempty) when absent. The URL is already
+// carried in *Entry.Issue.URL; this is the projection layer the state API was
+// missing. Mutation: dropping IssueURL from any DTO/builder fails the matching
+// "present" case; dropping omitempty fails the matching "absent" case.
+func TestApiStateRowsEmitIssueURLWhenAvailable(t *testing.T) {
+	const url = "https://tracker.example/issues/MT-649"
+	keyPresent := func(t *testing.T, raw []byte, want string) {
+		t.Helper()
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		v, ok := got["issue_url"]
+		if !ok {
+			t.Fatalf("issue_url missing; want %q in %s", want, raw)
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			t.Fatalf("issue_url unmarshal: %v", err)
+		}
+		if s != want {
+			t.Fatalf("issue_url = %q; want %q", s, want)
+		}
+	}
+	keyAbsent := func(t *testing.T, raw []byte) {
+		t.Helper()
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if _, ok := got["issue_url"]; ok {
+			t.Fatalf("issue_url present; want omitted (omitempty) in %s", raw)
+		}
+	}
+	rows := map[string]struct {
+		withURL any
+		noURL   any
+	}{
+		"running": {
+			withURL: apiRunningFromView(orchestrator.RunningView{IssueID: "i1", Identifier: "MT-649", IssueURL: url}),
+			noURL:   apiRunningFromView(orchestrator.RunningView{IssueID: "i1", Identifier: "MT-649"}),
+		},
+		"retry": {
+			withURL: apiRetryFromView(orchestrator.RetryView{IssueID: "i1", Identifier: "MT-649", IssueURL: url}),
+			noURL:   apiRetryFromView(orchestrator.RetryView{IssueID: "i1", Identifier: "MT-649"}),
+		},
+	}
+	for name, tc := range rows {
+		t.Run(name+" present", func(t *testing.T) {
+			raw, err := json.Marshal(tc.withURL)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			keyPresent(t, raw, url)
+		})
+		t.Run(name+" absent", func(t *testing.T) {
+			raw, err := json.Marshal(tc.noURL)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			keyAbsent(t, raw)
+		})
+	}
+
+	// Blocked rows are projected through apiStateFromView, not a standalone
+	// builder, so exercise that path.
+	resp := apiStateFromView(orchestrator.StateView{
+		Blocked: []orchestrator.BlockedView{{IssueID: "i1", Identifier: "MT-649", IssueURL: url}},
+	})
+	rawBlocked, err := json.Marshal(resp.Blocked[0])
+	if err != nil {
+		t.Fatalf("marshal blocked: %v", err)
+	}
+	keyPresent(t, rawBlocked, url)
+	respNo := apiStateFromView(orchestrator.StateView{
+		Blocked: []orchestrator.BlockedView{{IssueID: "i1", Identifier: "MT-649"}},
+	})
+	rawBlockedNo, err := json.Marshal(respNo.Blocked[0])
+	if err != nil {
+		t.Fatalf("marshal blocked no-url: %v", err)
+	}
+	keyAbsent(t, rawBlockedNo)
+}
+
 func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
 	view := orchestrator.StateView{
 		Completed: []orchestrator.IssueID{"linear-global-id"},

@@ -101,6 +101,9 @@ type apiStateCounts struct {
 type apiStateRunning struct {
 	IssueID    orchestrator.IssueID `json:"issue_id"`
 	Identifier string               `json:"issue_identifier,omitempty"`
+	// IssueURL is the tracker-provided issue URL, emitted only when available
+	// (SPEC §13.7 SHOULD). omitempty keeps URL-less rows (mock tracker) clean.
+	IssueURL string `json:"issue_url,omitempty"`
 	// State / SessionID / TurnCount / LastEvent / LastMessage are part of
 	// the SPEC §13.7.2 running-row contract — the sample literally shows
 	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
@@ -128,6 +131,7 @@ type apiRunningTokens struct {
 type apiStateBlocked struct {
 	IssueID           orchestrator.IssueID `json:"issue_id"`
 	Identifier        string               `json:"issue_identifier,omitempty"`
+	IssueURL          string               `json:"issue_url,omitempty"`
 	State             string               `json:"state,omitempty"`
 	BlockedAt         *time.Time           `json:"blocked_at,omitempty"`
 	WorkspacePath     string               `json:"workspace_path,omitempty"`
@@ -140,6 +144,7 @@ type apiStateBlocked struct {
 type apiStateRetry struct {
 	IssueID    orchestrator.IssueID   `json:"issue_id"`
 	Identifier string                 `json:"issue_identifier,omitempty"`
+	IssueURL   string                 `json:"issue_url,omitempty"`
 	Attempt    int                    `json:"attempt"`
 	DueAt      *time.Time             `json:"due_at,omitempty"`
 	Error      string                 `json:"error,omitempty"`
@@ -485,6 +490,7 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 	return apiStateRunning{
 		IssueID:       row.IssueID,
 		Identifier:    row.Identifier,
+		IssueURL:      row.IssueURL,
 		State:         row.State,
 		SessionID:     row.SessionID,
 		TurnCount:     row.TurnCount,
@@ -511,6 +517,7 @@ func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
 	return apiStateRetry{
 		IssueID:    row.IssueID,
 		Identifier: row.Identifier,
+		IssueURL:   row.IssueURL,
 		Attempt:    row.Attempt,
 		DueAt:      dueAt,
 		Error:      row.Error,
@@ -566,6 +573,7 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		blocked = append(blocked, apiStateBlocked{
 			IssueID:           row.IssueID,
 			Identifier:        row.Identifier,
+			IssueURL:          row.IssueURL,
 			State:             row.State,
 			BlockedAt:         blockedAt,
 			WorkspacePath:     row.WorkspacePath,

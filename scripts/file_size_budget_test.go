@@ -20,7 +20,9 @@ var oversizedProductionGoFileBaseline = map[string]int{
 	// operator-terminal-stop latch cap. Per #667 (and the #661 burn-down note it
 	// cites), this cap must land *before* #661 decomposes state.go by
 	// responsibility, which then drops it well under budget and removes this baseline.
-	"internal/orchestrator/state.go": 1062,
+	// #683 extracts the StateView projection types into views.go (a first
+	// responsibility split), dropping the baseline from 1062 to 1002.
+	"internal/orchestrator/state.go": 1002,
 	"cmd/tui/main.go":                904,
 	// codex_app_server.go's baseline rose from 840 under #666, which replaces the
 	// per-read goroutine with a single long-lived stdout reader (the reader
