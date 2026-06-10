@@ -101,6 +101,54 @@ GOLANGCI_LINT_CACHE=$(mktemp -d) go run github.com/golangci/golangci-lint/v2/cmd
 This prevents stale package-analysis entries from sibling worktrees from
 appearing as false findings.
 
+### Release Please (version, CHANGELOG, tag automation)
+
+File:
+
+```text
+.github/workflows/release-please.yml
+release-please-config.json
+.release-please-manifest.json
+```
+
+On every push to `main`, release-please maintains a Release PR that bumps the
+version and updates `CHANGELOG.md` from Conventional Commits (`release-type:
+go`, manifest mode; pre-1.0 bump flags so breaking changes bump minor and
+features bump patch). Merging the Release PR creates the `vX.Y.Z` tag and the
+GitHub Release with changelog notes; the tag push triggers the Release
+workflow below, which attaches binaries and the SBOM.
+
+The workflow authenticates with a short-lived GitHub App installation token,
+not `GITHUB_TOKEN`: GitHub suppresses workflow runs for events created by
+`GITHUB_TOKEN`, so a `GITHUB_TOKEN`-cut tag would never trigger
+`on: push: tags`, and required checks on the Release PR would wait for a
+manual "Approve workflows to run" click on every update.
+
+One-time App setup (operator):
+
+1. Create a GitHub App named `aiops-platform-release` (Settings → Developer
+   settings → GitHub Apps → New GitHub App). Disable the webhook. Repository
+   permissions: Contents read/write, Pull requests read/write, Issues
+   read/write. If the name is taken, pick another and update the
+   `<app-slug>[bot]` entry in `exemptAuthorLogins`
+   (`.github/scripts/validate-pr-metadata.mjs`) plus its test to match.
+2. Install the App on `xrf9268-hue/aiops-platform` only.
+3. Store repo secrets: `RELEASE_PLEASE_APP_ID` (the App ID) and
+   `RELEASE_PLEASE_APP_PRIVATE_KEY` (a generated `.pem` private key).
+
+Key rotation: generate a new private key in the App settings, replace the
+`RELEASE_PLEASE_APP_PRIVATE_KEY` secret, then revoke the old key.
+
+Rolling back a bad release: delete the GitHub Release and the tag
+(`gh release delete vX.Y.Z --yes` then `git push origin :refs/tags/vX.Y.Z`),
+and revert the Release PR merge commit so `CHANGELOG.md` and
+`.release-please-manifest.json` no longer claim the version. The next
+release-please run recomputes from the remaining tags.
+
+The Release PR is authored by `aiops-platform-release[bot]`, which is exempt
+from the PR Metadata gate (no `Closes #N`, no SPEC checklist) — see
+`exemptAuthorLogins` in `.github/scripts/validate-pr-metadata.mjs`.
+
 ### Release
 
 File:
@@ -129,6 +177,11 @@ race-test, security, e2e, Docker, Trivy, and SBOM quality gates on the commit
 being released. The release job keeps `contents: write` scoped to publishing,
 and adds `id-token: write` plus `attestations: write` only for GitHub artifact
 provenance.
+
+The GitHub Release itself is created by release-please (with changelog notes);
+this workflow attaches artifacts to it via `gh release upload --clobber`. On
+the manual `workflow_dispatch` path, a tag without an existing Release gets one
+created as a fallback before the upload.
 
 ## Local checks before pushing
 

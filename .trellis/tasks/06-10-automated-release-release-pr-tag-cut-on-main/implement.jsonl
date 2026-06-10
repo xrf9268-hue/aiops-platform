@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/06-10-automated-release-release-pr-tag-cut-on-main/research/release-please-official.md", "reason": "release-please v5 配置细节：manifest 模式、go release-type、initial-version、outputs、SHA pin"}
+{"file": ".trellis/tasks/06-10-automated-release-release-pr-tag-cut-on-main/research/integration-with-existing-pipeline.md", "reason": "衔接 verdict：App token、release.yml create→upload、PR Metadata 豁免、token 触发语义"}

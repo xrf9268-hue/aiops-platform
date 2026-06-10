@@ -190,7 +190,7 @@ jobs:
         with:
           subject-path: dist/*
 
-      - name: Create GitHub release
+      - name: Publish release artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
@@ -203,8 +203,17 @@ jobs:
             echo "Release tag $RELEASE_TAG moved from $RELEASE_COMMIT_SHA to $resolved_sha"
             exit 1
           fi
-          gh release create "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json \
+          # release-please owns the GitHub Release (it creates the tag and the
+          # Release with changelog notes); this job only attaches artifacts.
+          # The create fallback keeps the manual workflow_dispatch path working
+          # for a tag that has no Release yet.
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$RELEASE_TAG" \
+              --notes "Automated aiops-platform release for $RELEASE_TAG" \
+              --verify-tag
+          fi
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json \
             --repo "$GITHUB_REPOSITORY" \
-            --title "$RELEASE_TAG" \
-            --notes "Automated aiops-platform release for $RELEASE_TAG" \
-            --verify-tag
+            --clobber

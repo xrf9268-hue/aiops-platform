@@ -30,9 +30,14 @@ function body({ closes = 'Closes #573', selected = 0, extra = '' } = {}) {
 const CONFIG = [{ filename: 'internal/workflow/config.go', status: 'modified' }];
 const NON_SENSITIVE = [{ filename: 'internal/tracker/linear.go', status: 'modified' }];
 
-test('isExemptAuthor exempts Dependabot logins but no one else', () => {
+test('isExemptAuthor exempts the listed automation logins but no one else', () => {
   assert.equal(isExemptAuthor('dependabot[bot]'), true);
   assert.equal(isExemptAuthor('dependabot-preview[bot]'), true);
+  assert.equal(
+    isExemptAuthor('aiops-platform-release[bot]'),
+    true,
+    'the release-please App opens Release PRs without closing keywords',
+  );
   assert.equal(isExemptAuthor('echo-yvan'), false, 'a human author is never exempt');
   assert.equal(isExemptAuthor('some-other[bot]'), false, 'an arbitrary bot is not exempt');
   assert.equal(isExemptAuthor(undefined), false);

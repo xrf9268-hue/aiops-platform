@@ -54,12 +54,17 @@ const closingKeywordPattern =
 const elixirCitationPattern = /elixir\/[\w./-]+\.ex(?::\d+)?/i;
 
 // exemptAuthorLogins are automation accounts whose PRs cannot satisfy the gate
-// and never author SPEC deviations: Dependabot opens dependency bumps with no
-// closing keyword and no SPEC-alignment checklist, so without an exemption the
-// required check blocks every routine update indefinitely. Scoped to the known
-// Dependabot logins rather than any `[bot]` so a future bot has to be added
-// deliberately (earned-rule principle).
-const exemptAuthorLogins = new Set(['dependabot[bot]', 'dependabot-preview[bot]']);
+// and never author SPEC deviations: Dependabot opens dependency bumps and the
+// release-please App opens Release PRs (CHANGELOG + version manifest), neither
+// with a closing keyword or SPEC-alignment checklist, so without an exemption
+// the required check blocks them indefinitely. Scoped to the known logins
+// rather than any `[bot]` so a future bot has to be added deliberately
+// (earned-rule principle).
+const exemptAuthorLogins = new Set([
+  'dependabot[bot]',
+  'dependabot-preview[bot]',
+  'aiops-platform-release[bot]',
+]);
 
 export function isExemptAuthor(login) {
   return exemptAuthorLogins.has(String(login ?? ''));

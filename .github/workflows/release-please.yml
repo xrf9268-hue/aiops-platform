@@ -1,0 +1,45 @@
+name: Release Please
+
+# Front half of the release pipeline: on every push to main, release-please
+# maintains a Release PR (version bump + CHANGELOG.md from Conventional
+# Commits). Merging that PR cuts the vX.Y.Z tag and the GitHub Release with
+# changelog notes; the tag push then triggers release.yml (CI gates, builds,
+# SBOM, attestation, artifact upload).
+#
+# Authenticated with a short-lived GitHub App installation token instead of
+# the default GITHUB_TOKEN, because GITHUB_TOKEN-created events are
+# anti-recursion-suppressed: the tag it pushes would not trigger
+# `on: push: tags` in release.yml, and required checks on the Release PR
+# would sit in approval-required state on every update. App setup and key
+# rotation: docs/runbooks/ci.md (Release Please section).
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Maintain Release PR / cut tag
+    runs-on: ubuntu-latest
+    # Don't run the release machinery on forks.
+    if: github.repository == 'xrf9268-hue/aiops-platform'
+    timeout-minutes: 10
+    steps:
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}

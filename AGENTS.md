@@ -420,9 +420,10 @@ These rules apply to every PR. Each is earned by a specific observed failure —
   new key/phase — cite an upstream Elixir reference or track a `DEVIATIONS.md` row
   (principle 6/7). It also requires every PR body to carry a `Closes #N` keyword.
   Fill the `SPEC alignment` checklist in the PR template; required-check wiring is
-  in `.github/governance/main-ruleset.json`. Dependabot-authored PRs are exempt
-  (they cannot write a closing keyword or the checklist and never author SPEC
-  deviations); the exemption list lives in `validate-pr-metadata.mjs`.
+  in `.github/governance/main-ruleset.json`. PRs authored by Dependabot or the
+  release-please App are exempt (they cannot write a closing keyword or the
+  checklist and never author SPEC deviations); the exemption list lives in
+  `validate-pr-metadata.mjs`.
   ([provenance](docs/engineering-rules-rationale.md#conventions))
 
 ## WORKFLOW.md discovery (worker side)
