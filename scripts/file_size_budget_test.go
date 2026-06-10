@@ -15,8 +15,7 @@ const productionGoFileLineBudget = 800
 const gitProbeTimeout = 5 * time.Second
 
 var oversizedProductionGoFileBaseline = map[string]int{
-	"internal/doctor/doctor.go": 1294,
-	"cmd/tui/main.go":           904,
+	"cmd/tui/main.go": 904,
 }
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {
