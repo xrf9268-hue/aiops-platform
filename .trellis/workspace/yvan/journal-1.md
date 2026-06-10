@@ -174,3 +174,36 @@ had already merged). All three closed; `main` advanced to `92c5d67`.
   a required label beyond the cap. Mitigated by the 250 raise; kept open for true
   label pagination.
 - Deferred #464 / #547 untouched, as planned.
+
+
+## Session 1: Dashboard Worker Status v2 layout (PR #731)
+
+**Date**: 2026-06-10
+**Task**: Dashboard Worker Status v2 layout (PR #731)
+**Branch**: `main`
+
+### Summary
+
+Ported the Claude Design lean/Worker Status v2.html handoff to cmd/worker/dashboard: regrouped Running/Retrying/Blocked into the main column in KPI order, subgrid-aligned the Reconcile roll-up with serif counts, single-line Tokens header, retargeted the >=641px scrollbar guard, removed dead .grid-2 CSS. Vitest 17/17 with new mutation-verified layout assertions. Codex review unavailable ('This workspace is deactivated' — account-level; fork mirrors xrf-9527 and bytevane#16 both hit it, no repo-side bypass), merged #731 per adversarial-self-review + green-CI fallback with user approval. Learned: YYvanYang token lacks workflow scope; default SSH key = xrf-9527; xrf9268-hue now has Write on bytevane; git push --dry-run does not validate write permission.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5ec324b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
