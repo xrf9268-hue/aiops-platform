@@ -24,15 +24,6 @@ var oversizedProductionGoFileBaseline = map[string]int{
 	// responsibility split), dropping the baseline from 1062 to 1002.
 	"internal/orchestrator/state.go": 1002,
 	"cmd/tui/main.go":                904,
-	// codex_app_server.go's baseline rose from 840 under #666, which replaces the
-	// per-read goroutine with a single long-lived stdout reader (the reader
-	// lifecycle the #661 burn-down comment flags as this file's priority split).
-	// #671 then extracts the JSON-RPC response-matching helpers (responseForID /
-	// numberID) into codex_app_server_response.go, dropping the baseline from 907
-	// to 877 — a first step toward the #661/#499 decomposition. #661 finishes the
-	// split by responsibility, dropping it under budget and removing this baseline;
-	// the #666 reader tests are that split's characterization harness.
-	"internal/runner/codex_app_server.go": 877,
 }
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {

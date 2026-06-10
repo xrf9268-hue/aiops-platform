@@ -2,8 +2,8 @@ package runner
 
 // codex_app_server_approval.go answers app-server server->client requests: the
 // approval-policy gate that auto-approves or declines exec/patch/tool requests,
-// and the dynamic (linear_graphql) tool-call bridge. The message loop that
-// dispatches these lives in codex_app_server.go.
+// and the dynamic (linear_graphql) tool-call bridge. The turn message loop
+// that dispatches these lives in codex_app_server_turn.go.
 
 import (
 	"context"

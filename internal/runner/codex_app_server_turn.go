@@ -3,7 +3,7 @@ package runner
 // codex_app_server_turn.go handles a Codex turn's completion: awaiting the
 // terminal notification, classifying turn failures, and deriving quota-backoff
 // retry timing from a turn.failed payload. The transport that feeds these
-// notifications lives in codex_app_server.go.
+// notifications lives in codex_app_server_transport.go.
 
 import (
 	"context"

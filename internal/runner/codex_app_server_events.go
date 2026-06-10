@@ -2,8 +2,9 @@ package runner
 
 // codex_app_server_events.go records SPEC runtime events from the app-server
 // message stream onto the run's attempt log, including payload normalization
-// to snake_case. The message loop that calls these recorders lives in
-// codex_app_server.go.
+// to snake_case. The turn message loop that calls these recorders lives in
+// codex_app_server_turn.go; the session driver in codex_app_server.go records
+// the startup-failure and phase-transition events directly.
 
 import (
 	"encoding/json"
