@@ -210,6 +210,26 @@ describe('Worker status dashboard', () => {
     expect(container.querySelector('pre.rate-raw')).toBeNull();
   });
 
+  it('groups all live-work panels in the main column in KPI order (Worker Status v2)', async () => {
+    const { container } = render(<App />);
+    await screen.findByRole('heading', { name: /Worker status/i });
+
+    // v1 scattered the buckets: Retrying + Blocked sat in a full-width .grid-2
+    // row at the very bottom, below the reference gauges. v2 groups all three
+    // in-flight buckets in the main column, directly under the matching KPIs.
+    const mainTitles = [...container.querySelectorAll('.body-main .panel-title')].map((el) => el.textContent);
+    expect(mainTitles).toEqual(['Running2', 'Retrying1', 'Blocked1']); // count badge renders inline
+    const sideTitles = [...container.querySelectorAll('.body-side .panel-title')].map((el) => el.textContent);
+    expect(sideTitles).toEqual(['Rate limits', 'Reconcile roll-up']);
+    expect(container.querySelector('.grid-2')).toBeNull(); // the bottom row is gone
+
+    // tokens header renders as one line: bold "Tokens" + dim "in / out" suffix
+    const tokHeader = container.querySelector('th.tok-h');
+    expect(tokHeader).not.toBeNull();
+    expect(tokHeader.textContent).toBe('Tokens in / out');
+    expect(tokHeader.querySelector('.th-sub').textContent).toBe(' in / out');
+  });
+
   it('keeps reconcile-stopped details in the roll-up under the delivered KPI', async () => {
     render(<App />);
     const rollup = (await screen.findByText('Reconcile roll-up')).closest('.panel');
@@ -217,7 +237,10 @@ describe('Worker status dashboard', () => {
     // both buckets render as compact rows inside the single roll-up panel
     const stoppedCell = within(rollup).getByText('Stopped w/ progress').closest('.rollup-cell');
     expect(within(stoppedCell).getByText('bb0190')).toBeTruthy();
-    expect(stoppedCell.textContent).toContain('4 total'); // lifetime total
+    // v2: the window count is the serif-numeric anchor (<b>), the lifetime
+    // total is the dimmed .tot suffix — not one undifferentiated mono run.
+    expect(stoppedCell.querySelector('.rollup-v b').textContent).toBe('1');
+    expect(stoppedCell.querySelector('.rollup-v .tot').textContent).toBe('· 4 total');
     // sr-only explanation present (the prose lives in textContent, not just title)
     expect(stoppedCell.textContent).toContain('worth inspecting');
 

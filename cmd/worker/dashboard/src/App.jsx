@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 // Lean Worker-status dashboard — a read-only view of GET /api/v1/state.
-// Ported pixel-for-pixel from the Claude Design "lean/Worker Status.html"
+// Ported pixel-for-pixel from the Claude Design "lean/Worker Status v2.html"
 // handoff; the styling lives in styles.css. The mock data the prototype
 // shipped with is replaced here by the real /api/v1/state contract
 // (cmd/worker/stateapi.go · apiStateResponse), which it mirrors field-for-field.
@@ -301,7 +301,7 @@ function RunningTable({ rows }) {
         <caption className="sr-only">Running sessions</caption>
         <thead><tr>
           <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Runtime</th>
-          <th scope="col">Latest activity</th><th scope="col" className="r">Tokens (in / out)</th>
+          <th scope="col">Latest activity</th><th scope="col" className="r tok-h">Tokens<span className="th-sub"> in / out</span></th>
         </tr></thead>
         <tbody>
           {rows.map((r) => (
@@ -555,11 +555,13 @@ export default function App() {
         <div className="meta-cell"><div className="meta-k">Runtime total</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
       </div>
 
-      {/* Live work (Running) in the wider left column; system context (Rate
-          limits + the conditional Reconcile roll-up) stacks in the narrower
-          right column. Splitting the lower half into two columns roughly halves
-          its height so the dashboard fits one screen without clipping or inner
-          scrollbars; collapses to one column ≤980px (see styles.css). */}
+      {/* Live work (Running → Retrying → Blocked, matching the KPI order) in
+          the wider left column; system context (Rate limits + the conditional
+          Reconcile roll-up) stacks in the narrower right column. Grouping all
+          three in-flight buckets in one column keeps attention items together
+          and directly under the matching KPIs, instead of scattering them
+          above and below the reference data; collapses to one column ≤980px
+          (see styles.css). */}
       <div className="body-grid">
         <div className="body-main">
           {/* running */}
@@ -569,6 +571,24 @@ export default function App() {
               <div className="panel-meta"><b>{c.running || 0}</b> / {maxConc} concurrent</div>
             </div>
             <RunningTable rows={s.running || []} />
+          </div>
+
+          {/* retrying */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Retrying<Badge kind="retry">{c.retrying || 0}</Badge></div>
+              <div className="panel-meta">backoff queue</div>
+            </div>
+            <RetryTable rows={s.retrying || []} />
+          </div>
+
+          {/* blocked */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Blocked<Badge kind="blocked">{c.blocked || 0}</Badge></div>
+              <div className="panel-meta">needs attention</div>
+            </div>
+            <BlockedTable rows={s.blocked || []} />
           </div>
         </div>
 
@@ -597,7 +617,7 @@ export default function App() {
                 {stopped.length > 0 ? (
                   <div className="rollup-cell" title={STOPPED_DESC}>
                     <span className="rollup-k"><span className="kpi-dot retry" />Stopped w/ progress</span>
-                    <span className="rollup-v">{c.reconcile_stopped_with_progress}<small> this window · {c.reconcile_stopped_with_progress_total} total</small></span>
+                    <span className="rollup-v"><b>{c.reconcile_stopped_with_progress}</b> this window<span className="tot">· {c.reconcile_stopped_with_progress_total} total</span></span>
                     <span className="rollup-ids">{stopped.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
                     <span className="sr-only">{STOPPED_DESC}</span>
                   </div>
@@ -605,7 +625,7 @@ export default function App() {
                 {handoff.length > 0 ? (
                   <div className="rollup-cell" title={HANDOFF_DESC}>
                     <span className="rollup-k"><span className="kpi-dot done" />Agent handoff</span>
-                    <span className="rollup-v">{c.agent_handoff_reconcile_stopped}<small> this window · {c.agent_handoff_reconcile_stopped_total} total</small></span>
+                    <span className="rollup-v"><b>{c.agent_handoff_reconcile_stopped}</b> this window<span className="tot">· {c.agent_handoff_reconcile_stopped_total} total</span></span>
                     <span className="rollup-ids">{handoff.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
                     <span className="sr-only">{HANDOFF_DESC}</span>
                   </div>
@@ -613,24 +633,6 @@ export default function App() {
               </div>
             </div>
           ) : null}
-        </div>
-      </div>
-
-      {/* retrying + blocked — full-width row spanning the page below the two columns */}
-      <div className="grid-2">
-        <div className="panel">
-          <div className="panel-head">
-            <div className="panel-title"><span className="accent-stroke" />Retrying<Badge kind="retry">{c.retrying || 0}</Badge></div>
-            <div className="panel-meta">backoff queue</div>
-          </div>
-          <RetryTable rows={s.retrying || []} />
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="panel-title"><span className="accent-stroke" />Blocked<Badge kind="blocked">{c.blocked || 0}</Badge></div>
-            <div className="panel-meta">needs attention</div>
-          </div>
-          <BlockedTable rows={s.blocked || []} />
         </div>
       </div>
     </div>
