@@ -4,9 +4,9 @@ import "time"
 
 // This file holds the public projection types that StateView exposes for the
 // SPEC §13.7 observability surface (the /api/v1/state and /api/v1/<id>
-// handlers). They are split from state.go so the orchestrator state machine and
-// its read-only projections stay separately legible (#521 burn-down); the
-// builders live alongside Snapshot in state.go.
+// handlers). They are split from the state machine so it and its read-only
+// projections stay separately legible (#521 burn-down); the builders live
+// alongside Snapshot in state_snapshot.go.
 
 // RunningView is the per-running-entry projection in StateView. It
 // omits unexported / non-serializable fields like CancelWorker and Done.
