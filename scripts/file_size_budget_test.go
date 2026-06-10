@@ -14,9 +14,10 @@ import (
 const productionGoFileLineBudget = 800
 const gitProbeTimeout = 5 * time.Second
 
-var oversizedProductionGoFileBaseline = map[string]int{
-	"cmd/tui/main.go": 904,
-}
+// The baseline is empty since the #661 burn-down paid down every grandfathered
+// oversized file; it stays in place so a future, explicitly justified exception
+// has a reviewed home and the test keeps enforcing exact-match + removal.
+var oversizedProductionGoFileBaseline = map[string]int{}
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {
 	root := gitRepoRoot(t)
