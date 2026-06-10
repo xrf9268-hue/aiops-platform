@@ -207,3 +207,37 @@ Ported the Claude Design lean/Worker Status v2.html handoff to cmd/worker/dashbo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Automated release: release-please + App token, v0.1.0 shipped
+
+**Date**: 2026-06-10
+**Task**: Automated release: release-please + App token, v0.1.0 shipped
+**Branch**: `main`
+
+### Summary
+
+为发版流水线补上前半段：release-please v5（manifest 模式，release-type go，App token 认证）在 push main 时维护 Release PR，合并后 cut tag + Release；release.yml 最后一步 create→upload；aiops-platform-release[bot] 加入 PR Metadata 豁免（mutation-verified）。GitHub App（ID 4017341）经 manifest 流程创建（用户仅点 Create/Install 两次），secrets 已设置。端到端验收通过：PR #735 合并 → Release PR #736 自动出现（CHANGELOG 正确、CI 正常跑）→ 合并后 v0.1.0 tag/Release 自动创建并触发 release.yml → 四平台 tar.gz + SBOM 挂上 Release。codex bot 审查不可用（workspace deactivated），以 trellis-check 对抗审查替代（verdict: merge-ready）。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `87f1392` | (see git log) |
+| `bf74cf4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

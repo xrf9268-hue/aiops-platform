@@ -62,13 +62,19 @@ app/installation 限定、token 每 run 短期，是 GitHub 官方推荐的 PAT 
 
 ## Acceptance Criteria
 
-* [ ] 合并一个 feat/fix commit 后，Release PR 自动出现，版本号与 CHANGELOG 正确，
-      CI + PR Metadata 检查正常运行（无 approval-required 卡点）。
-* [ ] 合并 Release PR → tag `v0.1.0` + GitHub Release 自动创建，且触发 release.yml。
-* [ ] release.yml 成功向该 Release 上传四平台 tar.gz + SBOM（attestation 不回退）。
-* [ ] `gh api repos/xrf9268-hue/aiops-platform/rulesets` 确认无服务端 tag ruleset
-      阻塞 bot tag push（落地前验证）。
-* [ ] mutation-verify：从 `exemptAuthorLogins` 删掉 bot login，测试失败。
+* [x] 合并一个 feat/fix commit 后，Release PR 自动出现，版本号与 CHANGELOG 正确，
+      CI + PR Metadata 检查正常运行（无 approval-required 卡点）。（#736，bootstrap-sha
+      生效：CHANGELOG 只含 #735 一条）
+* [x] 合并 Release PR → tag `v0.1.0` + GitHub Release 自动创建，且触发 release.yml。
+* [x] release.yml 成功向该 Release 上传四平台 tar.gz + SBOM（run 27273593076 绿）。
+* [x] `gh api repos/xrf9268-hue/aiops-platform/rulesets` 确认无服务端 tag ruleset
+      阻塞 bot tag push（仅 branch 目标的 main merge governance）。
+* [x] mutation-verify：从 `exemptAuthorLogins` 删掉 bot login，测试失败（12 pass→1 fail）。
+
+落地记录：App `aiops-platform-release`（ID 4017341）经 manifest 流程创建于
+xrf9268-hue 名下，secrets `RELEASE_PLEASE_APP_ID` / `RELEASE_PLEASE_APP_PRIVATE_KEY`
+已设置；PR #735（实现）与 #736（v0.1.0 Release PR）均已合并；Docker image build
+在 #736 上有一次 Docker Hub 网络超时（与变更无关，重跑通过）。
 
 ## Definition of Done
 
