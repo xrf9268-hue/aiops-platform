@@ -11,7 +11,7 @@
   "creator": "yvan",
   "assignee": "yvan",
   "createdAt": "2026-06-05",
-  "completedAt": "2026-06-05",
+  "completedAt": "2026-06-10",
   "branch": "fix/658-multi-agent-reviewers",
   "base_branch": "main",
   "worktree_path": "/Users/yvan/.codex/worktrees/658/aiops-platform",

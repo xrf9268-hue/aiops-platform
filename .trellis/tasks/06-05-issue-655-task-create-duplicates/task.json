@@ -19,7 +19,7 @@
   "pr_url": "https://github.com/xrf9268-hue/aiops-platform/pull/663",
   "subtasks": [],
   "children": [],
-  "parent": "06-05-batch-github-658-661",
+  "parent": null,
   "relatedFiles": [],
   "notes": "Deferred: GitHub Codex review connector failed twice on PR #663, triggers 4631667163 and 4631700907. Local gates, CI, metadata, reviewThreads, warning audit, and size gate are otherwise clean.",
   "meta": {}
