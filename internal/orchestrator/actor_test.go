@@ -4291,7 +4291,8 @@ func TestRetryFire_TodoIssueBlockedByOpenDependencyReleasesClaim(t *testing.T) {
 //
 // The fix: block dispatch at the capacity gate so the entry stays in
 // RetryAttempts after the fetch+refresh. The Retrying snapshot view
-// reads RetryEntry.Identifier directly (state.go:818), so asserting
+// reads RetryEntry.Identifier directly (Snapshot's Retrying loop in
+// state_snapshot.go), so asserting
 // against `v.Retrying[0].Identifier` does pin the new mutation. With
 // the new line deleted, the entry retains the stale "OLD-1" and the
 // test fails.

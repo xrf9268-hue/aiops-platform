@@ -16,14 +16,7 @@ const gitProbeTimeout = 5 * time.Second
 
 var oversizedProductionGoFileBaseline = map[string]int{
 	"internal/doctor/doctor.go": 1294,
-	// state.go's baseline rose from 1020 under #667, which adds the
-	// operator-terminal-stop latch cap. Per #667 (and the #661 burn-down note it
-	// cites), this cap must land *before* #661 decomposes state.go by
-	// responsibility, which then drops it well under budget and removes this baseline.
-	// #683 extracts the StateView projection types into views.go (a first
-	// responsibility split), dropping the baseline from 1062 to 1002.
-	"internal/orchestrator/state.go": 1002,
-	"cmd/tui/main.go":                904,
+	"cmd/tui/main.go":           904,
 }
 
 func TestProductionGoFilesStayWithinSizeBudget(t *testing.T) {
