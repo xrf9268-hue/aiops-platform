@@ -29,6 +29,22 @@ type Issue struct {
 type IssueState struct {
 	State  string
 	Labels []string
+	// BlockedBy carries the refreshed blocker dependencies so dispatch-time
+	// revalidation can re-apply the SPEC §8.2 Todo blocker gate, matching
+	// upstream retry_candidate_issue? (orchestrator.ex:1602-1604), which
+	// re-checks todo_issue_blocked_by_non_terminal? on the refreshed issue
+	// (#750). nil means the adapter supplied no blocker knowledge for this
+	// issue and the consumer must keep its listing-time verdict; a non-nil
+	// empty slice is a positive "no blockers" answer. Unresolvable blocker
+	// knowledge fails closed as an empty-state placeholder the gate treats
+	// as open — never as nil, which would read as "safe". Linear resolves
+	// blockers only for refreshed Todo-state issues (the only state the gate
+	// applies to), placeholding the whole Todo batch when the
+	// inverse-relations query fails; Gitea derives them from the issue
+	// body's `Depends on #N` references, placeholding
+	// transiently-unresolvable references and skipping definitively-deleted
+	// blockers; GitHub has no blocker concept and always leaves this nil.
+	BlockedBy []BlockerRef
 }
 
 // IssueRef carries the stable tracker ID plus the human identifier captured at
@@ -57,6 +73,25 @@ type BlockerRef struct {
 	ID         string
 	Identifier string
 	State      string
+}
+
+// BlockedByNonTerminal reports whether any blocker in blockedBy is still open
+// per the SPEC §8.2 rule: an empty/unknown blocker state blocks, and a state
+// outside terminalStates (lowercased, trimmed keys) blocks. It is the single
+// source of truth for the "is this blocker open" judgment (#750). The
+// empty-state branch is what makes the Gitea adapter's fail-closed
+// placeholder refs (unresolvable `Depends on #N` lookups) block at the gate.
+func BlockedByNonTerminal(blockedBy []BlockerRef, terminalStates map[string]struct{}) bool {
+	for _, blocker := range blockedBy {
+		state := strings.ToLower(strings.TrimSpace(blocker.State))
+		if state == "" {
+			return true
+		}
+		if _, terminal := terminalStates[state]; !terminal {
+			return true
+		}
+	}
+	return false
 }
 
 // TimeString returns the canonical string form used by workspace keys for a

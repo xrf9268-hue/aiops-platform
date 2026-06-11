@@ -29,3 +29,27 @@ func TestTimeStringNormalizesOffsetsToUTC(t *testing.T) {
 		t.Fatalf("TimeString(offset time) = %q, want UTC RFC3339Nano", got)
 	}
 }
+
+// TestBlockedByNonTerminal pins the shared SPEC §8.2 "is this blocker open"
+// predicate's three edges (#750): empty/unknown state blocks, a non-terminal
+// state blocks, and an all-terminal set does not.
+func TestBlockedByNonTerminal(t *testing.T) {
+	terminal := map[string]struct{}{"done": {}, "canceled": {}}
+	cases := []struct {
+		name      string
+		blockedBy []BlockerRef
+		want      bool
+	}{
+		{name: "nil blockers do not block", blockedBy: nil, want: false},
+		{name: "empty blockers do not block", blockedBy: []BlockerRef{}, want: false},
+		{name: "all terminal does not block", blockedBy: []BlockerRef{{State: "Done"}, {State: " canceled "}}, want: false},
+		{name: "non-terminal blocks", blockedBy: []BlockerRef{{State: "Done"}, {State: "In Progress"}}, want: true},
+		{name: "empty state blocks", blockedBy: []BlockerRef{{State: ""}}, want: true},
+		{name: "whitespace state blocks", blockedBy: []BlockerRef{{State: "   "}}, want: true},
+	}
+	for _, tc := range cases {
+		if got := BlockedByNonTerminal(tc.blockedBy, terminal); got != tc.want {
+			t.Fatalf("BlockedByNonTerminal(%+v) = %t; want %t (%s)", tc.blockedBy, got, tc.want, tc.name)
+		}
+	}
+}

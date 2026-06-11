@@ -39,12 +39,13 @@ var dispatchRevalidationTimeout = 45 * time.Second
 // when the refresh omits it (upstream {:skip, :missing}; the Gitea adapter
 // also omits issues whose aiops/* state labels were stripped), when its
 // refreshed state left the configured active set, or when its refreshed
-// labels no longer satisfy the SPEC §6.4 required-labels gate — the same
-// gates the retry-fire path re-applies at fire time via
-// eligibleActiveIssueLister. Refreshed BlockedBy data is not available from
-// the narrow refresh, so the Todo-blocker gate keeps its listing-time result.
-// Survivors carry the refreshed state and labels so the per-state capacity
-// gate and the spawned worker see live tracker data, mirroring upstream's
+// labels no longer satisfy the SPEC §6.4 required-labels gate, or when it is
+// a Todo issue whose refreshed blockers are not all terminal (upstream
+// retry_candidate_issue?'s !todo_issue_blocked_by_non_terminal?,
+// orchestrator.ex:1602-1604, #750) — the same gates the retry-fire path
+// re-applies at fire time via eligibleActiveIssueLister. Survivors carry the
+// refreshed state, labels, and blocker data so the per-state capacity gate
+// and the spawned worker see live tracker data, mirroring upstream's
 // dispatch of the refreshed issue. On fetch failure the candidates the
 // refresh did return still dispatch and the rest are skipped (upstream skips
 // dispatch on refresh error); the next tick retries from a fresh listing.
@@ -100,12 +101,13 @@ func (p *Poller) claimableDispatchRefs(ctx context.Context, candidates []tracker
 // release stays single-sourced.
 func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimable map[IssueID]struct{}, statesByID map[string]tracker.IssueState) []tracker.Issue {
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
+	terminalStateKeys := normalizedStates(p.reconcile.TerminalStates)
 	kept := make([]tracker.Issue, 0, len(claimable))
 	for _, issue := range candidates {
 		if _, ok := claimable[IssueID(issue.ID)]; !ok {
 			continue
 		}
-		if revalidated, keep := revalidatedCandidate(issue, statesByID, activeStateKeys, p.reconcile.RequiredLabels); keep {
+		if revalidated, keep := revalidatedCandidate(issue, statesByID, activeStateKeys, terminalStateKeys, p.reconcile.RequiredLabels); keep {
 			kept = append(kept, revalidated)
 		}
 	}
@@ -114,9 +116,16 @@ func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimab
 
 // revalidatedCandidate applies the per-issue revalidation verdict: missing
 // from the refresh (upstream {:skip, :missing}), refreshed out of the active
-// set, or refreshed past the SPEC §6.4 required-labels gate all drop the
-// candidate; otherwise the refreshed state and labels are carried onto it.
-func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.IssueState, activeStateKeys map[string]struct{}, requiredLabels []string) (tracker.Issue, bool) {
+// set, refreshed past the SPEC §6.4 required-labels gate, or a refreshed Todo
+// issue whose blockers reopened all drop the candidate; otherwise the
+// refreshed state, labels, and blocker data are carried onto it. The blocker
+// recheck matches upstream retry_candidate_issue?'s
+// !todo_issue_blocked_by_non_terminal? on the refreshed issue
+// (orchestrator.ex:1602-1604, #750); when the refresh supplies no blocker
+// knowledge (nil BlockedBy — see tracker.IssueState), the gate re-runs on the
+// listing-time blockers, which the tick-start eligibility filter already
+// passed, so it cannot newly drop the candidate.
+func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.IssueState, activeStateKeys, terminalStateKeys map[string]struct{}, requiredLabels []string) (tracker.Issue, bool) {
 	refreshed, ok := statesByID[issue.ID]
 	if !ok || strings.TrimSpace(refreshed.State) == "" {
 		logStaleDispatchSkipped(issue, "", "missing_from_refresh")
@@ -124,12 +133,19 @@ func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.Iss
 	}
 	issue.State = refreshed.State
 	issue.Labels = refreshed.Labels
+	if refreshed.BlockedBy != nil {
+		issue.BlockedBy = refreshed.BlockedBy
+	}
 	if !isActiveTrackerState(issue.State, activeStateKeys) {
 		logStaleDispatchSkipped(issue, issue.State, "state_left_active_set")
 		return tracker.Issue{}, false
 	}
 	if !issueHasRequiredLabels(issue, requiredLabels) {
 		logStaleDispatchSkipped(issue, issue.State, "required_labels_missing")
+		return tracker.Issue{}, false
+	}
+	if todoIssueBlockedByOpenDependency(issue, terminalStateKeys) {
+		logStaleDispatchSkipped(issue, issue.State, "todo_blocker_not_terminal")
 		return tracker.Issue{}, false
 	}
 	return issue, true
@@ -217,16 +233,7 @@ func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[st
 	if !strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
 		return false
 	}
-	for _, blocker := range issue.BlockedBy {
-		state := strings.ToLower(strings.TrimSpace(blocker.State))
-		if state == "" {
-			return true
-		}
-		if _, terminal := terminalStates[state]; !terminal {
-			return true
-		}
-	}
-	return false
+	return tracker.BlockedByNonTerminal(issue.BlockedBy, terminalStates)
 }
 
 func sortCandidates(issues []tracker.Issue) {

@@ -167,6 +167,10 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 	if len(issueRefs) == 0 {
 		return map[string]tracker.IssueState{}, nil
 	}
+	// Install a per-refresh blocker cache so buildBlockedBy fetches each
+	// `Depends on #N` blocker at most once across the batch, mirroring the
+	// listing path (#677).
+	ctx = withBlockerCache(ctx)
 	states := make(map[string]tracker.IssueState, len(issueRefs))
 	seen := map[string]struct{}{}
 	for _, issueRef := range issueRefs {
@@ -202,7 +206,17 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 		}
 		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
 		// derived state; extractGiteaLabels lowercases/trims to match the gate.
-		states[issueID] = tracker.IssueState{State: state, Labels: extractGiteaLabels(issue.Labels)}
+		// BlockedBy is re-derived from the refreshed body so dispatch-time
+		// revalidation can re-apply the SPEC §8.2 Todo blocker gate (#750);
+		// the body is authoritative for this adapter, so an absence of
+		// `Depends on #N` references is a positive non-nil "no blockers" and
+		// transiently-unresolvable references fail closed as open
+		// placeholders inside buildBlockedBy.
+		blockedBy := c.buildBlockedBy(ctx, issue.Body)
+		if blockedBy == nil {
+			blockedBy = []tracker.BlockerRef{}
+		}
+		states[issueID] = tracker.IssueState{State: state, Labels: extractGiteaLabels(issue.Labels), BlockedBy: blockedBy}
 	}
 	return states, nil
 }
@@ -583,33 +597,43 @@ func blockerCacheFrom(ctx context.Context) map[int]blockerCacheEntry {
 
 // cachedIssueByNumber fetches blocker issue n via getIssueByNumber at most once
 // per poll tick. A successful fetch and a definitive 404 are memoized; a
-// transient error returns a miss without caching so a later source issue can
-// retry. When no per-tick cache is installed (non-poll callers), it falls back
-// to a direct fetch.
-func (c *TrackerClient) cachedIssueByNumber(ctx context.Context, cache map[int]blockerCacheEntry, n int) (Issue, bool) {
+// transient error returns resolved=false without caching so a later source
+// issue can retry. resolved distinguishes "the lookup answered" (found tells
+// whether the issue exists) from "the lookup failed" — callers must not treat
+// a transient failure as a definitive absence. When no per-tick cache is
+// installed (non-poll callers), it falls back to a direct fetch.
+func (c *TrackerClient) cachedIssueByNumber(ctx context.Context, cache map[int]blockerCacheEntry, n int) (issue Issue, found, resolved bool) {
 	if cache != nil {
 		if entry, ok := cache[n]; ok {
-			return entry.issue, entry.found
+			return entry.issue, entry.found, true
 		}
 	}
-	issue, found, err := c.getIssueByNumber(ctx, n)
+	fetched, found, err := c.getIssueByNumber(ctx, n)
 	if err != nil {
-		return Issue{}, false
+		return Issue{}, false, false
 	}
 	if cache != nil {
-		cache[n] = blockerCacheEntry{issue: issue, found: found}
+		cache[n] = blockerCacheEntry{issue: fetched, found: found}
 	}
-	return issue, found
+	return fetched, found, true
 }
 
 // buildBlockedBy parses `Depends on #N` references from issue.Body and looks
 // up each blocker's current workflow state via a follow-up Gitea fetch so the
-// §8.2 Todo blocker rule can compare against the blocker's State. Lookup
-// failures are silently skipped (best-effort): a missing or deleted blocker
-// drops out of the list rather than aborting candidate enumeration. The
-// per-poll-tick blocker cache (installed by ListIssuesByStates) ensures each
-// distinct blocker is fetched at most once per tick across all source issues,
-// instead of O(distinct refs) per source issue (#677).
+// §8.2 Todo blocker rule can compare against the blocker's State. The
+// per-poll-tick blocker cache (installed by ListIssuesByStates and the narrow
+// refresh) ensures each distinct blocker is fetched at most once per tick
+// across all source issues, instead of O(distinct refs) per source issue
+// (#677).
+//
+// Reference resolution fails closed (#750 / PR #752 review): a transiently
+// unresolvable reference becomes a placeholder ref with an empty State, which
+// the shared tracker.BlockedByNonTerminal predicate treats as open — the Todo
+// gate then blocks the candidate for this tick instead of dispatching past a
+// blocker the lookup could not see; the next tick retries (the transient
+// failure is deliberately not cached). A definitive 404 is a DELETED blocker:
+// it can never become terminal, so blocking on it would starve the candidate
+// forever — it drops out of the list instead.
 func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []tracker.BlockerRef {
 	matches := dependsOnRegexp.FindAllStringSubmatch(body, -1)
 	if len(matches) == 0 {
@@ -617,7 +641,7 @@ func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []track
 	}
 	cache := blockerCacheFrom(ctx)
 	seen := map[int]struct{}{}
-	var out []tracker.BlockerRef
+	var refs []tracker.BlockerRef
 	for _, m := range matches {
 		n, err := strconv.Atoi(m[1])
 		if err != nil || n <= 0 {
@@ -627,18 +651,35 @@ func (c *TrackerClient) buildBlockedBy(ctx context.Context, body string) []track
 			continue
 		}
 		seen[n] = struct{}{}
-		issue, found := c.cachedIssueByNumber(ctx, cache, n)
-		if !found {
-			continue
+		if ref, ok := c.blockerRefForNumber(ctx, cache, n); ok {
+			refs = append(refs, ref)
 		}
-		state, _ := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
-		out = append(out, tracker.BlockerRef{
-			ID:         giteaIssueID(issue),
-			Identifier: fmt.Sprintf("#%d", issue.Number),
-			State:      state,
-		})
 	}
-	return out
+	return refs
+}
+
+// blockerRefForNumber resolves one `Depends on #N` reference: a resolved
+// blocker carries its derived state, a transient lookup failure fails closed
+// as an empty-state placeholder (logged — without that a persistently failing
+// lookup would starve the candidate indistinguishably from a genuine open
+// blocker), and a definitively deleted blocker reports ok=false to drop out.
+func (c *TrackerClient) blockerRefForNumber(ctx context.Context, cache map[int]blockerCacheEntry, n int) (tracker.BlockerRef, bool) {
+	issue, found, resolved := c.cachedIssueByNumber(ctx, cache, n)
+	if !resolved {
+		if c.Logf != nil {
+			c.Logf("gitea blocker lookup failed transiently for #%d; failing closed as an open placeholder", n)
+		}
+		return tracker.BlockerRef{Identifier: fmt.Sprintf("#%d", n)}, true
+	}
+	if !found {
+		return tracker.BlockerRef{}, false
+	}
+	state, _ := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
+	return tracker.BlockerRef{
+		ID:         giteaIssueID(issue),
+		Identifier: fmt.Sprintf("#%d", issue.Number),
+		State:      state,
+	}, true
 }
 
 func giteaIssueID(issue Issue) string {
