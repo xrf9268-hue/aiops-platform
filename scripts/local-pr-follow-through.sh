@@ -429,6 +429,12 @@ gh_cmd() {
   "$timeout_bin" "$gh_timeout" gh "$@"
 }
 
+# Portable lowercasing: ${var,,} needs Bash 4+, but macOS /bin/bash is 3.2 and
+# this script only requires `env bash`.
+to_lower() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 run_with_timeout() {
   local duration="$1"
   shift
@@ -460,7 +466,7 @@ if [[ -n "$codex_trigger_user" ]]; then
   # wrong-identity trigger fails only later as "workspace is deactivated",
   # so pin the token to the expected account up front.
   codex_trigger_login="$(GH_TOKEN="$codex_trigger_token" gh_cmd api user --jq '.login')"
-  if [[ "${codex_trigger_login,,}" != "${codex_trigger_user,,}" ]]; then
+  if [[ "$(to_lower "$codex_trigger_login")" != "$(to_lower "$codex_trigger_user")" ]]; then
     echo "gh token for AIOPS_CODEX_TRIGGER_USER=$codex_trigger_user authenticates as '$codex_trigger_login'; refresh it with 'gh auth login'" >&2
     exit 1
   fi
@@ -872,7 +878,7 @@ wait_for_github_codex_review() {
   # before the trigger-identity requirement) may be bound to a deactivated
   # Codex workspace, and waiting on it burns the full poll timeout. Like the
   # Python filter, an empty author (deleted user) is rejected, not skipped.
-  if [[ -n "$codex_trigger_user" && "${cached_user,,}" != "${codex_trigger_user,,}" ]]; then
+  if [[ -n "$codex_trigger_user" && "$(to_lower "$cached_user")" != "$(to_lower "$codex_trigger_user")" ]]; then
     cached_body=""
   fi
   if [[ -n "$trigger_id" && -n "$started_at" && "$cached_body" == *"$head_oid"* && "$cached_body" == *"$base_oid"* && "$cached_body" == *"$base_ref"* ]]; then
