@@ -479,3 +479,99 @@ func TestRecordReconcileStoppedWithProgressCapsAndDedup(t *testing.T) {
 		t.Fatalf("CumulativeReconcileStoppedWithProgressTotal = %d; want 4 (a,b,c,c)", got)
 	}
 }
+
+func recordGiteaMutation(t *testing.T, o *Orchestrator, issueID string, classified bool) {
+	t.Helper()
+	payload := map[string]any{"tool": "gitea_issue_labels"}
+	if classified {
+		payload["current_issue_non_active_state_update"] = true
+	}
+	err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventToolCallMutation,
+		Payload: payload,
+	})
+	if err != nil {
+		t.Fatalf("RecordRuntimeEvent(gitea_issue_labels mutation): %v", err)
+	}
+}
+
+// TestReconcileCancelAfterGiteaCurrentIssueHandoffRecordsAgentHandoff pins #748:
+// a Gitea run whose agent flipped the current issue's aiops/* label out of the
+// active states (classified tool_call_mutation from gitea_issue_labels) and was
+// then reconcile-stopped must increment the agent-handoff counter, exactly like
+// the Linear tool path.
+func TestReconcileCancelAfterGiteaCurrentIssueHandoffRecordsAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "8842", Identifier: "#12", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordGiteaMutation(t, o, iss.ID, true)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(turn_completed): %v", err)
+	}
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "Human Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 1 || v.AgentHandoffReconcileStopped[0] != IssueID(iss.ID) {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want [%s]", v.AgentHandoffReconcileStopped, iss.ID)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 1 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 1", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.Completed) != 0 {
+		t.Fatalf("Completed = %v; want empty (agent handoff reconcile stop is not a clean §16.5 exit)", v.Completed)
+	}
+}
+
+// An unclassified gitea_issue_labels mutation (e.g. a flip to another active
+// state) must not count as a handoff even when the run made progress.
+func TestReconcileCancelAfterUnclassifiedGiteaMutationDoesNotRecordAgentHandoff(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "8843", Identifier: "#13", State: "In Progress"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+	recordGiteaMutation(t, o, iss.ID, false)
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{Event: task.EventTurnCompleted}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(turn_completed): %v", err)
+	}
+
+	inactive := map[string]tracker.Issue{iss.ID: {ID: iss.ID, Identifier: iss.Identifier, State: "Human Review"}}
+	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(), inactive, normalizedStates([]string{"done"}), 0); err != nil {
+		t.Fatalf("ReconcileInactiveTrackerIssuesAndWait: %v", err)
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0
+	}, time.Second)
+
+	v, _ := o.Snapshot(context.Background())
+	if len(v.AgentHandoffReconcileStopped) != 0 {
+		t.Fatalf("AgentHandoffReconcileStopped = %v; want empty for unclassified gitea mutation", v.AgentHandoffReconcileStopped)
+	}
+	if v.CumulativeAgentHandoffReconcileStoppedTotal != 0 {
+		t.Fatalf("CumulativeAgentHandoffReconcileStoppedTotal = %d; want 0", v.CumulativeAgentHandoffReconcileStoppedTotal)
+	}
+	if len(v.ReconcileStoppedWithProgress) != 1 || v.ReconcileStoppedWithProgress[0] != IssueID(iss.ID) {
+		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s] (progress is still recorded)", v.ReconcileStoppedWithProgress, iss.ID)
+	}
+}

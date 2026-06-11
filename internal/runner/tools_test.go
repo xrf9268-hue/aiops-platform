@@ -586,11 +586,11 @@ func TestLinearGraphQLEmitsAuditEventForSuccessfulMutation(t *testing.T) {
 
 	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
 
-	var sinkCalls []LinearGraphQLMutationAudit
-	sink := func(audit LinearGraphQLMutationAudit) {
+	var sinkCalls []ToolMutationAudit
+	sink := func(audit ToolMutationAudit) {
 		sinkCalls = append(sinkCalls, audit)
 	}
-	ctx := WithLinearGraphQLMutationSink(context.Background(), sink)
+	ctx := WithToolMutationSink(context.Background(), sink)
 
 	if _, err := proxy.call(ctx, ToolCall{Query: `mutation { issueUpdate(id: "1", input: {}) { success } }`}); err != nil {
 		t.Fatalf("mutation: %v", err)
@@ -619,8 +619,8 @@ func TestLinearGraphQLDoesNotEmitAuditOnGraphQLErrors(t *testing.T) {
 	defer httpServer.Close()
 
 	proxy := linearGraphQLProxy{apiKey: "token", baseURL: httpServer.URL, http: httpServer.Client(), allowMutations: true}
-	var sinkCalls []LinearGraphQLMutationAudit
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	var sinkCalls []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		sinkCalls = append(sinkCalls, audit)
 	})
 
@@ -851,7 +851,7 @@ func TestLinearGraphQLWorkpadEmitsAuditEvent(t *testing.T) {
 			workpad := NewLinearWorkpadTool(harnessTool)
 
 			var sinkCalls []string
-			ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+			ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 				sinkCalls = append(sinkCalls, audit.OperationField)
 			})
 
@@ -1117,7 +1117,7 @@ func TestLinearGraphQLIgnoresUnusedMutationFragmentDefinition(t *testing.T) {
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
 	var mutationFields []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		mutationFields = append(mutationFields, audit.OperationField)
 	})
 	var rejections []linearGraphQLMutationRejected
@@ -1222,8 +1222,8 @@ func TestLinearGraphQLAllowsCurrentIssueNonActiveHandoffState(t *testing.T) {
 	defer httpServer.Close()
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
-	var mutationAudits []LinearGraphQLMutationAudit
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	var mutationAudits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		mutationAudits = append(mutationAudits, audit)
 	})
 
@@ -1262,8 +1262,8 @@ func TestLinearGraphQLMarksCurrentIssueTerminalHandoffState(t *testing.T) {
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
 	proxy.currentIssueGuard.terminalStates = []string{"Done"}
-	var mutationAudits []LinearGraphQLMutationAudit
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	var mutationAudits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		mutationAudits = append(mutationAudits, audit)
 	})
 
@@ -1299,8 +1299,8 @@ func TestLinearGraphQLMarksTerminalHandoffWhenOtherConfiguredTerminalStatesAreMi
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
 	proxy.currentIssueGuard.terminalStates = []string{"Done", "Closed", "Duplicate"}
-	var mutationAudits []LinearGraphQLMutationAudit
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	var mutationAudits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		mutationAudits = append(mutationAudits, audit)
 	})
 
@@ -1333,9 +1333,9 @@ func TestLinearGraphQLAllowsCurrentIssueHandoffWhenTerminalStateLookupFails(t *t
 
 	proxy := guardedLinearProxy(httpServer, IssueStateSnapshot{Found: true, State: "In Progress", Active: true})
 	proxy.currentIssueGuard.terminalStates = []string{"Done"}
-	var mutationAudits []LinearGraphQLMutationAudit
+	var mutationAudits []ToolMutationAudit
 	var rejections []linearGraphQLMutationRejected
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		mutationAudits = append(mutationAudits, audit)
 	})
 	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
@@ -1379,7 +1379,7 @@ func TestLinearGraphQLNormalMutationAuditDoesNotRefreshCurrentIssueState(t *test
 		return IssueStateSnapshot{Found: true, State: "In Progress", Active: true}, nil
 	}
 	var normal, postStop []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		normal = append(normal, audit.OperationField)
 	})
 	ctx = WithLinearGraphQLPostStopMutationSink(ctx, func(field string) {
@@ -1492,7 +1492,7 @@ func TestLinearGraphQLPostStopCommentsUseDistinctAudit(t *testing.T) {
 		OperatorTerminalStop: true,
 	})
 	var normal, postStop []string
-	ctx := WithLinearGraphQLMutationSink(context.Background(), func(audit LinearGraphQLMutationAudit) {
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
 		normal = append(normal, audit.OperationField)
 	})
 	ctx = WithLinearGraphQLPostStopMutationSink(ctx, func(field string) {

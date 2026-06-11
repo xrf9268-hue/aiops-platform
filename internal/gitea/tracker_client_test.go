@@ -941,3 +941,27 @@ func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *tes
 		t.Fatalf("issues carrying blocker #3 = %d; want 1 (first source errored+skipped, second retried+found)", withBlocker)
 	}
 }
+
+// TestIssueNumberFromRef pins the "#N"-only contract (#748): a bare numeric ID
+// is the Gitea-internal int64 id, not the issue number, and must not parse.
+func TestIssueNumberFromRef(t *testing.T) {
+	cases := []struct {
+		id, identifier string
+		want           int
+		ok             bool
+	}{
+		{id: "8842", identifier: "#12", want: 12, ok: true},
+		{id: "#12", identifier: "", want: 12, ok: true},
+		{id: "8842", identifier: "", want: 0, ok: false},
+		{id: "", identifier: "", want: 0, ok: false},
+		{id: "#0", identifier: "", want: 0, ok: false},
+		{id: "#x", identifier: "", want: 0, ok: false},
+		{id: "8842", identifier: " #12 ", want: 12, ok: true},
+	}
+	for _, tc := range cases {
+		got, ok := IssueNumberFromRef(tc.id, tc.identifier)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("IssueNumberFromRef(%q, %q) = (%d, %t); want (%d, %t)", tc.id, tc.identifier, got, ok, tc.want, tc.ok)
+		}
+	}
+}

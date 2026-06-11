@@ -239,11 +239,20 @@ func (c *TrackerClient) issueNumberForStateRefresh(ref tracker.IssueRef) (int, b
 	if issueNumber, ok := c.cachedIssueNumber(ref.ID); ok {
 		return issueNumber, true
 	}
-	if issueNumber, ok := giteaIssueNumberFromIdentifier(ref.Identifier); ok {
+	return IssueNumberFromRef(ref.ID, ref.Identifier)
+}
+
+// IssueNumberFromRef derives a Gitea issue number from a tracker issue
+// reference without network access. Only "#N"-shaped values are trusted: a
+// bare numeric ID is the Gitea-internal int64 id (giteaIssueID prefers it
+// over the issue number), so parsing it as an issue number could silently
+// target a different issue.
+func IssueNumberFromRef(id, identifier string) (int, bool) {
+	if issueNumber, ok := giteaIssueNumberFromIdentifier(identifier); ok {
 		return issueNumber, true
 	}
-	if strings.HasPrefix(strings.TrimSpace(ref.ID), "#") {
-		return giteaIssueNumberFromIdentifier(ref.ID)
+	if strings.HasPrefix(strings.TrimSpace(id), "#") {
+		return giteaIssueNumberFromIdentifier(id)
 	}
 	return 0, false
 }

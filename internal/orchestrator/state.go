@@ -146,7 +146,8 @@ type RunningEntry struct {
 	InputRequiredMethod string
 
 	// AgentCurrentIssueHandoff is set only when the agent successfully updates
-	// this run's issue into a non-active state through the guarded Linear tool.
+	// this run's issue into a non-active state through an agent-visible tracker
+	// mutation tool (linear_graphql, linear_ai_workpad, gitea_issue_labels).
 	// It is the delivery signal when reconcile stops the worker before clean
 	// exit, and it avoids latching agent-owned terminal handoffs as operator
 	// stops.
