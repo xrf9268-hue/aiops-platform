@@ -363,7 +363,33 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		issue.Labels = st.Labels
 		refreshed[id] = issue
 	}
+	if err == nil {
+		err = p.releaseVanishedContinuations(ctx, issueRefs, statesByID)
+	}
 	return refreshed, err
+}
+
+// releaseVanishedContinuations releases queued continuation entries whose
+// issue a CLEAN narrow refresh was asked about but did not return with a
+// usable state (deleted, or a Gitea issue whose aiops/* state labels were
+// stripped). Reconcile's cancel paths deliberately treat absence as
+// no-information, so without this sweep such a continuation wedges in
+// RetryAttempts/Claimed forever — the poll loop never lists the issue again
+// and nothing else releases it (#740 review). Gated on err == nil: with a
+// failed fetch a missing row is indistinguishable from tracker downtime.
+// Kind filtering (continuations only, release-only) happens actor-side in
+// ReleaseVanishedContinuations.
+func (p *Poller) releaseVanishedContinuations(ctx context.Context, queried []tracker.IssueRef, statesByID map[string]tracker.IssueState) error {
+	vanished := make([]tracker.IssueRef, 0, len(queried))
+	for _, ref := range queried {
+		if st, ok := statesByID[ref.ID]; !ok || strings.TrimSpace(st.State) == "" {
+			vanished = append(vanished, ref)
+		}
+	}
+	if len(vanished) == 0 {
+		return nil
+	}
+	return p.orchestrator.ReleaseVanishedContinuations(ctx, vanished)
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {

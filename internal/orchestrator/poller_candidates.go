@@ -7,7 +7,6 @@ package orchestrator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -68,30 +67,7 @@ func (p *Poller) revalidateDispatchCandidates(ctx context.Context, candidates []
 	if fetchErr != nil {
 		fetchErr = fmt.Errorf("revalidate dispatch candidates: %w", fetchErr)
 	}
-	kept, missing := p.filterRevalidatedCandidates(candidates, claimable, statesByID)
-	// Release queued continuations only on a clean fetch: with fetchErr set, a
-	// row may be missing because the fetch failed, not because the issue is
-	// gone (upstream {:error} leaves state untouched). Candidates dropped with
-	// a PRESENT-but-ineligible row are deliberately not released — the
-	// reconcile pass observes the same refreshed state on its own narrow
-	// refresh of retrying refs and owns that cleanup, including terminal
-	// workspace removal. A missing row is the one observation reconcile can
-	// never act on (absence is "no information" there), so the wedged
-	// continuation is released here (#740 review).
-	if fetchErr == nil {
-		fetchErr = p.releaseMissingContinuations(ctx, missing)
-	}
-	return kept, fetchErr
-}
-
-func (p *Poller) releaseMissingContinuations(ctx context.Context, missing []tracker.Issue) error {
-	var err error
-	for _, issue := range missing {
-		if releaseErr := p.orchestrator.ReleaseMissingContinuation(ctx, IssueID(issue.ID), issue.Identifier); releaseErr != nil {
-			err = errors.Join(err, fmt.Errorf("release missing continuation %s: %w", issue.ID, releaseErr))
-		}
-	}
-	return err
+	return p.filterRevalidatedCandidates(candidates, claimable, statesByID), fetchErr
 }
 
 // claimableDispatchRefs asks the orchestrator which candidates the dispatch
@@ -115,62 +91,48 @@ func (p *Poller) claimableDispatchRefs(ctx context.Context, candidates []tracker
 	return claimable, refs, nil
 }
 
-// revalidationVerdict classifies one candidate's revalidation outcome. The
-// missing case is split out because the caller routes it to a continuation
-// release (a missing issue is invisible to the reconcile pass), while
-// present-but-ineligible drops are left to reconcile's own narrow refresh.
-type revalidationVerdict int
-
-const (
-	revalidationKeep revalidationVerdict = iota
-	revalidationStale
-	revalidationMissing
-)
-
 // filterRevalidatedCandidates keeps the claimable candidates whose refreshed
 // tracker row still passes the dispatch gates, carrying the refreshed state
-// and labels onto each survivor. Candidates whose refresh row is missing
-// entirely are returned separately for the continuation-release pass.
-func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimable map[IssueID]struct{}, statesByID map[string]tracker.IssueState) (kept, missing []tracker.Issue) {
+// and labels onto each survivor. Dropping is skip-only: a dropped candidate's
+// queued continuation (if any) is released by the reconcile pass's
+// vanished-continuation sweep when the row is missing, or by the inactive
+// reconcile when the row is present but ineligible — never here, so the
+// release stays single-sourced.
+func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimable map[IssueID]struct{}, statesByID map[string]tracker.IssueState) []tracker.Issue {
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
-	kept = make([]tracker.Issue, 0, len(claimable))
+	kept := make([]tracker.Issue, 0, len(claimable))
 	for _, issue := range candidates {
 		if _, ok := claimable[IssueID(issue.ID)]; !ok {
 			continue
 		}
-		revalidated, verdict := revalidatedCandidate(issue, statesByID, activeStateKeys, p.reconcile.RequiredLabels)
-		switch verdict {
-		case revalidationKeep:
+		if revalidated, keep := revalidatedCandidate(issue, statesByID, activeStateKeys, p.reconcile.RequiredLabels); keep {
 			kept = append(kept, revalidated)
-		case revalidationMissing:
-			missing = append(missing, issue)
-		case revalidationStale:
 		}
 	}
-	return kept, missing
+	return kept
 }
 
 // revalidatedCandidate applies the per-issue revalidation verdict: missing
 // from the refresh (upstream {:skip, :missing}), refreshed out of the active
 // set, or refreshed past the SPEC §6.4 required-labels gate all drop the
 // candidate; otherwise the refreshed state and labels are carried onto it.
-func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.IssueState, activeStateKeys map[string]struct{}, requiredLabels []string) (tracker.Issue, revalidationVerdict) {
+func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.IssueState, activeStateKeys map[string]struct{}, requiredLabels []string) (tracker.Issue, bool) {
 	refreshed, ok := statesByID[issue.ID]
 	if !ok || strings.TrimSpace(refreshed.State) == "" {
 		logStaleDispatchSkipped(issue, "", "missing_from_refresh")
-		return tracker.Issue{}, revalidationMissing
+		return tracker.Issue{}, false
 	}
 	issue.State = refreshed.State
 	issue.Labels = refreshed.Labels
 	if !isActiveTrackerState(issue.State, activeStateKeys) {
 		logStaleDispatchSkipped(issue, issue.State, "state_left_active_set")
-		return tracker.Issue{}, revalidationStale
+		return tracker.Issue{}, false
 	}
 	if !issueHasRequiredLabels(issue, requiredLabels) {
 		logStaleDispatchSkipped(issue, issue.State, "required_labels_missing")
-		return tracker.Issue{}, revalidationStale
+		return tracker.Issue{}, false
 	}
-	return issue, revalidationKeep
+	return issue, true
 }
 
 func logStaleDispatchSkipped(issue tracker.Issue, state, reason string) {
