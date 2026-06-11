@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -172,6 +171,10 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 	}
 	sortCandidates(candidates)
 	p.overflow = nil
+	candidates, revalidateErr := p.revalidateDispatchCandidates(ctx, candidates)
+	if revalidateErr != nil {
+		pollErr = errors.Join(pollErr, revalidateErr)
+	}
 	var dispatchErr error
 	for _, issue := range candidates {
 		if issue.ID == "" {
@@ -360,7 +363,33 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		issue.Labels = st.Labels
 		refreshed[id] = issue
 	}
+	if err == nil {
+		err = p.releaseVanishedContinuations(ctx, issueRefs, statesByID)
+	}
 	return refreshed, err
+}
+
+// releaseVanishedContinuations releases queued continuation entries whose
+// issue a CLEAN narrow refresh was asked about but did not return with a
+// usable state (deleted, or a Gitea issue whose aiops/* state labels were
+// stripped). Reconcile's cancel paths deliberately treat absence as
+// no-information, so without this sweep such a continuation wedges in
+// RetryAttempts/Claimed forever — the poll loop never lists the issue again
+// and nothing else releases it (#740 review). Gated on err == nil: with a
+// failed fetch a missing row is indistinguishable from tracker downtime.
+// Kind filtering (continuations only, release-only) happens actor-side in
+// ReleaseVanishedContinuations.
+func (p *Poller) releaseVanishedContinuations(ctx context.Context, queried []tracker.IssueRef, statesByID map[string]tracker.IssueState) error {
+	vanished := make([]tracker.IssueRef, 0, len(queried))
+	for _, ref := range queried {
+		if st, ok := statesByID[ref.ID]; !ok || strings.TrimSpace(st.State) == "" {
+			vanished = append(vanished, ref)
+		}
+	}
+	if len(vanished) == 0 {
+		return nil
+	}
+	return p.orchestrator.ReleaseVanishedContinuations(ctx, vanished)
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {
@@ -410,138 +439,6 @@ func issueMap(issues []tracker.Issue) map[string]tracker.Issue {
 	return out
 }
 
-func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Issue) []tracker.Issue {
-	if len(excluded) == 0 {
-		return issues
-	}
-	out := make([]tracker.Issue, 0, len(issues))
-	for _, issue := range issues {
-		if _, ok := excluded[issue.ID]; ok {
-			continue
-		}
-		out = append(out, issue)
-	}
-	return out
-}
-
-func filterEligibleCandidates(issues []tracker.Issue, terminalStates, requiredLabels []string) []tracker.Issue {
-	// Honor exactly what the caller supplied per SPEC §5.3.1. Callers that
-	// want the SPEC 5-state default get it from workflow.DefaultConfig at
-	// construction time (NewPoller seeds it; workflow.Load supplies it for
-	// omitted YAML). An explicit empty slice from
-	// NewPollerWithReconciliation disables the blocker rule entirely, which
-	// is the operator's call.
-	terminal := normalizedStates(terminalStates)
-	out := make([]tracker.Issue, 0, len(issues))
-	for _, issue := range issues {
-		if !issueHasRequiredCandidateFields(issue) {
-			continue
-		}
-		if todoIssueBlockedByOpenDependency(issue, terminal) {
-			continue
-		}
-		if !issueHasRequiredLabels(issue, requiredLabels) {
-			continue
-		}
-		out = append(out, issue)
-	}
-	return out
-}
-
-// issueHasRequiredLabels reports whether issue carries every label in required
-// (SPEC §4.1.1 / §6.4). See labelsSatisfyRequired for the matching semantics.
-func issueHasRequiredLabels(issue tracker.Issue, required []string) bool {
-	return labelsSatisfyRequired(issue.Labels, required)
-}
-
-// labelsSatisfyRequired reports whether labels contains every entry in required
-// (SPEC §4.1.1 / §6.4). Both sides are trimmed and lowercased so matching is
-// case-insensitive regardless of tracker label casing. Empty required disables
-// the gate (returns true); a blank required entry ("") can never match a
-// tracker's non-empty labels, so it blocks every issue as SPEC mandates. Shared
-// by the dispatch/reconcile predicate and the §16.5 per-turn continue gate so
-// they cannot diverge.
-func labelsSatisfyRequired(labels, required []string) bool {
-	if len(required) == 0 {
-		return true
-	}
-	have := make(map[string]struct{}, len(labels))
-	for _, label := range labels {
-		have[strings.ToLower(strings.TrimSpace(label))] = struct{}{}
-	}
-	for _, label := range required {
-		if _, ok := have[strings.ToLower(strings.TrimSpace(label))]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
-func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
-	return strings.TrimSpace(issue.ID) != "" &&
-		strings.TrimSpace(issue.Identifier) != "" &&
-		strings.TrimSpace(issue.Title) != "" &&
-		strings.TrimSpace(issue.State) != ""
-}
-
-func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
-	if !strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
-		return false
-	}
-	for _, blocker := range issue.BlockedBy {
-		state := strings.ToLower(strings.TrimSpace(blocker.State))
-		if state == "" {
-			return true
-		}
-		if _, terminal := terminalStates[state]; !terminal {
-			return true
-		}
-	}
-	return false
-}
-
-func sortCandidates(issues []tracker.Issue) {
-	sort.SliceStable(issues, func(i, j int) bool {
-		left, right := issues[i], issues[j]
-		leftPriority := linearPrioritySortKey(left.Priority)
-		rightPriority := linearPrioritySortKey(right.Priority)
-		if leftPriority != rightPriority {
-			return leftPriority < rightPriority
-		}
-		if compareCreatedAt(left.CreatedAt, right.CreatedAt) < 0 {
-			return true
-		}
-		if compareCreatedAt(left.CreatedAt, right.CreatedAt) > 0 {
-			return false
-		}
-		return left.Identifier < right.Identifier
-	})
-}
-
-func compareCreatedAt(left, right time.Time) int {
-	switch {
-	case left.IsZero() && right.IsZero():
-		return 0
-	case left.IsZero():
-		return 1
-	case right.IsZero():
-		return -1
-	case left.Before(right):
-		return -1
-	case left.After(right):
-		return 1
-	default:
-		return 0
-	}
-}
-
-func linearPrioritySortKey(priority int) int {
-	if priority == 0 {
-		return 1 << 30
-	}
-	return priority
-}
-
 func normalizedStates(states []string) map[string]struct{} {
 	out := make(map[string]struct{}, len(states))
 	for _, state := range states {
@@ -551,36 +448,6 @@ func normalizedStates(states []string) map[string]struct{} {
 		}
 	}
 	return out
-}
-
-func mergeOverflowCandidates(overflow, fresh []tracker.Issue) []tracker.Issue {
-	if len(overflow) == 0 {
-		return fresh
-	}
-	candidates := make([]tracker.Issue, 0, len(overflow)+len(fresh))
-	freshByID := make(map[string]tracker.Issue, len(fresh))
-	seen := make(map[string]struct{}, len(overflow)+len(fresh))
-	for _, issue := range fresh {
-		if issue.ID == "" {
-			continue
-		}
-		freshByID[issue.ID] = issue
-	}
-	for _, issue := range overflow {
-		freshIssue, ok := freshByID[issue.ID]
-		if !ok {
-			continue
-		}
-		seen[issue.ID] = struct{}{}
-		candidates = append(candidates, freshIssue)
-	}
-	for _, issue := range fresh {
-		if _, ok := seen[issue.ID]; ok {
-			continue
-		}
-		candidates = append(candidates, issue)
-	}
-	return candidates
 }
 
 // TaskBuilder converts a tracker candidate into the task shape consumed by the

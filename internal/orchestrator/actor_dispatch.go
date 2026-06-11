@@ -183,17 +183,69 @@ func resolveDispatchClaim(st *OrchestratorState, id IssueID, trackerRechecked bo
 	if !trackerRechecked {
 		return nil, 0, 0, st.IsClaimed(id)
 	}
-	entry, ok := st.RetryAttempts[id]
-	if !ok {
-		return nil, 0, 0, st.IsClaimed(id)
-	}
-	if entry.Kind != RetryKindContinuation {
+	entry, allow := dispatchClaimGateAllows(st, id, time.Now())
+	if !allow {
 		return nil, 0, 0, true
 	}
-	if !entry.IsDue(time.Now()) {
-		return nil, 0, 0, true
+	if entry == nil {
+		return nil, 0, 0, false
 	}
 	return entry, entry.Attempt, entry.ContinuationTurnCount, false
+}
+
+// dispatchClaimGateAllows reports whether a tracker-rechecked dispatch for id
+// would pass the claim gate right now: the issue is entirely unclaimed
+// (entry nil), or its queued retry entry is a DUE continuation (entry
+// returned for the caller to consume). Shared by resolveDispatchClaim and
+// dispatchClaimableIssueIDsOp so the dispatch gate and the poller's
+// pre-dispatch revalidation subset cannot drift (#740).
+func dispatchClaimGateAllows(st *OrchestratorState, id IssueID, now time.Time) (entry *RetryEntry, allow bool) {
+	queued, ok := st.RetryAttempts[id]
+	if !ok {
+		return nil, !st.IsClaimed(id)
+	}
+	if queued.Kind != RetryKindContinuation || !queued.IsDue(now) {
+		return nil, false
+	}
+	return queued, true
+}
+
+// DispatchClaimableIssueIDs returns the subset of ids a tracker-rechecked
+// dispatch would currently pass the claim gate for. The poller uses it to
+// revalidate (and dispatch) only candidates that can actually spawn this
+// tick — the same trim upstream gets from should_dispatch_issue? running
+// before revalidate_issue_for_dispatch (orchestrator.ex:776-777, 909-910) —
+// instead of re-fetching tracker state for already-running issues every tick.
+// The dispatch op re-resolves the claim authoritatively, so a claim taken
+// between this read and the dispatch is still denied there.
+func (o *Orchestrator) DispatchClaimableIssueIDs(ctx context.Context, ids []IssueID) (map[IssueID]struct{}, error) {
+	reply := make(chan map[IssueID]struct{}, 1)
+	if err := o.submit(ctx, &dispatchClaimableIssueIDsOp{ids: ids, result: reply}); err != nil {
+		return nil, err
+	}
+	select {
+	case claimable := <-reply:
+		return claimable, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type dispatchClaimableIssueIDsOp struct {
+	ids    []IssueID
+	result chan<- map[IssueID]struct{}
+}
+
+func (d *dispatchClaimableIssueIDsOp) apply(st *OrchestratorState) func() {
+	now := time.Now()
+	claimable := make(map[IssueID]struct{}, len(d.ids))
+	for _, id := range d.ids {
+		if _, allow := dispatchClaimGateAllows(st, id, now); allow {
+			claimable[id] = struct{}{}
+		}
+	}
+	d.result <- claimable
+	return nil
 }
 
 func cleanTurnBudgetForContinuationBudget(maxContinuationTurns, continuationTurnCount int) int {
