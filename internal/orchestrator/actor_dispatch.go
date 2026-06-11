@@ -248,6 +248,45 @@ func (d *dispatchClaimableIssueIDsOp) apply(st *OrchestratorState) func() {
 	return nil
 }
 
+// ReleaseMissingContinuation drops the queued continuation entry of an issue
+// the dispatch revalidation could not observe at all (missing from the narrow
+// refresh: deleted, or a Gitea issue whose aiops/* state labels were
+// stripped). Such an issue is invisible to every reconcile listing and
+// refresh — the no-information-on-absence invariant means nothing else ever
+// releases it, so without this the continuation would sit in
+// RetryAttempts/Claimed forever (#740 review). Release-only, mirroring
+// retryFireAfterFetchOp's absence branch (#341): absence is not a terminal
+// observation, so no workspace action is taken. Candidates whose refresh DID
+// return a row are not routed here — the reconcile pass observes the same
+// refreshed state on its own narrow refresh and owns that cleanup (including
+// terminal workspace removal).
+func (o *Orchestrator) ReleaseMissingContinuation(ctx context.Context, id IssueID, identifier string) error {
+	return o.submit(ctx, &releaseMissingContinuationOp{id: id, identifier: identifier})
+}
+
+type releaseMissingContinuationOp struct {
+	id         IssueID
+	identifier string
+}
+
+func (r *releaseMissingContinuationOp) apply(st *OrchestratorState) func() {
+	entry, allow := dispatchClaimGateAllows(st, r.id, time.Now())
+	if !allow || entry == nil {
+		// The claim state moved on since the revalidation read (entry consumed,
+		// replaced by another retry kind, or the issue was never claimed) —
+		// nothing of ours to release.
+		return nil
+	}
+	st.ReleaseClaim(r.id)
+	st.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventFailed,
+		IssueID:    r.id,
+		Identifier: r.identifier,
+		Message:    "continuation released: issue missing from dispatch revalidation",
+	})
+	return nil
+}
+
 func cleanTurnBudgetForContinuationBudget(maxContinuationTurns, continuationTurnCount int) int {
 	remaining := maxContinuationTurns - continuationTurnCount
 	if remaining < 0 {

@@ -110,6 +110,101 @@ func TestPollOnceSkipsDispatchWhenRevalidationDropsRequiredLabels(t *testing.T) 
 	}
 }
 
+// seedDueContinuation installs a due continuation retry entry (with its claim)
+// through the actor, the state a clean worker exit leaves behind while the
+// next dispatch is pending.
+func seedDueContinuation(t *testing.T, ctx context.Context, poller *Poller, issue tracker.Issue) {
+	t.Helper()
+	id := IssueID(issue.ID)
+	done := make(chan struct{})
+	if err := poller.orchestrator.submit(ctx, opFunc(func(st *OrchestratorState) func() {
+		st.Claimed[id] = struct{}{}
+		st.ClaimedIssues[id] = issue
+		st.RetryAttempts[id] = &RetryEntry{
+			IssueID:               id,
+			Identifier:            issue.Identifier,
+			Kind:                  RetryKindContinuation,
+			Attempt:               1,
+			DueAt:                 time.Now().Add(-time.Minute),
+			ContinuationTurnCount: 2,
+		}
+		close(done)
+		return nil
+	})); err != nil {
+		t.Fatalf("seed continuation: %v", err)
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("seed continuation: %v", ctx.Err())
+	}
+}
+
+// continuationClaimState reads whether the issue still holds a retry entry and
+// a claim, serialized through the actor.
+func continuationClaimState(t *testing.T, ctx context.Context, poller *Poller, id IssueID) (retained, claimed bool) {
+	t.Helper()
+	done := make(chan struct{})
+	if err := poller.orchestrator.submit(ctx, opFunc(func(st *OrchestratorState) func() {
+		_, retained = st.RetryAttempts[id]
+		_, claimed = st.Claimed[id]
+		close(done)
+		return nil
+	})); err != nil {
+		t.Fatalf("read claim state: %v", err)
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatalf("read claim state: %v", ctx.Err())
+	}
+	return retained, claimed
+}
+
+func TestPollOnceReleasesDueContinuationWhenRevalidationOmitsIssue(t *testing.T) {
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
+	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
+
+	// The refresh omits the issue entirely (deleted / Gitea aiops/* labels
+	// stripped). Reconcile treats absence as no-information forever, so the
+	// revalidation pass must release the queued continuation or the issue
+	// wedges in retrying (#740 review P2).
+	trackerClient.setFetchIDStates(map[string]string{})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce() = %v; want nil", err)
+	}
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatched %d issues (%v); want 0", got, dispatcher.issueIDs())
+	}
+	retained, claimed := continuationClaimState(t, ctx, poller, "issue-1")
+	if retained || claimed {
+		t.Fatalf("continuation after missing revalidation: retained=%v claimed=%v; want released", retained, claimed)
+	}
+}
+
+func TestPollOnceRetainsDueContinuationWhenRevalidationFetchFails(t *testing.T) {
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
+	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
+
+	// With the fetch failing, a missing row is indistinguishable from tracker
+	// downtime — the continuation must survive (upstream {:error} leaves state
+	// untouched).
+	trackerClient.setFetchIDStates(map[string]string{})
+	trackerClient.setFetchIDErr(errors.New("tracker briefly down"))
+	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "revalidate dispatch candidates") {
+		t.Fatalf("PollOnce() = %v; want wrapped revalidation fetch error", err)
+	}
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatched %d issues (%v); want 0", got, dispatcher.issueIDs())
+	}
+	retained, claimed := continuationClaimState(t, ctx, poller, "issue-1")
+	if !retained || !claimed {
+		t.Fatalf("continuation after failed revalidation fetch: retained=%v claimed=%v; want retained", retained, claimed)
+	}
+}
+
 func TestPollOncePartialRevalidationErrorStillDispatchesFreshCandidates(t *testing.T) {
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
 		{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"},
