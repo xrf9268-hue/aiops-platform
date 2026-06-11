@@ -80,7 +80,7 @@ func TestNormalizeStateConcurrencyKey_Shape(t *testing.T) {
 		{"REWORK", "rework"},
 		{"", ""},
 		{"   ", ""},
-		{"AI Ready", "ai_ready"},
+		{"Human Review", "human_review"},
 	}
 	for _, tc := range cases {
 		if got := NormalizeStateConcurrencyKey(tc.in); got != tc.want {

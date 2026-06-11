@@ -383,7 +383,7 @@ func TestListIssuesByStatesPaginates(t *testing.T) {
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready", "In Progress"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo", "In Progress"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestListIssuesByStatesErrorsWhenNextPageCursorMissing(t *testing.T) {
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
-	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil || !strings.Contains(err.Error(), "linear pagination missing endCursor") {
 		t.Fatalf("ListIssuesByStates error = %v, want missing cursor error", err)
 	}
@@ -638,7 +638,7 @@ func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
-	_, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil || !strings.Contains(err.Error(), "linear pagination exceeded") {
 		t.Fatalf("ListIssuesByStates error = %v, want max pages error", err)
 	}
@@ -740,9 +740,9 @@ func TestNewLinearClientEndpointActuallyUsedForRequests(t *testing.T) {
 	defer srv.Close()
 
 	endpoint := srv.URL + "/custom-graphql"
-	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", ProjectSlug: "aiops", Endpoint: endpoint, ActiveStates: []string{"AI Ready"}})
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "k", ProjectSlug: "aiops", Endpoint: endpoint, ActiveStates: []string{"Todo"}})
 	client.HTTP = srv.Client()
-	if _, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"}); err != nil {
+	if _, err := client.ListIssuesByStates(context.Background(), []string{"Todo"}); err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
 	if observed != "/custom-graphql" {

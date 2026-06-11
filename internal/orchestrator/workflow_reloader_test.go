@@ -132,7 +132,7 @@ func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T
 		t.Fatalf("new runtime: %v", err)
 	}
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
-		{ID: "issue-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"},
+		{ID: "issue-ready", Identifier: "ISSUE-1", Title: "ready", State: "Todo"},
 		{ID: "issue-rework", Identifier: "ISSUE-2", Title: "rework", State: "Rework"},
 	}}
 	dispatcher := &fakeDispatcher{}
@@ -180,8 +180,8 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 		t.Fatalf("new runtime: %v", err)
 	}
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
-		{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"},
-		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "AI Ready"},
+		{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "Todo"},
+		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "Todo"},
 	}}
 	dispatcher := &blockingDispatcher{}
 	orch := New(NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
@@ -199,7 +199,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 	}
 	waitForBlockingDispatcherCount(t, dispatcher, 1)
 
-	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxConcurrentAgents(2))
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxConcurrentAgents(2))
 	if err := runtime.ReloadOnce(ctx); err != nil {
 		t.Fatalf("reload workflow: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacit
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	path := writeWorkflowForReloadTest(t, "linear", 30000, withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"AI Ready": 1}))
+	path := writeWorkflowForReloadTest(t, "linear", 30000, withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"Todo": 1}))
 	initial, err := workflow.Load(path)
 	if err != nil {
 		t.Fatalf("load initial workflow: %v", err)
@@ -223,8 +223,8 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacit
 		t.Fatalf("new runtime: %v", err)
 	}
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{
-		{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"},
-		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "AI Ready"},
+		{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "Todo"},
+		{ID: "issue-2", Identifier: "ISSUE-2", Title: "two", State: "Todo"},
 	}}
 	dispatcher := &blockingDispatcher{}
 	st := NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents)
@@ -244,7 +244,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacit
 	}
 	waitForBlockingDispatcherCount(t, dispatcher, 1)
 
-	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"ai_ready": 2}))
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxConcurrentAgents(10), withReloadTestMaxConcurrentAgentsByState(map[string]int{"todo": 2}))
 	if err := runtime.ReloadOnce(ctx); err != nil {
 		t.Fatalf("reload workflow: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}
-	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"}}}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "Todo"}}}
 	dispatcher := &fakeDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Second}})
 	go orch.Run(ctx)
@@ -279,7 +279,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 		t.Fatalf("new runtime poller: %v", err)
 	}
 
-	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxRetryBackoffMs(50))
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxRetryBackoffMs(50))
 	if err := runtime.ReloadOnce(ctx); err != nil {
 		t.Fatalf("reload workflow: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestRuntimePollerAppliesReloadedMaxContinuationTurnsToCleanContinuationBudg
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
 	}
-	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "AI Ready"}}}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "one", State: "Todo"}}}
 	dispatcher := &fakeDispatcher{}
 	st := NewOrchestratorState(30000, 1)
 	st.MaxContinuationTurns = initial.Config.Agent.MaxContinuationTurns
@@ -330,7 +330,7 @@ func TestRuntimePollerAppliesReloadedMaxContinuationTurnsToCleanContinuationBudg
 		t.Fatalf("new runtime poller: %v", err)
 	}
 
-	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "AI Ready", withReloadTestMaxContinuationTurns(1))
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxContinuationTurns(1))
 	if err := runtime.ReloadOnce(ctx); err != nil {
 		t.Fatalf("reload workflow: %v", err)
 	}
@@ -360,7 +360,7 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 		t.Fatalf("new runtime: %v", err)
 	}
 	trackersByKind := map[string]*fakeIssueStateTracker{
-		"linear": {issues: []tracker.Issue{{ID: "linear-ready", Identifier: "ISSUE-1", Title: "ready", State: "AI Ready"}}},
+		"linear": {issues: []tracker.Issue{{ID: "linear-ready", Identifier: "ISSUE-1", Title: "ready", State: "Todo"}}},
 		"gitea":  {issues: []tracker.Issue{{ID: "gitea-rework", Identifier: "ISSUE-2", Title: "rework", State: "Rework"}}},
 	}
 	factoryCalls := 0
@@ -451,7 +451,7 @@ func TestRuntimePollerRetryListerWrapsEligibilityFilter(t *testing.T) {
 	}
 
 	// Positive control: a clean issue passes the wrap.
-	trackerClient.issues = []tracker.Issue{{ID: "gitea-ready", Identifier: "READY-1", Title: "ready", State: "AI Ready"}}
+	trackerClient.issues = []tracker.Issue{{ID: "gitea-ready", Identifier: "READY-1", Title: "ready", State: "Todo"}}
 	got, err = lister.ListActiveIssues(ctx)
 	if err != nil {
 		t.Fatalf("ListActiveIssues (positive control): %v", err)
@@ -503,7 +503,7 @@ func TestRuntimePollerRetryListerThreadsRequiredLabels(t *testing.T) {
 	// An active-state issue missing the required label must be dropped on the
 	// retry-fire seam: a queued retry whose issue lost the label is ineligible.
 	trackerClient.issues = []tracker.Issue{{
-		ID: "gitea-unlabeled", Identifier: "UNLABELED-1", Title: "missing required label", State: "AI Ready",
+		ID: "gitea-unlabeled", Identifier: "UNLABELED-1", Title: "missing required label", State: "Todo",
 	}}
 	got, err := lister.ListActiveIssues(ctx)
 	if err != nil {
@@ -515,7 +515,7 @@ func TestRuntimePollerRetryListerThreadsRequiredLabels(t *testing.T) {
 
 	// Positive control: the same active issue carrying the required label passes.
 	trackerClient.issues = []tracker.Issue{{
-		ID: "gitea-labeled", Identifier: "LABELED-1", Title: "has required label", State: "AI Ready",
+		ID: "gitea-labeled", Identifier: "LABELED-1", Title: "has required label", State: "Todo",
 		Labels: []string{"aiops-ready"},
 	}}
 	got, err = lister.ListActiveIssues(ctx)
@@ -555,8 +555,8 @@ func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *
 	if got := snap.Workflow.Config.Tracker.PollIntervalMs; got != 30000 {
 		t.Fatalf("poll interval after failed reload = %d, want previous 30000", got)
 	}
-	if got := snap.Workflow.Config.Tracker.ActiveStates; len(got) != 1 || got[0] != "AI Ready" {
-		t.Fatalf("active states after failed reload = %#v, want previous [AI Ready]", got)
+	if got := snap.Workflow.Config.Tracker.ActiveStates; len(got) != 1 || got[0] != "Todo" {
+		t.Fatalf("active states after failed reload = %#v, want previous [Todo]", got)
 	}
 	if got := emitter.count(task.EventWorkflowReloadFailed); got != 1 {
 		t.Fatalf("workflow_reload_failed event count = %d, want 1", got)
@@ -621,7 +621,7 @@ func TestRunPollLoopWithRuntimeUsesReloadedPollingCadence(t *testing.T) {
 		t.Fatalf("new runtime: %v", err)
 	}
 	poller := &countingPollOnce{afterFirst: func() {
-		writeWorkflowForReloadTestAt(t, path, "linear", 75, "AI Ready")
+		writeWorkflowForReloadTestAt(t, path, "linear", 75, "Todo")
 		_ = runtime.ReloadOnce(context.Background())
 	}}
 	sleeper := &recordingPollSleeper{}
@@ -707,7 +707,7 @@ func (s *reloadLoopTestSleeper) sleep(_ context.Context, _ time.Duration) error 
 func writeWorkflowForReloadTest(t *testing.T, trackerKind string, pollIntervalMs int, opts ...reloadWorkflowTestOption) string {
 	t.Helper()
 	path := t.TempDir() + "/WORKFLOW.md"
-	writeWorkflowForReloadTestAt(t, path, trackerKind, pollIntervalMs, "AI Ready", opts...)
+	writeWorkflowForReloadTestAt(t, path, trackerKind, pollIntervalMs, "Todo", opts...)
 	return path
 }
 

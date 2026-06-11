@@ -70,7 +70,7 @@ func TestReconcileStartupRemovesTerminalWorkspaces(t *testing.T) {
 	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready", "In Progress", "Rework"},
+		ActiveStates:    []string{"Todo", "In Progress", "Rework"},
 		TerminalStates:  []string{"Done", "Canceled"},
 		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}, {ID: "issue-2", Identifier: "LIN-2", State: "Done"}}},
 		Emitter:         emitter,
@@ -139,7 +139,7 @@ func TestReconcileStartupIsIdempotent(t *testing.T) {
 	}
 	cfg := ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{Identifier: "LIN-2", State: "Done"}}},
 		Emitter:         &fakeEmitter{},
@@ -164,12 +164,12 @@ func TestReconcileStartupRemovesUnknownWorkspacesWhenTerminalIssuesObserved(t *t
 	}
 
 	fake := &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
-		{{ID: "issue-1", Identifier: "LIN-1", State: "AI Ready"}},
+		{{ID: "issue-1", Identifier: "LIN-1", State: "Todo"}},
 		{{ID: "issue-2", Identifier: "LIN-2", State: "Done"}},
 	}}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fake,
 		Emitter:         &fakeEmitter{},
@@ -192,7 +192,7 @@ func TestReconcileStartupRefusesToRemoveWhenTrackerReturnsNoIssues(t *testing.T)
 
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fakeReconcileTracker{},
 		Emitter:         &fakeEmitter{},
@@ -224,7 +224,7 @@ func TestReconcileStartupTolerantOfActiveFetchFailure(t *testing.T) {
 	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         &fakeReconcileTrackerByCall{errByCall: []error{errors.New("tracker outage"), nil}},
 		Emitter:         emitter,
@@ -273,7 +273,7 @@ func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
 	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:  root,
-		ActiveStates:   []string{"AI Ready"},
+		ActiveStates:   []string{"Todo"},
 		TerminalStates: []string{"Done"},
 		Tracker: &fakeReconcileTrackerByCall{
 			// Active fetch returns capped error; terminal fetch would have
@@ -437,11 +437,11 @@ func TestReconcileStartupMatchesGiteaWorkspaceLayout(t *testing.T) {
 
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:  root,
-		ActiveStates:   []string{"AI Ready"},
+		ActiveStates:   []string{"Todo"},
 		TerminalStates: []string{"Done"},
 		TrackerKind:    "gitea",
 		Tracker: fakeReconcileTracker{issues: []tracker.Issue{
-			{ID: "issue-1", Identifier: "GIT-1", State: "AI Ready"},
+			{ID: "issue-1", Identifier: "GIT-1", State: "Todo"},
 			{ID: "issue-2", Identifier: "GIT-2", State: "Done"},
 		}},
 		Emitter:         &fakeEmitter{},
@@ -673,7 +673,7 @@ func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing
 	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:  root,
-		ActiveStates:   []string{"AI Ready"},
+		ActiveStates:   []string{"Todo"},
 		TerminalStates: []string{"Done"},
 		TrackerKind:    "linear",
 		Tracker:        fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}}},
@@ -738,7 +738,7 @@ func TestReconcileStartupRejectsEmptyTerminalStatesBeforeCleanup(t *testing.T) {
 
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		Tracker:         fakeReconcileTracker{},
 		Emitter:         &fakeEmitter{},
 		ReconcileTaskID: "reconcile-startup",
@@ -763,7 +763,7 @@ func TestReconcileStartupHandlesSourceEventIDAndTaskIDWorkspaceLayouts(t *testin
 
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
-		ActiveStates:    []string{"AI Ready"},
+		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-uuid", Identifier: "LIN-123", State: "Done"}}},
 		Emitter:         &fakeEmitter{},

@@ -67,7 +67,7 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 	d.SetIssueStateRefresher(stub)
 
 	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
-		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress", "AI Ready"}},
+		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress", "Todo"}},
 	}}}
 	cfg := d.configForSnapshot(snap)
 	if cfg.IssueStateRefresher == nil {

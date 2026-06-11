@@ -76,7 +76,7 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready", "Rework"},
+		ActiveStates: []string{"Todo", "Rework"},
 	}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
@@ -90,8 +90,8 @@ func TestTrackerClientListIssuesByStatesMapsAIOpsLabels(t *testing.T) {
 	if len(issues) != 2 {
 		t.Fatalf("issues len = %d, want 2", len(issues))
 	}
-	if issues[0].ID != "101" || issues[0].Identifier != "#1" || issues[0].State != "AI Ready" {
-		t.Fatalf("first issue = %#v, want mapped AI Ready state", issues[0])
+	if issues[0].ID != "101" || issues[0].Identifier != "#1" || issues[0].State != "Todo" {
+		t.Fatalf("first issue = %#v, want mapped Todo state", issues[0])
 	}
 	if issues[1].State != "Rework" {
 		t.Fatalf("second issue state = %q, want Rework", issues[1].State)
@@ -132,7 +132,7 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready"},
+		ActiveStates: []string{"Todo"},
 	}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
@@ -290,7 +290,7 @@ func TestTrackerClientListIssuesByStatesDeduplicatesIssuesReturnedForMultipleLab
 
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready", "Rework"},
+		ActiveStates: []string{"Todo", "Rework"},
 	}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
@@ -321,12 +321,12 @@ func TestTrackerClientListIssuesByStatesFiltersTerminalAndMissingStates(t *testi
 
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
-	if len(issues) != 1 || issues[0].Identifier != "#3" || issues[0].State != "AI Ready" {
-		t.Fatalf("issues = %#v, want only AI Ready issue", issues)
+	if len(issues) != 1 || issues[0].Identifier != "#3" || issues[0].State != "Todo" {
+		t.Fatalf("issues = %#v, want only Todo issue", issues)
 	}
 	if requestedState != "open" {
 		t.Fatalf("state query = %q, want open for active states", requestedState)
@@ -428,7 +428,7 @@ func TestTrackerClientListIssuesByStatesAllowsExactlyFullMaxPages(t *testing.T) 
 
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates returned error for exactly full max pages: %v", err)
 	}
@@ -476,7 +476,7 @@ func TestTrackerClientListIssuesByStatesErrorsWhenLabelOverflows(t *testing.T) {
 	if got := client.PaginationCapHits(); got != 0 {
 		t.Fatalf("initial PaginationCapHits = %d, want 0", got)
 	}
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready", "Rework"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo", "Rework"})
 	if !errors.Is(err, tracker.ErrIssueListingCapped) {
 		t.Fatalf("ListIssuesByStates err = %v, want tracker.ErrIssueListingCapped", err)
 	}
@@ -517,7 +517,7 @@ func TestTrackerClientListIssuesByStatesContinuesWhenServerCapsPageBelowRequeste
 
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -578,11 +578,11 @@ func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.
 
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready"},
+		ActiveStates: []string{"Todo"},
 	}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -651,11 +651,11 @@ func TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure(t *testin
 
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready"},
+		ActiveStates: []string{"Todo"},
 	}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestTrackerClientListIssuesByStatesSurfacesMalformedTimestamp(t *testing.T)
 
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err == nil {
 		t.Fatalf("ListIssuesByStates(malformed created_at) = %#v, nil; want parse error", issues)
 	}
@@ -721,7 +721,7 @@ func TestTrackerClientListIssuesByStatesDeduplicatesWithinSingleLabelScope(t *te
 
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -760,7 +760,7 @@ func TestTrackerClientListIssuesByStateLabelSkipsEmptyStateWithoutWantedStatesFi
 	if capped {
 		t.Fatalf("listIssuesByStateLabel capped = true; want false")
 	}
-	if len(issues) != 1 || issues[0].ID != "602" || issues[0].State != "AI Ready" {
+	if len(issues) != 1 || issues[0].ID != "602" || issues[0].State != "Todo" {
 		t.Fatalf("listIssuesByStateLabel(empty wantedStates) = %#v; want only issue 602 (unlabelled issue 601 dropped by state==\"\" guard, not wantedStates)", issues)
 	}
 }
@@ -779,7 +779,7 @@ func mustTime(value string) time.Time {
 
 // newSharedBlockerTrackerClient builds a Gitea mock whose issue-list endpoint
 // returns the given source issues and whose per-issue endpoint serves a single
-// shared blocker (#3, "AI Ready"), counting how many times the blocker is
+// shared blocker (#3, "Todo"), counting how many times the blocker is
 // fetched. It is the harness for the #677 per-poll-tick blocker-cache tests.
 func newSharedBlockerTrackerClient(t *testing.T, sources []Issue, blockerFetches *int) *TrackerClient {
 	t.Helper()
@@ -796,7 +796,7 @@ func newSharedBlockerTrackerClient(t *testing.T, sources []Issue, blockerFetches
 		}
 	}))
 	t.Cleanup(server.Close)
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 	return client
 }
@@ -808,7 +808,7 @@ func TestTrackerClientListIssuesByStatesFetchesSharedBlockerOncePerTick(t *testi
 		{ID: 102, Number: 2, Title: "b", Body: "Depends on #3", HTMLURL: "https://gitea.local/o/r/issues/2", Labels: []Label{{Name: "aiops/todo"}}},
 	}, &blockerFetches)
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v", err)
 	}
@@ -819,15 +819,15 @@ func TestTrackerClientListIssuesByStatesFetchesSharedBlockerOncePerTick(t *testi
 		t.Fatalf("shared blocker #3 fetched %d times; want 1 (cached across both source issues in one tick)", blockerFetches)
 	}
 	for _, iss := range issues {
-		if len(iss.BlockedBy) != 1 || iss.BlockedBy[0].Identifier != "#3" || iss.BlockedBy[0].State != "AI Ready" {
-			t.Fatalf("issue %s BlockedBy = %#v; want one blocker #3 in state AI Ready", iss.Identifier, iss.BlockedBy)
+		if len(iss.BlockedBy) != 1 || iss.BlockedBy[0].Identifier != "#3" || iss.BlockedBy[0].State != "Todo" {
+			t.Fatalf("issue %s BlockedBy = %#v; want one blocker #3 in state Todo", iss.Identifier, iss.BlockedBy)
 		}
 	}
 }
 
 func TestTrackerClientListIssuesByStatesRereadsBlockerOnNextTick(t *testing.T) {
 	var blockerFetches int
-	blockerLabel := "aiops/todo" // "AI Ready" on tick 1
+	blockerLabel := "aiops/todo" // "Todo" on tick 1
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -843,15 +843,15 @@ func TestTrackerClientListIssuesByStatesRereadsBlockerOnNextTick(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	tick1, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	tick1, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates tick 1: %v", err)
 	}
 	blockerLabel = "aiops/done" // blocker transitions to "Done" between ticks
-	tick2, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	tick2, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates tick 2: %v", err)
 	}
@@ -859,8 +859,8 @@ func TestTrackerClientListIssuesByStatesRereadsBlockerOnNextTick(t *testing.T) {
 	if blockerFetches != 2 {
 		t.Fatalf("blocker #3 fetched %d times across two ticks; want 2 (once per tick, no cross-tick cache leak)", blockerFetches)
 	}
-	if len(tick1) != 1 || len(tick1[0].BlockedBy) != 1 || tick1[0].BlockedBy[0].State != "AI Ready" {
-		t.Fatalf("tick 1 BlockedBy = %#v; want blocker #3 in state AI Ready", tick1)
+	if len(tick1) != 1 || len(tick1[0].BlockedBy) != 1 || tick1[0].BlockedBy[0].State != "Todo" {
+		t.Fatalf("tick 1 BlockedBy = %#v; want blocker #3 in state Todo", tick1)
 	}
 	if len(tick2) != 1 || len(tick2[0].BlockedBy) != 1 || tick2[0].BlockedBy[0].State != "Done" {
 		t.Fatalf("tick 2 BlockedBy = %#v; want blocker #3 re-read in state Done", tick2)
@@ -921,10 +921,10 @@ func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *tes
 		}
 	}))
 	defer server.Close()
-	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"AI Ready"}}, server.URL, "owner", "repo")
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	issues, err := client.ListIssuesByStates(context.Background(), []string{"AI Ready"})
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
 	if err != nil {
 		t.Fatalf("ListIssuesByStates: %v; a best-effort blocker error must not abort listing", err)
 	}

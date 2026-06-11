@@ -176,7 +176,7 @@ the shape here without updating the handler — or vice versa — fails the buil
       "issue_id": "issue-2",
       "issue_identifier": "ENG-2",
       "issue_url": "https://tracker.example/issues/ENG-2",
-      "state": "AI Ready",
+      "state": "Todo",
       "blocked_at": "2026-05-20T06:05:38Z",
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-2",
       "session_id": "thread-1-turn-1",

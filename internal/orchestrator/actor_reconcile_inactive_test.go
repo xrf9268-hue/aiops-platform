@@ -104,7 +104,7 @@ func TestReconcileInactiveLeavesUnlistedBlockedClaimed(t *testing.T) {
 	})
 	defer cancel()
 
-	issue := tracker.Issue{ID: "ENG-PB1", Identifier: "ENG-PB1", State: "AI Ready"}
+	issue := tracker.Issue{ID: "ENG-PB1", Identifier: "ENG-PB1", State: "Todo"}
 	blockIssue(t, o, disp, issue, 0, 1)
 
 	if err := o.ReconcileInactiveTrackerIssuesAndWait(context.Background(),
@@ -141,7 +141,7 @@ func TestReconcileInactiveNonTerminalBlockedReleasesWithoutCleanup(t *testing.T)
 	})
 	defer cancel()
 
-	issue := tracker.Issue{ID: "ENG-NB1", Identifier: "ENG-NB1", State: "AI Ready"}
+	issue := tracker.Issue{ID: "ENG-NB1", Identifier: "ENG-NB1", State: "Todo"}
 	blockIssue(t, o, disp, issue, 0, 1)
 
 	// Listed, but in a configured-inactive non-terminal state (Backlog, with

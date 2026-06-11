@@ -82,7 +82,7 @@ func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
 	cfg.Repo.DefaultBranch = "main"
 	cfg.Tracker.Kind = "gitea"
 	cfg.Tracker.APIKey = bed.gitea.botToken
-	cfg.Tracker.ActiveStates = []string{"AI Ready"}
+	cfg.Tracker.ActiveStates = []string{"Todo"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
@@ -112,8 +112,8 @@ func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
 	}
 	select {
 	case issue := <-dispatcher.started:
-		if issue.Identifier != fmt.Sprintf("#%d", issueNum) || issue.State != "AI Ready" {
-			t.Fatalf("started issue = %#v, want Gitea issue #%d in AI Ready", issue, issueNum)
+		if issue.Identifier != fmt.Sprintf("#%d", issueNum) || issue.State != "Todo" {
+			t.Fatalf("started issue = %#v, want Gitea issue #%d in Todo", issue, issueNum)
 		}
 	case <-ctx.Done():
 		t.Fatalf("worker did not start: %v", ctx.Err())
@@ -189,7 +189,7 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 	cfg.Repo.DefaultBranch = "main"
 	cfg.Tracker.Kind = "gitea"
 	cfg.Tracker.APIKey = bed.gitea.botToken
-	cfg.Tracker.ActiveStates = []string{"AI Ready"}
+	cfg.Tracker.ActiveStates = []string{"Todo"}
 	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
 	serviceWorkflow, err := workflow.Load(writeE2EServiceWorkflow(t, string(fixtureContent(t, fixture)), cloneURL))
 	if err != nil {

@@ -129,7 +129,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			IssueID:           "issue-2",
 			Identifier:        "ENG-2",
 			IssueURL:          "https://tracker.example/issues/ENG-2",
-			State:             "AI Ready",
+			State:             "Todo",
 			BlockedAt:         &blockedAt,
 			WorkspacePath:     "/var/aiops/workspaces/acme/repo/issue-2",
 			SessionID:         "thread-1-turn-1",

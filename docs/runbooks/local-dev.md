@@ -249,8 +249,9 @@ tool surface, not the worker. Default state labels:
 
 | Workflow state | Gitea label |
 | --- | --- |
-| `AI Ready` | `aiops/todo` |
+| `Todo` | `aiops/todo` |
 | `In Progress` | `aiops/in-progress` |
+| `Human Review` | `aiops/human-review` |
 | `Rework` | `aiops/rework` |
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |

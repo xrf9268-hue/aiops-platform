@@ -37,7 +37,7 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 
 	client := gitea.NewTrackerClient(workflow.TrackerConfig{
 		APIKey:         bed.gitea.botToken,
-		ActiveStates:   []string{"AI Ready", "Rework"},
+		ActiveStates:   []string{"Todo", "Rework"},
 		TerminalStates: []string{"Done", "Canceled"},
 	}, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
@@ -60,7 +60,7 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 	}
 	waitForE2E(t, func() bool { return disp.count() == 1 }, time.Second)
 	got := disp.issueAt(0)
-	if got.Identifier != "#1" || got.Title != "poll me" || got.State != "AI Ready" {
+	if got.Identifier != "#1" || got.Title != "poll me" || got.State != "Todo" {
 		t.Fatalf("unexpected dispatched issue: %+v", got)
 	}
 	if cloneURL == "" {
@@ -104,7 +104,7 @@ func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 
 	client := gitea.NewTrackerClient(workflow.TrackerConfig{
 		APIKey:         bed.gitea.botToken,
-		ActiveStates:   []string{"AI Ready", "Rework"},
+		ActiveStates:   []string{"Todo", "Rework"},
 		TerminalStates: []string{"Done", "Canceled"},
 	}, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
