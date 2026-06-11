@@ -18,7 +18,7 @@ tracker:
   # uses project_slug: aiops-platform-abc123
   project_slug: your-linear-project-slug
   active_states:
-    - AI Ready
+    - Todo
     - In Progress
     - Rework
   terminal_states:

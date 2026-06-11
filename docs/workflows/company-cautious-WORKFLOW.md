@@ -11,7 +11,7 @@ tracker:
   project_slug: your-linear-project-slug
   api_key: $LINEAR_API_KEY
   active_states:
-    - AI Ready
+    - Todo
     - In Progress
     - Rework
   terminal_states:

@@ -42,7 +42,7 @@ func TestTrackerClientListIssuesAbortsHungServer(t *testing.T) {
 	srv := hungGiteaServer(t)
 	client := NewTrackerClient(workflow.TrackerConfig{
 		APIKey:       "secret",
-		ActiveStates: []string{"AI Ready"},
+		ActiveStates: []string{"Todo"},
 	}, srv.URL, "owner", "repo")
 	client.HTTP = srv.Client()
 	client.RequestTimeout = 100 * time.Millisecond

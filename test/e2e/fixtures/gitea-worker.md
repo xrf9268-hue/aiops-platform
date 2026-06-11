@@ -11,7 +11,7 @@ verify:
 tracker:
   kind: gitea
   active_states:
-    - AI Ready
+    - Todo
     - Rework
   terminal_states:
     - Done

@@ -443,9 +443,9 @@ func DefaultConfig() Config {
 		// Tracker.ActiveStates / TerminalStates mirror SPEC §6.4's
 		// cheat-sheet defaults (Todo/In Progress active; Closed,
 		// Cancelled, Canceled, Duplicate, Done terminal). Workflows that
-		// run on a non-SPEC vocabulary (e.g. the personal profile's
-		// "AI Ready"/"Rework") declare the override in WORKFLOW.md front
-		// matter — see examples/WORKFLOW.md.
+		// run on extra states (e.g. the personal profile's "Rework")
+		// declare the override in WORKFLOW.md front matter — see
+		// examples/WORKFLOW.md.
 		// Tracker.Kind is intentionally left empty: SPEC §6.4 marks it
 		// REQUIRED, so DefaultConfig must not silently default it. A
 		// WORKFLOW.md that declares front matter must set `tracker.kind`

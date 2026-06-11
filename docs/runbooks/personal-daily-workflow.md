@@ -25,40 +25,40 @@ only sees the configured tracker states or labels in `WORKFLOW.md`.
 The worker poll tick reads issues whose state name appears in `tracker.active_states` of your `WORKFLOW.md`. Use a simple lifecycle:
 
 ```text
-Backlog -> AI Ready -> In Progress -> Human Review -> Rework -> Done
+Backlog -> Todo -> In Progress -> Human Review -> Rework -> Done
                                                   \-> Canceled
 ```
 
 Per-state rules:
 
 - `Backlog`: not picked up. Use this for anything you have not refined yet.
-- `AI Ready`: refined and small enough that an agent can attempt it. The worker poll tick picks these up.
+- `Todo`: refined and small enough that an agent can attempt it. The worker poll tick picks these up. Name this state exactly `Todo`: the SPEC §8.2 blocker rule only gates issues whose state is literally `Todo`, so a renamed ready state silently disables dependency blocking (#739).
 - `In Progress`: the agent has claimed an issue or you are iterating on it. Stays in `active_states` so re-runs after a push are allowed.
 - `Human Review`: agent finished and opened a draft PR. Not in `active_states`. Read the diff yourself. Per SPEC §1, tracker updates belong on the agent/tool side, not in the worker scheduler.
 - `Rework`: review found issues and you want another attempt. Keep `Rework` in `active_states` so the worker can pick the issue up again after the tracker state changes. The in-memory orchestrator state, not Postgres queue rows, is the scheduling authority for the running worker process.
 - `Done` / `Canceled`: terminal. Listed under `tracker.terminal_states`.
 
-Default `active_states` in code:
+Recommended `active_states` for this lifecycle (the code default is `[Todo, In Progress]`; `Rework` is an opt-in override):
 
 ```yaml
 tracker:
   active_states:
-    - AI Ready
+    - Todo
     - In Progress
     - Rework
 ```
 
-Rule of thumb: if you do not feel comfortable letting an agent open a draft PR for an issue right now, do not move it to `AI Ready`.
+Rule of thumb: if you do not feel comfortable letting an agent open a draft PR for an issue right now, do not move it to `Todo`.
 
 For GitHub dogfood, use the dedicated `aiops:ready` label as the ready gate
-instead of an `AI Ready` state. Do not treat `open` or `priority:pN` labels as
+instead of a `Todo` state. Do not treat `open` or `priority:pN` labels as
 readiness.
 
 ## Writing good issues
 
 The issue title and description are passed to the runner via the `PROMPT.md` template (see `examples/WORKFLOW.md`). Vague issues produce vague diffs.
 
-Checklist before moving an issue to `AI Ready`:
+Checklist before moving an issue to `Todo`:
 
 - One clear outcome. Not "improve logging" but "log tracker issue id in worker poll dispatch output".
 - Concrete file or package hints. Mention paths like `internal/runner/shell.go` so the agent does not wander.
@@ -155,13 +155,13 @@ Skip automation entirely when:
 
 - the task touches sensitive areas (infra, deploy, migrations, secrets).
 - it is a security-sensitive change or a data migration.
-- requirements are still ambiguous. Use a planning issue instead and only move to `AI Ready` once the design is settled.
+- requirements are still ambiguous. Use a planning issue instead and only move to `Todo` once the design is settled.
 - the change is large enough that a draft PR would blow well past the ~12-file / ~300-LOC review guideline.
 
 Decision shortcut:
 
 ```text
-unsure or risky                       -> manual review, keep issue out of AI Ready
+unsure or risky                       -> manual review, keep issue out of Todo
 plumbing or smoke test                -> mock
 real code change (SPEC default)       -> codex-app-server
 prefer Claude / want a second opinion -> claude

@@ -34,7 +34,7 @@ tracker:
   kind: gitea
   endpoint: http://your-gitea-host
   active_states:
-    - AI Ready
+    - Todo
     - Rework
   terminal_states:
     - Done
@@ -42,7 +42,7 @@ tracker:
 ```
 
 Gitea issue state is encoded by `aiops/*` labels. For example, `aiops/todo`
-maps to `AI Ready`.
+maps to `Todo`.
 
 ## 3. Start Worker
 

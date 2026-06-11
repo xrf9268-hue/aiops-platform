@@ -45,8 +45,8 @@ func TestIssueStateFromLabelsUsesDeterministicPriorityForConflicts(t *testing.T)
 func TestIssueStateFromLabelsIgnoresUnknownAIOpsLabels(t *testing.T) {
 	state, diagnostics := IssueStateFromLabels([]Label{{Name: "aiops/backlog"}, {Name: "aiops/todo"}}, DefaultStateLabelMappings())
 
-	if state != "AI Ready" {
-		t.Fatalf("state = %q, want AI Ready", state)
+	if state != "Todo" {
+		t.Fatalf("state = %q, want Todo", state)
 	}
 	if !hasDiagnostic(diagnostics, "unknown_aiops_label") {
 		t.Fatalf("diagnostics = %#v, want unknown_aiops_label", diagnostics)
@@ -54,7 +54,7 @@ func TestIssueStateFromLabelsIgnoresUnknownAIOpsLabels(t *testing.T) {
 }
 
 func TestStateLabelNamesForStatesFiltersConfiguredStates(t *testing.T) {
-	got := StateLabelNamesForStates([]string{"AI Ready", "Rework", "Done", "Not Configured"}, DefaultStateLabelMappings())
+	got := StateLabelNamesForStates([]string{"Todo", "Rework", "Done", "Not Configured"}, DefaultStateLabelMappings())
 	want := []string{"aiops/todo", "aiops/rework", "aiops/done"}
 
 	if !slices.Equal(got, want) {

@@ -39,8 +39,8 @@ Use one clear ready signal per tracker:
 
 | Tracker | Recommended ready gate |
 | --- | --- |
-| Linear | A dedicated active state such as `AI Ready`, with native blocked-by relations for dependencies |
-| Gitea | A dedicated ready label/state for unblocked work; keep dependent issues in `Todo` or out of active labels until `Depends on #N` blockers are terminal |
+| Linear | The `Todo` state as the ready gate, with native blocked-by relations for dependencies — SPEC §8.2 only blocker-gates issues whose state is literally `Todo`, so a renamed ready state (e.g. `AI Ready`) silently disables dependency blocking |
+| Gitea | The `aiops/todo` label (state `Todo`); `Depends on #N` blockers in non-terminal states keep the issue undispatched via the same `Todo` blocker rule |
 | GitHub | A dedicated `aiops:ready` label; do not use `open` as an unattended active state |
 
 Priority is not readiness. Treat priority as human triage metadata unless the

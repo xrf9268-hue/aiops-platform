@@ -377,7 +377,7 @@ func TestReconcileStalledRunsCancelsWorkerPastTimeout(t *testing.T) {
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "STALL-1", Identifier: "STALL-1", Title: "stuck", State: "AI Ready"}
+	iss := tracker.Issue{ID: "STALL-1", Identifier: "STALL-1", Title: "stuck", State: "Todo"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
@@ -408,7 +408,7 @@ func TestReconcileStalledRunsLeavesActiveRunsAlone(t *testing.T) {
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ACTIVE-1", Identifier: "ACTIVE-1", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ACTIVE-1", Identifier: "ACTIVE-1", State: "Todo"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestReconcileStalledRunsSkipsWhenTimeoutDisabled(t *testing.T) {
 	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "OFF-1", Identifier: "OFF-1", State: "AI Ready"}
+	iss := tracker.Issue{ID: "OFF-1", Identifier: "OFF-1", State: "Todo"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestRetryFireUsesRefreshedIssueWhenReconciledMidQueue(t *testing.T) {
 
 func TestTrackerRecheckedDispatchDoesNotConsumeFailureRetry(t *testing.T) {
 	st := NewOrchestratorState(30000, 1)
-	iss := tracker.Issue{ID: "ENG-FAIL-RETRY", Identifier: "ENG-FAIL-RETRY", Title: "failure retry", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ENG-FAIL-RETRY", Identifier: "ENG-FAIL-RETRY", Title: "failure retry", State: "Todo"}
 	id := IssueID(iss.ID)
 	st.ScheduleRetry(&RetryEntry{
 		IssueID:    id,
@@ -1748,7 +1748,7 @@ func TestFinalize_InputRequiredExitBlocksIssueWithoutRetry(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-INPUT", Identifier: "ENG-INPUT", State: "AI Ready", Title: "needs input"}
+	iss := tracker.Issue{ID: "ENG-INPUT", Identifier: "ENG-INPUT", State: "Todo", Title: "needs input"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
@@ -1789,7 +1789,7 @@ func TestFinalize_NormalExitAfterInputRequiredBlocksInsteadOfContinuationRetry(t
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-NORMAL-BLOCK", Identifier: "ENG-NORMAL-BLOCK", State: "AI Ready", Title: "needs input"}
+	iss := tracker.Issue{ID: "ENG-NORMAL-BLOCK", Identifier: "ENG-NORMAL-BLOCK", State: "Todo", Title: "needs input"}
 	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
 		t.Fatalf("RequestDispatch: %v", err)
 	}
@@ -1819,7 +1819,7 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 	})
 	defer cancel()
 
-	blocked := tracker.Issue{ID: "ENG-BLOCK-A", Identifier: "ENG-BLOCK-A", State: "AI Ready", Title: "active block"}
+	blocked := tracker.Issue{ID: "ENG-BLOCK-A", Identifier: "ENG-BLOCK-A", State: "Todo", Title: "active block"}
 	terminalWorkspace := t.TempDir()
 	if err := o.RequestDispatch(context.Background(), blocked, nil); err != nil {
 		t.Fatalf("RequestDispatch %s: %v", blocked.ID, err)
@@ -1842,7 +1842,7 @@ func TestReconcileBlockedIssuesRefreshesActiveAndReleasesInactive(t *testing.T) 
 
 	// Active pass: the blocked entry is still in an active state (moved to
 	// Rework), so it is refreshed in place rather than released.
-	activeStates := map[string]struct{}{"ai ready": {}, "rework": {}}
+	activeStates := map[string]struct{}{"todo": {}, "rework": {}}
 	if err := o.RefreshActiveTrackerIssues(context.Background(), map[string]tracker.Issue{
 		blocked.ID: {ID: blocked.ID, Identifier: blocked.Identifier, State: "Rework", Title: blocked.Title},
 	}, activeStates); err != nil {
@@ -2992,7 +2992,7 @@ func TestRetryFire_DropsStaleContinuationFireAfterFailureReplacement(t *testing.
 	o := New(st, Deps{Dispatcher: disp})
 
 	issueID := IssueID("ENG-KIND")
-	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "AI Ready", Title: "old continuation"}
+	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Todo", Title: "old continuation"}
 	failureIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Needs Fix", Title: "new failure"}
 	st.ScheduleRetry(&RetryEntry{
 		Issue:      failureIssue,
@@ -3038,7 +3038,7 @@ func TestRetryFire_DropsStaleFailureFireAfterContinuationReplacement(t *testing.
 
 	issueID := IssueID("ENG-KIND")
 	failureIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Needs Fix", Title: "old failure"}
-	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "AI Ready", Title: "new continuation"}
+	continuationIssue := tracker.Issue{ID: string(issueID), Identifier: "ENG-KIND", State: "Todo", Title: "new continuation"}
 	timer := time.AfterFunc(time.Hour, func() {})
 	defer timer.Stop()
 	st.ScheduleRetry(&RetryEntry{
@@ -3739,7 +3739,7 @@ func TestRetryFire_ReleasesClaimWhenIssueAbsentFromCandidates(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-GONE", Identifier: "ENG-GONE", Title: "absent", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ENG-GONE", Identifier: "ENG-GONE", Title: "absent", State: "Todo"}
 	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 2, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
@@ -3974,7 +3974,7 @@ func TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-FETCH-FAIL", Identifier: "ENG-FETCH-FAIL", Title: "fetch err", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ENG-FETCH-FAIL", Identifier: "ENG-FETCH-FAIL", Title: "fetch err", State: "Todo"}
 	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
@@ -4032,7 +4032,7 @@ func TestRetryFire_DispatchesWhenCandidateFetchReturnsIssue(t *testing.T) {
 	defer cancel()
 
 	stale := freshState
-	stale.State = "AI Ready"
+	stale.State = "Todo"
 	if err := o.ScheduleRetry(context.Background(), stale, stale.Identifier, 1, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
@@ -4092,7 +4092,7 @@ func TestRetryFire_FetchTimeoutReschedulesAsRetryPollFailed(t *testing.T) {
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-TIMEOUT", Identifier: "ENG-TIMEOUT", Title: "hang", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ENG-TIMEOUT", Identifier: "ENG-TIMEOUT", Title: "hang", State: "Todo"}
 	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
@@ -4144,7 +4144,7 @@ func TestRetryFire_QuotaBackoffFetchFailureReschedulesWithoutOrphaningClaim(t *t
 	})
 	defer cancel()
 
-	iss := tracker.Issue{ID: "ENG-QUOTA-POLL", Identifier: "ENG-QUOTA-POLL", Title: "quota poll", State: "AI Ready"}
+	iss := tracker.Issue{ID: "ENG-QUOTA-POLL", Identifier: "ENG-QUOTA-POLL", Title: "quota poll", State: "Todo"}
 	if err := o.scheduleQuotaBackoffRetry(context.Background(), iss, iss.Identifier, 0, "quota backoff", 0, Workspace{}); err != nil {
 		t.Fatalf("scheduleQuotaBackoffRetry: %v", err)
 	}
@@ -4324,7 +4324,7 @@ func TestRetryFireAfterFetch_RefreshedIdentifierSurfacesInSnapshot(t *testing.T)
 	}
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
-	stale := tracker.Issue{ID: "ID-STABLE", Identifier: "OLD-1", Title: "renamed", State: "AI Ready"}
+	stale := tracker.Issue{ID: "ID-STABLE", Identifier: "OLD-1", Title: "renamed", State: "Todo"}
 	if err := o.ScheduleRetry(context.Background(), stale, stale.Identifier, 1, "transient"); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}

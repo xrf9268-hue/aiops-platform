@@ -12,7 +12,7 @@ tracker:
   # overflowing aiops/* state label and logs the diagnostic.
   # pagination_max_pages: 25
   active_states:
-    - AI Ready
+    - Todo
     - Rework
   terminal_states:
     - Done
