@@ -140,6 +140,11 @@ For an operator walkthrough — workflow file layout, the `/api/v1/state` and
 runbook](docs/runbooks/local-dev.md). If the runbook and this README ever
 diverge, **this README is canonical**.
 
+For workflow-authoring patterns — including the repo-owned `LEARNINGS.md`
+cross-run memory convention (read-before-plan, verified-facts-only entries
+reviewed inside PRs) — see the [workflow authoring
+runbook](docs/runbooks/workflow-authoring.md).
+
 ## Operator surfaces
 
 The worker binds an HTTP server at `<server.host>:<server.port>`, defaulting to
