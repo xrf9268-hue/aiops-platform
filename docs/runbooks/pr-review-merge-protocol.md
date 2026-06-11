@@ -121,8 +121,34 @@ Triage:
 
 Run it **on every pushed head**, not once per PR.
 
-1. `gh pr comment <pr> --body "@codex review"`; record that trigger
-   comment's id plus the head SHA, base SHA, and base branch at trigger time.
+1. Post the trigger with a workspace-bound identity, resolving the token
+   first so a missing token fails loud instead of silently falling back to the
+   default account:
+
+   ```bash
+   trigger_token="$(gh auth token --user bytevane)" \
+     && GH_TOKEN="$trigger_token" gh pr comment <pr> --body "@codex review"
+   ```
+
+   The `&&` chain is what makes it fail-closed in an interactive shell: `gh`
+   treats an empty `GH_TOKEN` as unset and silently falls back to the default
+   (deactivated-workspace) identity.
+
+   Record that trigger comment's id plus the head SHA, base SHA, and base
+   branch at trigger time. **The trigger comment's GitHub identity selects the
+   Codex workspace** — the bot resolves the ChatGPT workspace from whoever
+   posts the comment, not from the repo or the App installation. On this
+   machine only `bytevane` is bound to an active workspace; a trigger from
+   `xrf9268-hue` or `YYvanYang` fails with
+   `This workspace is deactivated. Select an active workspace and try again.`
+   (proven 2026-06-11 on bytevane/aiops-platform#17: the same head got two
+   deactivated errors and then a clean review, with the commenter as the only
+   variable). If that error appears, re-trigger as `bytevane` — do not fall
+   back, do not mirror the PR to a fork (earlier "fork doesn't bypass it"
+   evidence was confounded by always commenting as `xrf9268-hue`). Keep
+   `xrf9268-hue` as the active `gh` account; pass the bytevane token per
+   command via `GH_TOKEN`. `scripts/local-pr-follow-through.sh` applies the
+   same rule via `AIOPS_CODEX_TRIGGER_USER` (default `bytevane`).
 2. **Poll** its reactions summary —
    `gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`
    (the issue-comment object carries the `.reactions` counts; no separate

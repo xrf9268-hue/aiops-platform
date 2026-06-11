@@ -442,6 +442,30 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
   export GITHUB_TOKEN
 fi
 
+# The @codex review bot resolves the ChatGPT workspace from the GitHub identity
+# that posts the trigger comment, not from the repo (protocol §4). The default
+# gh identity on this machine is bound to a deactivated workspace, so triggers
+# must be posted as AIOPS_CODEX_TRIGGER_USER (default bytevane). Set it to the
+# empty string to post with the default credentials instead. Fail loud when the
+# named account has no stored gh token: a wrong-identity trigger always fails
+# with "This workspace is deactivated" and the poll would burn its full timeout.
+codex_trigger_user="${AIOPS_CODEX_TRIGGER_USER-bytevane}"
+codex_trigger_token=""
+if [[ -n "$codex_trigger_user" ]]; then
+  if ! codex_trigger_token="$(gh_cmd auth token -h github.com --user "$codex_trigger_user")" || [[ -z "$codex_trigger_token" ]]; then
+    echo "cannot resolve a gh token for AIOPS_CODEX_TRIGGER_USER=$codex_trigger_user (gh error above); run 'gh auth login' for that account or set AIOPS_CODEX_TRIGGER_USER= to use default credentials" >&2
+    exit 1
+  fi
+  # A stale keyring entry can hold a token for a different login; a
+  # wrong-identity trigger fails only later as "workspace is deactivated",
+  # so pin the token to the expected account up front.
+  codex_trigger_login="$(GH_TOKEN="$codex_trigger_token" gh_cmd api user --jq '.login')"
+  if [[ "${codex_trigger_login,,}" != "${codex_trigger_user,,}" ]]; then
+    echo "gh token for AIOPS_CODEX_TRIGGER_USER=$codex_trigger_user authenticates as '$codex_trigger_login'; refresh it with 'gh auth login'" >&2
+    exit 1
+  fi
+fi
+
 acquire_follow_through_lock
 
 prepare_pr_worktree() {
@@ -790,7 +814,7 @@ find_existing_github_codex_review_trigger() {
   local head_commit_at comments_json
   head_commit_at="$(gh_cmd api "repos/${repo_owner}/${repo_name}/commits/${head_oid}" --jq '.commit.committer.date // .commit.author.date')"
   comments_json="$(gh_cmd api --paginate --slurp "repos/${repo_owner}/${repo_name}/issues/${pr}/comments?per_page=100")"
-  COMMENTS_JSON="$comments_json" python3 - "$head_commit_at" "$head_oid" "$base_oid" "$base_ref" <<'PY'
+  COMMENTS_JSON="$comments_json" TRIGGER_USER="$codex_trigger_user" python3 - "$head_commit_at" "$head_oid" "$base_oid" "$base_ref" <<'PY'
 import json
 import os
 import sys
@@ -805,6 +829,7 @@ if raw_comments and isinstance(raw_comments[0], list):
 else:
     comments = raw_comments
 matches = []
+trigger_user = os.environ.get("TRIGGER_USER") or ""
 for comment in comments:
     body = (comment.get("body") or "").strip()
     created_at = comment.get("created_at") or ""
@@ -813,6 +838,12 @@ for comment in comments:
     if head_oid not in body or base_oid not in body or base_ref not in body:
         continue
     if created_at < head_commit_at:
+        continue
+    # A trigger posted by a different identity may be bound to a deactivated
+    # Codex workspace; reusing it would wait on a review that never starts.
+    # GitHub logins are case-insensitive, so compare casefolded.
+    login = ((comment.get("user") or {}).get("login") or "").casefold()
+    if trigger_user and login != trigger_user.casefold():
         continue
     matches.append(comment)
 if not matches:
@@ -831,8 +862,18 @@ wait_for_github_codex_review() {
   state_file="$(github_codex_review_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
   trigger_id="$(jq -r '.trigger_id // empty' "$state_file" 2>/dev/null || true)"
   started_at="$(jq -r '.started_at // empty' "$state_file" 2>/dev/null || true)"
+  local cached_user=""
   if [[ -n "$trigger_id" && -n "$started_at" ]] && cached_comment_json="$(gh_cmd api "repos/${repo_owner}/${repo_name}/issues/comments/${trigger_id}" 2>/dev/null)"; then
     cached_body="$(jq -r '.body // ""' <<<"$cached_comment_json")"
+    cached_user="$(jq -r '.user.login // ""' <<<"$cached_comment_json")"
+  fi
+  # The author check mirrors find_existing_github_codex_review_trigger: a
+  # cached trigger posted by a different identity (e.g. a state file written
+  # before the trigger-identity requirement) may be bound to a deactivated
+  # Codex workspace, and waiting on it burns the full poll timeout. Like the
+  # Python filter, an empty author (deleted user) is rejected, not skipped.
+  if [[ -n "$codex_trigger_user" && "${cached_user,,}" != "${codex_trigger_user,,}" ]]; then
+    cached_body=""
   fi
   if [[ -n "$trigger_id" && -n "$started_at" && "$cached_body" == *"$head_oid"* && "$cached_body" == *"$base_oid"* && "$cached_body" == *"$base_ref"* ]]; then
     audit_log "github_codex_review_reused" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref trigger_id=$trigger_id state_file=$state_file"
@@ -853,7 +894,7 @@ wait_for_github_codex_review() {
     audit_log "github_codex_review_existing_trigger_found" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref trigger_id=$trigger_id state_file=$state_file"
     echo "Using existing GitHub Codex review trigger for PR #$pr at $head_oid against $base_ref@$base_oid (comment $trigger_id)"
   else
-    trigger_json="$(gh_cmd api \
+    trigger_json="$(GH_TOKEN="${codex_trigger_token:-$GITHUB_TOKEN}" gh_cmd api \
       -X POST \
       "repos/${repo_owner}/${repo_name}/issues/${pr}/comments" \
       -f body="@codex review
