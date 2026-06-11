@@ -654,8 +654,9 @@ func TestGiteaIssueLabelsNoOpWhenDesiredAlreadyPresentAndNoStale(t *testing.T) {
 
 // giteaEchoLabelServer serves the labels endpoint for handoff-classification
 // tests: GET returns currentLabels JSON, POST echoes the requested labels with
-// synthetic ids, DELETE succeeds unless failDelete is set.
-func giteaEchoLabelServer(currentLabels string, failDelete bool) *httptest.Server {
+// synthetic ids, DELETE succeeds unless the trailing label id is listed in
+// failDeleteIDs.
+func giteaEchoLabelServer(currentLabels string, failDeleteIDs ...string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
@@ -673,9 +674,13 @@ func giteaEchoLabelServer(currentLabels string, failDelete bool) *httptest.Serve
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"labels": echoed})
 		case http.MethodDelete:
-			if failDelete {
-				http.Error(w, "boom", http.StatusInternalServerError)
-				return
+			parts := strings.Split(strings.TrimRight(r.URL.Path, "/"), "/")
+			deleteID := parts[len(parts)-1]
+			for _, failID := range failDeleteIDs {
+				if deleteID == failID {
+					http.Error(w, "boom", http.StatusInternalServerError)
+					return
+				}
 			}
 			_, _ = io.WriteString(w, `{}`)
 		default:
@@ -768,7 +773,7 @@ func TestGiteaIssueLabelsClassifiesCurrentIssueHandoffMutation(t *testing.T) {
 			if currentLabels == "" {
 				currentLabels = `[{"id":101,"name":"aiops/in-progress"}]`
 			}
-			server := giteaEchoLabelServer(currentLabels, false)
+			server := giteaEchoLabelServer(currentLabels)
 			defer server.Close()
 			proxy := giteaClassificationProxy(server.URL)
 			proxy.http = server.Client()
@@ -800,7 +805,7 @@ func TestGiteaIssueLabelsClassifiesCurrentIssueHandoffMutation(t *testing.T) {
 // because the surviving active label keeps the derived state active.
 func TestGiteaIssueLabelsStaleDeleteRetryAndPartialFailureAuditContract(t *testing.T) {
 	t.Run("stale-delete-only retry classifies handoff", func(t *testing.T) {
-		server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"},{"id":102,"name":"aiops/human-review"}]`, false)
+		server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"},{"id":102,"name":"aiops/human-review"}]`)
 		defer server.Close()
 		proxy := giteaClassificationProxy(server.URL)
 		proxy.http = server.Client()
@@ -825,7 +830,7 @@ func TestGiteaIssueLabelsStaleDeleteRetryAndPartialFailureAuditContract(t *testi
 		// The label is already in the desired shape, so the call makes no HTTP
 		// write. The flip happened elsewhere (an earlier audited call or an
 		// operator's manual edit) and must not be attributed to the agent.
-		server := giteaEchoLabelServer(`[{"id":102,"name":"aiops/human-review"}]`, false)
+		server := giteaEchoLabelServer(`[{"id":102,"name":"aiops/human-review"}]`)
 		defer server.Close()
 		proxy := giteaClassificationProxy(server.URL)
 		proxy.http = server.Client()
@@ -845,8 +850,12 @@ func TestGiteaIssueLabelsStaleDeleteRetryAndPartialFailureAuditContract(t *testi
 			t.Fatalf("audits = %+v; want none for a zero-write no-op", audits)
 		}
 	})
-	t.Run("failed stale delete fires no audit", func(t *testing.T) {
-		server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"}]`, true)
+	t.Run("failed stale delete with surviving higher-priority active label fires no audit", func(t *testing.T) {
+		// aiops/in-progress outranks aiops/human-review in the mapping
+		// priority, so the surviving stale label keeps the derived state
+		// active: the issue never left the active set and the agent's retry
+		// will carry the signal.
+		server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"}]`, "101")
 		defer server.Close()
 		proxy := giteaClassificationProxy(server.URL)
 		proxy.http = server.Client()
@@ -863,7 +872,61 @@ func TestGiteaIssueLabelsStaleDeleteRetryAndPartialFailureAuditContract(t *testi
 			t.Fatalf("call result = %s; want failure when stale delete fails", result)
 		}
 		if len(audits) != 0 {
-			t.Fatalf("audits = %+v; want none for a partial replace", audits)
+			t.Fatalf("audits = %+v; want none for a partial replace that stays active", audits)
+		}
+	})
+	t.Run("failed aiops/todo delete after successful add still fires handoff", func(t *testing.T) {
+		// Codex P2 on #751: aiops/human-review outranks aiops/todo, so the
+		// successful add alone flips the derived state to Human Review —
+		// reconcile will stop the run on the next poll even though the
+		// stale delete failed. Skipping the audit here would lose the
+		// handoff exactly like the bug #748 fixes.
+		server := giteaEchoLabelServer(`[{"id":103,"name":"aiops/todo"}]`, "103")
+		defer server.Close()
+		proxy := giteaClassificationProxy(server.URL)
+		proxy.http = server.Client()
+
+		var audits []ToolMutationAudit
+		ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
+			audits = append(audits, audit)
+		})
+		result, err := proxy.call(ctx, ToolCall{IssueNumber: 7, Labels: []string{"aiops/human-review"}})
+		if err != nil {
+			t.Fatalf("call error = %v; want nil (structured failure result)", err)
+		}
+		if toolResultSucceeded(result) {
+			t.Fatalf("call result = %s; want failure when stale delete fails", result)
+		}
+		want := ToolMutationAudit{CurrentIssueNonActiveStateUpdate: true}
+		if len(audits) != 1 || audits[0] != want {
+			t.Fatalf("audits = %+v; want exactly [%+v] (landed add already left the active set)", audits, want)
+		}
+	})
+	t.Run("partial delete accounting derives post state from landed writes", func(t *testing.T) {
+		// Two stale active labels; the in-progress delete lands, the todo
+		// delete fails. The landed writes leave {todo, human-review}, which
+		// derives Human Review (non-active) → handoff fires. If the audit
+		// ignored which deletes landed and used the full pre-write set, the
+		// surviving in-progress would wrongly keep the verdict active.
+		server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"},{"id":103,"name":"aiops/todo"}]`, "103")
+		defer server.Close()
+		proxy := giteaClassificationProxy(server.URL)
+		proxy.http = server.Client()
+
+		var audits []ToolMutationAudit
+		ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
+			audits = append(audits, audit)
+		})
+		result, err := proxy.call(ctx, ToolCall{IssueNumber: 7, Labels: []string{"aiops/human-review"}})
+		if err != nil {
+			t.Fatalf("call error = %v; want nil (structured failure result)", err)
+		}
+		if toolResultSucceeded(result) {
+			t.Fatalf("call result = %s; want failure when a stale delete fails", result)
+		}
+		want := ToolMutationAudit{CurrentIssueNonActiveStateUpdate: true}
+		if len(audits) != 1 || audits[0] != want {
+			t.Fatalf("audits = %+v; want exactly [%+v] (post state from landed writes)", audits, want)
 		}
 	})
 }
@@ -875,7 +938,7 @@ func TestGiteaIssueLabelsStaleDeleteRetryAndPartialFailureAuditContract(t *testi
 // different number than the issue, pinning that classification keys on the
 // "#N" identifier, never on the Gitea-internal id.
 func TestDynamicToolsWireGiteaCurrentIssueClassification(t *testing.T) {
-	server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"}]`, false)
+	server := giteaEchoLabelServer(`[{"id":101,"name":"aiops/in-progress"}]`)
 	defer server.Close()
 
 	tools := DynamicToolsForWorkflow(workflow.Workflow{Config: workflow.Config{
