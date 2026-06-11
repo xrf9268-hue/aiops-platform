@@ -241,3 +241,36 @@ Ported the Claude Design lean/Worker Status v2.html handoff to cmd/worker/dashbo
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: v0.1.0 packaged-binary full lifecycle test: 12-issue web-todo app, PASS
+
+**Date**: 2026-06-11
+**Task**: v0.1.0 packaged-binary full lifecycle test: 12-issue web-todo app, PASS
+**Branch**: `main`
+
+### Summary
+
+Ran the v0.1.0 darwin_arm64 release worker against a local Gitea (docker, e2e-mirror setup) with real codex agents (0.137.0 pin) on a freshly designed 12-issue web-todo target repo. All 12 issues completed the full Symphony lifecycle (agent-side push/PR/label handoff, operator merge+done loop, 3 successful rework cycles, 1 stall-timeout retry, reconcile cancels verified). Final main independently verified: gofmt/vet/test green, live CRUD+validation correct. Filed #739 (Gitea Depends-on blocker gate keyed to literal Todo state, dead on Gitea) and #740 (freed slot dispatches stale candidates; handoff counter taxonomy). Full report + findings + reusable setup research archived in the task dir.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1a81e17` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

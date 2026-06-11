@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/06-11-web-todo-app-full-lifecycle-test-with-packaged-release-binary/research/local-lifecycle-setup.md", "reason": "全套配置事实：WORKFLOW.md schema、Gitea 标签状态映射、codex 0.137 要求、worker CLI/env、e2e Gitea 启动序列、并发键"}
+{"file": "docs/runbooks/local-dev.md", "reason": "本地 worker 运行循环与 GITEA_TOKEN 注入方式（api_key: $GITEA_TOKEN）"}
+{"file": "docs/runbooks/codex-app-server-docker.md", "reason": "turn_sandbox_policy 五字段写法与 codex 认证/沙箱要求"}
+{"file": "docs/runbooks/batch-issue-processing.md", "reason": "one-issue-per-PR 协议与串行合并节奏"}

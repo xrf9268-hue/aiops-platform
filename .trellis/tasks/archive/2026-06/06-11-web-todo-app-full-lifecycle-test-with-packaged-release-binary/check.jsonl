@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/06-11-web-todo-app-full-lifecycle-test-with-packaged-release-binary/prd.md", "reason": "验收标准：≥10 issue 全生命周期、PR 由 agent 创建、无 stuck run、测试报告"}
+{"file": ".trellis/tasks/06-11-web-todo-app-full-lifecycle-test-with-packaged-release-binary/research/local-lifecycle-setup.md", "reason": "核对配置是否按研究结论落地（active_states/AI Ready、networkAccess、并发=1）"}
