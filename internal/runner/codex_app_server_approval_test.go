@@ -221,8 +221,8 @@ func TestHandleDynamicToolCall_MutationSinkRecordsToolCallMutationEvent(t *testi
 		"linear_graphql": {Name: "linear_graphql", Call: func(ctx context.Context, _ ToolCall) (string, error) {
 			// A real proxy fires the sink installed on the tool context when it
 			// dispatches a mutation; emulate that here.
-			if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
-				sink(LinearGraphQLMutationAudit{OperationField: "issueUpdate"})
+			if sink := toolMutationSinkFrom(ctx); sink != nil {
+				sink(ToolMutationAudit{OperationField: "issueUpdate"})
 			}
 			return `{"success":true}`, nil
 		}},

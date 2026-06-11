@@ -16,37 +16,41 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// linearGraphQLMutationSinkKey carries the audit-event callback through the
-// linear_graphql tool call. handleDynamicToolCall installs the sink before
-// invoking the tool; the proxy fires it once a mutation HTTP round-trip
-// returns a non-error response. The key is unexported so only runner code
-// can write or read it — agent-controlled paths cannot forge a bypass.
-type linearGraphQLContextKey int
+// toolMutationSinkKey carries the audit-event callback through tracker
+// mutation tool calls (linear_graphql, linear_ai_workpad, gitea_issue_labels).
+// handleDynamicToolCall installs the sink before invoking the tool; the proxy
+// fires it once a mutation round-trip succeeds. The key is unexported so only
+// runner code can write or read it — agent-controlled paths cannot forge a
+// bypass.
+type dynamicToolContextKey int
 
 const (
-	linearGraphQLMutationSinkKey linearGraphQLContextKey = iota + 1
+	toolMutationSinkKey dynamicToolContextKey = iota + 1
 	linearGraphQLMutationRejectedSinkKey
 	linearGraphQLPostStopMutationSinkKey
 	linearGraphQLCurrentIssueHandoffKey
 	linearGraphQLCurrentIssueTerminalHandoffKey
 )
 
-// LinearGraphQLMutationAudit is the non-secret audit fact emitted once a
-// mutation succeeds. It deliberately excludes query text, variables, and state
-// IDs; current-issue handoff fields are parsed classifications only.
-type LinearGraphQLMutationAudit struct {
+// ToolMutationAudit is the non-secret audit fact emitted once a tracker
+// mutation succeeds — by the linear_graphql/linear_ai_workpad proxy and the
+// gitea_issue_labels proxy alike, so both trackers share one handoff
+// classification taxonomy (#748). It deliberately excludes query text,
+// variables, and state IDs; current-issue handoff fields are parsed
+// classifications only.
+type ToolMutationAudit struct {
 	OperationField                   string
 	CurrentIssueNonActiveStateUpdate bool
 	CurrentIssueTerminalStateUpdate  bool
 	CurrentIssueTerminalState        string
 }
 
-// LinearGraphQLMutationSink is the audit callback invoked once per
-// successful mutation dispatched through the agent-visible linear_graphql
-// tool. Implementations must NOT echo the query body or variables — the
-// design intent is operator visibility of WHICH mutation ran, not WHAT
-// values were attached.
-type LinearGraphQLMutationSink func(LinearGraphQLMutationAudit)
+// ToolMutationSink is the audit callback invoked once per successful
+// mutation dispatched through an agent-visible tracker mutation tool
+// (linear_graphql, linear_ai_workpad, gitea_issue_labels). Implementations
+// must NOT echo the query body or variables — the design intent is operator
+// visibility of WHICH mutation ran, not WHAT values were attached.
+type ToolMutationSink func(ToolMutationAudit)
 
 type linearGraphQLMutationFieldSink func(operationName string)
 
@@ -60,19 +64,20 @@ type linearGraphQLMutationRejected struct {
 
 type linearGraphQLMutationRejectedSink func(linearGraphQLMutationRejected)
 
-// WithLinearGraphQLMutationSink returns a context that the linear_graphql
-// tool consults to surface successful mutations as audit events. The sink
-// is invoked only after the HTTP response status is 2xx; transport failures
-// and Linear-reported GraphQL errors do not fire the audit.
-func WithLinearGraphQLMutationSink(ctx context.Context, sink LinearGraphQLMutationSink) context.Context {
+// WithToolMutationSink returns a context that the tracker mutation proxies
+// consult to surface successful mutations as audit events. The sink is
+// invoked only after the mutation actually succeeded; transport failures,
+// Linear-reported GraphQL errors, and partial Gitea label replaces do not
+// fire the audit.
+func WithToolMutationSink(ctx context.Context, sink ToolMutationSink) context.Context {
 	if sink == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, linearGraphQLMutationSinkKey, sink)
+	return context.WithValue(ctx, toolMutationSinkKey, sink)
 }
 
-func linearGraphQLMutationSinkFrom(ctx context.Context) LinearGraphQLMutationSink {
-	sink, _ := ctx.Value(linearGraphQLMutationSinkKey).(LinearGraphQLMutationSink)
+func toolMutationSinkFrom(ctx context.Context) ToolMutationSink {
+	sink, _ := ctx.Value(toolMutationSinkKey).(ToolMutationSink)
 	return sink
 }
 
@@ -247,7 +252,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 			owner:   wf.Config.Repo.Owner,
 			repo:    wf.Config.Repo.Name,
 			http:    http.DefaultClient,
-		}
+		}.withCurrentIssueClassification(trackerCfg, opts)
 		tools.tools["gitea_issue_labels"] = DynamicTool{
 			Name:        "gitea_issue_labels",
 			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]} with exactly one aiops/* label. The Gitea API token is never exposed to the agent process.",
@@ -595,8 +600,8 @@ func (p linearGraphQLProxy) dispatch(ctx context.Context, query string, op linea
 			if sink := linearGraphQLPostStopMutationSinkFrom(ctx); sink != nil {
 				sink(op.FieldName)
 			}
-		} else if sink := linearGraphQLMutationSinkFrom(ctx); sink != nil {
-			sink(LinearGraphQLMutationAudit{
+		} else if sink := toolMutationSinkFrom(ctx); sink != nil {
+			sink(ToolMutationAudit{
 				OperationField:                   op.FieldName,
 				CurrentIssueNonActiveStateUpdate: linearGraphQLCurrentIssueHandoffFrom(ctx),
 				CurrentIssueTerminalStateUpdate:  linearGraphQLCurrentIssueTerminalHandoffFrom(ctx),

@@ -27,6 +27,30 @@ type giteaIssueLabelsProxy struct {
 	// round trip. Zero uses defaultDynamicToolHTTPTimeout; tests set a tiny
 	// value to exercise the timeout path.
 	httpTimeout time.Duration
+	// currentIssueNumber, activeStates, and terminalStates power the
+	// agent-handoff classification mirrored from the Linear tool path (#748):
+	// a successful label replace that moves the current issue out of the
+	// configured active states is the agent's handoff signal. A zero
+	// currentIssueNumber disables classification; the audit still fires.
+	currentIssueNumber int
+	activeStates       []string
+	terminalStates     []string
+}
+
+// withCurrentIssueClassification copies the dispatched issue's number and the
+// tracker's configured state sets onto the proxy so a successful label replace
+// can be classified as a current-issue handoff. Only "#N"-shaped refs are
+// trusted (see gitea.IssueNumberFromRef); without one, classification stays
+// disabled and the proxy behaves as before.
+func (p giteaIssueLabelsProxy) withCurrentIssueClassification(cfg workflow.TrackerConfig, opts dynamicToolOptions) giteaIssueLabelsProxy {
+	number, ok := gitea.IssueNumberFromRef(opts.currentIssueID, opts.currentIssueIdentifier)
+	if !ok {
+		return p
+	}
+	p.currentIssueNumber = number
+	p.activeStates = append([]string(nil), cfg.ActiveStates...)
+	p.terminalStates = append([]string(nil), cfg.TerminalStates...)
+	return p
 }
 
 type giteaIssueLabel struct {
@@ -58,7 +82,82 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	if failure := p.deleteStaleStateLabels(ctx, client, endpoint, staleStateLabels); failure != "" {
 		return failure, nil
 	}
+	if len(labelsToAdd) > 0 || len(staleStateLabels) > 0 {
+		p.fireMutationAudit(ctx, call.IssueNumber, desiredStateLabels[0], currentLabels)
+	}
 	return result, nil
+}
+
+// fireMutationAudit mirrors the Linear proxy's success-audit contract (#748):
+// the shared mutation sink fires only after the full replace (desired-label
+// add plus stale-label delete) succeeded AND at least one HTTP write actually
+// ran. A partial failure must not fire — a surviving stale active label keeps
+// the derived state active (IssueStateFromLabels active-first priority), so
+// the issue never left the active set. The success path includes the retry
+// that only deletes a stale label left by an earlier partial replace: that
+// delete is the write that completes the handoff. A zero-write no-op (label
+// already in the desired shape) must not fire: the flip happened elsewhere —
+// an earlier audited call, or an operator's manual label edit, which must not
+// be attributed to the agent as a handoff.
+func (p giteaIssueLabelsProxy) fireMutationAudit(ctx context.Context, issueNumber int, desiredLabel string, preWriteLabels []giteaIssueLabel) {
+	if sink := toolMutationSinkFrom(ctx); sink != nil {
+		sink(p.classifyLabelMutation(issueNumber, desiredLabel, preWriteLabels))
+	}
+}
+
+// classifyLabelMutation marks the audit as a current-issue handoff only when
+// the replace moved the issue FROM a configured active state TO a non-active
+// one. The pre-write gate matters: the Linear path's guard rejects current-
+// issue mutations whose refreshed state is not active, so its classification
+// implicitly proves the issue left the active set. The Gitea tool has no such
+// guard, so without checking the pre-write labels a flip between two
+// non-active states (e.g. an operator's manual aiops/done later relabeled
+// aiops/human-review by the agent) would be misattributed as an agent handoff
+// and mask the operator-owned stop.
+func (p giteaIssueLabelsProxy) classifyLabelMutation(issueNumber int, desiredLabel string, preWriteLabels []giteaIssueLabel) ToolMutationAudit {
+	audit := ToolMutationAudit{}
+	if p.currentIssueNumber <= 0 || issueNumber != p.currentIssueNumber {
+		return audit
+	}
+	preState, _ := gitea.IssueStateFromLabels(stateLabelsForClassification(preWriteLabels), nil)
+	if preState == "" || matchStateFold(p.activeStates, preState) == "" {
+		return audit
+	}
+	state, _ := gitea.IssueStateFromLabels([]gitea.Label{{Name: desiredLabel}}, nil)
+	if state == "" || matchStateFold(p.activeStates, state) != "" {
+		return audit
+	}
+	audit.CurrentIssueNonActiveStateUpdate = true
+	if terminal := matchStateFold(p.terminalStates, state); terminal != "" {
+		audit.CurrentIssueTerminalStateUpdate = true
+		audit.CurrentIssueTerminalState = terminal
+	}
+	return audit
+}
+
+func stateLabelsForClassification(labels []giteaIssueLabel) []gitea.Label {
+	out := make([]gitea.Label, 0, len(labels))
+	for _, label := range labels {
+		out = append(out, gitea.Label{Name: label.Name})
+	}
+	return out
+}
+
+// matchStateFold returns the configured state entry equal to state
+// (case-insensitive, trimmed), or "" when absent. Returning the configured
+// entry keeps the audit's terminal-state value sourced from the workflow
+// config, matching the Linear guard's resolved-state semantics.
+func matchStateFold(states []string, state string) string {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return ""
+	}
+	for _, candidate := range states {
+		if strings.EqualFold(strings.TrimSpace(candidate), state) {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
 }
 
 // validateDesiredStateLabels enforces the tool's input contract: exactly one

@@ -282,14 +282,15 @@ func (c *appServerClient) resolveDynamicToolResult(ctx context.Context, name str
 }
 
 // withMutationAuditSink derives the tool-execution context carrying the audit
-// sink that fires for any tool routing through the Linear GraphQL proxy.
+// sink that fires for any tool routing through a tracker mutation proxy —
+// the Linear GraphQL proxy and the Gitea issue-labels proxy alike (#748).
 // linear_ai_workpad composes deterministic commentCreate/commentUpdate
 // mutations through the same token-isolated callRaw transport, so operators
 // need the tool_call_mutation runtime event for those harness-attributable
-// writes too. Only the proxy itself fires the sink, so installing it on
+// writes too. Only the proxies themselves fire the sink, so installing it on
 // unrelated tools is a no-op.
 func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string) context.Context {
-	ctx = WithLinearGraphQLMutationSink(ctx, func(audit LinearGraphQLMutationAudit) {
+	ctx = WithToolMutationSink(ctx, func(audit ToolMutationAudit) {
 		c.recordRuntimeEvent(task.EventToolCallMutation, c.withRuntimeContext(mutationAuditPayload(name, audit)))
 	})
 	ctx = WithLinearGraphQLMutationRejectedSink(ctx, func(rejection linearGraphQLMutationRejected) {
@@ -300,7 +301,7 @@ func (c *appServerClient) withMutationAuditSink(ctx context.Context, name string
 	})
 }
 
-func mutationAuditPayload(tool string, audit LinearGraphQLMutationAudit) map[string]any {
+func mutationAuditPayload(tool string, audit ToolMutationAudit) map[string]any {
 	payload := map[string]any{"tool": tool}
 	if audit.OperationField != "" {
 		payload["operation_field"] = audit.OperationField

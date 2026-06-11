@@ -28,10 +28,12 @@ const (
 	// /api/v1 status so string(kind) maps straight through.
 	RuntimeEventReconcileStopped RuntimeEventKind = "reconcile_stopped_with_progress"
 	// RuntimeEventAgentHandoffReconcileStopped marks a reconcile-stopped run
-	// that observed a guarded current-issue Linear state handoff before the
-	// tracker made the issue inactive. This is a scheduler/reader observability
-	// signal only: completed accounting stays limited to clean worker exits, and
-	// Linear writes remain agent-owned.
+	// that observed a current-issue state handoff through an agent-visible
+	// tracker mutation tool (linear_graphql, linear_ai_workpad,
+	// gitea_issue_labels — #748) before the tracker made the issue inactive.
+	// This is a scheduler/reader observability signal only: completed
+	// accounting stays limited to clean worker exits, and tracker writes
+	// remain agent-owned.
 	RuntimeEventAgentHandoffReconcileStopped RuntimeEventKind = "agent_handoff_reconcile_stopped"
 	// RuntimeEventDispatchPreflightFailed flags SPEC §8.1 step 2 failures:
 	// the per-tick dispatch preflight could not validate the workflow's

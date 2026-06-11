@@ -88,7 +88,7 @@ func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event ta
 		return
 	}
 	payload, _ := asStringMap(event.Payload)
-	if !linearMutationPayload(payload) {
+	if !agentHandoffMutationPayload(payload) {
 		return
 	}
 	if handoffBool(payload, "current_issue_non_active_state_update") {
@@ -99,13 +99,22 @@ func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event ta
 	}
 }
 
-func isLinearMutationTool(tool string) bool {
-	return tool == "linear_graphql" || tool == "linear_ai_workpad"
+// isAgentHandoffMutationTool names the agent-visible tracker mutation tools
+// whose tool_call_mutation events can carry a current-issue handoff
+// classification. The Gitea label tool joined the taxonomy in #748 so a Gitea
+// run's handoff label flip is counted like a Linear state update.
+func isAgentHandoffMutationTool(tool string) bool {
+	switch tool {
+	case "linear_graphql", "linear_ai_workpad", "gitea_issue_labels":
+		return true
+	default:
+		return false
+	}
 }
 
-func linearMutationPayload(payload map[string]any) bool {
+func agentHandoffMutationPayload(payload map[string]any) bool {
 	tool, ok := stringField(payload, "tool")
-	return ok && isLinearMutationTool(tool)
+	return ok && isAgentHandoffMutationTool(tool)
 }
 
 func handoffBool(payload map[string]any, key string) bool {
