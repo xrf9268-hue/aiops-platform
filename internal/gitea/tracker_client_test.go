@@ -615,9 +615,12 @@ func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.
 	}
 }
 
-// TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure: a missing
-// blocker (404 or transient failure) silently drops out of BlockedBy rather
-// than aborting candidate enumeration. Best-effort semantics per #210.
+// TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure: a
+// definitively deleted blocker (404) silently drops out of BlockedBy rather
+// than aborting candidate enumeration — it can never become terminal, so
+// keeping it would starve the candidate forever. (A transient lookup failure
+// fails closed as an empty-state placeholder instead; see
+// TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers.)
 func TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -885,11 +888,11 @@ func TestCachedIssueByNumberNilCacheFallsBackToDirectFetch(t *testing.T) {
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	issue, found := client.cachedIssueByNumber(context.Background(), nil, 3)
-	if !found || issue.Number != 3 {
-		t.Fatalf("cachedIssueByNumber(nil cache, 3) = (%#v, %v); want issue #3, true", issue, found)
+	issue, found, resolved := client.cachedIssueByNumber(context.Background(), nil, 3)
+	if !found || !resolved || issue.Number != 3 {
+		t.Fatalf("cachedIssueByNumber(nil cache, 3) = (%#v, %v, %v); want issue #3, true, true", issue, found, resolved)
 	}
-	if _, found = client.cachedIssueByNumber(context.Background(), nil, 3); !found {
+	if _, found, _ = client.cachedIssueByNumber(context.Background(), nil, 3); !found {
 		t.Fatalf("cachedIssueByNumber(nil cache, 3) second call found = false; want true")
 	}
 	if blockerFetches != 2 {
@@ -931,14 +934,158 @@ func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *tes
 	if blockerFetches != 2 {
 		t.Fatalf("blocker #3 fetched %d times; want 2 (transient error not cached, retried for the second source issue)", blockerFetches)
 	}
-	withBlocker := 0
+	// The first source's transient failure fails closed as an empty-state
+	// placeholder (#750 / PR #752 review); the second source's retry resolves
+	// the real blocker state. Both carry #3 — the difference is the State.
+	resolved, placeholders := 0, 0
 	for _, iss := range issues {
-		if len(iss.BlockedBy) == 1 && iss.BlockedBy[0].Identifier == "#3" {
-			withBlocker++
+		if len(iss.BlockedBy) != 1 || iss.BlockedBy[0].Identifier != "#3" {
+			continue
+		}
+		if iss.BlockedBy[0].State == "" {
+			placeholders++
+		} else {
+			resolved++
 		}
 	}
-	if withBlocker != 1 {
-		t.Fatalf("issues carrying blocker #3 = %d; want 1 (first source errored+skipped, second retried+found)", withBlocker)
+	if placeholders != 1 || resolved != 1 {
+		t.Fatalf("blocker #3 carried as placeholder=%d resolved=%d; want 1 fail-closed placeholder (errored source) and 1 resolved (retried source)", placeholders, resolved)
+	}
+}
+
+// TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers pins #750:
+// the narrow refresh re-derives `Depends on #N` blockers from the refreshed
+// body (with the blocker's current state) so dispatch revalidation can re-run
+// the SPEC §8.2 Todo blocker gate, and a dependency-free issue carries the
+// positive non-nil empty answer rather than nil ("no knowledge").
+func TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 555, Number: 5, Title: "blocked todo", Body: "Depends on #9",
+				HTMLURL: "https://gitea.local/o/r/issues/5",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/9":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 999, Number: 9, Title: "reopened blocker",
+				HTMLURL: "https://gitea.local/o/r/issues/9",
+				Labels:  []Label{{Name: "aiops/in-progress"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/6":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 666, Number: 6, Title: "free todo", Body: "no dependencies here",
+				HTMLURL: "https://gitea.local/o/r/issues/6",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/7":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 777, Number: 7, Title: "todo with unresolvable dep", Body: "Depends on #99",
+				HTMLURL: "https://gitea.local/o/r/issues/7",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/99":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case "/api/v1/repos/owner/repo/issues/8":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 888, Number: 8, Title: "mixed deps, one reopened", Body: "Depends on #9\nDepends on #99",
+				HTMLURL: "https://gitea.local/o/r/issues/8",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/4":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 444, Number: 4, Title: "mixed deps, resolved one terminal", Body: "Depends on #10\nDepends on #99",
+				HTMLURL: "https://gitea.local/o/r/issues/4",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/10":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 1010, Number: 10, Title: "done blocker",
+				HTMLURL: "https://gitea.local/o/r/issues/10",
+				Labels:  []Label{{Name: "aiops/done"}},
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}, TerminalStates: []string{"Done", "Canceled"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
+		{ID: "555", Identifier: "#5"},
+		{ID: "666", Identifier: "#6"},
+		{ID: "777", Identifier: "#7"},
+		{ID: "888", Identifier: "#8"},
+		{ID: "444", Identifier: "#4"},
+	})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+	blocked := states["555"].BlockedBy
+	if len(blocked) != 1 || blocked[0].ID != "999" || blocked[0].Identifier != "#9" || blocked[0].State != "In Progress" {
+		t.Fatalf("FetchIssueStatesByRefs(555).BlockedBy = %#v; want #9 in In Progress", blocked)
+	}
+	free := states["666"].BlockedBy
+	if free == nil || len(free) != 0 {
+		t.Fatalf("FetchIssueStatesByRefs(666).BlockedBy = %#v; want non-nil empty for a dependency-free body", free)
+	}
+	// A `Depends on #N` reference whose lookup transiently fails must fail
+	// closed: an empty-state placeholder the gate treats as open, never a
+	// positive "no blockers" — otherwise a transient blocker-lookup failure
+	// would let the candidate dispatch past a blocker the refresh could not
+	// see (PR #752 review).
+	failed := states["777"].BlockedBy
+	if len(failed) != 1 || failed[0].Identifier != "#99" || failed[0].State != "" {
+		t.Fatalf("FetchIssueStatesByRefs(777).BlockedBy = %#v; want one empty-state placeholder for the unresolvable #99", failed)
+	}
+	// Mixed resolution keeps the resolved reopened blocker AND the
+	// fail-closed placeholder; either alone blocks at the consumer's gate.
+	mixed := states["888"].BlockedBy
+	if len(mixed) != 2 || mixed[0].Identifier != "#9" || mixed[0].State != "In Progress" || mixed[1].Identifier != "#99" || mixed[1].State != "" {
+		t.Fatalf("FetchIssueStatesByRefs(888).BlockedBy = %#v; want resolved #9 (In Progress) plus the #99 placeholder", mixed)
+	}
+	// Resolved-terminal blockers do not unblock an unresolved sibling: the
+	// placeholder still fails the gate closed.
+	terminalMixed := states["444"].BlockedBy
+	if len(terminalMixed) != 2 || terminalMixed[0].Identifier != "#10" || terminalMixed[0].State != "Done" || terminalMixed[1].Identifier != "#99" || terminalMixed[1].State != "" {
+		t.Fatalf("FetchIssueStatesByRefs(444).BlockedBy = %#v; want resolved #10 (Done) plus the #99 placeholder", terminalMixed)
+	}
+}
+
+// A definitively deleted blocker (404) is skipped — it can never become
+// terminal, so blocking on it would starve the candidate forever; this
+// matches the listing path's handling of deleted references.
+func TestTrackerClientFetchIssueStatesByRefsSkipsDeletedBlockers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID: 555, Number: 5, Title: "todo with deleted dep", Body: "Depends on #404",
+				HTMLURL: "https://gitea.local/o/r/issues/5",
+				Labels:  []Label{{Name: "aiops/todo"}},
+			})
+		case "/api/v1/repos/owner/repo/issues/404":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "555", Identifier: "#5"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+	if got := states["555"].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("FetchIssueStatesByRefs(555).BlockedBy = %#v; want non-nil empty when the only dependency is deleted", got)
 	}
 }
 

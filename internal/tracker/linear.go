@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -391,7 +392,74 @@ func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []str
 			states[n.ID] = IssueState{State: n.State.Name, Labels: labels}
 		}
 	}
+	if err := c.attachRefreshedTodoBlockers(ctx, states); err != nil {
+		// Blocker data is consumed only by dispatch-time revalidation; the
+		// reconcile and §16.5 per-turn refreshers share this method and must
+		// not fail on it — their state/label result is already complete, and
+		// an error here would short-circuit a healthy run's turn loop on a
+		// transient inverse-relations failure (PR #752 review). Instead,
+		// every refreshed Todo entry fails closed with an empty-state
+		// placeholder blocker — the same shape the Gitea adapter uses for an
+		// unresolvable reference — so the revalidation gate skips the
+		// candidate for this tick and the next tick retries, rather than
+		// dispatching past a blocker the failed query could not see (a
+		// listing-time "unblocked" verdict may predate a newly added
+		// relation). State-only consumers ignore BlockedBy and are
+		// unaffected.
+		log.Printf("event=linear_blocker_refresh_failed error=%q detail=\"refreshed Todo issues fail closed with a placeholder blocker this batch\"", err.Error())
+		failClosedTodoBlockers(states)
+	}
 	return states, nil
+}
+
+// failClosedTodoBlockers marks every Todo-state entry with one empty-state
+// placeholder blocker, which tracker.BlockedByNonTerminal treats as open.
+func failClosedTodoBlockers(states map[string]IssueState) {
+	for id, state := range states {
+		if !isTodoState(state.State) {
+			continue
+		}
+		state.BlockedBy = []BlockerRef{{}}
+		states[id] = state
+	}
+}
+
+// attachRefreshedTodoBlockers resolves blocker data for the refreshed issues
+// whose state is Todo — the only state the SPEC §8.2 blocker gate applies to,
+// mirroring the listing path's Todo-only resolution (#672) — so dispatch-time
+// revalidation can re-apply the gate on refreshed data like upstream
+// retry_candidate_issue? (orchestrator.ex:1602-1604) does (#750). Non-Todo
+// entries keep a nil BlockedBy ("no blocker knowledge supplied"); Todo
+// entries get the non-nil (possibly empty) result linearBlockersForIssues
+// guarantees for every requested id.
+//
+// Dispatch revalidation is the only consumer of the blocker data; the
+// reconcile and §16.5 per-turn refreshers share FetchIssueStatesByIDs and
+// inherit the extra Todo-only batched query as a side effect but ignore
+// BlockedBy (reconcile cancellation and the per-turn continue gate are
+// state/label-only by design). Upstream's fetch_issue_states_by_ids returns
+// fully normalized issues including blocked_by on every caller too, so the
+// cost profile matches the reference.
+func (c *LinearClient) attachRefreshedTodoBlockers(ctx context.Context, states map[string]IssueState) error {
+	ids := make([]string, 0, len(states))
+	for id, state := range states {
+		if isTodoState(state.State) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	blockers, err := c.linearBlockersForIssues(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		state := states[id]
+		state.BlockedBy = blockers[id]
+		states[id] = state
+	}
+	return nil
 }
 
 type linearRelationNode struct {

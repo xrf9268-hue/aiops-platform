@@ -228,7 +228,9 @@ func TestListIssuesByStatesUsesDefaultPageSizeAndAggregatesMoreThanFiftyIssues(t
 }
 
 func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
+	var mu sync.Mutex
 	var recorded fakeLinearRequest
+	var blockerIDs []any
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
@@ -236,8 +238,19 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 			Variables map[string]any `json:"variables"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		recorded = fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables}
 		w.Header().Set("Content-Type", "application/json")
+		// The refresh now resolves blockers for Todo-state issues (#750);
+		// answer that follow-up query while keeping the state query recorded.
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			mu.Lock()
+			blockerIDs = payload.Variables["ids"].([]any)
+			mu.Unlock()
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","inverseRelations":{"nodes":[{"type":"blocks","issue":{"id":"blocker-1","identifier":"LIN-9","state":{"name":"In Progress"}}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}]}}}`)
+			return
+		}
+		mu.Lock()
+		recorded = fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables}
+		mu.Unlock()
 		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Aiops-Ready"}]}},{"id":"issue-2","state":{"name":"Done"}}]}}}`)
 	}))
 	defer httpSrv.Close()
@@ -263,6 +276,18 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 	if !ok || len(ids) != 2 || ids[0] != "issue-1" || ids[1] != "issue-2" {
 		t.Fatalf("ids variable = %#v, want []string{issue-1, issue-2}", recorded.Variables["ids"])
 	}
+	// Blocker resolution is Todo-only: issue-1 carries the refreshed blocker,
+	// Done issue-2 keeps a nil BlockedBy ("no blocker knowledge supplied").
+	if len(blockerIDs) != 1 || blockerIDs[0] != "issue-1" {
+		t.Fatalf("blocker query ids = %#v, want [issue-1] (Todo issues only)", blockerIDs)
+	}
+	gotBlockers := states["issue-1"].BlockedBy
+	if len(gotBlockers) != 1 || gotBlockers[0].ID != "blocker-1" || gotBlockers[0].State != "In Progress" {
+		t.Fatalf("FetchIssueStatesByIDs(issue-1).BlockedBy = %#v; want blocker-1 in In Progress", gotBlockers)
+	}
+	if states["issue-2"].BlockedBy != nil {
+		t.Fatalf("FetchIssueStatesByIDs(issue-2).BlockedBy = %#v; want nil for non-Todo state", states["issue-2"].BlockedBy)
+	}
 }
 
 func TestFetchIssueStatesByIDsChunksLargeBatches(t *testing.T) {
@@ -275,11 +300,20 @@ func TestFetchIssueStatesByIDsChunksLargeBatches(t *testing.T) {
 			Variables map[string]any `json:"variables"`
 		}
 		_ = json.Unmarshal(body, &payload)
-		mu.Lock()
-		requests = append(requests, fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables})
-		mu.Unlock()
+		op := opNameFromQuery(payload.Query)
 		ids := payload.Variables["ids"].([]any)
 		w.Header().Set("Content-Type", "application/json")
+		// All fixture issues refresh as Todo, so the blocker resolution
+		// (#750) follows up with chunked ListIssuesInverseRelations queries;
+		// answer them with empty relation pages and record only the state
+		// chunks for the chunking assertions below.
+		if op == "ListIssuesInverseRelations" {
+			_, _ = io.WriteString(w, linearEmptyInverseRelationsJSON(ids))
+			return
+		}
+		mu.Lock()
+		requests = append(requests, fakeLinearRequest{OpName: op, Query: payload.Query, Variables: payload.Variables})
+		mu.Unlock()
 		_, _ = io.WriteString(w, linearIssueStatesJSON(ids))
 	}))
 	defer httpSrv.Close()
@@ -307,6 +341,26 @@ func TestFetchIssueStatesByIDsChunksLargeBatches(t *testing.T) {
 	if len(firstIDs) != linearIssuePageSize || len(secondIDs) != 5 {
 		t.Fatalf("chunk lengths = %d, %d; want %d, 5", len(firstIDs), len(secondIDs), linearIssuePageSize)
 	}
+	// A Todo issue with no inverse relations carries the positive non-nil
+	// empty answer, not nil ("no knowledge") — see tracker.IssueState.
+	if got := states["issue-1"].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("FetchIssueStatesByIDs(issue-1).BlockedBy = %#v; want non-nil empty for a blocker-free Todo issue", got)
+	}
+}
+
+func linearEmptyInverseRelationsJSON(ids []any) string {
+	var b strings.Builder
+	b.WriteString(`{"data":{"issues":{"nodes":[`)
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"id":"`)
+		b.WriteString(id.(string))
+		b.WriteString(`","inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}`)
+	}
+	b.WriteString(`]}}}`)
+	return b.String()
 }
 
 func linearIssueStatesJSON(ids []any) string {
@@ -894,5 +948,43 @@ func TestListIssuesByStatesReturnsParseErrorForMalformedTimestamp(t *testing.T) 
 				t.Fatalf("ListIssuesByStates(%s) err = %q; want field %q and value %q", c.name, err.Error(), c.wantField, c.wantValue)
 			}
 		})
+	}
+}
+
+// A failed blocker resolution must not fail the state refresh: reconcile and
+// the §16.5 per-turn hook share FetchIssueStatesByIDs and ignore BlockedBy,
+// so an inverse-relations failure would otherwise short-circuit a healthy
+// run's turn loop (PR #752 review). The refreshed Todo entry instead fails
+// closed with an empty-state placeholder blocker so dispatch revalidation
+// skips it for the tick — a listing-time "unblocked" verdict may predate a
+// newly added relation the failed query could not see. State and labels
+// survive.
+func TestFetchIssueStatesByIDsSurvivesBlockerResolutionFailure(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Ready"}]}}]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs = error %v; want success despite blocker resolution failure", err)
+	}
+	got := states["issue-1"]
+	if got.State != "Todo" || len(got.Labels) != 1 {
+		t.Fatalf("states[issue-1] = %+v; want Todo state and labels preserved", got)
+	}
+	if len(got.BlockedBy) != 1 || got.BlockedBy[0].State != "" {
+		t.Fatalf("states[issue-1].BlockedBy = %#v; want one empty-state placeholder (fail closed) after blocker resolution failure", got.BlockedBy)
 	}
 }

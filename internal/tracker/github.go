@@ -540,6 +540,11 @@ func (c *GitHubClient) recordPaginationCapHit(label string, maxPages int) {
 // matched label is returned (lowercased, matching mapGitHubIssue's
 // normalization). Otherwise the issue's open/closed state is returned. This
 // matches the GitHub convention where workflow position is encoded as labels.
+//
+// BlockedBy stays nil (#750 documented gap): this adapter models no issue
+// dependencies — its listing path never populates Issue.BlockedBy either —
+// so the refresh has no blocker knowledge to supply and consumers keep
+// their listing-time blocker verdict (which is likewise always empty here).
 func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) {
 	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
 }

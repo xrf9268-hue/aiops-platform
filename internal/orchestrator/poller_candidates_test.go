@@ -289,3 +289,111 @@ func TestPollOncePartialRevalidationErrorStillDispatchesFreshCandidates(t *testi
 		t.Fatalf("dispatched issues = %v; want [issue-1]", got)
 	}
 }
+
+// todoBlockerRevalidationConfig mirrors revalidationReconcileConfig but keeps
+// Todo active so the SPEC §8.2 blocker gate (Todo-only) is exercisable.
+func todoBlockerRevalidationConfig() ReconciliationConfig {
+	return ReconciliationConfig{
+		ActiveStates:      []string{"Todo", "In Progress"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	}
+}
+
+// TestPollOnceSkipsDispatchWhenRevalidationShowsReopenedBlocker pins #750: a
+// Todo candidate that passed the tick-start blocker gate (blocker terminal at
+// listing time) is dropped when the pre-dispatch refresh shows the blocker
+// back in a non-terminal state, matching upstream retry_candidate_issue?'s
+// !todo_issue_blocked_by_non_terminal? on the refreshed issue
+// (orchestrator.ex:1602-1604).
+func TestPollOnceSkipsDispatchWhenRevalidationShowsReopenedBlocker(t *testing.T) {
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{
+		ID:         "issue-1",
+		Identifier: "GT-1",
+		State:      "Todo",
+		BlockedBy:  []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "Done"}},
+	}}}
+	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
+
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+		"issue-1": {State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce() = %v; want nil", err)
+	}
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatched %d issues (%v); want 0 after the refreshed blocker reopened", got, dispatcher.issueIDs())
+	}
+}
+
+// A refresh that positively reports "no blockers" (non-nil empty) dispatches,
+// and a refresh without blocker knowledge (nil BlockedBy) keeps the
+// listing-time verdict instead of clearing it.
+func TestPollOnceBlockerRevalidationHonorsNilVersusEmptyContract(t *testing.T) {
+	t.Run("non-nil empty refreshed blockers dispatch", func(t *testing.T) {
+		trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{
+			ID:         "issue-1",
+			Identifier: "GT-1",
+			State:      "Todo",
+			BlockedBy:  []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "Done"}},
+		}}}
+		poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
+
+		trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+			"issue-1": {State: "Todo", BlockedBy: []tracker.BlockerRef{}},
+		})
+		if err := poller.PollOnce(ctx); err != nil {
+			t.Fatalf("PollOnce() = %v; want nil", err)
+		}
+		if got := dispatcher.count(); got != 1 {
+			t.Fatalf("dispatched %d issues (%v); want 1 when the refresh positively reports no blockers", got, dispatcher.issueIDs())
+		}
+	})
+	t.Run("nil refreshed blockers keep the listing verdict", func(t *testing.T) {
+		// Listing blockers are all terminal (the candidate passed the
+		// tick-start gate); a nil-BlockedBy refresh must not clear them, and
+		// re-running the gate on them stays a pass — the candidate
+		// dispatches with its listing-time blocker data intact.
+		trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{
+			ID:         "issue-1",
+			Identifier: "GT-1",
+			State:      "Todo",
+			BlockedBy:  []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "Done"}},
+		}}}
+		poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
+
+		trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+			"issue-1": {State: "Todo"},
+		})
+		if err := poller.PollOnce(ctx); err != nil {
+			t.Fatalf("PollOnce() = %v; want nil", err)
+		}
+		if got := dispatcher.count(); got != 1 {
+			t.Fatalf("dispatched %d issues (%v); want 1 when the refresh has no blocker knowledge", got, dispatcher.issueIDs())
+		}
+		if got := dispatcher.issueAt(0).BlockedBy; len(got) != 1 || got[0].ID != "blocker-1" {
+			t.Fatalf("dispatched issue BlockedBy = %#v; want listing-time blocker kept", got)
+		}
+	})
+}
+
+// A non-Todo refreshed state leaves the blocker gate inert (SPEC §8.2 gates
+// only Todo issues), even when the refresh carries non-terminal blockers.
+func TestPollOnceBlockerRevalidationGatesTodoOnly(t *testing.T) {
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{
+		ID:         "issue-1",
+		Identifier: "GT-1",
+		State:      "Todo",
+	}}}
+	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
+
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+		"issue-1": {State: "In Progress", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce() = %v; want nil", err)
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("dispatched %d issues (%v); want 1 — the blocker gate applies to Todo only", got, dispatcher.issueIDs())
+	}
+}

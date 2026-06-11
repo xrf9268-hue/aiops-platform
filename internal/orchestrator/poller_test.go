@@ -153,6 +153,9 @@ type fakeIssueStateTracker struct {
 	fetchIDErr    error
 	fetchRefCalls [][]tracker.IssueRef
 	fetchIDStates map[string]string
+	// fetchIDIssueStates, when set, takes precedence over fetchIDStates and
+	// returns full refresh facts (state + labels + blockers) per issue ID.
+	fetchIDIssueStates map[string]tracker.IssueState
 }
 
 type fakeIssueStateTrackerByCall struct {
@@ -198,6 +201,14 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs [
 		wanted[ref.ID] = struct{}{}
 	}
 	out := make(map[string]tracker.IssueState, len(refs))
+	if f.fetchIDIssueStates != nil {
+		for id, state := range f.fetchIDIssueStates {
+			if _, ok := wanted[id]; ok {
+				out[id] = state
+			}
+		}
+		return out, f.fetchIDErr
+	}
 	if f.fetchIDStates != nil {
 		for id, state := range f.fetchIDStates {
 			if _, ok := wanted[id]; ok {
@@ -230,6 +241,12 @@ func (f *fakeIssueStateTracker) setFetchIDStates(states map[string]string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetchIDStates = states
+}
+
+func (f *fakeIssueStateTracker) setFetchIDIssueStates(states map[string]tracker.IssueState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fetchIDIssueStates = states
 }
 
 func (f *fakeIssueStateTracker) setFetchIDErr(err error) {
