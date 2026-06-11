@@ -180,8 +180,10 @@ specific observed failure per the "Earned rules" principle.
 1. **Audit adjacent paths for aiops-platform extensions before
    touching a SPEC code path.** Upstream Symphony is single-project;
    this port layers extensions on top of the SPEC algorithm
-   (service routing via `selectRoutedCandidates`, multi-tracker
-   fan-out, per-state capacity caps, reconciliation hooks).
+   (per-state capacity caps via `UpdateMaxConcurrentAgentsByState`,
+   the eligibility/required-labels gates in `filterEligibleCandidates`,
+   dispatch revalidation via `revalidateDispatchCandidates`,
+   reconciliation hooks).
    When you touch a path that consumes a SPEC concept (candidates,
    retries, dispatch, reconcile), `grep` the symbol and list the
    other consumers. Every aiops-platform-specific filter they apply
