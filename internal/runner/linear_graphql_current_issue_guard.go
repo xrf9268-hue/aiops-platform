@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
 const (
@@ -339,7 +341,7 @@ func (p linearGraphQLProxy) lookupWorkflowStateIDs(ctx context.Context, stateNam
 	if err != nil {
 		return nil, fmt.Errorf("send Linear workflowStates lookup: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer tracker.DrainAndClose(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("linear workflowStates lookup failed: %s", resp.Status)
 	}

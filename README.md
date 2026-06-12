@@ -63,8 +63,8 @@ brand/UX rationale.
 - `internal/workflow` — loads the repo-owned `WORKFLOW.md` configuration and
   prompt body, with defaults and normalization.
 - `internal/tracker` — tracker abstraction with Linear and GitHub clients.
-- `internal/gitea` — Gitea tracker client plus the Gitea PR-tool exposed through
-  the agent/tool surface (not a worker-side PR handoff).
+- `internal/gitea` — Gitea tracker client plus the label-state helpers behind
+  the agent-side `gitea_issue_labels` tool.
 - `internal/runner` — runner abstraction for `mock`, `codex-app-server`, and `claude`.
 - `internal/workspace` — deterministic Git workspace management, task files, and
   cached artifacts.

@@ -141,7 +141,11 @@ func (r *reportBuilder) checkLinearGraphQL(ctx context.Context, cfg workflow.Con
 }
 
 func decodeLinearProjectProbe(resp *http.Response, out any) error {
-	defer closeBody(resp.Body)
+	// The doctor probes every configured project slug through one shared
+	// HTTPClient, so an undrained non-2xx body costs a fresh TCP+TLS
+	// handshake per slug exactly when Linear is unhealthy (#771, the #762
+	// drain class).
+	defer tracker.DrainAndClose(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("linear returned %s", resp.Status)
 	}
