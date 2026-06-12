@@ -294,7 +294,10 @@ Before taking any action on an existing PR — and again **before every push**
    (e.g. `Claude <noreply@anthropic.com>`).
 2. **Liveness signals:** a push, review-thread reply, or PR-body edit within
    the last ~15 minutes; reviewer-bot findings being answered minutes after
-   they appear.
+   they appear. **Count only activity that is not your own**: the probe
+   detects *another* active session, so exclude pushes whose head SHA you
+   just published and comments/body edits/thread replies you authored this
+   session — a driver must never back off from its own footprint.
 
 Both signal classes present → treat the PR as **owned** and apply the
 collaboration policy below autonomously. Identity signals persist for the
