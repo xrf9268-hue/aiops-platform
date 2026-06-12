@@ -164,6 +164,20 @@ Run it **on every pushed head**, not once per PR.
      and base still match the recorded trigger refs.
    Do not automate the last case by parsing Codex natural-language output; an
    unattended gate that lacks a structured clean signal should fail closed.
+
+   **Poll-loop implementation constraints** (earned: the PR #774 second-round
+   watch stalled silently for 16+ rounds, 2026-06-12). The interactive shell
+   on this machine is zsh, whose builtin `echo` interprets backslash escapes
+   by default (`man zshbuiltins`) — piping rich-text JSON through
+   `echo "$var"` turns the `\n` escapes inside review/comment `body` fields
+   into real control characters and breaks every JSON parser downstream,
+   while small scalar JSON survives, making the breakage look intermittent.
+   Therefore: keep the predicate inside `--jq` and emit only small
+   scalars/flags (as the commands above already do); use `printf '%s' "$var"`
+   when a variable must carry JSON; and never silence the producer's stderr
+   inside a poll loop — print an `ERR:` line on fetch/parse failure, because
+   a watcher whose failure mode is silence is indistinguishable from "still
+   waiting".
 3. **CI green** uses native `gh pr checks <pr> --watch --fail-fast` (blocks to
    completion) — never `sleep`-poll.
 4. Local review **does not replace** this gate: the GitHub Codex bot and the
