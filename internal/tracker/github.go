@@ -299,7 +299,7 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer DrainAndClose(resp)
 	if githubRateLimited(resp) {
 		return nil, false, NewRateLimitedError("list GitHub issues", resp.StatusCode, resp.Header)
 	}
@@ -372,7 +372,7 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer DrainAndClose(resp)
 	if githubRateLimited(resp) {
 		return nil, false, NewRateLimitedError("list GitHub pull requests", resp.StatusCode, resp.Header)
 	}
@@ -688,7 +688,7 @@ func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (g
 	if err != nil {
 		return githubIssue{}, false, err
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer DrainAndClose(resp)
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return githubIssue{}, false, nil
 	}
