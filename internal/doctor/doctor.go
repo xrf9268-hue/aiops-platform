@@ -76,7 +76,7 @@ func BuildReport(ctx context.Context, opts Options) Report {
 	r.checkProjectToolchain(ctx)
 	r.checkDockerCompose(ctx)
 	if wf != nil {
-		r.checkLinear(ctx, wf.Config)
+		r.checkTracker(ctx, wf.Config)
 		r.checkCodex(ctx, wf.Config)
 		r.checkGitHubAgent(ctx, wf.Config)
 		r.checkSandbox(ctx, wf.Config)

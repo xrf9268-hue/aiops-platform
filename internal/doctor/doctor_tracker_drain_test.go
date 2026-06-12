@@ -88,3 +88,9 @@ func TestDecodeLinearProjectProbeDrainsResponseBodies(t *testing.T) {
 		})
 	}
 }
+
+// The Gitea/GitHub tracker preflight has no doctor-side drain tests anymore:
+// it drives the worker's own tracker clients, whose poll paths own the
+// response-body lifecycle (tracker.DrainAndClose in internal/gitea
+// tracker_client.go and internal/tracker github.go, pinned by those
+// packages' drain tests — #762/#771).

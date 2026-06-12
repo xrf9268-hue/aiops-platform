@@ -483,7 +483,9 @@ func TestCheckProjectToolchainSkippedForBinaryDeploy(t *testing.T) {
 
 func TestBuildReportRealModeUsesCustomCodexCommandForAppServerProbe(t *testing.T) {
 	wrapper := installFakeCodexWrapper(t)
-	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
+	// The no-failure sweep below needs the real-mode Gitea tracker preflight
+	// (#781) to succeed, so supply an api_key and a stub endpoint.
+	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server", "\n  api_key: token\n  endpoint: "+trackerPreflightStubURL(t))
 	report := BuildReport(context.Background(), Options{
 		WorkflowPath: path,
 		Mode:         "real",
@@ -586,8 +588,10 @@ func TestBuildReportRealModeFailsWithoutGoModuleForTargetedTest(t *testing.T) {
 
 func TestBuildReportRealModeWarnsWithoutExplicitGoTestDir(t *testing.T) {
 	installFakeGitOnly(t)
+	// The HasFailures assertion below needs the real-mode Gitea tracker
+	// preflight (#781) to succeed, so point tracker.endpoint at a stub.
 	report := BuildReport(context.Background(), Options{
-		WorkflowPath: writeWorkflow(t, "gitea", "token"),
+		WorkflowPath: writeWorkflowBody(t, "gitea", "token", "mock", "\n  endpoint: "+trackerPreflightStubURL(t)),
 		Mode:         "real",
 		Runner:       fakeRealRunner,
 	})
@@ -760,7 +764,7 @@ if [ "$1" = "app-server" ]; then
 fi
 exit 1
 `)
-	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
+	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server", "")
 	report := BuildReport(context.Background(), Options{
 		WorkflowPath: path,
 		Mode:         "real",
@@ -792,7 +796,7 @@ if [ "$1" = "app-server" ]; then
 fi
 exit 1
 `)
-	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server")
+	path := writeWorkflowWithCodexCommand(t, wrapper+" app-server", "")
 	report := BuildReport(context.Background(), Options{
 		WorkflowPath: path,
 		Mode:         "real",
@@ -970,6 +974,18 @@ func writeWorkflow(t *testing.T, trackerKind, apiKey string) string {
 	return writeWorkflowBody(t, trackerKind, apiKey, "mock", "")
 }
 
+// trackerPreflightStubURL serves an empty JSON body for the real-mode tracker
+// preflight probes (#781) so fixtures whose reports must stay failure-free
+// never depend on a live tracker endpoint.
+func trackerPreflightStubURL(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
 func writeWorkflowWithEndpoint(t *testing.T, endpoint, agent string) string {
 	t.Helper()
 	body := "\n  endpoint: " + endpoint
@@ -1000,7 +1016,7 @@ prompt
 	return path
 }
 
-func writeWorkflowWithCodexCommand(t *testing.T, command string) string {
+func writeWorkflowWithCodexCommand(t *testing.T, command, extraTracker string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
@@ -1010,7 +1026,7 @@ repo:
   name: r
   clone_url: https://example.invalid/o/r.git
 tracker:
-  kind: gitea
+  kind: gitea` + extraTracker + `
 agent:
   default: codex-app-server
 codex:
