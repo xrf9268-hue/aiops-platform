@@ -27,6 +27,8 @@ func TestParseRetryAfter(t *testing.T) {
 		{"unparseable value", "soon", 0},
 		{"negative delta", "-5", 0},
 		{"overflowing delta saturates", "10000000000", maxRetryAfter},
+		{"delta beyond int64 saturates", "99999999999999999999999", maxRetryAfter},
+		{"negative delta beyond int64", "-99999999999999999999999", 0},
 		{"zero delta", "0", 0},
 	}
 	for _, tc := range cases {
@@ -233,6 +235,16 @@ func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
 		}
 	})
 
+	t.Run("403 with remaining quota stays a generic status error", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "41")
+			w.WriteHeader(http.StatusForbidden)
+		})
+		if errors.Is(err, ErrRateLimited) {
+			t.Fatalf("err = %v; want a 403 with remaining quota not classified as ErrRateLimited", err)
+		}
+	})
+
 	t.Run("plain 403 stays a generic status error", func(t *testing.T) {
 		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
@@ -271,6 +283,21 @@ func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
 		assertRateLimited(t, err, 30*time.Second)
 	})
 
+	// The 403 shape must classify on every GitHub site, not only the issue
+	// listing: each remaining endpoint gets its own 403 subtest so reverting
+	// any single site to a 429-only check fails here.
+	t.Run("open pull request claims scan surfaces 403 rate limit", func(t *testing.T) {
+		client := githubRateLimitTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/repos/acme/api/pulls" {
+				t.Fatalf("request path = %q; want only the open-PR claims scan before the 403 aborts the listing", r.URL.Path)
+			}
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		_, err := client.ListIssuesByStates(context.Background(), []string{"open"})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+
 	t.Run("issue state refresh surfaces 429", func(t *testing.T) {
 		client := githubRateLimitTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/repos/acme/api/issues/1" {
@@ -281,5 +308,17 @@ func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
 		}))
 		_, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "500", Identifier: "#1"}})
 		assertRateLimited(t, err, 30*time.Second)
+	})
+
+	t.Run("issue state refresh surfaces 403 rate limit", func(t *testing.T) {
+		client := githubRateLimitTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/repos/acme/api/issues/1" {
+				t.Fatalf("request path = %q; want the per-issue state refresh", r.URL.Path)
+			}
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+		}))
+		_, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "500", Identifier: "#1"}})
+		assertRateLimited(t, err, 0)
 	})
 }
