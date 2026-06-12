@@ -63,7 +63,6 @@ Implemented:
 - deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout
 - basic path policy
 - verification commands
-- Gitea PR client code for the agent-side PR tool
 - `linear_graphql` dynamic tool advertisement and invocation for Codex app-server sessions, proxying Linear GraphQL through orchestrator-held auth without exposing the Linear token to the agent process
 
 Not yet implemented:

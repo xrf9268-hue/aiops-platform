@@ -144,7 +144,7 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
    freed-up surface to reach the next horizon.
 5. **Few sharp tools beat many overlapping ones.** When the
    agent's tool surface lands (#76), aim for the smallest set of
-   focused tools (`linear_graphql`, one Gitea PR tool, etc.); resist
+   focused tools (`linear_graphql`, `gitea_issue_labels`, etc.); resist
    the temptation to wrap every Gitea / Linear endpoint as a separate
    tool.
 6. **Upstream absence is an over-design signal; delete, don't relocate.**
@@ -287,7 +287,7 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 | `internal/runner` | Runner abstraction: `mock`, `codex-app-server`, `claude` |
 | `internal/workspace` | Deterministic git workspace, hooks, run artifacts |
 | `internal/tracker` | Tracker abstraction with Linear client |
-| `internal/gitea` | Gitea tracker/client support and PR/tool helpers |
+| `internal/gitea` | Gitea tracker client and label-state/config helpers for the agent tool surface |
 | `internal/worker` | Worker lifecycle |
 | `internal/task` | Task event constants |
 | `docs/adr/` | Architectural decisions (start here for "why") |
