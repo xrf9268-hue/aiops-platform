@@ -160,3 +160,31 @@ Create detailed flow docs when:
 - Multiple teams are involved
 - Data format is complex
 - Feature has caused bugs before
+
+---
+
+## Preflight / Health Checks Mirror the Real Consumer
+
+A preflight (doctor check, health probe, smoke test) and the runtime path it
+protects form a cross-layer boundary: when the probe exercises a *weaker
+proxy* of what the consumer actually calls, a credential or config that
+passes preflight can still fail the first real request.
+
+### Checklist: When Adding a Preflight or Health Check
+
+- [ ] List the exact endpoints/calls the runtime consumer makes (read its
+  client code, not its docs)
+- [ ] Probe those endpoints with the same resolution chain (base URL, auth
+  header shape, env fallbacks) the consumer uses — cite the consumer's
+  file:line in a comment
+- [ ] Ask whether the proxy you planned needs *fewer permissions* than the
+  real call (scopes, fine-grained tokens); if yes, probe the real call
+- [ ] Pin the probe request shapes in tests so probe/consumer drift fails CI
+
+**Real-world example (#781)**: doctor's Gitea/GitHub tracker preflight first
+probed `/user` + repo *labels*. The GitHub poll loop actually lists
+`/pulls` (claimed-issue detection) before `/issues`, and a fine-grained PAT
+can hold Issues:read without Pull requests:read — so a token could pass
+doctor and fail every poll. Fixed by probing the worker's actual poll
+endpoints (`internal/doctor/doctor_tracker.go`, request shapes pinned in
+`doctor_tracker_preflight_test.go`).
