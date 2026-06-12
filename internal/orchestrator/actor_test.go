@@ -666,7 +666,18 @@ func TestContinuationRetryTimerRequiresTrackerRecheckedDispatch(t *testing.T) {
 	}
 
 	disp.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
-	time.Sleep(20 * time.Millisecond)
+	// A fired continuation retry is a poll-loop wake, not a dispatch
+	// (fireWakeSignal). Receiving the wake proves the 1ms timer fired and the
+	// actor processed the retryFireOp without spawning. This relies on
+	// fireWakeSignal being the only queuePollWake producer reachable in this
+	// scenario (no RequestRefresh, no cleanup recheck); if a future wake
+	// producer fires earlier in this flow, this select stops proving the
+	// timer fired and the test must wait on a fire-specific signal instead.
+	select {
+	case <-o.retryWakeCh():
+	case <-time.After(5 * time.Second):
+		t.Fatal("continuation retry timer fire did not queue a poll wake")
+	}
 
 	if got := disp.count(); got != 1 {
 		t.Fatalf("continuation retry timer spawned without tracker recheck: got %d dispatches, want 1", got)
@@ -2184,6 +2195,10 @@ func TestReconcileTerminalCleanupGivesUpAfterPersistentStateRefreshFailure(t *te
 	wantCalls := maxReconciledCleanupStateRetries + 1
 	waitFor(t, func() bool { return refresher.count() >= wantCalls }, 2*time.Second)
 	settled := refresher.count()
+	// Fixed sleep is the assertion here, not synchronization: the give-up
+	// contract is the ABSENCE of further probes, which emits no signal to wait
+	// on, so a bounded quiescence window (generous vs the ~1ms backoff in play)
+	// is the only way to observe "the loop stopped".
 	time.Sleep(50 * time.Millisecond)
 	if got := refresher.count(); got != settled {
 		t.Fatalf("resolver kept being probed after give-up: count went %d -> %d; want it to stop", settled, got)
@@ -2229,7 +2244,12 @@ func TestReconcileTerminalCleanupRetryUsesFailureBackoffSchedule(t *testing.T) {
 
 	wantRetries := maxReconciledCleanupStateRetries
 	waitFor(t, func() bool { return refresher.count() >= wantRetries+1 }, 2*time.Second)
-	time.Sleep(50 * time.Millisecond) // let the give-up settle before reading requests
+	// Every failure-backoff NextDelay precedes its probe, so the waitFor above
+	// already guarantees all wanted scheduler requests are recorded. The fixed
+	// sleep is a quiescence window for the negative half of the assertion — a
+	// buggy give-up that reschedules the carried continuation would do so right
+	// after the final probe, and that absence emits no signal to wait on.
+	time.Sleep(50 * time.Millisecond)
 
 	var failureAttempts []int
 	for _, req := range scheduler.snapshotRequests() {
@@ -2829,8 +2849,10 @@ func TestFinalize_AbnormalExitHoldsClaimAcrossScheduleRetryGap(t *testing.T) {
 		}()
 	}
 	// Give the spammers a moment to ramp up so several dispatchOps
-	// are guaranteed to be queued behind finalizeRunOp by the time
-	// the actor processes it.
+	// are likely queued behind finalizeRunOp by the time the actor
+	// processes it. A fixed sleep is correct here: it injects scheduling
+	// pressure to amplify the race (best-effort), it does not synchronize
+	// any assertion — correctness is asserted via waitFor below.
 	time.Sleep(10 * time.Millisecond)
 
 	disp.finishAt(0, WorkerResult{Err: errors.New("fail"), Elapsed: 0})
@@ -3309,7 +3331,23 @@ func TestRetryFire_RespectsCapacityBeforeSpawning(t *testing.T) {
 	}
 	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
 
-	time.Sleep(80 * time.Millisecond)
+	// Deterministic fire signal: a retry fired at capacity defers via
+	// capacityDeferRetry, rescheduling with a bumped attempt counter — wait for
+	// that observable instead of sleeping out the 20ms backoff. On timeout,
+	// report the last-observed state: a regression that spawns over capacity
+	// drains Retrying, so the generic waitFor message would otherwise hide the
+	// informative spawn-count evidence below.
+	deferDeadline := time.Now().Add(5 * time.Second)
+	for {
+		v, err := o.Snapshot(context.Background())
+		if err == nil && len(v.Retrying) == 1 && v.Retrying[0].Attempt >= 2 {
+			break
+		}
+		if time.Now().After(deferDeadline) {
+			t.Fatalf("capacity-deferred retry not observed within 5s: Spawn calls = %d, retrying = %+v; want 2 spawns and one retrying entry with Attempt >= 2", disp.count(), v.Retrying)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	v, err := o.Snapshot(context.Background())
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)

@@ -17,6 +17,17 @@ import (
 // goroutines.
 func captureOrchestratorLog(t *testing.T, fn func()) string {
 	t.Helper()
+	read := captureOrchestratorLogReader(t)
+	fn()
+	return read()
+}
+
+// captureOrchestratorLogReader installs the buffer capture and returns a
+// snapshot reader so callers that race a logging goroutine (safeGo's deferred
+// recoverPanic flushes after the test-observable defer) can poll the buffer
+// to a deadline instead of sleeping a fixed interval.
+func captureOrchestratorLogReader(t *testing.T) func() string {
+	t.Helper()
 	var buf bytes.Buffer
 	var mu sync.Mutex
 	origOut := log.Writer()
@@ -27,10 +38,11 @@ func captureOrchestratorLog(t *testing.T, fn func()) string {
 		log.SetOutput(origOut)
 		log.SetFlags(origFlags)
 	})
-	fn()
-	mu.Lock()
-	defer mu.Unlock()
-	return buf.String()
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
 }
 
 type safeBufferWriter struct {
@@ -45,26 +57,37 @@ func (w safeBufferWriter) Write(p []byte) (int, error) {
 }
 
 func TestSafeGoConfinesPanic(t *testing.T) {
+	read := captureOrchestratorLogReader(t)
 	done := make(chan struct{})
-	got := captureOrchestratorLog(t, func() {
-		safeGo("test.site", func() {
-			defer close(done)
-			panic("boom")
-		})
-		<-done
-		// Give the deferred recoverPanic time to flush its log line.
-		time.Sleep(10 * time.Millisecond)
+	safeGo("test.site", func() {
+		defer close(done)
+		panic("boom")
 	})
-	for _, want := range []string{
-		"event=panic",
-		"site=test.site",
-		"panic=boom",
-		"stack=",
-	} {
+	<-done
+	// close(done) is fn's own defer, so it runs before safeGo's outer
+	// recoverPanic flushes the log line: poll the captured buffer until the
+	// line lands instead of sleeping a fixed interval.
+	wants := []string{"event=panic", "site=test.site", "panic=boom", "stack="}
+	got := read()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !containsAll(got, wants) {
+		time.Sleep(time.Millisecond)
+		got = read()
+	}
+	for _, want := range wants {
 		if !strings.Contains(got, want) {
 			t.Errorf("safeGo panic log missing %q in:\n%s", want, got)
 		}
 	}
+}
+
+func containsAll(s string, subs []string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRecoverPanicEmitsStructuredLine(t *testing.T) {
