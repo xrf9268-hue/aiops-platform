@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -84,6 +85,20 @@ type githubPullRequestSummary struct {
 	Body    string `json:"body"`
 	State   string `json:"state"`
 	HTMLURL string `json:"html_url"`
+}
+
+// NewGitHubClientFromEnv builds the GitHub tracker client with the base URL
+// resolved exactly as the worker dispatch does: tracker.endpoint first, then
+// the GITHUB_API_BASE_URL environment variable, then the constructor's
+// api.github.com default. Shared by cmd/worker and internal/doctor so the
+// doctor preflight can never drift from the poll loop's resolution (PR #801
+// drift class).
+func NewGitHubClientFromEnv(cfg workflow.TrackerConfig, owner, repo string) *GitHubClient {
+	baseURL := cfg.Endpoint
+	if baseURL == "" {
+		baseURL = os.Getenv("GITHUB_API_BASE_URL")
+	}
+	return NewGitHubClient(cfg, baseURL, owner, repo)
 }
 
 func NewGitHubClient(cfg workflow.TrackerConfig, baseURL, owner, repo string) *GitHubClient {

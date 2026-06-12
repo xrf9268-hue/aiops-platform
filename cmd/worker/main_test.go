@@ -2059,6 +2059,55 @@ func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
 	}
 }
 
+// TestTrackerClientForWorkflowUsesGiteaLocalhostDefaultWhenNoEnvAndNoConfig
+// pins the all-empty arm of the shared gitea.BaseURLFromEnv resolution: with
+// no endpoint, no legacy project_slug, and no GITEA_BASE_URL, both the worker
+// and doctor must land on the local-dev default.
+func TestTrackerClientForWorkflowUsesGiteaLocalhostDefaultWhenNoEnvAndNoConfig(t *testing.T) {
+	t.Setenv("GITEA_BASE_URL", "")
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.Kind = "gitea"
+	cfg.Repo.Owner = "owner"
+	cfg.Repo.Name = "repo"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("tracker client: %v", err)
+	}
+	giteaClient, ok := client.(*gitea.TrackerClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
+	}
+	if giteaClient.BaseURL != "http://localhost:3000" {
+		t.Fatalf("base URL = %q, want the http://localhost:3000 default with no endpoint/env", giteaClient.BaseURL)
+	}
+}
+
+// TestTrackerClientForWorkflowUsesGitHubDefaultWhenNoEnvAndNoEndpoint pins
+// the all-empty arm of the shared tracker.NewGitHubClientFromEnv resolution:
+// with no endpoint and no GITHUB_API_BASE_URL, both the worker and doctor
+// must land on the constructor's api.github.com default.
+func TestTrackerClientForWorkflowUsesGitHubDefaultWhenNoEnvAndNoEndpoint(t *testing.T) {
+	t.Setenv("GITHUB_API_BASE_URL", "")
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.Owner = "owner"
+	cfg.Repo.Name = "repo"
+	cfg.Tracker.Kind = "github"
+	cfg.Tracker.APIKey = "github-token"
+
+	client, err := trackerClientForWorkflow(cfg)
+	if err != nil {
+		t.Fatalf("trackerClientForWorkflow: %v", err)
+	}
+	githubClient, ok := client.(*tracker.GitHubClient)
+	if !ok {
+		t.Fatalf("client type = %T, want *tracker.GitHubClient", client)
+	}
+	if githubClient.BaseURL != "https://api.github.com" {
+		t.Fatalf("github base URL = %q, want the https://api.github.com default with no endpoint/env", githubClient.BaseURL)
+	}
+}
+
 func TestTrackerClientForWorkflowBuildsGitHubClient(t *testing.T) {
 	cfg := workflow.DefaultConfig()
 	cfg.Repo.Owner = "xrf9268-hue"
