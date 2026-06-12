@@ -335,6 +335,10 @@ an active remote `fix/<n>-*` branch — list with
 `gh api 'repos/<owner>/<repo>/commits?sha=<branch>&per_page=1' --jq '.[0].commit.committer.date'`
 (`ls-remote` carries no timestamps; the query form keeps slash-containing
 branch names out of the URL path; "active" = committed within ~15
-minutes). An open PR → switch to the PR-phase flow with this probe; an
-active branch without a PR → adopt that branch as base instead of
-re-implementing; neither → free to start.
+minutes). An open PR → switch to the PR-phase flow with this probe. An
+**active** branch without a PR means an owner is mid-flight before opening
+its PR — do not adopt it and start driving (that recreates the two-driver
+race outside the PR-phase guard); observe instead, re-probing on the same
+cadence as the per-finding window, until either the PR appears (→ PR-phase
+flow) or the branch goes idle past the liveness window (→ adopt it as base
+instead of re-implementing). No PR and no live branch → free to start.
