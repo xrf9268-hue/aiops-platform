@@ -327,8 +327,9 @@ the human which mode was chosen; do not block waiting for an answer.
 the issue for an existing open PR (`Closes #N` search / linked PRs) and for
 an active remote `fix/<n>-*` branch — list with
 `git ls-remote origin 'refs/heads/fix/<n>-*'`, then judge liveness with
-`gh api repos/<owner>/<repo>/commits/<branch> --jq .commit.committer.date`
-(`ls-remote` carries no timestamps; "active" = committed within ~15
+`gh api 'repos/<owner>/<repo>/commits?sha=<branch>&per_page=1' --jq '.[0].commit.committer.date'`
+(`ls-remote` carries no timestamps; the query form keeps slash-containing
+branch names out of the URL path; "active" = committed within ~15
 minutes). An open PR → switch to the PR-phase flow with this probe; an
 active branch without a PR → adopt that branch as base instead of
 re-implementing; neither → free to start.
