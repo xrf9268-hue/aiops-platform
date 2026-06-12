@@ -81,22 +81,33 @@ orchestrator state:
 export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
 export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
-# For tracker.kind: linear
+# For tracker.kind: linear  (consumed via WORKFLOW.md "api_key: $LINEAR_API_KEY")
 export LINEAR_API_KEY=your-linear-personal-key
 # Set tracker.project_slug in WORKFLOW.md to the Linear project slugId.
 # Example: a Linear project URL ending in /project/aiops-platform-abc123
 # uses project_slug: aiops-platform-abc123.
 
-# For tracker.kind: gitea
-# Set tracker.endpoint in WORKFLOW.md to the Gitea base URL.
+# For tracker.kind: gitea  (consumed via WORKFLOW.md "api_key: $GITEA_TOKEN")
+# Set tracker.endpoint in WORKFLOW.md to the Gitea base URL — a literal URL
+# or "endpoint: $GITEA_BASE_URL"; the bare export below is only the runtime
+# fallback when tracker.endpoint is empty.
 export GITEA_BASE_URL=https://gitea.example.com
 export GITEA_TOKEN=your-gitea-bot-token
 
-# For tracker.kind: github
+# For tracker.kind: github  (consumed via WORKFLOW.md "api_key: $GITHUB_TOKEN")
 export GITHUB_TOKEN=$(gh auth token -h github.com)
 
 go run ./cmd/worker
 ```
+
+The worker never reads these tracker tokens directly: a token reaches it only
+when `tracker.api_key` in the selected `WORKFLOW.md` references the variable as
+the entire field value (`$VAR` / `${VAR}`). The shipped examples already wire
+the right variable per tracker kind — `examples/WORKFLOW.md`
+(`api_key: $LINEAR_API_KEY`), `examples/gitea-WORKFLOW.md`
+(`api_key: $GITEA_TOKEN`), `examples/github-local-WORKFLOW.md`
+(`api_key: $GITHUB_TOKEN`). Exporting a token without that `api_key` line
+leaves the worker unauthenticated against the tracker.
 
 `WORKFLOW.md` front matter is the source of truth for runtime workspace
 placement: when `workspace.root` is set in the selected workflow, the worker

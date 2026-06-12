@@ -8,6 +8,11 @@ repo:
 tracker:
   kind: gitea
   endpoint: http://gitea.local
+  # Worker-held token for polling and the agent tool surface; expanded from
+  # the worker's environment, never exposed to the agent. The worker does not
+  # read GITEA_TOKEN directly — this whole-value $VAR reference is the only
+  # way the token reaches it.
+  api_key: $GITEA_TOKEN
   # Optional: raise this for large Gitea repositories. A cap hit skips only the
   # overflowing aiops/* state label and logs the diagnostic.
   # pagination_max_pages: 25
