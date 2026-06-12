@@ -22,6 +22,14 @@ const (
 	listIssuesMaxPages = 20
 )
 
+// defaultGiteaRequestTimeout bounds a single Gitea HTTP request when the
+// caller does not set TrackerClient.RequestTimeout explicitly. SPEC §8.1's
+// poll-tick cadence is minute-scale, so a 30 s per-request ceiling
+// catches hung-but-not-yet-RST connections (the failure mode #295
+// described — TCP half-open, NLB blackhole, slow server) well before
+// the OS-level keepalive RTO trips.
+const defaultGiteaRequestTimeout = 30 * time.Second
+
 // Issue is the subset of Gitea's issue JSON used by the tracker reader.
 type Issue struct {
 	ID        int64   `json:"id"`
