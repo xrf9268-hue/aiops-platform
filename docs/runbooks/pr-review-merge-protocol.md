@@ -314,9 +314,12 @@ the human which mode was chosen; do not block waiting for an answer.
   owned in the first place). If the owner pushes a fix: adopt it — fetch,
   reset the local view to the remote head, verify their fix against the
   finding, and contribute only what is still missing (tests, pins, doc
-  contracts, refutation records). If the window passes with a verified
-  fetch showing no new remote push: take over from the current remote head
-  and run the normal per-push gate.
+  contracts, refutation records). Take over only when the window passes
+  with **no non-own liveness signal at all** — a verified fetch showing no
+  new remote push *and* no owner thread reply or body edit; any owner
+  activity inside the window restarts it (the owner may answer the bot
+  first and push later). Then take over from the current remote head and
+  run the normal per-push gate.
 - **Remote is the base, always.** On any push rejection, never push over an
   owner head you have not incorporated, and never re-apply a local
   equivalent over the owner's version: fetch, diff remote vs local, keep
