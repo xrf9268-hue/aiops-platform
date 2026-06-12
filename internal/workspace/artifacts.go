@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -157,9 +156,7 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 			return fmt.Errorf("close git exclude %s: %w", excludePath, err)
 		}
 	}
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--absolute-git-dir")
-	cmd.Dir = workdir
-	out, err := cmd.Output()
+	out, err := runGitOutput(ctx, workdir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return fmt.Errorf("resolve worktree git dir: %w", err)
 	}
@@ -181,9 +178,7 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 }
 
 func gitPath(ctx context.Context, workdir, rel string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-path", rel)
-	cmd.Dir = workdir
-	out, err := cmd.Output()
+	out, err := runGitOutput(ctx, workdir, "rev-parse", "--git-path", rel)
 	if err != nil {
 		return "", fmt.Errorf("resolve git path %s: %w", rel, err)
 	}
