@@ -424,6 +424,10 @@ func TestCleanupRecheckActiveAfterOperatorTerminalStopDoesNotResumeContinuation(
 		view, _ := o.Snapshot(context.Background())
 		return len(view.Retrying) == 0 && len(view.OperatorTerminalStops) == 1
 	}, time.Second)
+	// Fixed quiescence window: the off-actor cleanup recheck must NOT resume
+	// the continuation under a sticky operator stop, and that sticky path
+	// returns without any observable state change — there is no signal to wait
+	// on, so a bounded window is the only way to observe the absence.
 	time.Sleep(25 * time.Millisecond)
 
 	view, err := o.Snapshot(context.Background())

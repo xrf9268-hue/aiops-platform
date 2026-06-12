@@ -1049,8 +1049,9 @@ func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T)
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
-	// Give the orchestrator a beat to evaluate. No dispatches expected.
-	time.Sleep(50 * time.Millisecond)
+	// No wait needed: PollOnce dispatches synchronously — each candidate's
+	// RequestDispatchAfterTrackerRecheck returns only after Dispatcher.Spawn
+	// ran (or the claim gate denied it), so the count is final here.
 	if got := dispatcher.count(); got != 0 {
 		t.Fatalf("dispatcher count = %d, want 0 (Closed/Duplicate blockers must be treated as open under operator config without them)", got)
 	}
