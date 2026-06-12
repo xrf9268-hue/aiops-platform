@@ -335,10 +335,12 @@ the human which mode was chosen; do not block waiting for an answer.
 the issue for an existing open PR (`Closes #N` search / linked PRs) and for
 an active remote `fix/<n>-*` branch — list with
 `git ls-remote origin 'refs/heads/fix/<n>-*'`, then judge liveness with
-`gh api 'repos/<owner>/<repo>/commits?sha=<branch>&per_page=1' --jq '.[0].commit.committer.date'`
-(`ls-remote` carries no timestamps; the query form keeps slash-containing
-branch names out of the URL path; "active" = committed within ~15
-minutes). An open PR → switch to the PR-phase flow with this probe. An
+`gh api 'repos/<owner>/<repo>/activity?ref=refs/heads/<branch>&per_page=1' --jq '.[0] | {timestamp, actor: .actor.login}'`
+(`ls-remote` carries no timestamps, and a commit's `committer.date` is
+when it was *created*, not when it was *pushed* — an old commit pushed
+seconds ago must still read as live; the activity endpoint records
+per-ref push time plus the actor, which also feeds the
+own-footprint exclusion above; "active" = pushed within ~15 minutes). An open PR → switch to the PR-phase flow with this probe. An
 **active** branch without a PR means an owner is mid-flight before opening
 its PR — do not adopt it and start driving (that recreates the two-driver
 race outside the PR-phase guard); observe instead, re-probing on the same
