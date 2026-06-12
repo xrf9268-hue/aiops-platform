@@ -460,8 +460,11 @@ func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (
 	if resp.StatusCode == http.StatusNotFound {
 		return Issue{}, false, nil
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return Issue{}, false, tracker.NewRateLimitedError(fmt.Sprintf("get Gitea issue #%d", issueNumber), resp.StatusCode, resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Issue{}, false, fmt.Errorf("get Gitea issue #%d failed: %s", issueNumber, resp.Status)
+		return Issue{}, false, fmt.Errorf("get Gitea issue #%d failed: status %d", issueNumber, resp.StatusCode)
 	}
 	var issue Issue
 	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
@@ -516,8 +519,11 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 		return nil, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, false, tracker.NewRateLimitedError("list Gitea issues", resp.StatusCode, resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, false, fmt.Errorf("list Gitea issues failed: %s", resp.Status)
+		return nil, false, fmt.Errorf("list Gitea issues failed: status %d", resp.StatusCode)
 	}
 	var issues []Issue
 	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
