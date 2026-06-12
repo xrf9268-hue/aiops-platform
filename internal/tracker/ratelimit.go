@@ -34,18 +34,48 @@ func (e *RateLimitedError) Error() string {
 // duration so delta-seconds arithmetic can never overflow.
 const maxRetryAfter = time.Duration(1<<63 - 1)
 
-// NewRateLimitedError classifies an HTTP 429 for operation (e.g. "list
-// GitHub issues") under CategoryRateLimited, parsing the response's
-// Retry-After header. The message carries the numeric status code only: the
-// reason phrase in resp.Status is proxy-controlled text and is kept out of
-// the tracker clients' error strings (this sweep's class; agent-tool and
-// diagnostic surfaces are outside it).
-func NewRateLimitedError(operation string, header http.Header) *Error {
+// NewRateLimitedError classifies a rate-limit response (HTTP 429, or
+// GitHub's documented 403 form) for operation (e.g. "list GitHub issues")
+// under CategoryRateLimited, parsing the retry hint from Retry-After or the
+// epoch-seconds X-RateLimit-Reset fallback. The message carries the numeric
+// status code only: the reason phrase in resp.Status is proxy-controlled
+// text and is kept out of the tracker clients' error strings (this sweep's
+// class; agent-tool and diagnostic surfaces are outside it).
+func NewRateLimitedError(operation string, statusCode int, header http.Header) *Error {
 	return NewError(
 		CategoryRateLimited,
-		fmt.Sprintf("%s failed: status %d", operation, http.StatusTooManyRequests),
-		&RateLimitedError{RetryAfter: parseRetryAfter(header.Get("Retry-After"), time.Now())},
+		fmt.Sprintf("%s failed: status %d", operation, statusCode),
+		&RateLimitedError{RetryAfter: retryAfterHint(header, time.Now())},
 	)
+}
+
+// retryAfterHint prefers the standard Retry-After header (GitHub secondary
+// limits, Gitea/Linear 429s) and falls back to the de-facto-standard
+// epoch-seconds X-RateLimit-Reset that GitHub primary limits carry when
+// Retry-After is absent.
+func retryAfterHint(header http.Header, now time.Time) time.Duration {
+	if d := parseRetryAfter(header.Get("Retry-After"), now); d > 0 {
+		return d
+	}
+	return parseRateLimitReset(header.Get("X-RateLimit-Reset"), now)
+}
+
+// parseRateLimitReset converts an epoch-seconds reset stamp to a duration
+// from now. Missing, unparseable, non-positive, or already-elapsed stamps
+// yield zero; time.Sub saturates, so oversized stamps cannot overflow.
+func parseRateLimitReset(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	epoch, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || epoch <= 0 {
+		return 0
+	}
+	if remaining := time.Unix(epoch, 0).Sub(now); remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 // parseRetryAfter parses the two RFC 9110 §10.2.3 Retry-After forms:

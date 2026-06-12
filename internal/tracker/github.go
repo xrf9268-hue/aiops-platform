@@ -300,8 +300,8 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 		return nil, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, false, NewRateLimitedError("list GitHub issues", resp.Header)
+	if githubRateLimited(resp) {
+		return nil, false, NewRateLimitedError("list GitHub issues", resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, false, fmt.Errorf("list GitHub issues failed: status %d", resp.StatusCode)
@@ -373,8 +373,8 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 		return nil, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, false, NewRateLimitedError("list GitHub pull requests", resp.Header)
+	if githubRateLimited(resp) {
+		return nil, false, NewRateLimitedError("list GitHub pull requests", resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, false, fmt.Errorf("list GitHub pull requests failed: status %d", resp.StatusCode)
@@ -510,6 +510,23 @@ func nonEmptyGitHubStates(states []string) []string {
 		out = append(out, state)
 	}
 	return out
+}
+
+// githubRateLimited reports whether resp is one of GitHub's documented
+// rate-limit responses. Primary and secondary limits surface as 403 as well
+// as 429 (REST API docs), distinguished from ordinary permission 403s by an
+// exhausted X-RateLimit-Remaining or a Retry-After header — a plain 403
+// stays a generic status error so auth misconfiguration is not misreported
+// as throttling.
+func githubRateLimited(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		return false
+	}
+	return strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")) == "0" ||
+		strings.TrimSpace(resp.Header.Get("Retry-After")) != ""
 }
 
 func githubHasNextPage(linkHeaders []string) bool {
@@ -692,8 +709,8 @@ func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (g
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return githubIssue{}, false, nil
 	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return githubIssue{}, false, NewRateLimitedError(fmt.Sprintf("get GitHub issue #%d", issueNumber), resp.Header)
+	if githubRateLimited(resp) {
+		return githubIssue{}, false, NewRateLimitedError(fmt.Sprintf("get GitHub issue #%d", issueNumber), resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: status %d", issueNumber, resp.StatusCode)

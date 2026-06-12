@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -32,6 +33,29 @@ func TestParseRetryAfter(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := parseRetryAfter(tc.value, now); got != tc.want {
 				t.Fatalf("parseRetryAfter(%q) = %v; want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseRateLimitReset(t *testing.T) {
+	now := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{"future epoch", "1781258490", 90 * time.Second}, // now is epoch 1781258400
+		{"elapsed epoch", "1781258340", 0},
+		{"missing header", "", 0},
+		{"unparseable value", "soon", 0},
+		{"zero epoch", "0", 0},
+		{"negative epoch", "-1", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRateLimitReset(tc.value, now); got != tc.want {
+				t.Fatalf("parseRateLimitReset(%q) = %v; want %v", tc.value, got, tc.want)
 			}
 		})
 	}
@@ -165,6 +189,52 @@ func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
 		}
 		if want := "list GitHub issues failed: status 500"; err == nil || err.Error() != want {
 			t.Fatalf("err = %v; want %q", err, want)
+		}
+	})
+
+	// GitHub's documented primary/secondary rate limits surface as 403 as
+	// well as 429 (codex P2 on PR #768): exhausted X-RateLimit-Remaining or a
+	// Retry-After header distinguishes them from ordinary permission 403s.
+	t.Run("403 primary limit with exhausted remaining and reset hint", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(2*time.Minute).Unix(), 10))
+			w.WriteHeader(http.StatusForbidden)
+		})
+		assertRateLimitedHTTPDate(t, err, time.Minute, 2*time.Minute)
+	})
+
+	t.Run("403 secondary limit with retry-after", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusForbidden)
+		})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+
+	t.Run("plain 403 stays a generic status error", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		})
+		if errors.Is(err, ErrRateLimited) {
+			t.Fatalf("err = %v; want a permission 403 (no rate-limit headers) not classified as ErrRateLimited", err)
+		}
+		if want := "list GitHub issues failed: status 403"; err == nil || err.Error() != want {
+			t.Fatalf("err = %v; want %q", err, want)
+		}
+	})
+
+	t.Run("403 rate limit reports its real status code", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusForbidden)
+		})
+		var typed *Error
+		if !errors.As(err, &typed) {
+			t.Fatalf("errors.As(%v, **Error) = false; want typed tracker error", err)
+		}
+		if want := "list GitHub issues failed: status 403"; typed.Message != want {
+			t.Fatalf("typed.Message = %q; want %q (the message must not claim 429 for a 403 limit)", typed.Message, want)
 		}
 	})
 

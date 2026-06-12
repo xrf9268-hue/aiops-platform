@@ -461,7 +461,7 @@ func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (
 		return Issue{}, false, nil
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return Issue{}, false, tracker.NewRateLimitedError(fmt.Sprintf("get Gitea issue #%d", issueNumber), resp.Header)
+		return Issue{}, false, tracker.NewRateLimitedError(fmt.Sprintf("get Gitea issue #%d", issueNumber), resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Issue{}, false, fmt.Errorf("get Gitea issue #%d failed: status %d", issueNumber, resp.StatusCode)
@@ -520,7 +520,7 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, false, tracker.NewRateLimitedError("list Gitea issues", resp.Header)
+		return nil, false, tracker.NewRateLimitedError("list Gitea issues", resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, false, fmt.Errorf("list Gitea issues failed: status %d", resp.StatusCode)

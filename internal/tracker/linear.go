@@ -669,7 +669,7 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return NewRateLimitedError("linear request", resp.Header)
+		return NewRateLimitedError("linear request", resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: status %d", resp.StatusCode), nil)
