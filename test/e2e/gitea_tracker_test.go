@@ -70,7 +70,9 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("second poll: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// No wait needed: PollOnce dispatches synchronously — each candidate's
+	// dispatch request returns only after Spawn ran or the duplicate-dispatch
+	// guard denied it, so the count is final once PollOnce returns.
 	if got := disp.count(); got != 1 {
 		t.Fatalf("repeated poll should dedupe running issue, spawn count = %d", got)
 	}
@@ -124,7 +126,8 @@ func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 	if err := orchestrator.NewPoller(client, orch).PollOnce(ctx); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
-	time.Sleep(100 * time.Millisecond)
+	// No wait needed: PollOnce dispatches synchronously, so a zero spawn count
+	// after it returns proves the backlog/terminal issues were never dispatched.
 	if got := disp.count(); got != 0 {
 		t.Fatalf("backlog/terminal issues should not dispatch, spawn count = %d", got)
 	}
