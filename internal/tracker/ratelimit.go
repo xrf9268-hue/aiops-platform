@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -8,8 +9,10 @@ import (
 	"time"
 )
 
-// RateLimitedError carries the Retry-After hint parsed from an HTTP 429
-// response so logs/state can show when the tracker expects the next attempt.
+// RateLimitedError carries the retry hint parsed from a rate-limited HTTP
+// response (429, or GitHub's documented 403 limit shapes; see
+// githubRateLimited) so logs/state can show when the tracker expects the
+// next attempt.
 // RetryAfter is zero when the header is missing or unparseable; the response
 // is still classified as rate limited either way. It travels as the wrapped
 // Err of a CategoryRateLimited *Error, so callers classify with
@@ -51,8 +54,11 @@ func NewRateLimitedError(operation string, statusCode int, header http.Header) *
 
 // retryAfterHint prefers the standard Retry-After header (GitHub secondary
 // limits, Gitea/Linear 429s) and falls back to the de-facto-standard
-// epoch-seconds X-RateLimit-Reset that GitHub primary limits carry when
-// Retry-After is absent.
+// epoch-seconds X-RateLimit-Reset that GitHub primary limits carry whenever
+// Retry-After yields no positive hint — absent, unparseable, zero, or
+// already elapsed. The hint is observability-only, so the most informative
+// positive window wins; no documented GitHub shape carries a conflicting
+// zero Retry-After next to a future reset.
 func retryAfterHint(header http.Header, now time.Time) time.Duration {
 	if d := parseRetryAfter(header.Get("Retry-After"), now); d > 0 {
 		return d
@@ -100,6 +106,11 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 			return maxRetryAfter
 		}
 		return time.Duration(seconds) * time.Second
+	} else if errors.Is(err, strconv.ErrRange) && !strings.HasPrefix(value, "-") {
+		// A positive delta too large for int is still a numeric delta, not an
+		// unparseable header: saturate it like any other oversized delta
+		// instead of degrading to a zero hint.
+		return maxRetryAfter
 	}
 	when, err := http.ParseTime(value)
 	if err != nil {

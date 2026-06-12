@@ -49,9 +49,11 @@ var (
 	// which deletes workspaces not seen in the active list) must treat this as
 	// a fetch failure and skip cleanup.
 	ErrIssueListingCapped = &Error{Category: CategoryIssueListingCapped}
-	// ErrRateLimited classifies an HTTP 429 from any tracker client (Linear,
-	// Gitea, GitHub). The wrapped *RateLimitedError carries the parsed
-	// Retry-After hint; see NewRateLimitedError.
+	// ErrRateLimited classifies a rate-limited response from any tracker
+	// client — HTTP 429 (Linear, Gitea, GitHub), plus GitHub's documented
+	// 403 limit shapes (see githubRateLimited). The wrapped
+	// *RateLimitedError carries the parsed retry hint; see
+	// NewRateLimitedError.
 	ErrRateLimited = &Error{Category: CategoryRateLimited}
 )
 
