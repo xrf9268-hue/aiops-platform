@@ -212,6 +212,27 @@ func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
 		assertRateLimited(t, err, 30*time.Second)
 	})
 
+	t.Run("403 headerless secondary limit classified by documented body", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits"}`))
+		})
+		// No header and no machine-readable wait in the body: the response
+		// carries no hint, so RetryAfter stays zero while the classification
+		// holds.
+		assertRateLimited(t, err, 0)
+	})
+
+	t.Run("403 with unrelated body message stays a generic status error", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest"}`))
+		})
+		if errors.Is(err, ErrRateLimited) {
+			t.Fatalf("err = %v; want a permission 403 with unrelated body not classified as ErrRateLimited", err)
+		}
+	})
+
 	t.Run("plain 403 stays a generic status error", func(t *testing.T) {
 		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
