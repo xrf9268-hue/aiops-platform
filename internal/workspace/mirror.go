@@ -213,6 +213,15 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 		return "", fmt.Errorf("mkdir mirror parent: %w", err)
 	}
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
+		// Re-assert the remote-tracking refspec before refreshing: a partial
+		// clone left at the final path by a pre-staging binary (worker killed
+		// mid-clone, #765) has HEAD + remote.origin.url but the bare-clone
+		// "do nothing" refspec, so without this line every refresh fetch
+		// updates only FETCH_HEAD and `worktree add` wedges on each §8.4
+		// retry until an operator deletes the directory.
+		if err := runGit(ctx, mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+			return "", fmt.Errorf("reassert fetch refspec: %w", err)
+		}
 		// Existing mirror: refresh remote-tracking refs only. `fetch origin`
 		// resolves the stored credentialed remote.origin.url, so its forwarded
 		// stderr is redacted (#595).
@@ -245,9 +254,21 @@ func cloneMirrorLocked(ctx context.Context, cloneURL, mirror string) (string, er
 	// Clear leftovers from prior interrupted attempts so `git clone` does
 	// not refuse the staging path; the final path is normally created only
 	// by the rename below, but an older worker version may have left a
-	// HEAD-less partial mirror there.
+	// HEAD-less partial mirror there. The deferred cleanup below cannot
+	// replace this sweep: a SIGKILLed worker never runs its deferred
+	// functions, so the next attempt must still clear the debris.
 	_ = os.RemoveAll(staging)
 	_ = os.RemoveAll(mirror)
+	// A failed attempt must not leak the staging directory: a repo removed
+	// from config after one failed first clone would otherwise keep its
+	// `.git.staging` debris until an operator deletes it by hand (#765).
+	// The success path renames staging into place before returning.
+	moved := false
+	defer func() {
+		if !moved {
+			_ = os.RemoveAll(staging)
+		}
+	}()
 	// The clone URL carries the agent's `user:token@` push credential on the
 	// command line, so both the forwarded git stderr (runGitRedacted) and the
 	// wrapped error string (MaskCloneURL) must mask it (#595).
@@ -269,6 +290,7 @@ func cloneMirrorLocked(ctx context.Context, cloneURL, mirror string) (string, er
 	if err := os.Rename(staging, mirror); err != nil {
 		return "", fmt.Errorf("move mirror into place: %w", err)
 	}
+	moved = true
 	return mirror, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -90,6 +91,11 @@ func TestEnsureMirror_FirstCallClonesSecondCallReuses(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err != nil {
 		t.Fatalf("expected bare repo HEAD at %s: %v", mirror, err)
 	}
+	// The staging build directory is renamed into place on success; a
+	// leftover would mean the deferred failure-path cleanup misfired (#765).
+	if _, err := os.Stat(mirror + mirrorStagingSuffix); !os.IsNotExist(err) {
+		t.Fatalf("staging dir survived a successful clone: stat err=%v", err)
+	}
 	// A bare clone has no working tree; assert that absence to confirm
 	// we used --mirror rather than a regular clone.
 	if _, err := os.Stat(filepath.Join(mirror, ".git")); err == nil {
@@ -159,6 +165,111 @@ func TestEnsureMirror_ConcurrentFirstUseSerializesClone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(want, "HEAD")); err != nil {
 		t.Fatalf("expected bare repo HEAD at %s: %v", want, err)
+	}
+}
+
+// TestEnsureMirror_HealsLegacyPartialMirrorMissingRefspec is the #765
+// legacy-wedge regression: a pre-#764 binary killed mid-clone could leave a
+// partial bare repo at the FINAL mirror path — HEAD plus a config carrying
+// remote.origin.url, but the bare-clone "do nothing" fetch refspec and no
+// refs. The existing-mirror branch must re-assert the remote-tracking
+// refspec before its refresh fetch so the mirror heals into a
+// worktree-able state instead of wedging every retry until an operator
+// deletes the directory.
+func TestEnsureMirror_HealsLegacyPartialMirrorMissingRefspec(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), upstream)
+	if err := os.MkdirAll(filepath.Dir(mirror), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "init", "--bare", "-q", "-b", "main", mirror},
+		// `git config remote.origin.url` (not `git remote add`) reproduces
+		// the killed-clone config shape: a URL with no fetch refspec.
+		{"git", "--git-dir", mirror, "config", "remote.origin.url", upstream},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	// Sanity: the constructed legacy state matches the wedge precondition —
+	// HEAD present, no fetch refspec, no refs at all.
+	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err != nil {
+		t.Fatalf("precondition broken: legacy mirror missing HEAD: %v", err)
+	}
+	if err := exec.Command("git", "--git-dir", mirror, "config", "--get", "remote.origin.fetch").Run(); err == nil {
+		t.Fatal("precondition broken: legacy mirror already has a fetch refspec")
+	}
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/heads/main").Run(); err == nil {
+		t.Fatal("precondition broken: legacy mirror already has refs/heads/main")
+	}
+
+	tk := makeTask("task-legacy-heal", upstream)
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("PrepareGitWorkspace over legacy partial mirror: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("prepare over legacy partial mirror reported createdNow=false")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatalf("expected README.md inside healed worktree %s: %v", dir, err)
+	}
+	// The heal is the re-asserted refspec letting the refresh fetch populate
+	// the remote-tracking ref the worktree start ref resolves through.
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/remotes/origin/main").Run(); err != nil {
+		t.Fatalf("legacy mirror not healed: refs/remotes/origin/main still missing: %v", err)
+	}
+}
+
+// TestEnsureMirror_FailedCloneRemovesStagingDir is the #765 staging-leak
+// regression: a failed first clone — the on-disk shape of a #759 per-op
+// timeout killing `git clone --bare` mid-transfer — must not leave the
+// `<mirror>.git.staging` build directory behind. Before the deferred
+// cleanup, a repo removed from config after one failed first clone leaked
+// its staging dir until an operator deleted it by hand.
+func TestEnsureMirror_FailedCloneRemovesStagingDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("PATH git shim requires a POSIX shell")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// A git shim whose `clone` leaves a partial staging directory and exits
+	// non-zero, mimicking a clone killed before it could clean up. Non-clone
+	// invocations must not happen on this path; fail loudly if they do.
+	shimDir := t.TempDir()
+	shim := `#!/bin/sh
+if [ "$1" = "clone" ]; then
+  for last; do :; done
+  mkdir -p "$last"
+  printf 'ref: refs/heads/main\n' > "$last/HEAD"
+  exit 128
+fi
+echo "unexpected git invocation: $*" >&2
+exit 1
+`
+	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	cloneURL := "file:///nonexistent/aiops-765-staging.git"
+	if _, err := mgr.EnsureMirror(ctx, cloneURL); err == nil {
+		t.Fatal("EnsureMirror succeeded under a failing clone shim; want error")
+	}
+	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), cloneURL)
+	if _, err := os.Stat(mirror + mirrorStagingSuffix); !os.IsNotExist(err) {
+		t.Fatalf("staging dir left behind after failed clone: stat err=%v", err)
+	}
+	if _, err := os.Stat(mirror); !os.IsNotExist(err) {
+		t.Fatalf("final mirror path materialized despite failed clone: stat err=%v", err)
 	}
 }
 
@@ -939,12 +1050,15 @@ func TestWriteSensitiveArtifactReplacesHardLinkedArtifact(t *testing.T) {
 // `refs/remotes/origin/<base>` through the post-clone fetch refspec
 // rewrite, so `git rev-parse --verify origin/<base>` succeeds and the
 // fallback never fires in production. This test drives the fallback
-// explicitly by deleting `refs/remotes/origin/main` from a freshly
-// prepared mirror and emptying the fetch refspec so the next
-// `ensureMirrorLocked`'s fetch does not repopulate it — guarding the
-// fallback against a future refactor of EnsureMirror's refspec layout
-// (and ensuring `file://` test fixtures continue to work even when the
-// mirror only carries `refs/heads/<base>`).
+// explicitly by deleting the base branch on the UPSTREAM so the next
+// `ensureMirrorLocked`'s `fetch --prune` removes `refs/remotes/origin/main`
+// from the mirror while the mirror keeps its bare `refs/heads/main` from
+// the original `git clone --bare`. (The earlier construction — unsetting
+// `remote.origin.fetch` on the mirror — stopped driving the fallback when
+// the existing-mirror branch began re-asserting the refspec before every
+// refresh fetch, #765.) This guards the fallback against a future refactor
+// of EnsureMirror's refspec layout and ensures `file://` test fixtures
+// continue to work even when the mirror only carries `refs/heads/<base>`.
 func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
@@ -965,31 +1079,28 @@ func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T)
 	if err != nil {
 		t.Fatalf("mirror rev-parse refs/heads/main: %v", err)
 	}
-	// Strip `refs/remotes/origin/*` and empty the fetch refspec so the
-	// next prepare's `git fetch --prune --tags origin` does not bring
-	// `origin/main` back. With no refspec, the fetch is effectively a
-	// no-op for ref tracking; the mirror keeps its `refs/heads/main` from
-	// the original `git clone --bare`.
-	if out, err := exec.Command("git", "--git-dir", mirror, "update-ref", "-d", "refs/remotes/origin/main").CombinedOutput(); err != nil {
-		t.Fatalf("delete refs/remotes/origin/main: %v\n%s", err, out)
-	}
-	if out, err := exec.Command("git", "--git-dir", mirror, "config", "--unset-all", "remote.origin.fetch").CombinedOutput(); err != nil {
-		t.Fatalf("unset remote.origin.fetch: %v\n%s", err, out)
+	// Delete the base branch on the upstream so the next prepare's
+	// `git fetch --prune --tags origin` prunes `refs/remotes/origin/main`
+	// from the mirror; the mirror keeps its bare `refs/heads/main` from the
+	// original `git clone --bare` because fetch never touches local heads.
+	upstreamPath := strings.TrimPrefix(upstream, "file://")
+	if out, err := exec.Command("git", "--git-dir", upstreamPath, "update-ref", "-d", "refs/heads/main").CombinedOutput(); err != nil {
+		t.Fatalf("delete upstream refs/heads/main: %v\n%s", err, out)
 	}
 	// Sanity: confirm the precondition the fallback branch needs — the
-	// remote-tracking ref is gone but the bare head ref survives.
-	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/remotes/origin/main").Run(); err == nil {
-		t.Fatal("precondition broken: refs/remotes/origin/main still resolves on the mirror")
+	// upstream branch is gone but the mirror's bare head ref survives.
+	if err := exec.Command("git", "--git-dir", upstreamPath, "rev-parse", "--verify", "refs/heads/main").Run(); err == nil {
+		t.Fatal("precondition broken: refs/heads/main still resolves on the upstream")
 	}
 	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/heads/main").Run(); err != nil {
 		t.Fatalf("precondition broken: refs/heads/main missing on mirror: %v", err)
 	}
 
 	// New task → first-touch path runs through the startRef resolution.
-	// With `origin/main` deleted, the `git rev-parse --verify origin/main`
-	// gate fails and startRef falls back to bare `main`; the subsequent
-	// `git worktree add ... main` must succeed against the mirror's
-	// `refs/heads/main`.
+	// The refresh fetch prunes `origin/main`, the `git rev-parse --verify
+	// origin/main` gate fails, and startRef falls back to bare `main`; the
+	// subsequent `git worktree add ... main` must succeed against the
+	// mirror's `refs/heads/main`.
 	tk := makeTask("task-fallback", upstream)
 	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
@@ -997,6 +1108,12 @@ func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T)
 	}
 	if !createdNow {
 		t.Fatal("first prepare for new task reported createdNow=false")
+	}
+	// Post-condition: the prune actually removed the remote-tracking ref,
+	// so the prepare above really exercised the fallback rather than
+	// resolving `origin/main`.
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/remotes/origin/main").Run(); err == nil {
+		t.Fatal("fetch --prune kept refs/remotes/origin/main; the fallback was not driven")
 	}
 	headOut, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
 	if err != nil {
