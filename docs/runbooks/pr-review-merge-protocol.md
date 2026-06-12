@@ -314,11 +314,16 @@ the human which mode was chosen; do not block waiting for an answer.
   contracts, refutation records). If the window passes with a verified
   fetch showing no new remote push: take over from the current remote head
   and run the normal per-push gate.
-- **Remote is the base, always.** On any push rejection, never force-push
-  and never re-apply a local equivalent over the owner's version: fetch,
-  diff remote vs local, keep the remote implementation, re-derive only the
-  missing increments on top, and re-run the gates (§1–§5) on the merged
-  head.
+- **Remote is the base, always.** On any push rejection, never push over an
+  owner head you have not incorporated, and never re-apply a local
+  equivalent over the owner's version: fetch, diff remote vs local, keep
+  the remote implementation, re-derive only the missing increments on top,
+  and re-run the gates (§1–§5) on the merged head. Publishing a rewritten
+  head after adopting the remote as base stays on §8's sanctioned
+  mechanism — `--force-with-lease=<branch>:<just-fetched-sha>`, where the
+  lease pinning the SHA you just incorporated is what guarantees no unseen
+  owner work is clobbered; what §9 forbids is the blind force-push that
+  discards it.
 - **No duplicated triggers.** Before posting `@codex review` or editing the
   PR body, check whether the owner already did for the current head; the
   ledger must merge both sessions' histories, not overwrite either.
