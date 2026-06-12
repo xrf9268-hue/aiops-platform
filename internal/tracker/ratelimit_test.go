@@ -1,0 +1,194 @@
+package tracker
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+)
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name  string
+		value string
+		want  time.Duration
+	}{
+		{"delta seconds", "30", 30 * time.Second},
+		{"delta seconds with whitespace", " 30 ", 30 * time.Second},
+		{"http date in the future", now.Add(90 * time.Second).Format(http.TimeFormat), 90 * time.Second},
+		{"http date already elapsed", now.Add(-time.Minute).Format(http.TimeFormat), 0},
+		{"missing header", "", 0},
+		{"unparseable value", "soon", 0},
+		{"negative delta", "-5", 0},
+		{"overflowing delta saturates", "10000000000", maxRetryAfter},
+		{"zero delta", "0", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseRetryAfter(tc.value, now); got != tc.want {
+				t.Fatalf("parseRetryAfter(%q) = %v; want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// assertRateLimited pins the typed 429 contract: errors.Is classification via
+// ErrRateLimited and the exact parsed Retry-After extracted with errors.As.
+func assertRateLimited(t *testing.T, err error, wantRetryAfter time.Duration) {
+	t.Helper()
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("err = %T %[1]v; want errors.Is(err, ErrRateLimited)", err)
+	}
+	var rateLimited *RateLimitedError
+	if !errors.As(err, &rateLimited) {
+		t.Fatalf("errors.As(%v, **RateLimitedError) = false; want true", err)
+	}
+	if rateLimited.RetryAfter != wantRetryAfter {
+		t.Fatalf("RetryAfter = %v; want %v (err = %v)", rateLimited.RetryAfter, wantRetryAfter, err)
+	}
+}
+
+// assertRateLimitedHTTPDate asserts classification for an HTTP-date
+// Retry-After: the parsed duration is computed against the wall clock, so it
+// is asserted as a (lower, upper] window around the expected delta instead of
+// an exact value.
+func assertRateLimitedHTTPDate(t *testing.T, err error, lower, upper time.Duration) {
+	t.Helper()
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("err = %T %[1]v; want errors.Is(err, ErrRateLimited)", err)
+	}
+	var rateLimited *RateLimitedError
+	if !errors.As(err, &rateLimited) {
+		t.Fatalf("errors.As(%v, **RateLimitedError) = false; want true", err)
+	}
+	if rateLimited.RetryAfter <= lower || rateLimited.RetryAfter > upper {
+		t.Fatalf("RetryAfter = %v; want in (%v, %v] for an HTTP-date Retry-After", rateLimited.RetryAfter, lower, upper)
+	}
+}
+
+func TestLinearClientClassifiesRateLimitedResponses(t *testing.T) {
+	listIssues := func(t *testing.T, handler http.HandlerFunc) error {
+		t.Helper()
+		_, err := linearTestClientForCategory(t, handler).ListIssuesByStates(context.Background(), []string{"Todo"})
+		return err
+	}
+
+	t.Run("429 with delta-seconds retry-after", func(t *testing.T) {
+		err := listIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+
+	t.Run("429 with http-date retry-after", func(t *testing.T) {
+		err := listIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", time.Now().Add(2*time.Minute).UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimitedHTTPDate(t, err, time.Minute, 2*time.Minute)
+	})
+
+	t.Run("429 without retry-after", func(t *testing.T) {
+		err := listIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimited(t, err, 0)
+	})
+
+	t.Run("non-429 is not rate limited and carries the numeric status", func(t *testing.T) {
+		err := listIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		if errors.Is(err, ErrRateLimited) {
+			t.Fatalf("err = %v; want HTTP 500 not classified as ErrRateLimited", err)
+		}
+		if want := "linear request failed: status 500"; err == nil || err.Error() != want {
+			t.Fatalf("err = %v; want %q", err, want)
+		}
+	})
+}
+
+func githubRateLimitTestClient(t *testing.T, handler http.Handler) *GitHubClient {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	return client
+}
+
+func TestGitHubClientClassifiesRateLimitedResponses(t *testing.T) {
+	// listClosedIssues exercises listIssuesPage without the open-PR claims
+	// scan (a "closed" state never requires it), so the handler sees exactly
+	// one issues-listing request.
+	listClosedIssues := func(t *testing.T, handler http.HandlerFunc) error {
+		t.Helper()
+		_, err := githubRateLimitTestClient(t, handler).ListIssuesByStates(context.Background(), []string{"closed"})
+		return err
+	}
+
+	t.Run("429 with delta-seconds retry-after", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+
+	t.Run("429 with http-date retry-after", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", time.Now().Add(2*time.Minute).UTC().Format(http.TimeFormat))
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimitedHTTPDate(t, err, time.Minute, 2*time.Minute)
+	})
+
+	t.Run("429 without retry-after", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+		assertRateLimited(t, err, 0)
+	})
+
+	t.Run("non-429 is not rate limited and carries the numeric status", func(t *testing.T) {
+		err := listClosedIssues(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		})
+		if errors.Is(err, ErrRateLimited) {
+			t.Fatalf("err = %v; want HTTP 500 not classified as ErrRateLimited", err)
+		}
+		if want := "list GitHub issues failed: status 500"; err == nil || err.Error() != want {
+			t.Fatalf("err = %v; want %q", err, want)
+		}
+	})
+
+	t.Run("open pull request claims scan surfaces 429", func(t *testing.T) {
+		client := githubRateLimitTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/repos/acme/api/pulls" {
+				t.Fatalf("request path = %q; want only the open-PR claims scan before the 429 aborts the listing", r.URL.Path)
+			}
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		_, err := client.ListIssuesByStates(context.Background(), []string{"open"})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+
+	t.Run("issue state refresh surfaces 429", func(t *testing.T) {
+		client := githubRateLimitTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/repos/acme/api/issues/1" {
+				t.Fatalf("request path = %q; want the per-issue state refresh", r.URL.Path)
+			}
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+		}))
+		_, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "500", Identifier: "#1"}})
+		assertRateLimited(t, err, 30*time.Second)
+	})
+}

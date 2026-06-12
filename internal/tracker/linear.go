@@ -31,6 +31,7 @@ const (
 	CategoryLinearUnknownPayload      Category = "linear_unknown_payload"
 	CategoryLinearMissingEndCursor    Category = "linear_missing_end_cursor"
 	CategoryIssueListingCapped        Category = "issue_listing_capped"
+	CategoryRateLimited               Category = "rate_limited"
 )
 
 var (
@@ -48,6 +49,10 @@ var (
 	// which deletes workspaces not seen in the active list) must treat this as
 	// a fetch failure and skip cleanup.
 	ErrIssueListingCapped = &Error{Category: CategoryIssueListingCapped}
+	// ErrRateLimited classifies an HTTP 429 from any tracker client (Linear,
+	// Gitea, GitHub). The wrapped *RateLimitedError carries the parsed
+	// Retry-After hint; see NewRateLimitedError.
+	ErrRateLimited = &Error{Category: CategoryRateLimited}
 )
 
 type Error struct {
@@ -663,8 +668,11 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 		return NewError(CategoryLinearAPIRequest, "send Linear GraphQL request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return NewRateLimitedError("linear request", resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: %s", resp.Status), nil)
+		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: status %d", resp.StatusCode), nil)
 	}
 	if out == nil {
 		return nil

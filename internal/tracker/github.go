@@ -300,8 +300,11 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 		return nil, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, false, NewRateLimitedError("list GitHub issues", resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, false, fmt.Errorf("list GitHub issues failed: %s", resp.Status)
+		return nil, false, fmt.Errorf("list GitHub issues failed: status %d", resp.StatusCode)
 	}
 	var issues []githubIssue
 	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
@@ -370,8 +373,11 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 		return nil, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, false, NewRateLimitedError("list GitHub pull requests", resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, false, fmt.Errorf("list GitHub pull requests failed: %s", resp.Status)
+		return nil, false, fmt.Errorf("list GitHub pull requests failed: status %d", resp.StatusCode)
 	}
 	var pulls []githubPullRequestSummary
 	if err := json.NewDecoder(resp.Body).Decode(&pulls); err != nil {
@@ -686,8 +692,11 @@ func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (g
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
 		return githubIssue{}, false, nil
 	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return githubIssue{}, false, NewRateLimitedError(fmt.Sprintf("get GitHub issue #%d", issueNumber), resp.Header)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: %s", issueNumber, resp.Status)
+		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: status %d", issueNumber, resp.StatusCode)
 	}
 	var issue githubIssue
 	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
