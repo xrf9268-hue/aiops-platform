@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,33 @@ func TestParseRateLimitReset(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := parseRateLimitReset(tc.value, now); got != tc.want {
 				t.Fatalf("parseRateLimitReset(%q) = %v; want %v", tc.value, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGitHubSecondaryLimitBody pins each discriminator of the documented
+// headerless secondary-limit payload independently: the message branch, the
+// documentation_url branch, and the case fold. The endpoint-level fixture
+// carries both signals at once, so deleting a single branch (or the fold)
+// would survive it — these rows are what kill those mutations.
+func TestGitHubSecondaryLimitBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"message only", `{"message":"You have exceeded a secondary rate limit. Please wait."}`, true},
+		{"documentation_url only", `{"message":"Forbidden","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api#about-secondary-rate-limits"}`, true},
+		{"mixed-case message", `{"message":"You have exceeded a Secondary Rate Limit, please slow down."}`, true},
+		{"unrelated message", `{"message":"Resource not accessible by integration"}`, false},
+		{"non-JSON body", `<html>Forbidden</html>`, false},
+		{"empty body", ``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := githubSecondaryLimitBody(strings.NewReader(tc.body)); got != tc.want {
+				t.Fatalf("githubSecondaryLimitBody(%q) = %v; want %v", tc.body, got, tc.want)
 			}
 		})
 	}
