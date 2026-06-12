@@ -307,3 +307,36 @@ Handled issue #765 end-to-end via /handle-issue: re-assert remote.origin.fetch (
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: Batch: release-readiness issues #780/#781/#782 → PRs #800/#801/#804 merged
+
+**Date**: 2026-06-13
+**Task**: Batch: release-readiness issues #780/#781/#782 → PRs #800/#801/#804 merged
+**Branch**: `main`
+
+### Summary
+
+Processed the 2026-06-12 release-readiness audit batch serially per batch-issue-processing + pr-review-merge-protocol with authorized auto-merge. #780→PR#800: README/example tracker.api_key wiring fixed, day1-runbook deleted, examples wiring guard test added. #781→PR#801: doctor Gitea/GitHub preflight converged over 9 review rounds to driving the worker's own tracker clients (shared constructors gitea.BaseURLFromEnv / tracker.NewGitHubClientFromEnv); /user probe dropped with evidence (least-privilege false negatives); masked errors, JSON validation, per-listing deadline. #782→PR#804: scripted-agent e2e covering the positive issue→PR loop (ShellRunner seam, de-placebo'd GITEA_TOKEN guard mutation-verified via os.Environ() inheritance, credential-free push via http.extraHeader, draft_pr fixture consistency). Follow-up filed: #802 (pre-existing e2e lint debt). Spec guide updated: preflight-mirrors-consumer checklist in cross-layer-thinking-guide.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ce5157c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
