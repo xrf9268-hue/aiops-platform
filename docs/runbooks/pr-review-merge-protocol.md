@@ -273,3 +273,62 @@ Include a size-gate checklist (exactly one box checked):
   sign-off); a `size-gated: split recommended` PR (split, don't seek sign-off);
   anything the human's instructions put off-limits. When at the edge of the
   grant, use `AskUserQuestion`. Stop the moment the human revokes the grant.
+
+## 9. Concurrent sessions on one PR
+
+**Earned by:** PR #768 (2026-06-12). The authoring cloud session and a local
+`handle-pr` session both responded to the same `@codex review` findings;
+three consecutive pushes raced (403 classification, headerless-403 probe,
+size-budget split). Every locally re-derived equivalent was discarded; only
+the increments the owner lacked (per-endpoint test pins, `ErrRange`
+saturation, discriminator unit tests, a refutation record) landed. The waste
+was rework; the risk was the `reset --hard` / cherry-pick churn each race
+forced.
+
+**Single-driver rule.** A PR has at most one driving session at a time.
+Before taking any action on an existing PR — and again **before every push**
+— probe for an active owner:
+
+1. **Identity signals:** the PR body links a `claude.ai/code/session_*` (or
+   equivalent agent session); commits are authored by an agent identity
+   (e.g. `Claude <noreply@anthropic.com>`).
+2. **Liveness signals:** a push, review-thread reply, or PR-body edit within
+   the last ~15 minutes; reviewer-bot findings being answered minutes after
+   they appear.
+
+Both signal classes present → treat the PR as **owned** and apply the
+collaboration policy below autonomously. Identity signals persist for the
+life of the PR, so they are never sufficient alone — the liveness window is
+the gate that distinguishes owned-now from agent-authored-but-idle. Inform
+the human which mode was chosen; do not block waiting for an answer.
+
+**Increment-only collaboration policy (owned PR):**
+
+- **Observe first.** When a new external finding lands (reviewer bot, CI
+  failure), do not start fixing immediately. Watch the remote for one short
+  window (~10 minutes; this is the per-finding reaction window — distinct
+  from the ~15-minute liveness window above, which classifies the PR as
+  owned in the first place). If the owner pushes a fix: adopt it — fetch,
+  reset the local view to the remote head, verify their fix against the
+  finding, and contribute only what is still missing (tests, pins, doc
+  contracts, refutation records). If the window passes with a verified
+  fetch showing no new remote push: take over from the current remote head
+  and run the normal per-push gate.
+- **Remote is the base, always.** On any push rejection, never force-push
+  and never re-apply a local equivalent over the owner's version: fetch,
+  diff remote vs local, keep the remote implementation, re-derive only the
+  missing increments on top, and re-run the gates (§1–§5) on the merged
+  head.
+- **No duplicated triggers.** Before posting `@codex review` or editing the
+  PR body, check whether the owner already did for the current head; the
+  ledger must merge both sessions' histories, not overwrite either.
+
+**Issue-phase corollary** (for `handle-issue`): before implementing, check
+the issue for an existing open PR (`Closes #N` search / linked PRs) and for
+an active remote `fix/<n>-*` branch — list with
+`git ls-remote origin 'refs/heads/fix/<n>-*'`, then judge liveness with
+`gh api repos/<owner>/<repo>/commits/<branch> --jq .commit.committer.date`
+(`ls-remote` carries no timestamps; "active" = committed within ~15
+minutes). An open PR → switch to the PR-phase flow with this probe; an
+active branch without a PR → adopt that branch as base instead of
+re-implementing; neither → free to start.

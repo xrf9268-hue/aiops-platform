@@ -24,6 +24,8 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
 
 ## PR 审查阶段差异
 
+0. **并行 owner 探测（开始时 + 每次 push 前）**：按协议 §9 探测活跃 owner；判定为 owned 即进入 §9 的 increment-only 协作模式，信号清单、观察窗、接管判据、push 被拒处理、触发去重全部以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr) §9 为唯一来源，不在此复述。**模式自主选定并通报用户，不询问**。
+
 1. **读 AGENTS.md** 的 "SPEC alignment" 和 "Cross-cutting checklist when porting from the Elixir reference" 两节作为审查清单。**每个 finding 至少归到一类**：
    - 算法级 SPEC 偏差（vs upstream `handle_*` 逐分支比对）
    - 跨模块一致性漏镜像（grep 同概念其他 consumer，列出 aiops-platform 扩展 routing / fan-out / capacity caps / eligibility filter 是否都镜像了）
@@ -44,4 +46,5 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
 - 工作分支：系统会告诉你具体名字。
 - Claude Code 若同一工具动作连续 2 次 malformed / stall / 中断，停止第 3 次原地重试，升级给 `codex:codex-rescue`，附 PR 号、当前 head/base、目标动作、失败 transcript、已验证事实；这是运行时故障，不是 review finding 的技术裁定。
 - 合并、force-push、auto-merge 门槛、hard stops：全部按协议 §8。merge 前必须等用户明确许可；批次/scope 显式授权下的 opt-in 自动合并见 [`docs/runbooks/batch-issue-processing.md`](../../../docs/runbooks/batch-issue-processing.md)，授权不跨批次/scope 沿用。
+- **自主优先**：协议 §8 hard stops（以协议原文清单为唯一来源，不在此枚举）之外的决策——finding 修复/反证/延后、reviewer 调度、rebase/增量取舍、body/thread 维护——自主做并简要通报，不向用户提问；finding 证据已能定论的不做多选题。
 - 中文回复，简洁；每次只汇报变化不复述。

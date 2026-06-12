@@ -29,8 +29,10 @@ metadata:
 
 ## 流程（按序）
 
-### 1. 读 issue
+### 1. 读 issue + 并行 owner 探测（协议 §9 issue-phase 推论）
 读 labels（`area:spec-alignment` / `priority:pN` / `type:*`）与正文。**把正文的 Acceptance criteria 复选框当作 definition-of-done**——每条都要满足或显式说明为何不在范围内。
+
+动手前先执行协议 §9 的 **issue-phase 探测**，判定命令与处置路由全部以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr) §9 为唯一来源，照其结果执行。**模式自主选定并通报，不询问。**
 
 ### 2. SPEC / upstream 调研（写代码之前）
 - 读 SPEC.md 相关章节 + 对应 Elixir 模块（`orchestrator.ex` / `codex/app_server.ex` / `tracker.ex` / `config/schema.ex`），歧义以 Elixir 为准。
@@ -40,7 +42,7 @@ metadata:
 - **DEVIATIONS.md 决策门**：研究到结论再提（AGENTS.md 原则 7）——别把「关闭既有 / 新开 / 回退」当多选题甩给用户，SPEC + Elixir 参考通常已能定论（最常见结论：upstream 缺失且 SPEC 归在别处的扩展应删除）。别为了让差异消失而新造「deliberate extension」。
 
 ### 3. 分支 + 实现
-- 从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
+- 分支基底按步骤 1 的 §9 探测结果定；仅当探测结论为"自由开工"时才从 `main` 开 `fix/<n>-<slug>`（如 `fix/331-active-transition-workspace-cleanup`）。
 - **显式补上 Elixir 隐式的 BEAM 保证**（checklist item 2）：followup goroutine 包 `context.WithTimeout`；每个 `go func`/`time.AfterFunc` 上 `defer recoverPanic` 或走 `safeGo`；重置 timer 前先 `Timer.Stop()`。
 - 算法对齐 upstream 分支（如终态清理仅在 terminal 转换、引用 `orchestrator.ex` 行号）。
 - 测试纪律（回归 + 变异 + fire-and-forget 的确定性 barrier + `-race`）见协议 §1；**别把"本地变绿"当成验证了发布物**。
@@ -88,6 +90,7 @@ go build ./cmd/worker ./cmd/tui
 - 用户明确许可后才合并（协议 §8）。
 
 ## 默认行为
+- **自主优先**：协议 §8 hard stops（以协议原文清单为唯一来源，不在此枚举）之外的决策——SPEC/upstream 裁定、finding 修复/反证/延后、分支与增量取舍、body/thread 维护——自主做并简要通报，不向用户提问；证据已能定论的不做多选题（AGENTS.md 原则 7）。
 - 中文回复，简洁；每次只汇报变化，不复述。
 - Claude Code 若同一工具动作连续 2 次 malformed / stall / 中断，停止第 3 次原地重试，升级给 `codex:codex-rescue`，附当前 head、目标动作、失败 transcript、已验证事实；这是运行时故障，不是技术 finding 通过或失败。
 - worker 永不 push/合并 PR 或写 tracker 状态（D8/#76）。

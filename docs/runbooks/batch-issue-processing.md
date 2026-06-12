@@ -157,7 +157,9 @@ each live issue/PR with `gh`, and reclassify externally changed work:
 
 - If the human merged a PR, mark it `merged-by-user` and move on.
 - If the head changed, restart local verification and the review gates for that
-  head (protocol §3–§5).
+  head (protocol §3–§5). If the change came from another *active* agent session,
+  apply the concurrent-owner probe and increment-only policy first
+  ([protocol §9](pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr)).
 - If a trigger comment is still active, wait for that exact trigger or start a
   fresh review on the current head.
 - If unresolved review follow-up issues were created after merge, link them in
