@@ -335,7 +335,7 @@ the human which mode was chosen; do not block waiting for an answer.
 the issue for an existing open PR (`Closes #N` search / linked PRs) and for
 an active remote `fix/<n>-*` branch — list with
 `git ls-remote origin 'refs/heads/fix/<n>-*'`, then judge liveness with
-`gh api 'repos/<owner>/<repo>/activity?ref=refs/heads/<branch>&per_page=1' --jq '.[0] | {timestamp, actor: .actor.login}'`
+`gh api 'repos/<owner>/<repo>/activity?ref=refs/heads/<branch>&per_page=1' --jq '.[0] | {time: (.timestamp // .pushed_at), who: (.actor.login // .pusher.login)}'`
 (`ls-remote` carries no timestamps, and a commit's `committer.date` is
 when it was *created*, not when it was *pushed* — an old commit pushed
 seconds ago must still read as live; the activity endpoint records
