@@ -218,8 +218,11 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 		// mid-clone, #765) has HEAD + remote.origin.url but the bare-clone
 		// "do nothing" refspec, so without this line every refresh fetch
 		// updates only FETCH_HEAD and `worktree add` wedges on each §8.4
-		// retry until an operator deletes the directory.
-		if err := runGit(ctx, mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+		// retry until an operator deletes the directory. --replace-all keeps
+		// the write valid when the key holds multiple values (e.g. an
+		// operator-added extra refspec): plain `git config <key> <value>`
+		// refuses multi-valued keys and would wedge the mirror instead.
+		if err := runGit(ctx, mirror, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 			return "", fmt.Errorf("reassert fetch refspec: %w", err)
 		}
 		// Existing mirror: refresh remote-tracking refs only. `fetch origin`

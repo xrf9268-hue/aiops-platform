@@ -225,6 +225,37 @@ func TestEnsureMirror_HealsLegacyPartialMirrorMissingRefspec(t *testing.T) {
 	}
 }
 
+// TestEnsureMirror_ReplacesMultiValuedFetchRefspec pins the --replace-all on
+// the refresh-path refspec re-assert (#765, PR #774 codex P2): when an
+// operator has added a second `remote.origin.fetch` value to a healthy
+// mirror, plain `git config <key> <value>` refuses multi-valued keys
+// ("cannot overwrite multiple values with a single value") and would turn a
+// previously fetchable mirror into a permanent EnsureMirror failure.
+func TestEnsureMirror_ReplacesMultiValuedFetchRefspec(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	mirror, err := mgr.EnsureMirror(ctx, upstream)
+	if err != nil {
+		t.Fatalf("first EnsureMirror: %v", err)
+	}
+	if out, err := exec.Command("git", "--git-dir", mirror, "config", "--add", "remote.origin.fetch", "+refs/tags/*:refs/tags/*").CombinedOutput(); err != nil {
+		t.Fatalf("add second fetch refspec: %v\n%s", err, out)
+	}
+
+	if _, err := mgr.EnsureMirror(ctx, upstream); err != nil {
+		t.Fatalf("EnsureMirror over multi-valued fetch refspec: %v", err)
+	}
+	out, err := exec.Command("git", "--git-dir", mirror, "config", "--get-all", "remote.origin.fetch").Output()
+	if err != nil {
+		t.Fatalf("read fetch refspecs after refresh: %v", err)
+	}
+	if got, want := strings.TrimSpace(string(out)), "+refs/heads/*:refs/remotes/origin/*"; got != want {
+		t.Fatalf("fetch refspecs after refresh = %q, want exactly %q", got, want)
+	}
+}
+
 // TestEnsureMirror_FailedCloneRemovesStagingDir is the #765 staging-leak
 // regression: a failed first clone — the on-disk shape of a #759 per-op
 // timeout killing `git clone --bare` mid-transfer — must not leave the
