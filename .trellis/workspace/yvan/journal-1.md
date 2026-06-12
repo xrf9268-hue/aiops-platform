@@ -274,3 +274,36 @@ Ran the v0.1.0 darwin_arm64 release worker against a local Gitea (docker, e2e-mi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Issue #765: mirror legacy-refspec heal + staging cleanup (PR #774 merged)
+
+**Date**: 2026-06-12
+**Task**: Issue #765: mirror legacy-refspec heal + staging cleanup (PR #774 merged)
+**Branch**: `main`
+
+### Summary
+
+Handled issue #765 end-to-end via /handle-issue: re-assert remote.origin.fetch (--replace-all) on the existing-mirror refresh path to heal pre-#764 partial mirrors, and reap .git.staging on failed first clones via moved-gated deferred cleanup. Reworked the startRef-fallback test (upstream-branch deletion) after the re-assert made the unset-refspec construction a placebo. 3 regression tests, all mutation-verified; two pre-push dual-review rounds clean; GitHub codex P2 (multi-valued refspec wedge) validated and fixed; CI green; squash-merged as c45b323 with user approval.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c45b323` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
