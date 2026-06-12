@@ -11,7 +11,8 @@ that re-runs on every PR and catches regressions automatically. The proof must
 exercise the production code path from webhook receipt through Gitea PR
 creation; it is not a unit test.
 
-The current state: the Day 1 runbook (`docs/day1-runbook.md`) describes the
+The current state: the Day 1 runbook (`docs/day1-runbook.md`, removed in #780 —
+see the README quick start and `docs/runbooks/local-dev.md`) described the
 loop, but no automated check has ever exercised it. Every milestone after M1
 builds on the assumption that this loop is sound.
 

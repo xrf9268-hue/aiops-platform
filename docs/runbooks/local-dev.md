@@ -89,10 +89,9 @@ has the right `tracker.api_key` mapping for your `tracker.kind`:
 | `gitea`  | `api_key: $GITEA_TOKEN` |
 | `github` | `api_key: $GITHUB_TOKEN` |
 
-The shipped `examples/WORKFLOW.md` and
-`examples/github-local-WORKFLOW.md` already use this pattern;
-`examples/gitea-WORKFLOW.md` omits it and must be edited before the
-worker can poll Gitea.
+The shipped examples — `examples/WORKFLOW.md`,
+`examples/gitea-WORKFLOW.md`, and `examples/github-local-WORKFLOW.md` —
+already use this pattern.
 
 Option A: from source.
 
