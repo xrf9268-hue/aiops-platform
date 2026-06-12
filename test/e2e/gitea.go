@@ -297,6 +297,29 @@ func (g *giteaEnv) addIssueLabels(ctx context.Context, owner, repo string, issue
 	return nil
 }
 
+func (g *giteaEnv) getIssueLabels(ctx context.Context, owner, repo string, issue int) ([]string, error) {
+	resp, body, err := g.doJSON(ctx, "GET",
+		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/labels", url.PathEscape(owner), url.PathEscape(repo), issue),
+		nil, false)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("getIssueLabels: status %d body %s", resp.StatusCode, body)
+	}
+	var out []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return nil, err
+	}
+	labels := make([]string, 0, len(out))
+	for _, label := range out {
+		labels = append(labels, label.Name)
+	}
+	return labels, nil
+}
+
 func (g *giteaEnv) replaceIssueLabels(ctx context.Context, owner, repo string, issue int, labels []string) error {
 	type req struct {
 		Labels []string `json:"labels"`
