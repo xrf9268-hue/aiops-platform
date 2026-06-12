@@ -258,14 +258,11 @@ func classifyExistingWorkdir(ctx context.Context, workdir, mirror string) (reusa
 	if err := runGitQuiet(ctx, workdir, "rev-parse", "--git-dir"); err != nil {
 		return false, ""
 	}
-	// Silence the probe's stderr: on a broken-but-existing `.git`
-	// (mid-corruption, partial `worktree add` crash, race with
+	// runGitOutput silences the probe's stderr: on a broken-but-existing
+	// `.git` (mid-corruption, partial `worktree add` crash, race with
 	// `os.RemoveAll`) git prints `fatal: not a git repository` while we're
-	// about to fall through to the recreate path anyway. Without io.Discard
-	// that fatal line pollutes the worker's inherited fd 2.
-	probe := exec.CommandContext(ctx, "git", "-C", workdir, "rev-parse", "--git-common-dir")
-	probe.Stderr = io.Discard
-	cdOut, cdErr := probe.Output()
+	// about to fall through to the recreate path anyway.
+	cdOut, cdErr := runGitOutput(ctx, workdir, "rev-parse", "--git-common-dir")
 	if cdErr != nil {
 		return false, ""
 	}
@@ -482,12 +479,53 @@ func sameRealPath(commonDir, workdir, want string) bool {
 	return commonReal == wantReal
 }
 
+// Per-operation deadlines for git subprocesses. The dispatch run context is
+// cancel-only by design (the agent run is unbounded per SPEC §7.1), so the
+// workspace layer must bound its own external I/O or a black-holed remote
+// stalls the dispatch — and its capacity slot — until operator intervention
+// (#759, AGENTS.md "All external I/O is timeout-bounded"). Vars, not consts,
+// so tests can shrink them. context.WithTimeout keeps an earlier parent
+// deadline, and parent cancellation still pre-empts immediately.
+var (
+	gitNetworkTimeout = 10 * time.Minute // clone --bare / fetch of a large repo over a slow link
+	gitLocalTimeout   = 5 * time.Minute  // config / worktree / checkout ops on slow disks
+	// gitWaitGrace bounds cmd.Wait after the context fires: a descendant
+	// (ssh, credential helper) that inherits the output pipe and outlives
+	// the killed git process would otherwise hold Wait open to its own exit.
+	gitWaitGrace = 5 * time.Second
+)
+
+// classifyGitContextErr rewraps a git failure caused by context expiry so
+// callers can classify with errors.Is instead of matching "signal: killed"
+// text (clean-code rule 8). A plain git failure passes through untouched,
+// and a parent WithCancelCause cause (e.g. reconcile-cancel) is preserved.
+func classifyGitContextErr(ctx context.Context, budget time.Duration, err error) error {
+	// ErrWaitDelay is only returned when the process exited successfully but
+	// a descendant kept an output pipe open past gitWaitGrace (e.g. a fetch
+	// kicking off background auto-gc). The git operation itself succeeded —
+	// reporting it as failure would fail dispatches on healthy repos.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		return nil
+	}
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	cause := context.Cause(ctx)
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return fmt.Errorf("git operation exceeded %s budget (%w): %w", budget, err, cause)
+	}
+	return fmt.Errorf("git operation canceled (%w): %w", err, cause)
+}
+
 func runGit(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	runCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "git", args...)
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	cmd.WaitDelay = gitWaitGrace
+	return classifyGitContextErr(runCtx, gitLocalTimeout, cmd.Run())
 }
 
 // runGitRedacted runs git like runGit but scrubs basic-auth userinfo from the
@@ -498,9 +536,12 @@ func runGit(ctx context.Context, dir string, args ...string) error {
 // `git clone --bare <cloneURL>` / `git fetch` leaks the credential to the
 // worker's os.Stderr (#595, AGENTS.md secret-masking convention).
 func runGitRedacted(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	runCtx, cancel := context.WithTimeout(ctx, gitNetworkTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "git", args...)
 	cmd.Dir = dir
-	return runRedacted(cmd)
+	cmd.WaitDelay = gitWaitGrace
+	return classifyGitContextErr(runCtx, gitNetworkTimeout, runRedacted(cmd))
 }
 
 // runRedacted runs cmd with its stdout/stderr forwarded to os.Stdout/os.Stderr
@@ -526,9 +567,26 @@ func runRedacted(cmd *exec.Cmd) error {
 // probe operations like `git rev-parse --verify` whose stderr is expected
 // noise on the unhappy path.
 func runGitQuiet(ctx context.Context, dir string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	runCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "git", args...)
 	cmd.Dir = dir
-	return cmd.Run()
+	cmd.WaitDelay = gitWaitGrace
+	return classifyGitContextErr(runCtx, gitLocalTimeout, cmd.Run())
+}
+
+// runGitOutput runs a local git probe and returns its stdout. Stderr stays
+// nil (devnull / ExitError.Stderr) so probe noise on the unhappy path —
+// e.g. `fatal: not a git repository` from a broken-but-existing `.git` —
+// never pollutes the worker's inherited fd 2.
+func runGitOutput(ctx context.Context, dir string, args ...string) ([]byte, error) {
+	runCtx, cancel := context.WithTimeout(ctx, gitLocalTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "git", args...)
+	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitGrace
+	out, err := cmd.Output()
+	return out, classifyGitContextErr(runCtx, gitLocalTimeout, err)
 }
 
 // SanitizeComponent returns the SPEC §4.2 workspace path component for s:

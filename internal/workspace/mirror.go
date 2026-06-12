@@ -224,26 +224,50 @@ func (m *Manager) ensureMirrorLocked(ctx context.Context, cloneURL, mirror strin
 		}
 		return mirror, nil
 	}
-	// First-time clone. Remove any partial directory left over from a prior
-	// failed attempt so `git clone` does not refuse to overwrite it.
+	return cloneMirrorLocked(ctx, cloneURL, mirror)
+}
+
+// mirrorStagingSuffix marks the in-progress build directory for a first-time
+// mirror clone. Every final mirror path from mirrorPathFor ends in ".git"
+// (both the structured and the fallback branch), so no final mirror path can
+// collide with another mirror's ".git.staging" build directory.
+const mirrorStagingSuffix = ".staging"
+
+// cloneMirrorLocked builds a first-time mirror in a staging directory and
+// renames it into place only after every setup step has succeeded. Cloning
+// straight into the final path would let a killed `git clone --bare` — a
+// #759 timeout, a reconcile-cancel, a worker crash — leave a partial
+// directory whose HEAD sends the next attempt down the existing-mirror fetch
+// branch against a repo that never got its remote-tracking refspec, wedging
+// every retry until an operator deletes the mirror by hand.
+func cloneMirrorLocked(ctx context.Context, cloneURL, mirror string) (string, error) {
+	staging := mirror + mirrorStagingSuffix
+	// Clear leftovers from prior interrupted attempts so `git clone` does
+	// not refuse the staging path; the final path is normally created only
+	// by the rename below, but an older worker version may have left a
+	// HEAD-less partial mirror there.
+	_ = os.RemoveAll(staging)
 	_ = os.RemoveAll(mirror)
 	// The clone URL carries the agent's `user:token@` push credential on the
 	// command line, so both the forwarded git stderr (runGitRedacted) and the
 	// wrapped error string (MaskCloneURL) must mask it (#595).
-	if err := runGitRedacted(ctx, filepath.Dir(mirror), "clone", "--bare", cloneURL, mirror); err != nil {
+	if err := runGitRedacted(ctx, filepath.Dir(mirror), "clone", "--bare", cloneURL, staging); err != nil {
 		return "", fmt.Errorf("clone mirror %s: %w", workflow.MaskCloneURL(cloneURL), err)
 	}
 	// `git clone --bare` defaults to a "do nothing" fetch refspec; rewrite
 	// it to the standard remote-tracking layout so subsequent fetches and
 	// `origin/<branch>` lookups behave like a regular clone.
-	if err := runGit(ctx, mirror, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
+	if err := runGit(ctx, staging, "config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"); err != nil {
 		return "", fmt.Errorf("configure fetch refspec: %w", err)
 	}
-	if err := runGitRedacted(ctx, mirror, "fetch", "--prune", "--tags", "origin"); err != nil {
+	if err := runGitRedacted(ctx, staging, "fetch", "--prune", "--tags", "origin"); err != nil {
 		return "", fmt.Errorf("initial fetch: %w", err)
 	}
-	if err := runGit(ctx, mirror, "config", "extensions.worktreeConfig", "true"); err != nil {
+	if err := runGit(ctx, staging, "config", "extensions.worktreeConfig", "true"); err != nil {
 		return "", fmt.Errorf("enable worktree config: %w", err)
+	}
+	if err := os.Rename(staging, mirror); err != nil {
+		return "", fmt.Errorf("move mirror into place: %w", err)
 	}
 	return mirror, nil
 }
