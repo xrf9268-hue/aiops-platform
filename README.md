@@ -82,7 +82,10 @@ repeatedly fetches active issues and dispatches them through the in-memory
 orchestrator state:
 
 ```bash
-export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md
+# Point AIOPS_WORKFLOW_PATH at the template you picked above:
+export AIOPS_WORKFLOW_PATH=$PWD/examples/WORKFLOW.md                 # Linear
+# export AIOPS_WORKFLOW_PATH=$PWD/examples/gitea-WORKFLOW.md         # Gitea
+# export AIOPS_WORKFLOW_PATH=$PWD/examples/github-local-WORKFLOW.md  # GitHub
 export AIOPS_WORKSPACE_ROOT=$PWD/.aiops/workspaces
 
 # For tracker.kind: linear  (consumed via WORKFLOW.md "api_key: $LINEAR_API_KEY")
@@ -435,9 +438,12 @@ Two behaviors keep the label-as-state loop safe:
   (`Closes #N`, `Fixes #N`, …) from each PR's title and body; an issue
   claimed by an open PR is skipped while both stay open, so a poll never
   double-dispatches an issue whose agent PR is already in flight.
-- **Reconciliation.** Removing the state label or closing the issue takes it
-  out of the active set; per-tick reconciliation then stops an in-flight run
-  on a following poll.
+- **Reconciliation.** Closing the issue (a configured terminal state) stops
+  an in-flight run on a following poll. Removing the state label keeps the
+  issue out of *future* dispatch but does **not** cancel an already-running
+  agent under this configuration: the refreshed issue falls back to plain
+  `open`, which is neither active nor a configured inactive/terminal state.
+  Close the issue to stop work that is already running.
 
 `tracker.api_key` needs only read access — a fine-grained PAT with read-only
 **Issues**, **Pull requests**, and **Metadata** permissions on the target
