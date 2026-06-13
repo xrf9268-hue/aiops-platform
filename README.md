@@ -398,6 +398,11 @@ polling and per-tick reconciliation. If a running issue is moved to `aiops/done`
 or `aiops/canceled`, the next poll refreshes that issue by ID and stops the
 in-flight run.
 
+For setting up a low-privilege bot account with the minimum token scopes
+(including the scopes the `gitea_issue_labels` state tool needs) and branch
+protection on a Gitea instance, follow the
+[Gitea bot and branch-protection runbook](docs/runbooks/gitea-bot-and-branch-protection.md).
+
 ## Continuous integration
 
 Every push to `main` and every pull request targeting `main` runs
@@ -446,12 +451,14 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Dashboard brand redesign & UX](docs/design/dashboard-brand-redesign.md)
 - [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
+- [ADR 0002: Ready-gated binary self-hosted development](docs/adr/0002-ready-gated-binary-self-hosting.md)
 - [Local development runbook](docs/runbooks/local-dev.md)
 - [Binary (non-Docker) deployment runbook](docs/runbooks/binary-deployment.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)
+- [Gitea bot and branch protection](docs/runbooks/gitea-bot-and-branch-protection.md)
 
 ## Safety notes
 

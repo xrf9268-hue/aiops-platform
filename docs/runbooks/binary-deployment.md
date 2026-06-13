@@ -21,8 +21,10 @@ a service manager (systemd on Linux, launchd on macOS) instead of Compose.
   `claude`) launch local subprocesses via `os/exec`;
   none shell out to `docker`. `testcontainers-go` is test-only.
 - **No PR creation / tracker writes.** The worker prepares a git
-  workspace, runs the agent, enforces policy, and stops. Push and
-  draft-PR creation happen agent-side.
+  workspace, runs the agent, and stops. Push and draft-PR creation
+  happen agent-side; the worker enforces no post-run policy gate
+  (DEVIATIONS D33, #561 — `policy.mode` only selects the analysis-only
+  vs draft-PR prompt directive).
 
 ## 1. Host prerequisites
 
