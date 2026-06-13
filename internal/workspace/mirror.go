@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -295,97 +294,4 @@ func cloneMirrorLocked(ctx context.Context, cloneURL, mirror string) (string, er
 	}
 	moved = true
 	return mirror, nil
-}
-
-// Cleanup removes per-task worktrees whose directory mtime is older than
-// maxAge. For each stale worktree we first try `git worktree remove --force`
-// against the owning mirror so the bare repo's administrative state is
-// cleaned up, then fall back to plain os.RemoveAll if git refuses (for
-// example when the mirror has been deleted out from under us).
-//
-// The function never returns an error for a single failed entry; it logs
-// the count of removed and failed entries via the returned CleanupReport so
-// callers can decide whether to surface a warning. Errors are only returned
-// for catastrophic conditions (root unreadable).
-//
-// maxAge <= 0 is treated as "remove everything", which is occasionally
-// useful from an operator CLI; callers that want a no-op should skip the
-// call entirely.
-func (m *Manager) Cleanup(ctx context.Context, maxAge time.Duration) (CleanupReport, error) {
-	report := CleanupReport{Threshold: maxAge}
-	cutoff := time.Now().Add(-maxAge)
-	entries, err := os.ReadDir(m.Root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return report, nil
-		}
-		return report, fmt.Errorf("read workspace root: %w", err)
-	}
-	for _, repoEntry := range entries {
-		if !repoEntry.IsDir() {
-			continue
-		}
-		cleanupWorktreeDirs(ctx, filepath.Join(m.Root, repoEntry.Name()), cutoff, maxAge, &report)
-	}
-	return report, nil
-}
-
-func cleanupWorktreeDirs(ctx context.Context, dir string, cutoff time.Time, maxAge time.Duration, report *CleanupReport) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		report.Failed++
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
-		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
-			cleanupWorktree(ctx, path, cutoff, maxAge, report)
-			continue
-		}
-		cleanupWorktreeDirs(ctx, path, cutoff, maxAge, report)
-	}
-}
-
-func cleanupWorktree(ctx context.Context, taskDir string, cutoff time.Time, maxAge time.Duration, report *CleanupReport) {
-	info, err := os.Stat(taskDir)
-	if err != nil {
-		report.Failed++
-		return
-	}
-	if maxAge > 0 && info.ModTime().After(cutoff) {
-		report.Skipped++
-		return
-	}
-	if removeWorktree(ctx, taskDir) {
-		report.Removed++
-	} else {
-		report.Failed++
-	}
-}
-
-// removeWorktree best-effort detaches a task directory from its owning bare
-// mirror and deletes the on-disk path. It returns true when the directory
-// is gone after the call.
-func removeWorktree(ctx context.Context, taskDir string) bool {
-	// The worktree's gitdir file points at <mirror>/worktrees/<id>; we ask
-	// git itself to clean both sides via the worktree itself.
-	_ = runGit(ctx, taskDir, "worktree", "remove", "--force", ".")
-	if _, err := os.Stat(taskDir); err == nil {
-		if err := os.RemoveAll(taskDir); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
-// CleanupReport summarises a Cleanup pass. It is intentionally tiny and
-// JSON-friendly so it can be logged or surfaced in a future ops CLI.
-type CleanupReport struct {
-	Threshold time.Duration `json:"threshold"`
-	Removed   int           `json:"removed"`
-	Skipped   int           `json:"skipped"`
-	Failed    int           `json:"failed"`
 }
