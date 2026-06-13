@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~342 | Active |
+| `journal-1.md` | ~386 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-06-13 | Batch #783/#784/#785: release-readiness docs (key reference, staleness/links, GitHub onboarding) | `bcbe28b`, `343fee3`, `a0c1270` | `chore/batch-783-785-bookkeeping` |
 | 5 | 2026-06-13 | Batch: release-readiness issues #780/#781/#782 → PRs #800/#801/#804 merged | `ce5157c` | `main` |
 | 4 | 2026-06-12 | Issue #765: mirror legacy-refspec heal + staging cleanup (PR #774 merged) | `c45b323` | `main` |
 | 3 | 2026-06-11 | v0.1.0 packaged-binary full lifecycle test: 12-issue web-todo app, PASS | `1a81e17` | `main` |

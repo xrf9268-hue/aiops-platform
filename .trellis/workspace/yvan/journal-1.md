@@ -340,3 +340,47 @@ Processed the 2026-06-12 release-readiness audit batch serially per batch-issue-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: Batch #783/#784/#785: release-readiness docs (key reference, staleness/links, GitHub onboarding)
+
+**Date**: 2026-06-13
+**Task**: Batch #783/#784/#785: release-readiness docs (key reference, staleness/links, GitHub onboarding)
+**Branch**: `chore/batch-783-785-bookkeeping`
+
+### Summary
+
+Three docs PRs merged under authorized auto-merge; follow-ups #808 filed; two process lessons captured
+
+### Main Changes
+
+## 2026-06-13 release-readiness docs batch (#783/#784/#785)
+
+Serial batch (all three shared README.md — soft overlap → serialized per the batch runbook). One issue → one branch → one PR; full shared gate per PR (local CI gate → dual local diff-only review → push → CI green → @codex review convergence → thread closure); authorized auto-merge applied.
+
+- #783 → PR #809 (merged bcbe28b): new docs/runbooks/workflow-frontmatter-reference.md — exhaustive front-matter key reference; README §6.4 cheat-sheet links to it. Discovered tracker.statuses.* is parsed but consumed nowhere → filed #808 (area:tech-debt). Review rounds fixed 3 Codex MEDIUMs (Linear pagination is a fixed 200-page cap and ignores tracker.pagination_max_pages — README cheat-sheet row was also wrong and fixed in the same PR; by-state cap violations are load errors, not drops; explicit workspace.root beats AIOPS_WORKSPACE_ROOT).
+- #784 → PR #810 (merged 343fee3): reworded the two stale "worker enforces policy" runbook claims to post-D33 reality; linked the orphaned ADR 0002 + Gitea bot runbook from README indexes.
+- #785 → PR #811 (merged a0c1270): README "GitHub issue-state labels" section (open/closed/all vs label-as-state, aiops:ready convention, open-PR claim skip), read-only token-scope sentence, per-tracker example links in quick start. @codex review found 2 real P2s: the quick start still exported the Linear AIOPS_WORKFLOW_PATH; and the reconciliation bullet over-promised — githubResolveState falls back to plain `open` on label removal, so only closing the issue cancels an in-flight run under the recommended config. Both fixed in ad64c0f.
+
+Process lessons (saved to memory): poll all three codex completion signals (PR reviews + bot issue comments + trigger reactions) — narrowing to the last observed form misread "converged with findings" as "quota exhausted" on #811; use the gh-pr-follow-through skill for PR closure instead of hand-rolled wait loops.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bcbe28b` | (see git log) |
+| `343fee3` | (see git log) |
+| `a0c1270` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
