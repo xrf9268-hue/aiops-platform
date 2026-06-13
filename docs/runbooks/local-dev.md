@@ -372,9 +372,8 @@ the worker falls back to `AIOPS_WORKSPACE_ROOT` (legacy alias
 every retry and lets two tasks run concurrently without sharing a
 working tree. See the dedicated
 [workspace cache runbook](workspace-cache.md) for the on-disk layout,
-configuration knobs, and recommended cleanup cadence (the
-`(*workspace.Manager).Cleanup` API or removal of the effective
-workspace root once old tasks no longer matter).
+configuration knobs, and the recommended manual cleanup cadence
+(removing the effective workspace root once old tasks no longer matter).
 
 ## Running e2e tests locally
 

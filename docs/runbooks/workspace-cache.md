@@ -240,26 +240,34 @@ recommended strategy is age-based pruning, gated on operator preference:
   rebuilt. `mod/` is intentionally shared and is not managed by workspace
   cleanup.
 
-The Go API for cleanup is `(*workspace.Manager).Cleanup(ctx, maxAge)`.
-It walks `$AIOPS_WORKSPACE_ROOT`, deletes each task directory whose mtime
-predates `now - maxAge`, and returns a `CleanupReport` with counts of
-removed/skipped/failed entries. It never touches the mirror cache.
+The worker exposes no in-process cleanup API and no scheduler; pruning is
+an out-of-band operator task.
 
 ### How to trigger cleanup
 
-There is no built-in scheduler. Pick one of the following based on how
-the worker is deployed:
+Delete stale per-task worktrees directly on disk between runs. The next
+task re-creates its worktree from the bare mirror (fast), so this is safe
+to run during any pause.
 
-1. **Cron / launchd**: schedule a tiny wrapper binary that calls
-   `workspace.New(root).Cleanup(ctx, 48*time.Hour)`. Suitable for the
-   personal daily workflow described in
-   [personal-daily-workflow.md](personal-daily-workflow.md).
-2. **Manual**: `rm -rf $AIOPS_WORKSPACE_ROOT/*` between long pauses works in
-   a pinch. The next task simply re-creates its worktree from the bare
-   mirror, which is fast.
-3. **Future hook**: a follow-up issue may wire `Cleanup` into the
-   worker's main loop (e.g. once per N completed tasks). Until that
-   lands, treat cleanup as an out-of-band concern.
+First confirm your **effective** workspace root: it is `workspace.root`
+from `WORKFLOW.md` when set, otherwise `$AIOPS_WORKSPACE_ROOT` (legacy
+`$WORKSPACE_ROOT`), otherwise the SPEC temp default. `go run ./cmd/worker
+--print-config <repo-clone>` prints the resolved value. Then prune that
+exact path — never an unset variable, or the glob below expands to `/*`
+and recurses into host directories:
+
+```sh
+# The :? guard makes the shell refuse to run rm when the root is unset or
+# empty, so the glob can never become "/*". Replace the env var with your
+# resolved workspace.root path if you do not deploy via AIOPS_WORKSPACE_ROOT.
+rm -rf "${AIOPS_WORKSPACE_ROOT:?set the workspace root before pruning}"/*
+```
+
+For age-based pruning, delete only the individual task directories under
+that root whose corresponding task is already `succeeded` or `failed` and
+that fall outside your chosen window (24h–72h for personal use; see the
+policy above). Never delete the bare mirrors under `$AIOPS_MIRROR_ROOT`:
+they are the long-lived cache that keeps worktree re-creation cheap.
 
 ## Cleanup containment invariant
 
