@@ -16,6 +16,22 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+// newRuntimePollerForTest builds a RuntimePoller through the production
+// NewRuntimePollerWithTrackerFactory constructor (the deleted NewRuntimePoller
+// wrapper used to wrap a single lister in this same closure). lister is served
+// for every workflow snapshot so reload-driven tracker selection still resolves
+// to the test fake.
+func newRuntimePollerForTest(t *testing.T, lister IssueStateLister, orch *Orchestrator, runtime *WorkflowRuntime) *RuntimePoller {
+	t.Helper()
+	poller, err := NewRuntimePollerWithTrackerFactory(func(workflow.Config) (IssueStateLister, error) {
+		return lister, nil
+	}, orch, runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+	return poller
+}
+
 type recordingWorkflowReloadEmitter struct {
 	mu     sync.Mutex
 	events []recordedWorkflowReloadEvent
@@ -138,10 +154,7 @@ func TestRuntimePollerUsesReloadedTrackerStatesFromSameWorkflowPath(t *testing.T
 	dispatcher := &fakeDispatcher{}
 	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll: %v", err)
@@ -189,10 +202,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll: %v", err)
@@ -234,10 +244,7 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacit
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll: %v", err)
@@ -274,10 +281,7 @@ func TestRuntimePollerAppliesReloadedMaxRetryBackoffToFailureRetries(t *testing.
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxRetryBackoffMs(50))
 	if err := runtime.ReloadOnce(ctx); err != nil {
@@ -325,10 +329,7 @@ func TestRuntimePollerAppliesReloadedMaxContinuationTurnsToCleanContinuationBudg
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestMaxContinuationTurns(1))
 	if err := runtime.ReloadOnce(ctx); err != nil {
@@ -422,10 +423,7 @@ func TestRuntimePollerRetryListerWrapsEligibilityFilter(t *testing.T) {
 	dispatcher := &recordingDispatcher{}
 	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -487,10 +485,7 @@ func TestRuntimePollerRetryListerThreadsRequiredLabels(t *testing.T) {
 	dispatcher := &recordingDispatcher{}
 	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
-	poller, err := NewRuntimePoller(trackerClient, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -650,10 +645,7 @@ func TestRunPollLoopWithRuntimePollerHonorsInjectedSleep(t *testing.T) {
 	disp := &recordingDispatcher{releaseCh: make(chan struct{})}
 	orch, orchCancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Second}})
 	defer orchCancel()
-	poller, err := NewRuntimePoller(&fakeIssueStateTracker{}, orch, runtime, worker.Config{}, nil)
-	if err != nil {
-		t.Fatalf("new runtime poller: %v", err)
-	}
+	poller := newRuntimePollerForTest(t, &fakeIssueStateTracker{}, orch, runtime)
 	sleeper := &recordingPollSleeper{}
 
 	start := time.Now()

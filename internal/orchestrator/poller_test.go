@@ -27,13 +27,38 @@ type fakeIssueTracker struct {
 }
 
 func (f *fakeIssueTracker) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	return f.list(nil, false)
+}
+
+// ListIssuesByStates lets fakeIssueTracker satisfy IssueStateLister so the
+// dispatch tests construct through the production NewPollerWithReconciliation
+// path (the deleted NewPoller used the bare ActiveIssueLister). It filters by
+// the requested states exactly like the real tracker and fakeIssueStateTracker,
+// so reconcileTick's terminal/inactive group listings only ever return
+// terminal-state issues — never an active dispatch candidate — and the run-less
+// dispatch behavior matches the old NewPoller construction verbatim.
+func (f *fakeIssueTracker) ListIssuesByStates(_ context.Context, states []string) ([]tracker.Issue, error) {
+	return f.list(states, true)
+}
+
+func (f *fakeIssueTracker) list(states []string, filterByState bool) ([]tracker.Issue, error) {
 	f.calls++
 	if f.err != nil && !f.partialSuccess {
 		return nil, f.err
 	}
 	issues := f.issues
+	if filterByState {
+		wanted := normalizedStates(states)
+		filtered := make([]tracker.Issue, 0, len(issues))
+		for _, issue := range issues {
+			if isActiveTrackerState(issue.State, wanted) {
+				filtered = append(filtered, issue)
+			}
+		}
+		issues = filtered
+	}
 	if !f.preserveMissingFields {
-		issues = defaultTrackerIssueTitles(f.issues)
+		issues = defaultTrackerIssueTitles(issues)
 	}
 	if f.err != nil {
 		return issues, f.err
@@ -882,10 +907,13 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	// NewPoller without a reconciliation config leaves reconcile.TerminalStates
-	// empty; filterEligibleCandidates falls back to workflow.DefaultConfig's
-	// SPEC §5.3.1 5-state set, so a Done blocker is still treated as terminal.
-	poller := NewPoller(trackerClient, orch)
+	// Construct through the production reconciliation path with the SPEC §5.3.1
+	// default terminal_states (workflow.DefaultConfig), so a Done blocker is
+	// still treated as terminal and only the unblocked Todo issue dispatches.
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates,
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -916,7 +944,7 @@ func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -945,7 +973,7 @@ func TestPollOnceDispatchesMissingCreatedAtCandidateAfterDatedCandidates(t *test
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -973,7 +1001,7 @@ func TestPollOnceIgnoresBlockersForNonTodoStates(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"In Progress"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1002,13 +1030,15 @@ func TestPollOnceTreatsDefaultSpecTerminalBlockersAsUnblocked(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
 	// Use workflow.DefaultConfig().Tracker.TerminalStates so the test actually
 	// exercises the SPEC §5.3.1 5-state default ("Done", "Canceled",
 	// "Cancelled", "Closed", "Duplicate"). Previously this was hard-coded to
 	// ["Done", "Canceled"] and relied on filterEligibleCandidates's now-removed
 	// hardcoded overlay (#232) to backfill the remaining three terminal states.
-	poller.reconcile.TerminalStates = workflow.DefaultConfig().Tracker.TerminalStates
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates,
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1042,10 +1072,12 @@ func TestPollOnceTodoBlockerHonorsOperatorConfiguredTerminalStates(t *testing.T)
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
 	// Operator subsets terminal_states to just ["Done"]. Closed and Duplicate
 	// must NOT be treated as terminal — both Todo issues stay blocked.
-	poller.reconcile.TerminalStates = []string{"Done"}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:   []string{"Todo"},
+		TerminalStates: []string{"Done"},
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1353,7 +1385,7 @@ func TestPollOnceSortsCandidatesByTrackerPriorityCreatedAtIdentifier(t *testing.
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1384,13 +1416,17 @@ func TestPollOnceDispatchesTrackerCandidatesThroughRuntimeStateWithoutQueue(t *t
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
 
+	// The active listing flows through the production activeIssueListerFromStates
+	// wrapper into ListIssuesByStates. With no terminal/inactive reconcile groups
+	// configured and no run active yet, that single active query is the only
+	// tracker call this tick.
 	if trackerClient.calls != 1 {
-		t.Fatalf("ListActiveIssues calls = %d, want 1", trackerClient.calls)
+		t.Fatalf("ListIssuesByStates calls = %d, want 1", trackerClient.calls)
 	}
 	if got := dispatcher.count(); got != 1 {
 		t.Fatalf("dispatcher issues = %d, want 1", got)
@@ -1421,7 +1457,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "Todo"}}}, orch)
+	poller := NewPollerWithReconciliation(&fakeIssueTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "Todo"}}}, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("initial poll once: %v", err)
@@ -1456,7 +1492,7 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 		t.Fatalf("WaitStarted: %v", err)
 	}
 	issue := tracker.Issue{ID: "issue-missing", Identifier: "ISSUE-MISSING", Title: "Issue missing from capped active listing", State: "Todo"}
-	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
+	poller := NewPollerWithReconciliation(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("initial poll once: %v", err)
@@ -1481,7 +1517,7 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 	}
 }
 
-func TestRunPollLoopWakesWhenContinuationRetryTimerFires(t *testing.T) {
+func TestRunPollLoopWithRuntimeWakesWhenContinuationRetryTimerFires(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -1494,22 +1530,49 @@ func TestRunPollLoopWakesWhenContinuationRetryTimerFires(t *testing.T) {
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	issue := tracker.Issue{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "Todo"}
-	poller := NewPoller(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch)
+	// A 1-hour cadence means the only thing that can drive the second poll
+	// within the test window is the §8.5 retry-timer wake, not the interval
+	// timer — exercising sleepOrRetryWake on the production *RuntimePoller path
+	// (RunPollLoopWithRuntime only watches retryWakeCh for *RuntimePoller). A
+	// non-zero continuation budget is required because RuntimePoller.PollOnce
+	// pushes the snapshot's max_continuation_turns into the orchestrator, so a
+	// completed run only schedules the continuation whose timer does the waking.
+	path := writeWorkflowForReloadTest(t, "linear", 3600000, withReloadTestMaxContinuationTurns(5))
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "ISSUE-1", Title: "Issue 1", State: "Todo"}}}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
 
 	done := make(chan error, 1)
 	go func() {
-		done <- RunPollLoop(ctx, poller, time.Hour)
+		done <- RunPollLoopWithRuntime(ctx, poller, runtime, PollLoopRuntimeOptions{})
 	}()
-	waitForDispatcherCount(t, dispatcher, 2)
+	// The second dispatch can only come from the continuation retry timer waking
+	// the loop (the 1h cadence cannot fire in-window). That timer is the
+	// production RetryScheduler's fixed 1s continuationRetryDelay — RuntimePoller
+	// installs that scheduler from the workflow, overriding any injected one — so
+	// allow more than 1s and stop as soon as the wake-driven re-dispatch lands.
+	deadline := time.Now().Add(3 * time.Second)
+	for dispatcher.count() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := dispatcher.count(); got < 2 {
+		t.Fatalf("dispatcher issues = %d, want >=2 after the continuation retry timer woke the poll loop", got)
+	}
 	cancel()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("RunPollLoop error = %v, want context canceled", err)
+			t.Fatalf("RunPollLoopWithRuntime error = %v, want context canceled", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("RunPollLoop did not exit after context cancel")
+		t.Fatal("RunPollLoopWithRuntime did not exit after context cancel")
 	}
 }
 
@@ -1539,7 +1602,7 @@ func TestPollOnceBuildTaskFailureSchedulesBackoffRetryNotPerTickSpin(t *testing.
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1597,7 +1660,7 @@ func TestPollOnceDoesNotExceedMaxConcurrentAgents(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll once: %v", err)
 	}
@@ -1627,7 +1690,7 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll once: %v", err)
 	}
@@ -1671,7 +1734,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 		t.Fatalf("wait for orchestrator: %v", err)
 	}
 
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll once: %v", err)
 	}
@@ -1865,7 +1928,7 @@ func TestPollOnceDispatchesPartialIssuesWhenTrackerReturnsCategorizedError(t *te
 	if err := orch.WaitStarted(ctx); err != nil {
 		t.Fatalf("WaitStarted: %v", err)
 	}
-	poller := NewPoller(trackerClient, orch)
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{ActiveStates: []string{"Todo"}})
 
 	pollErr := poller.PollOnce(ctx)
 	if pollErr == nil {

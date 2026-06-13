@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -102,22 +101,6 @@ type Poller struct {
 	// snapshot reload so `$VAR` resolution drift is detected on the
 	// next tick rather than at the next tracker call.
 	preflight *workflow.Config
-}
-
-// NewPoller returns a SPEC-aligned tracker poller backed by orchestrator-owned
-// runtime state instead of the legacy Postgres task queue.
-//
-// Callers that do not supply a ReconciliationConfig still get the SPEC §5.3.1
-// default terminal_states so the Todo blocker rule continues to honor
-// "Done"/"Canceled"/etc. without the hardcoded overlay #232 removed.
-// Operators who genuinely want to disable the blocker rule must construct via
-// NewPollerWithReconciliation with an explicit empty terminal_states slice.
-func NewPoller(tracker ActiveIssueLister, orchestrator *Orchestrator) *Poller {
-	return &Poller{
-		tracker:      tracker,
-		orchestrator: orchestrator,
-		reconcile:    ReconciliationConfig{TerminalStates: workflow.DefaultConfig().Tracker.TerminalStates},
-	}
 }
 
 // NewPollerWithReconciliation returns a poller that reconciles the
@@ -602,38 +585,5 @@ func IssueRenderVars(issue tracker.Issue) map[string]any {
 		"blocked_by":  blockedBy,
 		"created_at":  issue.CreatedAt,
 		"updated_at":  issue.UpdatedAt,
-	}
-}
-
-// RunPollLoop repeatedly polls the tracker until ctx is canceled.
-func RunPollLoop(ctx context.Context, poller *Poller, interval time.Duration) error { //nolint:gocognit // baseline (#521)
-	if poller == nil {
-		return errors.New("orchestrator poll loop requires poller")
-	}
-	if interval <= 0 {
-		interval = 30 * time.Second
-	}
-	intervalTimer := time.NewTimer(interval)
-	if !intervalTimer.Stop() {
-		<-intervalTimer.C
-	}
-	defer intervalTimer.Stop()
-	for {
-		if err := poller.PollOnce(ctx); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			log.Printf("event=tracker_poll_error error=%q", err)
-		}
-		intervalTimer.Reset(interval)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-poller.orchestrator.retryWakeCh():
-			if !intervalTimer.Stop() {
-				<-intervalTimer.C
-			}
-		case <-intervalTimer.C:
-		}
 	}
 }

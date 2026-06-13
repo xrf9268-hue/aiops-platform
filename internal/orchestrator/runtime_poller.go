@@ -28,12 +28,6 @@ type RuntimePoller struct {
 	currentRefresher IssueStateRefresher
 }
 
-func NewRuntimePoller(tracker IssueStateLister, orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
-	return NewRuntimePollerWithTrackerFactory(func(workflow.Config) (IssueStateLister, error) {
-		return tracker, nil
-	}, orchestrator, runtime, cfg, emitter)
-}
-
 func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (IssueStateLister, error), orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
 	if trackerFactory == nil {
 		return nil, errors.New("runtime poller requires tracker factory")

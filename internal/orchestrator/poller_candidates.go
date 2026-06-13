@@ -170,12 +170,10 @@ func filterIssuesNotInMap(issues []tracker.Issue, excluded map[string]tracker.Is
 }
 
 func filterEligibleCandidates(issues []tracker.Issue, terminalStates, requiredLabels []string) []tracker.Issue {
-	// Honor exactly what the caller supplied per SPEC §5.3.1. Callers that
-	// want the SPEC 5-state default get it from workflow.DefaultConfig at
-	// construction time (NewPoller seeds it; workflow.Load supplies it for
-	// omitted YAML). An explicit empty slice from
-	// NewPollerWithReconciliation disables the blocker rule entirely, which
-	// is the operator's call.
+	// Honor exactly what the caller supplied per SPEC §5.3.1. The SPEC 5-state
+	// default reaches NewPollerWithReconciliation through the workflow config
+	// (workflow.Load supplies it for omitted YAML). An explicit empty slice
+	// disables the blocker rule entirely, which is the operator's call.
 	terminal := normalizedStates(terminalStates)
 	out := make([]tracker.Issue, 0, len(issues))
 	for _, issue := range issues {

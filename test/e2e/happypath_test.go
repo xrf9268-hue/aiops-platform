@@ -226,7 +226,12 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 		t.Fatalf("start orchestrator: %v", err)
 	}
 
-	if err := orchestrator.NewPoller(client, orch).PollOnce(ctx); err != nil {
+	poller := orchestrator.NewPollerWithReconciliation(client, orch, orchestrator.ReconciliationConfig{
+		ActiveStates:      cfg.Tracker.ActiveStates,
+		TerminalStates:    cfg.Tracker.TerminalStates,
+		WorkerExitTimeout: 10 * time.Second,
+	})
+	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 

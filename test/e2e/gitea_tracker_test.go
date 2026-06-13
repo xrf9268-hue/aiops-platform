@@ -54,7 +54,10 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 		t.Fatalf("start orchestrator: %v", err)
 	}
 
-	poller := orchestrator.NewPoller(client, orch)
+	poller := orchestrator.NewPollerWithReconciliation(client, orch, orchestrator.ReconciliationConfig{
+		ActiveStates:   []string{"Todo", "Rework"},
+		TerminalStates: []string{"Done", "Canceled"},
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("first poll: %v", err)
 	}
@@ -123,7 +126,11 @@ func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 		t.Fatalf("start orchestrator: %v", err)
 	}
 
-	if err := orchestrator.NewPoller(client, orch).PollOnce(ctx); err != nil {
+	poller := orchestrator.NewPollerWithReconciliation(client, orch, orchestrator.ReconciliationConfig{
+		ActiveStates:   []string{"Todo", "Rework"},
+		TerminalStates: []string{"Done", "Canceled"},
+	})
+	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("poll: %v", err)
 	}
 	// No wait needed: PollOnce dispatches synchronously, so a zero spawn count
