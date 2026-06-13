@@ -23,9 +23,18 @@ import (
 // to the test fake.
 func newRuntimePollerForTest(t *testing.T, lister IssueStateLister, orch *Orchestrator, runtime *WorkflowRuntime) *RuntimePoller {
 	t.Helper()
+	// These reload tests dispatch through the actor's own fakeDispatcher; the
+	// poller only needs a *RuntimeDispatcher to receive SetIssueStateRefresher,
+	// so a standalone instance is sufficient. The actor's-dispatcher-is-the-
+	// poller's-dispatcher invariant is pinned by
+	// TestRuntimePollerWiresRefresherOntoProvidedDispatcher.
+	dispatcher, err := NewRuntimeDispatcher(runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime dispatcher: %v", err)
+	}
 	poller, err := NewRuntimePollerWithTrackerFactory(func(workflow.Config) (IssueStateLister, error) {
 		return lister, nil
-	}, orch, runtime, worker.Config{}, nil)
+	}, orch, runtime, dispatcher)
 	if err != nil {
 		t.Fatalf("new runtime poller: %v", err)
 	}
@@ -368,10 +377,14 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 	dispatcher := &fakeDispatcher{}
 	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	defer cancel()
+	runtimeDispatcher, err := NewRuntimeDispatcher(runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime dispatcher: %v", err)
+	}
 	poller, err := NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (IssueStateLister, error) {
 		factoryCalls++
 		return trackersByKind[cfg.Tracker.Kind], nil
-	}, orch, runtime, worker.Config{}, nil)
+	}, orch, runtime, runtimeDispatcher)
 	if err != nil {
 		t.Fatalf("new runtime poller: %v", err)
 	}
@@ -382,6 +395,13 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
 	if got := dispatcher.issueAt(0).ID; got != "linear-ready" {
 		t.Fatalf("first dispatched issue = %q, want linear-ready", got)
+	}
+	// The SPEC §16.5 refresher must track the rebuilt tracker client on the
+	// poller's dispatcher across reloads, not just at construction: pin it to
+	// the linear client now and the gitea client after reload so a regression
+	// that re-points the refresher only on first construction is caught.
+	if got := runtimeDispatcher.currentRefresher(); got != IssueStateRefresher(trackersByKind["linear"]) {
+		t.Fatalf("refresher after first poll = %v, want linear tracker client", got)
 	}
 
 	dispatcher.finishAt(0, WorkerResult{Elapsed: time.Millisecond})
@@ -395,6 +415,9 @@ func TestRuntimePollerRebuildsTrackerClientAfterTrackerConfigReload(t *testing.T
 	waitFor(t, func() bool { return dispatcher.count() == 2 }, time.Second)
 	if got := dispatcher.issueAt(1).ID; got != "gitea-rework" {
 		t.Fatalf("second dispatched issue after tracker config reload = %q, want gitea-rework", got)
+	}
+	if got := runtimeDispatcher.currentRefresher(); got != IssueStateRefresher(trackersByKind["gitea"]) {
+		t.Fatalf("refresher after tracker config reload = %v, want gitea tracker client; reload path must re-point the dispatcher refresher", got)
 	}
 	if factoryCalls < 2 {
 		t.Fatalf("tracker factory calls = %d, want at least 2 after tracker config reload", factoryCalls)

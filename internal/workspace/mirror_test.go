@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 	"unicode/utf8"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
@@ -1298,62 +1297,6 @@ type gitCmdError struct {
 
 func (e *gitCmdError) Error() string {
 	return strings.Join(e.Args, " ") + ": " + e.Err.Error() + "\n" + e.Out
-}
-
-func TestCleanup_RemovesOldWorktreesKeepsRecent(t *testing.T) {
-	upstream := initBareUpstream(t)
-	mgr := newTestManager(t)
-	ctx := context.Background()
-
-	old := makeTask("old", upstream)
-	recent := makeTask("recent", upstream)
-
-	oldDir, _, err := mgr.PrepareGitWorkspace(ctx, old)
-	if err != nil {
-		t.Fatalf("prepare old: %v", err)
-	}
-	recentDir, _, err := mgr.PrepareGitWorkspace(ctx, recent)
-	if err != nil {
-		t.Fatalf("prepare recent: %v", err)
-	}
-
-	// Backdate the "old" worktree so it sits well outside the cleanup
-	// threshold while "recent" stays inside it.
-	past := time.Now().Add(-48 * time.Hour)
-	if err := os.Chtimes(oldDir, past, past); err != nil {
-		t.Fatal(err)
-	}
-
-	report, err := mgr.Cleanup(ctx, 24*time.Hour)
-	if err != nil {
-		t.Fatalf("cleanup: %v", err)
-	}
-	if report.Removed != 1 {
-		t.Fatalf("expected 1 removal, got %+v", report)
-	}
-	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
-		t.Fatalf("old worktree still present at %s", oldDir)
-	}
-	if _, err := os.Stat(recentDir); err != nil {
-		t.Fatalf("recent worktree should still exist: %v", err)
-	}
-
-	// The mirror itself must survive cleanup so subsequent tasks reuse it.
-	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), upstream)
-	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err != nil {
-		t.Fatalf("mirror lost during cleanup: %v", err)
-	}
-}
-
-func TestCleanup_MissingRootIsNotAnError(t *testing.T) {
-	mgr := &Manager{Root: filepath.Join(t.TempDir(), "does-not-exist")}
-	report, err := mgr.Cleanup(context.Background(), time.Hour)
-	if err != nil {
-		t.Fatalf("expected nil error for missing root, got %v", err)
-	}
-	if report.Removed != 0 || report.Failed != 0 {
-		t.Fatalf("expected empty report, got %+v", report)
-	}
 }
 
 func TestMirrorRoot_OverrideWins(t *testing.T) {

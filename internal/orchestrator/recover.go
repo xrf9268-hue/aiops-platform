@@ -46,10 +46,11 @@ func recoverPanicValue(site string, r any) {
 // site updates do not have to repeat the `defer recoverPanic(...)`
 // boilerplate at every `go func()` call site.
 //
-// This is the narrow-scope close of #296 for the orchestrator package
-// only; the runner / worker / cmd-side `go func(` sites enumerated in
-// the issue are intentionally left for a follow-up. Inside the
-// orchestrator, every spawn now routes through here.
+// Inside the orchestrator, every spawn routes through here. Goroutines in
+// other packages (runner, workspace) install their own package-local
+// equivalent of recoverPanic — the orchestrator's is unexported — so the
+// recover-guard rule holds package by package; `cmd/*` goroutines are
+// exempt as package-main boot code.
 func safeGo(site string, fn func()) {
 	go func() {
 		defer recoverPanic(site)
