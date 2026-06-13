@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 // Ported pixel-for-pixel from the Claude Design "lean/Worker Status v2.html"
 // handoff; the styling lives in styles.css. The mock data the prototype
 // shipped with is replaced here by the real /api/v1/state contract
-// (cmd/worker/stateapi.go · apiStateResponse), which it mirrors field-for-field.
+// (internal/stateapi · StateResponse), which it mirrors field-for-field.
 
 const REFRESH_MS = 5000;
 

@@ -14,6 +14,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // ANSI escape codes (mirrors Elixir @ansi_* module attributes)
@@ -93,7 +95,7 @@ func main() {
 		}
 	}()
 
-	fetch := func(ctx context.Context) (*stateResponse, error) {
+	fetch := func(ctx context.Context) (*stateapi.StateResponse, error) {
 		return fetchStateWithAuth(ctx, client, stateURL, authToken)
 	}
 
@@ -128,7 +130,7 @@ func raiseAfterSignal(sig os.Signal) {
 // run drives the poll/render loop until ctx is cancelled (signal or otherwise),
 // restoring terminal state on the way out so an interrupted dashboard never
 // leaves the real terminal in alt-screen / cursor-hidden state.
-func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateResponse, error), interval time.Duration, baseURL string) { //nolint:gocognit // baseline (#521)
+func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateapi.StateResponse, error), interval time.Duration, baseURL string) { //nolint:gocognit // baseline (#521)
 	scr.enter()
 	defer scr.restore()
 
@@ -140,7 +142,7 @@ func run(ctx context.Context, scr *screen, fetch func(context.Context) (*stateRe
 	// at the new width without issuing another fetch.
 	var (
 		haveSnapshot bool
-		lastState    *stateResponse
+		lastState    *stateapi.StateResponse
 		lastErr      error
 		lastNow      time.Time
 	)

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // visibleString strips ANSI escape sequences so tests can reason about the
@@ -96,14 +98,14 @@ func TestFormatRunningRow_TokensDoNotCorruptAlignment(t *testing.T) {
 	const eventWidth = 44
 	wantWidth := fixedRunningWidth() + chromeWidth + eventWidth // 66 + 10 + 44 = 120
 
-	r := runningEntry{
+	r := stateapi.Running{
 		Identifier:        "ENG-1234",
 		State:             "running",
 		SessionID:         "sess-1", // short → no "..." from the session cell
 		TurnCount:         7,
 		LastEvent:         "codex/event/token_count",
 		StartedAt:         &started,
-		Tokens:            tokenInfo{TotalTokens: 1_000_000_000}, // "1,000,000,000" = 13 runes
+		Tokens:            stateapi.RunningTokens{TotalTokens: 1_000_000_000}, // "1,000,000,000" = 13 runes
 		CodexAppServerPID: 12345,
 	}
 
@@ -118,18 +120,18 @@ func TestFormatRunningRow_TokensDoNotCorruptAlignment(t *testing.T) {
 
 // ── acceptance criteria: readable at 80 / 100 / 120 columns ─────────────────
 
-func representativeState(now time.Time) *stateResponse {
+func representativeState(now time.Time) *stateapi.StateResponse {
 	started := now.Add(-3600 * time.Second)
 	due := now.Add(30 * time.Second)
-	return &stateResponse{
+	return &stateapi.StateResponse{
 		MaxConcurrentAgents: 10,
-		Counts: stateCounts{
-			CompletedTotal:                     12,
-			AgentHandoffReconcileStoppedTotal:  3,
-			AgentHandoffReconcileStoppedRecent: 2,
+		Counts: stateapi.Counts{
+			CompletedTotal:                    12,
+			AgentHandoffReconcileStoppedTotal: 3,
+			AgentHandoffReconcileStopped:      2,
 		},
-		CodexTotals: codexTotals{InputTokens: 123456, OutputTokens: 654321, TotalTokens: 1_000_000_000, SecondsRunning: 3600},
-		Running: []runningEntry{{
+		CodexTotals: stateapi.CodexTotals{InputTokens: 123456, OutputTokens: 654321, TotalTokens: 1_000_000_000, SecondsRunning: 3600},
+		Running: []stateapi.Running{{
 			Identifier:        "ENG-1234",
 			State:             "running",
 			SessionID:         "01HXAYZ-very-long-session-identifier-0001",
@@ -138,10 +140,10 @@ func representativeState(now time.Time) *stateResponse {
 			LastMessage:       "notification", // the word that wrapped (noti / fication) in #466
 			StartedAt:         &started,
 			LastEventAt:       &now,
-			Tokens:            tokenInfo{TotalTokens: 1_000_000_000},
+			Tokens:            stateapi.RunningTokens{TotalTokens: 1_000_000_000},
 			CodexAppServerPID: 12345,
 		}},
-		Retrying: []retryEntry{{
+		Retrying: []stateapi.Retry{{
 			Identifier: "ENG-9999",
 			Attempt:    2,
 			DueAt:      &due,
@@ -178,7 +180,7 @@ func TestRenderFrame_StaysWithinTerminalWidth(t *testing.T) {
 // assertFrameWithinWidth renders the frame and checks that no line exceeds the
 // terminal width and that the (over-long) rate-limits line was clipped to fill
 // it — proving the policy engaged at this width and the line did not wrap.
-func assertFrameWithinWidth(t *testing.T, state *stateResponse, now time.Time, width int) {
+func assertFrameWithinWidth(t *testing.T, state *stateapi.StateResponse, now time.Time, width int) {
 	t.Helper()
 	lines := strings.Split(renderFrame(state, nil, now, 100, "http://127.0.0.1:4001", 5*time.Second), "\n")
 	for _, line := range lines {
