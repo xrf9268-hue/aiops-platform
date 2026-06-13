@@ -10,18 +10,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // TestRuntimeStatusRunbookExampleMatchesHandler asserts bi-directional schema
-// parity between docs/runbooks/runtime-status.md and apiStateResponse:
+// parity between docs/runbooks/runtime-status.md and stateapi.StateResponse:
 //
 //  1. doc → handler: every ```json fenced block tagged as the /api/v1/state
 //     example (identified by the `counts` key) strict-decodes into
-//     apiStateResponse with json.DisallowUnknownFields. Catches drift where
+//     stateapi.StateResponse with json.DisallowUnknownFields. Catches drift where
 //     the doc references a field that does not exist in the wire format.
 //
-//  2. handler → doc: marshal a fully-populated apiStateResponse (every
+//  2. handler → doc: marshal a fully-populated stateapi.StateResponse (every
 //     omitempty field set), then walk the resulting key tree and assert each
 //     key path exists in the runbook example. Catches drift where the
 //     handler grows a new JSON field that the runbook forgets to mention.
@@ -53,9 +53,9 @@ func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 
 		dec := json.NewDecoder(bytes.NewReader([]byte(block)))
 		dec.DisallowUnknownFields()
-		var into apiStateResponse
+		var into stateapi.StateResponse
 		if err := dec.Decode(&into); err != nil {
-			t.Fatalf("runbook block %d failed strict decode into apiStateResponse: %v\n%s", i, err, block)
+			t.Fatalf("runbook block %d failed strict decode into stateapi.StateResponse: %v\n%s", i, err, block)
 		}
 		stateExample = probe
 		break
@@ -74,12 +74,12 @@ func TestRuntimeStatusRunbookExampleMatchesHandler(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		t.Fatalf("apiStateResponse fields not documented in docs/runbooks/runtime-status.md /api/v1/state example:\n  %s\nUpdate the runbook to mention these keys, or remove the field from apiStateResponse if intentional.", strings.Join(missing, "\n  "))
+		t.Fatalf("stateapi.StateResponse fields not documented in docs/runbooks/runtime-status.md /api/v1/state example:\n  %s\nUpdate the runbook to mention these keys, or remove the field from stateapi.StateResponse if intentional.", strings.Join(missing, "\n  "))
 	}
 }
 
 // fullyPopulatedAPIStateResponseJSON returns the JSON encoding of an
-// apiStateResponse with every field — including every `omitempty` field —
+// stateapi.StateResponse with every field — including every `omitempty` field —
 // populated, so json.Marshal cannot omit anything. Used to enumerate the
 // complete handler-side schema for drift detection.
 func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
@@ -89,12 +89,12 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 	lastEventAt := time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC)
 	dueAt := time.Date(2026, 5, 21, 9, 11, 0, 0, time.UTC)
 	retryAttempt := 1
-	resp := apiStateResponse{
+	resp := stateapi.StateResponse{
 		GeneratedAt:                time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC),
 		PollIntervalMs:             15000,
 		MaxConcurrentAgents:        4,
 		MaxConcurrentAgentsByState: map[string]int{"In Progress": 2},
-		Counts: apiStateCounts{
+		Counts: stateapi.Counts{
 			Running:                           1,
 			Blocked:                           1,
 			Retrying:                          1,
@@ -105,7 +105,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			AgentHandoffReconcileStopped:      3,
 			AgentHandoffReconcileStoppedTotal: 4,
 		},
-		Running: []apiStateRunning{{
+		Running: []stateapi.Running{{
 			IssueID:       "issue-1",
 			Identifier:    "ENG-1",
 			IssueURL:      "https://tracker.example/issues/ENG-1",
@@ -118,14 +118,14 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			LastEventAt:   &lastEventAt,
 			RetryAttempt:  &retryAttempt,
 			WorkspacePath: "/var/aiops/workspaces/acme/repo/issue-1",
-			Tokens: apiRunningTokens{
+			Tokens: stateapi.RunningTokens{
 				InputTokens:  1200,
 				OutputTokens: 800,
 				TotalTokens:  2000,
 			},
 			CodexAppServerPID: 12345,
 		}},
-		Blocked: []apiStateBlocked{{
+		Blocked: []stateapi.Blocked{{
 			IssueID:           "issue-2",
 			Identifier:        "ENG-2",
 			IssueURL:          "https://tracker.example/issues/ENG-2",
@@ -138,7 +138,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			Error:             "input required: mcpServer/elicitation/request",
 			CodexAppServerPID: 67890,
 		}},
-		Retrying: []apiStateRetry{{
+		Retrying: []stateapi.Retry{{
 			IssueID:    "issue-3",
 			Identifier: "ENG-3",
 			IssueURL:   "https://tracker.example/issues/ENG-3",
@@ -146,15 +146,15 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			DueAt:      &dueAt,
 			Error:      "retry soon",
 		}},
-		Completed:                    []orchestrator.IssueID{"issue-4"},
-		ReconcileStoppedWithProgress: []orchestrator.IssueID{"issue-6"},
-		CodexTotals: apiCodexTotals{
+		Completed:                    []string{"issue-4"},
+		ReconcileStoppedWithProgress: []string{"issue-6"},
+		CodexTotals: stateapi.CodexTotals{
 			InputTokens:    100,
 			OutputTokens:   200,
 			TotalTokens:    300,
 			SecondsRunning: 1.5,
 		},
-		RateLimits: &orchestrator.RateLimitSnapshot{},
+		RateLimits: map[string]any{},
 	}
 	return mustMarshal(t, resp)
 }
