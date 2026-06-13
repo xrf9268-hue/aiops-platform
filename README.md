@@ -145,10 +145,27 @@ aiops-platform_<tag>_SHA256SUMS` (plain checksums; `--ignore-missing` checks
 only the archives you downloaded, since the file lists every artifact) — both
 are published with the release.
 
-The default Compose service starts `worker`:
+Each tagged release publishes prebuilt **linux/amd64** images to GHCR, so you can
+run without a source checkout (arm64 hosts run them under emulation, or
+`--build` a native image):
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
+docker pull ghcr.io/xrf9268-hue/aiops-platform-worker:latest
+# Codex-enabled agent runtime: ghcr.io/xrf9268-hue/aiops-platform-codex-worker:latest
+```
+
+Public packages pull without auth; if a package is still private, run
+`docker login ghcr.io` first (or `--build` from source instead). The published
+image runs as UID 1000 — if your host `id -u` differs and you use the Compose
+0600 SSH-key / Codex-home bind mounts, prefer `--build` (it aligns the container
+user via `AIOPS_UID`/`AIOPS_GID`), which the pulled image can't do.
+
+The default Compose service starts `worker` and references that image, falling
+back to a local build with `--build`:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml pull worker        # use the published image
+docker compose --env-file .env -f deploy/docker-compose.yml up --build worker   # or build locally
 ```
 
 The image defaults to the worker (`CMD ["worker"]`), so a plain `docker run`

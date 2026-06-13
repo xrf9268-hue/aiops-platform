@@ -13,6 +13,9 @@
 # configuration and refreshing auth state.
 services:
   worker:
+    # Override the base image with the published codex-worker image; the
+    # build.target below stays as the `--build` fallback (#795).
+    image: ghcr.io/xrf9268-hue/aiops-platform-codex-worker:${AIOPS_IMAGE_TAG:-latest}
     build:
       target: codex-worker
     environment:
