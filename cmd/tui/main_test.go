@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // ── formatCount / groupThousands ──────────────────────────────────────────────
@@ -155,7 +157,7 @@ func TestCell_PadsShortStrings(t *testing.T) {
 }
 
 func TestFormatRetryRowIncludesQuotaBackoffKind(t *testing.T) {
-	got := formatRetryRow(retryEntry{
+	got := formatRetryRow(stateapi.Retry{
 		IssueID:    "issue-1",
 		Identifier: "ENG-1",
 		Attempt:    1,
@@ -171,7 +173,7 @@ func TestFormatRetryRowIncludesQuotaBackoffKind(t *testing.T) {
 }
 
 func TestFormatRetryRowDefaultsKindToFailure(t *testing.T) {
-	got := formatRetryRow(retryEntry{IssueID: "issue-1", Identifier: "ENG-1", Attempt: 1})
+	got := formatRetryRow(stateapi.Retry{IssueID: "issue-1", Identifier: "ENG-1", Attempt: 1})
 	if !strings.Contains(got, "kind=failure") {
 		t.Fatalf("formatRetryRow missing default failure kind: %q", got)
 	}
@@ -233,6 +235,73 @@ func TestFetchState_ParsesValidResponse(t *testing.T) {
 	}
 	if state.PollIntervalMs != 5000 {
 		t.Errorf("PollIntervalMs = %d, want 5000", state.PollIntervalMs)
+	}
+}
+
+// TestFetchState_DecodesSharedContractFields is the consumer half of the #793
+// anti-drift guard: the TUI now decodes /api/v1/state into the same
+// stateapi types the worker marshals, so a JSON-tag change is observable here
+// as a dropped value rather than a silently blank dashboard. It pins every
+// field the dashboard renders — handoff counts, per-row token totals, retry
+// kind, codex totals, and the nested rate-limit bucket — so a tag typo on any
+// of them fails this test (and the worker-side runbook drift test), not the
+// rendered UI.
+func TestFetchState_DecodesSharedContractFields(t *testing.T) {
+	body := `{
+	  "poll_interval_ms": 5000,
+	  "max_concurrent_agents": 4,
+	  "counts": {"completed_total": 12, "agent_handoff_reconcile_stopped_total": 3, "agent_handoff_reconcile_stopped": 2},
+	  "running": [{"issue_id": "i1", "issue_identifier": "ENG-1", "state": "In Progress", "session_id": "sess-1", "turn_count": 7, "last_event": "turn_completed", "last_message": "working", "started_at": "2026-05-21T09:09:55Z", "codex_app_server_pid": 12345, "tokens": {"total_tokens": 2000}}],
+	  "retrying": [{"issue_id": "i2", "attempt": 2, "due_at": "2026-05-21T09:11:00Z", "error": "retry soon", "kind": "quota_backoff"}],
+	  "codex_totals": {"total_tokens": 300, "seconds_running": 1.5},
+	  "rate_limits": {"limit_id": "lim", "primary": {"remaining": 42, "limit": 100}}
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	state, err := fetchState(context.Background(), &http.Client{}, srv.URL)
+	if err != nil {
+		t.Fatalf("fetchState() error = %v", err)
+	}
+	if got := state.Counts.AgentHandoffReconcileStopped; got != 2 {
+		t.Errorf("Counts.AgentHandoffReconcileStopped = %d, want 2 (agent_handoff_reconcile_stopped tag)", got)
+	}
+	if got := state.Counts.CompletedTotal; got != 12 {
+		t.Errorf("Counts.CompletedTotal = %d, want 12 (completed_total tag)", got)
+	}
+	// Pin every running-row field the dashboard renders (render.go formatRunningRow)
+	// so a tag typo on any of them fails here rather than blanking a column.
+	if len(state.Running) != 1 {
+		t.Fatalf("Running = %+v, want one row", state.Running)
+	}
+	r := state.Running[0]
+	if r.IssueID != "i1" || r.Identifier != "ENG-1" || r.State != "In Progress" || r.SessionID != "sess-1" ||
+		r.TurnCount != 7 || r.LastEvent != "turn_completed" || r.LastMessage != "working" ||
+		r.CodexAppServerPID != 12345 || r.Tokens.TotalTokens != 2000 {
+		t.Errorf("Running[0] = %+v, want every rendered field decoded (issue_id/identifier/state/session_id/turn_count/last_event/last_message/codex_app_server_pid/tokens.total_tokens tags)", r)
+	}
+	if r.StartedAt == nil || !r.StartedAt.Equal(time.Date(2026, 5, 21, 9, 9, 55, 0, time.UTC)) {
+		t.Errorf("Running[0].StartedAt = %v, want decoded started_at", r.StartedAt)
+	}
+	// Pin every retry-row field the dashboard renders (render.go formatRetryRow).
+	if len(state.Retrying) != 1 {
+		t.Fatalf("Retrying = %+v, want one row", state.Retrying)
+	}
+	rt := state.Retrying[0]
+	if rt.Attempt != 2 || rt.Error != "retry soon" || rt.Kind != "quota_backoff" || rt.DueAt == nil {
+		t.Errorf("Retrying[0] = %+v, want attempt/error/kind/due_at decoded", rt)
+	}
+	if state.CodexTotals.TotalTokens != 300 || state.CodexTotals.SecondsRunning != 1.5 {
+		t.Errorf("CodexTotals = %+v, want total_tokens=300 seconds_running=1.5", state.CodexTotals)
+	}
+	// The dashboard renders the bucket via formatRateLimits, which reads the
+	// decoded map; assert the nested object survived decoding into map[string]any.
+	primary, ok := state.RateLimits["primary"].(map[string]any)
+	if !ok || primary["remaining"] != float64(42) {
+		t.Errorf("RateLimits[\"primary\"] = %#v, want decoded bucket with remaining=42", state.RateLimits["primary"])
 	}
 }
 
@@ -387,8 +456,8 @@ func TestRun_RestoresTerminalOnSignal(t *testing.T) {
 	var buf bytes.Buffer
 	scr := newScreen(&buf, true /* isTTY */, false /* raw */)
 
-	fetch := func(ctx context.Context) (*stateResponse, error) {
-		return &stateResponse{MaxConcurrentAgents: 3}, nil
+	fetch := func(ctx context.Context) (*stateapi.StateResponse, error) {
+		return &stateapi.StateResponse{MaxConcurrentAgents: 3}, nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -438,7 +507,9 @@ func TestRun_CancelDuringFetchAbortsAndRestores(t *testing.T) {
 		<-fctx.Done()
 		return fctx.Err()
 	}
-	fetchState := func(fctx context.Context) (*stateResponse, error) { return &stateResponse{}, fetch(fctx) }
+	fetchState := func(fctx context.Context) (*stateapi.StateResponse, error) {
+		return &stateapi.StateResponse{}, fetch(fctx)
+	}
 
 	done := make(chan struct{})
 	go func() {

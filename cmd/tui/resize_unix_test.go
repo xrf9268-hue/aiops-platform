@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // lockedBuffer is a goroutine-safe io.Writer so the test can read frames while
@@ -39,11 +41,11 @@ func TestRun_RedrawsOnSIGWINCH(t *testing.T) {
 	scr := newScreen(lb, true /* isTTY */, false /* raw */)
 
 	var fetches int32
-	fetch := func(context.Context) *stateResponse {
+	fetch := func(context.Context) *stateapi.StateResponse {
 		atomic.AddInt32(&fetches, 1)
-		return &stateResponse{MaxConcurrentAgents: 3}
+		return &stateapi.StateResponse{MaxConcurrentAgents: 3}
 	}
-	fetchState := func(ctx context.Context) (*stateResponse, error) { return fetch(ctx), ctx.Err() }
+	fetchState := func(ctx context.Context) (*stateapi.StateResponse, error) { return fetch(ctx), ctx.Err() }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

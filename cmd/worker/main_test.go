@@ -49,7 +49,7 @@ func TestApiRunningRowAlwaysEmitsSpec13_7_2StatusKeys(t *testing.T) {
 	}
 	for _, key := range []string{"state", "session_id", "turn_count", "last_event", "last_message", "tokens"} {
 		if _, ok := got[key]; !ok {
-			t.Errorf("apiStateRunning JSON missing %q for a freshly-dispatched run: %s", key, raw)
+			t.Errorf("stateapi.Running JSON missing %q for a freshly-dispatched run: %s", key, raw)
 		}
 	}
 }
