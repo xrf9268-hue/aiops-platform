@@ -135,6 +135,16 @@ To run it directly under a service manager instead of Compose — build/install,
 `worker --doctor` preflight, and Linux (systemd) / macOS (launchd) samples —
 see the [binary deployment runbook](docs/runbooks/binary-deployment.md).
 
+Prebuilt Linux/macOS (amd64/arm64) archives are attached to each
+[GitHub Release](https://github.com/xrf9268-hue/aiops-platform/releases) as
+`aiops-platform_<tag>_<os>_<arch>.tar.gz`, bundling the `worker` and `tui`
+binaries plus `examples/WORKFLOW.md` and `.env.example`. Verify a download with
+either `gh attestation verify <archive> --repo xrf9268-hue/aiops-platform`
+(build provenance) or `sha256sum --ignore-missing -c
+aiops-platform_<tag>_SHA256SUMS` (plain checksums; `--ignore-missing` checks
+only the archives you downloaded, since the file lists every artifact) — both
+are published with the release.
+
 The default Compose service starts `worker`:
 
 ```bash
