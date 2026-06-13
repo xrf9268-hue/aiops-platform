@@ -21,7 +21,7 @@ func TestGiteaTrackerDispatchesLabeledIssueAndDedupesRepeatedPolls(t *testing.T)
 	if err != nil {
 		t.Fatalf("create repo: %v", err)
 	}
-	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
+	if err := bed.gitea.putWorkflowFile(context.Background(), owner, repo, fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
 		t.Fatalf("put workflow: %v", err)
 	}
 	issueNumber, err := bed.gitea.createIssue(context.Background(), owner, repo, "poll me", "dispatch through polling")
@@ -86,7 +86,7 @@ func TestGiteaTrackerIgnoresBacklogAndTerminalIssues(t *testing.T) {
 	if _, err := bed.gitea.createRepo(context.Background(), repo); err != nil {
 		t.Fatalf("create repo: %v", err)
 	}
-	if err := bed.gitea.putFile(context.Background(), owner, repo, "WORKFLOW.md", fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
+	if err := bed.gitea.putWorkflowFile(context.Background(), owner, repo, fixtureContent(t, "gitea-worker.md"), "add workflow"); err != nil {
 		t.Fatalf("put workflow: %v", err)
 	}
 	backlogIssue, err := bed.gitea.createIssue(context.Background(), owner, repo, "backlog", "must not dispatch")

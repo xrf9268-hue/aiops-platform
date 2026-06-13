@@ -130,7 +130,7 @@ func TestGiteaWorkerReconciliationStopsRunMovedToDone(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatalf("worker was not canceled after moving issue to Done: %v", ctx.Err())
 	}
-	pollUntil(t, 10*time.Second, 100*time.Millisecond, func(ctx context.Context) (bool, error) {
+	pollUntil(ctx, t, 10*time.Second, 100*time.Millisecond, func(ctx context.Context) (bool, error) {
 		view, err := orch.Snapshot(ctx)
 		if err != nil {
 			return false, err
@@ -168,8 +168,8 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 	if err != nil {
 		t.Fatalf("createRepo: %v", err)
 	}
-	if err := bed.gitea.putFile(ctx, owner, repo, "WORKFLOW.md", fixtureContent(t, fixture), "seed workflow"); err != nil {
-		t.Fatalf("putFile workflow: %v", err)
+	if err := bed.gitea.putWorkflowFile(ctx, owner, repo, fixtureContent(t, fixture), "seed workflow"); err != nil {
+		t.Fatalf("putWorkflowFile: %v", err)
 	}
 	issueNum, err := bed.gitea.createIssue(ctx, owner, repo, title, body)
 	if err != nil {
@@ -235,7 +235,7 @@ func runGiteaWorkerTask(t *testing.T, ctx context.Context, repo, title, body, fi
 		t.Fatalf("poll: %v", err)
 	}
 
-	pollUntil(t, 90*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
+	pollUntil(ctx, t, 90*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
 		tk, ok := events.taskBySource("gitea_issue", fmt.Sprintf("#%d", issueNum))
 		if !ok {
 			return false, nil
