@@ -90,6 +90,7 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 	dueAt := time.Date(2026, 5, 21, 9, 11, 0, 0, time.UTC)
 	retryAttempt := 1
 	resp := stateapi.StateResponse{
+		Version:                    "v1.2.3",
 		GeneratedAt:                time.Date(2026, 5, 21, 9, 10, 0, 0, time.UTC),
 		PollIntervalMs:             15000,
 		MaxConcurrentAgents:        4,

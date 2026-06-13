@@ -56,7 +56,10 @@ func TestDockerfileBuildsDashboardBeforeWorker(t *testing.T) {
 	dashboardStage := strings.Index(df, "FROM node:22-bookworm AS dashboard")
 	buildStage := strings.Index(df, "FROM golang:${GO_VERSION}-bookworm AS build")
 	copyDashboard := strings.Index(df, "COPY --from=dashboard /src/cmd/worker/dashboard/dist ./cmd/worker/dashboard/dist")
-	buildWorker := strings.Index(df, "RUN go build -o /out/worker ./cmd/worker")
+	// Anchor on the output target, not the full command, so build-flag changes
+	// (e.g. the #796 -ldflags -X main.version stamp) don't break the
+	// layer-ordering assertion.
+	buildWorker := strings.Index(df, "-o /out/worker ./cmd/worker")
 	for name, idx := range map[string]int{
 		"dashboard stage": dashboardStage,
 		"go build stage":  buildStage,

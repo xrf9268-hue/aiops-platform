@@ -15,7 +15,12 @@ COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
 COPY --from=dashboard /src/cmd/worker/dashboard/dist ./cmd/worker/dashboard/dist
-RUN go build -o /out/worker ./cmd/worker
+# Stamp main.version from a build ARG (#796): .dockerignore drops .git, so the
+# Go toolchain's vcs.revision fallback is unavailable in the image. Pass
+# --build-arg VERSION=<tag> to stamp a real version; defaults to "devel" for a
+# plain `docker build`.
+ARG VERSION=devel
+RUN go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/worker ./cmd/worker
 
 FROM debian:bookworm-slim AS worker
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends ca-certificates git openssh-client ripgrep wget && rm -rf /var/lib/apt/lists/*
