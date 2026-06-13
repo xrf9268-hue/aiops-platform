@@ -21,7 +21,9 @@ D8 (#76), it has stopped owning behaviors that earlier prototypes included:
   active issues on the next poll.
 - **No PR creation, no tracker writes.** The worker prepares a
   deterministic Git workspace, runs the configured agent (`mock`,
-  `codex-app-server`, or `claude`), enforces policy, and stops. Push, draft-PR
+  `codex-app-server`, or `claude`), and stops — it enforces no post-run
+  policy gate (DEVIATIONS D33, #561; `policy.mode` only selects the
+  analysis-only vs draft-PR prompt directive). Push, draft-PR
   creation, and tracker label transitions happen agent-side via the
   configured tool surface (`linear_graphql`, the workflow prompt's
   push step, etc.), not in `cmd/worker`.
