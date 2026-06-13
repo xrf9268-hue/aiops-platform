@@ -18,6 +18,11 @@ import "time"
 
 // StateResponse is the /api/v1/state body (SPEC §13.7.2).
 type StateResponse struct {
+	// Version is the worker build stamp (the -ldflags -X main.version value, the
+	// VCS-revision fallback, or "devel"), so a bug report can name the exact
+	// build. omitempty drops the key only when the resolved version is empty —
+	// which the "devel" default normally prevents (#796).
+	Version                    string         `json:"version,omitempty"`
 	GeneratedAt                time.Time      `json:"generated_at"`
 	PollIntervalMs             int64          `json:"poll_interval_ms"`
 	MaxConcurrentAgents        int            `json:"max_concurrent_agents"`

@@ -160,8 +160,10 @@ jobs:
             read -r goos goarch <<< "$target"
             out="dist/aiops-platform_${RELEASE_TAG}_${goos}_${goarch}"
             for binary in "${binaries[@]}"; do
+              # Stamp the release tag into each binary's main.version (#796);
+              # both cmd/worker and cmd/tui are package main with their own var.
               GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-                go build -trimpath -ldflags="-s -w" -o "${out}/${binary}" "./cmd/${binary}"
+                go build -trimpath -ldflags="-s -w -X main.version=${RELEASE_TAG}" -o "${out}/${binary}" "./cmd/${binary}"
             done
           done
 

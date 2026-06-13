@@ -132,6 +132,7 @@ the shape here without updating the handler — or vice versa — fails the buil
 
 ```json
 {
+  "version": "v1.2.3",
   "generated_at": "2026-05-21T09:10:00Z",
   "poll_interval_ms": 15000,
   "max_concurrent_agents": 4,
@@ -273,6 +274,7 @@ Two consequences for dashboard authors:
 
 ### Top-level metadata fields
 
+- `version` — the worker build stamp (the `-ldflags -X main.version` value, or the VCS-revision fallback for a source build); omitted for an un-stamped/empty build. Lets a bug report name the exact build (also on `--version` and the startup log).
 - `generated_at` — RFC3339 timestamp the handler stamped when materializing the snapshot.
 - `poll_interval_ms` — current tracker poll interval (SPEC §13.7).
 - `max_concurrent_agents` — global concurrency cap.

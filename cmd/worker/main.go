@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/buildinfo"
 	"github.com/xrf9268-hue/aiops-platform/internal/doctor"
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
@@ -21,7 +22,21 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+// version is the build stamp, set at link time via
+// -ldflags "-X main.version=<tag>" (release.yml, install.sh, Dockerfile).
+// It stays "devel" for an un-stamped `go build`/`go run`; resolveVersion then
+// falls back to the VCS revision the Go toolchain records when the binary was
+// built from a source tree (absent in Docker, where .dockerignore drops .git —
+// hence the explicit build ARG there).
+var version = "devel"
+
+func resolveVersion() string { return buildinfo.Resolve(version) }
+
 func main() { //nolint:gocognit // baseline (#521)
+	if len(os.Args) >= 2 && os.Args[1] == "--version" {
+		fmt.Println(resolveVersion())
+		os.Exit(0)
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "--print-config" {
 		workdir, portOverride, err := parsePrintConfigArgs(os.Args[2:])
 		if err != nil {
@@ -126,6 +141,19 @@ func parseRunArgs(args []string) (string, *int, error) {
 	// and parse diagnostics reach the user. flag.ErrHelp is propagated
 	// to the caller, which treats it as a clean exit.
 	portFlag := fs.Int("port", 0, "override server.port from WORKFLOW.md: -1 disables the HTTP server, 0 binds an ephemeral port, 1..65535 binds explicitly. SPEC §13.7.")
+	// main() intercepts --print-config / --doctor / --version positionally
+	// before this flag set ever sees them, so the default `flag` usage hides
+	// them. Spell out every subcommand so `worker --help` is a complete map.
+	fs.Usage = func() {
+		out := fs.Output()
+		_, _ = fmt.Fprint(out, "Usage:\n"+
+			"  worker [--port=N] [path-to-WORKFLOW.md]            run the orchestrator loop (default)\n"+
+			"  worker --print-config [--port=N] <workdir>        print the resolved config and exit\n"+
+			"  worker --doctor [--mode=mock|real] [--deploy=binary|docker] [path]  run preflight checks and exit\n"+
+			"  worker --version                                  print the build version and exit\n\n"+
+			"Run-mode flags:\n")
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(reorderForFlagParse(args)); err != nil {
 		return "", nil, err
 	}
@@ -330,6 +358,7 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 	if err != nil {
 		return err
 	}
+	log.Printf("aiops worker starting version=%s", resolveVersion())
 	// Emit deprecated-alias warnings exactly once per startup; the env loaders
 	// below are pure and run more than once.
 	worker.WarnDeprecatedEnv()
