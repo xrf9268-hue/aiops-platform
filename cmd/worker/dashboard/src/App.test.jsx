@@ -5,7 +5,7 @@ import App, { stateAPIURL } from './App';
 const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
 const unixIn = (s) => Math.floor(Date.now() / 1000) + s;
 
-// Shaped exactly like GET /api/v1/state (cmd/worker/stateapi.go · apiStateResponse).
+// Shaped exactly like GET /api/v1/state (internal/stateapi · StateResponse).
 function busyState(overrides = {}) {
   return {
     generated_at: iso(0),

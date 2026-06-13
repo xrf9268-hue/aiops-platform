@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
 
 // Column widths (mirrors Elixir @running_*_width constants)
@@ -33,7 +35,7 @@ const (
 
 // safeRenderFrame wraps renderFrame with panic recovery, mirroring the
 // `rescue` blocks in status_dashboard.ex (maybe_render/1, render_content/3).
-func safeRenderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) (out string) {
+func safeRenderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) (out string) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = clipFrame([]string{
@@ -49,7 +51,7 @@ func safeRenderFrame(state *stateResponse, fetchErr error, now time.Time, tps fl
 // ── Rendering ────────────────────────────────────────────────────────────────
 // Mirrors format_snapshot_content/2 in status_dashboard.ex.
 
-func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) string { //nolint:gocognit,funlen // baseline (#521)
+func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, tps float64, baseURL string, interval time.Duration) string { //nolint:gocognit,funlen // baseline (#521)
 	if fetchErr != nil {
 		return clipFrame([]string{
 			colorize("╭─ AIOPS STATUS", ansiBold),
@@ -77,7 +79,7 @@ func renderFrame(state *stateResponse, fetchErr error, now time.Time, tps float6
 			colorize("completed "+formatCount(state.Counts.CompletedTotal), ansiGreen) +
 			colorize(" | ", ansiGray) +
 			colorize("agent "+formatCount(state.Counts.AgentHandoffReconcileStoppedTotal), ansiGreen) +
-			colorize(" (recent "+formatCount(int64(state.Counts.AgentHandoffReconcileStoppedRecent))+")", ansiGray),
+			colorize(" (recent "+formatCount(int64(state.Counts.AgentHandoffReconcileStopped))+")", ansiGray),
 		colorize("│ Throughput: ", ansiBold) + colorize(formatTPS(tps)+" tps", ansiCyan),
 		colorize("│ Runtime:    ", ansiBold) + colorize(formatRuntimeSecs(state.CodexTotals.SecondsRunning), ansiMagenta),
 		colorize("│ Tokens:     ", ansiBold) +
@@ -165,7 +167,7 @@ func fixedRunningWidth() int {
 }
 
 // formatRunningRow mirrors format_running_summary/2.
-func formatRunningRow(r runningEntry, now time.Time, eventWidth int) string {
+func formatRunningRow(r stateapi.Running, now time.Time, eventWidth int) string {
 	id := cell(issueLabel(r.Identifier, r.IssueID), colID)
 	stage := cell(r.State, colStage)
 
@@ -208,7 +210,7 @@ func formatRunningRow(r runningEntry, now time.Time, eventWidth int) string {
 }
 
 // formatRetryRow mirrors format_retry_summary/1.
-func formatRetryRow(r retryEntry) string {
+func formatRetryRow(r stateapi.Retry) string {
 	id := issueLabel(r.Identifier, r.IssueID)
 	attempt := strconv.Itoa(r.Attempt)
 	kind := r.Kind

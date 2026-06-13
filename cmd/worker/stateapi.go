@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -31,135 +32,12 @@ const (
 
 var errRefreshBodyTooLarge = errors.New("refresh request body exceeds 1 MiB")
 
-type apiStateResponse struct {
-	GeneratedAt                time.Time              `json:"generated_at"`
-	PollIntervalMs             int64                  `json:"poll_interval_ms"`
-	MaxConcurrentAgents        int                    `json:"max_concurrent_agents"`
-	MaxConcurrentAgentsByState map[string]int         `json:"max_concurrent_agents_by_state,omitempty"`
-	Counts                     apiStateCounts         `json:"counts"`
-	Running                    []apiStateRunning      `json:"running"`
-	Blocked                    []apiStateBlocked      `json:"blocked"`
-	Retrying                   []apiStateRetry        `json:"retrying"`
-	Completed                  []orchestrator.IssueID `json:"completed"`
-	// ReconcileStoppedWithProgress lists reconcile-stopped runs that had completed ≥1
-	// agent turn (made progress — usually the agent's handoff, but turn_completed
-	// fires after every turn, so it can also be a run stopped after an intermediate
-	// turn; inspect to confirm, it is not a guaranteed success) before the per-tick
-	// reconcile reaped them — surfaced so a progressed-but-reaped run is visible
-	// rather than absent from completed (#557). It does not overlap
-	// completed: a reconcile-stopped run is not a clean §16.5 exit, matching
-	// upstream's accounting, so completed stays unchanged.
-	ReconcileStoppedWithProgress []orchestrator.IssueID    `json:"reconcile_stopped_with_progress"`
-	AgentHandoffReconcileStopped []orchestrator.IssueID    `json:"agent_handoff_reconcile_stopped"`
-	OperatorTerminalStops        []apiOperatorTerminalStop `json:"operator_terminal_stops"`
-	CodexTotals                  apiCodexTotals            `json:"codex_totals"`
-	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
-	// is emitted unconditionally — `null` until a `rate_limit_updated`
-	// notification is observed — so operators can rely on the key always
-	// being present (upstream parity, #328). A nil snapshot marshals to
-	// JSON null, not an omitted key.
-	RateLimits *orchestrator.RateLimitSnapshot `json:"rate_limits"`
-}
-type apiCodexTotals struct {
-	InputTokens    int64   `json:"input_tokens"`
-	OutputTokens   int64   `json:"output_tokens"`
-	TotalTokens    int64   `json:"total_tokens"`
-	SecondsRunning float64 `json:"seconds_running"`
-}
-type apiStateCounts struct {
-	Running int `json:"running"`
-	Blocked int `json:"blocked"`
-	// Retrying is the current retry-backoff queue depth.
-	Retrying int `json:"retrying"`
-	// Completed is the size of the FIFO-bounded recent-completed set
-	// (the same set published as `state.completed`). For lifetime
-	// totals across worker restarts and FIFO evictions, use
-	// completed_total. SPEC §13.7 §4.1.8.
-	Completed int `json:"completed"`
-	// CompletedTotal is a monotonic counter of every observed Succeeded
-	// transition since process start, independent of FIFO eviction. Added
-	// for #234 so long-running deployments still expose a true lifetime
-	// number when the bounded set has rotated.
-	CompletedTotal int64 `json:"completed_total"`
-	// ReconcileStoppedWithProgress is the size of the FIFO-bounded recent set of
-	// reconcile-stopped runs that had made progress (≥1 completed turn; the same set
-	// published as `state.reconcile_stopped_with_progress`);
-	// ReconcileStoppedWithProgressTotal is the lifetime monotonic counter that
-	// survives FIFO eviction (#557).
-	ReconcileStoppedWithProgress      int   `json:"reconcile_stopped_with_progress"`
-	ReconcileStoppedWithProgressTotal int64 `json:"reconcile_stopped_with_progress_total"`
-	AgentHandoffReconcileStopped      int   `json:"agent_handoff_reconcile_stopped"`
-	AgentHandoffReconcileStoppedTotal int64 `json:"agent_handoff_reconcile_stopped_total"`
-	// OperatorTerminalStops is the size of the FIFO-bounded recent D35 latch set
-	// (the same set published as `state.operator_terminal_stops`).
-	// OperatorTerminalStopsTotal is the lifetime monotonic counter that survives
-	// the #667 cap eviction, so a long-running worker that has rotated past the
-	// bound still exposes the true number of distinct operator-terminal-stops.
-	OperatorTerminalStops      int   `json:"operator_terminal_stops"`
-	OperatorTerminalStopsTotal int64 `json:"operator_terminal_stops_total"`
-}
-type apiStateRunning struct {
-	IssueID    orchestrator.IssueID `json:"issue_id"`
-	Identifier string               `json:"issue_identifier,omitempty"`
-	// IssueURL is the tracker-provided issue URL, emitted only when available
-	// (SPEC §13.7 SHOULD). omitempty keeps URL-less rows (mock tracker) clean.
-	IssueURL string `json:"issue_url,omitempty"`
-	// State / SessionID / TurnCount / LastEvent / LastMessage are part of
-	// the SPEC §13.7.2 running-row contract — the sample literally shows
-	// `"last_message": ""` and `"turn_count": 7`, so a freshly-dispatched
-	// run with zero/empty values must still emit the keys. omitempty would
-	// let consumers confuse "known zero/empty" with "field missing".
-	State             string           `json:"state"`
-	SessionID         string           `json:"session_id"`
-	TurnCount         int              `json:"turn_count"`
-	LastEvent         string           `json:"last_event"`
-	LastMessage       string           `json:"last_message"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	LastEventAt       *time.Time       `json:"last_event_at,omitempty"`
-	RetryAttempt      *int             `json:"retry_attempt,omitempty"`
-	WorkspacePath     string           `json:"workspace_path,omitempty"`
-	Tokens            apiRunningTokens `json:"tokens"`
-	CodexAppServerPID int              `json:"codex_app_server_pid,omitempty"`
-}
-
-// apiRunningTokens mirrors SPEC §13.7.2's per-running-row `tokens` object.
-type apiRunningTokens struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
-}
-type apiStateBlocked struct {
-	IssueID           orchestrator.IssueID `json:"issue_id"`
-	Identifier        string               `json:"issue_identifier,omitempty"`
-	IssueURL          string               `json:"issue_url,omitempty"`
-	State             string               `json:"state,omitempty"`
-	BlockedAt         *time.Time           `json:"blocked_at,omitempty"`
-	WorkspacePath     string               `json:"workspace_path,omitempty"`
-	SessionID         string               `json:"session_id,omitempty"`
-	LastEventAt       *time.Time           `json:"last_event_at,omitempty"`
-	Method            string               `json:"method,omitempty"`
-	Error             string               `json:"error,omitempty"`
-	CodexAppServerPID int                  `json:"codex_app_server_pid,omitempty"`
-}
-type apiStateRetry struct {
-	IssueID    orchestrator.IssueID   `json:"issue_id"`
-	Identifier string                 `json:"issue_identifier,omitempty"`
-	IssueURL   string                 `json:"issue_url,omitempty"`
-	Attempt    int                    `json:"attempt"`
-	DueAt      *time.Time             `json:"due_at,omitempty"`
-	Error      string                 `json:"error,omitempty"`
-	Kind       orchestrator.RetryKind `json:"kind"`
-}
-type apiOperatorTerminalStop struct {
-	IssueID               orchestrator.IssueID `json:"issue_id"`
-	Identifier            string               `json:"issue_identifier,omitempty"`
-	State                 string               `json:"state,omitempty"`
-	StoppedAt             *time.Time           `json:"stopped_at,omitempty"`
-	SuppressedDispatches  int                  `json:"suppressed_dispatches"`
-	FirstSuppressedAt     *time.Time           `json:"first_suppressed_at,omitempty"`
-	FirstSuppressedState  string               `json:"first_suppressed_state,omitempty"`
-	FirstSuppressedReason string               `json:"first_suppressed_reason,omitempty"`
-}
+// The /api/v1/state wire DTOs live in internal/stateapi so cmd/worker
+// (producer) and cmd/tui (consumer) share one definition (#793). The
+// orchestrator.StateView -> wire mappers below stay here: they are
+// single-consumer projection, not part of the shared contract. The
+// /api/v1/<issue> and error DTOs below stay here for the same reason —
+// nothing else consumes them.
 type apiIssueResponse struct {
 	IssueIdentifier string               `json:"issue_identifier"`
 	IssueID         orchestrator.IssueID `json:"issue_id"`
@@ -171,11 +49,11 @@ type apiIssueResponse struct {
 		RestartCount        int  `json:"restart_count"`
 		CurrentRetryAttempt *int `json:"current_retry_attempt"`
 	} `json:"attempts"`
-	Running      *apiStateRunning `json:"running"`
-	Retry        *apiStateRetry   `json:"retry"`
-	RecentEvents []map[string]any `json:"recent_events"`
-	LastError    *string          `json:"last_error"`
-	Tracked      map[string]any   `json:"tracked"`
+	Running      *stateapi.Running `json:"running"`
+	Retry        *stateapi.Retry   `json:"retry"`
+	RecentEvents []map[string]any  `json:"recent_events"`
+	LastError    *string           `json:"last_error"`
+	Tracked      map[string]any    `json:"tracked"`
 }
 type apiErrorResponse struct {
 	Error apiError `json:"error"`
@@ -476,7 +354,7 @@ func matchesIssueLookup(issueID orchestrator.IssueID, identifier, normalizedWant
 func normalizeIssueLookup(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
-func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
+func apiRunningFromView(row orchestrator.RunningView) stateapi.Running {
 	var startedAt *time.Time
 	if !row.StartedAt.IsZero() {
 		v := row.StartedAt
@@ -487,8 +365,8 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		v := row.LastEventAt
 		lastEventAt = &v
 	}
-	return apiStateRunning{
-		IssueID:       row.IssueID,
+	return stateapi.Running{
+		IssueID:       string(row.IssueID),
 		Identifier:    row.Identifier,
 		IssueURL:      row.IssueURL,
 		State:         row.State,
@@ -500,7 +378,7 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		LastEventAt:   lastEventAt,
 		RetryAttempt:  copyIntPointer(row.RetryAttempt),
 		WorkspacePath: row.WorkspacePath,
-		Tokens: apiRunningTokens{
+		Tokens: stateapi.RunningTokens{
 			InputTokens:  row.Tokens.InputTokens,
 			OutputTokens: row.Tokens.OutputTokens,
 			TotalTokens:  row.Tokens.TotalTokens,
@@ -508,20 +386,20 @@ func apiRunningFromView(row orchestrator.RunningView) apiStateRunning {
 		CodexAppServerPID: row.CodexAppServerPID,
 	}
 }
-func apiRetryFromView(row orchestrator.RetryView) apiStateRetry {
+func apiRetryFromView(row orchestrator.RetryView) stateapi.Retry {
 	var dueAt *time.Time
 	if !row.DueAt.IsZero() {
 		v := row.DueAt
 		dueAt = &v
 	}
-	return apiStateRetry{
-		IssueID:    row.IssueID,
+	return stateapi.Retry{
+		IssueID:    string(row.IssueID),
 		Identifier: row.Identifier,
 		IssueURL:   row.IssueURL,
 		Attempt:    row.Attempt,
 		DueAt:      dueAt,
 		Error:      row.Error,
-		Kind:       retryKindOrFailure(row.Kind),
+		Kind:       string(retryKindOrFailure(row.Kind)),
 	}
 }
 func retryKindOrFailure(kind orchestrator.RetryKind) orchestrator.RetryKind {
@@ -552,13 +430,13 @@ func apiErrorCode(err error) string {
 	}
 	return "internal_error"
 }
-func apiStateFromView(view orchestrator.StateView) apiStateResponse {
+func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 	generatedAt := view.GeneratedAt
 	if generatedAt.IsZero() {
 		generatedAt = time.Now().UTC()
 	}
 	running := sortedAPIRunningRows(view.Running)
-	blocked := make([]apiStateBlocked, 0, len(view.Blocked))
+	blocked := make([]stateapi.Blocked, 0, len(view.Blocked))
 	for _, row := range view.Blocked {
 		var blockedAt *time.Time
 		if !row.BlockedAt.IsZero() {
@@ -570,8 +448,8 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 			v := row.LastEventAt
 			lastEventAt = &v
 		}
-		blocked = append(blocked, apiStateBlocked{
-			IssueID:           row.IssueID,
+		blocked = append(blocked, stateapi.Blocked{
+			IssueID:           string(row.IssueID),
 			Identifier:        row.Identifier,
 			IssueURL:          row.IssueURL,
 			State:             row.State,
@@ -588,20 +466,8 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		return blocked[i].IssueID < blocked[j].IssueID
 	})
 	retrying := sortedAPIRetryRows(view.Retrying)
-	completed := append([]orchestrator.IssueID(nil), view.Completed...)
-	sort.Slice(completed, func(i, j int) bool {
-		return completed[i] < completed[j]
-	})
-	reconcileFinished := append([]orchestrator.IssueID(nil), view.ReconcileStoppedWithProgress...)
-	sort.Slice(reconcileFinished, func(i, j int) bool {
-		return reconcileFinished[i] < reconcileFinished[j]
-	})
-	agentHandoffFinished := append([]orchestrator.IssueID(nil), view.AgentHandoffReconcileStopped...)
-	sort.Slice(agentHandoffFinished, func(i, j int) bool {
-		return agentHandoffFinished[i] < agentHandoffFinished[j]
-	})
 	operatorStops := sortedAPIOperatorTerminalStops(view.OperatorTerminalStops)
-	return apiStateResponse{
+	return stateapi.StateResponse{
 		GeneratedAt:                  generatedAt,
 		PollIntervalMs:               view.PollIntervalMs,
 		MaxConcurrentAgents:          view.MaxConcurrentAgents,
@@ -610,21 +476,37 @@ func apiStateFromView(view orchestrator.StateView) apiStateResponse {
 		Running:                      running,
 		Blocked:                      blocked,
 		Retrying:                     retrying,
-		Completed:                    completed,
-		ReconcileStoppedWithProgress: reconcileFinished,
-		AgentHandoffReconcileStopped: agentHandoffFinished,
+		Completed:                    sortedIssueIDStrings(view.Completed),
+		ReconcileStoppedWithProgress: sortedIssueIDStrings(view.ReconcileStoppedWithProgress),
+		AgentHandoffReconcileStopped: sortedIssueIDStrings(view.AgentHandoffReconcileStopped),
 		OperatorTerminalStops:        operatorStops,
-		CodexTotals: apiCodexTotals{
+		CodexTotals: stateapi.CodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
 			TotalTokens:    view.CodexTotals.TotalTokens,
 			SecondsRunning: view.CodexTotals.SecondsRunning,
 		},
-		RateLimits: copyRateLimitsForAPI(view.CodexRateLimits),
+		RateLimits: rateLimitsForAPI(view.CodexRateLimits),
 	}
 }
-func sortedAPIRunningRows(rows []orchestrator.RunningView) []apiStateRunning {
-	running := make([]apiStateRunning, 0, len(rows))
+
+// sortedIssueIDStrings converts an orchestrator IssueID slice to the wire
+// []string and sorts it. It returns nil (not an empty slice) for empty input
+// so the JSON key marshals to `null`, preserving the wire shape these ID
+// lists have always emitted (the row lists below emit `[]` via make(.., 0)).
+func sortedIssueIDStrings(ids []orchestrator.IssueID) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = string(id)
+	}
+	sort.Strings(out)
+	return out
+}
+func sortedAPIRunningRows(rows []orchestrator.RunningView) []stateapi.Running {
+	running := make([]stateapi.Running, 0, len(rows))
 	for _, row := range rows {
 		running = append(running, apiRunningFromView(row))
 	}
@@ -633,8 +515,8 @@ func sortedAPIRunningRows(rows []orchestrator.RunningView) []apiStateRunning {
 	})
 	return running
 }
-func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
-	retrying := make([]apiStateRetry, 0, len(rows))
+func sortedAPIRetryRows(rows []orchestrator.RetryView) []stateapi.Retry {
+	retrying := make([]stateapi.Retry, 0, len(rows))
 	for _, row := range rows {
 		retrying = append(retrying, apiRetryFromView(row))
 	}
@@ -643,8 +525,8 @@ func sortedAPIRetryRows(rows []orchestrator.RetryView) []apiStateRetry {
 	})
 	return retrying
 }
-func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
-	return apiStateCounts{
+func apiCountsFromView(view orchestrator.StateView) stateapi.Counts {
+	return stateapi.Counts{
 		Running:                           len(view.Running),
 		Blocked:                           len(view.Blocked),
 		Retrying:                          len(view.Retrying),
@@ -659,8 +541,8 @@ func apiCountsFromView(view orchestrator.StateView) apiStateCounts {
 	}
 }
 
-func sortedAPIOperatorTerminalStops(rows []orchestrator.OperatorTerminalStopView) []apiOperatorTerminalStop {
-	out := make([]apiOperatorTerminalStop, 0, len(rows))
+func sortedAPIOperatorTerminalStops(rows []orchestrator.OperatorTerminalStopView) []stateapi.OperatorTerminalStop {
+	out := make([]stateapi.OperatorTerminalStop, 0, len(rows))
 	for _, row := range rows {
 		var stoppedAt *time.Time
 		if !row.StoppedAt.IsZero() {
@@ -672,8 +554,8 @@ func sortedAPIOperatorTerminalStops(rows []orchestrator.OperatorTerminalStopView
 			v := row.FirstSuppressedAt
 			firstSuppressedAt = &v
 		}
-		out = append(out, apiOperatorTerminalStop{
-			IssueID:               row.IssueID,
+		out = append(out, stateapi.OperatorTerminalStop{
+			IssueID:               string(row.IssueID),
 			Identifier:            row.Identifier,
 			State:                 row.State,
 			StoppedAt:             stoppedAt,
@@ -688,12 +570,18 @@ func sortedAPIOperatorTerminalStops(rows []orchestrator.OperatorTerminalStopView
 	})
 	return out
 }
-func copyRateLimitsForAPI(src *orchestrator.RateLimitSnapshot) *orchestrator.RateLimitSnapshot {
+
+// rateLimitsForAPI projects the orchestrator rate-limit snapshot to the wire
+// map. A nil snapshot yields a nil map so `rate_limits` marshals to JSON null
+// (the always-present key contract, #328). The returned map aliases the
+// snapshot's backing store, matching the prior shallow copy — safe because the
+// view is itself a point-in-time snapshot that the response is marshaled from
+// immediately.
+func rateLimitsForAPI(src *orchestrator.RateLimitSnapshot) map[string]any {
 	if src == nil {
 		return nil
 	}
-	copied := *src
-	return &copied
+	return map[string]any(*src)
 }
 func copyConcurrencyLimits(src map[string]int) map[string]int {
 	if len(src) == 0 {
