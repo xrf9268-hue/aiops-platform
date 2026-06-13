@@ -67,8 +67,8 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 	}
 	// Only validate when the file actually carries a front-matter block.
 	// Prompt-only WORKFLOW.md files are a supported pattern for repos that
-	// rely on the worker's built-in defaults (same semantic as
-	// LoadOptional's no-file fallback). Forcing schema validation on those
+	// rely on the worker's built-in defaults (same semantic as Resolve's
+	// no-file fallback to Source=default). Forcing schema validation on those
 	// would regress every repo that has not yet adopted the explicit
 	// Symphony front matter.
 	if hasFrontMatter {
@@ -93,26 +93,4 @@ func validateFrontMatterRoot(path string, frontBytes []byte) error {
 		return &Error{Category: CategoryWorkflowFrontMatterNotMap, Path: path, Message: "workflow front matter must decode to a map"}
 	}
 	return nil
-}
-
-// LoadOptional loads a workflow from an explicit path, returning schema
-// defaults when the file does not exist. New worker code should use
-// Resolve(workdir), which handles repo-relative discovery and returns
-// resolution metadata.
-//
-// Deprecated: use Resolve(workdir) for repo-relative discovery. Retained
-// for callers that pass an explicit path.
-func LoadOptional(path string) (*Workflow, error) {
-	wf, err := Load(path)
-	if err == nil {
-		return wf, nil
-	}
-	if errors.Is(err, ErrMissingWorkflowFile) || os.IsNotExist(err) {
-		cfg := DefaultConfig()
-		if err := expandConfig(&cfg); err != nil {
-			return nil, err
-		}
-		return &Workflow{Path: path, Config: cfg, PromptTemplate: DefaultPrompt()}, nil
-	}
-	return nil, err
 }

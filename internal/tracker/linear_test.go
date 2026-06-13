@@ -726,10 +726,6 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 	}
 }
 
-func TestLinearClient_SatisfiesStateIssueLister(t *testing.T) {
-	var _ StateIssueLister = (*LinearClient)(nil)
-}
-
 func TestLinearClient_EnforcesRequestTimeout(t *testing.T) {
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

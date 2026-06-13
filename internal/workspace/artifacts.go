@@ -3,7 +3,6 @@ package workspace
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,23 +82,6 @@ func WriteSensitiveArtifact(path string, body []byte) error { //nolint:gocognit 
 		return fmt.Errorf("close sensitive artifact %s: %w", path, err)
 	}
 	return nil
-}
-
-func ReadSensitiveArtifact(path string) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	if info, err := f.Stat(); err != nil {
-		return nil, err
-	} else if links, ok := linkCount(info); ok && links > 1 {
-		return nil, fmt.Errorf("sensitive artifact %s has %d hard links", path, links)
-	}
-	if err := f.Chmod(SensitiveArtifactFileMode); err != nil {
-		return nil, err
-	}
-	return io.ReadAll(f)
 }
 
 func linkCount(info os.FileInfo) (uint64, bool) {

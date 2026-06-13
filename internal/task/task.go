@@ -51,8 +51,8 @@ func RunAttemptPhases() []RunAttemptPhase {
 	}
 }
 
-// Event kinds emitted by the queue store and the worker. Keep these in sync
-// with the docs in docs/runbooks/task-api.md and the cmd/worker stage helpers.
+// Event kinds emitted by the worker. Keep these in sync with the docs in
+// docs/runbooks/task-api.md and the cmd/worker stage helpers.
 const (
 	EventRunPhaseTransition = "run_phase_transition"
 

@@ -411,8 +411,6 @@ func TestGitHubClientRequiresTokenOwnerAndRepo(t *testing.T) {
 }
 
 func TestGitHubClientSatisfiesTrackerInterfaces(t *testing.T) {
-	var _ Client = (*GitHubClient)(nil)
-	var _ StateIssueLister = (*GitHubClient)(nil)
 	var _ IssueStateRefresher = (*GitHubClient)(nil)
 }
 

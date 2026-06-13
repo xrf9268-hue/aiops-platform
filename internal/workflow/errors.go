@@ -30,10 +30,6 @@ type Error struct {
 	Err      error
 }
 
-func NewError(category Category, message string, err error) *Error {
-	return &Error{Category: category, Message: message, Err: err}
-}
-
 func (e *Error) Error() string {
 	if e == nil {
 		return ""

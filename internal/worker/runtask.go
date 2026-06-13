@@ -16,11 +16,11 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
-// EventEmitter is the subset of the queue store the worker needs to record
-// per-stage events. Defined as an interface so unit tests can verify the
-// worker emits the right kinds without standing up a database. The payload
-// parameter is `any` so callers can pass either structured maps (Marshal'd
-// by the store) or pre-serialized JSON []byte.
+// EventEmitter is the subset of the in-memory event emitter the worker needs
+// to record per-stage events. Defined as an interface so unit tests can verify
+// the worker emits the right kinds without a concrete emitter. The payload
+// parameter is `any` so callers can pass either structured maps (marshaled by
+// the emitter) or pre-serialized JSON []byte.
 type EventEmitter interface {
 	AddEvent(ctx context.Context, taskID, typ, msg string) error
 	AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error
@@ -173,23 +173,25 @@ func (rs *runState) emitPhase(from, to task.RunAttemptPhase) {
 	rs.phaseTerminal = isTerminalPhase(to)
 }
 
-// RunTask executes a single in-memory task. The orchestrator-backed worker path
-// uses this directly after claiming a tracker issue in runtime state.
+// RunTask executes a single in-memory task and discards the success-side
+// RunTaskResult. The orchestrator-backed worker path calls RunTaskWithResult
+// directly because it consumes that result; RunTask has no production caller and
+// exists only as the result-free entry point the external worker tests drive via
+// RunTaskForTest.
 //
 // Per SPEC §1, push, PR creation, and tracker state writes are the agent's
 // responsibility. The worker's role is: claim, prepare workspace, resolve
 // workflow, run the agent session, emit events, and clean up. The lifecycle is
-// split across runState phase
-// helpers; RunTask only sequences them and stamps PhaseFailed on the way out
-// of any non-terminal error path.
+// split across runState phase helpers; RunTaskWithResult sequences them and
+// stamps PhaseFailed on the way out of any non-terminal error path.
 func RunTask(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) *RunTaskError {
 	_, rtErr := RunTaskWithResult(ctx, ev, t, cfg)
 	return rtErr
 }
 
-// RunTaskWithResult is RunTask plus success-side metadata needed by the
-// orchestrator. Keep ordinary callers on RunTask so a new metadata field does not
-// force unrelated call sites to change.
+// RunTaskWithResult is RunTask plus the success-side metadata the orchestrator
+// consumes, and is the entry point the orchestrator calls. RunTask is the
+// result-discarding form the worker tests drive.
 func RunTaskWithResult(ctx context.Context, ev EventEmitter, t task.Task, cfg Config) (result RunTaskResult, ret *RunTaskError) {
 	rs := &runState{ctx: ctx, ev: ev, t: t, cfg: cfg}
 	defer func() {

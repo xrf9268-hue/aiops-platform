@@ -1314,37 +1314,37 @@ hello
 	}
 }
 
-// TestLoadOptionalAppliesAgentTimeoutDefaults verifies that a workflow
-// missing agent.timeout in its front matter still ends up with the
-// schema default after expandConfig runs.
-func TestLoadOptionalAppliesAgentTimeoutDefaults(t *testing.T) {
+// TestLoadAppliesAgentTimeoutDefaults verifies that a workflow missing
+// agent.timeout in its front matter still ends up with the schema default
+// after expandConfig runs.
+func TestLoadAppliesAgentTimeoutDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\n  default_branch: main\ntracker:\n  kind: gitea\n---\nhello\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wf, err := LoadOptional(path)
+	wf, err := Load(path)
 	if err != nil {
-		t.Fatalf("LoadOptional: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if wf.Config.Agent.Timeout != 30*time.Minute {
 		t.Fatalf("expanded Agent.Timeout: got %v want 30m", wf.Config.Agent.Timeout)
 	}
 }
 
-// TestLoadOptionalHonorsExplicitAgentTimeout confirms a user-specified
+// TestLoadHonorsExplicitAgentTimeout confirms a user-specified
 // agent.timeout overrides the schema default.
-func TestLoadOptionalHonorsExplicitAgentTimeout(t *testing.T) {
+func TestLoadHonorsExplicitAgentTimeout(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	body := "---\nrepo:\n  owner: o\n  name: n\n  clone_url: git@example.com:o/n.git\nagent:\n  timeout: 5m\ntracker:\n  kind: gitea\n---\nhello\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	wf, err := LoadOptional(path)
+	wf, err := Load(path)
 	if err != nil {
-		t.Fatalf("LoadOptional: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
 	if wf.Config.Agent.Timeout != 5*time.Minute {
 		t.Fatalf("explicit Agent.Timeout: got %v want 5m", wf.Config.Agent.Timeout)
@@ -1876,10 +1876,10 @@ prompt
 
 // TestLoad_AcceptsPromptOnlyFile guards backward compatibility for
 // WORKFLOW.md files that contain only a prompt template with no `---`
-// front matter. These rely on the same built-in defaults that
-// LoadOptional supplies when the file is absent, so Load must not
-// invoke schema validation against an empty config (issue #9 review
-// from chatgpt-codex-connector).
+// front matter. These rely on the same built-in defaults that Resolve
+// supplies when the file is absent, so Load must not invoke schema
+// validation against an empty config (issue #9 review from
+// chatgpt-codex-connector).
 func TestLoad_AcceptsPromptOnlyFile(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "WORKFLOW.md")
@@ -1922,23 +1922,6 @@ prompt
 	}
 	if _, err := Load(p); err != nil {
 		t.Fatalf("Load: unexpected error %v", err)
-	}
-}
-
-// TestLoadOptional_MissingFileSkipsValidation guards the operational
-// contract that a repo without a WORKFLOW.md still loads cleanly with
-// schema defaults. The validator must only run when an actual file was
-// parsed; otherwise the worker would refuse to act on any repo that has
-// not yet adopted Symphony.
-func TestLoadOptional_MissingFileSkipsValidation(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "WORKFLOW.md")
-	wf, err := LoadOptional(p)
-	if err != nil {
-		t.Fatalf("LoadOptional: unexpected error %v", err)
-	}
-	if wf.Config.Repo.CloneURL != "" {
-		t.Fatalf("default Config.Repo.CloneURL: got %q want empty", wf.Config.Repo.CloneURL)
 	}
 }
 

@@ -103,14 +103,6 @@ func TimeString(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
-type Client interface {
-	ListActiveIssues(ctx context.Context) ([]Issue, error)
-}
-
-type StateIssueLister interface {
-	ListIssuesByStates(ctx context.Context, states []string) ([]Issue, error)
-}
-
 // IssueStateRefresher fetches the current tracker state for explicit issue IDs.
 // Poll-tick reconciliation uses this to refresh already-running issues without
 // relying on candidate pagination side effects.
