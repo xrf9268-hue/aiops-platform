@@ -159,6 +159,21 @@ docker compose --env-file .env \
   up -d --build worker
 ```
 
+`--build` compiles the `codex-worker` target locally. To run a tagged release
+without building, pull the published image instead — drop `--build` and let
+Compose use `ghcr.io/xrf9268-hue/aiops-platform-codex-worker` (pin a version
+with `AIOPS_IMAGE_TAG=vX.Y.Z`, or take `:latest`):
+
+```bash
+docker pull ghcr.io/xrf9268-hue/aiops-platform-codex-worker:latest
+```
+
+Caveat: the published image is built as UID 1000. This runbook's mounts
+(host-owned `CODEX_HOME`, the 0600 SSH key, secret files) must be readable by
+that UID. If your host `id -u` is not 1000, keep `--build` (it sets
+`AIOPS_UID`/`AIOPS_GID` from your `.env` so the container user matches the
+mounts) rather than the pulled image.
+
 After the worker is healthy, smoke-check host reachability without printing the
 state API token:
 

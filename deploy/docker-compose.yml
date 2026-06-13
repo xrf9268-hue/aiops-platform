@@ -1,5 +1,13 @@
 services:
   worker:
+    # Prefer the published image (`docker compose pull` / plain `up`); the
+    # build below stays as the `--build` fallback (#795). Override the tag with
+    # AIOPS_IMAGE_TAG (e.g. a pinned vX.Y.Z); `latest` tracks the newest release.
+    # NOTE: the published image is built as UID 1000. If your host `id -u`
+    # differs and you rely on the 0600 SSH-key bind mount below (or the Codex
+    # overlay's host-owned CODEX_HOME), run `--build` so the AIOPS_UID/AIOPS_GID
+    # args align the container user with the host — the pulled image cannot.
+    image: ghcr.io/xrf9268-hue/aiops-platform-worker:${AIOPS_IMAGE_TAG:-latest}
     build:
       context: ..
       # Align the in-container user with the host owner of the deploy key so
