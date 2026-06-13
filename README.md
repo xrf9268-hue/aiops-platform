@@ -72,7 +72,11 @@ brand/UX rationale.
 
 ## Quick start: worker-owned tracker polling path
 
-Edit `examples/WORKFLOW.md` with your repository and tracker settings, then run
+Start from the example workflow for your tracker —
+[`examples/WORKFLOW.md`](examples/WORKFLOW.md) (Linear),
+[`examples/gitea-WORKFLOW.md`](examples/gitea-WORKFLOW.md) (Gitea), or
+[`examples/github-local-WORKFLOW.md`](examples/github-local-WORKFLOW.md)
+(GitHub) — edit your repository and tracker settings, then run
 the worker. It reconciles workspaces on startup before the first poll tick, then
 repeatedly fetches active issues and dispatches them through the in-memory
 orchestrator state:
@@ -402,6 +406,46 @@ For setting up a low-privilege bot account with the minimum token scopes
 (including the scopes the `gitea_issue_labels` state tool needs) and branch
 protection on a Gitea instance, follow the
 [Gitea bot and branch-protection runbook](docs/runbooks/gitea-bot-and-branch-protection.md).
+
+## GitHub issue-state labels
+
+For `tracker.kind: github`, a configured state named `open`, `closed`, or
+`all` (case-insensitive) maps directly to the GitHub issue-state filter with
+no label involved. **Any other state name is treated as an issue label**: the
+worker polls open issues carrying that label, so a workflow state such as
+`aiops:ready` means "open and labeled `aiops:ready`".
+
+| Configured state | What the worker polls |
+| --- | --- |
+| `open` / `closed` / `all` | GitHub issue state, no label filter |
+| anything else (e.g. `aiops:ready`) | open issues carrying that label |
+
+The dogfood convention ([ADR 0002](docs/adr/0002-ready-gated-binary-self-hosting.md)):
+use a dedicated `aiops:ready` label as the unattended queue entry and do
+**not** include `open` in `active_states`, so the worker never sweeps
+arbitrary open issues into execution. Priority labels are triage metadata,
+not permission to run. (The colon form `aiops:ready` is just this repo's
+GitHub-side naming, distinct from the Gitea path's `aiops/*` labels above —
+any label name works as long as the configured state matches it exactly.)
+
+Two behaviors keep the label-as-state loop safe:
+
+- **Open-PR claim skip.** Whenever an active state can include open issues,
+  the worker lists open pull requests and parses closing keywords
+  (`Closes #N`, `Fixes #N`, …) from each PR's title and body; an issue
+  claimed by an open PR is skipped while both stay open, so a poll never
+  double-dispatches an issue whose agent PR is already in flight.
+- **Reconciliation.** Removing the state label or closing the issue takes it
+  out of the active set; per-tick reconciliation then stops an in-flight run
+  on a following poll.
+
+`tracker.api_key` needs only read access — a fine-grained PAT with read-only
+**Issues**, **Pull requests**, and **Metadata** permissions on the target
+repository (classic-PAT equivalent: `public_repo`, or `repo` for private
+repositories).
+
+[`examples/github-local-WORKFLOW.md`](examples/github-local-WORKFLOW.md) is a
+working template wiring all of the above.
 
 ## Continuous integration
 
