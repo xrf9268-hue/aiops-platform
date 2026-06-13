@@ -69,9 +69,13 @@ func startGitea(ctx context.Context) (*giteaEnv, error) {
 		"--email", "aiops-bot@example.invalid",
 		"-c", "/etc/gitea/app.ini",
 	})
-	if execErr != nil || code != 0 {
+	if execErr != nil {
 		_ = c.Terminate(ctx)
-		return nil, fmt.Errorf("create gitea admin user: exit %d err %v", code, execErr)
+		return nil, fmt.Errorf("create gitea admin user (exit %d): %w", code, execErr)
+	}
+	if code != 0 {
+		_ = c.Terminate(ctx)
+		return nil, fmt.Errorf("create gitea admin user: unexpected exit code %d", code)
 	}
 
 	host, err := c.Host(ctx)
@@ -145,7 +149,7 @@ func (g *giteaEnv) doJSON(ctx context.Context, method, path string, body any, ba
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, _ := io.ReadAll(resp.Body)
 	return resp, respBody, nil
 }
@@ -202,20 +206,22 @@ func (g *giteaEnv) createRepo(ctx context.Context, name string) (cloneURL string
 	return out.CloneURL, nil
 }
 
-func (g *giteaEnv) putFile(ctx context.Context, owner, repo, path string, content []byte, msg string) error {
+// putWorkflowFile seeds the repo's canonical WORKFLOW.md (the only file the
+// e2e suite ever writes through the contents API).
+func (g *giteaEnv) putWorkflowFile(ctx context.Context, owner, repo string, content []byte, msg string) error {
 	type req struct {
 		Message string `json:"message"`
 		Content string `json:"content"`
 	}
 	resp, body, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/contents/%s", url.PathEscape(owner), url.PathEscape(repo), path),
+		fmt.Sprintf("/api/v1/repos/%s/%s/contents/WORKFLOW.md", url.PathEscape(owner), url.PathEscape(repo)),
 		req{Message: msg, Content: encodeBase64(content)},
 		false)
 	if err != nil {
 		return err
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("putFile: status %d body %s", resp.StatusCode, body)
+		return fmt.Errorf("putWorkflowFile: status %d body %s", resp.StatusCode, body)
 	}
 	return nil
 }
@@ -241,22 +247,6 @@ func (g *giteaEnv) createIssue(ctx context.Context, owner, repo, title, body str
 		return 0, err
 	}
 	return out.Number, nil
-}
-
-func (g *giteaEnv) commentIssue(ctx context.Context, owner, repo string, issue int, body string) error {
-	type req struct {
-		Body string `json:"body"`
-	}
-	resp, respBody, err := g.doJSON(ctx, "POST",
-		fmt.Sprintf("/api/v1/repos/%s/%s/issues/%d/comments", url.PathEscape(owner), url.PathEscape(repo), issue),
-		req{Body: body}, false)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("commentIssue: status %d body %s", resp.StatusCode, respBody)
-	}
-	return nil
 }
 
 func (g *giteaEnv) ensureLabels(ctx context.Context, owner, repo string, labels []string) error {

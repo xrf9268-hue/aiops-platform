@@ -101,6 +101,17 @@ jobs:
           version: v2.12.2
           args: --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,funlen,gocognit,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused
 
+      # The e2e suite is build-tagged (`//go:build e2e`), so the default gate
+      # above never type-checks test/e2e/*.go and that class of lint finding
+      # silently accumulated (#802). Run the same blocking set a second time
+      # with the e2e tag, scoped to test/e2e, so build-tagged files can't
+      # escape lint.
+      - name: Run golangci-lint blocking gate (e2e build tag)
+        uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
+        with:
+          version: v2.12.2
+          args: --config=.golangci.yml --enable-only=contextcheck,errcheck,errorlint,funlen,gocognit,gocritic,govet,ineffassign,revive,staticcheck,unparam,unused --build-tags=e2e ./test/e2e/...
+
       - name: Verify Dockerfile Go version matches go.mod
         shell: bash
         run: |
