@@ -15,8 +15,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/buildinfo"
 	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
 )
+
+// version is the build stamp, set at link time via
+// -ldflags "-X main.version=<tag>" (release.yml, install.sh). It stays "devel"
+// for an un-stamped build; resolveVersion then falls back to the VCS revision
+// the Go toolchain records when built from a source tree (#796).
+var version = "devel"
+
+func resolveVersion() string { return buildinfo.Resolve(version) }
 
 // ANSI escape codes (mirrors Elixir @ansi_* module attributes)
 const (
@@ -47,7 +56,12 @@ func main() {
 	urlFlag := flag.String("url", "http://127.0.0.1:4000/", "worker HTTP API base URL")
 	intervalFlag := flag.Duration("interval", 5*time.Second, "poll interval")
 	rawFlag := flag.Bool("raw", false, "disable alt-screen/cursor management (upstream parity mode)")
+	versionFlag := flag.Bool("version", false, "print the build version and exit")
 	flag.Parse()
+	if *versionFlag {
+		fmt.Println(resolveVersion())
+		return
+	}
 
 	baseURL := strings.TrimSuffix(*urlFlag, "/")
 	// Allow env override when using the default flag value.

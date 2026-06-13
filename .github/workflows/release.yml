@@ -160,8 +160,10 @@ jobs:
             read -r goos goarch <<< "$target"
             out="dist/aiops-platform_${RELEASE_TAG}_${goos}_${goarch}"
             for binary in "${binaries[@]}"; do
+              # Stamp the release tag into each binary's main.version (#796);
+              # both cmd/worker and cmd/tui are package main with their own var.
               GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 \
-                go build -trimpath -ldflags="-s -w" -o "${out}/${binary}" "./cmd/${binary}"
+                go build -trimpath -ldflags="-s -w -X main.version=${RELEASE_TAG}" -o "${out}/${binary}" "./cmd/${binary}"
             done
           done
 
@@ -181,9 +183,33 @@ jobs:
           set -euo pipefail
           for out in dist/aiops-platform_${RELEASE_TAG}_*; do
             [ -d "$out" ] || continue
+            # Ship a runnable starting point alongside the binaries so a
+            # binary-download user has a config template without cloning (#797).
+            # Keep WORKFLOW.md under examples/ so the bundled .env.example's
+            # AIOPS_WORKFLOW_PATH=examples/WORKFLOW.md resolves from the
+            # extracted directory.
+            mkdir -p "$out/examples"
+            cp examples/WORKFLOW.md "$out/examples/"
+            cp .env.example "$out/"
             tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
             rm -rf "$out"
           done
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Plain checksums file so operators without the gh CLI / attestation
+          # flow can still verify archive integrity (#797). Computed over the
+          # archives + SBOM (basenames only, so `sha256sum -c` works from the
+          # download dir); emitted before attestation so the existing
+          # subject-path: dist/* step signs it too.
+          ( cd dist && sha256sum \
+              "aiops-platform_${RELEASE_TAG}"_*.tar.gz \
+              "aiops-platform_${RELEASE_TAG}_sbom.cdx.json" \
+              > "aiops-platform_${RELEASE_TAG}_SHA256SUMS" )
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
@@ -214,6 +240,124 @@ jobs:
               --notes "Automated aiops-platform release for $RELEASE_TAG" \
               --verify-tag
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json \
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json dist/*_SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
+
+  images:
+    name: Build and publish container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs:
+      - resolve
+      - ci
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ needs.resolve.outputs.commit_sha }}
+
+      - name: Verify tag matches resolved commit
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RELEASE_COMMIT_SHA: ${{ needs.resolve.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          resolved_sha="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")"
+          if [ "$resolved_sha" != "$RELEASE_COMMIT_SHA" ]; then
+            echo "Release tag $RELEASE_TAG moved from $RELEASE_COMMIT_SHA to $resolved_sha"
+            exit 1
+          fi
+
+      - name: Determine if this is the newest release
+        id: latest
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin >/dev/null 2>&1 || true
+          # Filter to strict vMAJOR.MINOR.PATCH releases (the same shape the
+          # resolve job validates) before taking the highest, so a stray or
+          # prerelease tag like v2.0.0-rc.1 — which the `v*.*.*` glob also
+          # matches — can't outrank a real release and strand `:latest`.
+          highest="$(git tag --list 'v*.*.*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)"
+          # `:latest` (the Compose default) follows the newest release tag only.
+          # A real tag push (the new tag is highest) and a manual re-publish of
+          # the current release both qualify; a workflow_dispatch backfill of an
+          # OLDER tag does not, so `:latest` never moves backward (#795 review).
+          if [ "$RELEASE_TAG" = "$highest" ]; then
+            echo "is_newest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_newest=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "resolved=$RELEASE_TAG highest=$highest"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Publish the existing worker / codex-worker Dockerfile targets as-is
+      # (amd64, matching the CI `docker build`; multi-arch is a deliberate
+      # follow-up, not in #795's "publish as-is" scope). VERSION stamps the
+      # binary's main.version (#796) since .dockerignore drops .git in-image.
+      - name: Build and push worker image
+        id: worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          target: worker
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.resolve.outputs.tag }}
+          # `:latest` only when this resolved tag is the newest release (see the
+          # Determine step); a backfill of an older tag emits an empty line,
+          # which build-push-action ignores, so the Compose default never moves
+          # backward — while manual recovery of the current release still works.
+          tags: |
+            ghcr.io/${{ github.repository }}-worker:${{ needs.resolve.outputs.tag }}
+            ${{ steps.latest.outputs.is_newest == 'true' && format('ghcr.io/{0}-worker:latest', github.repository) || '' }}
+
+      - name: Build and push codex-worker image
+        id: codex-worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          target: codex-worker
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ needs.resolve.outputs.tag }}
+          tags: |
+            ghcr.io/${{ github.repository }}-codex-worker:${{ needs.resolve.outputs.tag }}
+            ${{ steps.latest.outputs.is_newest == 'true' && format('ghcr.io/{0}-codex-worker:latest', github.repository) || '' }}
+
+      - name: Attest worker image
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}-worker
+          subject-digest: ${{ steps.worker.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest codex-worker image
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        with:
+          subject-name: ghcr.io/${{ github.repository }}-codex-worker
+          subject-digest: ${{ steps.codex-worker.outputs.digest }}
+          push-to-registry: true

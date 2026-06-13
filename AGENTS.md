@@ -28,7 +28,7 @@ change a rule here, update its rationale entry there too.
 ## What this project is
 
 `aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
-implements the [OpenAI Symphony SPEC](https://github.com/openai/symphony/blob/main/SPEC.md).
+implements the [OpenAI Symphony SPEC](docs/research/SPEC.md).
 The orchestrator polls a tracker (Linear, soon Gitea), prepares a deterministic
 per-issue workspace, runs a coding agent in that workspace, and watches the
 agent's lifecycle. Per SPEC §1, the **agent** is what writes tickets, opens
@@ -64,7 +64,11 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 This project is positioned as a Symphony port. **Three upstream sources are
 jointly authoritative**:
 
-1. The protocol contract: [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md).
+1. The protocol contract: [Symphony SPEC.md](docs/research/SPEC.md) — mirrored
+   verbatim from
+   [upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so the
+   contract this port targets cannot drift (upstream is an unmaintained demo
+   repo); re-sync by bumping the commit hash in the mirror's header (#799).
 2. The reference implementation: [`openai/symphony` Elixir tree](https://github.com/openai/symphony/tree/main/elixir).
    When SPEC text is ambiguous, the reference's behavior is the tiebreaker.
    Pay particular attention to:

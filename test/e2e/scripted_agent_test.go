@@ -102,8 +102,8 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createRepo: %v", err)
 	}
-	if err := bed.gitea.putFile(ctx, owner, repo, "WORKFLOW.md", fixtureContent(t, "scripted-agent.md"), "seed workflow"); err != nil {
-		t.Fatalf("putFile workflow: %v", err)
+	if err := bed.gitea.putWorkflowFile(ctx, owner, repo, fixtureContent(t, "scripted-agent.md"), "seed workflow"); err != nil {
+		t.Fatalf("putWorkflowFile: %v", err)
 	}
 	issueNum, err := bed.gitea.createIssue(ctx, owner, repo, "scripted handoff", "agent pushes a branch, opens a PR, flips the label")
 	if err != nil {
@@ -199,7 +199,7 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	}
 
 	var taskID string
-	pollUntil(t, 90*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
+	pollUntil(ctx, t, 90*time.Second, 250*time.Millisecond, func(ctx context.Context) (bool, error) {
 		tk, ok := events.taskBySource("gitea_issue", fmt.Sprintf("#%d", issueNum))
 		if !ok {
 			return false, nil
@@ -237,7 +237,7 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	// §18.1 WorkspaceCleaner seam. Both the continuation scheduling and the
 	// cleanup itself run on async followups, so poll until they settle instead
 	// of asserting after a single tick.
-	pollUntil(t, 60*time.Second, 500*time.Millisecond, func(ctx context.Context) (bool, error) {
+	pollUntil(ctx, t, 60*time.Second, 500*time.Millisecond, func(ctx context.Context) (bool, error) {
 		// Treat transient poll/snapshot errors as not-yet-settled: the next
 		// tick retries and only the 60s timeout reports failure, so one API
 		// hiccup under CI load cannot fail the whole e2e run. The error is

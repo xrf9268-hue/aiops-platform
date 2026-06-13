@@ -15,12 +15,14 @@ Linear, Gitea, or GitHub issue
 ```
 
 It is a Go implementation of [OpenAI Symphony](https://github.com/openai/symphony).
-The upstream
-[`SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md) is the
-contract; the Elixir reference implementation is the tie-breaker when the SPEC
-text is ambiguous. Why we continue the Go port here rather than forking is
-recorded in [`DECISION.md`](DECISION.md); the current SPEC deviation ledger
-lives in [`DEVIATIONS.md`](DEVIATIONS.md).
+The [`SPEC.md`](docs/research/SPEC.md) contract — mirrored verbatim into this
+repo from
+[upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
+drift (upstream is an unmaintained demo repo) — is authoritative; the Elixir
+reference implementation is the tie-breaker when the SPEC text is ambiguous. Why
+we continue the Go port here rather than forking is recorded in
+[`DECISION.md`](DECISION.md); the current SPEC deviation ledger lives in
+[`DEVIATIONS.md`](DEVIATIONS.md).
 
 The goal is a practical loop, not a heavy enterprise platform: run `cmd/worker`
 as a Go-based, Gitea-friendly, locally customizable Symphony while the open
@@ -133,10 +135,37 @@ To run it directly under a service manager instead of Compose — build/install,
 `worker --doctor` preflight, and Linux (systemd) / macOS (launchd) samples —
 see the [binary deployment runbook](docs/runbooks/binary-deployment.md).
 
-The default Compose service starts `worker`:
+Prebuilt Linux/macOS (amd64/arm64) archives are attached to each
+[GitHub Release](https://github.com/xrf9268-hue/aiops-platform/releases) as
+`aiops-platform_<tag>_<os>_<arch>.tar.gz`, bundling the `worker` and `tui`
+binaries plus `examples/WORKFLOW.md` and `.env.example`. Verify a download with
+either `gh attestation verify <archive> --repo xrf9268-hue/aiops-platform`
+(build provenance) or `sha256sum --ignore-missing -c
+aiops-platform_<tag>_SHA256SUMS` (plain checksums; `--ignore-missing` checks
+only the archives you downloaded, since the file lists every artifact) — both
+are published with the release.
+
+Each tagged release publishes prebuilt **linux/amd64** images to GHCR, so you can
+run without a source checkout (arm64 hosts run them under emulation, or
+`--build` a native image):
 
 ```bash
-docker compose --env-file .env -f deploy/docker-compose.yml up --build worker
+docker pull ghcr.io/xrf9268-hue/aiops-platform-worker:latest
+# Codex-enabled agent runtime: ghcr.io/xrf9268-hue/aiops-platform-codex-worker:latest
+```
+
+Public packages pull without auth; if a package is still private, run
+`docker login ghcr.io` first (or `--build` from source instead). The published
+image runs as UID 1000 — if your host `id -u` differs and you use the Compose
+0600 SSH-key / Codex-home bind mounts, prefer `--build` (it aligns the container
+user via `AIOPS_UID`/`AIOPS_GID`), which the pulled image can't do.
+
+The default Compose service starts `worker` and references that image, falling
+back to a local build with `--build`:
+
+```bash
+docker compose --env-file .env -f deploy/docker-compose.yml pull worker        # use the published image
+docker compose --env-file .env -f deploy/docker-compose.yml up --build worker   # or build locally
 ```
 
 The image defaults to the worker (`CMD ["worker"]`), so a plain `docker run`

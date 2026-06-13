@@ -43,9 +43,14 @@ command -v go >/dev/null 2>&1 || { echo "error: go toolchain not found on PATH (
 
 binaries=(worker tui)
 mkdir -p "$dist_dir"
+# Stamp main.version from the checkout's git description (nearest tag, else
+# short SHA, else devel) so a locally-installed binary reports a real version
+# via --version / the startup log / /api/v1/state (#796).
+version="$(cd "$repo_root" && git describe --tags --always --dirty 2>/dev/null || true)"
+[ -n "$version" ] || version="devel"
 for binary in "${binaries[@]}"; do
-  echo "building ${binary} -> dist/${binary}"
-  ( cd "$repo_root" && go build -trimpath -ldflags="-s -w" -o "dist/${binary}" "./cmd/${binary}" )
+  echo "building ${binary} (version=${version}) -> dist/${binary}"
+  ( cd "$repo_root" && go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "dist/${binary}" "./cmd/${binary}" )
 done
 
 if [ -n "$prefix" ]; then

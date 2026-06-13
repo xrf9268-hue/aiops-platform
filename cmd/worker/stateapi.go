@@ -468,6 +468,7 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 	retrying := sortedAPIRetryRows(view.Retrying)
 	operatorStops := sortedAPIOperatorTerminalStops(view.OperatorTerminalStops)
 	return stateapi.StateResponse{
+		Version:                      resolveVersion(),
 		GeneratedAt:                  generatedAt,
 		PollIntervalMs:               view.PollIntervalMs,
 		MaxConcurrentAgents:          view.MaxConcurrentAgents,
