@@ -267,7 +267,10 @@ not searched and are not reported as shadowed workflow sources.
 If the canonical file does not exist, the worker proceeds with built-in
 defaults. The table below mirrors SPEC §6.4's cheat-sheet so a SPEC reader's
 mental model lines up with `worker --print-config` output; defaults that diverge
-from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
+from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md). It is
+deliberately partial — the exhaustive key-by-key reference (every front-matter
+key with type, default, behavior, and validation rule) is
+[`docs/runbooks/workflow-frontmatter-reference.md`](docs/runbooks/workflow-frontmatter-reference.md):
 
 | Setting | Default | Source |
 |---------|---------|--------|
@@ -286,7 +289,7 @@ from SPEC are called out and tracked in [`DEVIATIONS.md`](DEVIATIONS.md):
 | `tracker.active_states` | `[Todo, In Progress]` | SPEC §6.4 |
 | `tracker.terminal_states` | `[Closed, Cancelled, Canceled, Duplicate, Done]` | SPEC §6.4 |
 | `tracker.required_labels` | `[]` (gate off) — opt-in dispatch filter: an issue must carry every listed label (matched case-insensitively after trimming) to dispatch or keep running. Removing a required label makes a running agent self-stop after its current turn (per-turn refresh) and releases retry/blocked work on the next poll. A blank entry matches no issue. Labels are projected up to the Linear API's 250-per-issue page maximum; a required label beyond that window is outside the gate's evidence (an issue carrying 250+ labels is pathological — keep the marker set small). | SPEC §4.1.1 / §6.4 |
-| `tracker.pagination_max_pages` | adapter default (`github`: 10 pages; `gitea`: 20 pages; `linear`: uncapped cursor walk) | implementation |
+| `tracker.pagination_max_pages` | adapter default (`github`: 10 pages; `gitea`: 20 pages; the `linear` adapter ignores this key and walks up to a fixed 200-page cap) | implementation |
 | `workspace.root` | `<system-temp>/symphony_workspaces` (resolved via `os.TempDir()` at startup, typically `/tmp/symphony_workspaces` on Linux; per-boot — set explicitly to a long-lived path for persistence) | SPEC §6.4 |
 | `verify.commands` | none — surfaced to the agent's prompt as its own pre-handoff responsibility; the worker does not run them (SPEC §1 agent boundary) | implementation |
 
