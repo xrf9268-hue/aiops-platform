@@ -1702,7 +1702,7 @@ func TestWorkerEntrypointDoesNotRequirePostgresQueue(t *testing.T) {
 			t.Fatalf("cmd/worker/main.go contains %q; worker startup must use tracker + orchestrator runtime state, not the Postgres queue", forbidden)
 		}
 	}
-	for _, required := range []string{"orchestrator.NewOrchestratorState", "orchestrator.NewWorkflowRuntime", "orchestrator.NewRuntimeDispatcher", "orchestrator.NewRuntimePoller", "orchestrator.RunPollLoopWithRuntime", "orchestrator.RunWorkflowReloadLoop"} {
+	for _, required := range []string{"orchestrator.NewOrchestratorState", "orchestrator.NewWorkflowRuntime", "orchestrator.NewRuntimeDispatcher", "orchestrator.NewRuntimePollerWithTrackerFactory", "orchestrator.RunPollLoopWithRuntime", "orchestrator.RunWorkflowReloadLoop"} {
 		if !strings.Contains(string(src), required) {
 			t.Fatalf("cmd/worker/main.go missing %q; worker startup must poll tracker issues through dynamically reloaded reconciled orchestrator runtime state", required)
 		}
