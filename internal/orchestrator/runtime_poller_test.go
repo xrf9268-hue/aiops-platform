@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -243,51 +244,67 @@ func TestRuntimeDispatcherConfigForSnapshotReturnsNilWithoutRefresher(t *testing
 	}
 }
 
-// TestRuntimePollerAttachDispatcherCarriesCurrentRefresher pins the
-// cmd/worker/main.go startup sequence: NewRuntimePollerWithTrackerFactory
-// builds the initial tracker fan-in (and SetIssueStateRefresher's it
-// onto its internal dispatcher) before the caller has a chance to
-// AttachDispatcher with the external dispatcher used by the actor. The
-// attach call must replay the current refresher so the first PollOnce
-// — which sees an unchanged snapshot key and short-circuits the
-// SetIssueStateRefresher path — does not leave the actor's dispatcher
-// without a refresher.
-func TestRuntimePollerAttachDispatcherCarriesCurrentRefresher(t *testing.T) {
-	stub := &stubRefresher{states: map[string]string{"issue-1": "In Progress"}}
-	internal := &RuntimeDispatcher{}
-	rp := &RuntimePoller{dispatcher: internal}
-	// Simulate pollerForSnapshot having stored the multiLister.
-	rp.mu.Lock()
-	rp.currentRefresher = stub
-	rp.mu.Unlock()
-	internal.SetIssueStateRefresher(stub)
+// TestRuntimePollerWiresRefresherOntoProvidedDispatcher pins #791: the
+// dispatcher the actor spawns workers through is passed into
+// NewRuntimePollerWithTrackerFactory, and the poller points the SPEC §16.5
+// per-turn refresh hook at *that* dispatcher (no separate internal instance,
+// no post-construction AttachDispatcher). Construction alone runs the initial
+// pollerForSnapshot, which must leave the provided dispatcher carrying the
+// factory's tracker as its refresher and producing a refresh that calls
+// through to it. A regression that built its own dispatcher would leave this
+// one's refresher nil.
+func TestRuntimePollerWiresRefresherOntoProvidedDispatcher(t *testing.T) {
+	ctx := context.Background()
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{}
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "In Progress"})
 
-	external := &RuntimeDispatcher{}
-	rp.AttachDispatcher(external)
-	if external.currentRefresher() == nil {
-		t.Fatal("AttachDispatcher did not carry the current refresher onto the external dispatcher")
+	dispatcher, err := NewRuntimeDispatcher(runtime, worker.Config{}, nil)
+	if err != nil {
+		t.Fatalf("new runtime dispatcher: %v", err)
+	}
+	// Same dispatcher to the actor (Deps.Dispatcher) and the poller, mirroring
+	// cmd/worker/main.go.
+	orch, cancel := startActor(t, Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+	if _, err := NewRuntimePollerWithTrackerFactory(func(workflow.Config) (IssueStateLister, error) {
+		return trackerClient, nil
+	}, orch, runtime, dispatcher); err != nil {
+		t.Fatalf("new runtime poller: %v", err)
+	}
+
+	if got := dispatcher.currentRefresher(); got != IssueStateRefresher(trackerClient) {
+		t.Fatalf("dispatcher.currentRefresher() = %v, want the factory's tracker %v; constructor must wire the refresher onto the provided dispatcher", got, trackerClient)
 	}
 
 	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
 		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}},
 	}}}
-	cfg := external.configForSnapshot(snap)
+	cfg := dispatcher.configForSnapshot(snap)
 	if cfg.IssueStateRefresher == nil {
-		t.Fatal("external dispatcher has no IssueStateRefresher factory after AttachDispatcher")
+		t.Fatal("provided dispatcher has no IssueStateRefresher factory after construction")
 	}
 	fn := cfg.IssueStateRefresher(task.Task{ID: "issue-1"}, snap.Workflow.Config)
 	if fn == nil {
-		t.Fatal("factory returned nil for valid task on external dispatcher")
+		t.Fatal("factory returned nil for valid task on provided dispatcher")
 	}
-	snapshot, err := fn(context.Background())
+	snapshot, err := fn(ctx)
 	if err != nil {
 		t.Fatalf("refresher err: %v", err)
 	}
 	if !snapshot.Active || !snapshot.Found || snapshot.State != "In Progress" {
-		t.Fatalf("snapshot = %+v, want found active In Progress; external dispatcher should call through to the stub refresher", snapshot)
+		t.Fatalf("snapshot = %+v, want found active In Progress; provided dispatcher should call through to the factory's tracker", snapshot)
 	}
-	if len(stub.calls) == 0 {
-		t.Fatal("stub refresher never invoked; external dispatcher is wired to a different tracker")
+	if len(trackerClient.fetchIssueStatesByRefsCalls()) == 0 {
+		t.Fatal("tracker refresher never invoked; provided dispatcher is wired to a different tracker")
 	}
 }
 

@@ -400,24 +400,16 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 		return err
 	}
 	readiness.MarkReady()
+	// SPEC §16.5 per-turn refresh wires through the dispatcher the actor
+	// actually spawns workers with — the same instance handed to Deps.Dispatcher
+	// above — so the tracker fan-in the poller rebuilds each tick lands where
+	// Spawn reads it and operator-cancel takes effect on the current poll tick.
 	poller, err := orchestrator.NewRuntimePollerWithTrackerFactory(func(cfg workflow.Config) (orchestrator.IssueStateLister, error) {
 		return trackerClientForWorkflow(cfg)
-	}, orch, runtime, cfg, worker.LogEventEmitter{})
+	}, orch, runtime, dispatcher)
 	if err != nil {
 		return err
 	}
-	// SPEC §16.5 per-turn refresh wires through the dispatcher the actor
-	// actually spawns workers with (the line-298 instance), not the one
-	// NewRuntimePollerWithTrackerFactory creates internally. Without this
-	// the tracker fan-in built each tick would only update the poller's
-	// own (unused) dispatcher and operator-cancel would still wait for
-	// the next poll tick. Must precede RunPollLoopWithRuntime below so
-	// the first PollOnce sees the external dispatcher; this is safe today
-	// because OrchestratorState is freshly constructed with no claimed
-	// issues, so the actor cannot Spawn before the poll loop drives it.
-	// Any future persisted-state recovery added before this point must
-	// move AttachDispatcher above it.
-	poller.AttachDispatcher(dispatcher)
 	go func() {
 		if err := orchestrator.RunWorkflowReloadLoop(ctx, runtime, orchestrator.WorkflowReloadLoopOptions{}); err != nil && ctx.Err() == nil {
 			log.Printf("workflow reload loop exited: %v", err)

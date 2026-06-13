@@ -18,17 +18,21 @@ type RuntimePoller struct {
 	trackerFactory func(workflow.Config) (IssueStateLister, error)
 	orchestrator   *Orchestrator
 	runtime        *WorkflowRuntime
-	config         worker.Config
-	emitter        worker.EventEmitter
 
-	mu               sync.Mutex
-	poller           *Poller
-	dispatcher       *RuntimeDispatcher
-	lastSnapshotKey  string
-	currentRefresher IssueStateRefresher
+	mu              sync.Mutex
+	poller          *Poller
+	dispatcher      *RuntimeDispatcher
+	lastSnapshotKey string
 }
 
-func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (IssueStateLister, error), orchestrator *Orchestrator, runtime *WorkflowRuntime, cfg worker.Config, emitter worker.EventEmitter) (*RuntimePoller, error) {
+// NewRuntimePollerWithTrackerFactory builds the runtime poll loop over the
+// dispatcher the actor spawns workers through. dispatcher must be the same
+// *RuntimeDispatcher handed to orchestrator.Deps.Dispatcher (the actor attaches
+// itself to it in New): the poller re-points the SPEC §16.5 per-turn refresh
+// hook at this dispatcher on every workflow-snapshot reload, so a separate
+// instance would leave the actor's dispatcher without a refresher and stall
+// operator-cancel until the next poll tick (#791).
+func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (IssueStateLister, error), orchestrator *Orchestrator, runtime *WorkflowRuntime, dispatcher *RuntimeDispatcher) (*RuntimePoller, error) {
 	if trackerFactory == nil {
 		return nil, errors.New("runtime poller requires tracker factory")
 	}
@@ -38,42 +42,16 @@ func NewRuntimePollerWithTrackerFactory(trackerFactory func(workflow.Config) (Is
 	if runtime == nil {
 		return nil, errors.New("runtime poller requires workflow runtime")
 	}
-	dispatcher, err := NewRuntimeDispatcher(runtime, cfg, emitter)
-	if err != nil {
-		return nil, err
+	if dispatcher == nil {
+		return nil, errors.New("runtime poller requires dispatcher")
 	}
-	dispatcher.AttachOrchestrator(orchestrator)
-	rp := &RuntimePoller{trackerFactory: trackerFactory, orchestrator: orchestrator, runtime: runtime, config: cfg, emitter: emitter, dispatcher: dispatcher}
+	rp := &RuntimePoller{trackerFactory: trackerFactory, orchestrator: orchestrator, runtime: runtime, dispatcher: dispatcher}
 	initialPoller, err := rp.pollerForSnapshot(runtime.Current())
 	if err != nil {
 		return nil, err
 	}
 	rp.poller = initialPoller
 	return rp, nil
-}
-
-// AttachDispatcher rewires the dispatcher the RuntimePoller updates when
-// it builds a new tracker fan-in. Callers that construct their own
-// *RuntimeDispatcher externally (and pass it to orchestrator.Deps.Dispatcher
-// so the actor's Spawn uses it) must call this — otherwise the SPEC §16.5
-// refresher would land on the poller's internal dispatcher, which the
-// actor never sees. Passing nil is a no-op so tests that do not exercise
-// the refresher path can keep their existing construction.
-//
-// The poller copies its most recent tracker refresher onto the freshly
-// attached dispatcher so callers don't have to wait for the next workflow
-// snapshot change before the refresher hook activates.
-func (p *RuntimePoller) AttachDispatcher(d *RuntimeDispatcher) {
-	if p == nil || d == nil {
-		return
-	}
-	p.mu.Lock()
-	p.dispatcher = d
-	carry := p.currentRefresher
-	p.mu.Unlock()
-	if carry != nil {
-		d.SetIssueStateRefresher(carry)
-	}
 }
 
 func (p *RuntimePoller) PollOnce(ctx context.Context) error {
@@ -123,12 +101,11 @@ func (p *RuntimePoller) pollerForSnapshot(snap WorkflowSnapshot) (*Poller, error
 	p.lastSnapshotKey = key
 	// Concrete tracker clients (Linear/Gitea/GitHub) implement IssueStateRefresher;
 	// a bare lister (e.g. a test fake) does not, in which case the §11.2/§16.5
-	// refresh hooks no-op on a nil refresher.
+	// refresh hooks no-op on a nil refresher. dispatcher is the actor's own
+	// dispatcher (constructor invariant), so the refresher lands where Spawn
+	// reads it.
 	refresher, _ := trackerClient.(IssueStateRefresher)
-	p.currentRefresher = refresher
-	if p.dispatcher != nil {
-		p.dispatcher.SetIssueStateRefresher(refresher)
-	}
+	p.dispatcher.SetIssueStateRefresher(refresher)
 	poller := NewPollerWithReconciliation(trackerClient, p.orchestrator, snap.Reconciliation)
 	preflightCfg := snap.Workflow.Config
 	poller.preflight = &preflightCfg
