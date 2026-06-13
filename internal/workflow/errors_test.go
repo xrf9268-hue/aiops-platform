@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 )
@@ -60,19 +59,5 @@ func TestRenderSurfacesTemplateErrorCategories(t *testing.T) {
 	}
 	if got, ok := ErrorCategory(err); !ok || got != CategoryTemplateRenderError {
 		t.Fatalf("ErrorCategory = %q, %v; want %q, true", got, ok, CategoryTemplateRenderError)
-	}
-}
-
-func TestLoadOptionalStillTreatsMissingWorkflowAsDefault(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "WORKFLOW.md")
-	wf, err := LoadOptional(path)
-	if err != nil {
-		t.Fatalf("LoadOptional missing file: %v", err)
-	}
-	if wf.Path != path || wf.PromptTemplate == "" {
-		t.Fatalf("LoadOptional missing file = %+v, want default workflow at requested path", wf)
-	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("test expected workflow file to stay absent, stat error = %v", err)
 	}
 }

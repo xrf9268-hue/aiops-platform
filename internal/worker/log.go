@@ -41,9 +41,8 @@ func sessionIDFromRuntimeEvents(events []task.RuntimeEvent) string {
 
 // LogIssueEventf formats a SPEC §13.1 issue-lifecycle log line for a known
 // task: `event=<kind> task_id=<id> issue_id=<id> issue_identifier=<src> <msg>`.
-// Pair with Emit() for runtime-event surfaces; this helper covers the
-// log-only failure paths (workspace hooks, retry-queue plumbing, artifact
-// writes) where the orchestrator does not also fold a runtime event.
+// It is the log-only counterpart to Emit(): use it on failure paths that
+// record an issue-lifecycle line without also folding a runtime event.
 func LogIssueEventf(t task.Task, event, format string, args ...any) {
 	log.Printf("%s %s", issueLogPrefix(event, t, ""), fmt.Sprintf(format, args...))
 }

@@ -177,18 +177,6 @@ func (o *Orchestrator) UpdateRetryScheduler(ctx context.Context, scheduler Sched
 	}
 }
 
-func (o *Orchestrator) RunningRetryingAndBlockedIssueIDs(ctx context.Context) []string {
-	reply := make(chan []string, 1)
-	if err := o.submit(ctx, &runningRetryingAndBlockedIssueIDsOp{result: reply}); err != nil {
-		return nil
-	}
-	select {
-	case ids := <-reply:
-		return ids
-	case <-ctx.Done():
-		return nil
-	}
-}
 func (o *Orchestrator) RunningRetryingAndBlockedIssueRefs(ctx context.Context) []tracker.IssueRef {
 	view, err := o.Snapshot(ctx)
 	if err != nil {
@@ -218,43 +206,4 @@ func (o *Orchestrator) RunningRetryingAndBlockedIssueRefs(ctx context.Context) [
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
 	return refs
-}
-func (o *Orchestrator) RunningAndRetryingIssueIDs(ctx context.Context) []string {
-	return o.RunningRetryingAndBlockedIssueIDs(ctx)
-}
-
-type runningRetryingAndBlockedIssueIDsOp struct {
-	result chan<- []string
-}
-
-func (r *runningRetryingAndBlockedIssueIDsOp) apply(st *OrchestratorState) func() {
-	seen := map[string]struct{}{}
-	issueIDs := make([]string, 0, len(st.Running)+len(st.RetryAttempts)+len(st.Blocked))
-	add := func(id IssueID) {
-		s := strings.TrimSpace(string(id))
-		if s == "" {
-			return
-		}
-		if _, ok := seen[s]; ok {
-			return
-		}
-		seen[s] = struct{}{}
-		issueIDs = append(issueIDs, s)
-	}
-	for id := range st.Running {
-		add(id)
-	}
-	for id := range st.RetryAttempts {
-		add(id)
-	}
-	for id := range st.Blocked {
-		add(id)
-	}
-	sort.Strings(issueIDs)
-	result := r.result
-	return func() {
-		if result != nil {
-			result <- issueIDs
-		}
-	}
 }
