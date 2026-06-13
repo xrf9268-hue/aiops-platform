@@ -181,9 +181,33 @@ jobs:
           set -euo pipefail
           for out in dist/aiops-platform_${RELEASE_TAG}_*; do
             [ -d "$out" ] || continue
+            # Ship a runnable starting point alongside the binaries so a
+            # binary-download user has a config template without cloning (#797).
+            # Keep WORKFLOW.md under examples/ so the bundled .env.example's
+            # AIOPS_WORKFLOW_PATH=examples/WORKFLOW.md resolves from the
+            # extracted directory.
+            mkdir -p "$out/examples"
+            cp examples/WORKFLOW.md "$out/examples/"
+            cp .env.example "$out/"
             tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
             rm -rf "$out"
           done
+
+      - name: Generate SHA256SUMS
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Plain checksums file so operators without the gh CLI / attestation
+          # flow can still verify archive integrity (#797). Computed over the
+          # archives + SBOM (basenames only, so `sha256sum -c` works from the
+          # download dir); emitted before attestation so the existing
+          # subject-path: dist/* step signs it too.
+          ( cd dist && sha256sum \
+              "aiops-platform_${RELEASE_TAG}"_*.tar.gz \
+              "aiops-platform_${RELEASE_TAG}_sbom.cdx.json" \
+              > "aiops-platform_${RELEASE_TAG}_SHA256SUMS" )
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
@@ -214,6 +238,6 @@ jobs:
               --notes "Automated aiops-platform release for $RELEASE_TAG" \
               --verify-tag
           fi
-          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json \
+          gh release upload "$RELEASE_TAG" dist/*.tar.gz dist/*_sbom.cdx.json dist/*_SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --clobber
