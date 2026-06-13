@@ -57,6 +57,7 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
+		defer recoverPanic("runner.codex_app_server.stderr_drain")
 		_, _ = io.Copy(buf, stderr)
 	}()
 

@@ -414,6 +414,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	}
 	done := make(chan error, 1)
 	go func() {
+		defer recoverPanic("workspace.hook.cmd_wait")
 		done <- cmd.Wait()
 	}()
 
@@ -429,7 +430,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 		}
 	}
 	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
-	if runCtx.Err() == context.DeadlineExceeded {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.Err = fmt.Errorf("hook timed out after %dms: %w", timeoutMs, runCtx.Err())
 		res.ExitCode = -1
 	}

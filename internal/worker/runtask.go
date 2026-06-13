@@ -98,7 +98,7 @@ func logWorkflowResolved(taskID, identifier string, res *workflow.Resolution) {
 	if len(res.ShadowedBy) > 0 {
 		parts = append(parts, "shadowed=["+strings.Join(res.ShadowedBy, ",")+"]")
 	}
-	LogTaskIDEventf(taskID, identifier, "workflow_resolved", "%s", strings.Join(parts, " "))
+	LogTaskIDEventf(taskID, identifier, task.EventWorkflowResolved, "%s", strings.Join(parts, " "))
 }
 
 func emitHookResults(ctx context.Context, ev EventEmitter, taskID, identifier string, results []workspace.HookResult) {

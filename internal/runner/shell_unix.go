@@ -39,6 +39,7 @@ func terminateProcess(cmd *exec.Cmd) {
 	// SIGKILL to the whole group. cmd.WaitDelay only handles the
 	// direct child; grandchildren can survive otherwise.
 	go func(pid int) {
+		defer recoverPanic("runner.shell.sigkill_backstop")
 		time.Sleep(killGrace)
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 	}(cmd.Process.Pid)
