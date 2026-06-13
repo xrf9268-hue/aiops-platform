@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.3](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.2...v0.1.3) (2026-06-13)
+
+
+### Features
+
+* **doctor:** preflight Gitea/GitHub trackers by driving the worker's own clients ([#801](https://github.com/xrf9268-hue/aiops-platform/issues/801)) ([072a8de](https://github.com/xrf9268-hue/aiops-platform/commit/072a8deafdbed96e6a31d87340fec5e0920ba245)), closes [#781](https://github.com/xrf9268-hue/aiops-platform/issues/781)
+
+
+### Miscellaneous Chores
+
+* archive the [#780](https://github.com/xrf9268-hue/aiops-platform/issues/780)/[#781](https://github.com/xrf9268-hue/aiops-platform/issues/781)/[#782](https://github.com/xrf9268-hue/aiops-platform/issues/782) batch Trellis tasks and record the session journal ([#807](https://github.com/xrf9268-hue/aiops-platform/issues/807)) ([4652f3d](https://github.com/xrf9268-hue/aiops-platform/commit/4652f3dbd8452b80c7b0619c0642412ced3f12d8))
+* archive the [#783](https://github.com/xrf9268-hue/aiops-platform/issues/783)/[#784](https://github.com/xrf9268-hue/aiops-platform/issues/784)/[#785](https://github.com/xrf9268-hue/aiops-platform/issues/785) batch Trellis tasks and record the session journal ([#813](https://github.com/xrf9268-hue/aiops-platform/issues/813)) ([987ce8a](https://github.com/xrf9268-hue/aiops-platform/commit/987ce8a21611d4cfaf313002cbb6cdc15baaf498))
+* dead-code sweep — drop ReadSensitiveArtifact, workflow.NewError, terminal_update.go, dead tracker/actor APIs ([#788](https://github.com/xrf9268-hue/aiops-platform/issues/788)) ([461ab22](https://github.com/xrf9268-hue/aiops-platform/commit/461ab225a6cd0818cb33dcc863cd39c92cc33247))
+
 ## [0.1.2](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.1...v0.1.2) (2026-06-12)
 
 
