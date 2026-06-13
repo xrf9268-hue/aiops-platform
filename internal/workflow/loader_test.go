@@ -65,38 +65,6 @@ tracker:
 Prompt body
 `,
 		},
-		{
-			name: "legacy negative",
-			body: `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-workspace:
-  hooks:
-    timeout_ms: -1
-tracker:
-  kind: gitea
----
-Prompt body
-`,
-		},
-		{
-			name: "legacy zero",
-			body: `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-workspace:
-  hooks:
-    timeout_ms: 0
-tracker:
-  kind: gitea
----
-Prompt body
-`,
-		},
 	}
 
 	for _, tt := range tests {

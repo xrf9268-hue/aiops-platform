@@ -64,7 +64,6 @@ truth this page approximates.
 | `tracker.inactive_states` | string list | `[]` | Non-terminal states that make an already-running issue ineligible: poll-tick reconciliation stops in-flight runs when an issue moves here (operator-pause states such as `Backlog`) | — |
 | `tracker.required_labels` | string list | `[]` (gate off) | Opt-in dispatch gate (SPEC §4.1.1): an issue must carry every listed label to dispatch or keep running. Entries are trimmed, lowercased, de-duped; a blank entry matches no issue. See the README table row for the Linear 250-label projection ceiling | — |
 | `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20) | Caps one tracker pagination scan for the GitHub/Gitea adapters. The Linear adapter ignores this key — its cursor walk has a fixed 200-page cap | ≥ 0 |
-| `tracker.statuses.in_progress` / `.human_review` / `.rework` | string | `In Progress` / `Human Review` / `Rework` | **Currently unconsumed.** Parsed and defaulted per-field, but no worker code path reads the resolved values — worker-side tracker status writes were removed under #76 (SPEC §1: tracker writes are agent-side). Removal/wiring tracked in [#808](https://github.com/xrf9268-hue/aiops-platform/issues/808) | — |
 
 ## `polling`
 
@@ -92,7 +91,6 @@ value may be a single shell-script string, a list of command strings, or a
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `workspace.root` | string | `<system-temp>/symphony_workspaces` | Root for deterministic per-issue workspaces (per-boot on tmpfs — set a long-lived path for persistence). An explicit `workspace.root` wins over the `AIOPS_WORKSPACE_ROOT` env var, which overrides only the built-in default; see `--print-config` provenance | `$VAR`; `~/` expansion |
-| `workspace.hooks.*` | — | — | **Legacy location** for the `hooks.*` keys above; honored only for fields not set at the top level, for one release | same as `hooks.*` |
 
 ## `agent`
 
@@ -171,7 +169,6 @@ default; Symphony mandates no universal sandbox posture).
 | `tracker.base_url` | `tracker.endpoint` | Ignored when `endpoint` is also set (#242) |
 | `tracker.poll_interval_ms` | `polling.interval_ms` | Ignored when `polling.interval_ms` is also set |
 | `tracker.project_slug` (Gitea only) | `tracker.endpoint` | Pre-endpoint Gitea base-URL spelling; ignored when `endpoint` is set |
-| `workspace.hooks.*` | top-level `hooks.*` | One-release migration window |
 
 ## Removed keys (rejected at load)
 
@@ -181,12 +178,14 @@ loud with the replacement guidance instead of silently dropping them:
 `verify.allow_failure`, `verify.env_passthrough` (#557), `verify.secret_scan`
 (#561), `policy.allow_paths`, `policy.deny_paths`, `policy.max_changed_*`,
 `agent.policy_violation_budget` (#561), `agent.fallback` (#40),
-`agent.max_retry_attempts`, `agent.max_timeout_retries` (#577), and the
-top-level `pr:` / `safety:` blocks (#578).
+`agent.max_retry_attempts`, `agent.max_timeout_retries` (#577), the
+top-level `pr:` / `safety:` blocks (#578), `tracker.statuses` (#786, worker-side
+tracker writes are agent-side per SPEC §1 / #76 / #678), and `workspace.hooks`
+(#786, use the top-level `hooks:` block).
 
 ## Coverage
 
 Every YAML-tagged field in `internal/workflow/config.go` appears above.
 Unexported struct fields (`apiKeyEnvVar`, `portSet`, `rootSet`,
-`hookFields`, `hooksTimeoutDefaulted`, `turnSandboxPolicySet`) carry loader
-bookkeeping, have no YAML tag, and are not front-matter keys.
+`hookFields`, `turnSandboxPolicySet`) carry loader bookkeeping, have no YAML
+tag, and are not front-matter keys.

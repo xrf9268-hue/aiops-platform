@@ -84,18 +84,12 @@ type Config struct {
 	Hooks      WorkspaceHooks  `yaml:"hooks" json:"hooks"`
 	Workspace  WorkspaceConfig `yaml:"workspace" json:"workspace"`
 	hookFields HookFieldPresence
-
-	// hooksTimeoutDefaulted is true when Hooks.TimeoutMs came from DefaultConfig
-	// rather than WORKFLOW.md. It lets WorkspaceHooks keep the SPEC default while
-	// still honoring the legacy workspace.hooks.timeout_ms override during the
-	// one-release migration window.
-	hooksTimeoutDefaulted bool
-	Agent                 AgentConfig   `yaml:"agent" json:"agent"`
-	Codex                 CommandConfig `yaml:"codex" json:"codex"`
-	Claude                CommandConfig `yaml:"claude" json:"claude"`
-	Policy                PolicyConfig  `yaml:"policy" json:"policy"`
-	Sandbox               SandboxConfig `yaml:"sandbox" json:"sandbox"`
-	Verify                VerifyConfig  `yaml:"verify" json:"verify"`
+	Agent      AgentConfig   `yaml:"agent" json:"agent"`
+	Codex      CommandConfig `yaml:"codex" json:"codex"`
+	Claude     CommandConfig `yaml:"claude" json:"claude"`
+	Policy     PolicyConfig  `yaml:"policy" json:"policy"`
+	Sandbox    SandboxConfig `yaml:"sandbox" json:"sandbox"`
+	Verify     VerifyConfig  `yaml:"verify" json:"verify"`
 }
 
 type ServerConfig struct {
@@ -172,8 +166,7 @@ type TrackerConfig struct {
 	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
 	// selected adapter's default budget.
-	PaginationMaxPages int                 `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
-	Statuses           TrackerStatusConfig `yaml:"statuses" json:"statuses"`
+	PaginationMaxPages int `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
 }
 
 // normalizeLoadedConfig applies the post-parse normalizations that run after
@@ -213,23 +206,9 @@ type PollingConfig struct {
 	IntervalMs int `yaml:"interval_ms" json:"interval_ms"`
 }
 
-// TrackerStatusConfig names the workflow states used for tracker handoff
-// updates. The defaults ("In Progress", "Human Review", "Rework") match the
-// Linear template used by the personal profile; teams that customize their
-// workflow states override the names without touching code. Per SPEC §1,
-// tracker writes belong on the agent/tool side; transitional worker-side
-// writes remain only until the app-server tool transport is complete.
-type TrackerStatusConfig struct {
-	InProgress  string `yaml:"in_progress" json:"in_progress"`
-	HumanReview string `yaml:"human_review" json:"human_review"`
-	Rework      string `yaml:"rework" json:"rework"`
-}
-
 type WorkspaceConfig struct {
-	Root       string         `yaml:"root" json:"root"`
-	Hooks      WorkspaceHooks `yaml:"hooks" json:"hooks"`
-	hookFields HookFieldPresence
-	rootSet    bool
+	Root    string `yaml:"root" json:"root"`
+	rootSet bool
 }
 
 func (w WorkspaceConfig) RootSet() bool {
@@ -303,27 +282,13 @@ func (h WorkspaceHooks) HasCommands() bool {
 	return h.AfterCreate.HasCommands() || h.BeforeRun.HasCommands() || h.AfterRun.HasCommands() || h.BeforeRemove.HasCommands()
 }
 
-func (c Config) WorkspaceHooks() WorkspaceHooks { //nolint:gocognit // baseline (#521)
+// WorkspaceHooks returns the configured top-level `hooks:` block with a
+// positive timeout guaranteed for consumers. SPEC §6.4 homes workspace
+// lifecycle hooks at the top level (Elixir schema.ex embeds_one(:hooks, Hooks));
+// the pre-release legacy `workspace.hooks` alias was removed in #786 and is now
+// rejected at load.
+func (c Config) WorkspaceHooks() WorkspaceHooks {
 	hooks := c.Hooks
-	legacy := c.Workspace.Hooks
-	if !c.hookFields.AfterCreate && legacy.AfterCreate.HasCommands() {
-		hooks.AfterCreate = legacy.AfterCreate
-	}
-	if !c.hookFields.BeforeRun && legacy.BeforeRun.HasCommands() {
-		hooks.BeforeRun = legacy.BeforeRun
-	}
-	if !c.hookFields.AfterRun && legacy.AfterRun.HasCommands() {
-		hooks.AfterRun = legacy.AfterRun
-	}
-	if !c.hookFields.BeforeRemove && legacy.BeforeRemove.HasCommands() {
-		hooks.BeforeRemove = legacy.BeforeRemove
-	}
-	if legacy.TimeoutMs > 0 && !c.hookFields.TimeoutMs {
-		hooks.TimeoutMs = legacy.TimeoutMs
-	}
-	if !c.hookFields.EnvPassthrough && len(legacy.EnvPassthrough) > 0 {
-		hooks.EnvPassthrough = legacy.EnvPassthrough
-	}
 	if hooks.TimeoutMs <= 0 {
 		hooks.TimeoutMs = 60000
 	}
@@ -455,16 +420,10 @@ func DefaultConfig() Config {
 			ActiveStates:   []string{"Todo", "In Progress"},
 			TerminalStates: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
 			PollIntervalMs: 30000,
-			Statuses: TrackerStatusConfig{
-				InProgress:  "In Progress",
-				HumanReview: "Human Review",
-				Rework:      "Rework",
-			},
 		},
-		Polling:               PollingConfig{IntervalMs: 30000},
-		Hooks:                 WorkspaceHooks{TimeoutMs: 60000},
-		hooksTimeoutDefaulted: true,
-		Workspace:             WorkspaceConfig{Root: defaultWorkspaceRoot()},
+		Polling:   PollingConfig{IntervalMs: 30000},
+		Hooks:     WorkspaceHooks{TimeoutMs: 60000},
+		Workspace: WorkspaceConfig{Root: defaultWorkspaceRoot()},
 		Agent: AgentConfig{
 			Default:              "mock",
 			MaxConcurrentAgents:  10,

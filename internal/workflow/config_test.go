@@ -887,132 +887,7 @@ prompt body
 	}
 }
 
-func TestWorkspaceHooksMergesTopLevelAndLegacyPerHook(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Hooks = WorkspaceHooks{
-		AfterRun: WorkspaceHook{Commands: []string{"printf top-after-run"}},
-	}
-	cfg.Workspace.Hooks = WorkspaceHooks{
-		AfterCreate:  WorkspaceHook{Commands: []string{"printf legacy-after-create"}},
-		BeforeRemove: WorkspaceHook{Commands: []string{"printf legacy-before-remove"}},
-	}
-
-	hooks := cfg.WorkspaceHooks()
-	if !reflect.DeepEqual(hooks.AfterCreate.Commands, []string{"printf legacy-after-create"}) {
-		t.Fatalf("AfterCreate.Commands = %#v", hooks.AfterCreate.Commands)
-	}
-	if !reflect.DeepEqual(hooks.AfterRun.Commands, []string{"printf top-after-run"}) {
-		t.Fatalf("AfterRun.Commands = %#v", hooks.AfterRun.Commands)
-	}
-	if !reflect.DeepEqual(hooks.BeforeRemove.Commands, []string{"printf legacy-before-remove"}) {
-		t.Fatalf("BeforeRemove.Commands = %#v", hooks.BeforeRemove.Commands)
-	}
-}
-
-func TestWorkspaceHooksHonorsLegacyTimeoutOverride(t *testing.T) {
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-workspace:
-  hooks:
-    timeout_ms: 4321
-tracker:
-  kind: gitea
----
-prompt body
-`
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if got := wf.Config.WorkspaceHooks().TimeoutMs; got != 4321 {
-		t.Fatalf("WorkspaceHooks().TimeoutMs = %d, want legacy timeout override 4321", got)
-	}
-}
-
-func TestWorkspaceHooksPrefersExplicitTopLevelTimeout(t *testing.T) {
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-hooks:
-  timeout_ms: 1234
-workspace:
-  hooks:
-    timeout_ms: 4321
-tracker:
-  kind: gitea
----
-prompt body
-`
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if got := wf.Config.WorkspaceHooks().TimeoutMs; got != 1234 {
-		t.Fatalf("WorkspaceHooks().TimeoutMs = %d, want explicit top-level timeout 1234", got)
-	}
-}
-
-func TestWorkspaceHooksPreservesExplicitEmptyTopLevelOverride(t *testing.T) {
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-hooks:
-  before_run: []
-workspace:
-  hooks:
-    before_run:
-      - printf legacy-before-run
-tracker:
-  kind: gitea
----
-prompt body
-`
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	if got := wf.Config.WorkspaceHooks().BeforeRun.Commands; len(got) != 0 {
-		t.Fatalf("WorkspaceHooks().BeforeRun.Commands = %#v, want explicit empty top-level hook to suppress legacy hook", got)
-	}
-}
-
-func TestWorkspaceHooksHonorsLegacyEnvPassthrough(t *testing.T) {
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-workspace:
-  hooks:
-    env_passthrough:
-      - LEGACY_VAR
-tracker:
-  kind: gitea
----
-prompt body
-`
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	got := wf.Config.WorkspaceHooks().EnvPassthrough
-	if !reflect.DeepEqual(got, []string{"LEGACY_VAR"}) {
-		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want legacy env_passthrough to surface", got)
-	}
-}
-
-func TestWorkspaceHooksPrefersExplicitTopLevelEnvPassthrough(t *testing.T) {
+func TestLoadParsesTopLevelHooksEnvPassthrough(t *testing.T) {
 	body := `---
 repo:
   owner: o
@@ -1021,10 +896,6 @@ repo:
 hooks:
   env_passthrough:
     - TOP_VAR
-workspace:
-  hooks:
-    env_passthrough:
-      - LEGACY_VAR
 tracker:
   kind: gitea
 ---
@@ -1037,34 +908,35 @@ prompt body
 
 	got := wf.Config.WorkspaceHooks().EnvPassthrough
 	if !reflect.DeepEqual(got, []string{"TOP_VAR"}) {
-		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want explicit top-level to win over legacy", got)
+		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want [TOP_VAR]", got)
 	}
 }
 
-func TestWorkspaceHooksPreservesExplicitEmptyTopLevelEnvPassthrough(t *testing.T) {
+// TestLoad_RejectsRemovedWorkspaceHooks confirms the legacy `workspace.hooks`
+// alias removed under #786 fails loud at load instead of silently dropping
+// hooks an operator believes are active. SPEC §6.4 / Elixir schema.ex home
+// lifecycle hooks at the top-level `hooks:` block.
+func TestLoad_RejectsRemovedWorkspaceHooks(t *testing.T) {
 	body := `---
 repo:
   owner: o
   name: r
   clone_url: git@example.com:o/r.git
-hooks:
-  env_passthrough: []
 workspace:
   hooks:
-    env_passthrough:
-      - LEGACY_VAR
+    after_create:
+      - printf legacy-after-create
 tracker:
   kind: gitea
 ---
 prompt body
 `
-	wf, err := Load(writeTempWorkflow(t, body))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded, want workspace.hooks removed-key rejection")
 	}
-
-	if got := wf.Config.WorkspaceHooks().EnvPassthrough; len(got) != 0 {
-		t.Fatalf("WorkspaceHooks().EnvPassthrough = %#v, want explicit empty top-level to suppress legacy passthrough", got)
+	if !strings.Contains(err.Error(), "workspace.hooks") {
+		t.Fatalf("Load error = %v, want mention of workspace.hooks", err)
 	}
 }
 
@@ -2070,30 +1942,12 @@ func TestLoadOptional_MissingFileSkipsValidation(t *testing.T) {
 	}
 }
 
-// TestDefaultConfig_TrackerStatusesPopulated pins the schema-level
-// defaults for tracker.statuses. The names mirror Linear's stock
-// workflow ("In Progress", "Human Review", "Rework") so the personal
-// profile works without extra YAML; teams that customize their
-// workflow override only the names that differ.
-func TestDefaultConfig_TrackerStatusesPopulated(t *testing.T) {
-	got := DefaultConfig().Tracker.Statuses
-	want := TrackerStatusConfig{
-		InProgress:  "In Progress",
-		HumanReview: "Human Review",
-		Rework:      "Rework",
-	}
-	if got != want {
-		t.Fatalf("DefaultConfig().Tracker.Statuses = %#v, want %#v", got, want)
-	}
-}
-
-// TestLoad_TrackerStatusesPartialOverride verifies an operator can
-// override a single status name (here: in_progress) without restating
-// the others — expandConfig fills the remaining defaults so the
-// minimal-edit ergonomic from the issue's "Status names are
-// configurable" criterion is preserved.
-func TestLoad_TrackerStatusesPartialOverride(t *testing.T) {
-	dir := t.TempDir()
+// TestLoad_RejectsRemovedTrackerStatuses confirms the `tracker.statuses` block
+// removed under #786 fails loud at load instead of being silently dropped. The
+// worker never read these names (worker-side tracker writes were removed under
+// #76/#678 — SPEC §1: tracker writes are agent-side), and upstream
+// config/schema.ex has no `statuses` field.
+func TestLoad_RejectsRemovedTrackerStatuses(t *testing.T) {
 	body := `---
 repo:
   owner: o
@@ -2107,62 +1961,12 @@ tracker:
 ---
 prompt
 `
-	p := filepath.Join(dir, "WORKFLOW.md")
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded, want tracker.statuses removed-key rejection")
 	}
-	wf, err := Load(p)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	got := wf.Config.Tracker.Statuses
-	want := TrackerStatusConfig{
-		InProgress:  "Doing",
-		HumanReview: "Human Review", // default
-		Rework:      "Rework",       // default
-	}
-	if got != want {
-		t.Fatalf("Tracker.Statuses = %#v, want %#v", got, want)
-	}
-}
-
-// TestLoad_TrackerStatusesAllOverride confirms all three names round-trip
-// from YAML, so workflows whose Linear board uses non-default labels
-// (e.g. "Coding" / "Review" / "Backlog") work as the issue's acceptance
-// criterion 4 requires.
-func TestLoad_TrackerStatusesAllOverride(t *testing.T) {
-	dir := t.TempDir()
-	body := `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-tracker:
-  kind: linear
-  project_slug: platform
-  statuses:
-    in_progress: "Coding"
-    human_review: "Review"
-    rework: "Backlog"
----
-prompt
-`
-	p := filepath.Join(dir, "WORKFLOW.md")
-	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	wf, err := Load(p)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	got := wf.Config.Tracker.Statuses
-	want := TrackerStatusConfig{
-		InProgress:  "Coding",
-		HumanReview: "Review",
-		Rework:      "Backlog",
-	}
-	if got != want {
-		t.Fatalf("Tracker.Statuses = %#v, want %#v", got, want)
+	if !strings.Contains(err.Error(), "tracker.statuses") {
+		t.Fatalf("Load error = %v, want mention of tracker.statuses", err)
 	}
 }
 
