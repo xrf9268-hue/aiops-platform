@@ -15,12 +15,14 @@ Linear, Gitea, or GitHub issue
 ```
 
 It is a Go implementation of [OpenAI Symphony](https://github.com/openai/symphony).
-The upstream
-[`SPEC.md`](https://github.com/openai/symphony/blob/main/SPEC.md) is the
-contract; the Elixir reference implementation is the tie-breaker when the SPEC
-text is ambiguous. Why we continue the Go port here rather than forking is
-recorded in [`DECISION.md`](DECISION.md); the current SPEC deviation ledger
-lives in [`DEVIATIONS.md`](DEVIATIONS.md).
+The [`SPEC.md`](docs/research/SPEC.md) contract — mirrored verbatim into this
+repo from
+[upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
+drift (upstream is an unmaintained demo repo) — is authoritative; the Elixir
+reference implementation is the tie-breaker when the SPEC text is ambiguous. Why
+we continue the Go port here rather than forking is recorded in
+[`DECISION.md`](DECISION.md); the current SPEC deviation ledger lives in
+[`DEVIATIONS.md`](DEVIATIONS.md).
 
 The goal is a practical loop, not a heavy enterprise platform: run `cmd/worker`
 as a Go-based, Gitea-friendly, locally customizable Symphony while the open

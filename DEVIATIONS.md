@@ -3,8 +3,10 @@
 This document records every known difference between `aiops-platform` and the
 upstream Symphony project. Three sources are jointly authoritative:
 
-- [Symphony SPEC.md](https://github.com/openai/symphony/blob/main/SPEC.md) — the
-  protocol contract.
+- [Symphony SPEC.md](docs/research/SPEC.md) — the protocol contract, mirrored
+  verbatim from
+  [upstream](https://github.com/openai/symphony/blob/main/SPEC.md) so it cannot
+  drift.
 - [`openai/symphony` Elixir reference implementation](https://github.com/openai/symphony/tree/main/elixir/lib/symphony_elixir) —
   the working reference. When SPEC text is ambiguous, the Elixir module's
   behavior is the tiebreaker. **Not** a porting target — see
