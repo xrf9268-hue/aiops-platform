@@ -29,7 +29,49 @@ func rejectRemovedFields(front []byte) error {
 	if err := rejectRemovedPolicyFields(raw); err != nil {
 		return err
 	}
+	if err := rejectRemovedTrackerFields(raw); err != nil {
+		return err
+	}
+	if err := rejectRemovedWorkspaceFields(raw); err != nil {
+		return err
+	}
 	return rejectRemovedMiscFields(raw)
+}
+
+// rejectRemovedTrackerFields surfaces a clear error for the `tracker.statuses`
+// block removed under #786. It named the workflow states used for worker-side
+// tracker handoff writes, but those writes were removed under #76/#678 (SPEC §1:
+// tracker writes are agent-side via the linear_graphql tool), so no worker code
+// path ever read the resolved names — upstream `config/schema.ex` has no
+// `statuses` field either. Failing loud keeps a stale workflow from believing
+// the worker honors its custom state names.
+func rejectRemovedTrackerFields(raw map[string]any) error {
+	tracker, ok := raw["tracker"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, present := tracker["statuses"]; present {
+		return fmt.Errorf("tracker.statuses is no longer supported (#786): worker-side tracker status writes were removed under #76/#678 (SPEC §1: tracker writes are agent-side), so the worker never read these names. Remove the `statuses:` block; drive workflow-state moves from the agent's WORKFLOW prompt / linear_graphql tool surface")
+	}
+	return nil
+}
+
+// rejectRemovedWorkspaceFields surfaces a clear error for the legacy
+// `workspace.hooks` alias removed under #786. SPEC §6.4 homes lifecycle hooks at
+// the top-level `hooks:` block (Elixir `config/schema.ex` embeds_one(:hooks,
+// Hooks); its Workspace embed carries only `root`). The pre-release alias was a
+// consumption-time merge with no deprecation log; removing it (clean-code rule 2)
+// would otherwise silently drop hooks an operator believes are active, so the
+// loader fails loud and points at the canonical location.
+func rejectRemovedWorkspaceFields(raw map[string]any) error {
+	workspace, ok := raw["workspace"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, present := workspace["hooks"]; present {
+		return fmt.Errorf("workspace.hooks is no longer supported (#786): use the top-level `hooks:` block instead (SPEC §6.4 homes lifecycle hooks there — Elixir schema.ex embeds_one(:hooks, Hooks)). Move after_create/before_run/after_run/before_remove/timeout_ms/env_passthrough up to `hooks:`")
+	}
+	return nil
 }
 
 // rejectRemovedMiscFields surfaces clear errors for removed keys that do not

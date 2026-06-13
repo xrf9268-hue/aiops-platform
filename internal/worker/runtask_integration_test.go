@@ -275,7 +275,7 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
 		AfterCreate:  workflow.WorkspaceHook{Commands: []string{"printf after_create >> hook.log"}},
 		BeforeRun:    workflow.WorkspaceHook{Commands: []string{"printf before_run >> hook.log"}},
 		AfterRun:     workflow.WorkspaceHook{Commands: []string{"printf after_run >> hook.log"}},
@@ -541,7 +541,7 @@ func TestRunTaskReusesWorkspaceAcrossRunsAndGatesAfterCreate(t *testing.T) {
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
-	cfg.Workflow.Config.Workspace.Hooks = workflow.WorkspaceHooks{
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
 		AfterCreate: workflow.WorkspaceHook{Commands: []string{"printf after_create >> hook.log"}},
 		BeforeRun:   workflow.WorkspaceHook{Commands: []string{"printf before_run >> hook.log"}},
 	}

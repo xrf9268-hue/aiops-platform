@@ -27,16 +27,6 @@ tracker:
   inactive_states:
     - Backlog
     - Human Review
-  # statuses names the Linear workflow states used for handoff updates
-  # (for example claim -> in_progress, PR opened -> human_review, failure
-  # -> rework). Per SPEC §1, ticket writes belong on the agent/tool side;
-  # transitional worker-side writes remain only until app-server tool
-  # transport is complete. Defaults match Linear's stock template;
-  # uncomment and edit only if your board uses different labels.
-  # statuses:
-  #   in_progress: "In Progress"
-  #   human_review: "Human Review"
-  #   rework: "Rework"
 
 server:
   # Private-loopback SPEC §13.7 state endpoint: GET /api/v1/state

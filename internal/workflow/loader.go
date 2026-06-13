@@ -37,7 +37,6 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 		}
 		logUnknownTopLevelKeys(frontBytes)
 		hookFields := hookFieldPresence(frontBytes, "hooks")
-		legacyHookFields := hookFieldPresence(frontBytes, "workspace", "hooks")
 		workspaceRootSet := hasNestedKey(frontBytes, "workspace", "root")
 		serverPortSet := hasNestedKey(frontBytes, "server", "port")
 		turnSandboxPolicySet := hasNestedKey(frontBytes, "codex", "turn_sandbox_policy")
@@ -45,13 +44,9 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 			return nil, &Error{Category: CategoryWorkflowParseError, Path: path, Message: "parse workflow front matter", Err: err}
 		}
 		cfg.hookFields = hookFields
-		cfg.Workspace.hookFields = legacyHookFields
 		cfg.Workspace.rootSet = workspaceRootSet
 		cfg.Server.portSet = serverPortSet
 		cfg.Codex.turnSandboxPolicySet = turnSandboxPolicySet
-		if hookFields.TimeoutMs {
-			cfg.hooksTimeoutDefaulted = false
-		}
 		migratePollingInterval(frontBytes, &cfg)
 		migrateTrackerEndpoint(frontBytes, &cfg)
 		migrateGiteaTrackerProjectSlug(frontBytes, &cfg)

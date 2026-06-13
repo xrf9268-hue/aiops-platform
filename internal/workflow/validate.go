@@ -226,9 +226,6 @@ func validateTimeouts(path string, cfg Config) error {
 	if cfg.hookFields.TimeoutMs && cfg.Hooks.TimeoutMs <= 0 {
 		return fmt.Errorf("%s: hooks.timeout_ms must be a positive integer", path)
 	}
-	if cfg.Workspace.hookFields.TimeoutMs && cfg.Workspace.Hooks.TimeoutMs <= 0 {
-		return fmt.Errorf("%s: workspace.hooks.timeout_ms must be a positive integer", path)
-	}
 	var invalid []string
 	if cfg.Codex.TurnTimeoutMs <= 0 {
 		invalid = append(invalid, "codex.turn_timeout_ms")
