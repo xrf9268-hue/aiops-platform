@@ -26,6 +26,7 @@ tracker:
     - Todo
     - In Progress
     - Rework
+    - Merging                    # non-terminal holding state (Done is issued only after the forge merges)
 
 polling:
   interval_ms: 30000
@@ -99,7 +100,17 @@ PASS (every item passes):
      checks are green — you do NOT merge directly):
      `POST /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/merge`
      body `{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}`.
-  d. Set the label to `aiops/done` via the gitea_issue_labels tool — your LAST action.
+  d. Confirm the merge BEFORE issuing Done. Stay in this run (the issue is still
+     `Human Review`, so you are not reconcile-cancelled) and poll the PR until the
+     forge reports it merged:
+     `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → `merged: true`
+     (a short bounded wait; required CI here is fast).
+       - Merged → set the label to `aiops/done` via gitea_issue_labels. LAST action.
+       - Not merged within your budget (slow/flaky CI) → set `aiops/merging` (a
+         non-terminal holding state) via gitea_issue_labels and stop; a Merging
+         worker finalizes `Done` once the forge merges (see runbook). LAST action.
+  Never flip `aiops/done` before the forge reports the PR merged — `Done` is
+  terminal and would unblock `Depends on #N` dependents from a stale `main`.
 
 FAIL (any item fails):
   - Comment the failing items with concrete, actionable findings (file, line,
@@ -107,8 +118,10 @@ FAIL (any item fails):
     The maker re-runs from your findings. This is your LAST action.
 
 ## Hard constraints (review-only)
-- Do NOT modify, commit, or push code. Your only writes are: the review comment,
-  the approval, the auto-merge enablement, and the one verdict label flip.
+- Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the
+  review comment, the approval, enabling auto-merge, and the verdict label flip(s)
+  (an intermediate `aiops/merging` only if CI is slow, then the terminal verdict).
 - Judge only what the diff and its tests prove; unverified PR-description claims
   count for nothing.
-- Do the verdict label flip exactly once, as the final action.
+- Issue the terminal verdict exactly once: `aiops/done` only after the merge is
+  confirmed, or `aiops/rework` on failure — as your final action.

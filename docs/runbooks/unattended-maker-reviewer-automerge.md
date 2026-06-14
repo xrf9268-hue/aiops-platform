@@ -51,16 +51,26 @@ Two worker processes, one Gitea repo/project, **two bot accounts**:
 | `WORKFLOW.md` | `examples/maker-WORKFLOW.md` | `examples/reviewer-automerge-WORKFLOW.md` |
 | Bot account | `maker-bot` (Write) | `review-bot` (Write) — **must differ** |
 | `tracker.active_states` | `[Todo, Rework]` | `[Human Review]` |
-| `tracker.inactive_states` | `[Human Review, In Progress]` | `[Todo, In Progress, Rework]` |
+| `tracker.inactive_states` | `[Human Review, In Progress, Merging]` | `[Todo, In Progress, Rework, Merging]` |
 | `workspace.root` | `~/aiops-workspaces/maker` | `~/aiops-workspaces/reviewer` — **must differ (hard)** |
 | `AIOPS_MIRROR_ROOT` | `~/aiops-mirrors/maker` | `~/aiops-mirrors/reviewer` — **must differ (hard)** |
-| agent state writes | flips → `aiops/human-review`; opens PR; comments PR URL | approves + enables auto-merge; flips → `aiops/done` / `aiops/rework` |
+| agent state writes | flips → `aiops/human-review`; opens PR; comments PR URL | approves + enables auto-merge; **confirms the merge, then** flips → `aiops/done` (or `aiops/merging` if CI is slow); `aiops/rework` on fail |
 
 ```
-Todo ──maker──▶ Human Review ──reviewer(pass)──▶ Done   ──CI green──▶ auto-merge → main
-  ▲                              └──reviewer(fail)──▶ Rework
-  └──────────────── maker re-dispatch on Rework ◀───────────────┘
+Todo ──maker──▶ Human Review ──reviewer──▶ approve + enable CI-gated auto-merge
+                   │                               │
+                   ├─(rubric fail)─▶ Rework        forge merges when required CI is green
+                   │                               │
+                   │                        reviewer confirms merge ─▶ Done ─▶ (main)
+                   └─(slow/flaky CI)─▶ Merging ──(Merging worker: merged?)─▶ Done
+  ▲
+  └──────── maker re-dispatch on Rework ────────┘
 ```
+
+**`Done` is issued only AFTER the forge reports the PR merged** — never on the
+reviewer's verdict alone. Otherwise a `Depends on #N` dependent (whose gate keys
+off the terminal `aiops/*` label, not the forge merge) could unblock and start
+N+1 from a stale `main` while CI is still running or later fails.
 
 The two hard isolation requirements (separate `workspace.root` **and** separate
 `AIOPS_MIRROR_ROOT` per worker — same issue resolves to the same `PathFor`
@@ -158,22 +168,28 @@ for this DAG"*):
 - Put `Depends on #N` in issue N+1's body. The Gitea adapter parses it; the
   Todo-blocker gate (SPEC §8.2) holds N+1 until #N reaches a **terminal** aiops
   state (`Done`/`Canceled`).
-- On a clean run, N's PR auto-merges → #N closes/`Done` → next poll dispatches
-  N+1, whose maker branches from the now-updated `main`. Fully unattended.
+- Because the reviewer issues `Done` **only after the forge confirms the merge**,
+  N+1 unblocks only once N is actually on `main`, so its maker branches from the
+  updated tree. (If `Done` were issued on the verdict alone, N+1 could start from a
+  stale `main` while N's CI was still running — this is the bug this guide avoids.)
 - Independent issues fan out in parallel up to `max_concurrent_agents`.
 
 ## End-to-end flow (one issue, unattended)
 
 1. Maker claims `Todo` → implements → `go build/test` green → pushes `ai/<id>` →
-   opens PR (`Closes #N`) → comments PR URL → flips `Human Review`. Its run stops
+   opens PR (`Closes #<N>`) → comments PR URL → flips `Human Review`. Its run stops
    on the next reconcile (issue left the maker's active set).
 2. Reviewer claims `Human Review` → fetches head → runs the rubric incl.
-   `build/test`. **PASS**: approves (review-bot), enables
-   `merge_when_checks_succeed`, flips `Done`. **FAIL**: posts findings, flips
-   `Rework` (maker re-dispatches and addresses them).
+   `build/test`. **PASS**: approves (review-bot), enables `merge_when_checks_succeed`,
+   then — while still `Human Review` (so it is not reconcile-cancelled) — confirms
+   the merge via `GET …/pulls/<number>` → `merged:true` and flips `Done`. If CI is
+   slow/flaky and the merge has not landed within its budget, it flips the
+   non-terminal `Merging` and stops; a Merging worker finalizes `Done` post-merge.
+   **FAIL**: posts findings, flips `Rework` (maker re-dispatches).
 3. CI runs on the PR; when `build-test` is green and the approval is present,
-   Gitea auto-merges (squash) and deletes the branch. `Closes #N` resolves the
-   issue.
+   Gitea auto-merges (squash) and deletes the branch. `Closes #<N>` also resolves
+   the Gitea issue. `Done` is set by the reviewer/Merging worker after that merge,
+   never before.
 
 ## Best-practice checklist
 
@@ -183,18 +199,25 @@ for this DAG"*):
 - [ ] `GITEA_TOKEN` never in agent env; label writes only via `gitea_issue_labels`.
 - [ ] Maker `verify.commands` == the required CI checks (a green local run predicts a green merge).
 - [ ] Maker never sets `aiops/done`; reviewer is the only Done/auto-merge path.
+- [ ] Reviewer issues `aiops/done` **only after the forge confirms the merge** — never on the verdict alone (else `Depends on #N` dependents unblock from stale `main`).
+- [ ] Maker uses the numeric issue number (digits of `{{ issue.identifier }}`, no leading `#`) in every API path / `Closes` keyword — `{{ issue.identifier }}` renders as `#N` on Gitea.
 - [ ] Branch protection: required checks + 1 approval + no direct push to `main` + squash + auto-merge enabled.
 - [ ] One-issue-per-PR; agents file follow-up issues for out-of-scope finds.
 - [ ] Periodic human audit of auto-merged work (the bot review is the gate, not a human).
 
-## Optional: a "Merging" shepherd for flaky CI / monorepos
+## Optional: a "Merging" worker for slow/flaky CI or monorepos
 
-The blog's **Merging** state has an agent *"watch CI, rebase when needed, resolve
-conflicts, retry flaky checks."* If CI is flaky or your base moves fast, add a
-`Merging` state and either extend the reviewer prompt to poll CI and rebase/re-run
-before flipping `Done`, or run a third worker that claims `Merging` and shepherds
-the PR to a green merge. With stable CI, the reviewer's local `build/test` gate
-plus `merge_when_checks_succeed` is enough and you can skip this.
+For fast, stable CI the reviewer confirms the merge inline (poll → `Done`), so you
+need nothing more. When CI is slow or flaky — or your base moves fast and PRs need
+rebasing — the reviewer instead parks the issue at the non-terminal `Merging` state
+and a dedicated **Merging worker** finalizes it. This is the blog's **Merging**
+state: an agent that *"watches CI, rebases when needed, resolves conflicts, retries
+flaky checks,"* then flips `aiops/done` once the forge reports the PR merged. Run it
+as a third worker (`active_states: [Merging]`, its own distinct `workspace.root` +
+`AIOPS_MIRROR_ROOT`, the same two-hard-isolation rules), with a prompt that: reads
+the PR for this issue, confirms `merged:true` (rebasing / re-running CI as needed),
+and on success flips `aiops/done` via `gitea_issue_labels`. Keeping `Done` strictly
+post-merge is what makes dependent (`Depends on #N`) chains safe.
 
 ## What this is NOT
 

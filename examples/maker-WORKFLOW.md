@@ -32,6 +32,7 @@ tracker:
   inactive_states:
     - Human Review
     - In Progress
+    - Merging
 
 polling:
   interval_ms: 30000
@@ -76,9 +77,14 @@ worktree, open a pull request, and hand the work to an independent reviewer.
 You do NOT review or merge your own work.
 
 Issue:
-- Identifier: {{ issue.identifier }}   (the human #N; use its digits for Gitea API + gitea_issue_labels)
+- Identifier: {{ issue.identifier }}   (Gitea renders this as `#<number>`, e.g. `#7`)
 - URL: {{ issue.url }}
 - Title: {{ task.title }}
+
+Issue number: let `<N>` be the digits of the identifier with the leading `#`
+stripped (e.g. `7`). Use `<N>` — never the raw `{{ issue.identifier }}` (`#7`) —
+in every Gitea API path, the `Closes` keyword, and the gitea_issue_labels tool;
+the raw value would produce `/issues/#7/comments` and `Closes ##7`.
 
 Repository: {{ repo.owner }}/{{ repo.name }} (base branch: {{ repo.branch }}).
 Your Gitea push + API credential is the basic-auth token already embedded in the
@@ -99,11 +105,11 @@ Do all of the following end to end, without asking for confirmation:
 4. Open a pull request against `{{ repo.branch }}` via the Gitea API, with a
    closing keyword so the merge resolves the issue:
    `POST /repos/{{ repo.owner }}/{{ repo.name }}/pulls`
-   body `{"head":"<branch>","base":"{{ repo.branch }}","title":"<type(scope): summary>","body":"Closes #{{ issue.identifier }}\n\n<what + how tested>"}`.
+   body `{"head":"<branch>","base":"{{ repo.branch }}","title":"<type(scope): summary>","body":"Closes #<N>\n\n<what + how tested>"}`.
    Use the basic-auth credential from `origin` for the call.
 5. Comment the PR URL on this issue (the reviewer reads the newest PR-URL comment
    to find your change):
-   `POST /repos/{{ repo.owner }}/{{ repo.name }}/issues/{{ issue.identifier }}/comments`.
+   `POST /repos/{{ repo.owner }}/{{ repo.name }}/issues/<N>/comments`.
 6. Hand off for review: set this issue to the "Human Review" state via the
    `gitea_issue_labels` tool (do NOT use a raw token; the orchestrator proxies it).
    Do this exactly once, as your LAST action.
