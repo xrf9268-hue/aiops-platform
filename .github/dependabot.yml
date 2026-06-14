@@ -13,7 +13,7 @@ updates:
       - dependencies
       - area:foundation
     commit-message:
-      prefix: deps
+      prefix: "chore(deps)"
     groups:
       go-dependencies:
         patterns:
@@ -31,7 +31,7 @@ updates:
       - dependencies
       - github-actions
     commit-message:
-      prefix: deps
+      prefix: "chore(deps)"
 
   - package-ecosystem: npm
     directory: "/cmd/worker/dashboard"
@@ -45,7 +45,7 @@ updates:
       - dependencies
       - area:observability
     commit-message:
-      prefix: deps
+      prefix: "chore(deps)"
     groups:
       npm-dependencies:
         patterns:
