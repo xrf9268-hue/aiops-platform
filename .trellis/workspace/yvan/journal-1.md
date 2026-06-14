@@ -417,3 +417,36 @@ Pulled the Worker Status v2 design draft (hosted /v1/design/h share link → gzi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: release-please: align repo on Conventional Commits (PR #838)
+
+**Date**: 2026-06-14
+**Task**: release-please: align repo on Conventional Commits (PR #838)
+**Branch**: `main`
+
+### Summary
+
+Fixed release-please dropping real work from CHANGELOG/version bumps (it only acts on Conventional Commit types; repo squash-merged freeform area: titles). Removed the changelog-sections override (hide chore/refactor), added a SHA-pinned PR-title lint (amannn/action-semantic-pull-request on pull_request) as a required check, set squash_merge_commit_title=PR_TITLE, switched dependabot prefixes to chore(deps). Source-verified via cloned release-please. @codex review caught + I fixed: dependabot deps:->chore(deps) (P2), pull_request_target->pull_request head-SHA bug (P1), and a deps-non-releasable policy point (reply+resolved with source evidence). Pre-push dual review (Claude+Codex) ran 2 rounds. Imported the live ruleset post-merge. Follow-ups: #839 drift-check, #841 changelog cleanup, #842 deps release policy. Lesson: never push on a single reviewer; codex:codex-rescue stalls on network SHA verification.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `03b51d3` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

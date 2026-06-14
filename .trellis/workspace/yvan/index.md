@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-06-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~419 | Active |
+| `journal-1.md` | ~452 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-06-14 | release-please: align repo on Conventional Commits (PR #838) | `03b51d3` | `main` |
 | 7 | 2026-06-14 | dashboard: worker-status version chip + favicon (Symphony #90) | `661cf47` | `main` |
 | 6 | 2026-06-13 | Batch #783/#784/#785: release-readiness docs (key reference, staleness/links, GitHub onboarding) | `bcbe28b`, `343fee3`, `a0c1270` | `chore/batch-783-785-bookkeeping` |
 | 5 | 2026-06-13 | Batch: release-readiness issues #780/#781/#782 → PRs #800/#801/#804 merged | `ce5157c` | `main` |
