@@ -183,11 +183,29 @@ a { color:inherit; text-decoration:none; }
   display:flex; align-items:center; justify-content:center; flex-shrink:0;
   box-shadow:0 1px 2px var(--shadow);
 }
-.brand-mark span {
+/* v3 brand mark — type IS the mark: the italic Newsreader "a" plus the console's
+   block caret in the accent, blinking while the surface is live. The caret is the
+   live session — "a line still being written." Matches the favicon glyph. */
+.brand-mark .gm {
   font-family:var(--font-display); font-style:italic; font-weight:500;
-  font-size:15px; color:var(--canvas); line-height:1;
+  font-size:15px; color:var(--canvas); line-height:1; white-space:nowrap;
+}
+.brand-mark .gm .caret {
+  display:inline-block; width:.15em; height:.55em; margin-left:.1em;
+  background:var(--accent); border-radius:.025em; vertical-align:baseline;
+}
+@media (prefers-reduced-motion:no-preference) {
+  .brand-mark .gm .caret { animation:mkCaret 1s steps(2,end) infinite; }
+}
+@keyframes mkCaret { 50% { opacity:0; } }
+/* Anthropic's mark uses Poppins (geometric sans) — the editorial italic that
+   suits Newsreader reads as a slanted typo here, so set it upright, a touch
+   heavier and optically smaller to sit right in the square. */
+:root[data-brand="anthropic"] .brand-mark .gm {
+  font-style:normal; font-weight:600; font-size:14px; letter-spacing:-.01em;
 }
 .brand-name { font-weight:600; font-size:13px; letter-spacing:.01em; }
+.brand-ver  { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); white-space:nowrap; padding-top:2px; }
 .crumb { color:var(--ink-mute); font-family:var(--font-mono); font-size:12px; }
 .crumb b { color:var(--ink-soft); font-weight:500; }
 .spacer { flex:1; }
