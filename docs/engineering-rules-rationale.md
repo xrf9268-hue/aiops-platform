@@ -254,3 +254,22 @@ shipped.
   required-check wiring lives in `.github/governance/main-ruleset.json`. **Earned
   by:** #588 — those removals all shipped despite the rules existing, because the
   checks were judgment at audit time rather than mechanical at author time.
+- **PR titles are Conventional Commits.** Squash-merge makes the PR title the
+  commit subject release-please parses; titles using freeform `area:` prefixes
+  (`maintainability:`, `cmd:`, `stateapi:`, `dashboard:`, …) are dropped silently
+  by release-please — no changelog entry, no version bump — while `chore` was
+  configured visible, flooding the changelog with Trellis bookkeeping. The fix
+  removes the `changelog-sections` override (chore/refactor inherit the
+  upstream-default hidden state) and adds the
+  `Validate PR title (Conventional Commits)` required check
+  (`.github/workflows/pr-title-lint.yml`, pinned
+  `amannn/action-semantic-pull-request`); separately, the repo setting
+  `squash_merge_commit_title` is set to `PR_TITLE` (a GitHub repo setting applied
+  out-of-band, not a committed file) so the parsed subject is the linted title.
+  **Earned by:** the pending v0.1.3
+  Release PR (#803) lists one `feat` and four chores (three Trellis-archive —
+  #836/#807/#813 — plus the #788 dead-code sweep) while omitting every other
+  change shipped since v0.1.2 — `cmd:` version observability (#828), `release:`
+  GHCR images (#829), `dashboard:` version chip + favicon (#834), the #831
+  `maintainability:` decomposition — because their types were not Conventional
+  Commits, so release-please neither listed nor counted them.

@@ -37,7 +37,8 @@
         "required_status_checks": [
           { "context": "Go build and test" },
           { "context": "Security and supply-chain" },
-          { "context": "Validate PR metadata" }
+          { "context": "Validate PR metadata" },
+          { "context": "Validate PR title (Conventional Commits)" }
         ]
       }
     }
