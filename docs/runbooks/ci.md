@@ -121,7 +121,7 @@ workflow below, which attaches binaries and the SBOM.
 Because `main` merges squash-only with `squash_merge_commit_title: PR_TITLE`,
 the squash commit subject is the PR title, and release-please parses that
 subject. A PR title that is not a Conventional Commit (any of the canonical
-types in AGENTS.md → "Commit / PR-title convention") is dropped silently — no
+types in AGENTS.md → Conventions) is dropped silently — no
 changelog entry, no version bump — so the `Validate PR title (Conventional
 Commits)` required check (`.github/workflows/pr-title-lint.yml`, a SHA-pinned
 `amannn/action-semantic-pull-request`) gates every PR title. `release-please-config.json`

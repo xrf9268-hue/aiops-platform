@@ -1,8 +1,8 @@
 <!-- PR title MUST be a Conventional Commit: `type(scope): summary` — one of
 feat|fix|perf|refactor|docs|style|test|build|ci|chore|revert. Squash-merge uses
 it as the release-please-parsed commit subject; a non-conforming title is
-dropped from the CHANGELOG and the version bump (AGENTS.md → "Commit / PR-title
-convention"). Enforced by the `Validate PR title (Conventional Commits)` check. -->
+dropped from the CHANGELOG and the version bump (AGENTS.md → Conventions).
+Enforced by the `Validate PR title (Conventional Commits)` check. -->
 Closes #<issue>
 
 ## Summary

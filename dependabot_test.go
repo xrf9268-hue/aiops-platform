@@ -2,8 +2,8 @@ package aiopsplatform_test
 
 import (
 	"os"
+	"regexp"
 	"slices"
-	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -20,18 +20,21 @@ var conventionalCommitTypes = []string{
 	"test", "build", "ci", "chore", "revert",
 }
 
+// conventionalCommitPrefixRE matches a Conventional Commit type (captured) with
+// an optional single, non-empty, non-nested (scope): "chore", "chore(deps)",
+// "fix(runner,doctor)". It rejects malformed forms like "chore()", "chore(a)(b)",
+// and "chore(foo(bar)".
+var conventionalCommitPrefixRE = regexp.MustCompile(`^([a-z]+)(?:\([^()]+\))?$`)
+
 // isConventionalCommitPrefix reports whether a Dependabot commit-message prefix
-// is a Conventional Commit type with an optional (scope) — e.g. "chore(deps)" or
-// "build".
+// is an allowed Conventional Commit type with an optional (scope) — e.g.
+// "chore(deps)" or "build".
 func isConventionalCommitPrefix(prefix string) bool {
-	typePart := prefix
-	if i := strings.IndexByte(prefix, '('); i >= 0 {
-		if !strings.HasSuffix(prefix, ")") {
-			return false
-		}
-		typePart = prefix[:i]
+	m := conventionalCommitPrefixRE.FindStringSubmatch(prefix)
+	if m == nil {
+		return false
 	}
-	return slices.Contains(conventionalCommitTypes, typePart)
+	return slices.Contains(conventionalCommitTypes, m[1])
 }
 
 type dependabotConfig struct {
@@ -109,6 +112,31 @@ func TestDependabotCoversDashboardNPMDependencies(t *testing.T) {
 	}
 	if !slices.Contains(group.Patterns, "*") {
 		t.Fatalf("dashboard npm group must cover all packages, got %v", group.Patterns)
+	}
+}
+
+func TestIsConventionalCommitPrefix(t *testing.T) {
+	cases := []struct {
+		prefix string
+		want   bool
+	}{
+		{"chore(deps)", true},
+		{"build(deps)", true},
+		{"fix(runner,doctor)", true},
+		{"build", true},
+		{"chore", true},
+		{"deps", false},           // not an allowed type
+		{"", false},               // empty
+		{"chore()", false},        // empty scope
+		{"chore(a)(b)", false},    // trailing extra scope
+		{"chore(foo(bar)", false}, // nested/unbalanced parens
+		{"Chore(deps)", false},    // uppercase type
+		{"chore: x", false},       // includes the colon/subject, not a bare prefix
+	}
+	for _, c := range cases {
+		if got := isConventionalCommitPrefix(c.prefix); got != c.want {
+			t.Errorf("isConventionalCommitPrefix(%q) = %v; want %v", c.prefix, got, c.want)
+		}
 	}
 }
 

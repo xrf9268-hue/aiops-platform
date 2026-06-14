@@ -20,7 +20,7 @@ mismatched context blocks every PR forever waiting on a check that never reports
 - **`Validate PR title (Conventional Commits)`** is a required status check —
   squash-merge makes the PR title the commit subject release-please parses, so a
   non-Conventional-Commit title silently vanishes from the CHANGELOG and the
-  version bump (AGENTS.md → "Commit / PR-title convention",
+  version bump (AGENTS.md → Conventions,
   `.github/workflows/pr-title-lint.yml`).
 - Review-thread resolution required (the Codex-review protocol's unresolved
   threads block merge); stale reviews dismissed on push; squash-only; no branch

@@ -260,11 +260,13 @@ shipped.
   by release-please — no changelog entry, no version bump — while `chore` was
   configured visible, flooding the changelog with Trellis bookkeeping. The fix
   removes the `changelog-sections` override (chore/refactor inherit the
-  upstream-default hidden state), sets `squash_merge_commit_title: PR_TITLE` so
-  the parsed subject is the linted title, and adds the
+  upstream-default hidden state) and adds the
   `Validate PR title (Conventional Commits)` required check
   (`.github/workflows/pr-title-lint.yml`, pinned
-  `amannn/action-semantic-pull-request`). **Earned by:** the pending v0.1.3
+  `amannn/action-semantic-pull-request`); separately, the repo setting
+  `squash_merge_commit_title` is set to `PR_TITLE` (a GitHub repo setting applied
+  out-of-band, not a committed file) so the parsed subject is the linted title.
+  **Earned by:** the pending v0.1.3
   Release PR (#803) lists one `feat` and four chores (three Trellis-archive —
   #836/#807/#813 — plus the #788 dead-code sweep) while omitting every other
   change shipped since v0.1.2 — `cmd:` version observability (#828), `release:`
