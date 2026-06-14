@@ -1,0 +1,2 @@
+{"file": ".trellis/tasks/06-14-release-please-align-repo-on-conventional-commits-changelog-version-accuracy/research/release-please-best-practices.md", "reason": "Verify the config/workflow/ruleset/setting match the source-verified best practice (hidden chore/refactor, pinned action SHA, PR_TITLE squash setting, canonical type list)."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Check no dead config remains, JSON/YAML validity, and that the new AGENTS.md rule carries provenance."}
