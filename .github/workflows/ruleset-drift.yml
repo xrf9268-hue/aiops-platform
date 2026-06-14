@@ -1,0 +1,36 @@
+name: Ruleset Drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * *'
+  push:
+    branches:
+      - main
+    paths:
+      - .github/governance/main-ruleset.json
+      - .github/scripts/check-ruleset-drift.sh
+      - .github/workflows/ruleset-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    name: Main ruleset drift check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Compare live ruleset to committed source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/check-ruleset-drift.sh

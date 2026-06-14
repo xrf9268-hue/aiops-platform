@@ -45,6 +45,20 @@ gh api --method PUT repos/xrf9268-hue/aiops-platform/rulesets/<id> \
   --input .github/governance/main-ruleset.json
 ```
 
+## Drift check
+
+`.github/workflows/ruleset-drift.yml` runs a read-only comparison between the
+live GitHub ruleset and this file. It runs after relevant pushes to `main`, on a
+daily schedule, and on manual dispatch. The workflow uses the default Actions
+token with read-only repository contents permission and calls only GitHub
+ruleset read endpoints through `.github/scripts/check-ruleset-drift.sh`.
+
+The comparison intentionally excludes server-managed fields and
+`bypass_actors`: GitHub's ruleset API returns bypass actors only to callers with
+write access to the ruleset, and this check deliberately avoids that privilege.
+If the check fails, re-import this file with the update command above or update
+the committed source intentionally.
+
 ## Sequencing
 
 Apply the ruleset **after** this PR and any other open PRs merge. Once

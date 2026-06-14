@@ -18,11 +18,6 @@
 * **workspace:** bound every git subprocess with a per-operation timeout ([#764](https://github.com/xrf9268-hue/aiops-platform/issues/764)) ([4b0d276](https://github.com/xrf9268-hue/aiops-platform/commit/4b0d276ba3bf0a53dafcc94c09c8e30c59900ad5))
 * **workspace:** heal legacy partial mirrors and reap staging dirs on failed clones ([#774](https://github.com/xrf9268-hue/aiops-platform/issues/774)) ([c45b323](https://github.com/xrf9268-hue/aiops-platform/commit/c45b323ef503af67551baaa3909900281d193415)), closes [#765](https://github.com/xrf9268-hue/aiops-platform/issues/765)
 
-
-### Miscellaneous Chores
-
-* archive the issue-765 Trellis task and record the session journal ([#776](https://github.com/xrf9268-hue/aiops-platform/issues/776)) ([5df7640](https://github.com/xrf9268-hue/aiops-platform/commit/5df764074b80bc4e3c878715578c9d2fec265e0c)), closes [#775](https://github.com/xrf9268-hue/aiops-platform/issues/775)
-
 ## [0.1.1](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.0...v0.1.1) (2026-06-11)
 
 
@@ -33,13 +28,6 @@
 * post [@codex](https://github.com/codex) review triggers with a workspace-bound identity ([#747](https://github.com/xrf9268-hue/aiops-platform/issues/747)) ([a6f9e61](https://github.com/xrf9268-hue/aiops-platform/commit/a6f9e619cd76b21e590473364fcac9cdf1131d2b)), closes [#746](https://github.com/xrf9268-hue/aiops-platform/issues/746)
 * re-check Todo blockers in dispatch revalidation ([#750](https://github.com/xrf9268-hue/aiops-platform/issues/750)) ([#752](https://github.com/xrf9268-hue/aiops-platform/issues/752)) ([3c59890](https://github.com/xrf9268-hue/aiops-platform/commit/3c59890bf88d3ad690fb544664d3a03e5d4c25cf))
 * revalidate dispatch candidates against tracker state before spawning ([#749](https://github.com/xrf9268-hue/aiops-platform/issues/749)) ([e5c5e41](https://github.com/xrf9268-hue/aiops-platform/commit/e5c5e41e29ca066631a74f51bf9a4eaf7aa8ac7f)), closes [#740](https://github.com/xrf9268-hue/aiops-platform/issues/740)
-
-
-### Miscellaneous Chores
-
-* archive automated-release task and record session journal ([#737](https://github.com/xrf9268-hue/aiops-platform/issues/737)) ([ff1c4a8](https://github.com/xrf9268-hue/aiops-platform/commit/ff1c4a82a925c9455ccec0c02d4b0056bc5100fc))
-* archive Trellis task journals for the 2026-06-11 issue batch ([#758](https://github.com/xrf9268-hue/aiops-platform/issues/758)) ([58e7809](https://github.com/xrf9268-hue/aiops-platform/commit/58e780953ca5ca0f7b04d946614dd7495c2f2e73))
-* record v0.1.0 packaged-binary lifecycle test, archive task and journal ([#742](https://github.com/xrf9268-hue/aiops-platform/issues/742)) ([011341f](https://github.com/xrf9268-hue/aiops-platform/commit/011341fb896312db950fcc15e629f908e9d6f245))
 
 ## 0.1.0 (2026-06-10)
 
