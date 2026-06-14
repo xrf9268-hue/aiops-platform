@@ -5,8 +5,7 @@ name: PR Title Lint
 # `main` to build the CHANGELOG and decide the version bump, so a PR title that
 # is not a Conventional Commit is dropped silently — no changelog entry, no
 # bump. This gate validates the one string release-please will consume. See
-# docs/runbooks/ci.md (Conventional Commits) and AGENTS.md (Commit / PR-title
-# convention).
+# docs/runbooks/ci.md (Conventional Commits) and AGENTS.md (Conventions).
 #
 # Uses `pull_request` (not `pull_request_target`) so the check run attaches to
 # the PR head SHA. A required status check is matched against the head commit; a

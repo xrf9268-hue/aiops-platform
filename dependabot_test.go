@@ -10,8 +10,8 @@ import (
 )
 
 // conventionalCommitTypes mirrors the allow-list in
-// .github/workflows/pr-title-lint.yml and AGENTS.md → "Commit / PR-title
-// convention". Dependabot turns commit-message.prefix into the PR-title prefix
+// .github/workflows/pr-title-lint.yml and AGENTS.md → Conventions. Dependabot
+// turns commit-message.prefix into the PR-title prefix
 // ("<prefix>: …"), and the required `Validate PR title (Conventional Commits)`
 // check rejects any non-conventional type — so a prefix outside this set would
 // silently brick every Dependabot PR.
