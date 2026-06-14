@@ -110,8 +110,14 @@ but work out the situation first, in this order:
      do not assume auto-merge survived a prior crash between approve (Step 3b) and
      enable (Step 3c): re-issue Step 3c. You call the merge endpoint directly, so
      handle its response — on success or "already scheduled" (HTTP 409) auto-merge
-     is set, so poll Step 3d; on "already merged" (HTTP 405) it just landed, so
-     flip `aiops/done` + close and stop (no polling).
+     is set, so poll Step 3d. On any error (Gitea returns HTTP 405 for an
+     already-merged PR but ALSO for not-mergeable / WIP / no-permission states), do
+     NOT conclude it merged: re-check `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
+     and take the Done path (flip `aiops/done` + close) ONLY if `merged:true`;
+     otherwise — unmerged, or the check itself did not confirm a merge — leave the
+     issue in `Human Review` for the next poll (a persistent error is an operator
+     signal). Never flip `aiops/done` without a confirming `merged:true` —
+     a status code alone is not proof.
    - **No current approval** — your only approval is `stale`/dismissed or was for
      an older commit (the head moved after you approved: a rebase or a pushed fix)
      → do NOT short-circuit. Fall through to Step 2 and review the new head from
