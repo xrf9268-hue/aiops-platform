@@ -26,7 +26,6 @@ tracker:
     - Todo
     - In Progress
     - Rework
-    - Merging                    # non-terminal holding state (Done is issued only after the forge merges)
 
 polling:
   interval_ms: 30000
@@ -64,9 +63,16 @@ You review, decide a verdict, and (on pass) land it via CI-gated auto-merge.
 You do NOT write or push code.
 
 Issue under review:
-- Identifier: {{ issue.identifier }}   (the human #N; use its digits for every Gitea API call + gitea_issue_labels — never task.id)
+- Identifier: {{ issue.identifier }}   (Gitea renders this as `#<number>`, e.g. `#7`)
 - URL: {{ issue.url }}
 - Title: {{ task.title }}
+
+Issue number: let `<N>` be the digits of the identifier with the leading `#`
+stripped (e.g. `7`). Use `<N>` only for **issue-keyed** calls — the
+`/issues/<N>/comments` path and the `gitea_issue_labels` tool; never the raw
+`{{ issue.identifier }}` (`#7`, which yields `/issues/#7/...`) and never task.id.
+The **PR-keyed** paths below (`/pulls/<number>/...`) take the *pull-request*
+number from the maker's PR-URL comment — a different number from `<N>`.
 
 Repository: {{ repo.owner }}/{{ repo.name }} (base branch: {{ repo.branch }}).
 Your Gitea credential is the basic-auth token in `git remote get-url origin`;
@@ -79,6 +85,13 @@ commented. Obtain the diff either way:
 - `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>.diff`.
 If you cannot identify the PR, comment what you looked for and flip to
 `aiops/rework` so the maker re-hands-off.
+
+If a previous poll already reviewed this PR — `GET
+/repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/reviews` shows your own
+`APPROVED` review — you already ran the rubric and enabled auto-merge (Step 3c)
+in that pass (the two happen together). Do NOT re-review or re-approve; skip
+straight to Step 3d and just re-confirm the merge. Re-running `build/test` each
+poll while CI lands is wasted work.
 
 ## Step 2 — review against the rubric (every item must pass)
 1. The diff implements what the issue asked; each acceptance criterion is met or
@@ -104,11 +117,13 @@ PASS (every item passes):
      `Human Review`, so you are not reconcile-cancelled) and poll the PR until the
      forge reports it merged:
      `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → `merged: true`
-     (a short bounded wait; required CI here is fast).
+     (a short bounded wait — e.g. poll every ~30s for a few attempts, not a busy
+     loop; required CI here is fast).
        - Merged → set the label to `aiops/done` via gitea_issue_labels. LAST action.
-       - Not merged within your budget (slow/flaky CI) → set `aiops/merging` (a
-         non-terminal holding state) via gitea_issue_labels and stop; a Merging
-         worker finalizes `Done` once the forge merges (see runbook). LAST action.
+       - Not merged within your budget (slow/flaky CI) → do NOT flip any label.
+         Leave the issue in `Human Review` and stop. It stays in your active set,
+         so the next poll re-claims it and re-checks the merge (Step 1 sends you
+         straight back here) — no terminal flip until `merged:true`. Done.
   Never flip `aiops/done` before the forge reports the PR merged — `Done` is
   terminal and would unblock `Depends on #N` dependents from a stale `main`.
 
@@ -119,9 +134,11 @@ FAIL (any item fails):
 
 ## Hard constraints (review-only)
 - Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the
-  review comment, the approval, enabling auto-merge, and the verdict label flip(s)
-  (an intermediate `aiops/merging` only if CI is slow, then the terminal verdict).
+  review comment, the approval, enabling auto-merge, and the verdict label flip
+  (`aiops/done` after the merge is confirmed, or `aiops/rework` on failure).
 - Judge only what the diff and its tests prove; unverified PR-description claims
   count for nothing.
 - Issue the terminal verdict exactly once: `aiops/done` only after the merge is
-  confirmed, or `aiops/rework` on failure — as your final action.
+  confirmed, or `aiops/rework` on failure — as your final action. If the merge has
+  not landed within your turn budget, leave the issue in `Human Review` (no
+  terminal flip) so the next poll re-checks — never park it in an invented state.
