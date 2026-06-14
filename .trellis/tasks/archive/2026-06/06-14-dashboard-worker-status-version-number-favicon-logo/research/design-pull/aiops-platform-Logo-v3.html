@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-accent="default">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>aiops-platform — Logo v3</title>
+<link rel="icon" type="image/png" sizes="128x128" href="../assets/favicon.png?v=61f833fd0705" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400;1,6..72,500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="colors_and_type.css" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+  /* ── page scaffold ─────────────────────────────────────────── */
+  .sheet { max-width: 1180px; margin: 0 auto; padding: 14px 22px 80px; }
+  .stack { display: flex; flex-direction: column; gap: 18px; }
+  .vhead { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .vhead h1 {
+    font-family: var(--font-serif); font-weight: 400; font-size: 38px;
+    line-height: 1.05; margin: 0; letter-spacing: -0.015em; color: var(--ink);
+  }
+  .vhead h1 em { font-style: italic; }
+  .lede {
+    font-family: var(--font-serif); font-weight: 300; font-size: 19px;
+    line-height: 1.5; color: var(--ink-soft); max-width: 62ch; margin: 0;
+    text-wrap: pretty;
+  }
+  .lede em { font-style: italic; color: var(--ink); }
+  .kicker {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: var(--ls-label);
+    text-transform: uppercase; color: var(--ink-mute);
+  }
+  .sec-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; flex-wrap: wrap; }
+  .sec-head h2 {
+    font-family: var(--font-serif); font-weight: 400; font-size: 21px; margin: 0;
+    line-height: 1.15; white-space: nowrap;
+  }
+  .sec-head h2 em { font-style: italic; }
+  .sec-head .n {
+    font-family: var(--font-mono); font-size: 11px; color: var(--accent-text);
+    letter-spacing: 0.04em; padding-top: 3px;
+  }
+  .sec-head .note { font-family: var(--font-mono); font-size: 11px; color: var(--ink-mute); padding-top: 5px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+
+  /* ── the mark — pure type: italic a + block caret ──────────── */
+  .glyphmark {
+    font-family: var(--font-serif); font-style: italic; font-weight: 500;
+    line-height: 1; color: var(--mark-stroke); white-space: nowrap;
+    letter-spacing: 0; transform: translateY(-0.03em);
+  }
+  .glyphmark .c {
+    display: inline-block; width: 0.15em; height: 0.55em;
+    background: var(--mark-node); margin-left: 0.10em; border-radius: 0.025em;
+  }
+  /* the caret blinks when the surface is live — same cadence as the event log */
+  @media (prefers-reduced-motion: no-preference) {
+    .live .glyphmark .c { animation: mkCaret 1s steps(2, end) infinite; }
+  }
+  @keyframes mkCaret { 50% { opacity: 0; } }
+
+  /* tile = a rounded brand square holding the mark */
+  .tile {
+    aspect-ratio: 1; border-radius: 22%; container-type: inline-size;
+    display: grid; place-items: center; position: relative;
+    box-shadow: 0 1px 2px var(--inset);
+  }
+  .tile .glyphmark { font-size: 56cqw; }
+  .tile.dark  { background: var(--ink); --mark-stroke: var(--canvas); --mark-node: var(--accent); }
+  .tile.cream { background: var(--panel-2); border: 1px solid var(--hairline);
+    --mark-stroke: var(--ink); --mark-node: var(--accent); }
+  .tile.mono-ink { background: var(--canvas); border: 1px solid var(--hairline);
+    --mark-stroke: var(--ink); --mark-node: var(--ink); }
+  .tile.mono-rev { background: var(--ink); --mark-stroke: var(--canvas); --mark-node: var(--canvas); }
+
+  .swatch-cap {
+    margin-top: 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--ink-mute); letter-spacing: 0.02em;
+  }
+  .swatch-cap b { color: var(--ink-soft); font-weight: 500; }
+
+  /* wordmark — the name, mid-line */
+  .wm { font-family: var(--font-serif); font-weight: 400; color: var(--ink); line-height: 1; letter-spacing: -0.015em; }
+  .wm .mute { color: var(--ink-mute); }
+  .wm .wm-caret {
+    display: inline-block; width: 0.12em; height: 0.52em;
+    background: var(--accent); margin-left: 0.09em; border-radius: 0.02em;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .live .wm .wm-caret { animation: mkCaret 1s steps(2, end) infinite; }
+  }
+
+  /* ── hero ──────────────────────────────────────────────────── */
+  .hero {
+    display: grid; grid-template-columns: 300px 1fr; gap: 36px; align-items: center;
+    padding: 40px 38px;
+  }
+  .hero .herotile { width: 300px; }
+  .hero .lock-name { font-size: 52px; }
+  .hero .lock-sub {
+    margin-top: 14px; font-family: var(--font-mono); font-size: 12.5px;
+    letter-spacing: 0.04em; color: var(--ink-mute); text-transform: uppercase;
+  }
+  .hero .lock-tag {
+    margin-top: 18px; font-family: var(--font-serif); font-style: italic;
+    font-weight: 300; font-size: 17px; color: var(--ink-soft); max-width: 42ch;
+    line-height: 1.5;
+  }
+
+  /* ── retro: the rut, named ─────────────────────────────────── */
+  .retro { display: grid; grid-template-columns: 230px 1fr; gap: 28px; align-items: center; padding: 22px 26px; }
+  .retro-tiles { display: flex; align-items: center; gap: 14px; }
+  .retro-tiles .t { border-radius: 22%; background: var(--ink); display: grid; place-items: center;
+    --mark-stroke: var(--canvas); --mark-node: var(--accent); }
+  .retro-tiles .t .pad { width: 58%; height: 58%; }
+  .retro-tiles .t small {
+    position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-mute);
+  }
+  .retro-tiles .t { position: relative; }
+  .oldmark { display: block; width: 100%; height: 100%; overflow: visible; }
+  .oldmark .s { stroke: var(--mark-stroke); fill: none; stroke-width: 5;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .oldmark .f { fill: var(--mark-stroke); }
+  .oldmark .n { fill: var(--mark-node); }
+  .retro ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .retro li { display: grid; grid-template-columns: 18px 1fr; gap: 10px; font-size: 13px; color: var(--ink-soft); line-height: 1.5; }
+  .retro li .x { font-family: var(--font-mono); color: var(--danger); font-size: 12px; padding-top: 1px; }
+  .retro li b { color: var(--ink); font-weight: 600; }
+
+  /* ── construction / anatomy ────────────────────────────────── */
+  .anat { display: grid; grid-template-columns: 280px 1fr; gap: 32px; align-items: center; padding: 18px 0 4px; }
+  .gridtile {
+    width: 280px; aspect-ratio: 1; border-radius: var(--radius-lg);
+    background: var(--panel-2); border: 1px solid var(--hairline); position: relative;
+    background-image:
+      linear-gradient(var(--hairline-2) 1px, transparent 1px),
+      linear-gradient(90deg, var(--hairline-2) 1px, transparent 1px);
+    background-size: 25px 25px; background-position: center;
+    display: grid; place-items: center; overflow: hidden;
+    --mark-stroke: var(--ink); --mark-node: var(--accent);
+  }
+  .gridtile .glyphmark { font-size: 150px; }
+  .axis { position: absolute; background: var(--hairline); }
+  .axis.h { height: 1px; width: 100%; top: 65%; }
+  .axis-tag {
+    position: absolute; right: 10px; top: calc(65% + 6px);
+    font-family: var(--font-mono); font-size: 10px; color: var(--ink-mute);
+    letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .anat ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+  .anat li { display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start; }
+  .anat li .num {
+    width: 24px; height: 24px; border-radius: 999px; display: grid; place-items: center;
+    background: var(--accent-bg); color: var(--accent-text);
+    font-family: var(--font-mono); font-size: 12px; font-weight: 600;
+  }
+  .anat li h4 { margin: 0 0 2px; font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; }
+  .anat li p { margin: 0; font-size: 13px; color: var(--ink-soft); line-height: 1.5; text-wrap: pretty; }
+  .anat li p code { font-family: var(--font-mono); font-size: 12px; color: var(--ink-mute); }
+
+  /* ── lockups ───────────────────────────────────────────────── */
+  .lock-card { padding: 22px 24px; display: flex; flex-direction: column; gap: 16px; }
+  .lh { display: flex; align-items: center; gap: 14px; }
+  .lh .tile { width: 44px; }
+  .lh .wm { font-size: 26px; }
+  .lv { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+  .lv .tile { width: 56px; }
+  .lv .wm { font-size: 20px; }
+  .clear-ring { outline: 1px dashed var(--hairline); outline-offset: 0; }
+
+  /* ── favicon row ───────────────────────────────────────────── */
+  .fav-row { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .fav { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .fav .tile { box-shadow: 0 1px 2px var(--inset); }
+  .fav small { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-mute); }
+
+  /* ── alt directions ────────────────────────────────────────── */
+  .alt-card { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
+  .alt-top { background: var(--panel-2); border-bottom: 1px solid var(--hairline);
+    display: grid; place-items: center; padding: 30px; min-height: 150px;
+    --mark-stroke: var(--ink); --mark-node: var(--accent); }
+  .alt-top .m { width: 84px; height: 84px; display: block; overflow: visible; }
+  .alt-body { padding: 16px 18px; }
+  .alt-body h4 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+  .alt-body .tag { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: var(--ls-label);
+    text-transform: uppercase; color: var(--ink-mute); }
+  .alt-body p { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-soft); line-height: 1.5; text-wrap: pretty; }
+  .alt-lig {
+    font-family: var(--font-serif); font-style: italic; font-weight: 500;
+    font-size: 72px; line-height: 1; color: var(--ink); letter-spacing: -0.03em;
+  }
+  .alt-lig .dot { color: var(--accent); }
+
+  .footnote { font-family: var(--font-serif); font-style: italic; font-weight: 300;
+    font-size: 14px; color: var(--ink-mute); text-align: center; padding-top: 8px; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 24px; }
+    .hero .herotile { width: 200px; }
+    .anat, .retro { grid-template-columns: 1fr; }
+    .gridtile { width: 100%; max-width: 280px; }
+    .grid2, .grid3, .grid4 { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 560px) {
+    .hero .lock-name { font-size: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app sheet">
+
+  <!-- topbar — the logo, in its native habitat -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" style="background:var(--ink);--mark-stroke:var(--canvas);--mark-node:var(--accent);display:grid;place-items:center;">
+        <span class="glyphmark" style="font-size:13px;">a<span class="c"></span></span>
+      </span>
+      <span class="brand-name">aiops-platform <span class="mute">· brand</span></span>
+    </div>
+    <span class="crumb">identity</span>
+    <span class="crumb">the mark</span>
+    <span class="spacer"></span>
+    <span class="live-pill"><span class="pulse"></span>Live</span>
+    <span class="clock" style="font-family:var(--font-mono);font-size:12px;color:var(--ink-mute);">v3 · 2026</span>
+  </header>
+
+  <div class="stack">
+
+    <!-- title -->
+    <div class="vhead">
+      <span class="kicker">Identity · logo · v3</span>
+      <h1>The <em>unfinished line</em></h1>
+      <p class="lede">
+        v1 drew a tuning fork. v2 drew a dial. Different costumes, same idea — a thin-stroke pictogram wearing a borrowed music metaphor, with an accent pinhead that died at 16px. v3 stops drawing pictures. The system's voice is <em>a console log that learned typography</em> — so the mark is exactly that: the italic Newsreader <em>a</em>, mid-line, the console's block caret still blinking after it. Not a picture of operations — a line still being written.
+      </p>
+    </div>
+
+    <!-- ── HERO ──────────────────────────────────────────────── -->
+    <section class="panel hero live">
+      <div class="herotile tile dark">
+        <span class="glyphmark">a<span class="c"></span></span>
+      </div>
+      <div>
+        <div class="wm lock-name">aiops<span class="mute">-platform</span><span class="wm-caret"></span></div>
+        <div class="lock-sub">agent operations · orchestrator</div>
+        <p class="lock-tag">The serif is the editorial voice; the caret is the live session. Together they say the only thing the product ever says: <em>still running.</em></p>
+      </div>
+    </section>
+
+    <!-- ── WHY V1 + V2 WERE RETIRED ──────────────────────────── -->
+    <section class="panel retro">
+      <div>
+        <span class="kicker">v1 · v2 — the rut, named</span>
+        <div class="retro-tiles" style="margin-top:12px;margin-bottom:20px;">
+          <span class="t" style="width:84px;height:84px;">
+            <span class="pad"><svg class="oldmark" viewBox="0 0 64 64">
+              <path class="s" d="M22 14 L22 36 Q22 44 32 44 Q42 44 42 36 L42 14"></path>
+              <path class="s" d="M32 44 L32 50.5"></path>
+              <circle class="f" cx="32" cy="52" r="3.4"></circle>
+              <circle class="n" cx="22" cy="12.6" r="3.4"></circle>
+              <circle class="n" cx="42" cy="12.6" r="3.4"></circle>
+            </svg></span>
+            <small>v1</small>
+          </span>
+          <span class="t" style="width:84px;height:84px;">
+            <span class="pad"><svg class="oldmark" viewBox="0 0 64 64">
+              <path class="s" d="M9 43 A23 23 0 0 1 55 43"></path>
+              <path class="s" d="M32 43 L40 31.5"></path>
+              <circle class="n" cx="40" cy="31.5" r="3.6"></circle>
+              <circle class="f" cx="32" cy="43" r="3.6"></circle>
+            </svg></span>
+            <small>v2</small>
+          </span>
+        </div>
+      </div>
+      <ul>
+        <li><span class="x">✕</span><span><b>One idea, two costumes.</b> Both were stroke pictograms + a satellite accent dot + a music metaphor that needed a paragraph of caption. Iterating the costume again would not leave the rut.</span></li>
+        <li><span class="x">✕</span><span><b>Stroke marks thin out.</b> A 5px stroke in a 64-unit frame turns spindly at 24px and furry at 16. Letterforms are the one class of shape designed to survive every size — that is what type is.</span></li>
+        <li><span class="x">✕</span><span><b>The accent was decoration.</b> A pinhead whose only job was to be colored — first thing to vanish, nothing lost when it did. In v3 the accent is a <em>cursor</em>: solid, rectangular, and it means something — the stream is live.</span></li>
+      </ul>
+    </section>
+
+    <!-- ── CONCEPT ───────────────────────────────────────────── -->
+    <section class="panel" style="padding:22px 26px;">
+      <div class="sec-head"><span class="n">01</span><h2>What the mark <em>encodes</em></h2></div>
+      <div class="anat">
+        <div class="gridtile">
+          <span class="axis h"></span>
+          <span class="axis-tag">baseline · the platform</span>
+          <span class="glyphmark">a<span class="c"></span></span>
+        </div>
+        <ol>
+          <li>
+            <span class="num">1</span>
+            <div>
+              <h4>The glyph — the editorial voice</h4>
+              <p>Newsreader italic at 500 — the exact recipe the design system prescribes for its brand mark. It says <em>a</em> for aiops, set the way the dashboard sets its numbers.</p>
+            </div>
+          </li>
+          <li>
+            <span class="num">2</span>
+            <div>
+              <h4>The caret — the live session</h4>
+              <p>The console's block cursor, in the accent. It blinks at <code>1s steps(2)</code> — the event log's own <code>caretBlink</code> — whenever the surface is live. The system is mid-sentence; the work is not done.</p>
+            </div>
+          </li>
+          <li>
+            <span class="num">3</span>
+            <div>
+              <h4>The shared baseline — the platform</h4>
+              <p>Letter and cursor stand on one line. The baseline is the platform: the single invariant under everything that runs — <code>cmd/worker</code>, the poll tick, the budget.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ── COLOR VARIANTS ────────────────────────────────────── -->
+    <section>
+      <div class="sec-head"><span class="n">02</span><h2>Surfaces &amp; <em>monochrome</em></h2></div>
+      <div class="grid4" style="margin-top:12px;">
+        <div>
+          <div class="tile dark"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Primary</b> · linen on ink</div>
+        </div>
+        <div>
+          <div class="tile cream"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Light</b> · ink on paper</div>
+        </div>
+        <div>
+          <div class="tile mono-ink"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Mono</b> · single ink</div>
+        </div>
+        <div>
+          <div class="tile mono-rev"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Reversed</b> · knock-out</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── ACCENT VARIANTS ───────────────────────────────────── -->
+    <section>
+      <div class="sec-head"><span class="n">03</span><h2>Accent <em>carets</em></h2>
+        <span class="note">one accent per surface</span>
+      </div>
+      <div class="grid4" style="margin-top:12px;">
+        <div>
+          <div class="tile dark" style="--mark-node:#C25E36;"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Terracotta</b> · default</div>
+        </div>
+        <div>
+          <div class="tile dark" style="--mark-node:#9EBC8A;"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Sage</b></div>
+        </div>
+        <div>
+          <div class="tile dark" style="--mark-node:#95B7CE;"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Ink</b></div>
+        </div>
+        <div>
+          <div class="tile dark" style="--mark-node:#C99CB8;"><span class="glyphmark">a<span class="c"></span></span></div>
+          <div class="swatch-cap"><b>Plum</b></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── LOCKUPS ───────────────────────────────────────────── -->
+    <section>
+      <div class="sec-head"><span class="n">04</span><h2>Lockups &amp; <em>clearspace</em></h2></div>
+      <div class="grid3" style="margin-top:12px;">
+        <div class="panel lock-card">
+          <span class="kicker">Horizontal</span>
+          <div class="lh">
+            <span class="tile cream" style="border-radius:24%;box-shadow:none;"><span class="glyphmark">a<span class="c"></span></span></span>
+            <span class="wm">aiops<span class="mute">-platform</span></span>
+          </div>
+        </div>
+        <div class="panel lock-card">
+          <span class="kicker">Stacked</span>
+          <div class="lv">
+            <span class="tile cream" style="border-radius:24%;box-shadow:none;"><span class="glyphmark">a<span class="c"></span></span></span>
+            <span class="wm">aiops<span class="mute">-platform</span></span>
+          </div>
+        </div>
+        <div class="panel lock-card">
+          <span class="kicker">Wordmark · self-carrying</span>
+          <div style="display:grid;place-items:center;flex:1;" class="live">
+            <span class="wm" style="font-size:28px;">aiops<span class="mute">-platform</span><span class="wm-caret"></span></span>
+          </div>
+          <span class="swatch-cap" style="margin-top:0;">the caret travels with the name — no tile required · clear margin = caret width</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── IN CONTEXT ────────────────────────────────────────── -->
+    <section>
+      <div class="sec-head"><span class="n">05</span><h2>Small sizes &amp; <em>favicon</em></h2></div>
+      <div class="grid2" style="margin-top:12px;align-items:stretch;">
+        <div class="panel" style="padding:24px 26px;display:flex;align-items:center;">
+          <div class="fav-row">
+            <div class="fav"><span class="tile dark" style="width:48px;border-radius:24%;"><span class="glyphmark">a<span class="c"></span></span></span><small>48</small></div>
+            <div class="fav"><span class="tile dark" style="width:32px;border-radius:24%;"><span class="glyphmark">a<span class="c"></span></span></span><small>32</small></div>
+            <div class="fav"><span class="tile dark" style="width:24px;border-radius:26%;"><span class="glyphmark">a<span class="c"></span></span></span><small>24</small></div>
+            <div class="fav"><span class="tile dark" style="width:16px;border-radius:28%;"><span class="glyphmark" style="font-size:62cqw;">a<span class="c"></span></span></span><small>16</small></div>
+          </div>
+        </div>
+        <!-- dark-mode topbar demo -->
+        <div class="panel live" data-theme="dark" style="padding:0;overflow:hidden;background:var(--canvas);">
+          <div style="padding:14px 16px;display:flex;align-items:center;gap:10px;background:var(--panel);border-bottom:1px solid var(--hairline);">
+            <span class="tile dark" style="width:24px;border-radius:7px;box-shadow:none;">
+              <span class="glyphmark">a<span class="c"></span></span>
+            </span>
+            <span style="font-family:var(--font-sans);font-weight:500;font-size:13px;color:var(--ink);">aiops-platform <span style="color:var(--ink-mute);font-weight:400;">· dashboard</span></span>
+            <span style="flex:1;"></span>
+            <span class="live-pill"><span class="pulse"></span>Live</span>
+          </div>
+          <div style="padding:16px;font-family:var(--font-serif);font-style:italic;font-weight:300;color:var(--ink-soft);font-size:14px;">
+            seven concurrent sessions · queued three retries
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── ALT DIRECTIONS ────────────────────────────────────── -->
+    <section>
+      <div class="sec-head"><span class="n">06</span><h2>Alternative <em>directions</em></h2>
+        <span class="note">explored · not selected</span>
+      </div>
+      <div class="grid2" style="margin-top:12px;">
+        <div class="panel alt-card">
+          <div class="alt-top">
+            <span class="alt-lig">a<span class="dot">i</span></span>
+          </div>
+          <div class="alt-body">
+            <span class="tag">B · the ligature</span>
+            <h4>ai, set as one word</h4>
+            <p>Both initials, the <em>i</em> carrying the accent. Closer to the full name, but two letters crowd the tile below 24px — and the tittle of the <em>i</em> is the same doomed pinhead v1 and v2 already taught us about.</p>
+          </div>
+        </div>
+        <div class="panel alt-card">
+          <div class="alt-top">
+            <svg class="m" viewBox="0 0 64 64">
+              <path d="M14 50 L50 50" stroke="var(--mark-stroke)" stroke-width="5.5" stroke-linecap="round"></path>
+              <path d="M21 40 L21 28" stroke="var(--mark-stroke)" stroke-width="5.5" stroke-linecap="round"></path>
+              <path d="M32 40 L32 16" stroke="var(--mark-node)" stroke-width="5.5" stroke-linecap="round"></path>
+              <path d="M43 40 L43 24" stroke="var(--mark-stroke)" stroke-width="5.5" stroke-linecap="round"></path>
+            </svg>
+          </div>
+          <div class="alt-body">
+            <span class="tag">C · the platform</span>
+            <h4>Ground line, sessions rising</h4>
+            <p>The name taken literally — a platform with parallel sessions standing on it. Honest, and finally not musical; but every monitoring product owns a bar chart, and this is one.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p class="footnote">— Newsreader · Geist · Geist Mono — type is the mark, paper not screen.</p>
+
+  </div>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@1,6..72,500&display=swap" rel="stylesheet" />
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { width: 128px; height: 128px; }
+  /* The brand mark on its native dark tile — linen italic "a" + the live caret.
+     Colors are the light-theme / default-accent tokens, hard-coded so the
+     rasterized PNG is theme-independent. */
+  .tile {
+    width: 128px; height: 128px; box-sizing: border-box;
+    border-radius: 28px;            /* ~22% — the brand-square radius */
+    background: #211C14;            /* --ink */
+    display: grid; place-items: center;
+    container-type: inline-size;
+  }
+  .glyphmark {
+    font-family: "Newsreader", serif; font-style: italic; font-weight: 500;
+    line-height: 1; color: #E8E2D3; /* --canvas */
+    white-space: nowrap; letter-spacing: 0;
+    transform: translateY(-0.03em);
+    font-size: 60cqw;
+  }
+  .glyphmark .c {
+    display: inline-block; width: 0.15em; height: 0.55em;
+    background: #C25E36;            /* --accent (terracotta) */
+    margin-left: 0.10em; border-radius: 0.025em;
+    vertical-align: baseline;
+  }
+</style>
+</head>
+<body>
+  <div class="tile"><span class="glyphmark">a<span class="c"></span></span></div>
+</body>
+</html>
