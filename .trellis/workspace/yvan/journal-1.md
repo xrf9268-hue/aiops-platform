@@ -384,3 +384,36 @@ Process lessons (saved to memory): poll all three codex completion signals (PR r
 ### Next Steps
 
 - None - task complete
+
+
+## Session 7: dashboard: worker-status version chip + favicon (Symphony #90)
+
+**Date**: 2026-06-14
+**Task**: dashboard: worker-status version chip + favicon (Symphony #90)
+**Branch**: `main`
+
+### Summary
+
+Pulled the Worker Status v2 design draft (hosted /v1/design/h share link → gzip tarball), ported two additions into cmd/worker's embedded React/Vite dashboard: a topbar version chip from /api/v1/state.version, and a v3 brand-mark favicon (committed 128x128 PNG, embedded, served at /favicon.png with a sha256[:12] content-digest cache-bust templated into index.html+fallback.html, mirroring upstream Symphony #90). Mutation-verified Go + vitest. PR #834 merged (squash), issue #833 closed; full local CI gate + remote checks green; codex review (via bytevane) found no issues.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `661cf47` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
