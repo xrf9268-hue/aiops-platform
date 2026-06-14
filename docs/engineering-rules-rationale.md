@@ -272,7 +272,7 @@ shipped.
   — `cmd:` version observability (#828), `dashboard:` version chip + favicon
   (#834), `hardening:` goroutine panic recovery (#818), `release:` tarball
   packaging / GHCR images (#827/#829), `maintainability:` decompositions
-  (#830/#831). The user-facing `feat`/`fix` losses (#828/#834/#818) had to be
+  (#831/#832). The user-facing `feat`/`fix` losses (#828/#834/#818) had to be
   hand-backfilled into the v0.1.3 changelog after the tag was cut (#851); the
   `release:` and `maintainability:` work maps to the hidden `build`/`refactor`
   types and was correctly absent. The required check now prevents recurrence at

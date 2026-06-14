@@ -32,8 +32,10 @@ implements the [OpenAI Symphony SPEC](docs/research/SPEC.md).
 The orchestrator polls a tracker (Linear, Gitea, or GitHub), prepares a
 deterministic per-issue workspace, runs a coding agent in that workspace, and
 watches the agent's lifecycle. Per SPEC §1, the **agent** is what writes
-tickets, opens PRs, and pushes branches — through tools the orchestrator
-advertises (`linear_graphql` and equivalent for Gitea). The orchestrator is the
+tickets, opens PRs, and pushes branches — through tooling available in its
+workflow/runtime: the orchestrator-advertised dynamic tools `linear_graphql`
+(Linear) and `gitea_issue_labels` (Gitea), or `gh`/local workflow tooling for
+GitHub (which has no orchestrator-advertised tool). The orchestrator is the
 scheduler/runner and tracker *reader*, not a tracker writer.
 
 The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is even if the GitHub repo is temporarily mirrored elsewhere.
