@@ -118,6 +118,19 @@ features bump patch). Merging the Release PR creates the `vX.Y.Z` tag and the
 GitHub Release with changelog notes; the tag push triggers the Release
 workflow below, which attaches binaries and the SBOM.
 
+Because `main` merges squash-only with `squash_merge_commit_title: PR_TITLE`,
+the squash commit subject is the PR title, and release-please parses that
+subject. A PR title that is not a Conventional Commit (any of the canonical
+types in AGENTS.md → "Commit / PR-title convention") is dropped silently — no
+changelog entry, no version bump — so the `Validate PR title (Conventional
+Commits)` required check (`.github/workflows/pr-title-lint.yml`, a SHA-pinned
+`amannn/action-semantic-pull-request`) gates every PR title. `release-please-config.json`
+deliberately carries **no** `changelog-sections` override: it inherits
+release-please's default, which hides `chore`/`refactor`/`docs`/`style`/`test`/
+`build`/`ci` so the CHANGELOG stays a user-facing "what changed for an operator"
+document (breaking changes of any type still surface). If you add a new required
+CI job, register its check name in `.github/governance/main-ruleset.json`.
+
 The workflow authenticates with a short-lived GitHub App installation token,
 not `GITHUB_TOKEN`: GitHub suppresses workflow runs for events created by
 `GITHUB_TOKEN`, so a `GITHUB_TOKEN`-cut tag would never trigger

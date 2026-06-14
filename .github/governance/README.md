@@ -17,6 +17,11 @@ mismatched context blocks every PR forever waiting on a check that never reports
   it adds no new key/phase; it must cite an upstream Elixir reference or track a
   `DEVIATIONS.md` row.
 - **`Go build and test`** and **`Security and supply-chain`** required.
+- **`Validate PR title (Conventional Commits)`** is a required status check —
+  squash-merge makes the PR title the commit subject release-please parses, so a
+  non-Conventional-Commit title silently vanishes from the CHANGELOG and the
+  version bump (AGENTS.md → "Commit / PR-title convention",
+  `.github/workflows/pr-title-lint.yml`).
 - Review-thread resolution required (the Codex-review protocol's unresolved
   threads block merge); stale reviews dismissed on push; squash-only; no branch
   deletion or force-push on `main`.
@@ -46,3 +51,10 @@ Apply the ruleset **after** this PR and any other open PRs merge. Once
 `PR Metadata / Validate PR metadata` is required, every open PR must carry the
 SPEC-alignment checklist from `.github/pull_request_template.md` or it cannot
 merge — so land the template + gate first, then import the ruleset.
+
+The same ordering applies to `Validate PR title (Conventional Commits)`: its
+workflow runs on `pull_request_target` (base-branch config), so it does not
+report on any PR until `.github/workflows/pr-title-lint.yml` is on `main`.
+Importing the ruleset with that context **before** the workflow lands would
+deadlock every open PR (incl. the release-please PR) on a check that never runs.
+Land the workflow first, confirm it reports green on a PR, then re-import.

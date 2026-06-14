@@ -431,6 +431,39 @@ These rules apply to every PR. Each is earned by a specific observed failure —
   checklist and never author SPEC deviations); the exemption list lives in
   `validate-pr-metadata.mjs`.
   ([provenance](docs/engineering-rules-rationale.md#conventions))
+- **PR titles are Conventional Commits — release-please parses them.** `main`
+  merges squash-only (`.github/governance/main-ruleset.json`) with the squash
+  subject set to the PR title (`squash_merge_commit_title: PR_TITLE`), and
+  release-please reads that subject to build `CHANGELOG.md` and pick the version
+  bump. A title whose type is not a recognized Conventional Commit type is
+  **dropped silently** — no changelog line, no bump — so mistyped work vanishes
+  from releases (it is why the pending v0.1.3 Release PR #803 would omit
+  #828/#829/#834 while listing four chores, mostly Trellis archival). Title every
+  PR `type(optional-scope): summary` using
+  exactly these types; the `Validate PR title (Conventional Commits)` required
+  check (`.github/workflows/pr-title-lint.yml`) enforces it:
+
+  | Type | Use for | CHANGELOG |
+  |------|---------|-----------|
+  | `feat` | a new user-facing capability | ✅ Features (bumps) |
+  | `fix` | a bug fix | ✅ Bug Fixes (bumps) |
+  | `perf` | a performance change with no behavior change | ✅ Performance Improvements |
+  | `revert` | revert of a prior commit | ✅ Reverts |
+  | `refactor` | code change, no behavior change (e.g. file decomposition) | hidden |
+  | `docs` | docs only (README, runbooks, this file) | hidden |
+  | `style` | formatting / non-semantic code style | hidden |
+  | `test` | tests only | hidden |
+  | `build` | build system / release packaging / build deps | hidden |
+  | `ci` | CI, workflows, governance rulesets | hidden |
+  | `chore` | housekeeping (Trellis task archival, version bumps) | hidden |
+
+  Only `feat`/`fix`/breaking move the version (`feat`→minor, `fix`→patch,
+  breaking→major; pre-1.0 the `bump-*-pre-major` flags downshift these to
+  patch/patch/minor). A `type!:` or `BREAKING CHANGE:` footer marks a breaking
+  change and surfaces even for an otherwise-hidden type. Don't invent types
+  (`maintainability:`, `cmd:`, `deps:` are all dropped) — a refactor is
+  `refactor:`, a dependency bump is `chore(deps):`/`build(deps):`.
+  ([provenance](docs/engineering-rules-rationale.md#conventions))
 
 ## WORKFLOW.md discovery (worker side)
 
