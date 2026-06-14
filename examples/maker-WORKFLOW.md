@@ -76,9 +76,14 @@ worktree, open a pull request, and hand the work to an independent reviewer.
 You do NOT review or merge your own work.
 
 Issue:
-- Identifier: {{ issue.identifier }}   (the human #N; use its digits for Gitea API + gitea_issue_labels)
+- Identifier: {{ issue.identifier }}   (Gitea renders this as `#<number>`, e.g. `#7`)
 - URL: {{ issue.url }}
 - Title: {{ task.title }}
+
+Issue number: let `<N>` be the digits of the identifier with the leading `#`
+stripped (e.g. `7`). Use `<N>` — never the raw `{{ issue.identifier }}` (`#7`) —
+in every Gitea API path, the PR-body issue reference, and the gitea_issue_labels
+tool; the raw value would produce `/issues/#7/comments` and `Refs ##7`.
 
 Repository: {{ repo.owner }}/{{ repo.name }} (base branch: {{ repo.branch }}).
 Your Gitea push + API credential is the basic-auth token already embedded in the
@@ -96,14 +101,20 @@ Do all of the following end to end, without asking for confirmation:
    Add tests that would fail if your change were reverted (no placebo tests).
 3. Commit, then push the work branch:
    `git push -u origin "$(git rev-parse --abbrev-ref HEAD)"`.
-4. Open a pull request against `{{ repo.branch }}` via the Gitea API, with a
-   closing keyword so the merge resolves the issue:
+4. Open a pull request against `{{ repo.branch }}` via the Gitea API. Reference
+   the issue with a NON-closing keyword — `Refs #<N>`, NOT `Closes #<N>`. A
+   closing keyword makes the forge close the issue the instant the PR merges; on
+   the auto-merge path that strands it, because the reviewer issues `Done` only
+   *after* it confirms the merge, and the poller lists `Human Review` issues with
+   `state=open` — a merge-closed issue drops out of the reviewer's poll before
+   `Done` is ever set, deadlocking the issue and its `Depends on #N` dependents.
+   The reviewer owns issue closure.
    `POST /repos/{{ repo.owner }}/{{ repo.name }}/pulls`
-   body `{"head":"<branch>","base":"{{ repo.branch }}","title":"<type(scope): summary>","body":"Closes #{{ issue.identifier }}\n\n<what + how tested>"}`.
+   body `{"head":"<branch>","base":"{{ repo.branch }}","title":"<type(scope): summary>","body":"Refs #<N>\n\n<what + how tested>"}`.
    Use the basic-auth credential from `origin` for the call.
 5. Comment the PR URL on this issue (the reviewer reads the newest PR-URL comment
    to find your change):
-   `POST /repos/{{ repo.owner }}/{{ repo.name }}/issues/{{ issue.identifier }}/comments`.
+   `POST /repos/{{ repo.owner }}/{{ repo.name }}/issues/<N>/comments`.
 6. Hand off for review: set this issue to the "Human Review" state via the
    `gitea_issue_labels` tool (do NOT use a raw token; the orchestrator proxies it).
    Do this exactly once, as your LAST action.
