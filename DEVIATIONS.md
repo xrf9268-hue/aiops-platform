@@ -26,6 +26,12 @@ operational expectations and harness-engineering posture):
   Every Reverting deviation below survives the "name the behavior it
   delivers" test described in
   [`AGENTS.md` §Harness engineering principles](AGENTS.md#harness-engineering-principles).
+- [Scott Chacon's "Grit" — rewriting Git in Rust with agents (2026-06)](docs/research/2026-06-chacon-grit-rust-git.md) —
+  first-hand operator report of long-running *parallel* coding agents at scale
+  (500+ PRs, 7000+ commits, 99.3% of the Git test suite). The manual version of
+  this orchestrator's own loop: independently validates tracker-as-coordination,
+  per-task worktrees, and stateless rebuild, and sharpens where the "done" signal
+  can be gamed. Advisory only — adds no component or rule (principles 2 & 6).
 
 `aiops-platform` is a Go port of that reference. Per the project posture in
 [`AGENTS.md`](AGENTS.md#spec-alignment-is-a-hard-requirement), SPEC alignment
