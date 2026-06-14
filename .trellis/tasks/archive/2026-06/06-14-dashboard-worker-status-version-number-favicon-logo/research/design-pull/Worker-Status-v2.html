@@ -1,0 +1,1695 @@
+<!doctype html>
+<html lang="en" data-brand="linen" data-theme="light" data-density="compact">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>aiops · Worker status</title>
+  <link rel="icon" type="image/png" sizes="128x128" href="../assets/favicon.png?v=61f833fd0705">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400..600;1,6..72,400..600&family=Poppins:ital,wght@0,400;0,500;0,600;1,500&family=Lora:ital,wght@0,400;0,500;1,400&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+/* ============================================================
+   aiops-platform · lean operations dashboard
+   Two brands (anthropic / linen) × two themes (light / dark)
+   driven off <html data-brand data-theme data-density>.
+   One semantic variable layer; components never name a brand.
+   ============================================================ */
+
+/* ─── Fonts per brand ──────────────────────────────────────── */
+:root[data-brand="linen"] {
+  --font-display: "Newsreader", Georgia, serif;
+  --font-num:     "Newsreader", Georgia, serif;
+  --font-ui:      "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-prose:   "Newsreader", Georgia, serif;
+  --font-mono:    "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --num-feat:     "tnum" 1;
+  --grain:        var(--grain-op, 0);
+}
+:root[data-brand="anthropic"] {
+  --font-display: "Poppins", Arial, sans-serif;
+  --font-num:     "Poppins", Arial, sans-serif;
+  --font-ui:      "Poppins", Arial, sans-serif;
+  --font-prose:   "Lora", Georgia, serif;
+  --font-mono:    ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --num-feat:     "tnum" 1;
+  --grain:        0;
+}
+
+/* ─── Warm Linen — light ───────────────────────────────────── */
+:root[data-brand="linen"][data-theme="light"] {
+  --canvas:#E8E2D3; --canvas-2:#DED7C5; --panel:#F5F0E2; --panel-2:#FAF5E7;
+  --inset:#EFE9DA; --elevated:#FCF8EC;
+  --ink:#211C14; --ink-soft:#574E40; --ink-mute:#655D4E; --ink-faint:#B4AC9B;
+  --hairline:rgba(33,28,20,.10); --hairline-2:rgba(33,28,20,.055);
+  --shadow:rgba(33,28,20,.08); --edge:rgba(255,255,255,.5);
+  --accent:#C25E36; --accent-text:#9D4C2C; --accent-bg:#F4DECF;
+  --running:#385E7F; --running-soft:#C8D6E2;
+  --success:#416143; --success-soft:#C8D6C2;
+  --warning:#74561D; --warning-soft:#E6D4A5;
+  --danger:#913A26;  --danger-soft:#E8C5B8;
+  --info:#606046;    --info-soft:#DDDCBE;
+  --grain-op:.5;
+}
+/* ─── Warm Linen — dark ────────────────────────────────────── */
+:root[data-brand="linen"][data-theme="dark"] {
+  --canvas:#14110D; --canvas-2:#0D0B08; --panel:#1C1812; --panel-2:#221E17;
+  --inset:#191510; --elevated:#2A251D;
+  --ink:#ECE5D2; --ink-soft:#A39C8B; --ink-mute:#9A9384; --ink-faint:#888070;
+  --hairline:rgba(236,229,210,.11); --hairline-2:rgba(236,229,210,.055);
+  --shadow:rgba(0,0,0,.4); --edge:rgba(255,255,255,.04);
+  --accent:#D97757; --accent-text:#E0875C; --accent-bg:#3A2519;
+  --running:#80A7C7; --running-soft:#2A3A48;
+  --success:#8AAE85; --success-soft:#22301F;
+  --warning:#D9B14D; --warning-soft:#352B16;
+  --danger:#D17A60;  --danger-soft:#3A2520;
+  --info:#B5B395;    --info-soft:#2A2A1E;
+  --grain-op:.18;
+}
+
+/* ─── Anthropic brand — light ──────────────────────────────── */
+:root[data-brand="anthropic"][data-theme="light"] {
+  --canvas:#EFECE3; --canvas-2:#E8E6DC; --panel:#FAF9F5; --panel-2:#FFFDF8;
+  --inset:#F2F0E8; --elevated:#FFFFFF;
+  --ink:#141413; --ink-soft:#55534C; --ink-mute:#6E6C63; --ink-faint:#B0AEA5;
+  --hairline:rgba(20,20,19,.11); --hairline-2:rgba(20,20,19,.06);
+  --shadow:rgba(20,20,19,.07); --edge:rgba(255,255,255,.7);
+  --accent:#D97757; --accent-text:#A8492C; --accent-bg:#F6E2D8;
+  --running:#3F6EA3; --running-soft:#DBE7F4;
+  --success:#3F7D4F; --success-soft:#D7E8D9;
+  --warning:#8A5A12; --warning-soft:#F4E4C2;
+  --danger:#B23B2E;  --danger-soft:#F5DAD3;
+  --info:#646257;    --info-soft:#E8E6DC;
+  --grain-op:0;
+}
+/* ─── Anthropic brand — dark ───────────────────────────────── */
+:root[data-brand="anthropic"][data-theme="dark"] {
+  --canvas:#1F1E1B; --canvas-2:#191815; --panel:#2A2825; --panel-2:#312F2B;
+  --inset:#232121; --elevated:#36332E;
+  --ink:#F2EFE6; --ink-soft:#B8B5AB; --ink-mute:#A3A097; --ink-faint:#959084;
+  --hairline:rgba(250,249,245,.12); --hairline-2:rgba(250,249,245,.06);
+  --shadow:rgba(0,0,0,.4); --edge:rgba(255,255,255,.05);
+  --accent:#D97757; --accent-text:#E89478; --accent-bg:#3A2A22;
+  --running:#7EA8D4; --running-soft:#2B3947;
+  --success:#88B189; --success-soft:#29382A;
+  --warning:#D9B15A; --warning-soft:#3A3019;
+  --danger:#D98570;  --danger-soft:#3A261F;
+  --info:#B0AEA5;    --info-soft:#2E2C28;
+  --grain-op:0;
+}
+
+/* ─── Density (compact default, comfy loosens) ─────────────── */
+:root, :root[data-density="compact"] {
+  --gap:10px; --card-pad:11px 13px; --row-pad:7px 10px;
+  --kpi-size:30px; --title-size:30px; --panel-pad:11px 13px;
+  --shell-pad:14px 18px;
+}
+:root[data-density="comfy"] {
+  --gap:16px; --card-pad:16px 18px; --row-pad:11px 14px;
+  --kpi-size:38px; --title-size:38px; --panel-pad:15px 18px;
+  --shell-pad:22px 26px;
+}
+
+:root {
+  --radius-xs:4px; --radius-sm:6px; --radius-md:8px; --radius-lg:12px; --pill:999px;
+  --ls:.08em; --ease:cubic-bezier(.2,.7,.2,1);
+}
+
+/* Theme/brand swap: kill ALL transitions for one frame while the token layer
+   changes. Without this, any element transitioning a var()-driven color
+   (body, .kpi, .icon-btn) gets stuck at its pre-toggle value when --canvas /
+   --panel change — Chromium can't interpolate a transition triggered solely by
+   a custom-property change, so it never reaches the new color. Swap is instant;
+   hover transitions are untouched. */
+:root.theme-swapping * { transition:none !important; }
+
+/* ─── Base ─────────────────────────────────────────────────── */
+* { box-sizing:border-box; }
+html, body { margin:0; }
+body {
+  background:var(--canvas); color:var(--ink);
+  font-family:var(--font-ui); font-size:13px; line-height:1.45;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  font-variant-numeric:tabular-nums;
+  min-height:100vh; position:relative;
+  transition:background-color .3s var(--ease);
+}
+/* paper grain — linen only */
+body::before {
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  opacity:var(--grain);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  mix-blend-mode:multiply;
+}
+:root[data-theme="dark"] body::before { mix-blend-mode:screen; }
+a { color:inherit; text-decoration:none; }
+
+/* Visible keyboard focus on every interactive control (WCAG 2.4.7).
+   :focus-visible keeps the ring keyboard-only so mouse clicks stay clean.
+   This file is self-contained and doesn't load the DS styles.css, so the
+   ring is declared locally. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px; border-radius:var(--radius-sm);
+}
+
+/* Screen-reader-only: visually hidden but available to assistive tech. */
+.sr-only {
+  position:absolute; width:1px; height:1px; padding:0; margin:-1px;
+  overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0;
+}
+
+.app { position:relative; z-index:1; max-width:1240px; margin:0 auto; padding:var(--shell-pad); }
+.tnum { font-variant-numeric:tabular-nums; }
+.mono { font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+
+/* ─── Topbar ───────────────────────────────────────────────── */
+.topbar {
+  display:flex; align-items:center; gap:14px;
+  padding:4px 2px 12px; border-bottom:1px solid var(--hairline); margin-bottom:14px;
+}
+.brand { display:flex; align-items:center; gap:9px; }
+.brand-mark {
+  width:26px; height:26px; border-radius:7px; background:var(--ink);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  box-shadow:0 1px 2px var(--shadow);
+}
+/* v3 brand mark — type IS the mark: italic Newsreader "a" + the console's
+   block caret in the accent, blinking when the surface is live. The caret is
+   the live session — "a line still being written." */
+.brand-mark .gm {
+  font-family:var(--font-display); font-style:italic; font-weight:500;
+  font-size:15px; color:var(--canvas); line-height:1; white-space:nowrap;
+}
+.brand-mark .gm .caret {
+  display:inline-block; width:.15em; height:.55em; margin-left:.1em;
+  background:var(--accent); border-radius:.025em; vertical-align:baseline;
+}
+@media (prefers-reduced-motion:no-preference) {
+  .brand-mark .gm .caret { animation:mkCaret 1s steps(2,end) infinite; }
+}
+@keyframes mkCaret { 50% { opacity:0; } }
+/* Anthropic's mark uses Poppins (geometric sans) — the editorial italic that
+   suits Newsreader reads as a slanted typo here, so set it upright, a touch
+   heavier and optically smaller to sit right in the square. */
+:root[data-brand="anthropic"] .brand-mark .gm {
+  font-style:normal; font-weight:600; font-size:14px; letter-spacing:-.01em;
+}
+.brand-name { font-weight:600; font-size:13px; letter-spacing:.01em; }
+.brand-ver  { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); white-space:nowrap; padding-top:2px; }
+.crumb { color:var(--ink-mute); font-family:var(--font-mono); font-size:12px; }
+.crumb b { color:var(--ink-soft); font-weight:500; }
+.spacer { flex:1; }
+
+.live-pill {
+  display:inline-flex; align-items:center; gap:6px; height:24px; padding:0 10px 0 8px;
+  border-radius:var(--pill); font-size:11px; font-weight:600; letter-spacing:.01em;
+  border:1px solid; white-space:nowrap;
+}
+.live-pill.live   { color:var(--success); background:var(--success-soft); border-color:transparent; }
+.live-pill.offline{ color:var(--danger);  background:var(--danger-soft);  border-color:transparent; }
+.live-pill.conn   { color:var(--ink-mute); background:var(--inset); border-color:var(--hairline); }
+.dot { width:7px; height:7px; border-radius:50%; background:currentColor; position:relative; }
+.live .dot::after {
+  content:""; position:absolute; inset:-4px; border-radius:50%;
+  background:currentColor; opacity:.35; animation:halo 1.8s var(--ease) infinite;
+}
+@keyframes halo { 0%{transform:scale(.6);opacity:.45} 70%{transform:scale(1.7);opacity:0} 100%{opacity:0} }
+
+.meta-inline { color:var(--ink-mute); font-size:11.5px; font-family:var(--font-mono); white-space:nowrap; }
+.icon-btn {
+  width:28px; height:28px; border-radius:var(--radius-md); border:1px solid var(--hairline);
+  background:var(--panel); color:var(--ink-mute); display:inline-flex; align-items:center;
+  justify-content:center; cursor:pointer; transition:color var(--ease) .14s, border-color .14s, background .14s;
+}
+.icon-btn:hover { color:var(--ink); border-color:var(--accent-text); background:var(--elevated); }
+
+/* ─── Title row ────────────────────────────────────────────── */
+.title-row { display:flex; justify-content:space-between; align-items:flex-end; gap:24px; flex-wrap:wrap; margin-bottom:14px; }
+.title-row > div:first-child { min-width:0; }
+.page-title { font-family:var(--font-display); font-size:var(--title-size); font-weight:600; line-height:1.04; letter-spacing:-.01em; margin:0; }
+.page-title em { font-style:italic; color:var(--accent-text); font-weight:500; }
+.page-sub { color:var(--ink-mute); font-family:var(--font-prose); font-size:14px; margin-top:6px; max-width:62ch; }
+.page-sub b { color:var(--ink-soft); font-weight:600; }
+.title-meta { text-align:right; display:flex; flex-direction:column; gap:3px; flex-shrink:0; }
+.title-meta .row { display:flex; gap:7px; justify-content:flex-end; color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.title-meta b { color:var(--ink-soft); font-weight:500; }
+
+/* ─── KPI strip ────────────────────────────────────────────── */
+.kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--gap); margin-bottom:var(--gap); }
+.kpi {
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  padding:var(--card-pad); position:relative; overflow:hidden;
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow);
+  transition:background .25s var(--ease), border-color .25s;
+}
+/* status carried by a hairline top stripe + a dot — the tile and the number
+   stay neutral. Borrowed from the canonical KPI treatment: calmer, far less
+   saturated area (easier on the eyes), and aligned to the domain-state colors
+   so a KPI and its matching badge never disagree. */
+.stripe { position:absolute; top:0; left:13px; right:13px; height:2px; border-radius:0 0 3px 3px; background:transparent; }
+.stripe.running { background:var(--running); }
+.stripe.retry   { background:var(--warning); }
+.stripe.blocked { background:var(--info); }
+.stripe.done    { background:var(--success); }
+.kpi-label { display:flex; align-items:center; gap:6px; font-size:10.5px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.kpi-dot { width:6px; height:6px; border-radius:50%; background:var(--ink-faint); flex-shrink:0; }
+.kpi-dot.running { background:var(--running); }
+.kpi-dot.retry   { background:var(--warning); }
+.kpi-dot.blocked { background:var(--info); }
+.kpi-dot.done    { background:var(--success); }
+.kpi-value { font-family:var(--font-num); font-size:var(--kpi-size); font-weight:600; line-height:1.05; letter-spacing:-.01em; margin:5px 0 2px; font-variant-numeric:tabular-nums; color:var(--ink); }
+.kpi-sub { color:var(--ink-mute); font-size:11px; }
+
+/* ─── Meta strip (token/runtime stats) ─────────────────────── */
+.meta-strip {
+  display:grid; grid-template-columns:repeat(4,1fr);
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow); margin-bottom:var(--gap); overflow:hidden;
+}
+.meta-cell { padding:var(--card-pad); border-left:1px solid var(--hairline-2); }
+.meta-cell:first-child { border-left:0; }
+.meta-k { font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.meta-v { font-family:var(--font-num); font-size:19px; font-weight:600; margin-top:3px; font-variant-numeric:tabular-nums; }
+.meta-sub { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:1px; }
+
+/* ─── Panels ───────────────────────────────────────────────── */
+.panel {
+  background:var(--panel); border:1px solid var(--hairline); border-radius:var(--radius-lg);
+  box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow);
+  padding:var(--panel-pad); margin-bottom:var(--gap);
+}
+.panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; }
+.panel-title { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; white-space:nowrap; }
+.accent-stroke { width:13px; height:2px; border-radius:2px; background:var(--accent); flex-shrink:0; }
+.panel-meta { color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.panel-meta b { color:var(--ink-soft); font-weight:500; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); align-items:start; }
+
+/* ─── Rate limits ──────────────────────────────────────────── */
+.rate-tier { display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:12px; color:var(--ink-mute); flex-wrap:wrap; }
+.tier-badge { font-family:var(--font-mono); font-size:11px; padding:2px 8px; border-radius:var(--pill); background:var(--inset); border:1px solid var(--hairline); color:var(--ink-soft); white-space:nowrap; }
+.rate-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--gap); }
+.rate-cell { background:var(--inset); border:1px solid var(--hairline-2); border-radius:var(--radius-md); padding:10px 11px; }
+.rate-k { font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase; color:var(--ink-mute); }
+.rate-v { font-family:var(--font-num); font-size:17px; font-weight:600; margin-top:4px; font-variant-numeric:tabular-nums; }
+.rate-v small { font-family:var(--font-ui); font-size:10.5px; font-weight:400; color:var(--ink-mute); }
+.rate-bar { height:5px; border-radius:var(--pill); background:var(--hairline); overflow:hidden; margin-top:8px; }
+.rate-bar i { display:block; height:100%; border-radius:var(--pill); transition:width .5s var(--ease); }
+.rate-bar i.ok   { background:var(--success); }
+.rate-bar i.warn { background:var(--warning); }
+.rate-bar i.bad  { background:var(--danger); }
+.rate-meta { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:6px; }
+
+/* ─── Tables ───────────────────────────────────────────────── */
+.table-wrap { overflow-x:auto; margin:0 calc(var(--gap) * -1) calc(var(--gap) * -1); padding:0 var(--gap) 0; }
+table.sessions { width:100%; border-collapse:collapse; font-size:12.5px; min-width:560px; }
+/* narrow tables (Retrying / Blocked) sit two-up in .grid-2 — don't force the
+   wide min-width that the full-bleed Running table needs, or they overflow
+   their half-column and clip the last cell. */
+.table-wrap.narrow table.sessions { min-width:360px; }
+table.sessions th {
+  text-align:left; font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--ink-mute); padding:0 12px 8px 0; border-bottom:1px solid var(--hairline);
+}
+table.sessions th.r, table.sessions td.r { text-align:right; }
+table.sessions td { padding:var(--row-pad); padding-left:0; padding-right:12px; border-bottom:1px solid var(--hairline-2); vertical-align:top; }
+table.sessions tr:last-child td { border-bottom:0; }
+.issue { display:flex; flex-direction:column; gap:1px; }
+.issue-id { font-family:var(--font-mono); font-size:11.5px; font-weight:500; color:var(--accent-text); }
+.issue-title { color:var(--ink-soft); font-size:12px; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.wp { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); margin-top:1px; }
+.sess-id { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); }
+.runtime { font-family:var(--font-num); font-size:13px; font-variant-numeric:tabular-nums; }
+.dim { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:1px; }
+.upd { color:var(--ink); max-width:34ch; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.upd.err { color:var(--danger); }
+.tok { font-family:var(--font-mono); font-size:11.5px; text-align:right; font-variant-numeric:tabular-nums; }
+table.sessions th.tok-h { white-space:nowrap; }
+table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); letter-spacing:.04em; }
+.tok b { font-weight:600; }
+
+/* ─── Badges (domain-state axis) ───────────────────────────── */
+.badge {
+  display:inline-flex; align-items:center; gap:5px; height:21px; padding:0 8px 0 7px;
+  border-radius:var(--pill); font-size:11px; font-weight:600; white-space:nowrap;
+}
+.badge .bd { width:6px; height:6px; border-radius:50%; background:currentColor; }
+.badge.running { color:var(--running); background:var(--running-soft); }
+.badge.retry   { color:var(--warning); background:var(--warning-soft); }
+.badge.blocked { color:var(--info);    background:var(--info-soft); }
+.badge.done    { color:var(--success); background:var(--success-soft); }
+.badge.failed  { color:var(--danger);  background:var(--danger-soft); }
+.badge.running .bd { animation:breathe 2.4s var(--ease) infinite; }
+@keyframes breathe { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.attempt { display:inline-flex; align-items:center; gap:5px; color:var(--warning); font-family:var(--font-mono); font-size:11.5px; }
+.attempt .bd { width:6px; height:6px; border-radius:50%; background:currentColor; }
+
+/* ─── Empty state ──────────────────────────────────────────── */
+.empty { text-align:center; padding:26px 16px; color:var(--ink-mute); }
+.empty .ico { color:var(--ink-faint); margin-bottom:8px; display:inline-flex; }
+.empty .em-t { font-family:var(--font-prose); font-size:14px; color:var(--ink-soft); }
+.empty .em-s { font-size:11.5px; color:var(--ink-mute); margin-top:3px; }
+
+/* ─── Skeleton (loading) ───────────────────────────────────── */
+.skel { background:var(--hairline); border-radius:5px; animation:pulse 1.4s var(--ease) infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+
+.foot { text-align:center; color:var(--ink-mute); font-size:11px; font-family:var(--font-mono); margin-top:18px; padding-top:12px; border-top:1px solid var(--hairline-2); }
+
+/* ─── Reconcile roll-up (folds Stopped-with-progress + Agent-handoff
+   from two full panels into one compact strip). Each bucket is a single
+   inset row: dot + label · count · window/total · issue-id chips. The
+   explanatory prose the old panels carried now lives on a `title` tooltip
+   so no vertical budget is spent on it. ───────────────────────────── */
+/* Both buckets share a 3-track grid (label · metric · ids) via subgrid, so the
+   count column and the id column line up across rows no matter how wide each
+   label or the active font is — no fixed widths to drift. Each row keeps its
+   inset card. The window count carries the serif-numeric treatment used by the
+   KPIs/meta so it reads as the value; the lifetime total stays dim. Collapses
+   to flex-wrap on phones so nothing overflows the narrow viewport. */
+.rollup-grid { display:grid; grid-template-columns:auto auto 1fr; gap:8px var(--gap); }
+.rollup-cell {
+  display:grid; grid-template-columns:subgrid; grid-column:1 / -1; align-items:center;
+  background:var(--inset); border:1px solid var(--hairline-2);
+  border-radius:var(--radius-md); padding:8px 12px;
+}
+.rollup-k { display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:600; letter-spacing:.01em; color:var(--ink-soft); white-space:nowrap; }
+.rollup-v { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); white-space:nowrap; }
+.rollup-v b { font-family:var(--font-num); font-size:17px; font-weight:600; color:var(--ink); margin-right:2px; font-variant-numeric:tabular-nums; }
+.rollup-v .tot { color:var(--ink-faint); margin-left:5px; }
+.rollup-ids { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+@media (max-width:640px) {
+  .rollup-grid { display:flex; flex-direction:column; }
+  .rollup-cell { display:flex; flex-wrap:wrap; gap:6px 9px; grid-column:auto; }
+  .rollup-ids { margin-left:auto; }
+}
+
+/* ─── Two-column body — the real compaction that gets the dashboard onto
+   one screen WITHOUT clipping or inner scrollbars. The live focus (Running,
+   then Retrying + Blocked) takes the wider left column; system context
+   (Rate limits + Reconcile roll-up) stacks in the narrower right column.
+   Splitting the lower half into two columns roughly halves its height, so
+   the whole page falls under a normal display height naturally — content is
+   never cut off, and short screens just scroll. Collapses to one column
+   ≤980px (and the ≤820px rules below take over from there). ───────────── */
+.body-grid { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(330px,1fr); gap:var(--gap); align-items:start; margin-bottom:var(--gap); }
+.body-main, .body-side { display:flex; flex-direction:column; gap:var(--gap); min-width:0; }
+.body-grid .panel, .body-grid .grid-2 { margin-bottom:0; }
+/* Tables were tuned for the old full-width stack — full-bleed negative margins
+   and wide min-widths overflow a column. Inside the two-column body, drop the
+   bleed and let each table fit its (narrower) panel. */
+.body-grid .table-wrap { margin:0; padding:0; }
+.body-grid table.sessions, .body-grid .table-wrap.narrow table.sessions { min-width:0; }
+@media (max-width:980px) { .body-grid { grid-template-columns:1fr; } }
+
+/* Full-width Retrying/Blocked row: each table fits its half comfortably (the
+   long error/detail cells wrap). Clip the wrap so the per-second countdown
+   re-render can't flash a transient horizontal scrollbar — nothing actually
+   overflows. (≤640px the global card rule restores visible/stacked layout.) */
+@media (min-width:641px) { .app > .grid-2 .table-wrap, .body-main .table-wrap.narrow { overflow:hidden; } }
+
+/* ─── Responsive ───────────────────────────────────────────── */
+@media (max-width:820px) {
+  .kpi-row { grid-template-columns:repeat(2,1fr); }
+  .meta-strip { grid-template-columns:repeat(2,1fr); }
+  .meta-cell:nth-child(3) { border-left:0; }
+  .meta-cell:nth-child(n+3) { border-top:1px solid var(--hairline-2); }
+  .grid-2 { grid-template-columns:1fr; }
+  .rate-grid { grid-template-columns:1fr; }
+  .title-meta { text-align:left; }
+  .title-meta .row { justify-content:flex-start; }
+}
+
+/* phone: collapse tables → stacked cards, tighten chrome */
+@media (max-width:640px) {
+  .app { padding:12px 13px; }
+  .topbar { flex-wrap:wrap; gap:8px 10px; }
+  /* let a long title + meta drop the meta to a second line instead of
+     overflowing — both halves are nowrap with no wrap on the head. */
+  .panel-head { flex-wrap:wrap; gap:4px 12px; }
+  .panel-title { min-width:0; }
+  .topbar .meta-inline { order:5; flex-basis:100%; }
+  .page-title { font-size:26px; }
+  .title-row { gap:12px; }
+  .kpi-value { font-size:26px; }
+
+  /* table → cards */
+  .table-wrap { overflow-x:visible; margin:0; padding:0; }
+  /* the .narrow tables (Retrying / Blocked) carry a 360px min-width for their
+     two-up desktop layout via a 2-class selector — which out-specifies a plain
+     `table.sessions` reset and would keep them 360px wide in card mode, blowing
+     past the phone viewport. Match that specificity here so they collapse too. */
+  table.sessions, .table-wrap.narrow table.sessions { min-width:0; display:block; }
+  table.sessions thead { display:none; }
+  table.sessions tbody { display:block; }
+  table.sessions tr {
+    display:block; background:var(--inset); border:1px solid var(--hairline-2);
+    border-radius:var(--radius-md); padding:10px 12px; margin-bottom:9px;
+  }
+  table.sessions tr:last-child { margin-bottom:0; }
+  table.sessions td {
+    display:flex; justify-content:space-between; align-items:baseline; gap:14px;
+    padding:6px 0; border-bottom:1px dashed var(--hairline-2); text-align:right;
+  }
+  table.sessions td:last-child { border-bottom:0; padding-bottom:0; }
+  table.sessions td[data-label]::before {
+    content:attr(data-label); flex:0 0 auto; text-align:left;
+    font-size:10px; font-weight:600; letter-spacing:var(--ls); text-transform:uppercase;
+    color:var(--ink-mute); white-space:nowrap; padding-top:1px;
+  }
+  /* issue cell becomes the card header — full width, no label, left aligned */
+  table.sessions td.issue-cell {
+    display:block; text-align:left; padding-top:0;
+    border-bottom:1px solid var(--hairline); margin-bottom:3px; padding-bottom:8px;
+  }
+  .issue-title { white-space:normal; max-width:none; }
+  .upd { -webkit-line-clamp:unset; max-width:none; text-align:right; }
+  table.sessions td.tok { text-align:right; }
+}
+
+@media (max-width:440px) {
+  .kpi-row { grid-template-columns:1fr 1fr; gap:8px; }
+  .meta-strip { grid-template-columns:1fr 1fr; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  *, *::after { animation:none !important; }
+}
+
+/* ─── Print ────────────────────────────────────────────────────
+   The dashboard can be live in DARK mode (Tweaks → Theme). Printing a
+   near-black canvas either floods ink ("Background graphics" on) or drops
+   cream-on-white to invisible ("Background graphics" off). So for print we
+   force an ink-safe light palette regardless of the active theme/brand,
+   kill the grain overlay, hold every animation at its visible state, and
+   keep cards/rows whole across page breaks. ─────────────────────── */
+@media print {
+  /* ink-safe light palette, no matter which theme/brand is selected */
+  :root, :root[data-theme="dark"], :root[data-theme="light"],
+  :root[data-brand="linen"][data-theme="dark"],
+  :root[data-brand="anthropic"][data-theme="dark"] {
+    --canvas:#fff; --canvas-2:#fff; --panel:#fff; --panel-2:#fff;
+    --inset:#f5f3ed; --elevated:#fff;
+    --ink:#000; --ink-soft:#2a2620; --ink-mute:#4a463d; --ink-faint:#8a8474;
+    --hairline:rgba(0,0,0,.24); --hairline-2:rgba(0,0,0,.12);
+    --shadow:transparent; --edge:transparent; --grain-op:0;
+    --accent:#C25E36; --accent-text:#9D4C2C; --accent-bg:#F4DECF;
+    /* light-theme semantic pairs so badges/stripes print on light fills */
+    --running:#385E7F; --running-soft:#C8D6E2;
+    --success:#416143; --success-soft:#C8D6C2;
+    --warning:#74561D; --warning-soft:#E6D4A5;
+    --danger:#913A26;  --danger-soft:#E8C5B8;
+    --info:#606046;    --info-soft:#DDDCBE;
+  }
+  html, body { background:#fff !important; }
+  body::before { display:none !important; }                 /* paper grain off */
+
+  /* hold animations/transitions at their visible end-state — nothing
+     prints frozen mid-fade */
+  *, *::before, *::after { animation:none !important; transition:none !important; }
+
+  /* render the small semantic fills (badges, KPI stripes, rate bars) faithfully
+     even though the page background is forced white */
+  * { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+
+  /* on-screen-only chrome */
+  .twk-panel, .icon-btn { display:none !important; }
+
+  /* keep cards and table rows from splitting across pages */
+  .kpi, .meta-strip, .panel, .rate-cell, .empty,
+  table.sessions tr { break-inside:avoid; page-break-inside:avoid; }
+  .panel-head, .title-row { break-after:avoid; page-break-after:avoid; }
+  table.sessions thead { display:table-header-group; }      /* repeat header if a table spans pages */
+
+  /* tables can't scroll on paper — let them fit the page and wrap long cells
+     instead of clipping under overflow-x:auto */
+  .table-wrap { overflow:visible !important; margin:0 !important; padding:0 !important; }
+  table.sessions, .table-wrap.narrow table.sessions { min-width:0 !important; }
+  .issue-title, .upd { white-space:normal !important; max-width:none !important;
+    -webkit-line-clamp:unset !important; overflow:visible !important; }
+
+  .app { max-width:none; padding:0; }
+  @page { margin:14mm; }
+}
+
+  </style>
+  <style>
+    :root[data-theme="dark"] .twk-panel{
+      background:rgba(34,30,23,.82);color:#ece5d2;
+      border-color:rgba(255,255,255,.08);
+      box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 12px 40px rgba(0,0,0,.5);
+    }
+    :root[data-theme="dark"] .twk-hd b{color:#ece5d2}
+    :root[data-theme="dark"] .twk-lbl{color:rgba(236,229,210,.72)}
+    :root[data-theme="dark"] .twk-val{color:rgba(236,229,210,.5)}
+    /* segmented control: the light panel defaults (white thumb, dark track)
+       leave the SELECTED label as light-text-on-white → invisible in dark.
+       Re-tone track + thumb for a dark surface so both states stay legible. */
+    :root[data-theme="dark"] .twk-seg{background:rgba(0,0,0,.28)}
+    :root[data-theme="dark"] .twk-seg-thumb{
+      background:rgba(255,255,255,.16);
+      box-shadow:0 1px 2px rgba(0,0,0,.4),0 0 0 .5px rgba(255,255,255,.08)}
+    :root[data-theme="dark"] .twk-seg button{color:rgba(236,229,210,.6)}
+    :root[data-theme="dark"] .twk-x{color:rgba(236,229,210,.55)}
+    :root[data-theme="dark"] .twk-x:hover{background:rgba(255,255,255,.08);color:#ece5d2}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script>window.REFRESH_S = 5;</script>
+  <script>
+/* Early Tweaks announcer (runs before Babel compiles the panel).
+   The Tweaks toolbar button only enables once the page posts
+   __edit_mode_available. The React TweaksPanel posts that in its mount
+   effect — but that fires only after THREE babel blocks compile and the
+   boot poller mounts, which can be 500ms-1s+. If the host has stopped
+   listening by then, the toggle never lights up. So announce immediately
+   and on a short interval here, and buffer any activate request the host
+   sends back so the (later-mounting) panel can honor it. */
+(function () {
+  window.__tweakWantOpen = false;
+  window.addEventListener('message', function (e) {
+    var t = e && e.data && e.data.type;
+    if (t === '__activate_edit_mode') window.__tweakWantOpen = true;
+    else if (t === '__deactivate_edit_mode') window.__tweakWantOpen = false;
+  });
+  var n = 0;
+  function announce() { try { window.parent.postMessage({ type: '__edit_mode_available' }, '*'); } catch (e) {} }
+  announce();
+  var timer = setInterval(function () { announce(); if (++n > 24) clearInterval(timer); }, 150);
+  window.__stopTweakAnnounce = function () { clearInterval(timer); };
+})();
+  </script>
+  <script>
+/* ============================================================
+   Mock state — shaped EXACTLY like GET /api/v1/state.
+   Real worker contract (Symphony SPEC §13.7 + Elixir reference
+   + Codex rate-limit/token payloads): cumulative-since-start
+   counts, three live buckets (running / retrying / blocked),
+   issue-id buckets (completed / reconcile_stopped_with_progress /
+   agent_handoff_reconcile_stopped),
+   codex_totals, and a raw Codex rate-limit snapshot (may be null).
+   No daily windows, no pricing, no event stream, no history list,
+   no editable config — those don't exist in this API.
+   ============================================================ */
+(function () {
+  const now = Date.now();
+  const ago = (s) => new Date(now - s * 1000).toISOString();
+  const unixIn = (s) => Math.floor(now / 1000) + s; // for rate_limits.resets_at (unix seconds)
+
+  const busy = {
+    version: "v1.4.2",
+    generated_at: ago(0),
+    poll_interval_ms: 20000,
+    max_concurrent_agents: 3,
+    max_concurrent_agents_by_state: { "In Progress": 3 },
+    counts: {
+      running: 2, retrying: 1, blocked: 1,
+      completed: 14, completed_total: 137,
+      reconcile_stopped_with_progress: 1,
+      reconcile_stopped_with_progress_total: 4,
+      agent_handoff_reconcile_stopped: 1,
+      agent_handoff_reconcile_stopped_total: 9
+    },
+    running: [
+      { issue_id: "9f2c8a", issue_identifier: "MT-614", state: "In Progress",
+        session_id: "thread-7af3-turn-3", turn_count: 6,
+        last_event: "turn_completed",
+        last_message: "Wired counter into reconciler; adding a metrics test for the stopped-with-progress path.",
+        started_at: ago(372), last_event_at: ago(12),
+        workspace_path: "/tmp/aiops_workspaces/MT-614",
+        tokens: { input_tokens: 286400, output_tokens: 41200, total_tokens: 327600 },
+        codex_app_server_pid: 48213 },
+      { issue_id: "1a7b03", issue_identifier: "MT-615", state: "In Progress",
+        session_id: "thread-9c12-turn-1", turn_count: 1,
+        last_event: "agent_message",
+        last_message: "Drafting runbook; spinning up 3 concurrent sessions against the fixture tracker.",
+        started_at: ago(94), last_event_at: ago(6),
+        workspace_path: "/tmp/aiops_workspaces/MT-615",
+        tokens: { input_tokens: 51800, output_tokens: 7300, total_tokens: 59100 } }
+    ],
+    retrying: [
+      { issue_id: "5d3177", issue_identifier: "MT-613", attempt: 2,
+        due_at: ago(-46), // ~46s in the future
+        error: "context deadline exceeded — runner exceeded stall timeout (no progress 300s)",
+        kind: "runner_error" }
+    ],
+    blocked: [
+      { issue_id: "8e9041", issue_identifier: "MT-590", state: "Blocked",
+        blocked_at: ago(5340), last_event_at: ago(5300),
+        session_id: "thread-2d51-turn-2",
+        workspace_path: "/tmp/aiops_workspaces/MT-590",
+        method: "agent_blocked",
+        error: "Waiting on KMS key-grant approval; agent reported blocked and moved on." }
+    ],
+    completed: ["aa0112", "aa0245", "aa0388"],            // list of issue_id
+    reconcile_stopped_with_progress: ["bb0190"],          // list of issue_id
+    agent_handoff_reconcile_stopped: ["cc0271"],          // list of issue_id
+    codex_totals: { input_tokens: 4812000, output_tokens: 631400,
+                    total_tokens: 5443400, seconds_running: 7338.0 },
+    rate_limits: {                 // raw passthrough of the Codex rate-limit snapshot; may be null
+      limit_name: "codex",
+      primary:   { used_percent: 31.0, window_minutes: 1,  resets_at: unixIn(41) },
+      secondary: { used_percent: 12.4, window_minutes: 60, resets_at: unixIn(1800) },
+      plan_type: "pro"
+    }
+  };
+
+  const idle = {
+    version: "v1.4.2",
+    generated_at: ago(0),
+    poll_interval_ms: 20000, max_concurrent_agents: 3,
+    counts: { running: 0, retrying: 0, blocked: 0,
+              completed: 9, completed_total: 132,
+              reconcile_stopped_with_progress: 0,
+              reconcile_stopped_with_progress_total: 3,
+              agent_handoff_reconcile_stopped: 0,
+              agent_handoff_reconcile_stopped_total: 8 },
+    running: [], retrying: [], blocked: [],
+    completed: [], reconcile_stopped_with_progress: [],
+    agent_handoff_reconcile_stopped: [],
+    codex_totals: { input_tokens: 2140000, output_tokens: 288900,
+                    total_tokens: 2428900, seconds_running: 4292.0 },
+    rate_limits: null              // MUST render a graceful "no rate-limit data yet" empty state
+  };
+
+  window.MOCK_STATE = { busy, idle };
+})();
+
+  </script>
+  <script type="text/babel">
+// @ds-adherence-ignore -- omelette starter scaffold (raw elements/hex/px by design)
+
+/* BEGIN USAGE */
+// tweaks-panel.jsx
+// Reusable Tweaks shell + form-control helpers.
+// Exports (to window): useTweaks, TweaksPanel, TweakSection, TweakRow, TweakSlider,
+//   TweakToggle, TweakRadio, TweakSelect, TweakText, TweakNumber, TweakColor, TweakButton.
+//
+// Owns the host protocol (listens for __activate_edit_mode / __deactivate_edit_mode,
+// posts __edit_mode_available / __edit_mode_set_keys / __edit_mode_dismissed) so
+// individual prototypes don't re-roll it. Ships a consistent set of controls so you
+// don't hand-draw <input type="range">, segmented radios, steppers, etc.
+//
+// Usage (in an HTML file that loads React + Babel):
+//
+//   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+//     "primaryColor": "#D97757",
+//     "palette": ["#D97757", "#29261b", "#f6f4ef"],
+//     "fontSize": 16,
+//     "density": "regular",
+//     "dark": false
+//   }/*EDITMODE-END*/;
+//
+//   function App() {
+//     const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+//     return (
+//       <div style={{ fontSize: t.fontSize, color: t.primaryColor }}>
+//         Hello
+//         <TweaksPanel>
+//           <TweakSection label="Typography" />
+//           <TweakSlider label="Font size" value={t.fontSize} min={10} max={32} unit="px"
+//                        onChange={(v) => setTweak('fontSize', v)} />
+//           <TweakRadio  label="Density" value={t.density}
+//                        options={['compact', 'regular', 'comfy']}
+//                        onChange={(v) => setTweak('density', v)} />
+//           <TweakSection label="Theme" />
+//           <TweakColor  label="Primary" value={t.primaryColor}
+//                        options={['#D97757', '#2A6FDB', '#1F8A5B', '#7A5AE0']}
+//                        onChange={(v) => setTweak('primaryColor', v)} />
+//           <TweakColor  label="Palette" value={t.palette}
+//                        options={[['#D97757', '#29261b', '#f6f4ef'],
+//                                  ['#475569', '#0f172a', '#f1f5f9']]}
+//                        onChange={(v) => setTweak('palette', v)} />
+//           <TweakToggle label="Dark mode" value={t.dark}
+//                        onChange={(v) => setTweak('dark', v)} />
+//         </TweaksPanel>
+//       </div>
+//     );
+//   }
+//
+// TweakRadio is the segmented control for 2–3 short options (auto-falls-back to
+// TweakSelect past ~16/~10 chars per label); reach for TweakSelect directly when
+// options are many or long. For color tweaks always curate 3-4 options rather than
+// a free picker; an option can also be a whole 2–5 color palette (the stored value
+// is the array). The Tweak* controls are a floor, not a ceiling — build custom
+// controls inside the panel if a tweak calls for UI they don't cover.
+/* END USAGE */
+// ─────────────────────────────────────────────────────────────────────────────
+
+const __TWEAKS_STYLE = `
+  .twk-panel{position:fixed;right:16px;bottom:16px;z-index:2147483646;width:280px;
+    max-height:calc(100vh - 32px);display:flex;flex-direction:column;
+    transform:scale(var(--dc-inv-zoom,1));transform-origin:bottom right;
+    background:rgba(250,249,247,.78);color:#29261b;
+    -webkit-backdrop-filter:blur(24px) saturate(160%);backdrop-filter:blur(24px) saturate(160%);
+    border:.5px solid rgba(255,255,255,.6);border-radius:14px;
+    box-shadow:0 1px 0 rgba(255,255,255,.5) inset,0 12px 40px rgba(0,0,0,.18);
+    font:11.5px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif;overflow:hidden}
+  .twk-hd{display:flex;align-items:center;justify-content:space-between;
+    padding:10px 8px 10px 14px;cursor:move;user-select:none}
+  .twk-hd b{font-size:12px;font-weight:600;letter-spacing:.01em}
+  .twk-x{appearance:none;border:0;background:transparent;color:rgba(41,38,27,.55);
+    width:22px;height:22px;border-radius:6px;cursor:default;font-size:13px;line-height:1}
+  .twk-x:hover{background:rgba(0,0,0,.06);color:#29261b}
+  .twk-body{padding:2px 14px 14px;display:flex;flex-direction:column;gap:10px;
+    overflow-y:auto;overflow-x:hidden;min-height:0;
+    scrollbar-width:thin;scrollbar-color:rgba(0,0,0,.15) transparent}
+  .twk-body::-webkit-scrollbar{width:8px}
+  .twk-body::-webkit-scrollbar-track{background:transparent;margin:2px}
+  .twk-body::-webkit-scrollbar-thumb{background:rgba(0,0,0,.15);border-radius:4px;
+    border:2px solid transparent;background-clip:content-box}
+  .twk-body::-webkit-scrollbar-thumb:hover{background:rgba(0,0,0,.25);
+    border:2px solid transparent;background-clip:content-box}
+  .twk-row{display:flex;flex-direction:column;gap:5px}
+  .twk-row-h{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .twk-lbl{display:flex;justify-content:space-between;align-items:baseline;
+    color:rgba(41,38,27,.72)}
+  .twk-lbl>span:first-child{font-weight:500}
+  .twk-val{color:rgba(41,38,27,.5);font-variant-numeric:tabular-nums}
+
+  .twk-sect{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+    color:rgba(41,38,27,.45);padding:10px 0 0}
+  .twk-sect:first-child{padding-top:0}
+
+  .twk-field{appearance:none;box-sizing:border-box;width:100%;min-width:0;height:26px;padding:0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;
+    background:rgba(255,255,255,.6);color:inherit;font:inherit;outline:none}
+  .twk-field:focus{border-color:rgba(0,0,0,.25);background:rgba(255,255,255,.85)}
+  select.twk-field{padding-right:22px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path fill='rgba(0,0,0,.5)' d='M0 0h10L5 6z'/></svg>");
+    background-repeat:no-repeat;background-position:right 8px center}
+
+  .twk-slider{appearance:none;-webkit-appearance:none;width:100%;height:4px;margin:6px 0;
+    border-radius:999px;background:rgba(0,0,0,.12);outline:none}
+  .twk-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+    width:14px;height:14px;border-radius:50%;background:#fff;
+    border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+  .twk-slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;
+    background:#fff;border:.5px solid rgba(0,0,0,.12);box-shadow:0 1px 3px rgba(0,0,0,.2);cursor:default}
+
+  .twk-seg{position:relative;display:flex;padding:2px;border-radius:8px;
+    background:rgba(0,0,0,.06);user-select:none}
+  .twk-seg-thumb{position:absolute;top:2px;bottom:2px;border-radius:6px;
+    background:rgba(255,255,255,.9);box-shadow:0 1px 2px rgba(0,0,0,.12);
+    transition:left .15s cubic-bezier(.3,.7,.4,1),width .15s}
+  .twk-seg.dragging .twk-seg-thumb{transition:none}
+  .twk-seg button{appearance:none;position:relative;z-index:1;flex:1;border:0;
+    background:transparent;color:inherit;font:inherit;font-weight:500;min-height:22px;
+    border-radius:6px;cursor:default;padding:4px 6px;line-height:1.2;
+    overflow-wrap:anywhere}
+
+  .twk-toggle{position:relative;width:32px;height:18px;border:0;border-radius:999px;
+    background:rgba(0,0,0,.15);transition:background .15s;cursor:default;padding:0}
+  .twk-toggle[data-on="1"]{background:#34c759}
+  .twk-toggle i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+  .twk-toggle[data-on="1"] i{transform:translateX(14px)}
+
+  .twk-num{display:flex;align-items:center;box-sizing:border-box;min-width:0;height:26px;padding:0 0 0 8px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:7px;background:rgba(255,255,255,.6)}
+  .twk-num-lbl{font-weight:500;color:rgba(41,38,27,.6);cursor:ew-resize;
+    user-select:none;padding-right:8px}
+  .twk-num input{flex:1;min-width:0;height:100%;border:0;background:transparent;
+    font:inherit;font-variant-numeric:tabular-nums;text-align:right;padding:0 8px 0 0;
+    outline:none;color:inherit;-moz-appearance:textfield}
+  .twk-num input::-webkit-inner-spin-button,.twk-num input::-webkit-outer-spin-button{
+    -webkit-appearance:none;margin:0}
+  .twk-num-unit{padding-right:8px;color:rgba(41,38,27,.45)}
+
+  .twk-btn{appearance:none;height:26px;padding:0 12px;border:0;border-radius:7px;
+    background:rgba(0,0,0,.78);color:#fff;font:inherit;font-weight:500;cursor:default}
+  .twk-btn:hover{background:rgba(0,0,0,.88)}
+  .twk-btn.secondary{background:rgba(0,0,0,.06);color:inherit}
+  .twk-btn.secondary:hover{background:rgba(0,0,0,.1)}
+
+  .twk-swatch{appearance:none;-webkit-appearance:none;width:56px;height:22px;
+    border:.5px solid rgba(0,0,0,.1);border-radius:6px;padding:0;cursor:default;
+    background:transparent;flex-shrink:0}
+  .twk-swatch::-webkit-color-swatch-wrapper{padding:0}
+  .twk-swatch::-webkit-color-swatch{border:0;border-radius:5.5px}
+  .twk-swatch::-moz-color-swatch{border:0;border-radius:5.5px}
+
+  .twk-chips{display:flex;gap:6px}
+  .twk-chip{position:relative;appearance:none;flex:1;min-width:0;height:46px;
+    padding:0;border:0;border-radius:6px;overflow:hidden;cursor:default;
+    box-shadow:0 0 0 .5px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.06);
+    transition:transform .12s cubic-bezier(.3,.7,.4,1),box-shadow .12s}
+  .twk-chip:hover{transform:translateY(-1px);
+    box-shadow:0 0 0 .5px rgba(0,0,0,.18),0 4px 10px rgba(0,0,0,.12)}
+  .twk-chip[data-on="1"]{box-shadow:0 0 0 1.5px rgba(0,0,0,.85),
+    0 2px 6px rgba(0,0,0,.15)}
+  .twk-chip>span{position:absolute;top:0;bottom:0;right:0;width:34%;
+    display:flex;flex-direction:column;box-shadow:-1px 0 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i{flex:1;box-shadow:0 -1px 0 rgba(0,0,0,.1)}
+  .twk-chip>span>i:first-child{box-shadow:none}
+  .twk-chip svg{position:absolute;top:6px;left:6px;width:13px;height:13px;
+    filter:drop-shadow(0 1px 1px rgba(0,0,0,.3))}
+
+  /* Keyboard focus rings — the field/slider strip the UA outline above, so
+     restate a visible ring for :focus-visible (keyboard only). */
+  .twk-field:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+  .twk-slider:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+  .twk-seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-3px;border-radius:6px}
+  .twk-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .twk-chip:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .twk-x:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+`;
+
+// ── useTweaks ───────────────────────────────────────────────────────────────
+// Single source of truth for tweak values. setTweak persists via the host
+// (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
+function useTweaks(defaults) {
+  const [values, setValues] = React.useState(defaults);
+  // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
+  // useState-style call doesn't write a "[object Object]" key into the persisted
+  // JSON block.
+  const setTweak = React.useCallback((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
+      ? keyOrEdits : { [keyOrEdits]: val };
+    setValues((prev) => ({ ...prev, ...edits }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
+    // Same-window signal so in-page listeners (deck-stage rail thumbnails)
+    // can react — the parent message only reaches the host, not peers.
+    window.dispatchEvent(new CustomEvent('tweakchange', { detail: edits }));
+  }, []);
+  return [values, setTweak];
+}
+
+// ── TweaksPanel ─────────────────────────────────────────────────────────────
+// Floating shell. Registers the protocol listener BEFORE announcing
+// availability — if the announce ran first, the host's activate could land
+// before our handler exists and the toolbar toggle would silently no-op.
+// The close button posts __edit_mode_dismissed so the host's toolbar toggle
+// flips off in lockstep; the host echoes __deactivate_edit_mode back which
+// is what actually hides the panel.
+function TweaksPanel({ title = 'Tweaks', children }) {
+  const [open, setOpen] = React.useState(false);
+  const dragRef = React.useRef(null);
+  const offsetRef = React.useRef({ x: 16, y: 16 });
+  const PAD = 16;
+
+  const clampToViewport = React.useCallback(() => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    const maxRight = Math.max(PAD, window.innerWidth - w - PAD);
+    const maxBottom = Math.max(PAD, window.innerHeight - h - PAD);
+    offsetRef.current = {
+      x: Math.min(maxRight, Math.max(PAD, offsetRef.current.x)),
+      y: Math.min(maxBottom, Math.max(PAD, offsetRef.current.y)),
+    };
+    panel.style.right = offsetRef.current.x + 'px';
+    panel.style.bottom = offsetRef.current.y + 'px';
+  }, []);
+
+  React.useEffect(() => {
+    if (!open) return;
+    clampToViewport();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', clampToViewport);
+      return () => window.removeEventListener('resize', clampToViewport);
+    }
+    const ro = new ResizeObserver(clampToViewport);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [open, clampToViewport]);
+
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const t = e?.data?.type;
+      if (t === '__activate_edit_mode') setOpen(true);
+      else if (t === '__deactivate_edit_mode') setOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    // Stop the early plain-script announcer and honor any activate request the
+    // host already sent before this panel mounted (buffered on window).
+    if (typeof window.__stopTweakAnnounce === 'function') window.__stopTweakAnnounce();
+    if (window.__tweakWantOpen) setOpen(true);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const dismiss = () => {
+    setOpen(false);
+    window.parent.postMessage({ type: '__edit_mode_dismissed' }, '*');
+  };
+
+  const onDragStart = (e) => {
+    const panel = dragRef.current;
+    if (!panel) return;
+    const r = panel.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const startRight = window.innerWidth - r.right;
+    const startBottom = window.innerHeight - r.bottom;
+    const move = (ev) => {
+      offsetRef.current = {
+        x: startRight - (ev.clientX - sx),
+        y: startBottom - (ev.clientY - sy),
+      };
+      clampToViewport();
+    };
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  if (!open) return null;
+  return (
+    <>
+      <style>{__TWEAKS_STYLE}</style>
+      <div ref={dragRef} className="twk-panel" data-omelette-chrome=""
+           style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
+        <div className="twk-hd" onMouseDown={onDragStart}>
+          <b>{title}</b>
+          <button className="twk-x" aria-label="Close tweaks"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={dismiss}>✕</button>
+        </div>
+        <div className="twk-body">
+          {children}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ── Layout helpers ──────────────────────────────────────────────────────────
+
+function TweakSection({ label, children }) {
+  return (
+    <>
+      <div className="twk-sect">{label}</div>
+      {children}
+    </>
+  );
+}
+
+function TweakRow({ label, value, children, inline = false }) {
+  return (
+    <div className={inline ? 'twk-row twk-row-h' : 'twk-row'}>
+      <div className="twk-lbl">
+        <span>{label}</span>
+        {value != null && <span className="twk-val">{value}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Controls ────────────────────────────────────────────────────────────────
+
+function TweakSlider({ label, value, min = 0, max = 100, step = 1, unit = '', onChange }) {
+  return (
+    <TweakRow label={label} value={`${value}${unit}`}>
+      <input type="range" className="twk-slider" min={min} max={max} step={step}
+             value={value} onChange={(e) => onChange(Number(e.target.value))} />
+    </TweakRow>
+  );
+}
+
+function TweakToggle({ label, value, onChange }) {
+  return (
+    <div className="twk-row twk-row-h">
+      <div className="twk-lbl"><span>{label}</span></div>
+      <button type="button" className="twk-toggle" data-on={value ? '1' : '0'}
+              role="switch" aria-checked={!!value}
+              onClick={() => onChange(!value)}><i /></button>
+    </div>
+  );
+}
+
+function TweakRadio({ label, value, options, onChange }) {
+  const trackRef = React.useRef(null);
+  const [dragging, setDragging] = React.useState(false);
+  // The active value is read by pointer-move handlers attached for the lifetime
+  // of a drag — ref it so a stale closure doesn't fire onChange for every move.
+  const valueRef = React.useRef(value);
+  valueRef.current = value;
+
+  // Segments wrap mid-word once per-segment width runs out. The track is
+  // ~248px (280 panel − 28 body pad − 4 seg pad), each button loses 12px
+  // to its own padding, and 11.5px system-ui averages ~6.3px/char — so 2
+  // options fit ~16 chars each, 3 fit ~10. Past that (or >3 options), fall
+  // back to a dropdown rather than wrap.
+  const labelLen = (o) => String(typeof o === 'object' ? o.label : o).length;
+  const maxLen = options.reduce((m, o) => Math.max(m, labelLen(o)), 0);
+  const fitsAsSegments = maxLen <= ({ 2: 16, 3: 10 }[options.length] ?? 0);
+  if (!fitsAsSegments) {
+    // <select> emits strings — map back to the original option value so the
+    // fallback stays type-preserving (numbers, booleans) like the segment path.
+    const resolve = (s) => {
+      const m = options.find((o) => String(typeof o === 'object' ? o.value : o) === s);
+      return m === undefined ? s : typeof m === 'object' ? m.value : m;
+    };
+    return <TweakSelect label={label} value={value} options={options}
+                        onChange={(s) => onChange(resolve(s))} />;
+  }
+  const opts = options.map((o) => (typeof o === 'object' ? o : { value: o, label: o }));
+  const idx = Math.max(0, opts.findIndex((o) => o.value === value));
+  const n = opts.length;
+
+  const segAt = (clientX) => {
+    const r = trackRef.current.getBoundingClientRect();
+    const inner = r.width - 4;
+    const i = Math.floor(((clientX - r.left - 2) / inner) * n);
+    return opts[Math.max(0, Math.min(n - 1, i))].value;
+  };
+
+  const onPointerDown = (e) => {
+    setDragging(true);
+    const v0 = segAt(e.clientX);
+    if (v0 !== valueRef.current) onChange(v0);
+    const move = (ev) => {
+      if (!trackRef.current) return;
+      const v = segAt(ev.clientX);
+      if (v !== valueRef.current) onChange(v);
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
+  return (
+    <TweakRow label={label}>
+      <div ref={trackRef} role="radiogroup" aria-label={label} onPointerDown={onPointerDown}
+           onKeyDown={(e) => {
+             const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1
+                       : e.key === 'ArrowLeft'  || e.key === 'ArrowUp'   ? -1 : 0;
+             if (!dir) return;
+             e.preventDefault();
+             const next = (idx + dir + n) % n;
+             onChange(opts[next].value);
+             const btns = trackRef.current && trackRef.current.querySelectorAll('button[role="radio"]');
+             if (btns && btns[next]) btns[next].focus();
+           }}
+           className={dragging ? 'twk-seg dragging' : 'twk-seg'}>
+        <div className="twk-seg-thumb"
+             style={{ left: `calc(2px + ${idx} * (100% - 4px) / ${n})`,
+                      width: `calc((100% - 4px) / ${n})` }} />
+        {opts.map((o) => (
+          <button key={o.value} type="button" role="radio" aria-checked={o.value === value}
+                  tabIndex={o.value === value ? 0 : -1}
+                  onClick={() => onChange(o.value)}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakSelect({ label, value, options, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <select className="twk-field" value={value} onChange={(e) => onChange(e.target.value)}>
+        {options.map((o) => {
+          const v = typeof o === 'object' ? o.value : o;
+          const l = typeof o === 'object' ? o.label : o;
+          return <option key={v} value={v}>{l}</option>;
+        })}
+      </select>
+    </TweakRow>
+  );
+}
+
+function TweakText({ label, value, placeholder, onChange }) {
+  return (
+    <TweakRow label={label}>
+      <input className="twk-field" type="text" value={value} placeholder={placeholder}
+             onChange={(e) => onChange(e.target.value)} />
+    </TweakRow>
+  );
+}
+
+function TweakNumber({ label, value, min, max, step = 1, unit = '', onChange }) {
+  const clamp = (n) => {
+    if (min != null && n < min) return min;
+    if (max != null && n > max) return max;
+    return n;
+  };
+  const startRef = React.useRef({ x: 0, val: 0 });
+  const onScrubStart = (e) => {
+    e.preventDefault();
+    startRef.current = { x: e.clientX, val: value };
+    const decimals = (String(step).split('.')[1] || '').length;
+    const move = (ev) => {
+      const dx = ev.clientX - startRef.current.x;
+      const raw = startRef.current.val + dx * step;
+      const snapped = Math.round(raw / step) * step;
+      onChange(clamp(Number(snapped.toFixed(decimals))));
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+  return (
+    <div className="twk-num">
+      <span className="twk-num-lbl" onPointerDown={onScrubStart}>{label}</span>
+      <input type="number" value={value} min={min} max={max} step={step}
+             onChange={(e) => onChange(clamp(Number(e.target.value)))} />
+      {unit && <span className="twk-num-unit">{unit}</span>}
+    </div>
+  );
+}
+
+// Relative-luminance contrast pick — checkmarks drawn over a swatch need to
+// read on both #111 and #fafafa without per-option configuration. Hex input
+// only (#rgb / #rrggbb); named or rgb()/hsl() colors fall through to "light".
+function __twkIsLight(hex) {
+  const h = String(hex).replace('#', '');
+  const x = h.length === 3 ? h.replace(/./g, (c) => c + c) : h.padEnd(6, '0');
+  const n = parseInt(x.slice(0, 6), 16);
+  if (Number.isNaN(n)) return true;
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return r * 299 + g * 587 + b * 114 > 148000;
+}
+
+const __TwkCheck = ({ light }) => (
+  <svg viewBox="0 0 14 14" aria-hidden="true">
+    <path d="M3 7.2 5.8 10 11 4.2" fill="none" strokeWidth="2.2"
+          strokeLinecap="round" strokeLinejoin="round"
+          stroke={light ? 'rgba(0,0,0,.78)' : '#fff'} />
+  </svg>
+);
+
+// TweakColor — curated color/palette picker. Each option is either a single
+// hex string or an array of 1-5 hex strings; the card adapts — a lone color
+// renders solid, a palette renders colors[0] as the hero (left ~2/3) with the
+// rest stacked in a sharp column on the right. onChange emits the
+// option in the shape it was passed (string stays string, array stays array).
+// Without options it falls back to the native color input for back-compat.
+function TweakColor({ label, value, options, onChange }) {
+  if (!options || !options.length) {
+    return (
+      <div className="twk-row twk-row-h">
+        <div className="twk-lbl"><span>{label}</span></div>
+        <input type="color" className="twk-swatch" value={value}
+               onChange={(e) => onChange(e.target.value)} />
+      </div>
+    );
+  }
+  // Native <input type=color> emits lowercase hex per the HTML spec, so
+  // compare case-insensitively. String() guards JSON.stringify(undefined),
+  // which returns the primitive undefined (no .toLowerCase).
+  const key = (o) => String(JSON.stringify(o)).toLowerCase();
+  const cur = key(value);
+  return (
+    <TweakRow label={label}>
+      <div className="twk-chips" role="radiogroup">
+        {options.map((o, i) => {
+          const colors = Array.isArray(o) ? o : [o];
+          const [hero, ...rest] = colors;
+          const sup = rest.slice(0, 4);
+          const on = key(o) === cur;
+          return (
+            <button key={i} type="button" className="twk-chip" role="radio"
+                    aria-checked={on} data-on={on ? '1' : '0'}
+                    aria-label={colors.join(', ')} title={colors.join(' · ')}
+                    style={{ background: hero }}
+                    onClick={() => onChange(o)}>
+              {sup.length > 0 && (
+                <span>
+                  {sup.map((c, j) => <i key={j} style={{ background: c }} />)}
+                </span>
+              )}
+              {on && <__TwkCheck light={__twkIsLight(hero)} />}
+            </button>
+          );
+        })}
+      </div>
+    </TweakRow>
+  );
+}
+
+function TweakButton({ label, onClick, secondary = false }) {
+  return (
+    <button type="button" className={secondary ? 'twk-btn secondary' : 'twk-btn'}
+            onClick={onClick}>{label}</button>
+  );
+}
+
+Object.assign(window, {
+  useTweaks, TweaksPanel, TweakSection, TweakRow,
+  TweakSlider, TweakToggle, TweakRadio, TweakSelect,
+  TweakText, TweakNumber, TweakColor, TweakButton,
+});
+
+  </script>
+  <script type="text/babel">
+/* ============================================================
+   Lean operations dashboard — read-only view of /api/v1/state
+   ============================================================ */
+const { useState, useEffect, useRef } = React;
+
+/* ── formatters ─────────────────────────────────────────────── */
+const nf = new Intl.NumberFormat("en-US");
+const compact = (n) =>
+  n >= 1_000_000 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace(/\.0$/, "") + "M"
+  : n >= 1_000 ? (n / 1e3).toFixed(n >= 1e4 ? 0 : 1).replace(/\.0$/, "") + "k"
+  : nf.format(n);
+
+function dur(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+function sinceISO(iso) { return dur((Date.now() - new Date(iso).getTime()) / 1000); }
+function untilISO(iso) { return dur((new Date(iso).getTime() - Date.now()) / 1000); }
+
+/* ── tiny icons ─────────────────────────────────────────────── */
+const I = {
+  refresh: <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>,
+  ext: <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>,
+  check: <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
+};
+
+/* ── KPI card ──────────────────────────────────────────────── */
+function Kpi({ label, value, sub, flag, status }) {
+  return (
+    <div className="kpi">
+      {status ? <div className={"stripe " + status} /> : null}
+      <div className="kpi-label"><span className={"kpi-dot" + (status ? " " + status : "")} />{label}</div>
+      <div className="kpi-value tnum">{value}</div>
+      {sub != null && <div className="kpi-sub">{sub}</div>}
+      {flag != null && (
+        <div className="kpi-sub" style={{ color: "var(--warning)", fontWeight: 600, marginTop: "1px" }}>{flag}</div>
+      )}
+    </div>
+  );
+}
+
+/* ── rate-limit window cell ────────────────────────────────── */
+// Codex snapshot window: { used_percent (0-100 float), window_minutes (int|null),
+// resets_at (unix seconds|null) }. Percent-of-window — never a per-category quota.
+function RateWindow({ label, win }) {
+  const pct = Math.max(0, Math.min(100, win.used_percent || 0));
+  const cls = pct >= 85 ? "bad" : pct >= 60 ? "warn" : "ok";
+  const winLabel = win.window_minutes != null ? `${win.window_minutes}-minute window` : "window";
+  const resetSecs = win.resets_at != null ? win.resets_at - Math.floor(Date.now() / 1000) : null;
+  return (
+    <div className="rate-cell">
+      <div className="rate-k">{label}</div>
+      <div className="rate-v tnum">{pct.toFixed(pct < 10 ? 1 : 0)}<small> % used</small></div>
+      <div className="rate-bar"><i className={cls} style={{ width: pct + "%" }} /></div>
+      <span className="sr-only">{cls === "bad" ? "over limit" : cls === "warn" ? "approaching limit" : "within limit"}</span>
+      <div className="rate-meta">{winLabel}{resetSecs != null ? ` · resets in ${dur(resetSecs)}` : ""}</div>
+    </div>
+  );
+}
+
+/* ── badge ─────────────────────────────────────────────────── */
+const Badge = ({ kind, children }) => (
+  <span className={"badge " + kind}><span className="bd" />{children}</span>
+);
+
+/* ── empty state ───────────────────────────────────────────── */
+const Empty = ({ title, sub }) => (
+  <div className="empty">
+    <div className="ico">{I.check}</div>
+    <div className="em-t">{title}</div>
+    <div className="em-s">{sub}</div>
+  </div>
+);
+
+/* ── running table ─────────────────────────────────────────── */
+function RunningTable({ rows, tick }) {
+  if (!rows.length) return <Empty title="No active sessions" sub="The worker is polling and idle — nothing is running right now." />;
+  return (
+    <div className="table-wrap">
+      <table className="sessions">
+        <caption className="sr-only">Running sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Runtime</th>
+          <th scope="col">Latest activity</th><th scope="col" className="r tok-h">Tokens<span className="th-sub"> in / out</span></th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.issue_id}>
+              <td className="issue-cell">
+                <div className="issue">
+                  <span className="issue-id">{r.issue_identifier}</span>
+                  <div className="upd" style={{ maxWidth: "38ch" }}>{r.last_message}</div>
+                  <span className="wp">{r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ""}</span>
+                </div>
+              </td>
+              <td data-label="State"><Badge kind="running">{r.state}</Badge><div className="dim">turn {r.turn_count}</div></td>
+              <td data-label="Runtime"><span className="runtime tnum">{sinceISO(r.started_at)}</span><div className="dim">started</div></td>
+              <td data-label="Latest activity"><span className="mono" style={{ fontSize: "11.5px" }}>{r.last_event}</span><div className="dim">{sinceISO(r.last_event_at)} ago</div></td>
+              <td className="tok" data-label="Tokens in / out"><b>{compact(r.tokens.input_tokens)}</b> / {compact(r.tokens.output_tokens)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── retry table ───────────────────────────────────────────── */
+function RetryTable({ rows, tick }) {
+  if (!rows.length) return <Empty title="No sessions retrying" sub="Nothing has hit a transient failure. Backoff queue is empty." />;
+  return (
+    <div className="table-wrap narrow">
+      <table className="sessions">
+        <caption className="sr-only">Retrying sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">Attempt</th><th scope="col">Next retry</th><th scope="col">Error</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => {
+            const secs = (new Date(r.due_at).getTime() - Date.now()) / 1000;
+            return (
+              <tr key={r.issue_id}>
+                <td className="issue-cell">
+                  <div className="issue">
+                    <span className="issue-id">{r.issue_identifier}</span>
+                    <span className="wp">{r.kind}</span>
+                  </div>
+                </td>
+                <td data-label="Attempt"><span className="attempt"><span className="bd" />attempt {r.attempt}</span></td>
+                <td data-label="Next retry"><span className="runtime tnum">{secs > 0 ? "in " + dur(secs) : "due now"}</span><div className="dim">backoff</div></td>
+                <td data-label="Error"><div className="upd err">{r.error}</div></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── blocked table ─────────────────────────────────────────── */
+function BlockedTable({ rows, tick }) {
+  if (!rows.length) return <Empty title="Nothing blocked" sub="No sessions are waiting on a human or external dependency." />;
+  return (
+    <div className="table-wrap narrow">
+      <table className="sessions">
+        <caption className="sr-only">Blocked sessions</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Waiting</th><th scope="col">Detail</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.issue_id}>
+              <td className="issue-cell">
+                <div className="issue">
+                  <span className="issue-id">{r.issue_identifier}</span>
+                  <span className="wp">{r.workspace_path}{r.session_id ? ` · ${r.session_id}` : ""}</span>
+                </div>
+              </td>
+              <td data-label="State"><Badge kind="blocked">{r.state}</Badge>{r.method ? <div className="dim">{r.method}</div> : null}</td>
+              <td data-label="Waiting"><span className="runtime tnum">{sinceISO(r.blocked_at)}</span><div className="dim">since blocked</div></td>
+              <td data-label="Detail"><div className="upd">{r.error}</div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── main app ──────────────────────────────────────────────── */
+function App({ tweaks }) {
+  const dataState = tweaks.data_state || "busy";
+  const s = window.MOCK_STATE[dataState];
+  const [tick, setTick] = useState(0);
+
+  // live clock so relative times advance
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const c = s.counts, ct = s.codex_totals, rl = s.rate_limits;
+  const online = tweaks.conn !== "offline";
+  const total = c.running + c.retrying + c.blocked;
+  const pollSec = Math.round(s.poll_interval_ms / 1000);
+  const maxConc = s.max_concurrent_agents;
+  const byState = s.max_concurrent_agents_by_state;
+  const stopped = s.reconcile_stopped_with_progress || [];
+  const handoff = s.agent_handoff_reconcile_stopped || [];
+
+  return (
+    <div className="app">
+      {/* polite live region — announces connection + workload changes only.
+          Excludes the per-second "updated Xs ago" clock so it doesn't spam. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {online ? "Connected, live." : "Disconnected."}{" "}
+        {total > 0
+          ? `${total} ${total === 1 ? "session" : "sessions"} in flight: ${c.running} running, ${c.retrying} retrying, ${c.blocked} blocked.`
+          : "Worker idle, nothing in flight."}
+      </div>
+      {/* top bar */}
+      <div className="topbar">
+        <div className="brand">
+          <div className="brand-mark"><span className="gm">a<i className="caret"></i></span></div>
+          <div className="brand-name">aiops</div>
+          {s.version ? <span className="brand-ver" title="worker release">{s.version}</span> : null}
+        </div>
+        <span className="crumb">GET <b>/api/v1/state</b></span>
+        <div className="spacer" />
+        <span className="meta-inline">updated {sinceISO(s.generated_at)} ago</span>
+        {online ? (
+          <span className="live-pill live"><span className="dot" />Live</span>
+        ) : (
+          <span className="live-pill offline"><span className="dot" />Disconnected</span>
+        )}
+        <button className="icon-btn" aria-label="Refresh" title="Refresh">{I.refresh}</button>
+      </div>
+
+      {/* title */}
+      <div className="title-row">
+        <div>
+          <h1 className="page-title">Worker <em>status</em></h1>
+          <p className="page-sub">
+            {total > 0
+              ? <>Read-only view of <b>{total}</b> {total === 1 ? "session" : "sessions"} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
+              : <>The worker is healthy and <b>idle</b> — polling with nothing in flight.</>}
+          </p>
+        </div>
+        <div className="title-meta">
+          <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
+          <div className="row"><span>concurrency</span><b>{maxConc} max{byState ? " · " + Object.entries(byState).map(([k, v]) => `${k} ${v}`).join(", ") : ""}</b></div>
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      <div className="kpi-row">
+        <Kpi label="Running"   value={c.running}  sub={`${maxConc} max concurrent`} status={c.running ? "running" : null} />
+        <Kpi label="Retrying"  value={c.retrying} sub="in backoff queue" status={c.retrying ? "retry" : null} />
+        <Kpi label="Blocked"   value={c.blocked}  sub="awaiting external gate" status={c.blocked ? "blocked" : null} />
+        <Kpi label="Completed" value={c.completed}
+             sub={`${compact(c.completed_total)} lifetime`}
+             flag={c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : null}
+             status="done" />
+      </div>
+
+      {/* codex totals strip (cumulative since process start) */}
+      <div className="meta-strip">
+        <div className="meta-cell"><div className="meta-k">Input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">since process start</div></div>
+        <div className="meta-cell"><div className="meta-k">Output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">generated</div></div>
+        <div className="meta-cell"><div className="meta-k">Total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">input + output</div></div>
+        <div className="meta-cell"><div className="meta-k">Runtime total</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
+      </div>
+
+      {/* live work (left main column, in KPI order: running → retrying → blocked)
+          + system context (right sidebar: rate limits + reconcile). Grouping all
+          three in-flight buckets in one column keeps attention items together and
+          directly under the matching KPIs, instead of scattering them above and
+          below the reference data. */}
+      <div className="body-grid">
+        <div className="body-main">
+          {/* running */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Running<Badge kind="running">{c.running}</Badge></div>
+              <div className="panel-meta"><b>{c.running}</b> / {maxConc} concurrent</div>
+            </div>
+            <RunningTable rows={s.running} tick={tick} />
+          </div>
+
+          {/* retrying */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Retrying<Badge kind="retry">{c.retrying}</Badge></div>
+              <div className="panel-meta">backoff queue</div>
+            </div>
+            <RetryTable rows={s.retrying} tick={tick} />
+          </div>
+
+          {/* blocked */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Blocked<Badge kind="blocked">{c.blocked}</Badge></div>
+              <div className="panel-meta">needs attention</div>
+            </div>
+            <BlockedTable rows={s.blocked} tick={tick} />
+          </div>
+        </div>
+
+        <div className="body-side">
+          {/* rate limits — raw Codex snapshot, may be null */}
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Rate limits</div>
+              <div className="panel-meta">{rl ? <>Codex usage snapshot{rl.limit_name ? <> · <b>{rl.limit_name}</b></> : null}</> : "no snapshot yet"}</div>
+            </div>
+            {rl ? (
+              <>
+                {rl.plan_type ? (
+                  <div className="rate-tier"><span className="tier-badge">{rl.plan_type}</span><span>Codex plan · percent of each rolling window</span></div>
+                ) : null}
+                <div className="rate-grid" style={{ gridTemplateColumns: "repeat(2,1fr)" }}>
+                  {rl.primary   ? <RateWindow label="Primary window"   win={rl.primary} />   : null}
+                  {rl.secondary ? <RateWindow label="Secondary window" win={rl.secondary} /> : null}
+                </div>
+              </>
+            ) : (
+              <div className="empty">
+                <div className="em-t">No rate-limit data yet</div>
+                <div className="em-s">The runner hasn't reported a rate-limit snapshot — common on a Claude runner, or before the first rate-limit event.</div>
+              </div>
+            )}
+          </div>
+
+          {/* reconcile roll-up — Stopped-with-progress + Agent-handoff folded into
+              one compact strip (each was a full panel). Explanatory prose preserved
+              as a hover title so it costs no vertical budget. Hidden when both empty. */}
+          {(stopped.length > 0 || handoff.length > 0) ? (
+            <div className="panel">
+              <div className="panel-head">
+                <div className="panel-title"><span className="accent-stroke" />Reconcile roll-up</div>
+                <div className="panel-meta">reaped by the reconcile loop</div>
+              </div>
+              <div className="rollup-grid">
+                {stopped.length > 0 ? (
+                  <div className="rollup-cell" title="Runs reaped by reconcile after making progress — worth inspecting, not a guaranteed success.">
+                    <span className="rollup-k"><span className="kpi-dot retry" />Stopped w/ progress</span>
+                    <span className="rollup-v"><b>{c.reconcile_stopped_with_progress}</b> this window<span className="tot">· {c.reconcile_stopped_with_progress_total} total</span></span>
+                    <span className="rollup-ids">{stopped.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
+                  </div>
+                ) : null}
+                {handoff.length > 0 ? (
+                  <div className="rollup-cell" title="Runs the reconcile loop stopped after the agent had already completed its handoff (opened its PR / wrote back to the tracker) — finished before being reaped; informational, not an error.">
+                    <span className="rollup-k"><span className="kpi-dot done" />Agent handoff</span>
+                    <span className="rollup-v"><b>{c.agent_handoff_reconcile_stopped}</b> this window<span className="tot">· {c.agent_handoff_reconcile_stopped_total} total</span></span>
+                    <span className="rollup-ids">{handoff.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+window.DashApp = App;
+
+  </script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "brand": "linen",
+      "theme": "light",
+      "data_state": "busy",
+      "density": "compact",
+      "conn": "live"
+    }/*EDITMODE-END*/;
+
+    function Root() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+      // reflect tweaks onto <html> so the whole token layer switches.
+      // Suppress transitions for one frame so var()-driven backgrounds snap to
+      // the new theme instead of getting stuck mid-transition (see .theme-swapping).
+      React.useEffect(() => {
+        const r = document.documentElement;
+        r.classList.add('theme-swapping');
+        r.dataset.brand = t.brand;
+        r.dataset.theme = t.theme;
+        r.dataset.density = t.density;
+        void r.offsetWidth; // force reflow → commit new colors with no transition
+        const id = requestAnimationFrame(() => r.classList.remove('theme-swapping'));
+        return () => cancelAnimationFrame(id);
+      }, [t.brand, t.theme, t.density]);
+
+      return (
+        <React.Fragment>
+          <DashApp tweaks={t} />
+          <TweaksPanel title="Tweaks">
+            <TweakSection label="Appearance" />
+            <TweakRadio label="Brand" value={t.brand}
+              options={[{value:"linen",label:"Linen"},{value:"anthropic",label:"Anthropic"}]}
+              onChange={(v) => setTweak("brand", v)} />
+            <TweakRadio label="Theme" value={t.theme}
+              options={[{value:"light",label:"Light"},{value:"dark",label:"Dark"}]}
+              onChange={(v) => setTweak("theme", v)} />
+            <TweakRadio label="Density" value={t.density}
+              options={[{value:"compact",label:"Compact"},{value:"comfy",label:"Comfy"}]}
+              onChange={(v) => setTweak("density", v)} />
+
+            <TweakSection label="Demo data" />
+            <TweakRadio label="Worker state" value={t.data_state}
+              options={[{value:"busy",label:"Busy"},{value:"idle",label:"Idle"}]}
+              onChange={(v) => setTweak("data_state", v)} />
+            <TweakRadio label="Connection" value={t.conn}
+              options={[{value:"live",label:"Live"},{value:"offline",label:"Offline"}]}
+              onChange={(v) => setTweak("conn", v)} />
+          </TweaksPanel>
+        </React.Fragment>
+      );
+    }
+
+    // Resilient boot: the serve occasionally drops a sibling babel file on a
+    // given load, which would leave useTweaks / DashApp undefined and crash the
+    // whole tree. Poll until every dependency is present, then mount.
+    (function boot(tries) {
+      const ready = typeof useTweaks === "function"
+        && typeof TweaksPanel === "function"
+        && typeof DashApp === "function"
+        && window.MOCK_STATE;
+      if (ready) {
+        ReactDOM.createRoot(document.getElementById("root")).render(<Root />);
+        return;
+      }
+      if (tries > 80) {
+        document.getElementById("root").innerHTML =
+          '<div style="font-family:system-ui;padding:40px;color:#913A26">Failed to load dashboard resources — refresh the page.</div>';
+        return;
+      }
+      setTimeout(() => boot(tries + 1), 50);
+    })(0);
+  </script>
+
+  <template id="__bundler_thumbnail">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect width="100" height="100" fill="#E8E2D3"/>
+      <rect x="30" y="34" width="40" height="7" rx="2" fill="#211C14"/>
+      <rect x="30" y="46" width="16" height="16" rx="3" fill="#C25E36"/>
+      <rect x="52" y="46" width="18" height="16" rx="3" fill="#385E7F"/>
+    </svg>
+  </template>
+</body>
+</html>
