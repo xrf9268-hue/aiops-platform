@@ -53,8 +53,10 @@ SPEC-alignment checklist from `.github/pull_request_template.md` or it cannot
 merge — so land the template + gate first, then import the ruleset.
 
 The same ordering applies to `Validate PR title (Conventional Commits)`: its
-workflow runs on `pull_request_target` (base-branch config), so it does not
-report on any PR until `.github/workflows/pr-title-lint.yml` is on `main`.
-Importing the ruleset with that context **before** the workflow lands would
-deadlock every open PR (incl. the release-please PR) on a check that never runs.
-Land the workflow first, confirm it reports green on a PR, then re-import.
+workflow runs on `pull_request` (so the check attaches to the PR head SHA, like
+`pr-metadata.yml` — not `pull_request_target`, which would report on the base
+SHA and never satisfy the required context). A PR only gets the check once
+`.github/workflows/pr-title-lint.yml` is on `main`, so importing the ruleset
+with that context **before** the workflow lands would deadlock open PRs (and any
+branched from the pre-merge `main`) on a check that never reports. Land the
+workflow first, confirm it reports green on a PR, then re-import.
