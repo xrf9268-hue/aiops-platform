@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.2...v0.1.3) (2026-06-14)
+
+
+### Features
+
+* **doctor:** preflight Gitea/GitHub trackers by driving the worker's own clients ([#801](https://github.com/xrf9268-hue/aiops-platform/issues/801)) ([072a8de](https://github.com/xrf9268-hue/aiops-platform/commit/072a8deafdbed96e6a31d87340fec5e0920ba245)), closes [#781](https://github.com/xrf9268-hue/aiops-platform/issues/781)
+
 ## [0.1.2](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.1...v0.1.2) (2026-06-12)
 
 
