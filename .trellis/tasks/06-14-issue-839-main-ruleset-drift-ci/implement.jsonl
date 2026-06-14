@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/agent-workflow-guidelines.md","reason":"Issue-to-PR workflow and pre-implementation planning gates for this repository"}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Guidance for adding a small reusable checker script without duplicating existing CI patterns"}
+{"file":"docs/runbooks/pr-review-merge-protocol.md","reason":"Owner probe, review, PR, and verification protocol for issue work"}
+{"file":".claude/skills/handle-issue/SKILL.md","reason":"Manual issue-to-PR procedure invoked for GitHub issue #839"}
