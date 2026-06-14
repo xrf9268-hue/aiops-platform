@@ -29,18 +29,20 @@ change a rule here, update its rationale entry there too.
 
 `aiops-platform` is a Go-based, self-hostable AI coding orchestrator that
 implements the [OpenAI Symphony SPEC](docs/research/SPEC.md).
-The orchestrator polls a tracker (Linear, soon Gitea), prepares a deterministic
-per-issue workspace, runs a coding agent in that workspace, and watches the
-agent's lifecycle. Per SPEC §1, the **agent** is what writes tickets, opens
-PRs, and pushes branches — through tools the orchestrator advertises
-(`linear_graphql` and equivalent for Gitea). The orchestrator is the
+The orchestrator polls a tracker (Linear, Gitea, or GitHub), prepares a
+deterministic per-issue workspace, runs a coding agent in that workspace, and
+watches the agent's lifecycle. Per SPEC §1, the **agent** is what writes
+tickets, opens PRs, and pushes branches — through tooling available in its
+workflow/runtime: the orchestrator-advertised dynamic tools `linear_graphql`
+(Linear) and `gitea_issue_labels` (Gitea), or `gh`/local workflow tooling for
+GitHub (which has no orchestrator-advertised tool). The orchestrator is the
 scheduler/runner and tracker *reader*, not a tracker writer.
 
 The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is even if the GitHub repo is temporarily mirrored elsewhere.
 
-> **Transitional notes** — several pieces of the current implementation deviate
-> from this SPEC-aligned picture and are being reverted. Do not design new
-> code that depends on the legacy behavior:
+> **Transitional notes** — several pieces of earlier implementations deviated
+> from this SPEC-aligned picture and have since been reverted. Do not design new
+> code that depends on the legacy behavior, and do not reintroduce it:
 >
 > - **Postgres queue**: removed under #407 as the second half of #73. Do not
 >   reintroduce `internal/queue`, `migrations/`, `cmd/linear-poller`, or
@@ -55,9 +57,9 @@ The Go module path is `github.com/xrf9268-hue/aiops-platform` — keep it as-is 
 >   PR #131 (D9 closed). The worker should continue to stop active runs
 >   when tracker state changes make them ineligible.
 > - **Multi-path WORKFLOW.md discovery** (`internal/workflow/resolver.go`):
->   closed under #72. The resolver now uses the canonical root
->   `WORKFLOW.md` only; do not reintroduce `.aiops/WORKFLOW.md` or
->   `.github/WORKFLOW.md` fallback discovery.
+>   closed under #72; do not reintroduce `.aiops/WORKFLOW.md` or
+>   `.github/WORKFLOW.md` fallback discovery. The canonical-root-only behavior
+>   is documented once in [WORKFLOW.md discovery](#workflowmd-discovery-worker-side).
 
 ## SPEC alignment is a hard requirement
 
@@ -290,7 +292,7 @@ new SPEC-violating change you make must either (a) close an existing deviation,
 | `internal/workflow` | Loads `WORKFLOW.md` (front matter + prompt body) |
 | `internal/runner` | Runner abstraction: `mock`, `codex-app-server`, `claude` |
 | `internal/workspace` | Deterministic git workspace, hooks, run artifacts |
-| `internal/tracker` | Tracker abstraction with Linear client |
+| `internal/tracker` | Tracker abstraction with Linear and GitHub clients |
 | `internal/gitea` | Gitea tracker client and label-state/config helpers for the agent tool surface |
 | `internal/worker` | Worker lifecycle |
 | `internal/task` | Task event constants |
@@ -437,9 +439,11 @@ These rules apply to every PR. Each is earned by a specific observed failure —
   release-please reads that subject to build `CHANGELOG.md` and pick the version
   bump. A title whose type is not a recognized Conventional Commit type is
   **dropped silently** — no changelog line, no bump — so mistyped work vanishes
-  from releases (it is why the pending v0.1.3 Release PR #803 would omit
-  #828/#829/#834 while listing four chores, mostly Trellis archival). Title every
-  PR `type(optional-scope): summary` using
+  from releases (this is what dropped the `feat`s #828/#834 and the `fix` #818
+  from v0.1.3 — their `cmd:`/`dashboard:`/`hardening:` titles predated this
+  check, so they had to be hand-backfilled into the changelog in #851; the
+  `build`-class `release:` PRs #827/#829 were correctly hidden, not dropped).
+  Title every PR `type(optional-scope): summary` using
   exactly these types; the `Validate PR title (Conventional Commits)` required
   check (`.github/workflows/pr-title-lint.yml`) enforces it:
 

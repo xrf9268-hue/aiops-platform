@@ -266,10 +266,14 @@ shipped.
   `amannn/action-semantic-pull-request`); separately, the repo setting
   `squash_merge_commit_title` is set to `PR_TITLE` (a GitHub repo setting applied
   out-of-band, not a committed file) so the parsed subject is the linted title.
-  **Earned by:** the pending v0.1.3
-  Release PR (#803) lists one `feat` and four chores (three Trellis-archive —
-  #836/#807/#813 — plus the #788 dead-code sweep) while omitting every other
-  change shipped since v0.1.2 — `cmd:` version observability (#828), `release:`
-  GHCR images (#829), `dashboard:` version chip + favicon (#834), the #831
-  `maintainability:` decomposition — because their types were not Conventional
-  Commits, so release-please neither listed nor counted them.
+  **Earned by:** the v0.1.3 Release PR (#803) was about to ship crediting only
+  the single Conventional `feat` (#801), because every other change since v0.1.2
+  carried a non-Conventional type that release-please neither listed nor counted
+  — `cmd:` version observability (#828), `dashboard:` version chip + favicon
+  (#834), `hardening:` goroutine panic recovery (#818), `release:` tarball
+  packaging / GHCR images (#827/#829), `maintainability:` decompositions
+  (#831/#832). The user-facing `feat`/`fix` losses (#828/#834/#818) had to be
+  hand-backfilled into the v0.1.3 changelog after the tag was cut (#851); the
+  `release:` and `maintainability:` work maps to the hidden `build`/`refactor`
+  types and was correctly absent. The required check now prevents recurrence at
+  author time.
