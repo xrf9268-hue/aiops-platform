@@ -277,6 +277,10 @@ func newStateHTTPServerWithAuthTokenAndReadiness(host string, port int, authToke
 	dashboardAssets := dashboardAssetHandler()
 	mux.Handle("/assets/", dashboardAssets)
 	mux.Handle("/fonts/", dashboardAssets)
+	// Favicon is served from the committed embed (not the Vite dist) so it works
+	// in the un-built fallback case too; the digest in its URL is the cache-bust
+	// (Symphony#90). An explicit route beats the "/" catch-all below.
+	mux.Handle("/favicon.png", faviconHandler())
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
