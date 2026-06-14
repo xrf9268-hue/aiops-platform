@@ -119,7 +119,11 @@ PASS (every item passes):
      `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → `merged: true`
      (a short bounded wait — e.g. poll every ~30s for a few attempts, not a busy
      loop; required CI here is fast).
-       - Merged → set the label to `aiops/done` via gitea_issue_labels. LAST action.
+       - Merged → set the label to `aiops/done` via gitea_issue_labels, then close
+         the issue: `PATCH /repos/{{ repo.owner }}/{{ repo.name }}/issues/<N>`
+         body `{"state":"closed"}`. The maker referenced the issue with a
+         non-closing `Refs #<N>`, so the forge did NOT close it on merge — you own
+         closure, after `Done`. This is your LAST action.
        - Not merged within your budget (slow/flaky CI) → do NOT flip any label.
          Leave the issue in `Human Review` and stop. It stays in your active set,
          so the next poll re-claims it and re-checks the merge (Step 1 sends you
@@ -134,8 +138,9 @@ FAIL (any item fails):
 
 ## Hard constraints (review-only)
 - Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the
-  review comment, the approval, enabling auto-merge, and the verdict label flip
-  (`aiops/done` after the merge is confirmed, or `aiops/rework` on failure).
+  review comment, the approval, enabling auto-merge, the verdict label flip
+  (`aiops/done` after the merge is confirmed, or `aiops/rework` on failure), and —
+  on the Done path — closing the issue (the maker left it open via `Refs #<N>`).
 - Judge only what the diff and its tests prove; unverified PR-description claims
   count for nothing.
 - Issue the terminal verdict exactly once: `aiops/done` only after the merge is

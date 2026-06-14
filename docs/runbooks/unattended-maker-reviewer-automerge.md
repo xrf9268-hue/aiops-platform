@@ -181,20 +181,26 @@ for this DAG"*):
 ## End-to-end flow (one issue, unattended)
 
 1. Maker claims `Todo` → implements → `go build/test` green → pushes `ai/<id>` →
-   opens PR (`Closes #<N>`) → comments PR URL → flips `Human Review`. Its run stops
+   opens PR referencing the issue with a **non-closing** `Refs #<N>` (NOT
+   `Closes` — see below) → comments PR URL → flips `Human Review`. Its run stops
    on the next reconcile (issue left the maker's active set).
 2. Reviewer claims `Human Review` → fetches head → runs the rubric incl.
    `build/test`. **PASS**: approves (review-bot), enables `merge_when_checks_succeed`,
    then — while still `Human Review` (so it is not reconcile-cancelled) — confirms
-   the merge via `GET …/pulls/<number>` → `merged:true` and flips `Done`. If CI is
-   slow/flaky and the merge has not landed within its budget, it makes **no**
-   terminal flip and leaves the issue in `Human Review`; the next poll re-claims it
-   and re-checks until the forge confirms the merge.
+   the merge via `GET …/pulls/<number>` → `merged:true`, flips `Done`, and closes
+   the issue (it owns closure, since the maker left it open). If CI is slow/flaky
+   and the merge has not landed within its budget, it makes **no** terminal flip
+   and leaves the issue in `Human Review`; the next poll re-claims it and re-checks
+   until the forge confirms the merge.
    **FAIL**: posts findings, flips `Rework` (maker re-dispatches).
 3. CI runs on the PR; when `build-test` is green and the approval is present,
-   Gitea auto-merges (squash) and deletes the branch. `Closes #<N>` also resolves
-   the Gitea issue. `Done` is set by the reviewer only after that merge, never
-   before.
+   Gitea auto-merges (squash) and deletes the branch. The merge does **not** close
+   the issue (the maker used `Refs #<N>`, not a closing keyword); the reviewer
+   flips `Done` and closes it only after confirming the merge, never before.
+   **Why not `Closes #<N>`:** the poller lists `Human Review` (a non-terminal
+   active state) with `state=open`, so an issue auto-closed at merge-time would
+   drop out of the reviewer's poll *before* it could set `Done` — stranding it
+   (closed + still `Human Review`) and blocking every `Depends on #N` dependent.
 
 ## Best-practice checklist
 
@@ -205,7 +211,8 @@ for this DAG"*):
 - [ ] Maker `verify.commands` == the required CI checks (a green local run predicts a green merge).
 - [ ] Maker never sets `aiops/done`; reviewer is the only Done/auto-merge path.
 - [ ] Reviewer issues `aiops/done` **only after the forge confirms the merge** — never on the verdict alone (else `Depends on #N` dependents unblock from stale `main`).
-- [ ] Maker uses the numeric issue number (digits of `{{ issue.identifier }}`, no leading `#`) in every API path / `Closes` keyword — `{{ issue.identifier }}` renders as `#N` on Gitea.
+- [ ] Maker references the issue with a **non-closing** `Refs #<N>` (not `Closes`); the reviewer flips `Done` and closes the issue post-merge. A closing keyword auto-closes the issue at merge, dropping it from the reviewer's `state=open` poll before `Done` is set — stranding it and its dependents.
+- [ ] Maker uses the numeric issue number (digits of `{{ issue.identifier }}`, no leading `#`) in every API path / issue reference — `{{ issue.identifier }}` renders as `#N` on Gitea.
 - [ ] Branch protection: required checks + 1 approval + no direct push to `main` + squash + auto-merge enabled.
 - [ ] One-issue-per-PR; agents file follow-up issues for out-of-scope finds.
 - [ ] Periodic human audit of auto-merged work (the bot review is the gate, not a human).
@@ -217,8 +224,10 @@ need nothing more. When CI is slow or flaky, the merge may not land within the
 reviewer's turn budget. The reviewer then makes **no terminal flip** and leaves the
 issue in `Human Review`; because that is the reviewer's active state, the next poll
 re-claims the issue and re-checks the PR — flipping `Done` only once the forge
-reports `merged:true`. Dependents stay gated throughout, since the issue never
-reaches a terminal state before the merge. (On re-claim the reviewer detects its own
+reports `merged:true`. This re-poll only works because the maker used a non-closing
+`Refs #<N>`: an issue auto-closed at merge would drop out of the poller's
+`state=open` listing for `Human Review` before `Done` is set. Dependents stay gated
+throughout, since the issue never reaches a terminal state before the merge. (On re-claim the reviewer detects its own
 prior approval and skips straight to the merge re-check, so it does not re-run the
 full rubric every poll.) If CI stays red **after** approval — a local-pass /
 CI-fail mismatch the reviewer's own `build/test` did not catch — the issue parks in
