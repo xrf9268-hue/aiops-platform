@@ -5,7 +5,14 @@
 
 ### Features
 
+* **dashboard:** worker-status version chip + favicon (Symphony #90) ([#834](https://github.com/xrf9268-hue/aiops-platform/issues/834)) ([661cf47](https://github.com/xrf9268-hue/aiops-platform/commit/661cf4714ef223fbdbf2366176b905d829e8bc69)), closes [#833](https://github.com/xrf9268-hue/aiops-platform/issues/833)
+* **cmd:** version observability (--version, ldflags stamping, /api/v1/state field, --help subcommands) ([#828](https://github.com/xrf9268-hue/aiops-platform/issues/828)) ([19e3c8f](https://github.com/xrf9268-hue/aiops-platform/commit/19e3c8fbe9752cbd477d8961fd12912670f87b9c)), closes [#796](https://github.com/xrf9268-hue/aiops-platform/issues/796)
 * **doctor:** preflight Gitea/GitHub trackers by driving the worker's own clients ([#801](https://github.com/xrf9268-hue/aiops-platform/issues/801)) ([072a8de](https://github.com/xrf9268-hue/aiops-platform/commit/072a8deafdbed96e6a31d87340fec5e0920ba245)), closes [#781](https://github.com/xrf9268-hue/aiops-platform/issues/781)
+
+
+### Bug Fixes
+
+* add panic recovery to the three unguarded goroutines; fix two letter-of-rule violations ([#818](https://github.com/xrf9268-hue/aiops-platform/issues/818)) ([28a69ee](https://github.com/xrf9268-hue/aiops-platform/commit/28a69eecaf44f4e249b96e3e2ba898c56e6f6d47)), closes [#790](https://github.com/xrf9268-hue/aiops-platform/issues/790)
 
 ## [0.1.2](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.1...v0.1.2) (2026-06-12)
 
