@@ -38,6 +38,15 @@ agent:
   default: codex-app-server
   max_concurrent_agents: 2
   max_turns: 12
+  # Bounds the slow-CI re-poll. Every clean exit that leaves the issue in
+  # Human Review consumes from this cumulative clean-turn budget (D34). It
+  # DEFAULTS to max_turns (12) — too low to re-check across a slow CI run — and
+  # on exhaustion the orchestrator parks the issue in local `blocked`
+  # (continuation_budget), it does NOT loop forever. Set it above max_turns so
+  # several cheap merge re-checks (the Step 1 short-circuit) fit. CI routinely
+  # slower than this budget wants the dedicated Merging worker (#863), not a
+  # larger number.
+  max_continuation_turns: 36
 
 codex:
   command: codex app-server
@@ -88,10 +97,13 @@ If you cannot identify the PR, comment what you looked for and flip to
 
 If a previous poll already reviewed this PR — `GET
 /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/reviews` shows your own
-`APPROVED` review — you already ran the rubric and enabled auto-merge (Step 3c)
-in that pass (the two happen together). Do NOT re-review or re-approve; skip
-straight to Step 3d and just re-confirm the merge. Re-running `build/test` each
-poll while CI lands is wasted work.
+`APPROVED` review — do NOT re-review or re-run `build/test` (wasted work). But do
+NOT assume auto-merge is still enabled: a prior run could have approved (Step 3b)
+then crashed/timed out before enabling it (Step 3c). Re-issue Step 3c — you call
+the merge endpoint directly, so handle its response yourself: a success means it
+is now scheduled, and a "merge already scheduled" error (Gitea returns HTTP 409)
+means a prior run already set it. Treat BOTH as success and go to Step 3d to
+confirm the merge.
 
 ## Step 2 — review against the rubric (every item must pass)
 1. The diff implements what the issue asked; each acceptance criterion is met or
@@ -127,7 +139,10 @@ PASS (every item passes):
        - Not merged within your budget (slow/flaky CI) → do NOT flip any label.
          Leave the issue in `Human Review` and stop. It stays in your active set,
          so the next poll re-claims it and re-checks the merge (Step 1 sends you
-         straight back here) — no terminal flip until `merged:true`. Done.
+         straight back here, cheaply) — no terminal flip until `merged:true`. The
+         re-poll is bounded by `agent.max_continuation_turns` (front matter); CI
+         slower than that budget parks the issue in local `blocked` for an
+         operator to redrive. Done.
   Never flip `aiops/done` before the forge reports the PR merged — `Done` is
   terminal and would unblock `Depends on #N` dependents from a stale `main`.
 

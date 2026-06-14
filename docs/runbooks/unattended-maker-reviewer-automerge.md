@@ -229,11 +229,17 @@ reports `merged:true`. This re-poll only works because the maker used a non-clos
 `state=open` listing for `Human Review` before `Done` is set. Dependents stay gated
 throughout, since the issue never reaches a terminal state before the merge. (On re-claim the reviewer detects its own
 prior approval and skips straight to the merge re-check, so it does not re-run the
-full rubric every poll.) If CI stays red **after** approval — a local-pass /
-CI-fail mismatch the reviewer's own `build/test` did not catch — the issue parks in
-`Human Review` indefinitely and its dependents stay gated; that is a signal for a
-human to investigate the mismatch, not to force `Done`/`Canceled` (either would
-unblock dependents from a `main` that never received the change).
+full rubric every poll.) This re-poll is **bounded**, not infinite: each clean
+exit consumes from `agent.max_continuation_turns` (D34; it defaults to `max_turns`,
+so the reviewer WORKFLOW sets it explicitly higher). When the budget is exhausted —
+e.g. CI stays red after approval (a local-pass / CI-fail mismatch the reviewer's own
+`build/test` did not catch) — the orchestrator parks the issue in local `blocked`
+(`continuation_budget`); its dependents stay gated, and an operator must investigate
+the mismatch and redrive it (raising the budget does not auto-redrive a blocked
+claim) — not force `Done`/`Canceled`, either of which would unblock dependents from a
+`main` that never received the change. For CI that is *routinely* slower than the
+budget, the dedicated Merging worker (#863) is the right tool, not an ever-larger
+number.
 
 Upstream Symphony models this landing phase as a dedicated **Merging** state with an
 agent that *"watches CI, rebases when needed, resolves conflicts, retries flaky
