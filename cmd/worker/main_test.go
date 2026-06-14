@@ -642,6 +642,14 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 	if strings.Contains(html, "/src/main.jsx") {
 		t.Fatalf("dashboard fallback references unserved Vite source: %s", html)
 	}
+	// Favicon wiring (Symphony#90): the served document links the favicon with the
+	// live content digest templated in, never the un-rendered placeholder.
+	if strings.Contains(html, faviconVersionPlaceholder) {
+		t.Fatalf("dashboard HTML still carries the un-templated favicon placeholder %q:\n%s", faviconVersionPlaceholder, html)
+	}
+	if wantLink := "/favicon.png?v=" + faviconDigest(); !strings.Contains(html, wantLink) {
+		t.Fatalf("dashboard HTML missing favicon link %q:\n%s", wantLink, html)
+	}
 
 	if assetPath, ok := firstScriptAssetPath(html); ok && strings.HasPrefix(assetPath, "/assets/") {
 		assetReq := newLoopbackRequest(http.MethodGet, "http://127.0.0.1:4000"+assetPath, nil)

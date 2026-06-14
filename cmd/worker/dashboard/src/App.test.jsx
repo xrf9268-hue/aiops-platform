@@ -203,6 +203,27 @@ describe('Worker status dashboard', () => {
     expect(screen.queryByText(/refreshed every/)).toBeNull(); // footer was removed
   });
 
+  it('surfaces the worker build version as the top-bar chip when stamped', async () => {
+    // The worker stamps `version` into /api/v1/state (resolveVersion); the topbar
+    // threads s.version into the .brand-ver chip next to the mark. Mutation seam:
+    // dropping version={s.version} from the Topbar call drops this chip.
+    current = busyState({ version: 'v1.4.2' });
+    const { container } = render(<App />);
+    await screen.findByRole('heading', { name: /Worker status/i });
+
+    const ver = container.querySelector('.brand-ver');
+    expect(ver).not.toBeNull();
+    expect(ver.textContent).toBe('v1.4.2');
+  });
+
+  it('omits the version chip when the build is unstamped (no version field)', async () => {
+    // omitempty drops `version` for un-stamped dev builds — render no empty chip.
+    current = busyState(); // default fixture carries no `version`
+    const { container } = render(<App />);
+    await screen.findByRole('heading', { name: /Worker status/i });
+    expect(container.querySelector('.brand-ver')).toBeNull();
+  });
+
   it('shows the no-snapshot empty state when rate_limits is null', async () => {
     current = idleState;
     const { container } = render(<App />);

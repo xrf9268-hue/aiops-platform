@@ -390,14 +390,15 @@ function BlockedTable({ rows }) {
 }
 
 // ── topbar (shared by loading + loaded states) ───────────────────────────────
-function Topbar({ status, generatedAt, onRefresh, settings }) {
+function Topbar({ status, generatedAt, version, onRefresh, settings }) {
   const pill = { live: 'live', offline: 'offline', connecting: 'conn' }[status];
   const pillLabel = { live: 'Live', offline: 'Disconnected', connecting: 'Connecting…' }[status];
   return (
     <div className="topbar">
       <div className="brand">
-        <div className="brand-mark"><span>a</span></div>
+        <div className="brand-mark"><span className="gm">a<i className="caret" /></span></div>
         <div className="brand-name">aiops</div>
+        {version ? <span className="brand-ver" title="worker release">{version}</span> : null}
       </div>
       <span className="crumb">GET <b>/api/v1/state</b></span>
       <div className="spacer" />
@@ -513,7 +514,7 @@ export default function App() {
           : 'Worker idle, nothing in flight.'}
       </div>
 
-      <Topbar status={status} generatedAt={s.generated_at} onRefresh={loadState} settings={settings} />
+      <Topbar status={status} generatedAt={s.generated_at} version={s.version} onRefresh={loadState} settings={settings} />
 
       {error ? <div className="err-banner" role="alert">Showing last snapshot — refresh failed: {error}</div> : null}
 
