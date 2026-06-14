@@ -228,7 +228,7 @@ reports `merged:true`. This re-poll only works because the maker used a non-clos
 `Refs #<N>`: an issue auto-closed at merge would drop out of the poller's
 `state=open` listing for `Human Review` before `Done` is set. Dependents stay gated
 throughout, since the issue never reaches a terminal state before the merge. (On re-claim the reviewer detects its own
-prior approval and skips straight to the merge re-check, so it does not re-run the
+**current (non-stale)** prior approval and skips straight to the merge re-check, so it does not re-run the
 full rubric every poll.) This re-poll is **bounded**, not infinite: each clean
 exit consumes from `agent.max_continuation_turns` (D34; it defaults to `max_turns`,
 so the reviewer WORKFLOW sets it explicitly higher). When the budget is exhausted —

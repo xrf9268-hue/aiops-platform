@@ -95,20 +95,28 @@ commented. Obtain the diff either way:
 If you cannot identify the PR, comment what you looked for and flip to
 `aiops/rework` so the maker re-hands-off.
 
-If a previous poll already reviewed this PR — `GET
-/repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/reviews` shows your own
-`APPROVED` review — do NOT re-review or re-run `build/test` (wasted work).
-Instead, in this order:
-1. **Check whether it already merged FIRST:**
-   `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → if `merged:true`
-   (CI finished before this poll landed it), go straight to Step 3d's Merged
-   action — flip `aiops/done`, then close the issue. Do NOT re-post the merge
-   endpoint on a merged PR (Gitea returns HTTP 405, which would derail you).
-2. **Only if not yet merged**, do not assume auto-merge survived a prior crash
-   between approve (Step 3b) and enable (Step 3c): re-issue Step 3c. You call the
-   merge endpoint directly, so handle its response — on success or "already
-   scheduled" (HTTP 409), auto-merge is set, so poll Step 3d; on "already merged"
-   (HTTP 405) it just landed, so flip `aiops/done` + close and stop (no polling).
+If a previous poll already acted on this PR, do NOT blindly re-run the rubric —
+but work out the situation first, in this order:
+1. **Already merged?** `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
+   → if `merged:true` (CI finished before this poll landed it), go straight to
+   Step 3d's Merged action — flip `aiops/done`, then close the issue. Do NOT
+   re-post the merge endpoint on a merged PR (Gitea returns HTTP 405, which would
+   derail you).
+2. **Not merged — is your approval still CURRENT?** Check
+   `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/reviews` for your
+   own `APPROVED` review that is NOT `stale`/dismissed AND whose `commit_id`
+   equals the PR's current `head.sha` (from step 1's response):
+   - **Current approval** → skip the rubric (no wasted `build/test` re-run), but
+     do not assume auto-merge survived a prior crash between approve (Step 3b) and
+     enable (Step 3c): re-issue Step 3c. You call the merge endpoint directly, so
+     handle its response — on success or "already scheduled" (HTTP 409) auto-merge
+     is set, so poll Step 3d; on "already merged" (HTTP 405) it just landed, so
+     flip `aiops/done` + close and stop (no polling).
+   - **No current approval** — your only approval is `stale`/dismissed or was for
+     an older commit (the head moved after you approved: a rebase or a pushed fix)
+     → do NOT short-circuit. Fall through to Step 2 and review the new head from
+     scratch, re-approving before you re-enable auto-merge. Approving an unreviewed
+     head would bypass the checker (the maker/checker split).
 
 ## Step 2 — review against the rubric (every item must pass)
 1. The diff implements what the issue asked; each acceptance criterion is met or
