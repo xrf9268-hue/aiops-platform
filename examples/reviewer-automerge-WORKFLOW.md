@@ -38,6 +38,15 @@ agent:
   default: codex-app-server
   max_concurrent_agents: 2
   max_turns: 12
+  # Bounds the slow-CI re-poll. Every clean exit that leaves the issue in
+  # Human Review consumes from this cumulative clean-turn budget (D34). It
+  # DEFAULTS to max_turns (12) — too low to re-check across a slow CI run — and
+  # on exhaustion the orchestrator parks the issue in local `blocked`
+  # (continuation_budget), it does NOT loop forever. Set it above max_turns so
+  # several cheap merge re-checks (the Step 1 short-circuit) fit. CI routinely
+  # slower than this budget wants the dedicated Merging worker (#863), not a
+  # larger number.
+  max_continuation_turns: 36
 
 codex:
   command: codex app-server
@@ -63,9 +72,16 @@ You review, decide a verdict, and (on pass) land it via CI-gated auto-merge.
 You do NOT write or push code.
 
 Issue under review:
-- Identifier: {{ issue.identifier }}   (the human #N; use its digits for every Gitea API call + gitea_issue_labels — never task.id)
+- Identifier: {{ issue.identifier }}   (Gitea renders this as `#<number>`, e.g. `#7`)
 - URL: {{ issue.url }}
 - Title: {{ task.title }}
+
+Issue number: let `<N>` be the digits of the identifier with the leading `#`
+stripped (e.g. `7`). Use `<N>` only for **issue-keyed** calls — the
+`/issues/<N>/comments` path and the `gitea_issue_labels` tool; never the raw
+`{{ issue.identifier }}` (`#7`, which yields `/issues/#7/...`) and never task.id.
+The **PR-keyed** paths below (`/pulls/<number>/...`) take the *pull-request*
+number from the maker's PR-URL comment — a different number from `<N>`.
 
 Repository: {{ repo.owner }}/{{ repo.name }} (base branch: {{ repo.branch }}).
 Your Gitea credential is the basic-auth token in `git remote get-url origin`;
@@ -78,6 +94,35 @@ commented. Obtain the diff either way:
 - `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>.diff`.
 If you cannot identify the PR, comment what you looked for and flip to
 `aiops/rework` so the maker re-hands-off.
+
+If a previous poll already acted on this PR, do NOT blindly re-run the rubric —
+but work out the situation first, in this order:
+1. **Already merged?** `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
+   → if `merged:true` (CI finished before this poll landed it), go straight to
+   Step 3d's Merged action — flip `aiops/done`, then close the issue. Do NOT
+   re-post the merge endpoint on a merged PR (Gitea returns HTTP 405, which would
+   derail you).
+2. **Not merged — is your approval still CURRENT?** Check
+   `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/reviews` for your
+   own `APPROVED` review that is NOT `stale`/dismissed AND whose `commit_id`
+   equals the PR's current `head.sha` (from step 1's response):
+   - **Current approval** → skip the rubric (no wasted `build/test` re-run), but
+     do not assume auto-merge survived a prior crash between approve (Step 3b) and
+     enable (Step 3c): re-issue Step 3c. You call the merge endpoint directly, so
+     handle its response — on success or "already scheduled" (HTTP 409) auto-merge
+     is set, so poll Step 3d. On any error (Gitea returns HTTP 405 for an
+     already-merged PR but ALSO for not-mergeable / WIP / no-permission states), do
+     NOT conclude it merged: re-check `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
+     and take the Done path (flip `aiops/done` + close) ONLY if `merged:true`;
+     otherwise — unmerged, or the check itself did not confirm a merge — leave the
+     issue in `Human Review` for the next poll (a persistent error is an operator
+     signal). Never flip `aiops/done` without a confirming `merged:true` —
+     a status code alone is not proof.
+   - **No current approval** — your only approval is `stale`/dismissed or was for
+     an older commit (the head moved after you approved: a rebase or a pushed fix)
+     → do NOT short-circuit. Fall through to Step 2 and review the new head from
+     scratch, re-approving before you re-enable auto-merge. Approving an unreviewed
+     head would bypass the checker (the maker/checker split).
 
 ## Step 2 — review against the rubric (every item must pass)
 1. The diff implements what the issue asked; each acceptance criterion is met or
@@ -99,7 +144,26 @@ PASS (every item passes):
      checks are green — you do NOT merge directly):
      `POST /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>/merge`
      body `{"Do":"squash","merge_when_checks_succeed":true,"delete_branch_after_merge":true}`.
-  d. Set the label to `aiops/done` via the gitea_issue_labels tool — your LAST action.
+  d. Confirm the merge BEFORE issuing Done. Stay in this run (the issue is still
+     `Human Review`, so you are not reconcile-cancelled) and poll the PR until the
+     forge reports it merged:
+     `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → `merged: true`
+     (a short bounded wait — e.g. poll every ~30s for a few attempts, not a busy
+     loop; required CI here is fast).
+       - Merged → set the label to `aiops/done` via gitea_issue_labels, then close
+         the issue: `PATCH /repos/{{ repo.owner }}/{{ repo.name }}/issues/<N>`
+         body `{"state":"closed"}`. The maker referenced the issue with a
+         non-closing `Refs #<N>`, so the forge did NOT close it on merge — you own
+         closure, after `Done`. This is your LAST action.
+       - Not merged within your budget (slow/flaky CI) → do NOT flip any label.
+         Leave the issue in `Human Review` and stop. It stays in your active set,
+         so the next poll re-claims it and re-checks the merge (Step 1 sends you
+         straight back here, cheaply) — no terminal flip until `merged:true`. The
+         re-poll is bounded by `agent.max_continuation_turns` (front matter); CI
+         slower than that budget parks the issue in local `blocked` for an
+         operator to redrive. Done.
+  Never flip `aiops/done` before the forge reports the PR merged — `Done` is
+  terminal and would unblock `Depends on #N` dependents from a stale `main`.
 
 FAIL (any item fails):
   - Comment the failing items with concrete, actionable findings (file, line,
@@ -107,8 +171,13 @@ FAIL (any item fails):
     The maker re-runs from your findings. This is your LAST action.
 
 ## Hard constraints (review-only)
-- Do NOT modify, commit, or push code. Your only writes are: the review comment,
-  the approval, the auto-merge enablement, and the one verdict label flip.
+- Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the
+  review comment, the approval, enabling auto-merge, the verdict label flip
+  (`aiops/done` after the merge is confirmed, or `aiops/rework` on failure), and —
+  on the Done path — closing the issue (the maker left it open via `Refs #<N>`).
 - Judge only what the diff and its tests prove; unverified PR-description claims
   count for nothing.
-- Do the verdict label flip exactly once, as the final action.
+- Issue the terminal verdict exactly once: `aiops/done` only after the merge is
+  confirmed, or `aiops/rework` on failure — as your final action. If the merge has
+  not landed within your turn budget, leave the issue in `Human Review` (no
+  terminal flip) so the next poll re-checks — never park it in an invented state.
