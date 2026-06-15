@@ -98,7 +98,9 @@ RCP=30  RC=5  RP=1  R-only=4  CP=51  C-only=20  P-only=3  none=36
 ## Goals / non-goals
 
 Goals
-- Detect, reliably and by **stable identity**: processing, findings, clean.
+- Detect **findings** reliably and by **stable identity**; surface (not
+  auto-trust) human-audited **clean** evidence. There is no reliable structured
+  clean signal (D1/D5), so "detect clean" is explicitly NOT a goal.
 - Query the **right object** for each signal.
 - Keep the safety invariant: **unattended automation must not parse natural
   language** to decide merge-readiness (`github-local-automation.md`).
@@ -154,9 +156,16 @@ Predicates:
   Codex clean comment / `+1` — consistent with the repo default that **merge is
   a human action** (`batch-issue-processing.md`) and the earned "no NL parsing
   for unattended merge" rule (`github-local-automation.md`). (review R2-#1.)
-- **Merge-ready (human / authorized agent):** Codex has reviewed the current
-  head (a review object for the head, or an audited clean signal) **AND** zero
-  unresolved non-outdated `reviewThreads`.
+- **Two merge paths, kept distinct (review R4-#1):**
+  - **Unattended-eligible — the ONLY path the script may auto-merge:** a Codex
+    review object for the **current head** with all of *its* threads resolved
+    (a positive, head-bound confirmation that Codex reviewed this head and the
+    findings are addressed) **AND** zero unresolved non-outdated `reviewThreads`
+    overall.
+  - **Human-merge — default for everything else:** NOT-CONFIRMED
+    (clean-or-not-reviewed) and any human-audited clean signal are **human**
+    decisions; the script never auto-merges on them. A human-recorded "audited
+    clean" artifact is **not** an unattended-script trigger.
 
 ### D2. `local-pr-follow-through.sh`
 
@@ -174,18 +183,26 @@ Predicates:
   fixture-driven, mutation-verified predicate tests (review R1-#6 / R2-#5):
   identity match + each conflict class fails closed; findings review-object with
   `commit_id==head` detected and `commit_id!=head` ignored; all-author thread
-  blocker not narrowed; no-signal timeout surfaces "Codex did not review";
-  multi-head re-review keys off the current head.
+  blocker not narrowed; identity cross-check failure (id-match/login-differ vs
+  login-match/id-differ) exercised; no-signal timeout → **NOT-CONFIRMED** and
+  does NOT auto-merge; multi-head re-review keys off the current head.
 
-### D3. Docs
+### D3. Docs (all updated atomically with the script)
 
-- `pr-review-merge-protocol.md` §4 + `github-local-automation.md`: replace the
-  trigger-comment-`+1` / bare-login model with D1 — the **identity constant**,
-  the head-bound **findings review object**, the broad **all-thread merge
-  blocker**, transient eyes, and the **explicit statement that Codex provides no
-  reliable structured clean signal**, so unattended does not auto-merge on
-  "clean". Keep the earned "unattended must not parse Codex NL" rule as-is; the
-  clean comment / `+1` stay human-audited.
+- `pr-review-merge-protocol.md` **§4** + `github-local-automation.md`: replace
+  the trigger-comment-`+1` / bare-login model with D1 — the **identity
+  constant**, the head-bound **findings review object**, the broad **all-thread
+  merge blocker**, transient eyes, and the **explicit statement that Codex
+  provides no reliable structured clean signal**, so unattended does not
+  auto-merge on "clean". Keep the earned "unattended must not parse Codex NL"
+  rule as-is; the clean comment / `+1` stay human-audited.
+- `pr-review-merge-protocol.md` **§8 (merge)** + `batch-issue-processing.md`
+  **"Authorized auto-merge"** (review R4-#1): state the single unattended-merge
+  rule — auto-merge fires ONLY on the unattended-eligible path (head-bound Codex
+  review object, its threads + all threads resolved); a NOT-CONFIRMED result or
+  a human-audited clean artifact **never** triggers an unattended/script merge.
+  Authorized auto-merge stays opt-in and scope-bounded as today; it does not
+  gain a clean-artifact trigger.
 
 ### D4. Out of scope (confirmed)
 
@@ -221,6 +238,17 @@ as "no findings (yet)". The design owns this rather than papering over it:
   ("did Codex review this head?"), NOT a second merge block — the all-thread
   blocker already blocks findings regardless of how Codex surfaces them
   (review R3-#2). Keep both, with that division of labor explicit.
+- **NOT-CONFIRMED terminal contract (review R4-LOW)** — make the handoff
+  actionable, not a silent recurring timeout indistinguishable from a network
+  failure:
+  - **non-zero exit status** meaning "human action required" (distinct from a
+    hard error/network exit);
+  - a single **structured log/audit line**: PR number, head SHA, base SHA,
+    trigger id, the observed signal (review-object? threads? clean artifact?
+    none), and any open-thread ids;
+  - **suppress re-triggering** the same NOT-CONFIRMED on the next poll until the
+    head SHA changes (a new push), so it doesn't spin.
+  - a test asserts this exit status + payload.
 
 ## Open questions / decisions
 
@@ -280,3 +308,14 @@ as "no findings (yet)". The design owns this rather than papering over it:
   — the findings review-object is completion/attribution, not a second merge
   block (clarified in D5). Net: unattended auto-merge-on-clean is retired
   (no reliable clean signal); scope confirmed not overbuilt.
+- **R4 — codex (local, grounded + adversarial), commit 9d15d0b:**
+  NEEDS-CHANGES, all polish/consistency (no new structural or premise flaws;
+  force-push race verified safe via `commit_id==head`; hardcoded-id acceptable
+  under D-Q4). Accepted: **R4-#1 (HIGH)** D3 must also update protocol §8 +
+  batch auto-merge, and the merge-ready path must be crisp — unattended merges
+  ONLY on a head-bound review-object-all-resolved; a human-audited clean artifact
+  never triggers a script merge (D1 two-paths + D3 + D5). **R4-#2 (HIGH)** stale
+  "detect clean" / "did not review" wording removed from Goals/D2. **R4-LOW**
+  NOT-CONFIRMED terminal contract (non-zero exit, structured log, re-trigger
+  suppression, test) added to D5. Design judged structurally sound; remaining
+  work is implementation (D2/D3/tests).
