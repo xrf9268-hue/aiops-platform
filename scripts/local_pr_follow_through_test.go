@@ -762,15 +762,23 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 		{"0", ""},     // GNU: 0 disables the timeout -> empty (unbounded), not budget 0
 		{"0m", ""},    // 0 with a suffix also disables
 		{"0.4s", "1"}, // ceil to whole seconds
+		// GNU/strtod float spellings the old code passed through directly.
+		{".5m", "30"},
+		{"1.", "1"},
+		{"1e1s", "10"},
+		{"+10s", "10"},
 	} {
 		out := runShellFunc(t, script, "duration_to_seconds", tc.in)
 		if out != tc.want {
 			t.Fatalf("duration_to_seconds(%q) = %q; want %q", tc.in, out, tc.want)
 		}
 	}
-	// Unparseable input must fail (non-zero), not silently yield a bogus budget.
-	if _, _, code := runShellFuncRaw(t, script, "duration_to_seconds", "notaduration"); code == 0 {
-		t.Fatal("duration_to_seconds must fail closed on an unparseable duration")
+	// Unparseable / out-of-grammar input must fail (non-zero), not silently yield
+	// a bogus budget (negatives and malformed floats are not valid durations).
+	for _, bad := range []string{"notaduration", "-5s", "1..2", "m", ""} {
+		if _, _, code := runShellFuncRaw(t, script, "duration_to_seconds", bad); code == 0 {
+			t.Fatalf("duration_to_seconds(%q) must fail closed", bad)
+		}
 	}
 	// The disabled (0) case must leave the timeout unbounded: the caller passes
 	// the raw setting to the outer timeout and budget 0 to the inner loop, and

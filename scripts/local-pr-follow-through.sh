@@ -452,8 +452,12 @@ to_lower() {
 # Fails closed on an unparseable value.
 duration_to_seconds() {
   local d="$1"
-  if [[ "$d" =~ ^([0-9]+(\.[0-9]+)?)([smhd]?)$ ]]; then
-    local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[3]}" mult
+  # Match the full C/GNU floating-point grammar `timeout` accepts for the number
+  # (optional sign, leading/trailing dot, scientific notation) so we don't reject
+  # a value the old code would have passed straight through (e.g. .5m, 1., 1e1s,
+  # +10s); awk then parses the captured number the same way strtod does.
+  if [[ "$d" =~ ^([+]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?)([smhd]?)$ ]]; then
+    local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[5]}" mult
     case "$unit" in
       "" | s) mult=1 ;;
       m) mult=60 ;;
