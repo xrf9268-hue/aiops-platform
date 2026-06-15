@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -527,14 +528,12 @@ func TestPrepareGitWorkspace_RerunReusesWorkspaceAcrossRuns(t *testing.T) {
 	}
 }
 
-// TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink covers the security
-// gate on the reuse path: a symlink planted at the workspace path could
-// otherwise redirect the reuse-path `git reset` / `git checkout -B` into
-// a repository outside the workspace root. PrepareGitWorkspace must
-// refuse the reuse, remove the symlink (without following it), and
-// recreate a fresh worktree linked to OUR mirror, reporting
-// `createdNow=true`.
-func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink(t *testing.T) {
+// TestPrepareGitWorkspaceRejectsWhenPathIsSymlinkOutsideRoot covers the
+// cleanup boundary on the recreate path: a symlink planted at the workspace
+// path can point outside the workspace root. PrepareGitWorkspace must refuse
+// the reuse and fail closed through SafeRemove rather than treating the path as
+// a normal cleanup target.
+func TestPrepareGitWorkspaceRejectsWhenPathIsSymlinkOutsideRoot(t *testing.T) {
 	upstream := initBareUpstream(t)
 	mgr := newTestManager(t)
 	ctx := context.Background()
@@ -548,19 +547,9 @@ func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink(t *testing.T) {
 		t.Fatal("first prepare reported createdNow=false")
 	}
 
-	// Capture the mirror's git-common-dir for later comparison.
-	firstCommon, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
-	if err != nil {
-		t.Fatalf("first git-common-dir: %v", err)
-	}
-	firstCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(firstCommon)))
-	if err != nil {
-		t.Fatalf("eval first common: %v", err)
-	}
-
 	// Replace the workspace path with a symlink pointing at an attacker
-	// controlled git repo elsewhere on disk. The reuse path must NOT
-	// follow this symlink and run `git reset` inside it.
+	// controlled git repo elsewhere on disk. Neither the reuse path nor the
+	// recreate cleanup path may follow or delete through this symlink.
 	attacker := t.TempDir()
 	for _, args := range [][]string{
 		{"git", "init", "-q", "-b", "main", attacker},
@@ -594,15 +583,8 @@ func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink(t *testing.T) {
 		t.Fatalf("plant symlink: %v", err)
 	}
 
-	dir2, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
-	if err != nil {
-		t.Fatalf("second prepare after symlink swap: %v", err)
-	}
-	if dir != dir2 {
-		t.Fatalf("path changed across runs: %s vs %s", dir, dir2)
-	}
-	if !createdNow {
-		t.Fatal("second prepare reported createdNow=false; symlinked path must fall back to recreate")
+	if _, _, err := mgr.PrepareGitWorkspace(ctx, tk); !errors.Is(err, ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("second prepare after symlink swap err = %v, want ErrSafeRemoveEscapesRoot", err)
 	}
 
 	// The attacker repo must be untouched — its HEAD ref must not have
@@ -619,19 +601,12 @@ func TestPrepareGitWorkspace_RecreatesWhenPathIsSymlink(t *testing.T) {
 	} else if string(body) != "attacker" {
 		t.Fatalf("attacker canary file modified: %q", body)
 	}
-
-	// The recreated workspace must be linked to OUR mirror (same
-	// git-common-dir as the first prepare), not to the attacker's repo.
-	secondCommon, err := exec.Command("git", "-C", dir2, "rev-parse", "--git-common-dir").Output()
+	linkInfo, err := os.Lstat(dir)
 	if err != nil {
-		t.Fatalf("second git-common-dir: %v", err)
+		t.Fatalf("symlink path removed after rejected cleanup: %v", err)
 	}
-	secondCommonReal, err := filepath.EvalSymlinks(strings.TrimSpace(string(secondCommon)))
-	if err != nil {
-		t.Fatalf("eval second common: %v", err)
-	}
-	if secondCommonReal != firstCommonReal {
-		t.Fatalf("recreated workspace linked to a different mirror: before=%q after=%q", firstCommonReal, secondCommonReal)
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("workspace path mode = %v, want symlink left in place after rejected cleanup", linkInfo.Mode())
 	}
 }
 
