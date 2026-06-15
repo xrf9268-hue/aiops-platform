@@ -747,9 +747,9 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 	if !strings.Contains(script, `duration_to_seconds() {`) {
 		t.Fatal("local-pr-follow-through.sh missing duration_to_seconds helper")
 	}
-	// Behaviorally exercise the helper, including the GNU `timeout` semantics the
-	// old code preserved by passing DURATION through directly: floats and the
-	// `0`-disables case (which prints empty so the caller leaves the bound off).
+	// duration_to_seconds is a best-effort optimizer: it reduces the COMMON
+	// decimal forms (incl. the GNU/strtod float spellings the old code passed
+	// straight through) to whole seconds for the inner deadline.
 	for _, tc := range []struct {
 		in, want string
 	}{
@@ -757,12 +757,9 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 		{"20m", "1200"},
 		{"1h", "3600"},
 		{"30s", "30"},
-		{"0.5m", "30"}, // float duration (was rejected by the integer-only regex)
+		{"0.5m", "30"},
 		{"1.5h", "5400"},
-		{"0", ""},     // GNU: 0 disables the timeout -> empty (unbounded), not budget 0
-		{"0m", ""},    // 0 with a suffix also disables
 		{"0.4s", "1"}, // ceil to whole seconds
-		// GNU/strtod float spellings the old code passed through directly.
 		{".5m", "30"},
 		{"1.", "1"},
 		{"1e1s", "10"},
@@ -773,20 +770,27 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 			t.Fatalf("duration_to_seconds(%q) = %q; want %q", tc.in, out, tc.want)
 		}
 	}
-	// Unparseable / out-of-grammar input must fail (non-zero), not silently yield
-	// a bogus budget (negatives and malformed floats are not valid durations).
-	for _, bad := range []string{"notaduration", "-5s", "1..2", "m", ""} {
-		if _, _, code := runShellFuncRaw(t, script, "duration_to_seconds", bad); code == 0 {
-			t.Fatalf("duration_to_seconds(%q) must fail closed", bad)
+	// Everything it can't reduce — `0` (disables), exotic GNU spellings
+	// (inf, 0x1p3s), and outright garbage — prints EMPTY and exits 0; the helper
+	// is not the validator. The caller hands these to GNU `timeout` (which
+	// disables on 0, bounds on inf/hex, and errors on garbage) and skips the
+	// inner deadline. This is the fix for the #879 P3 "rejected valid GNU
+	// spellings with exit 2" regression — it must not fail closed here.
+	for _, in := range []string{"0", "0m", "inf", "0x1p3s", "notaduration", "-5s", "1..2", "m", ""} {
+		out, _, code := runShellFuncRaw(t, script, "duration_to_seconds", in)
+		if code != 0 || out != "" {
+			t.Fatalf("duration_to_seconds(%q) = %q exit=%d; want empty/0 (delegated to GNU timeout)", in, out, code)
 		}
 	}
-	// The disabled (0) case must leave the timeout unbounded: the caller passes
-	// the raw setting to the outer timeout and budget 0 to the inner loop, and
-	// the inner loop only self-deadlines when budget > 0.
+	// The non-decimal branch must hand the RAW value to the outer timeout (GNU is
+	// the validator) with budget 0 (no inner deadline); the inner loop only
+	// self-deadlines when budget > 0, and caps the sleep to the remaining budget.
 	for _, want := range []string{
 		`if [[ -z "$poll_budget_seconds" ]]; then`,
+		`hard_cap_arg="$github_codex_review_timeout"`,
 		`budget_arg=0`,
 		`if (( budget_seconds > 0 )) && (( SECONDS >= budget_seconds )); then`,
+		`if (( budget_seconds > 0 && budget_seconds - SECONDS < sleep_for )); then`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("local-pr-follow-through.sh missing %q", want)
