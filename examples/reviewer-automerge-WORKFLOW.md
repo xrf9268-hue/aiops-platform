@@ -22,9 +22,10 @@ tracker:
   terminal_states:
     - Done
     - Canceled
-  inactive_states:               # maker-owned states cancel an in-flight review (Rework pull-back)
+  inactive_states:               # maker/landing-owned states cancel an in-flight review
     - Todo
     - In Progress
+    - Merging
     - Rework
 
 polling:
@@ -44,8 +45,8 @@ agent:
   # on exhaustion the orchestrator parks the issue in local `blocked`
   # (continuation_budget), it does NOT loop forever. Set it above max_turns so
   # several cheap merge re-checks (the Step 1 short-circuit) fit. CI routinely
-  # slower than this budget wants the dedicated Merging worker (#863), not a
-  # larger number.
+  # slower than this budget wants a dedicated Merging worker, not a larger
+  # number.
   max_continuation_turns: 36
 
 codex:

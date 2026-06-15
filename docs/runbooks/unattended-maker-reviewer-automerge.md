@@ -51,7 +51,7 @@ Two worker processes, one Gitea repo/project, **two bot accounts**:
 | `WORKFLOW.md` | `examples/maker-WORKFLOW.md` | `examples/reviewer-automerge-WORKFLOW.md` |
 | Bot account | `maker-bot` (Write) | `review-bot` (Write) — **must differ** |
 | `tracker.active_states` | `[Todo, Rework]` | `[Human Review]` |
-| `tracker.inactive_states` | `[Human Review, In Progress]` | `[Todo, In Progress, Rework]` |
+| `tracker.inactive_states` | `[Human Review, In Progress, Merging]` | `[Todo, In Progress, Merging, Rework]` |
 | `workspace.root` | `~/aiops-workspaces/maker` | `~/aiops-workspaces/reviewer` — **must differ (hard)** |
 | `AIOPS_MIRROR_ROOT` | `~/aiops-mirrors/maker` | `~/aiops-mirrors/reviewer` — **must differ (hard)** |
 | agent state writes | flips → `aiops/human-review`; opens PR; comments PR URL | approves + enables auto-merge; **confirms the merge, then** flips → `aiops/done`; stays in `Human Review` (re-checks next poll) if CI is still landing; `aiops/rework` on fail |
@@ -74,7 +74,9 @@ off the terminal `aiops/*` label, not the forge merge) could unblock and start
 N+1 from a stale `main` while CI is still running or later fails. When CI has not
 landed within the reviewer's turn budget, it makes **no** terminal flip and leaves
 the issue in `Human Review`; the next poll re-claims it and re-checks (see
-[Slow or flaky CI](#slow-or-flaky-ci)) — there is no separate holding state.
+[Slow or flaky CI](#slow-or-flaky-ci)). The default two-worker topology does not
+need a separate holding state; routinely slow CI can add a dedicated `Merging`
+worker without making `Merging` terminal.
 
 The two hard isolation requirements (separate `workspace.root` **and** separate
 `AIOPS_MIRROR_ROOT` per worker — same issue resolves to the same `PathFor`
@@ -221,37 +223,50 @@ for this DAG"*):
 
 For fast, stable CI the reviewer confirms the merge inline (poll → `Done`), so you
 need nothing more. When CI is slow or flaky, the merge may not land within the
-reviewer's turn budget. The reviewer then makes **no terminal flip** and leaves the
-issue in `Human Review`; because that is the reviewer's active state, the next poll
-re-claims the issue and re-checks the PR — flipping `Done` only once the forge
-reports `merged:true`. This re-poll only works because the maker used a non-closing
-`Refs #<N>`: an issue auto-closed at merge would drop out of the poller's
-`state=open` listing for `Human Review` before `Done` is set. Dependents stay gated
-throughout, since the issue never reaches a terminal state before the merge. (On re-claim the reviewer detects its own
-**current (non-stale)** prior approval and skips straight to the merge re-check, so it does not re-run the
-full rubric every poll.) This re-poll is **bounded**, not infinite: each clean
-exit consumes from `agent.max_continuation_turns` (D34; it defaults to `max_turns`,
-so the reviewer WORKFLOW sets it explicitly higher). When the budget is exhausted —
-e.g. CI stays red after approval (a local-pass / CI-fail mismatch the reviewer's own
-`build/test` did not catch) — the orchestrator parks the issue in local `blocked`
-(`continuation_budget`); its dependents stay gated, and an operator must investigate
-the mismatch and redrive it (raising the budget does not auto-redrive a blocked
-claim) — not force `Done`/`Canceled`, either of which would unblock dependents from a
-`main` that never received the change. For CI that is *routinely* slower than the
-budget, the dedicated Merging worker (#863) is the right tool, not an ever-larger
-number.
+reviewer's turn budget. The default two-worker topology can still make **no
+terminal flip** and leave the issue in `Human Review`; because that is the
+reviewer's active state, the next poll re-claims the issue and re-checks the PR —
+flipping `Done` only once the forge reports `merged:true`. This re-poll only works
+because the maker used a non-closing `Refs #<N>`: an issue auto-closed at merge
+would drop out of the poller's `state=open` listing for `Human Review` before
+`Done` is set. Dependents stay gated throughout, since the issue never reaches a
+terminal state before the merge. (On re-claim the reviewer detects its own
+**current (non-stale)** prior approval and skips straight to the merge re-check, so
+it does not re-run the full rubric every poll.) This re-poll is **bounded**, not
+infinite: each clean exit consumes from `agent.max_continuation_turns` (D34; it
+defaults to `max_turns`, so the reviewer WORKFLOW sets it explicitly higher).
+When the budget is exhausted — e.g. CI stays red after approval (a local-pass /
+CI-fail mismatch the reviewer's own `build/test` did not catch) — the orchestrator
+parks the issue in local `blocked` (`continuation_budget`); its dependents stay
+gated, and an operator must investigate the mismatch and redrive it (raising the
+budget does not auto-redrive a blocked claim) — not force `Done`/`Canceled`, either
+of which would unblock dependents from a `main` that never received the change.
 
-Upstream Symphony models this landing phase as a dedicated **Merging** state with an
-agent that *"watches CI, rebases when needed, resolves conflicts, retries flaky
-checks"* ([blog](../research/2026-04-27-openai-symphony-blog.md); upstream
-`elixir/WORKFLOW.md`). The Gitea adapter's state set is currently fixed to the six
-`aiops/*` labels in the topology table — `validGiteaStateLabels`
-(`internal/runner/gitea_tools.go`) rejects any other label, and
-`DefaultStateLabelMappings` (`internal/gitea/label_state.go`) has no `Merging` — so a
-native `Merging` state is a tracked **code** enhancement
-([#863](https://github.com/xrf9268-hue/aiops-platform/issues/863)), not something you
-can configure today. Until it lands, the `Human Review` re-poll above is the slow-CI
-path.
+For CI that is *routinely* slower than the reviewer budget, deploy a dedicated
+**Merging** worker instead of making that budget ever larger. Upstream Symphony
+models this landing phase as a dedicated `Merging` state with an agent that
+*"watches CI, rebases when needed, resolves conflicts, retries flaky checks"*
+([blog](../research/2026-04-27-openai-symphony-blog.md); upstream
+`elixir/WORKFLOW.md`). On Gitea, the reviewer approves the PR, enables
+forge-native auto-merge, then flips the issue to `aiops/merging`. A separate
+landing worker watches `tracker.active_states: [Merging]`, follows the land loop,
+confirms the forge reports `merged:true`, and only then flips `aiops/done` and
+closes the issue. Add `Merging` to the maker/reviewer workers' inactive states
+so the handoff reconcile-cancels any still-running prior owner. `Merging` is
+non-terminal: `Depends on #N` dependents remain blocked until the landing worker
+reaches `Done` (or an operator intentionally uses the terminal `Canceled` escape
+hatch).
+
+The landing worker is a third worker with its own `workspace.root`,
+`AIOPS_MIRROR_ROOT`, and bot credentials. Its workflow should keep `Merging` as
+the only active state and treat the other handoff states as inactive:
+
+```yaml
+tracker:
+  active_states: [Merging]
+  inactive_states: [Todo, In Progress, Human Review, Rework]
+  terminal_states: [Done, Canceled]
+```
 
 ## What this is NOT
 

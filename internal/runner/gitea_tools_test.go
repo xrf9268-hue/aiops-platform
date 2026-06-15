@@ -506,10 +506,53 @@ func TestGiteaIssueLabelsRejectsUnknownAIOpsStateLabelWithoutHTTPRequest(t *test
 
 	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
 		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/inprogress"}})
-	assertStructuredFailure(t, result, err, "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo")
+	assertStructuredFailure(t, result, err, "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/merging, aiops/rework, aiops/todo")
 	_, _, requests := server.recorded()
 	if requests != 0 {
 		t.Fatalf("server received %d requests, want 0", requests)
+	}
+}
+
+func TestGiteaIssueLabelsAcceptsMergingStateLabel(t *testing.T) {
+	server := &fakeGiteaLabelServer{}
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		server.mu.Lock()
+		server.requests++
+		server.methods = append(server.methods, r.Method)
+		server.paths = append(server.paths, r.URL.String())
+		server.bodies = append(server.bodies, string(body))
+		server.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/todo"},{"id":202,"name":"bug"}]`)
+		case http.MethodPost:
+			_, _ = io.WriteString(w, `{"labels":[{"name":"aiops/merging"}]}`)
+		case http.MethodDelete:
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+		}
+	}))
+	defer httpServer.Close()
+
+	result, err := giteaIssueLabelsProxy{token: "token", baseURL: httpServer.URL, owner: "owner", repo: "repo", http: httpServer.Client()}.
+		call(context.Background(), ToolCall{IssueNumber: 7, Labels: []string{"aiops/merging"}})
+	if err != nil {
+		t.Fatalf("gitea_issue_labels call: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Fatalf("result = %q, want success", result)
+	}
+
+	methods, _, bodies := server.recordedSequence()
+	if strings.Join(methods, ",") != "GET,POST,DELETE" {
+		t.Fatalf("methods = %#v, want GET, POST desired label, DELETE stale label", methods)
+	}
+	if !strings.Contains(bodies[1], "aiops/merging") {
+		t.Fatalf("POST body = %s, want aiops/merging desired label", bodies[1])
 	}
 }
 

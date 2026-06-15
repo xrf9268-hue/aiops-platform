@@ -34,7 +34,7 @@ Two worker processes, one tracker project:
 |---|---|---|
 | `WORKFLOW.md` | implementation prompt | rubric/review prompt ([example](../../examples/reviewer-WORKFLOW.md)) |
 | `tracker.active_states` | `[Todo, Rework]` | `[Human Review]` |
-| `tracker.inactive_states` | `[Human Review]` | `[Todo, In Progress, Rework]` |
+| `tracker.inactive_states` | `[Human Review, Merging]` | `[Todo, In Progress, Merging, Rework]` |
 | `workspace.root` | e.g. `~/aiops-workspaces/maker` | **a different root — hard requirement, see below** |
 | `AIOPS_MIRROR_ROOT` env | e.g. `~/aiops-mirrors/maker` | **a different mirror root — hard requirement, see below** |
 | state writes (agent-side) | flips to `aiops/human-review` | flips to `aiops/done` / `aiops/rework` |

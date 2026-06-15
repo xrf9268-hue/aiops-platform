@@ -425,6 +425,7 @@ label:
 | `Todo` | `aiops/todo` |
 | `In Progress` | `aiops/in-progress` |
 | `Human Review` | `aiops/human-review` |
+| `Merging` | `aiops/merging` |
 | `Rework` | `aiops/rework` |
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |

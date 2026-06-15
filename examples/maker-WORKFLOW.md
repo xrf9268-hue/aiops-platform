@@ -32,6 +32,7 @@ tracker:
   inactive_states:
     - Human Review
     - In Progress
+    - Merging
 
 polling:
   interval_ms: 30000
