@@ -473,6 +473,33 @@ func mustJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
+// runShellFuncRaw extracts a self-contained shell function from the script and
+// invokes it in a fresh bash with the given args, returning stdout/stderr/exit.
+func runShellFuncRaw(t *testing.T, script, name string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	prog := name + "() {\n" + shellFunctionBody(t, script, name) + "\n}\n" + name + " \"$@\""
+	cmd := exec.Command("bash", append([]string{"-c", prog, "_"}, args...)...)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("run shell func %s: %v", name, err)
+		}
+		code = ee.ExitCode()
+	}
+	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), code
+}
+
+func runShellFunc(t *testing.T, script, name string, args ...string) string {
+	t.Helper()
+	out, errOut, code := runShellFuncRaw(t, script, name, args...)
+	if code != 0 {
+		t.Fatalf("shell func %s%v exit=%d stderr=%q", name, args, code, errOut)
+	}
+	return out
+}
+
 func TestCodexReviewSignalIdentityFailsClosedOnConflict(t *testing.T) {
 	const head, trigger = "abc123head", "2026-06-15T12:00:00Z"
 	fresh := "2026-06-15T12:05:00Z"
@@ -619,6 +646,50 @@ func TestCodexReviewSignalPinsBotIdentityInOnePlace(t *testing.T) {
 	}
 }
 
+func TestCodexReviewSignalShellGuardFailsClosed(t *testing.T) {
+	// An identity conflict makes the helper exit 3; the poll loop must fail
+	// closed regardless of bash version (errexit-on-`v=$(…)` only fires on bash
+	// >= 4.4). Drive the REAL helper through the same `if ! classification=$(…)`
+	// guard the script uses and assert the shell aborts (exit 1), not falls
+	// through to keep polling.
+	py := codexSignalPython(t)
+	spoof := mustJSON(t, []sigReview{{
+		ID:          1,
+		User:        sigUser{ID: intPtr(42), Login: "chatgpt-codex-connector[bot]", Type: "Bot"},
+		CommitID:    "head",
+		SubmittedAt: "2026-06-15T12:05:00Z",
+	}})
+	guard := `set -euo pipefail
+if ! classification="$(printf "%s" "$REVIEWS" | "$PY" codex_review_signal.py find-findings head 2026-06-15T12:00:00Z)"; then
+  echo CONFLICT >&2
+  exit 1
+fi
+printf '%s' "$classification"`
+	cmd := exec.Command("bash", "-c", guard)
+	cmd.Env = append(os.Environ(), "REVIEWS="+spoof, "PY="+py)
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("spoof guard: want non-zero exit, got err=%v stdout=%q", err, out.String())
+	}
+	if ee.ExitCode() != 1 {
+		t.Fatalf("spoof guard exit = %d (stdout=%q stderr=%q); want 1 (fail-closed)", ee.ExitCode(), out.String(), errb.String())
+	}
+	if strings.Contains(out.String(), "FINDINGS") {
+		t.Fatalf("spoof guard leaked FINDINGS through a fail-closed path: %q", out.String())
+	}
+	// Pin that the script actually uses the version-independent guard form.
+	script, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	if !strings.Contains(string(script), `if ! classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")"; then`) {
+		t.Fatal("poll loop must guard the find-findings substitution with `if ! classification=$(...)` so a spoof fails closed regardless of bash version")
+	}
+}
+
 func TestLocalPRFollowThroughHandsNotConfirmedToHuman(t *testing.T) {
 	body, err := os.ReadFile("local-pr-follow-through.sh")
 	if err != nil {
@@ -632,7 +703,14 @@ func TestLocalPRFollowThroughHandsNotConfirmedToHuman(t *testing.T) {
 		`audit_log "github_codex_review_not_confirmed"`,
 		`action=human_review_required`,
 		`open_threads=${open_threads:-none}`,
-		`if [[ "$rc" -eq 124 ]]; then`,
+		// NOT-CONFIRMED rides the inner loop's own no-signal deadline (sentinel
+		// 75), NOT the outer timeout 124 — a hung gh/network call yields 124 and
+		// must stay a retryable hard error, not a suppressing handoff (codex #879).
+		`if (( SECONDS >= budget_seconds )); then`,
+		`exit 75`,
+		`if [[ "$rc" -eq 75 ]]; then`,
+		`hard_cap_seconds=$((poll_budget_seconds + 120))`,
+		`run_with_timeout "${hard_cap_seconds}s" bash -c`,
 		`return 20`,
 		`wait_for_github_codex_review "$pr" "$head_oid" "$base_oid" "$base_ref" || review_rc=$?`,
 		`if [[ "$review_rc" -eq 20 ]]; then`,
@@ -643,13 +721,48 @@ func TestLocalPRFollowThroughHandsNotConfirmedToHuman(t *testing.T) {
 			t.Fatalf("local-pr-follow-through.sh missing %q", want)
 		}
 	}
+	// Timeout 124 must NOT be the NOT-CONFIRMED trigger (that is the clean
+	// deadline sentinel 75); 124 means a command hung and the head stays
+	// retryable. Guard against a regression that conflates them again.
+	if strings.Contains(script, `if [[ "$rc" -eq 124 ]]; then`) {
+		t.Fatal("rc==124 (a hung command / outer timeout) must stay a hard error, not the NOT-CONFIRMED path; use the 75 clean-deadline sentinel")
+	}
 	// NOT-CONFIRMED must hand off before any merge: the review_rc==20 `continue`
 	// has to precede the merge call so a clean-or-not-reviewed PR is never merged.
 	if strings.Index(script, `human_action_required=1`) > strings.Index(script, `gh_cmd pr merge`) {
 		t.Fatal("NOT-CONFIRMED handoff (human_action_required=1) must come before the merge call")
 	}
-	// The 124 (timeout) branch is what records NOT-CONFIRMED.
-	if strings.Index(script, `if [[ "$rc" -eq 124 ]]; then`) > strings.Index(script, `record_github_codex_not_confirmed "$pr"`) {
-		t.Fatal("record_github_codex_not_confirmed must be reached from the timeout (124) branch")
+	// The clean-deadline (75) branch is what records NOT-CONFIRMED.
+	if strings.Index(script, `if [[ "$rc" -eq 75 ]]; then`) > strings.Index(script, `record_github_codex_not_confirmed "$pr"`) {
+		t.Fatal("record_github_codex_not_confirmed must be reached from the clean-deadline (75) branch")
+	}
+}
+
+func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	script := string(body)
+	if !strings.Contains(script, `duration_to_seconds() {`) {
+		t.Fatal("local-pr-follow-through.sh missing duration_to_seconds helper")
+	}
+	// Behaviorally exercise the helper for the formats the poll budget uses.
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"1200", "1200"},
+		{"20m", "1200"},
+		{"1h", "3600"},
+		{"30s", "30"},
+	} {
+		out := runShellFunc(t, script, "duration_to_seconds", tc.in)
+		if out != tc.want {
+			t.Fatalf("duration_to_seconds(%q) = %q; want %q", tc.in, out, tc.want)
+		}
+	}
+	// Unparseable input must fail (non-zero), not silently yield a bogus budget.
+	if _, _, code := runShellFuncRaw(t, script, "duration_to_seconds", "notaduration"); code == 0 {
+		t.Fatal("duration_to_seconds must fail closed on an unparseable duration")
 	}
 }

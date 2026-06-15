@@ -443,6 +443,25 @@ to_lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
+# Converts a GNU-timeout duration (e.g. 20m, 1200, 1h) to whole seconds, so the
+# Codex poll loop can own its own no-signal deadline (distinct sentinel) and
+# leave the outer `timeout` 124 as a hard error for a genuinely hung command.
+duration_to_seconds() {
+  local d="$1"
+  if [[ "$d" =~ ^([0-9]+)([smhd]?)$ ]]; then
+    local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+    case "$unit" in
+      "" | s) printf '%s' "$n" ;;
+      m) printf '%s' "$((n * 60))" ;;
+      h) printf '%s' "$((n * 3600))" ;;
+      d) printf '%s' "$((n * 86400))" ;;
+    esac
+    return 0
+  fi
+  echo "cannot parse duration '$d' (expected <int>[smhd])" >&2
+  return 1
+}
+
 run_with_timeout() {
   local duration="$1"
   shift
@@ -984,8 +1003,14 @@ base_ref: ${base_ref}")"
   # transient (clears on completion) and the PR-body +1 is idempotent/PR-level,
   # so neither is a gate. (design #870 D1/D2/D5)
   local signal_script="$repo_root/scripts/codex_review_signal.py"
+  local poll_budget_seconds hard_cap_seconds
+  poll_budget_seconds="$(duration_to_seconds "$github_codex_review_timeout")" || exit 2
+  # The loop owns its no-signal deadline and exits 75; the outer timeout is a
+  # longer hard backstop, so its 124 means a command genuinely hung (network
+  # stall) — never "polled the full window clean". (codex #879 R1-P2)
+  hard_cap_seconds=$((poll_budget_seconds + 120))
   rc=0
-  run_with_timeout "$github_codex_review_timeout" bash -c '
+  run_with_timeout "${hard_cap_seconds}s" bash -c '
     set -euo pipefail
     repo_owner="$1"
     repo_name="$2"
@@ -997,7 +1022,14 @@ base_ref: ${base_ref}")"
     started_at="$8"
     poll_seconds="$9"
     signal_script="${10}"
+    budget_seconds="${11}"
+    SECONDS=0
     while true; do
+      if (( SECONDS >= budget_seconds )); then
+        # Polled the full window with no Codex review object: clean no-signal
+        # deadline (NOT-CONFIRMED), distinct from a hung command (outer 124).
+        exit 75
+      fi
       current_refs="$(gh api "repos/${repo_owner}/${repo_name}/pulls/${pr}" --jq "{head:.head.sha, base:.base.sha, base_ref:.base.ref}")"
       current_head="$(jq -r ".head" <<<"$current_refs")"
       current_base="$(jq -r ".base" <<<"$current_refs")"
@@ -1019,15 +1051,20 @@ base_ref: ${base_ref}")"
       eyes="$(jq -r ".reactions.eyes // 0" <<<"$comment_json")"
       reviews_json="$(gh api --paginate --slurp "repos/${repo_owner}/${repo_name}/pulls/${pr}/reviews?per_page=100")"
       # A Codex identity conflict (spoofed login / wrong type) makes the helper
-      # exit non-zero, which set -e propagates as a fail-closed hard error.
-      classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")"
+      # exit non-zero. Test the substitution explicitly (if !) so the fail-closed
+      # hard error does not depend on bash-version errexit semantics for `v=$(…)`
+      # assignments (errexit-on-assignment only fires on bash >= 4.4).
+      if ! classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")"; then
+        echo "GitHub Codex identity conflict for PR #$pr (codex_review_signal.py find-findings rejected the reviews)" >&2
+        exit 1
+      fi
       if [[ "$classification" == FINDINGS* ]]; then
         echo "GitHub Codex review object detected for PR #$pr head $head_oid (eyes=$eyes; $classification)"
         exit 0
       fi
       sleep "$poll_seconds"
     done
-  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds" "$signal_script" || rc=$?
+  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds" "$signal_script" "$poll_budget_seconds" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     # Completion + attribution: Codex reviewed this head. Whether it is mergeable
     # is decided solely by the all-thread gate (any author), not a second block
@@ -1036,15 +1073,17 @@ base_ref: ${base_ref}")"
     assert_no_actionable_threads "$pr"
     return 0
   fi
-  if [[ "$rc" -eq 124 ]]; then
+  if [[ "$rc" -eq 75 ]]; then
     # No Codex review object appeared in the window. The script cannot tell
     # "reviewed clean" from "not yet reviewed" (no reliable structured clean
     # signal), so it hands to a human and never auto-merges. (design #870 D5)
     record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id"
     return 20
   fi
-  # Drift / binding mismatch / network error inside the loop — a hard error,
-  # deliberately distinct from the NOT-CONFIRMED human-handoff exit.
+  # Drift / binding mismatch / spoof, or the outer timeout 124 (a command hung
+  # for the whole hard cap — review state was never observed). All hard errors,
+  # deliberately NOT cached as NOT-CONFIRMED so the next sweep retries this head
+  # instead of permanently suppressing it. (codex #879 R1-P2)
   return "$rc"
 }
 
