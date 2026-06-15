@@ -1162,6 +1162,351 @@ func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T)
 	}
 }
 
+// TestPrepareGitWorkspace_ReclaimsBranchAfterWorkspaceRootChange is the #854
+// regression: the bare mirror cache is keyed by clone URL, not by
+// workspace.root, so it outlives a workspace.root change. A per-issue worktree
+// ai/N registered at the OLD root's path — still on disk, so `worktree prune`
+// keeps it — made the next dispatch's `git worktree add -B ai/N <new-root-path>`
+// fail with `fatal: 'ai/N' is already used by worktree at '<old-root-path>'`,
+// wedging the run in Failed on every retry. Preparing the SAME issue/branch at a
+// NEW root that shares the SAME bare mirror must reclaim the stale registration
+// and reach a usable worktree under the new root.
+func TestPrepareGitWorkspace_ReclaimsBranchAfterWorkspaceRootChange(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir() // shared across both roots, as in production
+	ctx := context.Background()
+	tk := makeTask("2", upstream) // WorkBranch ai/2, matching the issue's repro
+
+	rootA := t.TempDir()
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	dirA, createdNow, err := mgrA.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare at root A: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("first prepare at root A reported createdNow=false")
+	}
+	// Leave dirA on disk — the load-bearing precondition. With the old worktree
+	// dir gone, `worktree prune` alone already recovers; the bug needs the stale
+	// dir present so prune keeps the colliding registration.
+	if _, err := os.Stat(dirA); err != nil {
+		t.Fatalf("root A worktree dir missing before root change: %v", err)
+	}
+
+	rootB := t.TempDir()
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot} // SAME mirror, new root
+	dirB, createdNow, err := mgrB.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		// Pre-fix: `git worktree add -B ai/2` collides with the root-A registration.
+		t.Fatalf("prepare same issue at new root over shared mirror: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("prepare at root B reported createdNow=false; new-root worktree must be created fresh")
+	}
+	if dirB == dirA {
+		t.Fatalf("root B workdir collapsed onto root A path %q", dirA)
+	}
+	// The reclaimed worktree must be usable: seed file present and on the work branch.
+	if _, err := os.Stat(filepath.Join(dirB, "README.md")); err != nil {
+		t.Fatalf("expected README.md inside reclaimed worktree %s: %v", dirB, err)
+	}
+	branchOut, err := exec.Command("git", "-C", dirB, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
+		t.Fatalf("reclaimed worktree on branch %q, want %q", got, tk.WorkBranch)
+	}
+	// The mirror must now register ai/2 at the NEW path; the stale root-A
+	// registration is gone. Compare via EvalSymlinks because git records the
+	// canonicalized worktree path (e.g. /private/var on macOS).
+	mirror := mirrorPathFor(MirrorRoot(mirrorRoot), upstream)
+	holder := worktreePathForBranch(ctx, mirror, tk.WorkBranch)
+	if holder == "" {
+		t.Fatal("ai/2 no longer registered after reclaim + recreate")
+	}
+	holderReal, err := filepath.EvalSymlinks(holder)
+	if err != nil {
+		t.Fatalf("eval holder %q: %v", holder, err)
+	}
+	dirBReal, err := filepath.EvalSymlinks(dirB)
+	if err != nil {
+		t.Fatalf("eval dirB %q: %v", dirB, err)
+	}
+	if holderReal != dirBReal {
+		t.Fatalf("ai/2 registered at %q (real %q), want reclaimed at new path %q (real %q)", holder, holderReal, dirB, dirBReal)
+	}
+}
+
+// TestPrepareGitWorkspace_ReclaimLeavesPeerBranchWorktreeIntact pins the #854
+// safety contract (acceptance criterion 4): reclaiming a stale foreign-root
+// registration must be branch-scoped — it may drop only the EXACT colliding
+// work branch, never a peer worktree for a different issue that shares the same
+// bare mirror. A blanket "drop everything outside the current root" would wipe a
+// live peer's branch ref and working tree; this test fails under that mutation.
+func TestPrepareGitWorkspace_ReclaimLeavesPeerBranchWorktreeIntact(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir()
+	ctx := context.Background()
+
+	rootA := t.TempDir()
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	// Issue N (the one whose root changes) and a peer issue M, both prepared
+	// under root A against the shared mirror; both worktree dirs stay on disk.
+	taskN := makeTask("2", upstream) // ai/2
+	taskM := makeTask("7", upstream) // ai/7, the peer
+	if _, _, err := mgrA.PrepareGitWorkspace(ctx, taskN); err != nil {
+		t.Fatalf("prepare issue N at root A: %v", err)
+	}
+	peerDir, _, err := mgrA.PrepareGitWorkspace(ctx, taskM)
+	if err != nil {
+		t.Fatalf("prepare peer issue M at root A: %v", err)
+	}
+	// Commit a distinctive change on the peer's work branch so any stray reclaim
+	// of its registration would be observable as a moved branch ref / lost file.
+	if err := configureGitIdentity(peerDir); err != nil {
+		t.Fatalf("configure peer identity: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(peerDir, "peer.txt"), []byte("peer-content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "-C", peerDir, "add", "peer.txt"},
+		{"git", "-C", peerDir, "commit", "-q", "-m", "peer commit"},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v\n%s", args, err, out)
+		}
+	}
+	peerHeadBefore, err := exec.Command("git", "-C", peerDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("peer rev-parse HEAD: %v", err)
+	}
+
+	// Re-prepare ONLY issue N at a new root sharing the same mirror. The reclaim
+	// must drop ai/2's stale root-A registration but leave the peer ai/7 alone.
+	rootB := t.TempDir()
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot}
+	if _, _, err := mgrB.PrepareGitWorkspace(ctx, taskN); err != nil {
+		t.Fatalf("re-prepare issue N at new root: %v", err)
+	}
+
+	// Peer worktree dir, tracked content, and branch tip must all be untouched.
+	if body, err := os.ReadFile(filepath.Join(peerDir, "peer.txt")); err != nil {
+		t.Fatalf("peer tracked file removed by reclaim: %v", err)
+	} else if string(body) != "peer-content\n" {
+		t.Fatalf("peer tracked file mutated by reclaim: %q", body)
+	}
+	peerHeadAfter, err := exec.Command("git", "-C", peerDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("peer rev-parse HEAD after: %v", err)
+	}
+	if string(peerHeadAfter) != string(peerHeadBefore) {
+		t.Fatalf("peer work branch moved by reclaim: before=%q after=%q", peerHeadBefore, peerHeadAfter)
+	}
+	// The peer's registration must still resolve to its original dir.
+	mirror := mirrorPathFor(MirrorRoot(mirrorRoot), upstream)
+	holder := worktreePathForBranch(ctx, mirror, taskM.WorkBranch)
+	holderReal, err := filepath.EvalSymlinks(holder)
+	if err != nil {
+		t.Fatalf("eval peer holder %q: %v", holder, err)
+	}
+	peerReal, err := filepath.EvalSymlinks(peerDir)
+	if err != nil {
+		t.Fatalf("eval peerDir %q: %v", peerDir, err)
+	}
+	if holderReal != peerReal {
+		t.Fatalf("peer ai/7 registration changed: holder=%q (real %q), want %q (real %q)", holder, holderReal, peerDir, peerReal)
+	}
+}
+
+// TestPrepareGitWorkspace_ReclaimRefusesWhenHolderOverlapsNewRoot pins the #869
+// path-overlap guard. If the operator points workspace.root AT the stale
+// worktree (root == holder) or INSIDE it (holder is an ancestor of root), a
+// naive "reclaim anything outside the current root" would os.RemoveAll the
+// holder — deleting the current root and everything under it. Reclaim must
+// refuse such a holder and fail safely on the collision. The two cases pin both
+// halves of the guard (`realHolder == realRoot` and `pathContainedUnder`).
+func TestPrepareGitWorkspace_ReclaimRefusesWhenHolderOverlapsNewRoot(t *testing.T) {
+	upstream := initBareUpstream(t)
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		rootB func(dirA string) string
+	}{
+		{"new root equals the stale worktree", func(dirA string) string { return dirA }},
+		{"new root nested inside the stale worktree", func(dirA string) string { return filepath.Join(dirA, "nested-root") }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mirrorRoot := t.TempDir()
+			tk := makeTask("2", upstream)
+			rootA := t.TempDir()
+			mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+			dirA, _, err := mgrA.PrepareGitWorkspace(ctx, tk)
+			if err != nil {
+				t.Fatalf("prepare at root A: %v", err)
+			}
+			// A marker in the stale worktree; a wrongful os.RemoveAll(holder) erases it.
+			marker := filepath.Join(dirA, "do-not-delete.txt")
+			if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			mgrB := &Manager{Root: tc.rootB(dirA), MirrorRoot: mirrorRoot}
+			if _, _, err := mgrB.PrepareGitWorkspace(ctx, tk); err == nil {
+				t.Fatal("prepare under a root overlapping the stale worktree succeeded; reclaim must refuse an at-or-above-root holder and fail safely on the collision")
+			}
+			// The stale worktree (== or an ancestor of the new root) must be intact.
+			if body, err := os.ReadFile(marker); err != nil {
+				t.Fatalf("overlapping holder content deleted by reclaim: %v", err)
+			} else if string(body) != "keep\n" {
+				t.Fatalf("overlapping holder content mutated: %q", body)
+			}
+		})
+	}
+}
+
+// TestPrepareGitWorkspace_ReclaimsWhenNewRootIsAncestorOfOldWorktree pins the
+// #854 ancestor-root-change case (codex P2 on 44fcfda): when workspace.root is
+// moved UP to an ANCESTOR of the old worktree, the stale ai/N registration sits
+// INSIDE the new root. It must still be reclaimed — it is this worker's own
+// stale subdir worktree, never a live peer (a separate AIOPS_MIRROR_ROOT per
+// worker means a peer never shares our mirror). A guard that refused every
+// in-root holder would skip the reclaim and wedge the worktree-add collision.
+func TestPrepareGitWorkspace_ReclaimsWhenNewRootIsAncestorOfOldWorktree(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir()
+	ctx := context.Background()
+	tk := makeTask("2", upstream)
+
+	rootB := filepath.Join(t.TempDir(), "ws") // the new (ancestor) root
+	rootA := filepath.Join(rootB, "maker")    // old root, a subdir of rootB
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	dirA, _, err := mgrA.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare at old root A: %v", err)
+	}
+	if _, err := os.Stat(dirA); err != nil {
+		t.Fatalf("old worktree missing before root change: %v", err)
+	}
+
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot}
+	dirB, createdNow, err := mgrB.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		// With an over-broad "refuse every in-root holder" guard, the reclaim is
+		// skipped and `git worktree add -B ai/2` collides.
+		t.Fatalf("prepare at ancestor root B over shared mirror: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("prepare at ancestor root B reported createdNow=false")
+	}
+	if dirB == dirA {
+		t.Fatalf("root B workdir collapsed onto old path %q", dirA)
+	}
+	if _, err := os.Stat(filepath.Join(dirB, "README.md")); err != nil {
+		t.Fatalf("expected README.md inside reclaimed worktree %s: %v", dirB, err)
+	}
+	branchOut, err := exec.Command("git", "-C", dirB, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
+		t.Fatalf("reclaimed worktree on branch %q, want %q", got, tk.WorkBranch)
+	}
+}
+
+// TestPrepareGitWorkspace_ReclaimDoesNotDeleteRepurposedHolderPath pins the
+// #869 fail-closed rule (codex P2 on 9d91779): reclaim deletes a foreign holder
+// only after confirming it is still a live worktree of our mirror. If the old
+// worktree path was repurposed for non-worktree data after a workspace.root
+// change (here: its .git is removed and operator data planted), reclaim must NOT
+// erase what now lives there — it fails closed and lets the collision surface.
+func TestPrepareGitWorkspace_ReclaimDoesNotDeleteRepurposedHolderPath(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir()
+	ctx := context.Background()
+	tk := makeTask("2", upstream)
+
+	rootA := t.TempDir()
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	dirA, _, err := mgrA.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare at root A: %v", err)
+	}
+	// Repurpose the old worktree path: drop its .git link (no longer a valid
+	// worktree) and plant operator data the reclaim must not delete. The mirror's
+	// admin registration for ai/2 still points here, so reclaim still selects it.
+	if err := os.RemoveAll(filepath.Join(dirA, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(dirA, "operator-data.txt")
+	if err := os.WriteFile(keep, []byte("precious\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootB := t.TempDir()
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot}
+	// Prep may fail (the lingering registration collides) — the invariant is that
+	// the repurposed data is never deleted, regardless of prep outcome.
+	_, _, _ = mgrB.PrepareGitWorkspace(ctx, tk)
+	if body, err := os.ReadFile(keep); err != nil {
+		t.Fatalf("repurposed holder data deleted by reclaim: %v", err)
+	} else if string(body) != "precious\n" {
+		t.Fatalf("repurposed holder data mutated: %q", body)
+	}
+}
+
+// TestIsForeignRootHolder pins the symlink-correct, two-case root scope the #854
+// reclaim rests on (clean-code rule 11: mutation-test the wiring seam). A holder
+// is reclaimable UNLESS it is this issue's own workdir, or it is / contains the
+// current root. git records the canonicalized worktree path (/private/var on
+// macOS) while root and workdir arrive in the operator-supplied symlinked form;
+// without evalSymlinksOr a same-real-path holder would read as foreign.
+func TestIsForeignRootHolder(t *testing.T) {
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	// workspace.root is supplied as the symlink; workdir lives under it.
+	mkdir := func(parent, branchID string) string {
+		p := filepath.Join(parent, "acme", "demo", "linear_issue", branchID)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	workdir := mkdir(linkRoot, "2")
+
+	// Same real dir as workdir (canonicalized through the root symlink): NOT
+	// foreign. Reverting evalSymlinksOr to raw compares fails this — the symlink seam.
+	canonSelf := filepath.Join(realRoot, "acme", "demo", "linear_issue", "2")
+	if isForeignRootHolder(linkRoot, workdir, canonSelf) {
+		t.Errorf("same-real-path holder %q (canonicalized via root symlink) misclassified as foreign", canonSelf)
+	}
+	// The current root itself, and an ancestor of it: NOT foreign — reclaiming
+	// would os.RemoveAll the root / an ancestor of the workdir (the overlap guard).
+	if isForeignRootHolder(linkRoot, workdir, realRoot) {
+		t.Errorf("holder == current root misclassified as foreign")
+	}
+	if ancestor := filepath.Dir(realRoot); isForeignRootHolder(linkRoot, workdir, ancestor) {
+		t.Errorf("holder %q (ancestor of current root) misclassified as foreign", ancestor)
+	}
+	// A stale worktree INSIDE the root but not the workdir (the #854
+	// ancestor-root-change case maps the old worktree here): IS reclaimable.
+	// Re-introducing an "in-root holder → refuse" case fails this.
+	inRoot := mkdir(realRoot, "9")
+	if !isForeignRootHolder(linkRoot, workdir, inRoot) {
+		t.Errorf("stale in-root holder %q must be reclaimable (foreign)", inRoot)
+	}
+	// A holder under a genuinely different root (the disjoint #854 case): foreign.
+	foreign := mkdir(t.TempDir(), "2")
+	if !isForeignRootHolder(linkRoot, workdir, foreign) {
+		t.Errorf("holder %q under a different root must be foreign", foreign)
+	}
+}
+
 func TestPathForUsesStableSanitizedIssueIdentifier(t *testing.T) {
 	mgr := &Manager{Root: "/workspaces"}
 
