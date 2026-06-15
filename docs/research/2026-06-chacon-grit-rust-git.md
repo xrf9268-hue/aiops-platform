@@ -18,7 +18,7 @@ Author: Scott Chacon (co-founder, GitHub & GitButler)
 
 Scott Chacon used coding agents to rewrite all of Git from scratch as a library-first, memory-safe Rust crate ("Grit"), passing 99.3% (41,715 / 42,001) of the Git test suite. The cost of getting there: ~45B tokens, ~$10–15k, 500+ PRs, 7000+ commits, across two bursts (early April, early June 2026).
 
-Mechanically, what he did by hand is what aiops-platform does as a product: pick a unit of work, give an agent an isolated checkout, let it run a coding agent against a verification signal, and merge the result back. His pains are therefore our design concerns, observed without our automation.
+Mechanically, what he did by hand is what aiops-platform does as a product: pick a unit of work, give an agent an isolated checkout, let it run a coding agent against a verification signal, and let the agent open a PR for operator review. His pains are therefore our design concerns, observed without our automation.
 
 ## A. Grit independently validates three of our architectural bets
 
