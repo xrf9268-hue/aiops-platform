@@ -197,7 +197,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 	}
 	startRef := resolveStartRef(ctx, mirror, t.BaseBranch)
 
-	createdNow, err := attachWorktree(ctx, workdir, mirror, t.WorkBranch, startRef, workdirExists)
+	createdNow, err := attachWorktree(ctx, m.Root, workdir, mirror, t.WorkBranch, startRef, workdirExists)
 	if err != nil {
 		return "", false, err
 	}
@@ -207,7 +207,7 @@ func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string,
 // attachWorktree reuses the existing workdir when it is a valid, mirror-linked
 // worktree and otherwise (re)creates it. It returns createdNow=true on the
 // create path so the caller fires after_create on first touch / recovery.
-func attachWorktree(ctx context.Context, workdir, mirror, workBranch, startRef string, workdirExists bool) (createdNow bool, err error) {
+func attachWorktree(ctx context.Context, root, workdir, mirror, workBranch, startRef string, workdirExists bool) (createdNow bool, err error) {
 	reusable, foreignCommonDir := false, ""
 	if workdirExists {
 		reusable, foreignCommonDir = classifyExistingWorkdir(ctx, workdir, mirror)
@@ -215,7 +215,7 @@ func attachWorktree(ctx context.Context, workdir, mirror, workBranch, startRef s
 	if reusable {
 		return false, reuseWorktree(ctx, workdir, workBranch, startRef)
 	}
-	return true, createWorktree(ctx, workdir, mirror, workBranch, startRef, foreignCommonDir)
+	return true, createWorktree(ctx, root, workdir, mirror, workBranch, startRef, foreignCommonDir)
 }
 
 // resolveStartRef resolves the base ref via `origin/<base>` because the bare
@@ -309,10 +309,11 @@ func reuseWorktree(ctx context.Context, workdir, workBranch, startRef string) er
 // If the reuse gate rejected a workspace linked to a *different* mirror,
 // foreignCommonDir prunes the orphaned admin entry off that mirror first so its
 // `worktrees/` directory stays in sync with disk. It then drops any stale
-// worktree entry the mirror still tracks for this path, removes the workdir,
-// prunes, and adds a fresh `--no-track -B` worktree (idempotent via `-B`; the
-// worktree inherits origin from the linked bare mirror, so no remote set-url).
-func createWorktree(ctx context.Context, workdir, mirror, workBranch, startRef, foreignCommonDir string) error {
+// worktree entry the mirror still tracks for this path, reclaims a stale
+// foreign-root registration of workBranch (#854), removes the workdir, prunes,
+// and adds a fresh `--no-track -B` worktree (idempotent via `-B`; the worktree
+// inherits origin from the linked bare mirror, so no remote set-url).
+func createWorktree(ctx context.Context, root, workdir, mirror, workBranch, startRef, foreignCommonDir string) error {
 	if foreignCommonDir != "" {
 		_ = runGitQuiet(ctx, foreignCommonDir, "worktree", "prune")
 	}
@@ -320,6 +321,7 @@ func createWorktree(ctx context.Context, workdir, mirror, workBranch, startRef, 
 	// worktree") prints a scary fatal line that obscures real worker logs.
 	_ = runGitQuiet(ctx, mirror, "worktree", "remove", "--force", workdir)
 	_ = os.RemoveAll(workdir)
+	reclaimForeignBranchWorktree(ctx, root, workdir, mirror, workBranch)
 	if err := runGitQuiet(ctx, mirror, "worktree", "prune"); err != nil {
 		return fmt.Errorf("worktree prune: %w", err)
 	}
@@ -330,6 +332,130 @@ func createWorktree(ctx context.Context, workdir, mirror, workBranch, startRef, 
 		return fmt.Errorf("install sensitive artifact excludes: %w", err)
 	}
 	return nil
+}
+
+// reclaimForeignBranchWorktree drops a worktree registration that still holds
+// workBranch at a path OUTSIDE the current workspace root, so the subsequent
+// `git worktree add -B workBranch <workdir>` recreates it under the new root
+// instead of failing with `fatal: '<branch>' is already used by worktree at
+// '<old-path>'`.
+//
+// This is the #854 case: the bare mirror cache is keyed by clone URL, not by
+// workspace.root, so it outlives a workspace.root change. Branch ai/N stays
+// registered at the OLD root's path; because that directory is still on disk,
+// the createWorktree `worktree prune` keeps the registration and the add
+// collides on every retry.
+//
+// The reclaim is doubly scoped so it stays within the current workspace's own
+// stale state (#854 acceptance; the #557 maker/reviewer tail-window race must
+// not regress):
+//   - branch-scoped: only the worktree holding this exact workBranch is touched;
+//     a peer worktree for a different issue/branch is never matched.
+//   - root-scoped (isForeignRootHolder): only a holder genuinely disjoint from
+//     the current root subtree is reclaimed — never this issue's own workdir, a
+//     holder inside the current root, or one that IS/CONTAINS the current root.
+//
+// This is safe for every supported deployment because a separate
+// AIOPS_MIRROR_ROOT per worker is a hard requirement (docs/runbooks/reviewer-worker.md),
+// so a foreign-root registration in *our* mirror can only be our own stale one.
+// In the explicitly-unsupported shared-AIOPS_MIRROR_ROOT-with-different-root
+// config, reclaim could delete a concurrent peer's worktree; robust ownership
+// for that misconfiguration is tracked in #871 (a bare-PID guard is unreliable —
+// container workers are PID 1 on every restart).
+func reclaimForeignBranchWorktree(ctx context.Context, root, workdir, mirror, workBranch string) {
+	holder := worktreePathForBranch(ctx, mirror, workBranch)
+	if holder == "" || !isForeignRootHolder(root, workdir, holder) {
+		return
+	}
+	// Only delete a holder we can confirm is STILL a live worktree of our mirror.
+	// The path comes from a stale registration: after a workspace.root change it
+	// may have been repurposed for non-worktree data, or its .git corrupted —
+	// blindly removing it would erase unrelated data (#869 codex P2). When it no
+	// longer classifies as our worktree, fail closed and let the worktree-add
+	// collision surface instead (classifyExistingWorkdir also rejects a symlinked
+	// or foreign-mirror path, as on the reuse gate).
+	if reusable, _ := classifyExistingWorkdir(ctx, holder, mirror); !reusable {
+		return
+	}
+	// `worktree remove --force` drops the registration and the stale dir; the
+	// os.RemoveAll backstops a remove that balks (e.g. a partially-deleted dir)
+	// so the createWorktree `worktree prune` that follows can clear a still
+	// dangling registration.
+	_ = runGitQuiet(ctx, mirror, "worktree", "remove", "--force", holder)
+	_ = os.RemoveAll(holder)
+}
+
+// isForeignRootHolder reports whether holder is a worktree registration that
+// belongs to a *different* (stale) workspace root than the current one and is
+// therefore safe for reclaim to delete. Symlinks are resolved first because git
+// records the canonicalized worktree path (e.g. /private/var on macOS) while
+// root and workdir arrive in the operator-supplied form (/var); comparing raw
+// strings would let a same-real-path or in-root holder read as foreign and be
+// wrongly reclaimed. Mirrors the EvalSymlinks comparison in sameRealPath.
+//
+// Two classes are NOT foreign (reclaim refuses them, failing safely on the
+// collision instead of deleting in-use data):
+//   - holder == this issue's own current workdir (the reuse path handles it);
+//   - holder IS the current root or an ANCESTOR of it — i.e. it contains the
+//     current workdir, so os.RemoveAll(holder) would delete the current root /
+//     workdir or an ancestor (#869; covers root == holder and a new root nested
+//     inside the stale worktree).
+//
+// A holder merely INSIDE the current root is NOT refused: when the operator
+// moves workspace.root UP to an ancestor of the old worktree, that old worktree
+// is a stale subdir of the new root and must be reclaimed — the #854
+// ancestor-root-change case (codex P2 on 44fcfda). Deleting that subdir touches
+// neither the current root nor the current workdir (a same-branch holder under
+// the root is always this worker's own stale worktree, never a peer's: a
+// separate AIOPS_MIRROR_ROOT per worker means a peer never shares our mirror).
+func isForeignRootHolder(root, workdir, holder string) bool {
+	realRoot := evalSymlinksOr(root)
+	realHolder := evalSymlinksOr(holder)
+	switch {
+	case realHolder == evalSymlinksOr(workdir):
+		return false
+	case realHolder == realRoot || pathContainedUnder(realHolder, realRoot):
+		return false
+	default:
+		return true
+	}
+}
+
+// evalSymlinksOr resolves p through filepath.EvalSymlinks, falling back to a
+// lexically-cleaned p when resolution fails (e.g. the path does not exist yet,
+// as workdir often does not on the create path). The fallback keeps the
+// comparison total without inventing a path.
+func evalSymlinksOr(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
+}
+
+// worktreePathForBranch returns the path of the worktree that currently has
+// workBranch checked out in the mirror, or "" when no worktree holds it. It
+// parses `git worktree list --porcelain`, whose per-worktree record pairs a
+// `worktree <path>` line with a `branch refs/heads/<name>` line (a detached or
+// bare worktree carries `detached`/`bare` instead). The branch line is matched
+// in full so `ai/2` never matches `ai/20`.
+func worktreePathForBranch(ctx context.Context, mirror, workBranch string) string {
+	out, err := runGitOutput(ctx, mirror, "worktree", "list", "--porcelain")
+	if err != nil {
+		return ""
+	}
+	wantBranch := "branch refs/heads/" + workBranch
+	curPath := ""
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, "\r") // porcelain is LF, but tolerate CRLF
+		if path, ok := strings.CutPrefix(line, "worktree "); ok {
+			curPath = path
+			continue
+		}
+		if line == wantBranch {
+			return curPath
+		}
+	}
+	return ""
 }
 
 // RunWorkspaceHook executes the configured shell commands for a lifecycle hook
