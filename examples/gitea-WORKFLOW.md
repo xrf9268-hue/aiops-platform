@@ -24,6 +24,7 @@ tracker:
     - Canceled
   inactive_states:
     - Human Review
+    - Merging
 
 polling:
   interval_ms: 30000

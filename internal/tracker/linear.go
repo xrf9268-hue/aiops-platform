@@ -218,21 +218,36 @@ func (c *LinearClient) ListIssuesByStates(ctx context.Context, states []string) 
 	}
 	var issues []Issue
 	var after any
-	for page := 0; page < maxLinearIssuePages; page++ {
+	maxPages := c.issueMaxPages()
+	for page := 1; page <= maxPages; page++ {
 		mapped, pageInfo, err := c.fetchLinearIssuesPage(ctx, map[string]any{"projectSlug": projectSlug, "states": nonEmpty, "first": linearIssuePageSize, "after": after})
 		if err != nil {
 			return nil, err
 		}
 		issues = append(issues, mapped...)
-		if !pageInfo.HasNextPage {
+		nextCursor, hasNext, err := nextLinearIssueCursor(pageInfo, page, maxPages)
+		if err != nil {
+			return nil, err
+		}
+		if !hasNext {
 			return issues, nil
 		}
-		if pageInfo.EndCursor == "" {
-			return nil, NewError(CategoryLinearMissingEndCursor, "linear pagination missing endCursor", nil)
-		}
-		after = pageInfo.EndCursor
+		after = nextCursor
 	}
-	return nil, fmt.Errorf("linear pagination exceeded %d pages", maxLinearIssuePages)
+	return nil, NewError(CategoryIssueListingCapped, fmt.Sprintf("linear pagination exceeded %d pages", maxPages), nil)
+}
+
+func nextLinearIssueCursor(pageInfo linearPageInfo, page, maxPages int) (string, bool, error) {
+	if !pageInfo.HasNextPage {
+		return "", false, nil
+	}
+	if page >= maxPages {
+		return "", false, NewError(CategoryIssueListingCapped, fmt.Sprintf("linear pagination exceeded %d pages", maxPages), nil)
+	}
+	if pageInfo.EndCursor == "" {
+		return "", false, NewError(CategoryLinearMissingEndCursor, "linear pagination missing endCursor", nil)
+	}
+	return pageInfo.EndCursor, true, nil
 }
 
 // requireListIssuesConfig enforces the two ListIssuesByStates preconditions
@@ -247,6 +262,13 @@ func (c *LinearClient) requireListIssuesConfig() (string, error) {
 		return "", NewError(CategoryMissingTrackerProjectSlug, "Linear project slug is required", nil)
 	}
 	return projectSlug, nil
+}
+
+func (c *LinearClient) issueMaxPages() int {
+	if c != nil && c.Config.PaginationMaxPages > 0 {
+		return c.Config.PaginationMaxPages
+	}
+	return maxLinearIssuePages
 }
 
 // normalizeRequestedStates trims each requested state and drops empties.
@@ -600,7 +622,11 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 		}
 	}
 	appendBlockers(nodes)
-	for page := 0; hasNextPage && page < maxLinearIssuePages; page++ {
+	maxPages := c.issueMaxPages()
+	for page := 1; hasNextPage; page++ {
+		if page >= maxPages {
+			return nil, NewError(CategoryIssueListingCapped, fmt.Sprintf("linear inverse relation pagination exceeded %d pages for issue %s", maxPages, issueID), nil)
+		}
 		if endCursor == "" {
 			return nil, NewError(CategoryLinearMissingEndCursor, fmt.Sprintf("linear inverse relation pagination missing endCursor for issue %s", issueID), nil)
 		}
@@ -632,9 +658,6 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 		appendBlockers(out.Data.Issue.InverseRelations.Nodes)
 		hasNextPage = out.Data.Issue.InverseRelations.PageInfo.HasNextPage
 		endCursor = out.Data.Issue.InverseRelations.PageInfo.EndCursor
-	}
-	if hasNextPage {
-		return nil, fmt.Errorf("linear inverse relation pagination exceeded %d pages for issue %s", maxLinearIssuePages, issueID)
 	}
 	return blockers, nil
 }

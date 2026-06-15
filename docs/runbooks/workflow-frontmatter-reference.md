@@ -63,7 +63,7 @@ truth this page approximates.
 | `tracker.terminal_states` | string list | `[Closed, Cancelled, Canceled, Duplicate, Done]` | States that end work on an issue (also used by the retry/backoff loop to stop redispatch) | — |
 | `tracker.inactive_states` | string list | `[]` | Non-terminal states that make an already-running issue ineligible: poll-tick reconciliation stops in-flight runs when an issue moves here (operator-pause states such as `Backlog`) | — |
 | `tracker.required_labels` | string list | `[]` (gate off) | Opt-in dispatch gate (SPEC §4.1.1): an issue must carry every listed label to dispatch or keep running. Entries are trimmed, lowercased, de-duped; a blank entry matches no issue. See the README table row for the Linear 250-label projection ceiling | — |
-| `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20) | Caps one tracker pagination scan for the GitHub/Gitea adapters. The Linear adapter ignores this key — its cursor walk has a fixed 200-page cap | ≥ 0 |
+| `tracker.pagination_max_pages` | int | `0` = adapter default (`github` 10, `gitea` 20, `linear` 200) | Caps one tracker pagination scan. Linear applies the same cap to issue listing and inverse-relation pagination | ≥ 0 |
 
 ## `polling`
 

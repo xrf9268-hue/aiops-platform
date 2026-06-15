@@ -17,6 +17,20 @@ func TestIssueStateFromLabelsMapsSingleAIOpsLabel(t *testing.T) {
 	}
 }
 
+func TestIssueStateFromLabelsMapsMergingAndPrioritizesItOverHumanReview(t *testing.T) {
+	state, diagnostics := IssueStateFromLabels([]Label{{Name: "aiops/human-review"}, {Name: "aiops/merging"}}, DefaultStateLabelMappings())
+
+	if state != "Merging" {
+		t.Fatalf("state = %q, want Merging to win conflict priority over Human Review", state)
+	}
+	if !hasDiagnostic(diagnostics, "conflicting_aiops_state_labels") {
+		t.Fatalf("diagnostics = %#v, want conflicting_aiops_state_labels", diagnostics)
+	}
+	if !strings.Contains(diagnostics[0].Message, "aiops/merging") || !strings.Contains(diagnostics[0].Message, "aiops/human-review") {
+		t.Fatalf("diagnostic message = %q, want conflicting labels named", diagnostics[0].Message)
+	}
+}
+
 func TestIssueStateFromLabelsReportsMissingState(t *testing.T) {
 	state, diagnostics := IssueStateFromLabels([]Label{{Name: "bug"}}, DefaultStateLabelMappings())
 
@@ -54,8 +68,8 @@ func TestIssueStateFromLabelsIgnoresUnknownAIOpsLabels(t *testing.T) {
 }
 
 func TestStateLabelNamesForStatesFiltersConfiguredStates(t *testing.T) {
-	got := StateLabelNamesForStates([]string{"Todo", "Rework", "Done", "Not Configured"}, DefaultStateLabelMappings())
-	want := []string{"aiops/todo", "aiops/rework", "aiops/done"}
+	got := StateLabelNamesForStates([]string{"Todo", "Merging", "Rework", "Done", "Not Configured"}, DefaultStateLabelMappings())
+	want := []string{"aiops/todo", "aiops/merging", "aiops/rework", "aiops/done"}
 
 	if !slices.Equal(got, want) {
 		t.Fatalf("StateLabelNamesForStates = %#v, want %#v", got, want)

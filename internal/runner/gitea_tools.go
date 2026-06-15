@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -241,6 +242,8 @@ func (p giteaIssueLabelsProxy) validateDesiredStateLabels(call ToolCall) (desire
 		return nil, failureResult, failureErr, false
 	}
 	desiredStateLabels := make([]string, 0, len(call.Labels))
+	validLabels := validGiteaStateLabels()
+	validLabelList := strings.Join(validGiteaStateLabelNames(), ", ")
 	for _, label := range call.Labels {
 		label = strings.TrimSpace(label)
 		if label == "" || !strings.HasPrefix(strings.ToLower(label), "aiops/") {
@@ -249,9 +252,9 @@ func (p giteaIssueLabelsProxy) validateDesiredStateLabels(call ToolCall) (desire
 			})
 			return nil, failureResult, failureErr, false
 		}
-		if _, ok := validGiteaStateLabels()[strings.ToLower(label)]; !ok {
+		if _, ok := validLabels[strings.ToLower(label)]; !ok {
 			failureResult, failureErr = dynamicToolFailure(map[string]any{
-				"error": map[string]any{"message": "gitea_issue_labels label must be one of: aiops/canceled, aiops/done, aiops/human-review, aiops/in-progress, aiops/rework, aiops/todo"},
+				"error": map[string]any{"message": fmt.Sprintf("gitea_issue_labels label must be one of: %s", validLabelList)},
 			})
 			return nil, failureResult, failureErr, false
 		}
@@ -458,14 +461,25 @@ func (p giteaIssueLabelsProxy) decodeIssueLabelsFromToolResult(result, source st
 }
 
 func validGiteaStateLabels() map[string]struct{} {
-	return map[string]struct{}{
-		"aiops/canceled":     {},
-		"aiops/done":         {},
-		"aiops/human-review": {},
-		"aiops/in-progress":  {},
-		"aiops/rework":       {},
-		"aiops/todo":         {},
+	labels := validGiteaStateLabelNames()
+	out := make(map[string]struct{}, len(labels))
+	for _, label := range labels {
+		out[label] = struct{}{}
 	}
+	return out
+}
+
+func validGiteaStateLabelNames() []string {
+	mappings := gitea.DefaultStateLabelMappings()
+	labels := make([]string, 0, len(mappings))
+	for _, mapping := range mappings {
+		label := strings.ToLower(strings.TrimSpace(mapping.Label))
+		if label != "" && !containsLabelFold(labels, label) {
+			labels = append(labels, label)
+		}
+	}
+	sort.Strings(labels)
+	return labels
 }
 
 func containsLabelFold(labels []string, label string) bool {

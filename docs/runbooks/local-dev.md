@@ -33,7 +33,8 @@ needs Postgres, it is stale — file an issue.
 
 ## Prerequisites
 
-- Go 1.25 or newer (matches `go.mod`).
+- Go 1.25.11 or newer (the exact patch floor pinned in `go.mod` and the
+  Dockerfile).
 - `git` and `curl`.
 - Tracker credentials matching the workflow you're running:
   - `tracker.kind: linear` → a Linear personal API key.
@@ -51,6 +52,27 @@ needs Postgres, it is stale — file an issue.
   `agent.default: codex-app-server` and want a real model loop.
 
 `cmd/worker` does **not** need Postgres.
+
+## Quick local validation
+
+From a fresh checkout, run the lightweight non-container validation shim before
+starting a worker loop or opening a PR:
+
+```bash
+./scripts/dev-test.sh
+```
+
+The script reads the pinned Go version from `go.mod`, checks the effective
+`go env GOVERSION`, then runs the credential-free Go path: `gofmt -l`,
+`go mod tidy` with a clean `go.mod` / `go.sum` diff, and `go test ./...`.
+It does not require tracker credentials, dashboard dependencies, or an e2e
+container runtime.
+
+Keep `GOTOOLCHAIN=auto` enabled unless you have already installed the pinned Go
+toolchain locally. With `GOTOOLCHAIN=auto`, modern Go can download the required
+toolchain when the checkout asks for Go 1.25.11. If the machine is offline or
+the download is blocked, install Go 1.25.11 first (or pre-seed the toolchain)
+and re-run `./scripts/dev-test.sh`.
 
 ## 1. Configure the workflow and environment
 
@@ -253,6 +275,7 @@ tool surface, not the worker. Default state labels:
 | `Todo` | `aiops/todo` |
 | `In Progress` | `aiops/in-progress` |
 | `Human Review` | `aiops/human-review` |
+| `Merging` | `aiops/merging` |
 | `Rework` | `aiops/rework` |
 | `Done` | `aiops/done` |
 | `Canceled` | `aiops/canceled` |

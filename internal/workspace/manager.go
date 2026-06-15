@@ -320,7 +320,9 @@ func createWorktree(ctx context.Context, root, workdir, mirror, workBranch, star
 	// Failures here are ignored and stderr silenced: the common case ("no such
 	// worktree") prints a scary fatal line that obscures real worker logs.
 	_ = runGitQuiet(ctx, mirror, "worktree", "remove", "--force", workdir)
-	_ = os.RemoveAll(workdir)
+	if err := SafeRemove(root, workdir); err != nil {
+		return fmt.Errorf("worktree cleanup: %w", err)
+	}
 	reclaimForeignBranchWorktree(ctx, root, workdir, mirror, workBranch)
 	if err := runGitQuiet(ctx, mirror, "worktree", "prune"); err != nil {
 		return fmt.Errorf("worktree prune: %w", err)

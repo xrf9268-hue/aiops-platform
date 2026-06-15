@@ -2154,6 +2154,25 @@ func TestWorkerReconciliationConfigDoesNotProbeUnmappedGiteaInactiveStates(t *te
 	if !containsState(reconcile.InactiveStates, "Human Review") {
 		t.Fatalf("inactive reconciliation states = %v, want mapped Gitea Human Review state", reconcile.InactiveStates)
 	}
+	if !containsState(reconcile.InactiveStates, "Merging") {
+		t.Fatalf("inactive reconciliation states = %v, want mapped Gitea Merging state", reconcile.InactiveStates)
+	}
+}
+
+func TestWorkerReconciliationConfigFiltersActiveGiteaMergingState(t *testing.T) {
+	cfg := workflow.DefaultConfig()
+	cfg.Repo.CloneURL = "git@example.com:o/r.git"
+	cfg.Tracker.Kind = "gitea"
+	cfg.Tracker.ActiveStates = []string{"Todo", "In Progress", "Merging"}
+	cfg.Tracker.TerminalStates = []string{"Done", "Canceled"}
+
+	reconcile := reconciliationConfigForWorkflow(cfg)
+	if containsState(reconcile.InactiveStates, "Merging") {
+		t.Fatalf("inactive reconciliation states = %v, must not include active Merging state", reconcile.InactiveStates)
+	}
+	if !containsState(reconcile.InactiveStates, "Human Review") {
+		t.Fatalf("inactive reconciliation states = %v, want mapped Gitea Human Review state", reconcile.InactiveStates)
+	}
 }
 
 func TestWorkerReconciliationConfigUsesWorkflowInactiveStates(t *testing.T) {

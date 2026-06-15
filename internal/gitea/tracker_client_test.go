@@ -615,6 +615,55 @@ func TestTrackerClientListIssuesByStatesNormalizesLabelsAndBlockedBy(t *testing.
 	}
 }
 
+func TestTrackerClientListIssuesByStatesTreatsMergingBlockerAsNonTerminal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]Issue{{
+				ID:     101,
+				Number: 1,
+				Title:  "dependent",
+				Body:   "Depends on #42",
+				Labels: []Label{{Name: "aiops/todo"}},
+			}})
+		case "/api/v1/repos/owner/repo/issues/42":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(Issue{
+				ID:     142,
+				Number: 42,
+				Title:  "blocker landing",
+				Labels: []Label{{Name: "aiops/merging"}},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewTrackerClient(workflow.TrackerConfig{
+		APIKey:       "secret",
+		ActiveStates: []string{"Todo"},
+	}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues len = %d, want 1", len(issues))
+	}
+	blockedBy := issues[0].BlockedBy
+	if len(blockedBy) != 1 || blockedBy[0].Identifier != "#42" || blockedBy[0].State != "Merging" {
+		t.Fatalf("BlockedBy = %#v, want #42 in Merging state", blockedBy)
+	}
+	terminal := map[string]struct{}{"done": {}, "canceled": {}}
+	if !tracker.BlockedByNonTerminal(blockedBy, terminal) {
+		t.Fatalf("BlockedByNonTerminal(%#v) = false, want true because Merging is non-terminal", blockedBy)
+	}
+}
+
 // TestTrackerClientListIssuesByStatesTolerantOfBlockerLookupFailure: a
 // definitively deleted blocker (404) silently drops out of BlockedBy rather
 // than aborting candidate enumeration — it can never become terminal, so

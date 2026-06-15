@@ -693,8 +693,31 @@ func TestListIssuesByStatesErrorsWhenMaxPagesExceeded(t *testing.T) {
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
-	if err == nil || !strings.Contains(err.Error(), "linear pagination exceeded") {
-		t.Fatalf("ListIssuesByStates error = %v, want max pages error", err)
+	if !errors.Is(err, ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped", err)
+	}
+}
+
+func TestListIssuesByStatesUsesConfiguredPaginationMaxPages(t *testing.T) {
+	var requests atomic.Int32
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		if requests.Load() == 1 {
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"}}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops", PaginationMaxPages: 1})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if !errors.Is(err, ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped after configured one-page cap", err)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("ListIssuesByStates requests = %d, want 1 from pagination_max_pages", got)
 	}
 }
 
@@ -721,8 +744,42 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
 	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
-	if err == nil || !strings.Contains(err.Error(), "linear inverse relation pagination exceeded") {
-		t.Fatalf("ListIssuesByStates error = %v, want inverse relation max pages error", err)
+	if !errors.Is(err, ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped from inverse relation cap", err)
+	}
+}
+
+func TestListIssuesByStatesUsesConfiguredInverseRelationPaginationMaxPages(t *testing.T) {
+	var perIssueRelationRequests atomic.Int32
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		w.Header().Set("Content-Type", "application/json")
+		switch opNameFromQuery(payload.Query) {
+		case "ListIssues":
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		case "ListIssuesInverseRelations":
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-relation-cursor"}}}]}}}`)
+		default:
+			if perIssueRelationRequests.Add(1) == 1 {
+				_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"same-relation-cursor"}}}}}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"data":{"issue":{"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}}`)
+		}
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops", PaginationMaxPages: 1})
+
+	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if !errors.Is(err, ErrIssueListingCapped) {
+		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped after configured inverse-relation cap", err)
+	}
+	if got := perIssueRelationRequests.Load(); got != 0 {
+		t.Fatalf("per-issue inverse relation requests = %d, want 0 because the batched relation page counts toward pagination_max_pages", got)
 	}
 }
 
