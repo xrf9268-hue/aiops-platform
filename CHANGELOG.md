@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.4](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.3...v0.1.4) (2026-06-15)
+
+
+### Features
+
+* **gitea:** add merging state label ([#880](https://github.com/xrf9268-hue/aiops-platform/issues/880)) ([adb4587](https://github.com/xrf9268-hue/aiops-platform/commit/adb458741ba72cc70d74377a27d148603052853b))
+
+
+### Bug Fixes
+
+* **linear:** honor pagination max pages ([#876](https://github.com/xrf9268-hue/aiops-platform/issues/876)) ([3635870](https://github.com/xrf9268-hue/aiops-platform/commit/3635870c4232fa3e7b26a9a57777c30d45e94e3c))
+* **tooling:** detect Codex completion by stable id + head-bound review object ([#879](https://github.com/xrf9268-hue/aiops-platform/issues/879)) ([e665974](https://github.com/xrf9268-hue/aiops-platform/commit/e665974f35d1dec416d90d863ab5b42d56c0f572))
+* **workspace:** guard live worktree reclaim ([#881](https://github.com/xrf9268-hue/aiops-platform/issues/881)) ([cc97284](https://github.com/xrf9268-hue/aiops-platform/commit/cc972848e5663c4f8c607a97930a99853150f581))
+* **workspace:** guard worktree cleanup ([#877](https://github.com/xrf9268-hue/aiops-platform/issues/877)) ([d3f610b](https://github.com/xrf9268-hue/aiops-platform/commit/d3f610b7ca66526a25f6ca55722bf3a3bd1f6d85))
+* **workspace:** reclaim stale foreign-root worktree after workspace.root change ([#854](https://github.com/xrf9268-hue/aiops-platform/issues/854)) ([#869](https://github.com/xrf9268-hue/aiops-platform/issues/869)) ([db99fb5](https://github.com/xrf9268-hue/aiops-platform/commit/db99fb5d68afa5310f076a422bcb3e5139682d0c))
+
 ## [0.1.3](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.2...v0.1.3) (2026-06-14)
 
 
