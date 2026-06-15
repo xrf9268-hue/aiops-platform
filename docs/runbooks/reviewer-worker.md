@@ -93,7 +93,10 @@ design:
   (`git worktree add --no-track -B <branch>`), and git refuses to check out
   a branch that another worktree of the same repository already has checked
   out. While the maker's worktree holds `ai/<issue.ID>`, the reviewer's
-  workspace preparation for that issue fails outright.
+  workspace preparation for that issue fails safely. The worker holds a
+  per-worktree ownership `flock` for the active run, so foreign-root reclaim
+  refuses to delete or branch-reset that live peer; it does **not** make the
+  shared-mirror topology supported.
 
 Set a distinct `AIOPS_MIRROR_ROOT` for each worker process. It costs one
 extra bare clone on disk and removes both the branch-namespace collision
