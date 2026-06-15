@@ -1213,6 +1213,85 @@ func TestPrepareGitWorkspace_ReclaimsBranchAfterWorkspaceRootChange(t *testing.T
 	}
 }
 
+func TestPrepareGitWorkspace_ReclaimRefusesLiveOwnedForeignRootWorktree(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("worktree ownership uses flock on Unix")
+	}
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir()
+	ctx := context.Background()
+	tk := makeTask("2", upstream)
+
+	rootA := t.TempDir()
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	ownedA, err := mgrA.PrepareGitWorkspaceOwned(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare owned at root A: %v", err)
+	}
+	defer ownedA.Release()
+	marker := filepath.Join(ownedA.Workdir, "live-peer-marker.txt")
+	if err := os.WriteFile(marker, []byte("live\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootB := t.TempDir()
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot}
+	if _, _, err := mgrB.PrepareGitWorkspace(ctx, tk); err == nil {
+		t.Fatal("prepare same branch at new root succeeded while the foreign-root owner lock was held; reclaim must fail safely")
+	}
+	if body, err := os.ReadFile(marker); err != nil {
+		t.Fatalf("live peer worktree deleted by reclaim: %v", err)
+	} else if string(body) != "live\n" {
+		t.Fatalf("live peer marker mutated by reclaim: %q", body)
+	}
+
+	mirror := mirrorPathFor(MirrorRoot(mirrorRoot), upstream)
+	holder := worktreePathForBranch(ctx, mirror, tk.WorkBranch)
+	holderReal, err := filepath.EvalSymlinks(holder)
+	if err != nil {
+		t.Fatalf("eval holder %q: %v", holder, err)
+	}
+	ownedReal, err := filepath.EvalSymlinks(ownedA.Workdir)
+	if err != nil {
+		t.Fatalf("eval owned workdir %q: %v", ownedA.Workdir, err)
+	}
+	if holderReal != ownedReal {
+		t.Fatalf("live ai/2 registration moved: holder=%q (real %q), want %q (real %q)", holder, holderReal, ownedA.Workdir, ownedReal)
+	}
+}
+
+func TestPrepareGitWorkspace_ReclaimsReleasedOwnedWorktreeAfterRootChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("worktree ownership uses flock on Unix")
+	}
+	upstream := initBareUpstream(t)
+	mirrorRoot := t.TempDir()
+	ctx := context.Background()
+	tk := makeTask("2", upstream)
+
+	rootA := t.TempDir()
+	mgrA := &Manager{Root: rootA, MirrorRoot: mirrorRoot}
+	ownedA, err := mgrA.PrepareGitWorkspaceOwned(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare owned at root A: %v", err)
+	}
+	oldDir := ownedA.Workdir
+	ownedA.Release()
+
+	rootB := t.TempDir()
+	mgrB := &Manager{Root: rootB, MirrorRoot: mirrorRoot}
+	dirB, createdNow, err := mgrB.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare same issue at new root after owner release: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("prepare after owner release reported createdNow=false")
+	}
+	if dirB == oldDir {
+		t.Fatalf("root B workdir collapsed onto old path %q", oldDir)
+	}
+}
+
 // TestPrepareGitWorkspace_ReclaimLeavesPeerBranchWorktreeIntact pins the #854
 // safety contract (acceptance criterion 4): reclaiming a stale foreign-root
 // registration must be branch-scoped — it may drop only the EXACT colliding

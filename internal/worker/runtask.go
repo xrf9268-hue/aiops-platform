@@ -157,6 +157,7 @@ type runState struct {
 	hooks          workflow.WorkspaceHooks
 	workspaceRoot  string
 	workdir        string
+	releaseWorkdir func()
 	prompt         string
 	res            runner.Result
 	sessionID      string
@@ -203,6 +204,7 @@ func RunTaskWithResult(ctx context.Context, ev EventEmitter, t task.Task, cfg Co
 	if rtErr := rs.prepareWorkspace(); rtErr != nil {
 		return result, rtErr
 	}
+	defer rs.releaseWorkspaceOwnership()
 	if rtErr := rs.buildPrompt(); rtErr != nil {
 		return result, rtErr
 	}
@@ -230,24 +232,34 @@ func (rs *runState) prepareWorkspace() *RunTaskError {
 	rs.workspaceRoot = EffectiveWorkspaceRoot(rs.cfg, rs.wcfg)
 	mgr := workspace.New(rs.workspaceRoot)
 	mgr.MirrorRoot = rs.cfg.MirrorRoot
-	workdir, createdNow, err := mgr.PrepareGitWorkspace(rs.ctx, rs.t)
+	prepared, err := mgr.PrepareGitWorkspaceOwned(rs.ctx, rs.t)
 	if err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
-	rs.workdir = workdir
-	if createdNow {
+	rs.workdir = prepared.Workdir
+	rs.releaseWorkdir = prepared.Release
+	if prepared.CreatedNow {
 		// SPEC §9.4: after_create runs only when a workspace directory
 		// is newly created. Reuses skip it so bootstrap commands
 		// (`npm ci`, `pip install`, …) remain the one-time init they're
 		// documented as.
-		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, workdir, workspace.HookAfterCreate, rs.hooks.AfterCreate, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
-			removeWorkdirAfterHookFailure(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workspaceRoot, workdir, rs.hooks.BeforeRemove, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, "after_create")
+		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterCreate, rs.hooks.AfterCreate, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+			removeWorkdirAfterHookFailure(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workspaceRoot, rs.workdir, rs.hooks.BeforeRemove, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, "after_create")
+			rs.releaseWorkspaceOwnership()
 			return &RunTaskError{Cfg: rs.wcfg, Err: err}
 		}
 	}
 
 	rs.applyDefaultModel()
 	return nil
+}
+
+func (rs *runState) releaseWorkspaceOwnership() {
+	if rs.releaseWorkdir == nil {
+		return
+	}
+	rs.releaseWorkdir()
+	rs.releaseWorkdir = nil
 }
 
 // applyDefaultModel resolves the task model from the workflow default when the

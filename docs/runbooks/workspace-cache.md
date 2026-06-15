@@ -128,6 +128,12 @@ Operational notes:
 - The lock is **host-scoped**. Two workers must run on the same OS
   instance for the lock to mediate them; cross-host concurrency is not
   supported, because `flock(2)` is a per-kernel primitive.
+- The mirror lock only serializes mirror operations. During an active agent
+  run, the worker also holds a per-worktree ownership `flock` in that worktree's
+  git-admin directory so stale foreign-root reclaim fails safely when another
+  process is still using the old worktree. That guard protects against deletion;
+  it does not make shared `AIOPS_MIRROR_ROOT` maker/reviewer topologies
+  supported.
 - **NFS mirror roots are unsupported.** `flock(2)` on NFS is silently
   best-effort on Linux (depends on `lockd` being healthy) and not
   honoured on macOS. Use a local filesystem.

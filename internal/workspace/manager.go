@@ -174,34 +174,51 @@ func issueWorkspaceKey(t task.Task) string {
 //     (cached deps, build outputs) survive across
 //     runs.
 func (m *Manager) PrepareGitWorkspace(ctx context.Context, t task.Task) (string, bool, error) {
+	prepared, err := m.PrepareGitWorkspaceOwned(ctx, t)
+	if err != nil {
+		return "", false, err
+	}
+	prepared.Release()
+	return prepared.Workdir, prepared.CreatedNow, nil
+}
+
+// PrepareGitWorkspaceOwned is PrepareGitWorkspace plus a held per-worktree
+// ownership lease. Callers that run an agent in the worktree must hold the
+// lease until the run exits so foreign-root reclaim can fail safely when a
+// shared mirror observes a live peer worktree.
+func (m *Manager) PrepareGitWorkspaceOwned(ctx context.Context, t task.Task) (PreparedGitWorkspace, error) {
 	workdir := m.PathFor(t)
 	if err := os.MkdirAll(filepath.Dir(workdir), 0o755); err != nil {
-		return "", false, err
+		return PreparedGitWorkspace{}, err
 	}
 	info, statErr := os.Stat(workdir)
 	if statErr != nil && !os.IsNotExist(statErr) {
-		return "", false, statErr
+		return PreparedGitWorkspace{}, statErr
 	}
 	workdirExists := statErr == nil && info.IsDir()
 
 	mirror := mirrorPathFor(MirrorRoot(m.MirrorRoot), t.CloneURL)
 	unlock, err := acquireMirrorLock(mirror)
 	if err != nil {
-		return "", false, err
+		return PreparedGitWorkspace{}, err
 	}
 	defer unlock()
 
 	mirror, err = m.ensureMirrorLocked(ctx, t.CloneURL, mirror)
 	if err != nil {
-		return "", false, err
+		return PreparedGitWorkspace{}, err
 	}
 	startRef := resolveStartRef(ctx, mirror, t.BaseBranch)
 
 	createdNow, err := attachWorktree(ctx, m.Root, workdir, mirror, t.WorkBranch, startRef, workdirExists)
 	if err != nil {
-		return "", false, err
+		return PreparedGitWorkspace{}, err
 	}
-	return workdir, createdNow, nil
+	release, err := acquireWorktreeOwnership(ctx, workdir)
+	if err != nil {
+		return PreparedGitWorkspace{}, err
+	}
+	return PreparedGitWorkspace{Workdir: workdir, CreatedNow: createdNow, release: release}, nil
 }
 
 // attachWorktree reuses the existing workdir when it is a valid, mirror-linked
@@ -361,9 +378,10 @@ func createWorktree(ctx context.Context, root, workdir, mirror, workBranch, star
 // AIOPS_MIRROR_ROOT per worker is a hard requirement (docs/runbooks/reviewer-worker.md),
 // so a foreign-root registration in *our* mirror can only be our own stale one.
 // In the explicitly-unsupported shared-AIOPS_MIRROR_ROOT-with-different-root
-// config, reclaim could delete a concurrent peer's worktree; robust ownership
-// for that misconfiguration is tracked in #871 (a bare-PID guard is unreliable —
-// container workers are PID 1 on every restart).
+// config, a live peer worktree is protected by its held ownership lock; reclaim
+// then fails safely on the later worktree-add collision instead of deleting or
+// branch-resetting that peer. A bare-PID guard is intentionally not used:
+// container workers are PID 1 on every restart.
 func reclaimForeignBranchWorktree(ctx context.Context, root, workdir, mirror, workBranch string) {
 	holder := worktreePathForBranch(ctx, mirror, workBranch)
 	if holder == "" || !isForeignRootHolder(root, workdir, holder) {
@@ -377,6 +395,9 @@ func reclaimForeignBranchWorktree(ctx context.Context, root, workdir, mirror, wo
 	// collision surface instead (classifyExistingWorkdir also rejects a symlinked
 	// or foreign-mirror path, as on the reuse gate).
 	if reusable, _ := classifyExistingWorkdir(ctx, holder, mirror); !reusable {
+		return
+	}
+	if worktreeOwnershipLockHeld(ctx, holder) {
 		return
 	}
 	// `worktree remove --force` drops the registration and the stale dir; the
