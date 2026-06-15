@@ -195,4 +195,13 @@ satisfied, agreed squash method. Native auto-merge enforces only CI + required
 reviews, so confirm the non-check gates yourself immediately before enabling it,
 and re-confirm after any push (a new commit re-opens the `@codex` round).
 
+The grant authorizes **you** (a human or explicitly-authorized agent) to merge
+after auditing the gate — including judging Codex's clean `+1`/comment for the
+head. It does **not** loosen the unattended script: `local-pr-follow-through.sh`
+merges only on positive structured confirmation (a head-bound Codex review
+object with threads resolved, [protocol §8](pr-review-merge-protocol.md#8-merge))
+and hands every clean-or-not-reviewed (NOT-CONFIRMED) PR to a human — Codex emits
+no reliable structured clean signal, so an audited-clean artifact is never a
+script-merge trigger.
+
 Stop the moment the human revokes the grant or asks you to stop.

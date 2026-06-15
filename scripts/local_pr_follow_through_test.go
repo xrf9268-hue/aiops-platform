@@ -1,7 +1,11 @@
 package scripts
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -51,9 +55,8 @@ func TestLocalPRFollowThroughTriggersGitHubCodexReviewBeforeMerge(t *testing.T) 
 		`PR #$pr base changed during GitHub Codex review`,
 		`GitHub Codex review trigger comment is not bound to head`,
 		`[[ "$comment_body" != *"$head_oid"* || "$comment_body" != *"$base_oid"* || "$comment_body" != *"$base_ref"* ]]`,
-		`reactions?per_page=100`,
-		`chatgpt-codex-connector`,
-		`bot_plus_one`,
+		`pulls/${pr}/reviews?per_page=100`,
+		`python3 "$signal_script" find-findings "$head_oid" "$started_at"`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("local-pr-follow-through.sh missing %q", want)
@@ -227,7 +230,6 @@ func TestLocalPRFollowThroughReusesGitHubCodexReviewTriggerByHeadSHA(t *testing.
 		`github_codex_review_state_file "$pr" "$head_oid" "$base_oid" "$base_ref"`,
 		`gh_cmd api --paginate --slurp`,
 		`head_oid not in body or base_oid not in body or base_ref not in body`,
-		`if [[ "$eyes" == "0" && "$bot_plus_one" != "0" ]]; then`,
 		`Reusing GitHub Codex review trigger`,
 		`audit_log "github_codex_review_reused"`,
 	} {
@@ -406,5 +408,248 @@ func TestInstallLaunchAgentsDefaultsPRFollowThroughToAutoMerge(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install-local-launchagents.sh missing %q", want)
 		}
+	}
+}
+
+// --- #870: fixture-driven, mutation-verified Codex review-completion predicates ---
+//
+// The bot-identity + findings classification lives in scripts/codex_review_signal.py
+// (single source of truth, design D1). These tests drive that module with JSON
+// fixtures so a mutation to a predicate fails an assertion, not a build.
+
+const codexBotID int64 = 199175422
+
+type sigUser struct {
+	ID    *int64 `json:"id,omitempty"`
+	Login string `json:"login,omitempty"`
+	Type  string `json:"type,omitempty"`
+}
+
+type sigReview struct {
+	ID          int64   `json:"id"`
+	User        sigUser `json:"user"`
+	CommitID    string  `json:"commit_id"`
+	SubmittedAt string  `json:"submitted_at"`
+}
+
+func intPtr(v int64) *int64 { return &v }
+
+func codexSignalPython(t *testing.T) string {
+	t.Helper()
+	for _, name := range []string{"python3", "python"} {
+		if p, err := exec.LookPath(name); err == nil {
+			return p
+		}
+	}
+	t.Skip("python not found on PATH; codex_review_signal.py predicate tests require python")
+	return ""
+}
+
+func runCodexSignal(t *testing.T, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	py := codexSignalPython(t)
+	cmd := exec.Command(py, append([]string{"codex_review_signal.py"}, args...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err != nil {
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) {
+			t.Fatalf("run codex_review_signal.py %v: %v", args, err)
+		}
+		code = ee.ExitCode()
+	}
+	return strings.TrimSpace(out.String()), strings.TrimSpace(errb.String()), code
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("Marshal(%v): %v", v, err)
+	}
+	return string(b)
+}
+
+func TestCodexReviewSignalIdentityFailsClosedOnConflict(t *testing.T) {
+	const head, trigger = "abc123head", "2026-06-15T12:00:00Z"
+	fresh := "2026-06-15T12:05:00Z"
+	for _, tc := range []struct {
+		name     string
+		user     sigUser
+		wantCode int
+		wantOut  string // when wantCode==0
+		wantErr  string // when wantCode!=0
+	}{
+		{
+			name:     "authoritative match",
+			user:     sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector[bot]", Type: "Bot"},
+			wantCode: 0,
+			wantOut:  "FINDINGS",
+		},
+		{
+			name:     "login drift tolerated (id authoritative)",
+			user:     sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector", Type: "Bot"},
+			wantCode: 0,
+			wantOut:  "FINDINGS",
+		},
+		{
+			name:     "spoof: codex login over wrong id",
+			user:     sigUser{ID: intPtr(42), Login: "chatgpt-codex-connector[bot]", Type: "Bot"},
+			wantCode: 3,
+			wantErr:  "possible spoof",
+		},
+		{
+			name:     "spoof: codex login with absent id",
+			user:     sigUser{Login: "chatgpt-codex-connector[bot]", Type: "Bot"},
+			wantCode: 3,
+			wantErr:  "possible spoof",
+		},
+		{
+			name:     "wrong type: id matches but not a Bot",
+			user:     sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector[bot]", Type: "User"},
+			wantCode: 3,
+			wantErr:  "not Bot",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reviews := []sigReview{{ID: 1, User: tc.user, CommitID: head, SubmittedAt: fresh}}
+			out, errOut, code := runCodexSignal(t, mustJSON(t, reviews), "find-findings", head, trigger)
+			if code != tc.wantCode {
+				t.Fatalf("find-findings(%s) exit = %d (%s / %s); want %d", tc.name, code, out, errOut, tc.wantCode)
+			}
+			if tc.wantCode == 0 && !strings.HasPrefix(out, tc.wantOut) {
+				t.Fatalf("find-findings(%s) stdout = %q; want prefix %q", tc.name, out, tc.wantOut)
+			}
+			if tc.wantCode != 0 && !strings.Contains(errOut, tc.wantErr) {
+				t.Fatalf("find-findings(%s) stderr = %q; want substring %q", tc.name, errOut, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestCodexReviewSignalFindingsBoundToHead(t *testing.T) {
+	const head, trigger = "abc123head", "2026-06-15T12:00:00Z"
+	codex := sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector[bot]", Type: "Bot"}
+	human := sigUser{ID: intPtr(42), Login: "alice", Type: "User"}
+	for _, tc := range []struct {
+		name    string
+		reviews []sigReview
+		want    string // "FINDINGS" prefix or exact "NONE"
+	}{
+		{
+			name:    "codex review of current head after trigger",
+			reviews: []sigReview{{ID: 10, User: codex, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}},
+			want:    "FINDINGS",
+		},
+		{
+			name:    "codex review of a different head is ignored",
+			reviews: []sigReview{{ID: 11, User: codex, CommitID: "OTHERhead", SubmittedAt: "2026-06-15T12:05:00Z"}},
+			want:    "NONE",
+		},
+		{
+			name:    "codex review older than the trigger is ignored",
+			reviews: []sigReview{{ID: 12, User: codex, CommitID: head, SubmittedAt: "2026-06-15T11:00:00Z"}},
+			want:    "NONE",
+		},
+		{
+			name:    "human review on the head does not count",
+			reviews: []sigReview{{ID: 13, User: human, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}},
+			want:    "NONE",
+		},
+		{
+			name: "mixed set: stale codex + human + fresh codex",
+			reviews: []sigReview{
+				{ID: 14, User: codex, CommitID: head, SubmittedAt: "2026-06-15T11:00:00Z"},
+				{ID: 15, User: human, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"},
+				{ID: 16, User: codex, CommitID: head, SubmittedAt: "2026-06-15T12:06:00Z"},
+			},
+			want: "FINDINGS",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, code := runCodexSignal(t, mustJSON(t, tc.reviews), "find-findings", head, trigger)
+			if code != 0 {
+				t.Fatalf("find-findings(%s) exit = %d (%s)", tc.name, code, errOut)
+			}
+			if tc.want == "NONE" && out != "NONE" {
+				t.Fatalf("find-findings(%s) = %q; want NONE", tc.name, out)
+			}
+			if tc.want == "FINDINGS" && !strings.HasPrefix(out, "FINDINGS") {
+				t.Fatalf("find-findings(%s) = %q; want FINDINGS", tc.name, out)
+			}
+		})
+	}
+}
+
+func TestCodexReviewSignalAcceptsPaginatedSlurpShape(t *testing.T) {
+	const head, trigger = "abc123head", "2026-06-15T12:00:00Z"
+	codex := sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector[bot]", Type: "Bot"}
+	// gh api --paginate --slurp yields a list of per-page lists.
+	pages := [][]sigReview{{{ID: 20, User: codex, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}}}
+	out, errOut, code := runCodexSignal(t, mustJSON(t, pages), "find-findings", head, trigger)
+	if code != 0 || !strings.HasPrefix(out, "FINDINGS") {
+		t.Fatalf("find-findings(paginated) = %q exit=%d (%s); want FINDINGS exit 0", out, code, errOut)
+	}
+}
+
+func TestCodexReviewSignalPinsBotIdentityInOnePlace(t *testing.T) {
+	mod, err := os.ReadFile("codex_review_signal.py")
+	if err != nil {
+		t.Fatalf("ReadFile(codex_review_signal.py): %v", err)
+	}
+	for _, want := range []string{
+		"CODEX_BOT_ID = 199175422",
+		`CODEX_BOT_LOGIN = "chatgpt-codex-connector[bot]"`,
+	} {
+		if !strings.Contains(string(mod), want) {
+			t.Fatalf("codex_review_signal.py missing %q", want)
+		}
+	}
+	// Single source of truth: the shell script must not re-hardcode the numeric
+	// id (it delegates to the helper). A stray literal here is the #870 trap.
+	shell, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	if strings.Contains(string(shell), "199175422") {
+		t.Fatal("local-pr-follow-through.sh hardcodes the Codex bot id; keep it only in codex_review_signal.py")
+	}
+}
+
+func TestLocalPRFollowThroughHandsNotConfirmedToHuman(t *testing.T) {
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		`github_codex_not_confirmed_state_dir="${AIOPS_GITHUB_CODEX_NOT_CONFIRMED_STATE_DIR:-`,
+		`if [[ -f "$not_confirmed_file" ]]; then`,
+		`record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id"`,
+		`audit_log "github_codex_review_not_confirmed"`,
+		`action=human_review_required`,
+		`open_threads=${open_threads:-none}`,
+		`if [[ "$rc" -eq 124 ]]; then`,
+		`return 20`,
+		`wait_for_github_codex_review "$pr" "$head_oid" "$base_oid" "$base_ref" || review_rc=$?`,
+		`if [[ "$review_rc" -eq 20 ]]; then`,
+		`human_action_required=1`,
+		`exit 20`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("local-pr-follow-through.sh missing %q", want)
+		}
+	}
+	// NOT-CONFIRMED must hand off before any merge: the review_rc==20 `continue`
+	// has to precede the merge call so a clean-or-not-reviewed PR is never merged.
+	if strings.Index(script, `human_action_required=1`) > strings.Index(script, `gh_cmd pr merge`) {
+		t.Fatal("NOT-CONFIRMED handoff (human_action_required=1) must come before the merge call")
+	}
+	// The 124 (timeout) branch is what records NOT-CONFIRMED.
+	if strings.Index(script, `if [[ "$rc" -eq 124 ]]; then`) > strings.Index(script, `record_github_codex_not_confirmed "$pr"`) {
+		t.Fatal("record_github_codex_not_confirmed must be reached from the timeout (124) branch")
 	}
 }

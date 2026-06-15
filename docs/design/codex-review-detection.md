@@ -1,6 +1,7 @@
 # Design: align codex-review completion detection with codex's actual signaling
 
-Status: draft (for review)
+Status: accepted — implemented (`scripts/codex_review_signal.py`,
+`scripts/local-pr-follow-through.sh`, runbook §4/§8 + automation/batch docs)
 Issue: #870
 Scope: the local follow-through tooling + the protocol/runbook docs that decide
 when a GitHub `@codex review` is **done** and whether it is **clean** or has

@@ -38,9 +38,12 @@ This runbook wires the local macOS operator flow for resolving
   `codex.thread_sandbox: danger-full-access`.
 - Codex review and Claude Code are both mandatory independent local diff
   reviewers before PR handoff.
-- `scripts/local-pr-follow-through.sh` serializes PR gates and auto-merge:
-  local Go gates, independent Codex and Claude Code diff reviews, all GitHub checks,
-  unresolved review-thread check, then `gh pr merge --squash --auto`.
+- `scripts/local-pr-follow-through.sh` serializes PR gates: local Go gates,
+  independent Codex and Claude Code diff reviews, the GitHub `@codex review`
+  completion gate, all GitHub checks, the unresolved review-thread check, then —
+  **only on positive structured confirmation** (a head-bound Codex review object
+  with threads resolved) — `gh pr merge --squash --auto`. A clean-or-not-reviewed
+  (NOT-CONFIRMED) result hands to a human and is never auto-merged.
 - The local review command contract lives in
   [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) and is enforced
   by `scripts/local-pr-follow-through.sh`; keep concrete reviewer mechanics
@@ -208,8 +211,10 @@ This installs:
 - `com.aiops-platform.github-pr-follow-through`: PR gate/auto-merge sweep every
   10 minutes. It installs with `AIOPS_AUTO_MERGE=1` by default, so it merges
   only after the full local Go gate, Claude Code review, Codex review, GitHub
-  checks, and review-thread gates pass. For dogfood, install with
-  `AIOPS_AUTO_MERGE=0` until a named small-PR merge scope is authorized.
+  checks, and review-thread gates pass **and** only on positive structured Codex
+  confirmation (a clean-or-not-reviewed PR is handed to a human, not merged).
+  For dogfood, install with `AIOPS_AUTO_MERGE=0` until a named small-PR merge
+  scope is authorized.
 
 Logs are written under `~/Library/Logs/aiops-platform/`.
 
@@ -252,20 +257,25 @@ scripts/uninstall-local-launchagents.sh
   wait for that trigger to finish on the current head and base before merging.
   Reuse an existing trigger only when the comment body contains the current head
   SHA, base SHA, and base branch name.
-  The completion gate requires a `+1` reaction from
-  `chatgpt-codex-connector` on that head/base-bound trigger and no active `eyes`
-  reaction; unrelated/manual reactions do not satisfy the gate.
-  This unattended script intentionally fails closed if GitHub Codex instead
-  finishes by posting a clean issue comment; manual follow-through may treat
-  that as a human-audited completion signal per
-  [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md), but automation
-  must not parse Codex natural-language output to decide merge readiness.
+  The completion signal it polls for is the **head-bound Codex review object**
+  (`id == 199175422`, `commit_id == head`, `submitted_at` ≥ trigger), detected
+  via `scripts/codex_review_signal.py` — never a reaction/login string (see
+  [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) §4; 👀 eyes is
+  transient and the PR-body `+1` is idempotent, so neither is a gate).
+  Because a clean review leaves no such object, the script **cannot** tell
+  "reviewed clean" from "not yet reviewed": when no review object appears within
+  the window it records **NOT-CONFIRMED**, emits one structured handoff line,
+  suppresses re-triggering until the head changes, and exits non-zero ("human
+  action required"). It never parses Codex natural-language output, and it never
+  auto-merges a NOT-CONFIRMED PR — a human audits the clean `+1`/comment and
+  merges.
 - Merge uses `gh pr merge --match-head-commit <reviewed-head>` so GitHub rejects
   auto-merge setup if the PR branch changes between the last local check and the
   merge request.
-- Use `AIOPS_AUTO_MERGE=0` during new workflow changes or after changing local
-  credentials. Restore `AIOPS_AUTO_MERGE=1` after the no-merge sweep logs are
-  clean so unattended follow-through can merge PRs that pass all gates.
+- `AIOPS_AUTO_MERGE=1` only enables the script's structurally-confirmed merge
+  path (head-bound review object, threads resolved); it can never merge on a
+  self-asserted clean. Still set `AIOPS_AUTO_MERGE=0` during new workflow changes
+  or after changing local credentials so even that path is held back.
 - Stale per-issue worktrees live under
   `~/aiops-workspaces/github/xrf9268-hue-aiops-platform`; remove issue
   directories only after confirming the worker is stopped or the issue/PR is no

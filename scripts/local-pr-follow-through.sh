@@ -24,6 +24,7 @@ follow_lock_dir="${AIOPS_FOLLOW_THROUGH_LOCK_DIR:-"$HOME/Library/Caches/aiops-pl
 follow_lock_stale_seconds="${AIOPS_FOLLOW_THROUGH_LOCK_STALE_SECONDS:-3600}"
 review_state_dir="${AIOPS_REVIEW_STATE_DIR:-"$HOME/Library/Caches/aiops-platform/reviews"}"
 github_codex_review_state_dir="${AIOPS_GITHUB_CODEX_REVIEW_STATE_DIR:-"$HOME/Library/Caches/aiops-platform/github-codex-review"}"
+github_codex_not_confirmed_state_dir="${AIOPS_GITHUB_CODEX_NOT_CONFIRMED_STATE_DIR:-"$HOME/Library/Caches/aiops-platform/github-codex-not-confirmed"}"
 
 cd "$repo_root"
 
@@ -137,6 +138,13 @@ review_artifact_dir() {
 
 github_codex_review_state_file() {
   state_file_for "$github_codex_review_state_dir" "$1" "$2-$3-$(safe_key_component "$4")"
+}
+
+# Keyed by head SHA so a NOT-CONFIRMED verdict suppresses re-triggering on the
+# next sweep until the head changes (a new push) — without spinning the 20m
+# wait every poll. See wait_for_github_codex_review and design #870 (D5).
+github_codex_not_confirmed_state_file() {
+  state_file_for "$github_codex_not_confirmed_state_dir" "$1" "$2-$3-$(safe_key_component "$4")"
 }
 
 closing_issue_report_for_prs() {
@@ -762,10 +770,16 @@ run_local_reviews() {
   mark_local_reviews_passed "$pr" "$head_oid" "$base_oid" "$base_ref" "$artifacts_dir"
 }
 
-assert_no_actionable_threads() {
+# Paginates every reviewThread and prints the comma-joined ids of the ones that
+# block merge: unresolved AND non-outdated, regardless of author (humans count —
+# the all-thread gate is never narrowed to Codex; design #870 D1/D4). Single
+# source of truth for both the merge gate (assert_no_actionable_threads) and the
+# NOT-CONFIRMED handoff line (record_github_codex_not_confirmed).
+collect_actionable_thread_ids() {
   local pr="$1"
-  local cursor after_clause payload active has_next
+  local cursor after_clause payload active has_next all
   cursor=""
+  all=""
   while true; do
     after_clause=""
     if [[ -n "$cursor" ]]; then
@@ -787,12 +801,11 @@ assert_no_actionable_threads() {
     }")"
     active="$(jq -r '[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not)) | .id] | join(",")' <<<"$payload")"
     if [[ -n "$active" ]]; then
-      echo "unresolved actionable review threads: $active" >&2
-      return 1
+      all="${all:+$all,}$active"
     fi
     has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$payload")"
     if [[ "$has_next" != "true" ]]; then
-      return 0
+      break
     fi
     cursor="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor // ""' <<<"$payload")"
     if [[ -z "$cursor" ]]; then
@@ -800,6 +813,38 @@ assert_no_actionable_threads() {
       return 1
     fi
   done
+  printf '%s' "$all"
+}
+
+assert_no_actionable_threads() {
+  local pr="$1" active
+  active="$(collect_actionable_thread_ids "$pr")" || return 1
+  if [[ -n "$active" ]]; then
+    echo "unresolved actionable review threads: $active" >&2
+    return 1
+  fi
+}
+
+# Records the NOT-CONFIRMED verdict for this head and emits the single
+# structured handoff line the operator acts on: PR, head/base, trigger id, the
+# observed signal (none — no Codex review object for this head), and any open
+# thread ids. Distinct from a network/hard error; means "human action required".
+record_github_codex_not_confirmed() {
+  local pr="$1" head_oid="$2" base_oid="$3" base_ref="$4" trigger_id="$5"
+  local state_file tmp open_threads
+  state_file="$(github_codex_not_confirmed_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
+  open_threads="$(collect_actionable_thread_ids "$pr" || true)"
+  tmp="${state_file}.$$"
+  jq -n \
+    --arg pr "$pr" \
+    --arg head_oid "$head_oid" \
+    --arg base_oid "$base_oid" \
+    --arg base_ref "$base_ref" \
+    --arg trigger_id "$trigger_id" \
+    --arg open_threads "$open_threads" \
+    '{pr:$pr, head_oid:$head_oid, base_oid:$base_oid, base_ref:$base_ref, trigger_id:$trigger_id, signal:"none", open_threads:$open_threads, status:"NOT-CONFIRMED"}' > "$tmp"
+  mv "$tmp" "$state_file"
+  audit_log "github_codex_review_not_confirmed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref trigger_id=$trigger_id signal=none open_threads=${open_threads:-none} state_file=$state_file action=human_review_required"
 }
 
 assert_review_decision_clean() {
@@ -864,7 +909,15 @@ wait_for_github_codex_review() {
   local head_oid="$2"
   local base_oid="$3"
   local base_ref="$4"
-  local cached_comment_json cached_body existing_trigger trigger_json trigger_id started_at state_file tmp
+  local cached_comment_json cached_body existing_trigger trigger_json trigger_id started_at state_file tmp not_confirmed_file rc
+  # If this exact head already reached NOT-CONFIRMED, hand back to the human
+  # without re-triggering or re-waiting — the state file is keyed by head, so a
+  # new push clears the suppression. (design #870 D5)
+  not_confirmed_file="$(github_codex_not_confirmed_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
+  if [[ -f "$not_confirmed_file" ]]; then
+    audit_log "github_codex_review_not_confirmed_suppressed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref state_file=$not_confirmed_file action=human_review_required"
+    return 20
+  fi
   state_file="$(github_codex_review_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
   trigger_id="$(jq -r '.trigger_id // empty' "$state_file" 2>/dev/null || true)"
   started_at="$(jq -r '.started_at // empty' "$state_file" 2>/dev/null || true)"
@@ -924,6 +977,14 @@ base_ref: ${base_ref}")"
     echo "Triggered GitHub Codex review for PR #$pr at $head_oid against $base_ref@$base_oid (comment $trigger_id)"
   fi
 
+  # Poll for the one reliable, current-head-bound structured signal: a Codex
+  # FINDINGS review object (commit_id==head, submitted_at>=trigger). A clean
+  # review leaves no such object, so its absence is NOT-CONFIRMED, surfaced via
+  # the run_with_timeout 124 exit below — never auto-merged. The 👀 eyes count is
+  # transient (clears on completion) and the PR-body +1 is idempotent/PR-level,
+  # so neither is a gate. (design #870 D1/D2/D5)
+  local signal_script="$repo_root/scripts/codex_review_signal.py"
+  rc=0
   run_with_timeout "$github_codex_review_timeout" bash -c '
     set -euo pipefail
     repo_owner="$1"
@@ -935,6 +996,7 @@ base_ref: ${base_ref}")"
     trigger_id="$7"
     started_at="$8"
     poll_seconds="$9"
+    signal_script="${10}"
     while true; do
       current_refs="$(gh api "repos/${repo_owner}/${repo_name}/pulls/${pr}" --jq "{head:.head.sha, base:.base.sha, base_ref:.base.ref}")"
       current_head="$(jq -r ".head" <<<"$current_refs")"
@@ -955,33 +1017,38 @@ base_ref: ${base_ref}")"
         exit 1
       fi
       eyes="$(jq -r ".reactions.eyes // 0" <<<"$comment_json")"
-      reactions_json="$(gh api --paginate --slurp -H "Accept: application/vnd.github+json" "repos/${repo_owner}/${repo_name}/issues/comments/${trigger_id}/reactions?per_page=100")"
-      bot_plus_one="$(REACTIONS_JSON="$reactions_json" python3 - <<'"'"'PY'"'"'
-import json
-import os
-
-raw_reactions = json.loads(os.environ["REACTIONS_JSON"])
-if raw_reactions and isinstance(raw_reactions[0], list):
-    reactions = [reaction for page in raw_reactions for reaction in page]
-else:
-    reactions = raw_reactions
-count = 0
-for reaction in reactions:
-    user = reaction.get("user") or {}
-    if reaction.get("content") == "+1" and user.get("login") == "chatgpt-codex-connector":
-        count += 1
-print(count)
-PY
-)"
-      if [[ "$eyes" == "0" && "$bot_plus_one" != "0" ]]; then
+      reviews_json="$(gh api --paginate --slurp "repos/${repo_owner}/${repo_name}/pulls/${pr}/reviews?per_page=100")"
+      # A Codex identity conflict (spoofed login / wrong type) makes the helper
+      # exit non-zero, which set -e propagates as a fail-closed hard error.
+      classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")"
+      if [[ "$classification" == FINDINGS* ]]; then
+        echo "GitHub Codex review object detected for PR #$pr head $head_oid (eyes=$eyes; $classification)"
         exit 0
       fi
       sleep "$poll_seconds"
     done
-  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds"
-  assert_no_actionable_threads "$pr"
+  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds" "$signal_script" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    # Completion + attribution: Codex reviewed this head. Whether it is mergeable
+    # is decided solely by the all-thread gate (any author), not a second block
+    # here. (design #870 D5)
+    audit_log "github_codex_review_findings_detected" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref trigger_id=$trigger_id"
+    assert_no_actionable_threads "$pr"
+    return 0
+  fi
+  if [[ "$rc" -eq 124 ]]; then
+    # No Codex review object appeared in the window. The script cannot tell
+    # "reviewed clean" from "not yet reviewed" (no reliable structured clean
+    # signal), so it hands to a human and never auto-merges. (design #870 D5)
+    record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id"
+    return 20
+  fi
+  # Drift / binding mismatch / network error inside the loop — a hard error,
+  # deliberately distinct from the NOT-CONFIRMED human-handoff exit.
+  return "$rc"
 }
 
+human_action_required=0
 for pr in "${prs[@]}"; do
   echo "== PR #$pr =="
   audit_log "pr_started" "pr=$pr"
@@ -1021,7 +1088,18 @@ for pr in "${prs[@]}"; do
 
   gh_cmd pr ready -R "$repo_path" "$pr" >/dev/null 2>&1 || true
   assert_pr_refs_unchanged "$pr" "$head_oid" "$base_oid" "$base_ref" "before_github_codex_review"
-  wait_for_github_codex_review "$pr" "$head_oid" "$base_oid" "$base_ref"
+  review_rc=0
+  wait_for_github_codex_review "$pr" "$head_oid" "$base_oid" "$base_ref" || review_rc=$?
+  if [[ "$review_rc" -eq 20 ]]; then
+    # NOT-CONFIRMED (clean-or-not-reviewed): record_github_codex_not_confirmed
+    # already emitted the structured handoff line. Skip merge for this PR and
+    # carry on; the run exits non-zero at the end so the operator is signalled.
+    echo "PR #$pr: GitHub Codex review NOT-CONFIRMED; handing to a human and leaving it unmerged" >&2
+    human_action_required=1
+    continue
+  elif [[ "$review_rc" -ne 0 ]]; then
+    exit "$review_rc"
+  fi
   audit_log "github_codex_review_passed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref"
   assert_pr_refs_unchanged "$pr" "$head_oid" "$base_oid" "$base_ref" "before_github_checks"
   audit_log "github_checks_started" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref timeout=$checks_timeout"
@@ -1031,6 +1109,11 @@ for pr in "${prs[@]}"; do
   assert_no_actionable_threads "$pr"
   assert_review_decision_clean "$pr"
 
+  # Reached only on positive structured confirmation: Codex reviewed this head
+  # (review object) and the all-thread gate is clean — the one unattended-eligible
+  # merge path. A clean-or-not-reviewed (NOT-CONFIRMED) PR `continue`d above and
+  # never gets here, so AIOPS_AUTO_MERGE can never merge on a self-asserted clean.
+  # (design #870 D1/D5)
   if [[ "$auto_merge" == "1" ]]; then
     audit_log "merge_requested" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref method=squash auto=1"
     gh_cmd pr merge -R "$repo_path" "$pr" --squash --auto --delete-branch --match-head-commit "$head_oid"
@@ -1041,3 +1124,8 @@ for pr in "${prs[@]}"; do
   fi
   audit_log "pr_completed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref"
 done
+
+if [[ "$human_action_required" == "1" ]]; then
+  audit_log "follow_through_human_action_required" "prs=${prs[*]} reason=github_codex_review_not_confirmed"
+  exit 20
+fi

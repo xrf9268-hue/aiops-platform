@@ -149,21 +149,43 @@ Run it **on every pushed head**, not once per PR.
    `xrf9268-hue` as the active `gh` account; pass the bytevane token per
    command via `GH_TOKEN`. `scripts/local-pr-follow-through.sh` applies the
    same rule via `AIOPS_CODEX_TRIGGER_USER` (default `bytevane`).
-2. **Poll** its reactions summary —
-   `gh api repos/<owner>/<repo>/issues/comments/<id> --jq '.reactions.eyes'`
-   (the issue-comment object carries the `.reactions` counts; no separate
-   `/reactions` endpoint needed). Codex review is not a check run and reactions
-   have no watch/subscribe API (REST is GET/POST/DELETE only), so polling is the
-   only option. **`eyes==0` alone is not done** (it may not have started): wait
-   for 👀 to **appear then disappear**, **and** for a positive completion
-   signal:
-   - a `chatgpt-codex-connector` `+1` reaction on the trigger,
-   - a `chatgpt-codex-connector` PR review for the recorded head, or
-   - for manual follow-through only, a later `chatgpt-codex-connector` issue
-     comment that the operator reads as a clean review result while the PR head
-     and base still match the recorded trigger refs.
-   Do not automate the last case by parsing Codex natural-language output; an
-   unattended gate that lacks a structured clean signal should fail closed.
+2. **Detect completion by the canonical predicates — not a reaction/login
+   string.** Codex review is not a check run and reactions have no
+   watch/subscribe API, so polling is the only option, but poll for the *right*
+   object and identify the bot by *stable identity*. These are the single source
+   of truth (the script + helper implement them; agents must not re-derive
+   fragile filters):
+   - **Identity — one constant.** Codex is `id == 199175422`
+     (`login == "chatgpt-codex-connector[bot]"`, `type == "Bot"`). Match by the
+     numeric `id`; the `[bot]`-suffixed login is easy to drop and differs across
+     endpoints, so a bare-login filter silently matches nothing (the #870 trap).
+     Fail closed on conflicts: `type != Bot` or the login present over a
+     wrong/absent id (possible spoof) → reject; an `id`-match with a drifted
+     login (App reinstall) is the only "proceed, log". Pinned once in
+     `scripts/codex_review_signal.py`.
+   - **Findings (reliable, head-bound).** The only structured signal tied to a
+     specific head is a Codex **review object** with `commit_id == <head>` and
+     `submitted_at` ≥ the trigger. That is the completion + attribution signal
+     ("Codex reviewed *this* head"). The empirical co-occurrence: a PR can carry
+     a findings review for an early head *and* a clean `+1` for the final head,
+     so "has a review object" is never "current head has findings" — always scope
+     by `commit_id`.
+   - **Merge blocker (broad).** ANY unresolved, non-outdated `reviewThread` —
+     any author, humans included — blocks merge (see §5). The review-object
+     predicate above is for completion/attribution, **not** a second merge gate.
+   - **Processing (advisory only).** 👀 eyes is transient — it clears on
+     completion — so it is never a gate; log it, do not wait on it.
+   - **No reliable clean signal → no unattended clean-merge.** A clean review
+     leaves no head-bound structured artifact: the PR-body `+1` is
+     idempotent/PR-level (re-reacting keeps the original timestamp, so it can't
+     bind a head) and the clean issue comment carries `Reviewed commit:` only
+     ~⅓ of the time (matching its verdict prose is the banned NL path). So
+     unattended automation **cannot** assert "clean" and must not auto-merge on
+     `+1`/eyes/comment. Absence of a review object within the window is
+     **NOT-CONFIRMED** (clean-or-not-reviewed, indistinguishable to the script);
+     it hands to a human, never auto-merges. A human (or an explicitly-authorized
+     agent) may audit the clean `+1`/comment and merge — that audited artifact is
+     not an unattended-script trigger.
 
    **Poll-loop implementation constraints** (earned: the PR #774 second-round
    watch stalled silently for 16+ rounds, 2026-06-12). The interactive shell
@@ -279,6 +301,18 @@ Include a size-gate checklist (exactly one box checked):
   protection — not gates 2–4.** Confirm gates 2–4 yourself immediately before
   enabling auto-merge; any new push re-opens them (re-confirm before
   re-enabling).
+
+  Gate 2 distinguishes **who** is merging:
+  - A **human or explicitly-authorized agent** may establish "clean" by auditing
+    Codex's clean `+1`/comment for the current head (§4) — natural-language
+    judgment is allowed for *this* actor.
+  - The **unattended script** (`local-pr-follow-through.sh`) may merge **only on
+    positive structured confirmation**: a head-bound Codex review object (§4)
+    whose threads — and all threads — are resolved. It has no reliable clean
+    signal, so a NOT-CONFIRMED (clean-or-not-reviewed) result and a human-audited
+    clean artifact **never** trigger a script merge; the script hands those to a
+    human (non-zero "human action required" exit). This is the only unattended
+    merge path, and in practice it retires unattended auto-merge-on-clean.
 
   **Hard stops — always require human sign-off even under an auto-merge grant:**
   force-pushing/merging into `main` out of band or any history rewrite; editing
