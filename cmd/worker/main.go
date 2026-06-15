@@ -489,7 +489,7 @@ func defaultInactiveStateCandidates(kind string) []string {
 	case "github":
 		return nil
 	case "gitea":
-		return []string{"Human Review"}
+		return []string{"Human Review", "Merging"}
 	default:
 		return []string{"Backlog", "Human Review"}
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
 // TestGiteaPreDispatchStateIsBlockerGated pins the producer/consumer seam
@@ -42,5 +43,29 @@ func TestGiteaPreDispatchStateIsBlockerGated(t *testing.T) {
 	released.BlockedBy = []tracker.BlockerRef{{ID: "4", Identifier: "#4", State: terminal}}
 	if out := filterEligibleCandidates([]tracker.Issue{released}, terminalStates, nil); len(out) != 1 {
 		t.Fatalf("filterEligibleCandidates(issue in %q blocked by terminal %q) = %d issues, want 1", preDispatch, terminal, len(out))
+	}
+}
+
+func TestGiteaMergingStateIsNonTerminalForDefaultBlockerGate(t *testing.T) {
+	mappings := gitea.DefaultStateLabelMappings()
+	preDispatch, diags := gitea.IssueStateFromLabels([]gitea.Label{{Name: "aiops/todo"}}, mappings)
+	if len(diags) != 0 {
+		t.Fatalf("IssueStateFromLabels(aiops/todo) diagnostics = %v, want none", diags)
+	}
+	merging, diags := gitea.IssueStateFromLabels([]gitea.Label{{Name: "aiops/merging"}}, mappings)
+	if len(diags) != 0 {
+		t.Fatalf("IssueStateFromLabels(aiops/merging) diagnostics = %v, want none", diags)
+	}
+
+	dependent := tracker.Issue{
+		ID:         "10",
+		Identifier: "#10",
+		Title:      "blocked while dependency lands",
+		State:      preDispatch,
+		BlockedBy:  []tracker.BlockerRef{{ID: "4", Identifier: "#4", State: merging}},
+	}
+	terminalStates := workflow.DefaultConfig().Tracker.TerminalStates
+	if out := filterEligibleCandidates([]tracker.Issue{dependent}, terminalStates, nil); len(out) != 0 {
+		t.Fatalf("filterEligibleCandidates(issue in %q blocked by %q, terminal=%v) = %d issues, want 0", preDispatch, merging, terminalStates, len(out))
 	}
 }

@@ -28,12 +28,13 @@ tracker:
   terminal_states:
     - Done
     - Canceled
-  # Maker-owned states make a running review ineligible: a Rework verdict
-  # (or an operator pulling the issue back) cancels the in-flight reviewer
-  # run on the next poll.
+  # Maker/landing-owned states make a running review ineligible: a Rework or
+  # Merging verdict (or an operator pulling the issue back) cancels the
+  # in-flight reviewer run on the next poll.
   inactive_states:
     - Todo
     - In Progress
+    - Merging
     - Rework
 
 polling:
