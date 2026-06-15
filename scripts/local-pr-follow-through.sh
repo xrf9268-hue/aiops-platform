@@ -443,22 +443,27 @@ to_lower() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-# Converts a GNU-timeout duration (e.g. 20m, 1200, 1h) to whole seconds, so the
-# Codex poll loop can own its own no-signal deadline (distinct sentinel) and
-# leave the outer `timeout` 124 as a hard error for a genuinely hung command.
+# Converts a GNU-timeout DURATION to whole seconds (ceil), so the Codex poll loop
+# can own its own no-signal deadline (distinct sentinel) and leave the outer
+# `timeout` 124 as a hard error for a genuinely hung command. Preserves GNU
+# `timeout` semantics: DURATION is a floating-point number with an optional
+# s/m/h/d suffix, and `0` disables the timeout — for which this prints an empty
+# string so the caller leaves both the inner deadline and the outer bound off.
+# Fails closed on an unparseable value.
 duration_to_seconds() {
   local d="$1"
-  if [[ "$d" =~ ^([0-9]+)([smhd]?)$ ]]; then
-    local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[2]}"
+  if [[ "$d" =~ ^([0-9]+(\.[0-9]+)?)([smhd]?)$ ]]; then
+    local n="${BASH_REMATCH[1]}" unit="${BASH_REMATCH[3]}" mult
     case "$unit" in
-      "" | s) printf '%s' "$n" ;;
-      m) printf '%s' "$((n * 60))" ;;
-      h) printf '%s' "$((n * 3600))" ;;
-      d) printf '%s' "$((n * 86400))" ;;
+      "" | s) mult=1 ;;
+      m) mult=60 ;;
+      h) mult=3600 ;;
+      d) mult=86400 ;;
     esac
+    awk -v n="$n" -v m="$mult" 'BEGIN { s = n * m; if (s == 0) print ""; else print (s == int(s)) ? s : int(s) + 1 }'
     return 0
   fi
-  echo "cannot parse duration '$d' (expected <int>[smhd])" >&2
+  echo "cannot parse duration '$d' (expected <float>[smhd]; 0 disables)" >&2
   return 1
 }
 
@@ -1003,14 +1008,22 @@ base_ref: ${base_ref}")"
   # transient (clears on completion) and the PR-body +1 is idempotent/PR-level,
   # so neither is a gate. (design #870 D1/D2/D5)
   local signal_script="$repo_root/scripts/codex_review_signal.py"
-  local poll_budget_seconds hard_cap_seconds
+  local poll_budget_seconds hard_cap_arg budget_arg
   poll_budget_seconds="$(duration_to_seconds "$github_codex_review_timeout")" || exit 2
   # The loop owns its no-signal deadline and exits 75; the outer timeout is a
   # longer hard backstop, so its 124 means a command genuinely hung (network
   # stall) — never "polled the full window clean". (codex #879 R1-P2)
-  hard_cap_seconds=$((poll_budget_seconds + 120))
+  if [[ -z "$poll_budget_seconds" ]]; then
+    # AIOPS_GITHUB_CODEX_REVIEW_TIMEOUT=0 disables the timeout (GNU semantics):
+    # leave both the inner deadline (budget 0) and the outer bound off.
+    hard_cap_arg="$github_codex_review_timeout"
+    budget_arg=0
+  else
+    hard_cap_arg="$((poll_budget_seconds + 120))s"
+    budget_arg="$poll_budget_seconds"
+  fi
   rc=0
-  run_with_timeout "${hard_cap_seconds}s" bash -c '
+  run_with_timeout "$hard_cap_arg" bash -c '
     set -euo pipefail
     repo_owner="$1"
     repo_name="$2"
@@ -1025,9 +1038,10 @@ base_ref: ${base_ref}")"
     budget_seconds="${11}"
     SECONDS=0
     while true; do
-      if (( SECONDS >= budget_seconds )); then
+      if (( budget_seconds > 0 )) && (( SECONDS >= budget_seconds )); then
         # Polled the full window with no Codex review object: clean no-signal
         # deadline (NOT-CONFIRMED), distinct from a hung command (outer 124).
+        # budget 0 = timeout disabled: never self-deadline (poll until a review).
         exit 75
       fi
       current_refs="$(gh api "repos/${repo_owner}/${repo_name}/pulls/${pr}" --jq "{head:.head.sha, base:.base.sha, base_ref:.base.ref}")"
@@ -1064,7 +1078,7 @@ base_ref: ${base_ref}")"
       fi
       sleep "$poll_seconds"
     done
-  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds" "$signal_script" "$poll_budget_seconds" || rc=$?
+  ' bash "$repo_owner" "$repo_name" "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at" "$github_codex_review_poll_seconds" "$signal_script" "$budget_arg" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     # Completion + attribution: Codex reviewed this head. Whether it is mergeable
     # is decided solely by the all-thread gate (any author), not a second block

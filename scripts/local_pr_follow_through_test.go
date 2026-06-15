@@ -706,11 +706,11 @@ func TestLocalPRFollowThroughHandsNotConfirmedToHuman(t *testing.T) {
 		// NOT-CONFIRMED rides the inner loop's own no-signal deadline (sentinel
 		// 75), NOT the outer timeout 124 — a hung gh/network call yields 124 and
 		// must stay a retryable hard error, not a suppressing handoff (codex #879).
-		`if (( SECONDS >= budget_seconds )); then`,
+		`if (( budget_seconds > 0 )) && (( SECONDS >= budget_seconds )); then`,
 		`exit 75`,
 		`if [[ "$rc" -eq 75 ]]; then`,
-		`hard_cap_seconds=$((poll_budget_seconds + 120))`,
-		`run_with_timeout "${hard_cap_seconds}s" bash -c`,
+		`hard_cap_arg="$((poll_budget_seconds + 120))s"`,
+		`run_with_timeout "$hard_cap_arg" bash -c`,
 		`return 20`,
 		`wait_for_github_codex_review "$pr" "$head_oid" "$base_oid" "$base_ref" || review_rc=$?`,
 		`if [[ "$review_rc" -eq 20 ]]; then`,
@@ -747,7 +747,9 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 	if !strings.Contains(script, `duration_to_seconds() {`) {
 		t.Fatal("local-pr-follow-through.sh missing duration_to_seconds helper")
 	}
-	// Behaviorally exercise the helper for the formats the poll budget uses.
+	// Behaviorally exercise the helper, including the GNU `timeout` semantics the
+	// old code preserved by passing DURATION through directly: floats and the
+	// `0`-disables case (which prints empty so the caller leaves the bound off).
 	for _, tc := range []struct {
 		in, want string
 	}{
@@ -755,6 +757,11 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 		{"20m", "1200"},
 		{"1h", "3600"},
 		{"30s", "30"},
+		{"0.5m", "30"}, // float duration (was rejected by the integer-only regex)
+		{"1.5h", "5400"},
+		{"0", ""},     // GNU: 0 disables the timeout -> empty (unbounded), not budget 0
+		{"0m", ""},    // 0 with a suffix also disables
+		{"0.4s", "1"}, // ceil to whole seconds
 	} {
 		out := runShellFunc(t, script, "duration_to_seconds", tc.in)
 		if out != tc.want {
@@ -764,5 +771,17 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 	// Unparseable input must fail (non-zero), not silently yield a bogus budget.
 	if _, _, code := runShellFuncRaw(t, script, "duration_to_seconds", "notaduration"); code == 0 {
 		t.Fatal("duration_to_seconds must fail closed on an unparseable duration")
+	}
+	// The disabled (0) case must leave the timeout unbounded: the caller passes
+	// the raw setting to the outer timeout and budget 0 to the inner loop, and
+	// the inner loop only self-deadlines when budget > 0.
+	for _, want := range []string{
+		`if [[ -z "$poll_budget_seconds" ]]; then`,
+		`budget_arg=0`,
+		`if (( budget_seconds > 0 )) && (( SECONDS >= budget_seconds )); then`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("local-pr-follow-through.sh missing %q", want)
+		}
 	}
 }
