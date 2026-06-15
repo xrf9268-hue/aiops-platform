@@ -145,8 +145,9 @@ Predicates:
   all-thread gate; never narrow to Codex-only. (review R1-#5.)
 - **Processing (advisory only):** 👀 eyes — transient (1/150 residual), never a
   gate.
-- **No-review backstop:** ~24% of PRs get no Codex signal; time-bound the wait
-  and surface "Codex did not review" rather than hang.
+- **No-review backstop:** ~24% of PRs get no Codex signal; time-bound the wait.
+  But the timeout result is **NOT-CONFIRMED**, not a definitive "Codex did not
+  review" — the script cannot distinguish clean-done from never-ran (see D5).
 - **Clean — NOT structurally auto-confirmed:** unattended automation must not
   assert "clean" from `+1` / eyes / comment (none reliable + head-bound). Clean
   is established by a human (or an explicitly-authorized agent) auditing the
@@ -191,6 +192,36 @@ Predicates:
 - `.github/scripts/capture-unresolved-reviews.mjs` — captures **all** unresolved
   threads regardless of author (login only used for display). No change.
 
+### D5. Script terminal behavior and the clean-detection consequence (review R3-#1)
+
+Because there is no reliable structured clean signal, the unattended script
+**cannot distinguish "reviewed clean" from "not yet reviewed"** — both present
+as "no findings (yet)". The design owns this rather than papering over it:
+
+- The script classifies only what it can prove: **FINDINGS** = a Codex review
+  object (`id==199175422`, `commit_id==head`, `submitted_at ≥ trigger`) and/or
+  unresolved non-outdated `reviewThreads`. Everything else is
+  **NOT-CONFIRMED** (clean-or-not-reviewed) — it must NOT be reported as a
+  definitive "Codex did not review" (the script can't know that), and must NOT
+  be treated as clean.
+- **Auto-merge on a NOT-CONFIRMED result is forbidden.** The current silent
+  `AIOPS_AUTO_MERGE=1` default (`local-pr-follow-through.sh:10`) contradicts
+  "clean-merge is human"; gate it so the clean/NOT-CONFIRMED path **hands to a
+  human** (matches the repo default `batch-issue-processing.md`). Auto-merge may
+  only proceed on positive structured confirmation, which for *clean* does not
+  exist.
+- **Consequence (decided, best-practice — flag to operator):** unattended
+  **auto-merge-on-clean is effectively retired**, because Codex emits no
+  reliable clean signal. The unattended script's value narrows to: detect
+  findings, block on any unresolved thread, drive to threads-resolved — then a
+  human confirms Codex reviewed and merges. Rejected alternative (B): accept the
+  human-audited clean comment/`+1` as an *unattended* signal — that is exactly
+  the NL/best-effort path the earned safety rule forbids.
+- The **findings review-object** predicate is for *completion/attribution*
+  ("did Codex review this head?"), NOT a second merge block — the all-thread
+  blocker already blocks findings regardless of how Codex surfaces them
+  (review R3-#2). Keep both, with that division of labor explicit.
+
 ## Open questions / decisions
 
 - **D-Q1 — DECIDED: no reliable structured clean signal → unattended does not
@@ -215,8 +246,9 @@ Predicates:
 - Rewrite `local_pr_follow_through_test.go` from substring assertions to
   fixture-driven, mutation-verified predicate tests: identity constant + each
   conflict class fails closed; findings review object `commit_id==head` detected
-  vs `commit_id!=head` ignored; all-author thread blocker not narrowed; no-signal
-  timeout surfaces "Codex did not review"; multi-head re-review keys on the head.
+  vs `commit_id!=head` ignored; all-author thread blocker not narrowed; timeout
+  classifies as NOT-CONFIRMED (not "did not review") and does NOT auto-merge;
+  multi-head re-review keys on the head.
 - A doc-consistency check so §4 / `github-local-automation.md` / the script stay
   in step (one source of truth).
 
@@ -238,3 +270,13 @@ Predicates:
   (review object `commit_id==head`) + all-thread blocker; clean-merge is
   human-audited. This collapses R2-#1/#2 and D-Q2, and tightens identity (#4) and
   tests (#5).
+- **R3 — codex (local, grounded + adversarial), commit 3bfef29:**
+  NEEDS-CHANGES. Most "NOT RESOLVED" items were the reviewer comparing the
+  *current* script/runbooks/tests to the design — i.e. the not-yet-done
+  implementation (D2/D3/test plan), not design defects. Genuine design findings
+  accepted: **R3-#1** — dropping clean auto-detect leaves the script unable to
+  distinguish clean-done from not-reviewed; the doc must own this and the
+  `AIOPS_AUTO_MERGE` clean-path must hand to a human (added as **D5**). **R3-#2**
+  — the findings review-object is completion/attribution, not a second merge
+  block (clarified in D5). Net: unattended auto-merge-on-clean is retired
+  (no reliable clean signal); scope confirmed not overbuilt.
