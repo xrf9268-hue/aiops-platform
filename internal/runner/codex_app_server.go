@@ -83,19 +83,27 @@ func (CodexAppServerRunner) Run(ctx context.Context, in RunInput) (Result, error
 		terminateProcess(cmd)
 	}
 	_ = stdin.Close()
-	// Drain stdout to EOF BEFORE cmd.Wait — the os/exec idiom (StdoutPipe doc:
-	// "incorrect to call Wait before all reads from the pipe have completed").
-	// The reader keeps scanning as the drain receives, so the child can never
-	// block writing to a full pipe; it finishes, observes the stdin EOF above (or
-	// the kill), exits, and its stdout EOF makes the reader close readCh, ending
-	// the drain. Waiting before draining would deadlock: a reader parked on an
-	// unconsumed send stalls stdout, the child blocks on write and never exits,
-	// and cmd.Wait never returns. Draining also joins the reader so no goroutine
-	// outlives this call (Go Code Review Comments, "Goroutine Lifetimes").
+	// Drain BOTH pipes to EOF BEFORE cmd.Wait — the os/exec idiom (StdoutPipe /
+	// StderrPipe docs: "incorrect to call Wait before all reads from the pipe
+	// have completed", because Wait closes the pipe once it sees the process
+	// exit). The reader keeps scanning as the drain receives, so the child can
+	// never block writing to a full pipe; it finishes, observes the stdin EOF
+	// above (or the kill), exits, and its stdout EOF makes the reader close
+	// readCh, ending the drain. Waiting before draining would deadlock: a reader
+	// parked on an unconsumed send stalls stdout, the child blocks on write and
+	// never exits, and cmd.Wait never returns. Draining also joins the reader so
+	// no goroutine outlives this call (Go Code Review Comments, "Goroutine
+	// Lifetimes").
 	for range client.readCh { //nolint:revive // drain-to-close joins the reader goroutine
 	}
-	waitErr := cmd.Wait()
+	// Join the stderr drain BEFORE Wait for the same reason: Wait closes the
+	// StderrPipe fd on process exit, which would truncate a final stderr write —
+	// e.g. a bwrap sandbox-startup denial that classifySandboxStartupFailure
+	// depends on (#550) — if io.Copy were still reading. io.Copy returns once the
+	// child closes stderr on exit (concurrent draining means the child never
+	// blocks on a full stderr pipe), so this join never stalls Wait.
 	<-stderrDone
+	waitErr := cmd.Wait()
 	elapsed := time.Since(start)
 
 	writeAppServerArtifact(in.Workdir, buf)
