@@ -797,3 +797,115 @@ func TestLocalPRFollowThroughDurationToSeconds(t *testing.T) {
 		}
 	}
 }
+
+// Drives the REAL recheck_suppressed_codex_findings helper against fixture
+// reviews JSON (gh_cmd stubbed). It must return 0 only when a Codex FINDINGS
+// review object for the head landed after started_at — the late-review case the
+// suppression re-check exists to catch (#894) — and non-zero (keep the
+// suppression, hand to a human) on no review, a different head, or a review
+// older than the trigger. Mutation: gut the find-findings call and the
+// FINDINGS/NONE cases diverge.
+func TestLocalPRFollowThroughRecheckSuppressedFindings(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found on PATH; the shell helper invokes python3 directly")
+	}
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	fnBody := shellFunctionBody(t, string(body), "recheck_suppressed_codex_findings")
+	const head, started = "abc123head", "2026-06-15T12:00:00Z"
+	codex := sigUser{ID: intPtr(codexBotID), Login: "chatgpt-codex-connector[bot]", Type: "Bot"}
+	human := sigUser{ID: intPtr(42), Login: "alice", Type: "User"}
+	spoof := sigUser{ID: intPtr(42), Login: "chatgpt-codex-connector[bot]", Type: "Bot"}
+	for _, tc := range []struct {
+		name     string
+		reviews  []sigReview
+		wantCode int // 0 => clear suppression; 3 => identity-conflict hard error; other non-zero => keep suppression
+	}{
+		{"findings landed late", []sigReview{{ID: 10, User: codex, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}}, 0},
+		{"still no review", []sigReview{}, 1},
+		{"review of a different head", []sigReview{{ID: 11, User: codex, CommitID: "OTHERhead", SubmittedAt: "2026-06-15T12:05:00Z"}}, 1},
+		{"review older than the trigger", []sigReview{{ID: 12, User: codex, CommitID: head, SubmittedAt: "2026-06-15T11:00:00Z"}}, 1},
+		{"human review of head is not codex findings", []sigReview{{ID: 13, User: human, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}}, 1},
+		// A spoofed Codex login (wrong id) must propagate find-findings' exit 3
+		// as a distinct hard error, NOT collapse into the NONE keep-suppression
+		// path — so the caller hard-fails like the poll loop. (#894 / PR #903 P2)
+		{"identity conflict (spoofed codex login)", []sigReview{{ID: 14, User: spoof, CommitID: head, SubmittedAt: "2026-06-15T12:05:00Z"}}, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prog := "set -euo pipefail\n" +
+				"repo_root=\"$(dirname \"$PWD\")\"\n" +
+				"repo_owner=o\nrepo_name=n\n" +
+				"gh_cmd() { printf '%s' \"$REVIEWS\"; }\n" +
+				"recheck_suppressed_codex_findings() {\n" + fnBody + "\n}\n" +
+				"recheck_suppressed_codex_findings 7 " + head + " " + started + "\n"
+			cmd := exec.Command("bash", "-c", prog)
+			cmd.Env = append(os.Environ(), "REVIEWS="+mustJSON(t, tc.reviews))
+			var out, errb bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errb
+			code := 0
+			if runErr := cmd.Run(); runErr != nil {
+				var ee *exec.ExitError
+				if !errors.As(runErr, &ee) {
+					t.Fatalf("run recheck helper: %v (stderr=%q)", runErr, errb.String())
+				}
+				code = ee.ExitCode()
+			}
+			if code != tc.wantCode {
+				t.Fatalf("recheck_suppressed_codex_findings(%s) exit=%d; want %d (stderr=%q)",
+					tc.name, code, tc.wantCode, errb.String())
+			}
+		})
+	}
+}
+
+// Pins the wiring that makes the late-review re-check effective: the suppression
+// branch reads started_at, re-checks, clears the state file and returns 0 via
+// the FINDINGS path on a hit; record_github_codex_not_confirmed persists
+// started_at and its caller passes it. Deleting the re-check wiring fails here.
+func TestLocalPRFollowThroughClearsSuppressionOnLateFindings(t *testing.T) {
+	body, err := os.ReadFile("local-pr-follow-through.sh")
+	if err != nil {
+		t.Fatalf("ReadFile(local-pr-follow-through.sh): %v", err)
+	}
+	script := string(body)
+	for _, want := range []string{
+		// state file now carries started_at, and the caller supplies it.
+		`local pr="$1" head_oid="$2" base_oid="$3" base_ref="$4" trigger_id="$5" started_at="$6"`,
+		`started_at:$started_at,`,
+		`record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at"`,
+		// suppression branch re-checks before honoring the suppression, and
+		// distinguishes the FINDINGS (clear) / identity-conflict (hard error) /
+		// NONE (keep) outcomes by the helper's exit code.
+		`nc_started_at="$(jq -r '.started_at // empty' "$not_confirmed_file" 2>/dev/null || true)"`,
+		`recheck_suppressed_codex_findings "$pr" "$head_oid" "$nc_started_at" || recheck_rc=$?`,
+		`if [[ "$recheck_rc" -eq 0 ]]; then`,
+		`rm -f "$not_confirmed_file"`,
+		`audit_log "github_codex_review_not_confirmed_cleared"`,
+		`action=findings_landed_late`,
+		// a spoof (find-findings exit 3) is a hard error, like the poll loop —
+		// never folded into the benign keep-suppression/exit-20 path.
+		`elif [[ "$recheck_rc" -eq 3 ]]; then`,
+		`audit_log "github_codex_review_recheck_identity_conflict"`,
+		`action=hard_error`,
+		// one API call; the helper propagates find-findings' exit code so the
+		// conflict code 3 stays distinct from NONE; FINDINGS-only success.
+		`reviews_json="$(gh_cmd api --paginate --slurp "repos/${repo_owner}/${repo_name}/pulls/${pr}/reviews?per_page=100")" || return 1`,
+		`classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")" || rc=$?`,
+		`if [[ "$rc" -ne 0 ]]; then`,
+		`[[ "$classification" == FINDINGS* ]]`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("local-pr-follow-through.sh missing %q", want)
+		}
+	}
+	// The cleared path must reach the all-thread gate then return 0, and must do
+	// so without re-entering the poll loop (no second run_with_timeout between
+	// the re-check and its return 0).
+	clearIdx := strings.Index(script, `audit_log "github_codex_review_not_confirmed_cleared"`)
+	threadIdx := strings.Index(script, `assert_no_actionable_threads "$pr"`)
+	if clearIdx < 0 || threadIdx < clearIdx {
+		t.Fatal("cleared suppression must fall through to assert_no_actionable_threads then return 0")
+	}
+}
