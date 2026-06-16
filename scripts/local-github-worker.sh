@@ -5,7 +5,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/us
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 workflow_path="${AIOPS_WORKFLOW_PATH:-"$repo_root/examples/github-local-WORKFLOW.md"}"
-workspace_root="${WORKSPACE_ROOT:-"$HOME/aiops-workspaces/github/xrf9268-hue-aiops-platform"}"
+workspace_root="${AIOPS_WORKSPACE_ROOT:-"$HOME/aiops-workspaces/github/xrf9268-hue-aiops-platform"}"
 bin_dir="${AIOPS_BIN_DIR:-"$HOME/Library/Application Support/aiops-platform/bin"}"
 worker_bin="$bin_dir/worker"
 worker_lock_key="$(printf '%s\n%s\n' "$workflow_path" "$workspace_root" | shasum -a 256 | awk '{print $1}')"
@@ -101,7 +101,7 @@ if [[ -z "${GITHUB_TOKEN:-}" ]]; then
 fi
 
 mkdir -p "$workspace_root" "$bin_dir"
-export WORKSPACE_ROOT="$workspace_root"
+export AIOPS_WORKSPACE_ROOT="$workspace_root"
 
 acquire_worker_lock
 go build -o "$worker_bin" ./cmd/worker
