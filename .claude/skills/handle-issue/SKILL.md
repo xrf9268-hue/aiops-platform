@@ -58,7 +58,7 @@ go build ./cmd/worker ./cmd/tui
 **暂存只 add 明确路径，绝不 `git add -A` / `git add .`**（会把 `.codex/` 等本地未跟踪文件卷入 PR）。commit 前 `git status --short` 核对只暂存了预期文件。
 
 ### 5. 提交 → 双审 → 开 PR
-1. 按协议 §2–§3 commit-first + pre-push 双 reviewer；先执行协议里的 **subagent-first reviewer routing**，具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。review finding 先按当前 head、issue 计划、SPEC/Elixir 参考和相邻路径验证技术正确性，再修复 / 反证 / 延后。§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
+1. 按协议 §2–§3 commit-first + pre-push 双 reviewer；先执行协议里的 **subagent-first reviewer routing**，具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。操作者可在当前请求中写明 `handle issue N with subagent review enabled` 作为 Codex inline 的 subagent review enabled 授权短语；授权含义仍以协议为准。review finding 先按当前 head、issue 计划、SPEC/Elixir 参考和相邻路径验证技术正确性，再修复 / 反证 / 延后。§4 每 push 跑 `@codex review` 收敛，§5 处理 review threads。
 2. push 后开 **一个** PR 对应该 issue，body 引用 issue（`Closes #N`），列验收项、验证命令、变异验证、风险/deferral；PR body 是活账本（协议 §7）。
 3. **每条 finding 归入 ≥1 类**：算法偏差 / 跨模块一致性 / Go runtime hardening / 安慰剂测试；然后修掉或**开 follow-up issue 延后**（标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria；伞 issue #67）。
 4. **Deferred 偏差必须开 issue**（AGENTS.md rule 2）：决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。

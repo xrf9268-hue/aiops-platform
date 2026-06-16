@@ -48,6 +48,8 @@ This runbook wires the local macOS operator flow for resolving
   [`pr-review-merge-protocol.md`](pr-review-merge-protocol.md) and is enforced
   by `scripts/local-pr-follow-through.sh`; keep concrete reviewer mechanics
   there so this automation runbook does not become a second source of truth.
+  When subagent review is unavailable or not authorized, that same contract keeps
+  local reviewer fallback time-bounded, cached, and audited.
 
 ## Prerequisites
 
