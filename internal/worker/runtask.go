@@ -437,15 +437,13 @@ func isTerminalPhase(phase task.RunAttemptPhase) bool {
 	}
 }
 
-// RunRunnerWithTimeout invokes the runner under a per-task timeout derived
-// from agent.timeout. It emits structured task events
-// (runner_start, runner_end, runner_timeout) so retry policy and observers
-// can distinguish a clean exit from a kill due to deadline. The returned
-// runner.Result carries any output telemetry the runner captured; on failure
-// (timeout or non-zero exit) the same Result is returned so that partial
-// telemetry (OutputBytes, OutputHead, OutputTail, etc.) is still available to
-// the caller.
-func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) { //nolint:gocognit,funlen // baseline (#521)
+// RunRunnerWithTimeout invokes the runner under a per-task timeout derived from
+// agent.timeout. It emits runner_start plus the terminal event classifyRunnerError
+// selects, so retry policy and observers can distinguish a clean exit from a
+// deadline kill. The runner.Result is returned on both success and failure so
+// partial output telemetry (OutputBytes, OutputHead, OutputTail, …) stays
+// available to the caller.
+func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner, in runner.RunInput, timeout time.Duration, workflowSource string) (runner.Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
@@ -455,30 +453,9 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 		"timeout_ms":      timeout.Milliseconds(),
 		"workflow_source": workflowSource,
 	})
-	currentPhase := task.PhaseBuildingPrompt
-	upstreamPhaseSink := in.PhaseTransitionSink
-	in.PhaseTransitionSink = func(from, to task.RunAttemptPhase) {
-		if from == "" {
-			from = currentPhase
-		}
-		currentPhase = to
-		if upstreamPhaseSink != nil {
-			upstreamPhaseSink(from, to)
-			return
-		}
-		EmitPhaseTransition(ctx, ev, in.Task.ID, in.Task.SourceEventID, from, to)
-	}
+
+	sinks := wireRunnerSinks(ctx, ev, &in, in.Task.ID, in.Task.SourceEventID)
 	in.PhaseTransitionSink(task.PhaseBuildingPrompt, task.PhaseLaunchingAgentProcess)
-	emittedRuntimeEvents := map[string]bool{}
-	upstreamRuntimeSink := in.RuntimeEventSink
-	in.RuntimeEventSink = func(event task.RuntimeEvent) {
-		emittedRuntimeEvents[runtimeEventKey(event)] = true
-		if upstreamRuntimeSink != nil {
-			upstreamRuntimeSink(event)
-			return
-		}
-		EmitRuntimeEvents(ctx, ev, in.Task.ID, in.Task.SourceEventID, []task.RuntimeEvent{event})
-	}
 
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -487,97 +464,18 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	res, runErr := r.Run(runCtx, in)
 	elapsed := time.Since(start)
 
-	for _, event := range res.RuntimeEvents {
-		if emittedRuntimeEvents[runtimeEventKey(event)] {
-			continue
-		}
-		EmitRuntimeEvents(ctx, ev, in.Task.ID, in.Task.SourceEventID, []task.RuntimeEvent{event})
-	}
+	sinks.forwardResultRuntimeEvents(ctx, ev, in.Task.ID, in.Task.SourceEventID, res)
 
 	if runErr != nil {
-		var stall *runner.StallError
-		if errors.As(runErr, &stall) {
-			in.PhaseTransitionSink(currentPhase, task.PhaseStalled)
-			stallPayload := map[string]any{
-				"model":      in.Task.Model,
-				"timeout_ms": stall.Timeout.Milliseconds(),
-				"elapsed_ms": stall.Elapsed.Milliseconds(),
-			}
-			addOutputFields(stallPayload, res)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventStalled, stall.Error(), stallPayload)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, stall.Error(), stallPayload)
-			return res, runErr
+		decision := classifyRunnerError(ctx, runErr, runCtx.Err(), res, in.Task.Model, elapsed, timeout)
+		in.PhaseTransitionSink(sinks.current, decision.phase)
+		for _, e := range decision.events {
+			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, e.kind, e.message, e.payload)
 		}
-		var turnTimeout *runner.TurnTimeoutError
-		if errors.As(runErr, &turnTimeout) {
-			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
-			timeoutPayload := map[string]any{
-				"model":      in.Task.Model,
-				"timeout_ms": turnTimeout.Timeout.Milliseconds(),
-				"elapsed_ms": turnTimeout.Elapsed.Milliseconds(),
-			}
-			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, turnTimeout.Error(), timeoutPayload)
-			return res, runErr
-		}
-		var readTimeout *runner.ReadTimeoutError
-		if errors.As(runErr, &readTimeout) {
-			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
-			timeoutPayload := map[string]any{
-				"model":      in.Task.Model,
-				"timeout_ms": readTimeout.Timeout.Milliseconds(),
-				"elapsed_ms": elapsed.Milliseconds(),
-			}
-			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, readTimeout.Error(), timeoutPayload)
-			return res, runErr
-		}
-		var te *runner.TimeoutError
-		if errors.As(runErr, &te) || (errors.Is(runErr, context.DeadlineExceeded) && errors.Is(runCtx.Err(), context.DeadlineExceeded)) {
-			in.PhaseTransitionSink(currentPhase, task.PhaseTimedOut)
-			if te == nil {
-				te = &runner.TimeoutError{Timeout: timeout, Elapsed: elapsed, Cause: runErr}
-				runErr = te
-			}
-			timeoutPayload := map[string]any{
-				"model":      in.Task.Model,
-				"timeout_ms": te.Timeout.Milliseconds(),
-				"elapsed_ms": te.Elapsed.Milliseconds(),
-			}
-			addOutputFields(timeoutPayload, res)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerTimeout, te.Error(), timeoutPayload)
-			return res, runErr
-		}
-		if isReconcileCancel(ctx, runErr) {
-			// The orchestrator stopped this run because its tracker issue left
-			// the active set (e.g. the agent's own PR handoff to In Review).
-			// That is a supervised stop, not a runner failure: record it as
-			// stopped and do not count it as a failure for the superseded run
-			// (#543).
-			in.PhaseTransitionSink(currentPhase, task.PhaseCanceledByReconciliation)
-			stoppedPayload := map[string]any{
-				"model":       in.Task.Model,
-				"duration_ms": elapsed.Milliseconds(),
-				"ok":          true,
-				"reason":      "reconcile_ineligible",
-			}
-			addOutputFields(stoppedPayload, res)
-			Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerStopped, "runner stopped: reconcile ineligible", stoppedPayload)
-			return res, runErr
-		}
-		in.PhaseTransitionSink(currentPhase, task.PhaseFailed)
-		failurePayload := map[string]any{
-			"model":       in.Task.Model,
-			"duration_ms": elapsed.Milliseconds(),
-			"error":       ErrSummary(runErr),
-			"ok":          false,
-		}
-		addOutputFields(failurePayload, res)
-		Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerEnd, "runner failed", failurePayload)
-		return res, runErr
+		return res, decision.err
 	}
 
-	in.PhaseTransitionSink(currentPhase, task.PhaseFinishing)
+	in.PhaseTransitionSink(sinks.current, task.PhaseFinishing)
 	endPayload := map[string]any{
 		"model":       in.Task.Model,
 		"duration_ms": elapsed.Milliseconds(),
@@ -589,6 +487,187 @@ func RunRunnerWithTimeout(ctx context.Context, ev EventEmitter, r runner.Runner,
 	addOutputFields(endPayload, res)
 	Emit(ctx, ev, in.Task.ID, in.Task.SourceEventID, task.EventRunnerEnd, "runner completed", endPayload)
 	return res, nil
+}
+
+// runnerSinkState tracks the live run-attempt phase and the set of runtime
+// events already forwarded while the runner streams, so the timeout boundary
+// can emit the terminal phase transition from the runner's last phase and skip
+// re-emitting result events the streaming sink already delivered.
+type runnerSinkState struct {
+	current task.RunAttemptPhase
+	emitted map[string]bool
+}
+
+// wireRunnerSinks installs phase-transition and runtime-event forwarding on in
+// so the runner's streaming callbacks fan out to the task event stream (or the
+// caller-supplied upstream sink when present), returning the live sink state the
+// boundary reads after the run.
+func wireRunnerSinks(ctx context.Context, ev EventEmitter, in *runner.RunInput, taskID, identifier string) *runnerSinkState {
+	st := &runnerSinkState{current: task.PhaseBuildingPrompt, emitted: map[string]bool{}}
+	upstreamPhaseSink := in.PhaseTransitionSink
+	in.PhaseTransitionSink = func(from, to task.RunAttemptPhase) {
+		if from == "" {
+			from = st.current
+		}
+		st.current = to
+		if upstreamPhaseSink != nil {
+			upstreamPhaseSink(from, to)
+			return
+		}
+		EmitPhaseTransition(ctx, ev, taskID, identifier, from, to)
+	}
+	upstreamRuntimeSink := in.RuntimeEventSink
+	in.RuntimeEventSink = func(event task.RuntimeEvent) {
+		st.emitted[runtimeEventKey(event)] = true
+		if upstreamRuntimeSink != nil {
+			upstreamRuntimeSink(event)
+			return
+		}
+		EmitRuntimeEvents(ctx, ev, taskID, identifier, []task.RuntimeEvent{event})
+	}
+	return st
+}
+
+// forwardResultRuntimeEvents emits any runtime events the runner returned in its
+// Result that the streaming sink did not already deliver, deduped by event key.
+func (st *runnerSinkState) forwardResultRuntimeEvents(ctx context.Context, ev EventEmitter, taskID, identifier string, res runner.Result) {
+	for _, event := range res.RuntimeEvents {
+		if st.emitted[runtimeEventKey(event)] {
+			continue
+		}
+		EmitRuntimeEvents(ctx, ev, taskID, identifier, []task.RuntimeEvent{event})
+	}
+}
+
+// terminalRunnerEvent is one structured task event the timeout boundary emits
+// when the runner returns an error. The slice is ordered because the stall path
+// emits the stalled budget event before the shared runner_timeout retry-budget
+// event, and observers depend on that order.
+type terminalRunnerEvent struct {
+	kind    string
+	message string
+	payload map[string]any
+}
+
+// runnerErrorClassification maps a runner error to its SPEC §7.2 terminal phase,
+// the ordered events the boundary emits for it, and the error to surface to the
+// caller — normalized to *runner.TimeoutError for the bare context-deadline case
+// so retry policy sees one timeout type. classifyRunnerError is the single owner
+// of this taxonomy: a misclassification is then a one-line table change, not a
+// hunt through the timeout/event orchestration in RunRunnerWithTimeout (#886).
+type runnerErrorClassification struct {
+	phase  task.RunAttemptPhase
+	events []terminalRunnerEvent
+	err    error
+}
+
+// classifyRunnerError decides how a non-nil runner error maps to a terminal
+// phase and events. Order is significant and mirrors the runner error taxonomy:
+// stall, then the turn/read/outer timeout family, then a supervised
+// reconcile-cancel stop, then a plain failure. ctx carries the run's cancel
+// cause (the reconcile-cancel signal); runCtxErr is the timeout context's Err()
+// used only to normalize a bare deadline into *runner.TimeoutError.
+func classifyRunnerError(ctx context.Context, runErr, runCtxErr error, res runner.Result, model string, elapsed, timeout time.Duration) runnerErrorClassification {
+	var stall *runner.StallError
+	if errors.As(runErr, &stall) {
+		payload := timeoutBudgetPayload(model, stall.Timeout, stall.Elapsed, res)
+		return runnerErrorClassification{
+			phase: task.PhaseStalled,
+			events: []terminalRunnerEvent{
+				{task.EventStalled, stall.Error(), payload},
+				{task.EventRunnerTimeout, stall.Error(), payload},
+			},
+			err: runErr,
+		}
+	}
+	var turnTimeout *runner.TurnTimeoutError
+	if errors.As(runErr, &turnTimeout) {
+		payload := timeoutBudgetPayload(model, turnTimeout.Timeout, turnTimeout.Elapsed, res)
+		return runnerErrorClassification{
+			phase:  task.PhaseTimedOut,
+			events: []terminalRunnerEvent{{task.EventRunnerTimeout, turnTimeout.Error(), payload}},
+			err:    runErr,
+		}
+	}
+	var readTimeout *runner.ReadTimeoutError
+	if errors.As(runErr, &readTimeout) {
+		payload := timeoutBudgetPayload(model, readTimeout.Timeout, elapsed, res)
+		return runnerErrorClassification{
+			phase:  task.PhaseTimedOut,
+			events: []terminalRunnerEvent{{task.EventRunnerTimeout, readTimeout.Error(), payload}},
+			err:    runErr,
+		}
+	}
+	if te, surfaced := asTimeoutError(runErr, runCtxErr, timeout, elapsed); te != nil {
+		payload := timeoutBudgetPayload(model, te.Timeout, te.Elapsed, res)
+		return runnerErrorClassification{
+			phase:  task.PhaseTimedOut,
+			events: []terminalRunnerEvent{{task.EventRunnerTimeout, te.Error(), payload}},
+			err:    surfaced,
+		}
+	}
+	if isReconcileCancel(ctx, runErr) {
+		// SPEC D9 (#131/#543): a per-tick eligibility reconcile stopped this run
+		// because its tracker issue left the active set (e.g. the agent's own PR
+		// handoff to In Review). That is a supervised stop, not a runner failure,
+		// so it records runner_stopped (ok=true) and is not counted against the
+		// superseded run.
+		payload := map[string]any{
+			"model":       model,
+			"duration_ms": elapsed.Milliseconds(),
+			"ok":          true,
+			"reason":      "reconcile_ineligible",
+		}
+		addOutputFields(payload, res)
+		return runnerErrorClassification{
+			phase:  task.PhaseCanceledByReconciliation,
+			events: []terminalRunnerEvent{{task.EventRunnerStopped, "runner stopped: reconcile ineligible", payload}},
+			err:    runErr,
+		}
+	}
+	payload := map[string]any{
+		"model":       model,
+		"duration_ms": elapsed.Milliseconds(),
+		"error":       ErrSummary(runErr),
+		"ok":          false,
+	}
+	addOutputFields(payload, res)
+	return runnerErrorClassification{
+		phase:  task.PhaseFailed,
+		events: []terminalRunnerEvent{{task.EventRunnerEnd, "runner failed", payload}},
+		err:    runErr,
+	}
+}
+
+// asTimeoutError reports whether runErr is (or should normalize to) an outer
+// *runner.TimeoutError, returning the canonical TimeoutError for the payload and
+// the error to surface (nil, nil when it is neither). An already-typed
+// TimeoutError keeps the caller's original (possibly wrapped) error; a bare
+// context.DeadlineExceeded that fired the run context's own deadline is
+// normalized so the timeout retry bucket and event payload stay uniform.
+func asTimeoutError(runErr, runCtxErr error, timeout, elapsed time.Duration) (*runner.TimeoutError, error) {
+	var te *runner.TimeoutError
+	if errors.As(runErr, &te) {
+		return te, runErr
+	}
+	if errors.Is(runErr, context.DeadlineExceeded) && errors.Is(runCtxErr, context.DeadlineExceeded) {
+		norm := &runner.TimeoutError{Timeout: timeout, Elapsed: elapsed, Cause: runErr}
+		return norm, norm
+	}
+	return nil, nil
+}
+
+// timeoutBudgetPayload builds the runner_timeout/stalled event payload shared by
+// the stall and timeout classifications: the configured budget, the observed
+// elapsed, and any captured output telemetry.
+func timeoutBudgetPayload(model string, budget, elapsed time.Duration, res runner.Result) map[string]any {
+	payload := map[string]any{
+		"model":      model,
+		"timeout_ms": budget.Milliseconds(),
+		"elapsed_ms": elapsed.Milliseconds(),
+	}
+	addOutputFields(payload, res)
+	return payload
 }
 
 // EmitPhaseTransition records SPEC §7.2 run-attempt phase transitions with the
