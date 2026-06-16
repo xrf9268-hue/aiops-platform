@@ -98,55 +98,81 @@ func scopedEnv(allow []string, cfg workflow.Config) []string {
 	return sandboxEnv(nil, allow, cfg)
 }
 
-func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string { //nolint:gocognit // baseline (#521)
+func sandboxEnv(primary []string, allow []string, cfg workflow.Config) []string {
 	if len(allow) == 0 {
 		return []string{}
 	}
-	primaryByName := make(map[string]string, len(primary))
-	for _, envPair := range primary {
-		name, value, ok := strings.Cut(envPair, "=")
-		if ok && name != "" {
-			primaryByName[name] = value
-		}
-	}
+	primaryByName := indexEnvByName(primary)
 	seen := map[string]struct{}{}
 	var env []string
 	for _, name := range allow {
 		name = strings.TrimSpace(name)
-		if name == "" || strings.Contains(name, "=") {
-			continue
-		}
-		if workflow.AgentEnvPassthroughDenyReasonForConfig(name, cfg) != "" {
-			continue
-		}
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		seen[name] = struct{}{}
-		if value, ok := primaryByName[name]; ok {
-			env = append(env, name+"="+value)
+		value, ok := allowlistedEnvValue(name, primaryByName, cfg)
+		if !ok {
 			continue
 		}
-		if value, ok := os.LookupEnv(name); ok {
-			env = append(env, name+"="+value)
+		seen[name] = struct{}{}
+		env = append(env, name+"="+value)
+	}
+	return carryWorkerInjectedGoCache(env, primaryByName, seen)
+}
+
+// indexEnvByName maps each KEY=VALUE pair in env to KEY->VALUE, keeping the last
+// value for a repeated key. Pairs without a non-empty name are skipped.
+func indexEnvByName(env []string) map[string]string {
+	byName := make(map[string]string, len(env))
+	for _, pair := range env {
+		name, value, ok := strings.Cut(pair, "=")
+		if ok && name != "" {
+			byName[name] = value
 		}
 	}
-	// Carry the worker-injected Go toolchain cache defaults (#544) through the
-	// allowlist: setupAppServerCommand sets GOCACHE/GOMODCACHE as agent-runtime
-	// requirements, not operator passthrough, so the operator should not have to
-	// allowlist them for the agent's first `go test` to find a writable cache.
-	// Only WORKER-INJECTED values (under aiopsGoCacheRoot) are carried — an
-	// operator's own GOCACHE/GOMODCACHE that they kept out of env_allowlist still
-	// respects that boundary (codex review #548). The bwrap/firejail tmpfs /tmp
-	// keeps the default writable.
+	return byName
+}
+
+// allowlistedEnvValue resolves the value an allowlisted name contributes to the
+// sandbox env, or reports ok=false when the name must not cross the boundary.
+// It enforces the default-deny boundary: a malformed name, or one the tracker
+// token deny filter rejects, resolves to nothing; an admitted name takes its
+// worker-supplied value (primary) ahead of the host environment.
+func allowlistedEnvValue(name string, primaryByName map[string]string, cfg workflow.Config) (string, bool) {
+	if name == "" || strings.Contains(name, "=") {
+		return "", false
+	}
+	if workflow.AgentEnvPassthroughDenyReasonForConfig(name, cfg) != "" {
+		return "", false
+	}
+	if value, ok := primaryByName[name]; ok {
+		return value, true
+	}
+	return os.LookupEnv(name)
+}
+
+// carryWorkerInjectedGoCache appends the worker-injected Go toolchain cache
+// defaults (#544) that the allowlist loop did not already admit, so the agent's
+// first `go test` finds a writable cache under the optional bubblewrap/firejail
+// wrapper (its tmpfs /tmp keeps the default writable). setupAppServerCommand
+// sets GOCACHE/GOMODCACHE as agent-runtime requirements, not operator
+// passthrough, so the operator should not have to allowlist them.
+//
+// Only WORKER-INJECTED values (under aiopsGoCacheRoot) are carried — an
+// operator's own GOCACHE/GOMODCACHE kept out of sandbox.env_allowlist still
+// respects that deny boundary (codex review #548). seen records the names the
+// allowlist already emitted so a carried name is never duplicated.
+func carryWorkerInjectedGoCache(env []string, primaryByName map[string]string, seen map[string]struct{}) []string {
 	for _, name := range goCacheNames() {
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		if value, ok := primaryByName[name]; ok && isWorkerInjectedGoCache(value) {
-			seen[name] = struct{}{}
-			env = append(env, name+"="+value)
+		value, ok := primaryByName[name]
+		if !ok || !isWorkerInjectedGoCache(value) {
+			continue
 		}
+		seen[name] = struct{}{}
+		env = append(env, name+"="+value)
 	}
 	return env
 }
