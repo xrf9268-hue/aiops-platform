@@ -156,15 +156,9 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 	if err != nil {
 		return nil, fmt.Errorf("bubblewrap sandbox requested but bwrap binary not found in PATH: %w", err)
 	}
-	if len(childArgs) == 0 {
-		return nil, fmt.Errorf("sandbox cannot wrap empty command")
-	}
-	if !filepath.IsAbs(childArgs[0]) && !strings.ContainsAny(childArgs[0], `/\\`) {
-		resolved, err := exec.LookPath(childArgs[0])
-		if err != nil {
-			return nil, fmt.Errorf("sandbox child binary %q not found in PATH: %w", childArgs[0], err)
-		}
-		childArgs = append([]string{resolved}, childArgs[1:]...)
+	childArgs, err = resolveSandboxChildArgs(childArgs)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.NetworkMode == "allowlist" {
 		return nil, fmt.Errorf("sandbox network allowlist requires firejail --netfilter support; bubblewrap only supports network: none via --unshare-net")
@@ -196,15 +190,9 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 		name, value, _ := strings.Cut(envPair, "=")
 		args = append(args, "--setenv", name, value)
 	}
-	for _, f := range cfg.CredentialFiles {
-		f = strings.TrimSpace(f)
-		if f == "" {
-			continue
-		}
-		if _, err := os.Stat(f); err != nil {
-			return nil, fmt.Errorf("sandbox credential file %q is not readable: %w", f, err)
-		}
-		args = append(args, "--ro-bind", f, f)
+	args, err = appendCredentialMounts(args, cfg.CredentialFiles, bubblewrapCredentialMount)
+	if err != nil {
+		return nil, err
 	}
 	args = append(args, "--")
 	args = append(args, childArgs...)
@@ -214,48 +202,62 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 	return wrapped, nil
 }
 
-func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) { //nolint:gocognit,funlen // baseline (#521)
+func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) {
 	firejail, err := exec.LookPath("firejail")
 	if err != nil {
 		return nil, fmt.Errorf("firejail sandbox requested but firejail binary not found in PATH: %w", err)
 	}
-	if len(childArgs) == 0 {
-		return nil, fmt.Errorf("sandbox cannot wrap empty command")
-	}
-	if !filepath.IsAbs(childArgs[0]) && !strings.ContainsAny(childArgs[0], `/\\`) {
-		resolved, err := exec.LookPath(childArgs[0])
-		if err != nil {
-			return nil, fmt.Errorf("sandbox child binary %q not found in PATH: %w", childArgs[0], err)
-		}
-		childArgs = append([]string{resolved}, childArgs[1:]...)
+	childArgs, err = resolveSandboxChildArgs(childArgs)
+	if err != nil {
+		return nil, err
 	}
 	args := []string{"--quiet", "--noprofile", "--private=" + workdir, "--whitelist=" + workdir, "--private-tmp"}
-	var cleanupFiles []string
-	cleanupOnError := false
-	if cfg.NetworkMode == "allowlist" {
-		filter, err := writeFirejailNetfilter(cfg.NetworkAllowlistCIDRs)
-		if err != nil {
-			return nil, err
-		}
-		cleanupFiles = append(cleanupFiles, filter)
-		cleanupOnError = true
-		defer func() {
-			if cleanupOnError {
-				_ = removeFiles(cleanupFiles)
-			}
-		}()
-		netArg, err := firejailAllowlistNetArg(cfg)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, netArg, "--netfilter="+filter)
-	} else {
-		args = append(args, "--net=none")
+	netArgs, cleanupFiles, err := buildFirejailNetArgs(cfg)
+	if err != nil {
+		return nil, err
 	}
+	args = append(args, netArgs...)
+	cleanupOnError := len(cleanupFiles) > 0
+	defer func() {
+		if cleanupOnError {
+			_ = removeFiles(cleanupFiles)
+		}
+	}()
 	for _, envPair := range env {
 		args = append(args, "--env="+envPair)
 	}
-	for _, f := range cfg.CredentialFiles {
+	args, err = appendCredentialMounts(args, cfg.CredentialFiles, firejailCredentialMount)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--")
+	args = append(args, childArgs...)
+	wrapped, err := wireFirejailCleanup(ctx, firejail, args, cleanupFiles)
+	if err != nil {
+		return nil, err
+	}
+	wrapped.Dir = workdir
+	wrapped.Env = env
+	cleanupOnError = false
+	return wrapped, nil
+}
+
+func resolveSandboxChildArgs(childArgs []string) ([]string, error) {
+	if len(childArgs) == 0 {
+		return nil, fmt.Errorf("sandbox cannot wrap empty command")
+	}
+	if filepath.IsAbs(childArgs[0]) || strings.ContainsAny(childArgs[0], `/\\`) {
+		return childArgs, nil
+	}
+	resolved, err := exec.LookPath(childArgs[0])
+	if err != nil {
+		return nil, fmt.Errorf("sandbox child binary %q not found in PATH: %w", childArgs[0], err)
+	}
+	return append([]string{resolved}, childArgs[1:]...), nil
+}
+
+func appendCredentialMounts(args []string, credentialFiles []string, mountArgs func(string) []string) ([]string, error) {
+	for _, f := range credentialFiles {
 		f = strings.TrimSpace(f)
 		if f == "" {
 			continue
@@ -263,27 +265,56 @@ func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir st
 		if _, err := os.Stat(f); err != nil {
 			return nil, fmt.Errorf("sandbox credential file %q is not readable: %w", f, err)
 		}
-		args = append(args, "--read-only="+f, "--whitelist="+f)
+		args = append(args, mountArgs(f)...)
 	}
-	args = append(args, "--")
-	args = append(args, childArgs...)
-	wrapped := exec.CommandContext(ctx, firejail, args...)
-	if len(cleanupFiles) > 0 {
-		if len(cleanupFiles) != 1 {
-			return nil, fmt.Errorf("firejail sandbox expected one cleanup file, got %d", len(cleanupFiles))
+	return args, nil
+}
+
+func bubblewrapCredentialMount(path string) []string {
+	return []string{"--ro-bind", path, path}
+}
+
+func firejailCredentialMount(path string) []string {
+	return []string{"--read-only=" + path, "--whitelist=" + path}
+}
+
+func buildFirejailNetArgs(cfg workflow.SandboxConfig) ([]string, []string, error) {
+	if cfg.NetworkMode != "allowlist" {
+		return []string{"--net=none"}, nil, nil
+	}
+	filter, err := writeFirejailNetfilter(cfg.NetworkAllowlistCIDRs)
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanupFiles := []string{filter}
+	cleanupOnError := true
+	defer func() {
+		if cleanupOnError {
+			_ = removeFiles(cleanupFiles)
 		}
-		cleanupScript := `cleanup_file=$1; shift; "$@"; status=$?; rm -f "$cleanup_file"; exit "$status"`
-		shellArgs := []string{"-c", cleanupScript, "aiops-firejail-cleanup", cleanupFiles[0], firejail}
-		shellArgs = append(shellArgs, args...)
-		wrapped = exec.CommandContext(ctx, "/bin/sh", shellArgs...)
+	}()
+	netArg, err := firejailAllowlistNetArg(cfg)
+	if err != nil {
+		return nil, nil, err
 	}
-	wrapped.Dir = workdir
-	wrapped.Env = env
-	if len(cleanupFiles) > 0 {
-		cleanupOnError = false
-		wrapped.Cancel = cleanupCancel(cleanupFiles)
-		wrapped.WaitDelay = 1
+	cleanupOnError = false
+	return []string{netArg, "--netfilter=" + filter}, cleanupFiles, nil
+}
+
+func wireFirejailCleanup(ctx context.Context, firejail string, args []string, cleanupFiles []string) (*exec.Cmd, error) {
+	wrapped := exec.CommandContext(ctx, firejail, args...)
+	if len(cleanupFiles) == 0 {
+		return wrapped, nil
 	}
+	if len(cleanupFiles) != 1 {
+		return nil, fmt.Errorf("firejail sandbox expected one cleanup file, got %d", len(cleanupFiles))
+	}
+	cleanupScript := `cleanup_file=$1; shift; "$@"; status=$?; rm -f "$cleanup_file"; exit "$status"`
+	shellArgs := []string{"-c", cleanupScript, "aiops-firejail-cleanup", cleanupFiles[0], firejail}
+	shellArgs = append(shellArgs, args...)
+	wrapped = exec.CommandContext(ctx, "/bin/sh", shellArgs...)
+	wrapped.Cancel = cleanupCancel(cleanupFiles)
+	wrapped.WaitDelay = 1
 	return wrapped, nil
 }
 

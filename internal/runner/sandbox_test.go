@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -686,6 +687,50 @@ func TestFirejailNetfilterAcceptsIPv4CIDR(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "-A OUTPUT -d 203.0.113.10/32 -j ACCEPT") {
 		t.Fatalf("netfilter file missing IPv4 allow rule: %s", content)
+	}
+}
+
+func TestBuildFirejailNetArgsBuildsAllowlistAndCleanupFile(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+
+	args, cleanupFiles, err := buildFirejailNetArgs(workflow.SandboxConfig{
+		NetworkMode:           "allowlist",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+		NetworkInterface:      "aiops0",
+	})
+	if err != nil {
+		t.Fatalf("buildFirejailNetArgs: %v", err)
+	}
+	defer func() { _ = removeFiles(cleanupFiles) }()
+	if len(cleanupFiles) != 1 {
+		t.Fatalf("cleanupFiles = %#v; want one netfilter file", cleanupFiles)
+	}
+	wantArgs := []string{"--net=aiops0", "--netfilter=" + cleanupFiles[0]}
+	if !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("buildFirejailNetArgs args = %#v; want %#v", args, wantArgs)
+	}
+	if _, err := os.Stat(cleanupFiles[0]); err != nil {
+		t.Fatalf("netfilter cleanup file should exist before wrapping: %v", err)
+	}
+}
+
+func TestBuildFirejailNetArgsRemovesNetfilterWhenInterfaceMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
+
+	_, _, err := buildFirejailNetArgs(workflow.SandboxConfig{
+		NetworkMode:           "allowlist",
+		NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+	})
+	if err == nil {
+		t.Fatal("expected missing firejail network interface error")
+	}
+	matches, globErr := filepath.Glob(filepath.Join(tmpDir, "aiops-firejail-netfilter-*.conf"))
+	if globErr != nil {
+		t.Fatalf("glob netfilter files: %v", globErr)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("buildFirejailNetArgs setup error should remove netfilter files, left %v", matches)
 	}
 }
 
