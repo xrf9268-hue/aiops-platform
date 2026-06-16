@@ -38,12 +38,19 @@ type linearGraphQLProxy struct {
 	currentIssueGuard currentIssueMutationGuard
 }
 
+type linearGraphQLAuthorization struct {
+	currentIssueHandoff currentIssueHandoffClassification
+	rejected            bool
+	result              string
+	err                 error
+}
+
 // call is the gated entry point exposed to the agent through the
 // linear_graphql dynamic tool. It parses the operation kind/name,
 // applies the SPEC §15.5 narrowing, fires the optional audit sink, and
 // otherwise delegates to callRaw. Subscription operations are rejected
 // unconditionally because the runner has no streaming surface for them.
-func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) { //nolint:gocognit // baseline (#521)
+func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, error) {
 	query := strings.TrimSpace(call.Query)
 	if query == "" {
 		return dynamicToolFailure(map[string]any{
@@ -59,6 +66,19 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 			},
 		})
 	}
+	op := parseLinearGraphQLOperation(query)
+	authorization := p.authorizeMutation(ctx, query, op, call.Variables)
+	if authorization.rejected {
+		return authorization.result, authorization.err
+	}
+	if authorization.currentIssueHandoff.nonActive {
+		ctx = withLinearGraphQLCurrentIssueHandoff(ctx, authorization.currentIssueHandoff)
+	}
+
+	return p.dispatch(ctx, query, op, call.Variables)
+}
+
+func (p linearGraphQLProxy) authorizeMutation(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) linearGraphQLAuthorization {
 	// The gate keys on the GraphQL operation keyword (`query` /
 	// `mutation` / `subscription`), not on the selected root field's
 	// type. `query Q { issueDelete(id: "1") { success } }` therefore
@@ -67,74 +87,79 @@ func (p linearGraphQLProxy) call(ctx context.Context, call ToolCall) (string, er
 	// field, so the destructive operation is never executed. Maintaining
 	// a client-side denylist of Linear mutation field names would drift
 	// every time Linear adds a mutation; we rely on Linear's type system
-	// for that defense layer instead. The Authorization header still
-	// carries the workspace token on the rejected request, which is
-	// broadly comparable to the surface ordinary read queries already
-	// expose — but two soft signals differ: Linear records the rejected
-	// request in its server-side audit log (an attempted-write signal
-	// for operators watching Linear directly), and repeated rejections
-	// could plausibly contribute to Linear-side rate limiting on the
-	// token. Neither alters the destructive-operation guarantee.
-	op := parseLinearGraphQLOperation(query)
+	// for that defense layer instead. The rejected request still carries
+	// the workspace token to Linear, which can leave a Linear-side audit
+	// trace or contribute to Linear-side rate limits, but neither signal
+	// alters the destructive-operation guarantee.
 	switch op.Kind {
 	case linearGraphQLOperationSubscription:
-		return dynamicToolFailure(map[string]any{
+		return rejectLinearGraphQLOperation(map[string]any{
 			"error": map[string]any{
 				"message": "linear_graphql does not accept subscription operations; submit a query or mutation instead",
 			},
 		})
 	case linearGraphQLOperationMutation:
-		if !p.allowMutations {
-			return dynamicToolFailure(map[string]any{
+		return p.authorizeMutationOperation(ctx, query, op, variables)
+	}
+	return linearGraphQLAuthorization{}
+}
+
+func (p linearGraphQLProxy) authorizeMutationOperation(ctx context.Context, query string, op linearGraphQLOperation, variables map[string]any) linearGraphQLAuthorization {
+	if !p.allowMutations {
+		return rejectLinearGraphQLOperation(map[string]any{
+			"error": map[string]any{
+				"message":          "linear_graphql mutations are disabled by this workflow; set codex.linear_graphql.allow_mutations: true in WORKFLOW.md to opt in (SPEC §15.5)",
+				"operation":        string(op.Kind),
+				"operation_field":  op.FieldName,
+				"workflow_setting": "codex.linear_graphql.allow_mutations",
+			},
+		})
+	}
+	if len(p.allowedMutations) > 0 {
+		if op.FieldName == "" {
+			return rejectLinearGraphQLOperation(map[string]any{
 				"error": map[string]any{
-					"message":          "linear_graphql mutations are disabled by this workflow; set codex.linear_graphql.allow_mutations: true in WORKFLOW.md to opt in (SPEC §15.5)",
-					"operation":        string(op.Kind),
+					"message":          "linear_graphql could not identify the top-level mutation field; rewrite the mutation so its selection set starts with a single Mutation root field",
+					"workflow_setting": "codex.linear_graphql.allowed_mutations",
+				},
+			})
+		}
+		if _, ok := p.allowedMutations[op.FieldName]; !ok {
+			return rejectLinearGraphQLOperation(map[string]any{
+				"error": map[string]any{
+					"message":          "linear_graphql mutation is not in the workflow's allowed_mutations list",
 					"operation_field":  op.FieldName,
-					"workflow_setting": "codex.linear_graphql.allow_mutations",
+					"workflow_setting": "codex.linear_graphql.allowed_mutations",
 				},
 			})
-		}
-		if len(p.allowedMutations) > 0 {
-			if op.FieldName == "" {
-				return dynamicToolFailure(map[string]any{
-					"error": map[string]any{
-						"message":          "linear_graphql could not identify the top-level mutation field; rewrite the mutation so its selection set starts with a single Mutation root field",
-						"workflow_setting": "codex.linear_graphql.allowed_mutations",
-					},
-				})
-			}
-			if _, ok := p.allowedMutations[op.FieldName]; !ok {
-				return dynamicToolFailure(map[string]any{
-					"error": map[string]any{
-						"message":          "linear_graphql mutation is not in the workflow's allowed_mutations list",
-						"operation_field":  op.FieldName,
-						"workflow_setting": "codex.linear_graphql.allowed_mutations",
-					},
-				})
-			}
-		}
-		rejection, reject, currentIssueHandoff := p.checkCurrentIssueUpdate(ctx, query, call.Variables)
-		if reject {
-			if sink := linearGraphQLMutationRejectedSinkFrom(ctx); sink != nil {
-				sink(rejection)
-			}
-			return dynamicToolFailure(map[string]any{
-				"error": map[string]any{
-					"message":         currentIssueMutationRejectMessage(rejection.Reason),
-					"operation_field": rejection.OperationField,
-					"reason":          rejection.Reason,
-					"found":           rejection.Found,
-					"state":           rejection.State,
-					"terminal":        rejection.Terminal,
-				},
-			})
-		}
-		if currentIssueHandoff.nonActive {
-			ctx = withLinearGraphQLCurrentIssueHandoff(ctx, currentIssueHandoff)
 		}
 	}
+	return p.authorizeCurrentIssueMutation(ctx, query, variables)
+}
 
-	return p.dispatch(ctx, query, op, call.Variables)
+func (p linearGraphQLProxy) authorizeCurrentIssueMutation(ctx context.Context, query string, variables map[string]any) linearGraphQLAuthorization {
+	rejection, reject, currentIssueHandoff := p.checkCurrentIssueUpdate(ctx, query, variables)
+	if reject {
+		if sink := linearGraphQLMutationRejectedSinkFrom(ctx); sink != nil {
+			sink(rejection)
+		}
+		return rejectLinearGraphQLOperation(map[string]any{
+			"error": map[string]any{
+				"message":         currentIssueMutationRejectMessage(rejection.Reason),
+				"operation_field": rejection.OperationField,
+				"reason":          rejection.Reason,
+				"found":           rejection.Found,
+				"state":           rejection.State,
+				"terminal":        rejection.Terminal,
+			},
+		})
+	}
+	return linearGraphQLAuthorization{currentIssueHandoff: currentIssueHandoff}
+}
+
+func rejectLinearGraphQLOperation(payload map[string]any) linearGraphQLAuthorization {
+	result, err := dynamicToolFailure(payload)
+	return linearGraphQLAuthorization{rejected: true, result: result, err: err}
 }
 
 // callRaw is the harness-internal transport. It does NOT apply the
