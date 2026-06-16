@@ -51,6 +51,22 @@ findings (keep each review ≤700 words) and a final verdict —
 SHA, changed files, intent (issue/PR), relevant SPEC/upstream pointers, and
 AGENTS.md policy.
 
+Subagent-first means "prefer subagent review when the current environment can do
+it and the current user request has authorized it," not automatic fan-out from a
+runbook alone. This wording closes the #891 friction: spawn_agent available but
+skipped because the user request lacked explicit authorization, followed by the
+correct CLI fallback. To opt in up front, use a current-turn phrase such as
+"handle issue N with subagent review enabled" or "review this PR with parallel
+subagents".
+
+Best-practice reviewer modes:
+
+| Mode | Use when | Required handling |
+| --- | --- | --- |
+| No subagent authorization | The request does not explicitly authorize subagent delegation, or the tool contract forbids it | Discover availability when relevant, record why subagents were not used, ask one concise authorization question before pre-push review when interactive timing allows, otherwise use bounded CLI fallback and record that reason |
+| One sidecar subagent | The diff is low-risk/docs-only or normal-risk and the user authorized subagent review | Run one independent read-only diff reviewer sidecar focused on correctness, safety/security, and test gaps, plus the existing Codex-family and Claude-family gates |
+| Parallel specialized subagents | The diff touches high-risk security, sandbox, filesystem deletion, concurrency, tracker mutation, workflow, or orchestrator behavior and the user authorized parallel review | Split read-only reviewers by concern, such as security/safety, tests/mutation gaps, races/lifecycle, and maintainability/scope, then merge their findings into the same dual-family gate |
+
 Reviewer routing is environment-dependent:
 
 - **Claude Code Agent.** Prefer the Agent tool subagents named below for
@@ -64,8 +80,8 @@ Reviewer routing is environment-dependent:
   spawning for that request. A workflow prompt or runbook instruction alone is
   not sufficient authorization to spawn. Record the agent id/verdict in review
   notes. If subagent use is not authorized for the current session, do not
-  spawn; record that eligibility result and continue with the family reviewer
-  fallback. Do not wait for a human reminder to discover the tool.
+  spawn; follow the "No subagent authorization" mode above. Do not wait for a
+  human reminder to discover the tool.
 - **codex-sub-agent.** If the current session is already a spawned sub-agent,
   obey the parent assignment and the sub-agent notice first. Do not recursively
   spawn reviewers unless the parent task explicitly asks for that; return the
