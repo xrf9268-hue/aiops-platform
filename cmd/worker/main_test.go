@@ -1478,6 +1478,36 @@ func TestIsLoopbackHTTPHost(t *testing.T) {
 	}
 }
 
+func TestNormalizeHostFromHostport(t *testing.T) {
+	cases := []struct {
+		in       string
+		wantHost string
+		wantOK   bool
+	}{
+		{"127.0.0.1:4000", "127.0.0.1", true},
+		{"127.0.0.1", "127.0.0.1", true},
+		{"localhost:4000", "localhost", true},
+		{"localhost", "localhost", true},
+		{"[::1]:4000", "::1", true},
+		{"[::1]", "::1", true}, // bracketed IPv6, no port — strip-without-port path
+		{"evil.example", "evil.example", true},
+		{"evil.example:4000", "evil.example", true},
+		// Fail-closed: a host the gate cannot parse unambiguously must report ok=false.
+		{"", "", false},
+		{"::1", "", false},  // unbracketed IPv6 "host:port" that fails to split
+		{"[::1", "", false}, // opening bracket without a closing one
+		{"::1]", "", false}, // closing bracket without an opening one
+	}
+	for _, c := range cases {
+		t.Run(c.in, func(t *testing.T) {
+			gotHost, gotOK := normalizeHostFromHostport(c.in)
+			if gotHost != c.wantHost || gotOK != c.wantOK {
+				t.Fatalf("normalizeHostFromHostport(%q) = (%q, %v), want (%q, %v)", c.in, gotHost, gotOK, c.wantHost, c.wantOK)
+			}
+		})
+	}
+}
+
 func TestStartStateHTTPServerSkipsDisabledPort(t *testing.T) {
 	handle := startStateHTTPServer(context.Background(), "127.0.0.1", -1, func(context.Context) (orchestrator.StateView, error) {
 		t.Fatal("disabled state server must not evaluate snapshot")
