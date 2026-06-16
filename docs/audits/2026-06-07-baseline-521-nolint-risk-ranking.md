@@ -89,7 +89,7 @@ Read in full; tier and decomposability are grounded in the code, not the name.
 |----------|-----------|------|-----------|------|
 | `SafeRemove` | `safe_remove.go:36` | critical | borderline | Gates `os.RemoveAll` behind containment + post-symlink re-check (§9.5/§15.2). Containment is **already** extracted to `assertContained`; the remainder is a cohesive feed-forward sequence. At most a small `resolveRootForCompare` extract for the macOS `/var` symlink edge. |
 | `WriteSensitiveArtifact` | `artifacts.go:45` | critical | cosmetic-only | TOCTOU/symlink/hardlink-resistant secret write (`O_NOFOLLOW`, pre/post hardlink recount, 0600). Ordering is load-bearing; splitting breaks the open-handle continuity that defeats the race. Keep cohesive. |
-| `EnsureSensitiveArtifactExcludes` | `artifacts.go:114` | high | **genuine** | Two independent jobs behind one name: (1) `info/exclude` append, (2) pre-commit hook install (`core.hooksPath`). Extract `ensureSensitiveArtifactExcludeFile` + `installSensitiveArtifactHook`; each drops below budget and isolates the subtle append/newline + git-config error paths. |
+| `EnsureSensitiveArtifactExcludes` | `artifacts.go:114` | high | **closed by #882** | Two independent jobs behind one name: (1) `info/exclude` append, (2) pre-commit hook install (`core.hooksPath`). #882 extracted `ensureSensitiveArtifactExcludeFile` + `installSensitiveArtifactHook`, removing the baseline while preserving the append/newline + git-config behavior. |
 | `reworkWorkspaceKeyPrefixes`, `workspaceKeysForRawIssueKeys`, `sanitizeLegacyWorkspaceKey` | `reconcile.go:454/517/543` | medium | (not individually read) | Compute the keys that drive reconcile keep/remove decisions (feed `SafeRemove`); cohesive sanitizer/matcher logic. `reworkWorkspaceKeyPrefixes` was just simplified under #679 but is still gocognit 13. |
 
 ### Cluster D — runner lifecycle
@@ -126,7 +126,7 @@ Each is its own behavior-preserving, characterization-test-first PR (see
    external-process exit taxonomy that feeds the reconcile-cancel race
    #543/#557; dual `gocognit,funlen`). Decision-table unit tests for
    stall/timeout/reconcile-cancel/failure/success.
-4. **`artifacts.go:EnsureSensitiveArtifactExcludes` → `ensureSensitiveArtifactExcludeFile` + `installSensitiveArtifactHook`** (high; secret-leak guard; two genuinely independent jobs).
+4. **Done in #882:** `artifacts.go:EnsureSensitiveArtifactExcludes` → `ensureSensitiveArtifactExcludeFile` + `installSensitiveArtifactHook` (high; secret-leak guard; two genuinely independent jobs).
 5. **`sandbox.go:sandboxEnv` → extract `carryWorkerInjectedGoCache`** (high;
    isolates the #548 "only worker-injected GOCACHE passes" leak rule for direct
    testing).

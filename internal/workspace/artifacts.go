@@ -92,7 +92,14 @@ func linkCount(info os.FileInfo) (uint64, bool) {
 	return uint64(st.Nlink), true
 }
 
-func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error { //nolint:gocognit // baseline (#521)
+func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error {
+	if err := ensureSensitiveArtifactExcludeFile(ctx, workdir); err != nil {
+		return err
+	}
+	return installSensitiveArtifactHook(ctx, workdir)
+}
+
+func ensureSensitiveArtifactExcludeFile(ctx context.Context, workdir string) error {
 	excludePath, err := gitPath(ctx, workdir, "info/exclude")
 	if err != nil {
 		return err
@@ -104,6 +111,14 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	add := missingSensitiveArtifactExcludes(existing)
+	if len(add) > 0 {
+		return appendSensitiveArtifactExcludes(excludePath, existing, add)
+	}
+	return nil
+}
+
+func missingSensitiveArtifactExcludes(existing []byte) []string {
 	seen := map[string]struct{}{}
 	for _, line := range strings.Split(string(existing), "\n") {
 		seen[strings.TrimSpace(line)] = struct{}{}
@@ -114,30 +129,36 @@ func EnsureSensitiveArtifactExcludes(ctx context.Context, workdir string) error 
 			add = append(add, rel)
 		}
 	}
-	if len(add) > 0 {
-		f, err := os.OpenFile(excludePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-		if err != nil {
+	return add
+}
+
+func appendSensitiveArtifactExcludes(excludePath string, existing []byte, add []string) error {
+	f, err := os.OpenFile(excludePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	closeFile := true
+	defer func() {
+		if closeFile {
+			_ = f.Close()
+		}
+	}()
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		if _, err := f.WriteString("\n"); err != nil {
 			return err
-		}
-		closeFile := true
-		defer func() {
-			if closeFile {
-				_ = f.Close()
-			}
-		}()
-		if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
-			if _, err := f.WriteString("\n"); err != nil {
-				return err
-			}
-		}
-		if _, err := f.WriteString(strings.Join(add, "\n") + "\n"); err != nil {
-			return err
-		}
-		closeFile = false
-		if err := f.Close(); err != nil {
-			return fmt.Errorf("close git exclude %s: %w", excludePath, err)
 		}
 	}
+	if _, err := f.WriteString(strings.Join(add, "\n") + "\n"); err != nil {
+		return err
+	}
+	closeFile = false
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close git exclude %s: %w", excludePath, err)
+	}
+	return nil
+}
+
+func installSensitiveArtifactHook(ctx context.Context, workdir string) error {
 	out, err := runGitOutput(ctx, workdir, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return fmt.Errorf("resolve worktree git dir: %w", err)
