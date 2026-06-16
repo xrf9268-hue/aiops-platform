@@ -138,7 +138,8 @@ see the [binary deployment runbook](docs/runbooks/binary-deployment.md).
 Prebuilt Linux/macOS (amd64/arm64) archives are attached to each
 [GitHub Release](https://github.com/xrf9268-hue/aiops-platform/releases) as
 `aiops-platform_<tag>_<os>_<arch>.tar.gz`, bundling the `worker` and `tui`
-binaries plus `examples/WORKFLOW.md` and `.env.example`. Verify a download with
+binaries, every `examples/` WORKFLOW template, `.env.example`, `README.md`, and
+`LICENSE` — a self-contained starting point. Verify a download with
 either `gh attestation verify <archive> --repo xrf9268-hue/aiops-platform`
 (build provenance) or `sha256sum --ignore-missing -c
 aiops-platform_<tag>_SHA256SUMS` (plain checksums; `--ignore-missing` checks

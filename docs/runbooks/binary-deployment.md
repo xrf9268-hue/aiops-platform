@@ -188,10 +188,10 @@ sudo chmod 600 /etc/aiops-platform/worker.env
 ```
 
 `examples/WORKFLOW.md` and `.env.example` ship in the source checkout
-(Option A). If you installed from a release archive (Option B), the
-archive contains only the binaries — copy these two files from the repo,
-or author a `WORKFLOW.md` from the README configuration table and a
-minimal env file by hand.
+(Option A). The release archive (Option B) is self-contained: it bundles
+every `examples/` WORKFLOW template, `.env.example`, `README.md`, and
+`LICENSE` alongside the binaries, so `cp` the example matching your
+`tracker.kind` straight from the extracted directory.
 
 The paths above use the Linux FHS layout (`/etc`, `/var/lib`). On macOS
 the conventional equivalents are `/usr/local/etc/aiops-platform` and
