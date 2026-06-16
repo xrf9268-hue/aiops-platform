@@ -99,7 +99,15 @@ explicitly the Codex-family or Claude-family reviewer for that environment.
   [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) (`Agent` tool,
   `subagent_type: "codex:codex-rescue"`); pass the full brief in the prompt. It
   wraps the Codex CLI review contract and returns structured output via
-  `codex:codex-result-handling`. **Only when** no authorized and appropriate
+  `codex:codex-result-handling`. Invoke it **foreground/synchronous** for this
+  gate — an `Agent` call without `run_in_background`, and no `--background` — so
+  the review returns inline: the rescue runtime's `task` blocks and returns by
+  default, whereas `--background` detaches a `task-worker` whose result, once the
+  spawning Claude session ends, is no longer surfaced by default
+  `/codex:status`/`/codex:result` discovery (session-scoped) and is recoverable
+  only via the retained job id (#743). Reserve `--background` for long
+  fire-and-forget work fetched with `/codex:result` in the same session.
+  **Only when** no authorized and appropriate
   Codex-family subagent path is available, fall back to plain `codex exec
   --output-schema` with the repo-specific review prompt and diff on stdin.
   Do not use `codex exec review --base` for this gate: the `review` subcommand
