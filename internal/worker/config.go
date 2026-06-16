@@ -51,11 +51,7 @@ type OperatorTerminalStopLookupFactory func(t task.Task, cfg workflow.Config) ru
 
 // LoadConfigFromEnv reads the worker configuration from the environment.
 //
-// Worker env vars use the AIOPS_ prefix as the single naming convention
-// (#368). The legacy unprefixed WORKSPACE_ROOT is still honored as a
-// deprecated alias for AIOPS_WORKSPACE_ROOT (with a warning) so existing
-// deployments keep working; using the wrong form no longer silently falls back
-// to the code default.
+// Worker env vars use the AIOPS_ prefix as the single naming convention (#368).
 //
 // WorkspaceRoot intentionally has no literal default here — when the workspace
 // root env is unset, Config.WorkspaceRoot stays empty and
@@ -65,8 +61,8 @@ type OperatorTerminalStopLookupFactory func(t task.Task, cfg workflow.Config) ru
 // regardless of WORKFLOW.md content; see #319.
 func LoadConfigFromEnv() Config {
 	return Config{
-		WorkspaceRoot: ResolveEnv(workspaceRootEnv, workspaceRootEnvLegacy).Value,
-		MirrorRoot:    ResolveEnv(mirrorRootEnv, mirrorRootEnvLegacy).Value,
+		WorkspaceRoot: ResolveEnv(workspaceRootEnv).Value,
+		MirrorRoot:    ResolveEnv(mirrorRootEnv).Value,
 	}
 }
 

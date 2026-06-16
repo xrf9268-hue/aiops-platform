@@ -13,7 +13,7 @@ import (
 // at the helper level and locks the #319 fix in place:
 //
 //  1. RootSet (explicit yaml) > env > workflow-default.
-//  2. An unset WORKSPACE_ROOT (empty cfg.WorkspaceRoot) falls through to
+//  2. An unset AIOPS_WORKSPACE_ROOT (empty cfg.WorkspaceRoot) falls through to
 //     the workflow's default `Workspace.Root` rather than a private
 //     env-loader literal.
 //
@@ -95,7 +95,7 @@ tracker:
 }
 
 // TestLoadConfigFromEnv_NoLiteralWorkspaceRootDefault pins the
-// loader-floor invariant from #319: when WORKSPACE_ROOT is unset
+// loader-floor invariant from #319: when AIOPS_WORKSPACE_ROOT is unset
 // Config.WorkspaceRoot must stay empty so EffectiveWorkspaceRoot can
 // fall through to the workflow's SPEC default. Pre-#319 the loader
 // returned the literal `/tmp/aiops-workspaces`.
@@ -109,17 +109,14 @@ func TestLoadConfigFromEnv_NoLiteralWorkspaceRootDefault(t *testing.T) {
 	}
 }
 
-// TestLoadConfigFromEnv_HonorsWorkspaceRootEnv covers the still-supported
-// legacy alias path: an explicit WORKSPACE_ROOT flows through to
-// Config.WorkspaceRoot verbatim (now as a deprecated alias; see #368).
-func TestLoadConfigFromEnv_HonorsWorkspaceRootEnv(t *testing.T) {
+func TestLoadConfigFromEnv_IgnoresLegacyWorkspaceRootEnv(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "operator-root")
 	t.Setenv("AIOPS_WORKSPACE_ROOT", "")
 	t.Setenv("WORKSPACE_ROOT", want)
 
 	cfg := worker.LoadConfigFromEnv()
-	if cfg.WorkspaceRoot != want {
-		t.Fatalf("LoadConfigFromEnv().WorkspaceRoot = %q, want %q", cfg.WorkspaceRoot, want)
+	if cfg.WorkspaceRoot != "" {
+		t.Fatalf("LoadConfigFromEnv().WorkspaceRoot = %q, want unprefixed WORKSPACE_ROOT ignored", cfg.WorkspaceRoot)
 	}
 }
 
@@ -137,8 +134,8 @@ func TestLoadConfigFromEnv_HonorsAIOPSWorkspaceRoot(t *testing.T) {
 	}
 }
 
-// TestLoadConfigFromEnv_CanonicalWorkspaceRootWinsOverLegacy pins precedence
-// when both the canonical and the deprecated alias are set.
+// TestLoadConfigFromEnv_CanonicalWorkspaceRootWinsOverLegacy proves a stale
+// unprefixed value cannot shadow the canonical variable.
 func TestLoadConfigFromEnv_CanonicalWorkspaceRootWinsOverLegacy(t *testing.T) {
 	canonical := filepath.Join(t.TempDir(), "canonical")
 	t.Setenv("AIOPS_WORKSPACE_ROOT", canonical)

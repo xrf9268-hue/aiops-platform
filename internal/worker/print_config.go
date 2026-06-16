@@ -34,8 +34,7 @@ type printConfigOutput struct {
 // layer that won:
 //   - sourceDefault:  the built-in schema default (no override took effect)
 //   - sourceEnv:      a worker environment variable (the field's EnvVar
-//     names which one; EnvVarDeprecated flags a legacy
-//     unprefixed alias per #368)
+//     names which one)
 //   - sourceWorkflow: an explicit value in WORKFLOW.md front matter
 //   - sourceCLI:      a command-line override (currently only --port)
 const (
@@ -63,13 +62,11 @@ type configProvenance struct {
 
 // fieldProvenance is the effective value of one field plus where it came
 // from. Value is rendered as a string for a uniform shape across a path, a
-// port, and a workflow path. EnvVar/EnvVarDeprecated are populated only
-// when Source == sourceEnv.
+// port, and a workflow path. EnvVar is populated only when Source == sourceEnv.
 type fieldProvenance struct {
-	Value            string `json:"value"`
-	Source           string `json:"source"`
-	EnvVar           string `json:"env_var,omitempty"`
-	EnvVarDeprecated bool   `json:"env_var_deprecated,omitempty"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+	EnvVar string `json:"env_var,omitempty"`
 }
 
 // resolveProvenance derives the per-field provenance for --print-config.
@@ -94,7 +91,7 @@ func workspaceRootProvenance(workerCfg Config, wcfg workflow.Config) fieldProven
 	if wcfg.Workspace.RootSet() && strings.TrimSpace(wcfg.Workspace.Root) != "" {
 		return fieldProvenance{Value: effective, Source: sourceWorkflow}
 	}
-	envRes := ResolveEnv(workspaceRootEnv, workspaceRootEnvLegacy)
+	envRes := ResolveEnv(workspaceRootEnv)
 	if strings.TrimSpace(envRes.Value) != "" {
 		return envProvenance(effective, envRes)
 	}
@@ -103,9 +100,9 @@ func workspaceRootProvenance(workerCfg Config, wcfg workflow.Config) fieldProven
 
 // mirrorRootProvenance reports where the bare-mirror cache root resolves
 // from. There is no WORKFLOW.md field for it, so the only layers are the
-// AIOPS_MIRROR_ROOT env (with its legacy alias) and the computed default.
+// AIOPS_MIRROR_ROOT env and the computed default.
 func mirrorRootProvenance() fieldProvenance {
-	envRes := ResolveEnv(mirrorRootEnv, mirrorRootEnvLegacy)
+	envRes := ResolveEnv(mirrorRootEnv)
 	if strings.TrimSpace(envRes.Value) != "" {
 		return envProvenance(workspace.MirrorRoot(envRes.Value), envRes)
 	}
@@ -139,15 +136,12 @@ func workflowPathProvenance(res workflow.Resolution) fieldProvenance {
 	}
 }
 
-// envProvenance builds an env-sourced fieldProvenance, flagging the used
-// name as deprecated when it is a legacy alias rather than the canonical
-// AIOPS_-prefixed name (#368).
+// envProvenance builds an env-sourced fieldProvenance.
 func envProvenance(value string, res EnvResolution) fieldProvenance {
 	return fieldProvenance{
-		Value:            value,
-		Source:           sourceEnv,
-		EnvVar:           res.UsedName,
-		EnvVarDeprecated: res.UsedName != res.Canonical,
+		Value:  value,
+		Source: sourceEnv,
+		EnvVar: res.UsedName,
 	}
 }
 
@@ -163,6 +157,7 @@ func envProvenance(value string, res EnvResolution) fieldProvenance {
 type configView struct {
 	Repo      workflow.RepoConfig      `json:"repo"`
 	Tracker   workflow.TrackerConfig   `json:"tracker"`
+	Polling   workflow.PollingConfig   `json:"polling"`
 	Workspace workflow.WorkspaceConfig `json:"workspace"`
 	Agent     agentConfigView          `json:"agent"`
 	Codex     workflow.CommandConfig   `json:"codex"`
@@ -189,6 +184,7 @@ func newConfigView(cfg workflow.Config) configView {
 	return configView{
 		Repo:      cfg.Repo,
 		Tracker:   cfg.Tracker,
+		Polling:   cfg.Polling,
 		Workspace: cfg.Workspace,
 		Agent: agentConfigView{
 			Default:              cfg.Agent.Default,

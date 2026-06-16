@@ -359,9 +359,6 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 		return err
 	}
 	log.Printf("aiops worker starting version=%s", resolveVersion())
-	// Emit deprecated-alias warnings exactly once per startup; the env loaders
-	// below are pure and run more than once.
-	worker.WarnDeprecatedEnv()
 	var resolveArgs []string
 	if workflowPath != "" {
 		resolveArgs = []string{workflowPath}
@@ -383,7 +380,7 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 		return err
 	}
 
-	state := orchestrator.NewOrchestratorState(int64(wf.Config.Tracker.PollIntervalMs), wf.Config.Agent.MaxConcurrentAgents)
+	state := orchestrator.NewOrchestratorState(int64(wf.Config.Polling.IntervalMs), wf.Config.Agent.MaxConcurrentAgents)
 	state.MaxContinuationTurns = wf.Config.Agent.MaxContinuationTurns
 	runtime, err := orchestrator.NewWorkflowRuntime(orchestrator.WorkflowRuntimeConfig{
 		Initial:              wf,

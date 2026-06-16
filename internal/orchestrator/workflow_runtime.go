@@ -154,7 +154,7 @@ func (r *WorkflowRuntime) ReloadOnce(ctx context.Context) error { //nolint:gocog
 	}
 	r.clearLastFailedFingerprint()
 	r.current.Store(r.snapshotFromWorkflow(wf, fingerprint))
-	r.emit(ctx, task.EventWorkflowReloaded, "workflow reloaded", map[string]any{"path": r.path, "poll_interval_ms": wf.Config.Tracker.PollIntervalMs})
+	r.emit(ctx, task.EventWorkflowReloaded, "workflow reloaded", map[string]any{"path": r.path, "poll_interval_ms": wf.Config.Polling.IntervalMs})
 	return nil
 }
 
@@ -212,7 +212,7 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 	}
 	return &WorkflowSnapshot{
 		Workflow:                   wf,
-		PollInterval:               time.Duration(wf.Config.Tracker.PollIntervalMs) * time.Millisecond,
+		PollInterval:               time.Duration(wf.Config.Polling.IntervalMs) * time.Millisecond,
 		MaxConcurrentAgents:        wf.Config.Agent.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(wf.Config.Agent.MaxConcurrentAgentsByState),
 		MaxContinuationTurns:       wf.Config.Agent.MaxContinuationTurns,

@@ -50,6 +50,17 @@ func rejectRemovedTrackerFields(raw map[string]any) error {
 	if !ok {
 		return nil
 	}
+	if _, present := tracker["base_url"]; present {
+		return fmt.Errorf("tracker.base_url is no longer supported (#911): use tracker.endpoint")
+	}
+	if _, present := tracker["poll_interval_ms"]; present {
+		return fmt.Errorf("tracker.poll_interval_ms is no longer supported (#911): use polling.interval_ms")
+	}
+	if kind, _ := tracker["kind"].(string); strings.EqualFold(kind, "gitea") {
+		if _, present := tracker["project_slug"]; present {
+			return fmt.Errorf("tracker.project_slug is no longer supported for Gitea (#911): use tracker.endpoint. tracker.project_slug remains the Linear project slug field")
+		}
+	}
 	if _, present := tracker["statuses"]; present {
 		return fmt.Errorf("tracker.statuses is no longer supported (#786): worker-side tracker status writes were removed under #76/#678 (SPEC §1: tracker writes are agent-side), so the worker never read these names. Remove the `statuses:` block; drive workflow-state moves from the agent's WORKFLOW prompt / linear_graphql tool surface")
 	}

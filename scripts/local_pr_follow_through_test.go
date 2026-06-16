@@ -375,17 +375,27 @@ func TestLocalGitHubWorkerUsesWorkspaceSingletonLock(t *testing.T) {
 	}
 	script := string(body)
 	for _, want := range []string{
+		`workspace_root="${AIOPS_WORKSPACE_ROOT:-"$HOME/aiops-workspaces/github/xrf9268-hue-aiops-platform"}"`,
 		`worker_lock_key="$(printf '%s\n%s\n' "$workflow_path" "$workspace_root" | shasum -a 256`,
 		`worker_lock_dir="${AIOPS_WORKER_LOCK_DIR:-"$HOME/Library/Caches/aiops-platform/github-worker-${worker_lock_key}.lock"}"`,
 		`worker_lock_stale_seconds="${AIOPS_WORKER_LOCK_STALE_SECONDS:-3600}"`,
 		`acquire_worker_lock`,
 		`worker_lock_initializing`,
 		`github worker already running for workflow/workspace`,
+		`export AIOPS_WORKSPACE_ROOT="$workspace_root"`,
 		`exec "$worker_bin" "$workflow_path"`,
 		`release_worker_lock`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("local-github-worker.sh missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		`workspace_root="${WORKSPACE_ROOT:-`,
+		`export WORKSPACE_ROOT=`,
+	} {
+		if strings.Contains(script, forbidden) {
+			t.Fatalf("local-github-worker.sh still uses removed env alias %q", forbidden)
 		}
 	}
 	if strings.Contains(script, `"$worker_bin" "$workflow_path" &`) {

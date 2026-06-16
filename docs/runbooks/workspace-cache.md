@@ -103,7 +103,7 @@ just `<workdir>/.git`) — the worker recovers on the next prepare.
 
 | Env var               | Default                                                                 | Purpose                                                  |
 | --------------------- | ----------------------------------------------------------------------- | -------------------------------------------------------- |
-| `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`) | _unset_ — falls back to WORKFLOW.md `workspace.root` (SPEC §6.4 default `<system-temp>/symphony_workspaces`) | Where per-task worktrees live.                           |
+| `AIOPS_WORKSPACE_ROOT` | _unset_ — falls back to WORKFLOW.md `workspace.root` (SPEC §6.4 default `<system-temp>/symphony_workspaces`) | Where per-task worktrees live.                           |
 | `AIOPS_MIRROR_ROOT`   | `os.UserCacheDir()/aiops-platform/mirrors` (fallback `$TMPDIR/...`)     | Where bare mirror clones are cached.                     |
 
 On Linux containers `os.UserCacheDir()` resolves to `$XDG_CACHE_HOME` or
@@ -256,8 +256,8 @@ task re-creates its worktree from the bare mirror (fast), so this is safe
 to run during any pause.
 
 First confirm your **effective** workspace root: it is `workspace.root`
-from `WORKFLOW.md` when set, otherwise `$AIOPS_WORKSPACE_ROOT` (legacy
-`$WORKSPACE_ROOT`), otherwise the SPEC temp default. `go run ./cmd/worker
+from `WORKFLOW.md` when set, otherwise `$AIOPS_WORKSPACE_ROOT`, otherwise
+the SPEC temp default. `go run ./cmd/worker
 --print-config <repo-clone>` prints the resolved value. Then prune that
 exact path — never an unset variable, or the glob below expands to `/*`
 and recurses into host directories:

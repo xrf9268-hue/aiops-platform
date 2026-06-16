@@ -83,12 +83,15 @@ Prompt body
 	}
 }
 
-// TestLoadMigratesLegacyTrackerBaseURL pins the #242 deprecation alias:
-// `tracker.base_url` in a legacy WORKFLOW.md still parses, surfaces on the
-// renamed `Tracker.Endpoint` field, and clears the legacy `BaseURL` field
-// so downstream code reads only one place.
-func TestLoadMigratesLegacyTrackerBaseURL(t *testing.T) {
-	path := writeTempWorkflow(t, `---
+func TestLoadRejectsDeprecatedTrackerAliases(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "base_url",
+			body: `---
 repo:
   owner: o
   name: r
@@ -98,23 +101,12 @@ tracker:
   base_url: https://tracker.example/legacy-base-url
 ---
 prompt body
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/legacy-base-url" {
-		t.Fatalf("Tracker.Endpoint = %q, want legacy base_url migrated to endpoint", got)
-	}
-	if wf.Config.Tracker.BaseURL != "" {
-		t.Fatalf("Tracker.BaseURL = %q, want cleared after migration", wf.Config.Tracker.BaseURL)
-	}
-}
-
-// TestLoadPrefersEndpointWhenBothFieldsSet: explicit `tracker.endpoint` wins
-// over the deprecated `tracker.base_url`.
-func TestLoadPrefersEndpointWhenBothFieldsSet(t *testing.T) {
-	path := writeTempWorkflow(t, `---
+`,
+			want: []string{"tracker.base_url", "tracker.endpoint"},
+		},
+		{
+			name: "base_url even when endpoint is set",
+			body: `---
 repo:
   owner: o
   name: r
@@ -125,18 +117,12 @@ tracker:
   base_url: https://tracker.example/legacy
 ---
 prompt body
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://tracker.example/canonical" {
-		t.Fatalf("Tracker.Endpoint = %q, want canonical endpoint to win over base_url", got)
-	}
-}
-
-func TestLoadMigratesGiteaProjectSlugBaseURLToEndpoint(t *testing.T) {
-	path := writeTempWorkflow(t, `---
+`,
+			want: []string{"tracker.base_url", "tracker.endpoint"},
+		},
+		{
+			name: "gitea project_slug base URL",
+			body: `---
 repo:
   owner: o
   name: r
@@ -146,66 +132,24 @@ tracker:
   project_slug: https://gitea.example/legacy
 ---
 prompt body
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+`,
+			want: []string{"tracker.project_slug", "tracker.endpoint", "Gitea"},
+		},
 	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/legacy" {
-		t.Fatalf("Tracker.Endpoint = %q, want legacy Gitea project_slug migrated to endpoint", got)
-	}
-	if wf.Config.Tracker.ProjectSlug != "" {
-		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
-	}
-}
 
-func TestLoadPrefersGiteaEndpointOverProjectSlugBaseURL(t *testing.T) {
-	path := writeTempWorkflow(t, `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-tracker:
-  kind: gitea
-  endpoint: https://gitea.example/canonical
-  project_slug: https://gitea.example/legacy
----
-prompt body
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/canonical" {
-		t.Fatalf("Tracker.Endpoint = %q, want tracker.endpoint to win over legacy Gitea project_slug", got)
-	}
-	if wf.Config.Tracker.ProjectSlug != "" {
-		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
-	}
-}
-
-func TestLoadPrefersLegacyBaseURLOverGiteaProjectSlugBaseURL(t *testing.T) {
-	path := writeTempWorkflow(t, `---
-repo:
-  owner: o
-  name: r
-  clone_url: git@example.com:o/r.git
-tracker:
-  kind: gitea
-  base_url: https://gitea.example/base-url
-  project_slug: https://gitea.example/project-slug
----
-prompt body
-`)
-	wf, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := wf.Config.Tracker.Endpoint; got != "https://gitea.example/base-url" {
-		t.Fatalf("Tracker.Endpoint = %q, want legacy base_url to win over legacy Gitea project_slug", got)
-	}
-	if wf.Config.Tracker.ProjectSlug != "" {
-		t.Fatalf("Tracker.ProjectSlug = %q, want cleared after Gitea migration", wf.Config.Tracker.ProjectSlug)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeTempWorkflow(t, tt.body)
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load succeeded, want deprecated tracker alias rejection")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("Load error = %q, want substring %q", err, want)
+				}
+			}
+		})
 	}
 }
 

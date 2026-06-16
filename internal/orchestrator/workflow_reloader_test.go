@@ -103,7 +103,7 @@ func TestWorkflowRuntimeReloadSuccessAtomicallySwapsConfigAndEmitsEvent(t *testi
 	}
 
 	snap := runtime.Current()
-	if got := snap.Workflow.Config.Tracker.PollIntervalMs; got != 45000 {
+	if got := snap.Workflow.Config.Polling.IntervalMs; got != 45000 {
 		t.Fatalf("poll interval after reload = %d, want 45000", got)
 	}
 	if got := snap.Workflow.Config.Tracker.ActiveStates; len(got) != 1 || got[0] != "Rework" {
@@ -570,7 +570,7 @@ func TestWorkflowRuntimeReloadFailureKeepsPreviousConfigAndEmitsFailureEvent(t *
 	}
 
 	snap := runtime.Current()
-	if got := snap.Workflow.Config.Tracker.PollIntervalMs; got != 30000 {
+	if got := snap.Workflow.Config.Polling.IntervalMs; got != 30000 {
 		t.Fatalf("poll interval after failed reload = %d, want previous 30000", got)
 	}
 	if got := snap.Workflow.Config.Tracker.ActiveStates; len(got) != 1 || got[0] != "Todo" {
@@ -618,7 +618,7 @@ func TestRunWorkflowReloadLoopPollFallbackReloadsChangedWorkflow(t *testing.T) {
 	}
 
 	snap := runtime.Current()
-	if got := snap.Workflow.Config.Tracker.PollIntervalMs; got != 42000 {
+	if got := snap.Workflow.Config.Polling.IntervalMs; got != 42000 {
 		t.Fatalf("poll interval after polling reload loop = %d, want 42000", got)
 	}
 	if got := snap.Workflow.Config.Tracker.ActiveStates; len(got) != 1 || got[0] != "Rework" {

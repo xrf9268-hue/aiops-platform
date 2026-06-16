@@ -162,14 +162,6 @@ default; Symphony mandates no universal sandbox posture).
 |-----|------|---------|----------|------------|
 | `verify.commands` | string list | `[]` | Surfaced to the agent's rendered prompt as its own pre-handoff contract; the worker does not run them (SPEC §1 agent boundary) | — |
 
-## Deprecated aliases (accepted with a deprecation log)
-
-| Legacy key | Use instead | Notes |
-|------------|-------------|-------|
-| `tracker.base_url` | `tracker.endpoint` | Ignored when `endpoint` is also set (#242) |
-| `tracker.poll_interval_ms` | `polling.interval_ms` | Ignored when `polling.interval_ms` is also set |
-| `tracker.project_slug` (Gitea only) | `tracker.endpoint` | Pre-endpoint Gitea base-URL spelling; ignored when `endpoint` is set |
-
 ## Removed keys (rejected at load)
 
 These once configured worker behavior that no longer exists; the loader fails
@@ -181,7 +173,11 @@ loud with the replacement guidance instead of silently dropping them:
 `agent.max_retry_attempts`, `agent.max_timeout_retries` (#577), the
 top-level `pr:` / `safety:` blocks (#578), `tracker.statuses` (#786, worker-side
 tracker writes are agent-side per SPEC §1 / #76 / #678), and `workspace.hooks`
-(#786, use the top-level `hooks:` block).
+(#786, use the top-level `hooks:` block). The pre-release compatibility aliases
+`tracker.base_url` (#911, use `tracker.endpoint`), `tracker.poll_interval_ms`
+(#911, use `polling.interval_ms`), and Gitea `tracker.project_slug` (#911, use
+`tracker.endpoint`; Linear still uses `tracker.project_slug` as the project
+slug) are also rejected at load.
 
 ## Coverage
 

@@ -1044,6 +1044,7 @@ func writeGitHubWorkflow(t *testing.T, agent string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
+	endpoint := trackerPreflightStubURL(t)
 	body := `---
 repo:
   owner: xrf9268-hue
@@ -1052,7 +1053,7 @@ repo:
 tracker:
   kind: gitea
   api_key: token
-  project_slug: platform
+  endpoint: ` + endpoint + `
 agent:
   default: ` + agent + `
 ---
@@ -1068,6 +1069,15 @@ func writeWorkflowBody(t *testing.T, trackerKind, apiKey, agent, extraTracker st
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
+	trackerExtra := extraTracker
+	switch trackerKind {
+	case "linear":
+		trackerExtra = "\n  project_slug: platform" + extraTracker
+	case "gitea":
+		if !strings.Contains(extraTracker, "endpoint:") {
+			trackerExtra = "\n  endpoint: " + trackerPreflightStubURL(t) + extraTracker
+		}
+	}
 	body := `---
 repo:
   owner: o
@@ -1076,7 +1086,7 @@ repo:
 tracker:
   kind: ` + trackerKind + `
   api_key: ` + apiKey + `
-  project_slug: platform` + extraTracker + `
+  ` + strings.TrimPrefix(trackerExtra, "\n  ") + `
 agent:
   default: ` + agent + `
 ---

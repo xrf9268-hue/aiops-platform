@@ -47,9 +47,6 @@ func Load(path string) (*Workflow, error) { //nolint:gocognit // baseline (#521)
 		cfg.Workspace.rootSet = workspaceRootSet
 		cfg.Server.portSet = serverPortSet
 		cfg.Codex.turnSandboxPolicySet = turnSandboxPolicySet
-		migratePollingInterval(frontBytes, &cfg)
-		migrateTrackerEndpoint(frontBytes, &cfg)
-		migrateGiteaTrackerProjectSlug(frontBytes, &cfg)
 	}
 	var rawStateCaps map[string]int
 	if hasFrontMatter && len(cfg.Agent.MaxConcurrentAgentsByState) > 0 {
