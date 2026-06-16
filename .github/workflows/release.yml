@@ -183,14 +183,17 @@ jobs:
           set -euo pipefail
           for out in dist/aiops-platform_${RELEASE_TAG}_*; do
             [ -d "$out" ] || continue
-            # Ship a runnable starting point alongside the binaries so a
-            # binary-download user has a config template without cloning (#797).
-            # Keep WORKFLOW.md under examples/ so the bundled .env.example's
-            # AIOPS_WORKFLOW_PATH=examples/WORKFLOW.md resolves from the
-            # extracted directory.
+            # Ship a self-contained starting point so a binary-download user can
+            # configure and run without cloning (#797, #905): every examples/
+            # template (one per tracker x role; cp the whole dir so it stays a
+            # single source of truth — the canonical examples/WORKFLOW.md keeps
+            # .env.example's AIOPS_WORKFLOW_PATH=examples/WORKFLOW.md resolving
+            # from the extracted directory), the .env template, README.md as the
+            # offline entry manual (it deep-links the runbooks), and LICENSE so
+            # the redistributed archive carries its terms.
             mkdir -p "$out/examples"
-            cp examples/WORKFLOW.md "$out/examples/"
-            cp .env.example "$out/"
+            cp -r examples/. "$out/examples/"
+            cp .env.example README.md LICENSE "$out/"
             tar -C dist -czf "${out}.tar.gz" "$(basename "$out")"
             rm -rf "$out"
           done
