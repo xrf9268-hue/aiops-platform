@@ -9,7 +9,7 @@
 #
 # The overlay builds the `codex-worker` Dockerfile target and feeds sensitive
 # values through Docker-supported secret files where possible. Codex auth/config
-# live in a CODEX_HOME directory, which Codex CLI 0.133 writes while loading
+# live in a CODEX_HOME directory, which Codex CLI writes while loading
 # configuration and refreshing auth state.
 services:
   worker:
@@ -34,9 +34,9 @@ services:
       - worker
     volumes:
       - ${AIOPS_WORKFLOW_PATH:?set AIOPS_WORKFLOW_PATH to a workflow file}:/app/WORKFLOW.md:ro
-      # CODEX_HOME is a restricted writable volume: Codex CLI 0.133 writes while
-      # loading config and persists refreshed ChatGPT-login tokens here. Keep it
-      # owned by the worker UID/GID and out of git; auth.json is a secret.
+      # CODEX_HOME is a restricted writable volume: Codex CLI writes config and
+      # persists refreshed ChatGPT-login tokens here. Keep it owned by the worker
+      # UID/GID and out of git; auth.json is a secret.
       - ${AIOPS_CODEX_HOME_PATH:?set AIOPS_CODEX_HOME_PATH to a Codex home directory}:/home/aiops/.codex
       # Optional, recommended (#465): mount a version-controlled, NON-SECRET
       # config.toml read-only OVER the writable home so model/provider/reasoning

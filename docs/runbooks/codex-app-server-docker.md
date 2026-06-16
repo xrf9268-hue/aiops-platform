@@ -8,7 +8,7 @@ For the full new-operator path, including support matrix, Docker Compose
 secrets, `worker --doctor`, and the todo smoke test, start with
 [`first-run-docker-linear-codex.md`](first-run-docker-linear-codex.md).
 
-## Current installer status
+## Historical installer failure
 
 On 2026-05-26, the online installer failed inside the Linux ARM64 worker image:
 
@@ -16,7 +16,7 @@ On 2026-05-26, the online installer failed inside the Linux ARM64 worker image:
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
-Observed:
+Observed historical output:
 
 ```text
 ==> Installing Codex CLI
@@ -26,8 +26,9 @@ Observed:
 Could not find SHA-256 digest for codex-package-aarch64-unknown-linux-musl.tar.gz in codex-package_SHA256SUMS.
 ```
 
-Until the installer works for this platform, use a deterministic release-package
-install in the worker image.
+This historical output is retained to explain why the worker image uses a
+deterministic release-package install. The current pinned Codex CLI version is
+the Dockerfile `CODEX_CLI_VERSION` value described below.
 
 The repository Dockerfile now exposes this as the `codex-worker` target:
 
