@@ -201,6 +201,31 @@ func TestPrintConfig_ExposesMaxRetryBackoffMs(t *testing.T) {
 	}
 }
 
+func TestPrintConfig_ExposesPollingInterval(t *testing.T) {
+	dir := t.TempDir()
+	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\ntracker:\n  kind: linear\n  project_slug: platform\npolling:\n  interval_ms: 12345\n---\nprompt\n"
+	if err := os.WriteFile(filepath.Join(dir, "WORKFLOW.md"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := printConfig(dir, nil, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	var out struct {
+		Config struct {
+			Polling struct {
+				IntervalMs int `json:"interval_ms"`
+			} `json:"polling"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v\nstdout: %s", err, stdout.String())
+	}
+	if got, want := out.Config.Polling.IntervalMs, 12345; got != want {
+		t.Fatalf("polling.interval_ms = %d, want %d\nstdout:\n%s", got, want, stdout.String())
+	}
+}
+
 func TestPrintConfig_ExposesMaxContinuationTurns(t *testing.T) {
 	dir := t.TempDir()
 	body := "---\nrepo:\n  owner: o\n  name: r\n  clone_url: git@example.com:o/r.git\nagent:\n  max_continuation_turns: 7\ntracker:\n  kind: linear\n  project_slug: platform\n---\nprompt\n"

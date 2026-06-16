@@ -157,6 +157,7 @@ func envProvenance(value string, res EnvResolution) fieldProvenance {
 type configView struct {
 	Repo      workflow.RepoConfig      `json:"repo"`
 	Tracker   workflow.TrackerConfig   `json:"tracker"`
+	Polling   workflow.PollingConfig   `json:"polling"`
 	Workspace workflow.WorkspaceConfig `json:"workspace"`
 	Agent     agentConfigView          `json:"agent"`
 	Codex     workflow.CommandConfig   `json:"codex"`
@@ -183,6 +184,7 @@ func newConfigView(cfg workflow.Config) configView {
 	return configView{
 		Repo:      cfg.Repo,
 		Tracker:   cfg.Tracker,
+		Polling:   cfg.Polling,
 		Workspace: cfg.Workspace,
 		Agent: agentConfigView{
 			Default:              cfg.Agent.Default,
