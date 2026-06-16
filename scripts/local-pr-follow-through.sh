@@ -850,10 +850,12 @@ assert_no_actionable_threads() {
 
 # Records the NOT-CONFIRMED verdict for this head and emits the single
 # structured handoff line the operator acts on: PR, head/base, trigger id, the
-# observed signal (none — no Codex review object for this head), and any open
-# thread ids. Distinct from a network/hard error; means "human action required".
+# original trigger time (started_at — lets the next sweep re-check for a Codex
+# review that landed after the deadline, #894), the observed signal (none — no
+# Codex review object for this head), and any open thread ids. Distinct from a
+# network/hard error; means "human action required".
 record_github_codex_not_confirmed() {
-  local pr="$1" head_oid="$2" base_oid="$3" base_ref="$4" trigger_id="$5"
+  local pr="$1" head_oid="$2" base_oid="$3" base_ref="$4" trigger_id="$5" started_at="$6"
   local state_file tmp open_threads
   state_file="$(github_codex_not_confirmed_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
   open_threads="$(collect_actionable_thread_ids "$pr" || true)"
@@ -864,10 +866,36 @@ record_github_codex_not_confirmed() {
     --arg base_oid "$base_oid" \
     --arg base_ref "$base_ref" \
     --arg trigger_id "$trigger_id" \
+    --arg started_at "$started_at" \
     --arg open_threads "$open_threads" \
-    '{pr:$pr, head_oid:$head_oid, base_oid:$base_oid, base_ref:$base_ref, trigger_id:$trigger_id, signal:"none", open_threads:$open_threads, status:"NOT-CONFIRMED"}' > "$tmp"
+    '{pr:$pr, head_oid:$head_oid, base_oid:$base_oid, base_ref:$base_ref, trigger_id:$trigger_id, started_at:$started_at, signal:"none", open_threads:$open_threads, status:"NOT-CONFIRMED"}' > "$tmp"
   mv "$tmp" "$state_file"
   audit_log "github_codex_review_not_confirmed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref trigger_id=$trigger_id signal=none open_threads=${open_threads:-none} state_file=$state_file action=human_review_required"
+}
+
+# Single non-polling re-check for a suppressed (NOT-CONFIRMED) head: did a Codex
+# FINDINGS review object for this head land *after* the no-signal deadline (a
+# slow/throttled review — the #879 run repeatedly hit Codex usage limits and
+# reviews landed minutes late)? One reviews API call, never re-enters the poll
+# loop. Exit codes: 0 on a FINDINGS object bound to this head (clear the
+# suppression); 3 on a find-findings identity conflict (a spoofed
+# chatgpt-codex-connector login — propagated so the caller hard-fails like the
+# poll loop, never folding a spoof into the benign keep-suppression path); other
+# non-zero on NONE or a fetch error (caller keeps the suppression). (#894)
+recheck_suppressed_codex_findings() {
+  local pr="$1" head_oid="$2" started_at="$3"
+  local signal_script="$repo_root/scripts/codex_review_signal.py"
+  local reviews_json classification rc
+  reviews_json="$(gh_cmd api --paginate --slurp "repos/${repo_owner}/${repo_name}/pulls/${pr}/reviews?per_page=100")" || return 1
+  rc=0
+  # Capture the exit code via `|| rc=$?` (not `local x=$(...)`, whose `local`
+  # masks it; not `if !`, which collapses every non-zero to a single boolean) so
+  # the identity-conflict code 3 stays distinct from NONE. Version-independent.
+  classification="$(printf "%s" "$reviews_json" | python3 "$signal_script" find-findings "$head_oid" "$started_at")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    return "$rc"
+  fi
+  [[ "$classification" == FINDINGS* ]]
 }
 
 assert_review_decision_clean() {
@@ -932,12 +960,43 @@ wait_for_github_codex_review() {
   local head_oid="$2"
   local base_oid="$3"
   local base_ref="$4"
-  local cached_comment_json cached_body existing_trigger trigger_json trigger_id started_at state_file tmp not_confirmed_file rc
+  local cached_comment_json cached_body existing_trigger trigger_json trigger_id started_at state_file tmp not_confirmed_file nc_started_at recheck_rc rc
   # If this exact head already reached NOT-CONFIRMED, hand back to the human
   # without re-triggering or re-waiting — the state file is keyed by head, so a
   # new push clears the suppression. (design #870 D5)
   not_confirmed_file="$(github_codex_not_confirmed_state_file "$pr" "$head_oid" "$base_oid" "$base_ref")"
   if [[ -f "$not_confirmed_file" ]]; then
+    # Before honoring the suppression, do one non-polling re-check: a Codex
+    # review object may have landed after the no-signal deadline (#894). If so,
+    # clear the suppression and fall through to the normal FINDINGS path (the
+    # all-thread gate decides mergeability). started_at is read from the state
+    # file; if it is absent (an older state file), skip the re-check and keep
+    # the existing hand-to-human behavior.
+    nc_started_at="$(jq -r '.started_at // empty' "$not_confirmed_file" 2>/dev/null || true)"
+    if [[ -n "$nc_started_at" ]]; then
+      recheck_rc=0
+      recheck_suppressed_codex_findings "$pr" "$head_oid" "$nc_started_at" || recheck_rc=$?
+      if [[ "$recheck_rc" -eq 0 ]]; then
+        rm -f "$not_confirmed_file"
+        audit_log "github_codex_review_not_confirmed_cleared" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref state_file=$not_confirmed_file action=findings_landed_late"
+        # Mirrors the normal FINDINGS tail: return 0 so the caller proceeds. The
+        # authoritative pre-merge thread gate is in the main loop after CI
+        # (assert_no_actionable_threads, errexit-active there); this in-function
+        # call is advisory only — errexit is suppressed inside a function invoked
+        # as `… || review_rc=$?`, so its failure does not abort here.
+        assert_no_actionable_threads "$pr"
+        return 0
+      elif [[ "$recheck_rc" -eq 3 ]]; then
+        # find-findings rejected the review set on an identity conflict (a
+        # spoofed chatgpt-codex-connector login). Match the poll loop: a spoof is
+        # a hard error, never folded into the benign keep-suppression/exit-20
+        # path. Leave the suppression in place and surface it loudly.
+        echo "GitHub Codex identity conflict re-checking suppressed PR #$pr at $head_oid" >&2
+        audit_log "github_codex_review_recheck_identity_conflict" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref state_file=$not_confirmed_file action=hard_error"
+        return 1
+      fi
+      # recheck_rc is NONE / fetch error: no review landed, keep the suppression.
+    fi
     audit_log "github_codex_review_not_confirmed_suppressed" "pr=$pr head=$head_oid base=$base_oid base_ref=$base_ref state_file=$not_confirmed_file action=human_review_required"
     return 20
   fi
@@ -1102,7 +1161,7 @@ base_ref: ${base_ref}")"
     # No Codex review object appeared in the window. The script cannot tell
     # "reviewed clean" from "not yet reviewed" (no reliable structured clean
     # signal), so it hands to a human and never auto-merges. (design #870 D5)
-    record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id"
+    record_github_codex_not_confirmed "$pr" "$head_oid" "$base_oid" "$base_ref" "$trigger_id" "$started_at"
     return 20
   fi
   # Drift / binding mismatch / spoof, or the outer timeout 124 (a command hung
