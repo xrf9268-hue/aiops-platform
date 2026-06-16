@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.4...v0.1.5) (2026-06-16)
+
+
+### Bug Fixes
+
+* **tooling:** re-check NOT-CONFIRMED head for a late Codex review ([#903](https://github.com/xrf9268-hue/aiops-platform/issues/903)) ([d0ff3af](https://github.com/xrf9268-hue/aiops-platform/commit/d0ff3afac1e4cf15ef22427491d6ae65552273a4)), closes [#894](https://github.com/xrf9268-hue/aiops-platform/issues/894)
+
 ## [0.1.4](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.3...v0.1.4) (2026-06-15)
 
 
