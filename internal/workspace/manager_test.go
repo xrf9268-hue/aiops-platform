@@ -26,7 +26,7 @@ func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 		"printf never > should-not-exist",
 	}}
 
-	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on non-zero exit")
 	}
@@ -56,7 +56,7 @@ func TestRunWorkspaceHookTimeoutStopsCommand(t *testing.T) {
 	hook := workflow.WorkspaceHook{Commands: []string{"sleep 2"}}
 
 	start := time.Now()
-	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil, workflow.Config{})
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on timeout")
@@ -86,7 +86,7 @@ func TestRunWorkspaceHookTimeoutDoesNotWaitForeverOnEscapedDescendantOutput(t *t
 	hook := workflow.WorkspaceHook{Commands: []string{"setsid sh -c 'while true; do printf x; sleep 1; done' & sleep 2"}}
 
 	start := time.Now()
-	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookAfterRun, hook, 50, nil, workflow.Config{})
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("RunWorkspaceHook should fail on timeout")
@@ -134,7 +134,7 @@ func TestRunWorkspaceHookEnvDropsNonAllowlistedSecretsByDefault(t *testing.T) {
 		`printf '<%s><%s><%s>' "$LINEAR_API_KEY" "$GITHUB_TOKEN" "$PATH"`,
 	}}
 
-	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
 	if err != nil {
 		t.Fatalf("RunWorkspaceHook: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestRunWorkspaceHookEnvPassthroughLetsNamedVarThrough(t *testing.T) {
 		`printf '<%s><%s>' "$LINEAR_API_KEY" "$EXTRA_BUILD_VAR"`,
 	}}
 
-	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, []string{"EXTRA_BUILD_VAR"})
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, []string{"EXTRA_BUILD_VAR"}, workflow.Config{})
 	if err != nil {
 		t.Fatalf("RunWorkspaceHook: %v", err)
 	}
@@ -176,6 +176,41 @@ func TestRunWorkspaceHookEnvPassthroughLetsNamedVarThrough(t *testing.T) {
 	}
 	if !strings.Contains(out, "let-me-in") {
 		t.Fatalf("EXTRA_BUILD_VAR did not pass through: %q", out)
+	}
+}
+
+func TestRunWorkspaceHookEnvRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "hook-tracker-secret")
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		`printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET"`,
+	}}
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{APIKey: "hook-tracker-secret"},
+	}
+
+	results, err := RunWorkspaceHook(
+		context.Background(),
+		dir,
+		HookBeforeRun,
+		hook,
+		0,
+		[]string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		cfg,
+	)
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	out := results[0].Output
+	if !strings.Contains(out, "let-me-in") {
+		t.Fatalf("EXTRA_BUILD_VAR did not pass through: %q", out)
+	}
+	if strings.Contains(out, "hook-tracker-secret") {
+		t.Fatalf("hook env leaked configured tracker API key value: %q", out)
+	}
+	if !strings.Contains(out, "<let-me-in><>") {
+		t.Fatalf("hook output = %q, want tracker secret slot empty", out)
 	}
 }
 
@@ -196,7 +231,7 @@ func TestRunWorkspaceHookDoesNotSourceUserLoginProfile(t *testing.T) {
 	dir := t.TempDir()
 	hook := workflow.WorkspaceHook{Commands: []string{`printf clean`}}
 
-	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil)
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
 	if err != nil {
 		t.Fatalf("RunWorkspaceHook: %v", err)
 	}
@@ -214,7 +249,7 @@ func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
 		t.Fatalf("Unsetenv(%q) = %v; want nil", "DEFINITELY_UNSET_227", err)
 	}
 
-	env := subprocessEnv([]string{"DEFINITELY_SET_227", "DEFINITELY_UNSET_227", "DEFINITELY_SET_227"})
+	env := subprocessEnv([]string{"DEFINITELY_SET_227", "DEFINITELY_UNSET_227", "DEFINITELY_SET_227"}, workflow.Config{})
 
 	var sawSet, sawUnsetMarker int
 	for _, kv := range env {
@@ -231,4 +266,82 @@ func TestSubprocessEnvSkipsUnsetPassthroughNames(t *testing.T) {
 	if sawUnsetMarker != 0 {
 		t.Fatalf("unset passthrough name leaked into env: %v", env)
 	}
+}
+
+func TestSubprocessEnvWithLookupBoundaryTable(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
+	}
+	lookupValues := map[string]string{
+		"PATH":                       "/worker/path",
+		"HOME":                       "/home/hook",
+		"USER":                       "hook-user",
+		"AIOPS_ALLOWED":              "allowed-value",
+		"AIOPS_DUPLICATE":            "duplicate-value",
+		"LINEAR_API_KEY":             "linear-secret",
+		"GITEA_TOKEN":                "gitea-secret",
+		"GITHUB_TOKEN":               "github-secret",
+		"AIOPS_CONFIGURED_TRACKER":   "configured-tracker-secret",
+		"AIOPS_UNRELATED_TRACKERISH": "not-the-configured-secret",
+	}
+	env := subprocessEnvWithLookup(
+		[]string{
+			"AIOPS_ALLOWED",
+			"LINEAR_API_KEY",
+			"GITEA_TOKEN",
+			"GITHUB_TOKEN",
+			"AIOPS_CONFIGURED_TRACKER",
+			"AIOPS_UNRELATED_TRACKERISH",
+			"AIOPS_DUPLICATE",
+			"AIOPS_DUPLICATE",
+			"BAD=NAME",
+			"",
+			"PATH",
+		},
+		cfg,
+		func(name string) (string, bool) {
+			value, ok := lookupValues[name]
+			return value, ok
+		},
+		func() string { return "/login/path" },
+	)
+
+	values, counts := workspaceEnvByName(env)
+	for _, tc := range []struct {
+		name      string
+		wantValue string
+	}{
+		{name: "PATH", wantValue: "/login/path"},
+		{name: "HOME", wantValue: "/home/hook"},
+		{name: "USER", wantValue: "hook-user"},
+		{name: "AIOPS_ALLOWED", wantValue: "allowed-value"},
+		{name: "AIOPS_DUPLICATE", wantValue: "duplicate-value"},
+		{name: "AIOPS_UNRELATED_TRACKERISH", wantValue: "not-the-configured-secret"},
+	} {
+		if values[tc.name] != tc.wantValue {
+			t.Fatalf("%s = %q, want %q in env %#v", tc.name, values[tc.name], tc.wantValue, env)
+		}
+		if counts[tc.name] != 1 {
+			t.Fatalf("%s appeared %d times, want 1 in env %#v", tc.name, counts[tc.name], env)
+		}
+	}
+	for _, denied := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "AIOPS_CONFIGURED_TRACKER", "BAD"} {
+		if counts[denied] != 0 {
+			t.Fatalf("denied env %s appeared %d times in env %#v", denied, counts[denied], env)
+		}
+	}
+}
+
+func workspaceEnvByName(env []string) (map[string]string, map[string]int) {
+	values := make(map[string]string, len(env))
+	counts := make(map[string]int, len(env))
+	for _, pair := range env {
+		name, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		values[name] = value
+		counts[name]++
+	}
+	return values, counts
 }

@@ -118,10 +118,6 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 
 	agentBranch := fmt.Sprintf("agent/%d", issueNum)
 	scriptPath := writeScriptedAgent(t, owner, repo, agentBranch, issueNum)
-	serviceWorkflow, err := workflow.Load(writeScriptedAgentServiceWorkflow(t, cloneURL, scriptPath))
-	if err != nil {
-		t.Fatalf("load service workflow: %v", err)
-	}
 
 	// Put the tracker credential into the WORKER process environment so the
 	// script's GITEA_TOKEN-absence guard pins something real: the runner
@@ -131,6 +127,13 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	// (Passthrough *requests* for GITEA_TOKEN are already rejected one layer
 	// earlier, at workflow load; see validateAgentEnvPassthrough.)
 	t.Setenv("GITEA_TOKEN", bed.gitea.botToken)
+	t.Setenv("AIOPS_TRACKER_SECRET", bed.gitea.botToken)
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	serviceWorkflow, err := workflow.Load(writeScriptedAgentServiceWorkflow(t, cloneURL, scriptPath))
+	if err != nil {
+		t.Fatalf("load service workflow: %v", err)
+	}
+	t.Setenv("AIOPS_TRACKER_SECRET", "rotated-e2e-tracker-secret")
 
 	// The hand-set fields below deliberately mirror the fixture front matter
 	// (test/e2e/fixtures/scripted-agent.md) — the suite-wide assembly pattern
@@ -146,6 +149,7 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 	cfg.Tracker.APIKey = bed.gitea.botToken
 	cfg.Tracker.ActiveStates = serviceWorkflow.Config.Tracker.ActiveStates
 	cfg.Tracker.TerminalStates = serviceWorkflow.Config.Tracker.TerminalStates
+	serviceWorkflow.Config.Tracker.APIKey = bed.gitea.botToken
 	client := gitea.NewTrackerClient(cfg.Tracker, bed.gitea.baseURL, owner, repo)
 	client.HTTP = httpClientForE2E()
 
@@ -177,9 +181,10 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 		// worker.RemoveIssueWorkspace routine so the SPEC §18.1 terminal
 		// cleanup path under test matches the deployed seam.
 		WorkspaceCleaner: &scriptedAgentWorkspaceCleaner{
-			emitter:       events,
-			workspaceRoot: workspaceRoot,
-			hooks:         serviceWorkflow.Config.WorkspaceHooks(),
+			emitter:        events,
+			workspaceRoot:  workspaceRoot,
+			workflowConfig: serviceWorkflow.Config,
+			hooks:          serviceWorkflow.Config.WorkspaceHooks(),
 		},
 	})
 	orchCtx, orchCancel := context.WithCancel(ctx)
@@ -259,6 +264,14 @@ func TestGiteaScriptedAgentLoop_PositiveHandoff(t *testing.T) {
 		}
 		return true, nil
 	})
+	beforeRemoveMarker := filepath.Join(filepath.Dir(workspacePath), "before-remove-env")
+	body, err := os.ReadFile(beforeRemoveMarker)
+	if err != nil {
+		t.Fatalf("read before_remove env marker: %v", err)
+	}
+	if got := string(body); got != "<let-me-in><>" {
+		t.Fatalf("before_remove env marker = %q, want tracker secret slot empty", got)
+	}
 
 	// Re-check the tracker after reconciliation: the worker must not have
 	// rewritten the agent's label flip or opened a PR of its own.
@@ -415,9 +428,10 @@ func (d *scriptedAgentDispatcher) preparedWorkspacePath() string {
 // sweep uses, so before_remove and the reconcile_workspace event contract
 // match the deployed worker.
 type scriptedAgentWorkspaceCleaner struct {
-	emitter       worker.EventEmitter
-	workspaceRoot string
-	hooks         workflow.WorkspaceHooks
+	emitter        worker.EventEmitter
+	workspaceRoot  string
+	workflowConfig workflow.Config
+	hooks          workflow.WorkspaceHooks
 }
 
 func (c *scriptedAgentWorkspaceCleaner) CleanupReconciledWorkspace(ctx context.Context, w orchestrator.ReconciledWorkspace) {
@@ -433,6 +447,7 @@ func (c *scriptedAgentWorkspaceCleaner) CleanupReconciledWorkspace(ctx context.C
 		Identifier:         w.Identifier,
 		State:              w.State,
 		Reason:             w.Reason,
+		WorkflowConfig:     c.workflowConfig,
 		BeforeRemoveHook:   c.hooks.BeforeRemove,
 		HookTimeoutMillis:  c.hooks.TimeoutMs,
 		HookEnvPassthrough: c.hooks.EnvPassthrough,

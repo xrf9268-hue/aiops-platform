@@ -3,6 +3,9 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -242,6 +245,60 @@ func TestRuntimeDispatcherConfigForSnapshotReturnsNilWithoutRefresher(t *testing
 	if cfg.IssueStateRefresher != nil {
 		t.Fatal("IssueStateRefresher should be nil when dispatcher has no tracker refresher set")
 	}
+}
+
+func TestRuntimeDispatcherCleanupRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
+	root := t.TempDir()
+	workdir := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		t.Fatalf("mkdir workdir: %v", err)
+	}
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "active-tracker-secret")
+	marker := filepath.Join(root, "hook-env")
+	cfg := workflow.DefaultConfig()
+	cfg.Tracker.APIKey = "active-tracker-secret"
+	cfg.Hooks = workflow.WorkspaceHooks{
+		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		BeforeRemove: workflow.WorkspaceHook{Commands: []string{
+			`printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET" > ` + shellQuoteRuntimeTest(marker),
+		}},
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{
+		Initial: &workflow.Workflow{Config: cfg, Source: workflow.SourceDefault},
+		Source:  workflow.SourceDefault,
+	})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	dispatcher, err := NewRuntimeDispatcher(runtime, worker.Config{}, &recordingWorkerEmitter{})
+	if err != nil {
+		t.Fatalf("new runtime dispatcher: %v", err)
+	}
+
+	dispatcher.CleanupReconciledWorkspace(context.Background(), ReconciledWorkspace{
+		IssueID:    IssueID("issue-1"),
+		Identifier: "LIN-1",
+		Path:       workdir,
+		Root:       root,
+		State:      "Done",
+		Reason:     "terminal",
+	})
+
+	body, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read before_remove marker: %v", err)
+	}
+	if got := string(body); got != "<let-me-in><>" {
+		t.Fatalf("before_remove env marker = %q, want tracker secret slot empty", got)
+	}
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("cleanup workdir stat err = %v, want removed", err)
+	}
+}
+
+func shellQuoteRuntimeTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // TestRuntimePollerWiresRefresherOntoProvidedDispatcher pins #791: the

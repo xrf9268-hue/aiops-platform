@@ -487,9 +487,9 @@ func worktreePathForBranch(ctx context.Context, mirror, workBranch string) strin
 // allowlist plus envPassthrough — secrets in the worker's environment that
 // are not in either list are dropped. See
 // docs/design/hook-verify-env-allowlist.md (#227).
-func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) ([]HookResult, error) {
+func RunWorkspaceHook(ctx context.Context, workdir string, name HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, cfg workflow.Config) ([]HookResult, error) {
 	timeoutMs = EffectiveWorkspaceHookTimeoutMs(timeoutMs)
-	env := subprocessEnv(envPassthrough)
+	env := subprocessEnv(envPassthrough, cfg)
 	results := make([]HookResult, 0, len(hook.Commands))
 	for _, raw := range hook.Commands {
 		command := strings.TrimSpace(raw)

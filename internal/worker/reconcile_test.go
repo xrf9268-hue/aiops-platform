@@ -703,6 +703,40 @@ func TestReconcileStartupRunsBeforeRemoveHookAndStillRemovesOnFailure(t *testing
 	}
 }
 
+func TestReconcileStartupBeforeRemoveRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
+	root := t.TempDir()
+	terminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "LIN-1")
+	if err := os.MkdirAll(terminalPath, 0o755); err != nil {
+		t.Fatalf("mkdir terminal workspace: %v", err)
+	}
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "reconcile-tracker-secret")
+	marker := filepath.Join(root, "hook-env")
+
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:      root,
+		ActiveStates:       []string{"Todo"},
+		TerminalStates:     []string{"Done"},
+		TrackerKind:        "linear",
+		Tracker:            fakeReconcileTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}}},
+		WorkflowConfig:     workflow.Config{Tracker: workflow.TrackerConfig{APIKey: "reconcile-tracker-secret"}},
+		HookEnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		BeforeRemoveHook: workflow.WorkspaceHook{Commands: []string{
+			`printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET" > ` + shellQuote(marker),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	body, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("read before_remove marker: %v", err)
+	}
+	if got := string(body); got != "<let-me-in><>" {
+		t.Fatalf("before_remove env marker = %q, want tracker secret slot empty", got)
+	}
+}
+
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

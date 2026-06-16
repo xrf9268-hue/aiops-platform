@@ -28,6 +28,13 @@ func AgentEnvPassthroughDenyReason(name string) string {
 }
 
 func AgentEnvPassthroughDenyReasonForConfig(name string, cfg Config) string {
+	return AgentEnvPassthroughDenyReasonForConfigWithLookup(name, cfg, os.LookupEnv)
+}
+
+// AgentEnvPassthroughDenyReasonForConfigWithLookup is
+// AgentEnvPassthroughDenyReasonForConfig with an injectable environment lookup
+// so env construction tests can pin value-based tracker secret denial.
+func AgentEnvPassthroughDenyReasonForConfigWithLookup(name string, cfg Config, lookup func(string) (string, bool)) string {
 	name = strings.TrimSpace(name)
 	if reason := AgentEnvPassthroughDenyReason(name); reason != "" {
 		return reason
@@ -36,7 +43,7 @@ func AgentEnvPassthroughDenyReasonForConfig(name string, cfg Config) string {
 		return "tracker.api_key environment variable must stay behind orchestrator tools"
 	}
 	if cfg.Tracker.APIKey != "" {
-		if value, ok := os.LookupEnv(name); ok && value == cfg.Tracker.APIKey {
+		if value, ok := lookup(name); ok && value == cfg.Tracker.APIKey {
 			return "tracker.api_key value must stay behind orchestrator tools"
 		}
 	}

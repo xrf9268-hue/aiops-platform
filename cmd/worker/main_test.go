@@ -1867,9 +1867,11 @@ func TestLoadWorkflowForStartupReconcileLogsConfiguredGiteaWorkflow(t *testing.T
 
 func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	cfg := workflow.DefaultConfig()
+	cfg.Tracker.APIKey = "tracker-secret"
 	cfg.Hooks = workflow.WorkspaceHooks{
-		BeforeRemove: workflow.WorkspaceHook{Commands: []string{"printf top-level"}},
-		TimeoutMs:    1234,
+		BeforeRemove:   workflow.WorkspaceHook{Commands: []string{"printf top-level"}},
+		TimeoutMs:      1234,
+		EnvPassthrough: []string{"AIOPS_TRACKER_SECRET"},
 	}
 
 	reconcile := startupReconcileConfigForWorkflow(cfg, nil)
@@ -1878,6 +1880,12 @@ func TestStartupReconcileConfigUsesEffectiveWorkspaceHooks(t *testing.T) {
 	}
 	if reconcile.HookTimeoutMillis != 1234 {
 		t.Fatalf("HookTimeoutMillis = %d, want top-level effective timeout", reconcile.HookTimeoutMillis)
+	}
+	if !reflect.DeepEqual(reconcile.HookEnvPassthrough, []string{"AIOPS_TRACKER_SECRET"}) {
+		t.Fatalf("HookEnvPassthrough = %#v, want top-level effective passthrough", reconcile.HookEnvPassthrough)
+	}
+	if reconcile.WorkflowConfig.Tracker.APIKey != cfg.Tracker.APIKey {
+		t.Fatalf("WorkflowConfig.Tracker.APIKey = %q, want startup workflow config to feed before_remove env deny", reconcile.WorkflowConfig.Tracker.APIKey)
 	}
 }
 

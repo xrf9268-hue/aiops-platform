@@ -278,6 +278,7 @@ func (d *RuntimeDispatcher) CleanupReconciledWorkspace(ctx context.Context, w Re
 		Identifier:         w.Identifier,
 		State:              w.State,
 		Reason:             w.Reason,
+		WorkflowConfig:     cfg,
 		BeforeRemoveHook:   hooks.BeforeRemove,
 		HookTimeoutMillis:  hooks.TimeoutMs,
 		HookEnvPassthrough: hooks.EnvPassthrough,
