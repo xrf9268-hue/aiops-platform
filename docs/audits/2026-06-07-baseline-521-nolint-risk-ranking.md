@@ -28,7 +28,10 @@ mutation. Display-only and config-load are lowest.
 
 ## Summary
 
-- **61** production baseline nolints across **32** files.
+- **61** production baseline nolints across **32** files — the **original
+  2026-06-07 inventory** (commit `7802a3f`). This headline is kept as the
+  historical base; see [Current status](#current-status) for the live count
+  after the first-batch follow-up refactors landed.
 - #521 (closed) intentionally repaid only the 10 heaviest `gocognit >= 30`
   hotspots and left milder findings out of scope; these 61 are the remainder.
 - Concentration is in two clusters that also carry the highest risk: the agent
@@ -55,6 +58,51 @@ mutation. Display-only and config-load are lowest.
 | H | Workflow loader / config / template | `workflow/template.go` (2), `expand.go`/`codex_schema.go`/`env.go`/`loader.go`/`config.go`/`resolver.go` (1 each) | 8 | low — config load (boot) |
 | I | Doctor / boot | `doctor/doctor.go` (5), `cmd/worker/main.go` (2) | 7 | medium/low — external-process probes (boot-time) |
 
+## Current status
+
+**Refreshed:** 2026-06-16, after #888 (main `3f37a1d`). The headline in
+[Summary](#summary) and the [Count by subsystem](#count-by-subsystem) table are
+the **original** 2026-06-07 snapshot and are kept as-is — this section records
+the live delta as follow-up refactors land, so later issue selection reads off
+real numbers rather than a stale base.
+
+| Snapshot | Directives | Files | When |
+|----------|-----------:|------:|------|
+| Original audit base (`7802a3f`) | 61 | 32 | 2026-06-07 |
+| Post-#883 live scan (when #889 was filed) | 56 | 34 | ~2026-06-15 |
+| **Current** (`3f37a1d`, post-#888) | **51** | **33** | 2026-06-16 |
+
+Live scan — reproduce on any checkout (production = non-test `*.go`):
+
+```bash
+rg -n "//nolint:.*baseline \(#521\)" --glob '*.go' --glob '!*_test.go' | wc -l   # 51 directives
+rg -l "//nolint:.*baseline \(#521\)" --glob '*.go' --glob '!*_test.go' | wc -l   # 33 files
+```
+
+The file count can rise while the directive count falls: a decomposition that
+splits an oversized file (e.g. `tracker/github.go` → `github_listing.go` +
+`github_refresh.go`, `doctor.go` → `doctor_codex.go`) carries a milder directive
+into the new file, so the per-file spread widens even as genuine seams are
+repaid. Treat the **directive** count, not the file count, as the debt headline.
+
+### First batch — all selected targets closed
+
+Every first-batch target (and the borderline Cluster G predicate) has shipped as
+its own characterization-test-first, mutation-verified, behavior-preserving PR:
+
+| Target | Issue | PR | Extract |
+|--------|-------|----|---------|
+| `tools.go:call` → `authorizeMutation` | [#884](https://github.com/xrf9268-hue/aiops-platform/issues/884) | [#890](https://github.com/xrf9268-hue/aiops-platform/pull/890) | §15.5 agent mutation authorization gate |
+| `sandbox.go:firejailCommand` → `buildFirejailNetArgs` + `wireFirejailCleanup` + `appendCredentialMounts` | [#885](https://github.com/xrf9268-hue/aiops-platform/issues/885) | [#891](https://github.com/xrf9268-hue/aiops-platform/pull/891) | sandbox confinement + temp-file lifecycle |
+| `runtask.go:RunRunnerWithTimeout` → `classifyRunnerError` | [#886](https://github.com/xrf9268-hue/aiops-platform/issues/886) | [#895](https://github.com/xrf9268-hue/aiops-platform/pull/895) | runner exit taxonomy (#543/#557 race) |
+| `artifacts.go:EnsureSensitiveArtifactExcludes` → `ensureSensitiveArtifactExcludeFile` + `installSensitiveArtifactHook` | [#882](https://github.com/xrf9268-hue/aiops-platform/issues/882) | [#883](https://github.com/xrf9268-hue/aiops-platform/pull/883) | secret-leak guard, two independent jobs |
+| `sandbox.go:sandboxEnv` → `carryWorkerInjectedGoCache` | [#887](https://github.com/xrf9268-hue/aiops-platform/issues/887) | [#896](https://github.com/xrf9268-hue/aiops-platform/pull/896) | worker-injected GOCACHE leak rule (#548) |
+| `statehttp_server.go:isLoopbackHTTPHost` → `normalizeHostFromHostport` (borderline; Cluster G) | [#888](https://github.com/xrf9268-hue/aiops-platform/issues/888) | [#899](https://github.com/xrf9268-hue/aiops-platform/pull/899) | loopback `Host` parse, fail-closed |
+
+The [Do **not** decompose](#do-not-decompose-keep-the-directive-harden-in-place--table-test)
+and [Lower priority](#lower-priority-defer) guidance below is unchanged and
+remains the roadmap for the **51** remaining directives.
+
 ## High-risk function assessments
 
 Read in full; tier and decomposability are grounded in the code, not the name.
@@ -63,10 +111,10 @@ Read in full; tier and decomposability are grounded in the code, not the name.
 
 | Function | file:line | Tier | Decompose | Note |
 |----------|-----------|------|-----------|------|
-| `firejailCommand` | `sandbox.go:217` | critical | **genuine** | Security boundary + external process + FS (temp netfilter). Most failure-prone state in the file (cleanup-on-error flag, shell `rm` wrapper, `Cancel`/`WaitDelay`). Extract `buildFirejailNetArgs` + `wireFirejailCleanup` to isolate the leak-prone temp-file lifecycle. Dual `gocognit,funlen`. |
+| `firejailCommand` | `sandbox.go:217` | critical | **closed by #885** (PR #891) | Security boundary + external process + FS (temp netfilter). Most failure-prone state in the file (cleanup-on-error flag, shell `rm` wrapper, `Cancel`/`WaitDelay`). Extract `buildFirejailNetArgs` + `wireFirejailCleanup` to isolate the leak-prone temp-file lifecycle. Dual `gocognit,funlen`. |
 | `bubblewrapCommand` | `sandbox.go:154` | critical | borderline | The bwrap arg list *is* the boundary contract; splitting it fragments the contract. Only genuine seam: the credential-mount loop, duplicated in `firejailCommand` → shared `appendCredentialMounts`. |
 | `applySandbox` | `sandbox.go:16` | critical | borderline | Top of the isolation dispatch (linux precondition, allowlist/backend coupling, `ensurePathWithinRoot` containment from #670). Optional `validateSandboxPreconditions` extract for guard testability; only ~50 lines and cohesive. |
-| `sandboxEnv` | `sandbox.go:101` | high | **genuine** | Secret/credential boundary into the sandbox (allowlist + deny filter). Extract `carryWorkerInjectedGoCache` to isolate the subtle "only worker-injected GOCACHE/GOMODCACHE passes" rule (#544 defaults, #548 review) for direct leak-vs-no-leak unit tests. |
+| `sandboxEnv` | `sandbox.go:101` | high | **closed by #887** (PR #896) | Secret/credential boundary into the sandbox (allowlist + deny filter). Extract `carryWorkerInjectedGoCache` to isolate the subtle "only worker-injected GOCACHE/GOMODCACHE passes" rule (#544 defaults, #548 review) for direct leak-vs-no-leak unit tests. |
 | `writeFirejailNetfilter` | `sandbox.go:314` | high | cosmetic-only | Egress policy (default DROP + per-CIDR ACCEPT) + FS write + CIDR trust boundary, but single-responsibility ~35 lines, no second caller. Harden in place; do not split. |
 | `agentEnvWithLookup` | `env.go:42` | critical | cosmetic-only | Default-deny token allowlist keeping `GH_TOKEN`/`LINEAR_API_KEY`/configured tracker key out of the agent process (#76/#227). Guard ladder is cohesive; table-test, don't split. |
 | `subprocessEnv` | `subprocess_env.go:28` | critical | cosmetic-only | Same default-deny allowlist for hook/verify subprocesses (#227). Near-duplicate of `agentEnvWithLookup` (a cross-package dedup *opportunity*, not a within-function split). |
@@ -75,7 +123,7 @@ Read in full; tier and decomposability are grounded in the code, not the name.
 
 | Function | file:line | Tier | Decompose | Note |
 |----------|-----------|------|-----------|------|
-| `call` | `tools.go:401` | critical | **genuine** | THE agent-controlled authorization boundary: parses untrusted GraphQL, rejects subscriptions, enforces §15.5 `allow_mutations`/`allowed_mutations` + the current-issue guard. Extract `authorizeMutation` (the whole mutation `case`) into a per-reason table-testable gate. |
+| `call` | `tools.go:401` | critical | **closed by #884** (PR #890) | THE agent-controlled authorization boundary: parses untrusted GraphQL, rejects subscriptions, enforces §15.5 `allow_mutations`/`allowed_mutations` + the current-issue guard. Extract `authorizeMutation` (the whole mutation `case`) into a per-reason table-testable gate. |
 | `dispatch` | `tools.go:532` | high | borderline | Executes the network mutation with the orchestrator-held token; reached by ungated `callRaw` too, so the redaction (`redactToolSecrets`)/timeout/response-cap path is a token-isolation boundary (#76/#298/#287/#405). Only genuine seam: extract the success-path mutation-audit/post-stop-sink branch (e.g. `fireMutationAudit`). |
 | `countGraphQLOperations` | `linear_graphql_parse.go:252` | high | cosmetic-only | Anti-smuggling "exactly one operation" enforcer. Flat single-pass lexer; the count comes from enumerating token cases, not nesting. Dual `gocognit,funlen`; cohesive. |
 | `consumeName` | `linear_graphql_parse.go:161` | high | borderline | Computes `op.Kind` + `op.FieldName` the gate keys on. Optional `classifyOperationHeader` extract; only worthwhile with characterization tests first. |
@@ -96,15 +144,21 @@ Read in full; tier and decomposability are grounded in the code, not the name.
 
 | Function | file:line | Tier | Decompose | Note |
 |----------|-----------|------|-----------|------|
-| `RunRunnerWithTimeout` | `worker/runtask.go:434` | high | **genuine** | Owns the deadline context that kills the agent subprocess and maps its exit onto SPEC run-attempt phases/events; a misclassification corrupts retry policy and the reconcile-cancel race (#543/#557). Extract `classifyRunnerError` (the `if runErr != nil` taxonomy block). Dual `gocognit,funlen`. |
+| `RunRunnerWithTimeout` | `worker/runtask.go:434` | high | **closed by #886** (PR #895) | Owns the deadline context that kills the agent subprocess and maps its exit onto SPEC run-attempt phases/events; a misclassification corrupts retry policy and the reconcile-cancel race (#543/#557). Extract `classifyRunnerError` (the `if runErr != nil` taxonomy block). Dual `gocognit,funlen`. |
 
 ### Cluster G — one security predicate among display code
 
 | Function | file:line | Tier | Decompose | Note |
 |----------|-----------|------|-----------|------|
-| `isLoopbackHTTPHost` | `cmd/worker/statehttp_server.go:402` | high | borderline | Parses an attacker-controllable `Host` header for the no-auth state-API loopback gate (checked with `RemoteAddr`). Optional `normalizeHostFromHostport` extract isolates the bypass-prone parsing; ~26 lines, fail-closed. The other Cluster G nolints are read/display handlers (low). |
+| `isLoopbackHTTPHost` | `cmd/worker/statehttp_server.go:402` | high | **closed by #888** (PR #899) | Parses an attacker-controllable `Host` header for the no-auth state-API loopback gate (checked with `RemoteAddr`). Optional `normalizeHostFromHostport` extract isolates the bypass-prone parsing; ~26 lines, fail-closed. The other Cluster G nolints are read/display handlers (low). |
 
 ## First batch — selected high-risk targets
+
+> **Status (2026-06-16): all closed.** Every target below — plus the borderline
+> Cluster G `isLoopbackHTTPHost` — has shipped; the issue/PR links live in
+> [First batch — all selected targets closed](#first-batch--all-selected-targets-closed).
+> The list below is preserved as the original 2026-06-07 **selection rationale**
+> (why each was picked), not a live to-do list.
 
 Selected for **both** high risk **and** a `genuine` decomposition seam (so the
 follow-up PR repays real complexity/testability rather than dodging the linter).
