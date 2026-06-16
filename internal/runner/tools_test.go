@@ -575,6 +575,167 @@ func TestLinearGraphQLRejectsSubscriptions(t *testing.T) {
 	}
 }
 
+func TestLinearGraphQLAuthorizeMutationPolicyOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		proxy         linearGraphQLProxy
+		op            linearGraphQLOperation
+		query         string
+		wantRejected  bool
+		wantFailure   []string
+		wantHandoff   bool
+		wantTerminal  bool
+		wantTermState string
+	}{
+		{
+			name:         "default-deny mutation",
+			op:           linearGraphQLOperation{Kind: linearGraphQLOperationMutation, FieldName: "issueUpdate"},
+			query:        `mutation { issueUpdate(id: "1", input: {}) { success } }`,
+			wantRejected: true,
+			wantFailure:  []string{"mutations are disabled by this workflow", "codex.linear_graphql.allow_mutations", "issueUpdate"},
+		},
+		{
+			name:  "allowed mutation",
+			proxy: linearGraphQLProxy{allowMutations: true, allowedMutations: linearGraphQLAllowSet([]string{"issueUpdate"})},
+			op:    linearGraphQLOperation{Kind: linearGraphQLOperationMutation, FieldName: "issueUpdate"},
+			query: `mutation { issueUpdate(id: "1", input: {}) { success } }`,
+		},
+		{
+			name:         "disallowed mutation field",
+			proxy:        linearGraphQLProxy{allowMutations: true, allowedMutations: linearGraphQLAllowSet([]string{"issueUpdate"})},
+			op:           linearGraphQLOperation{Kind: linearGraphQLOperationMutation, FieldName: "issueDelete"},
+			query:        `mutation { issueDelete(id: "1") { success } }`,
+			wantRejected: true,
+			wantFailure:  []string{"not in the workflow's allowed_mutations list", "issueDelete"},
+		},
+		{
+			name:         "unidentified mutation field",
+			proxy:        linearGraphQLProxy{allowMutations: true, allowedMutations: linearGraphQLAllowSet([]string{"issueUpdate"})},
+			op:           linearGraphQLOperation{Kind: linearGraphQLOperationMutation},
+			query:        `mutation Broken`,
+			wantRejected: true,
+			wantFailure:  []string{"could not identify the top-level mutation field", "codex.linear_graphql.allowed_mutations"},
+		},
+		{
+			name:         "subscription rejected",
+			proxy:        linearGraphQLProxy{allowMutations: true},
+			op:           linearGraphQLOperation{Kind: linearGraphQLOperationSubscription, FieldName: "issues"},
+			query:        `subscription { issues { id } }`,
+			wantRejected: true,
+			wantFailure:  []string{"does not accept subscription operations"},
+		},
+		{
+			name:  "query allowed without mutation gate",
+			op:    linearGraphQLOperation{Kind: linearGraphQLOperationQuery, FieldName: "viewer"},
+			query: `query { viewer { id } }`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			authorization := tc.proxy.authorizeMutation(context.Background(), tc.query, tc.op, nil)
+			if authorization.rejected != tc.wantRejected {
+				t.Fatalf("authorizeMutation(%q).rejected = %v; want %v", tc.query, authorization.rejected, tc.wantRejected)
+			}
+			if tc.wantRejected {
+				assertStructuredFailure(t, authorization.result, authorization.err, tc.wantFailure...)
+				return
+			}
+			if authorization.result != "" || authorization.err != nil {
+				t.Fatalf("authorizeMutation(%q) returned result=%q err=%v; want allowed without failure", tc.query, authorization.result, authorization.err)
+			}
+			if authorization.currentIssueHandoff.nonActive != tc.wantHandoff {
+				t.Fatalf("authorizeMutation(%q) handoff = %v; want %v", tc.query, authorization.currentIssueHandoff.nonActive, tc.wantHandoff)
+			}
+			if got := authorization.currentIssueHandoff.terminalState != ""; got != tc.wantTerminal {
+				t.Fatalf("authorizeMutation(%q) terminal handoff = %v; want %v", tc.query, got, tc.wantTerminal)
+			}
+			if authorization.currentIssueHandoff.terminalState != tc.wantTermState {
+				t.Fatalf("authorizeMutation(%q) terminal state = %q; want %q", tc.query, authorization.currentIssueHandoff.terminalState, tc.wantTermState)
+			}
+		})
+	}
+}
+
+func TestLinearGraphQLAuthorizeMutationCurrentIssueOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		snapshot      IssueStateSnapshot
+		stateIDs      map[string]string
+		query         string
+		wantRejected  bool
+		wantReason    string
+		wantHandoff   bool
+		wantTerminal  bool
+		wantTermState string
+	}{
+		{
+			name:         "current issue active-state update rejected",
+			snapshot:     IssueStateSnapshot{Found: true, State: "In Progress", Active: true},
+			stateIDs:     map[string]string{"In Progress": "state-active"},
+			query:        `mutation { issueUpdate(id: "issue-current", input: { stateId: "state-active" }) { success } }`,
+			wantRejected: true,
+			wantReason:   currentIssueRejectActiveStateUpdate,
+		},
+		{
+			name:         "current issue non-active handoff allowed",
+			snapshot:     IssueStateSnapshot{Found: true, State: "In Progress", Active: true},
+			stateIDs:     map[string]string{"In Progress": "state-active"},
+			query:        `mutation { issueUpdate(id: "issue-current", input: { stateId: "state-review" }) { success } }`,
+			wantHandoff:  true,
+			wantTerminal: false,
+		},
+		{
+			name:          "current issue terminal handoff allowed",
+			snapshot:      IssueStateSnapshot{Found: true, State: "In Progress", Active: true},
+			stateIDs:      map[string]string{"In Progress": "state-active", "Done": "state-done"},
+			query:         `mutation { issueUpdate(id: "issue-current", input: { stateId: "state-done" }) { success } }`,
+			wantHandoff:   true,
+			wantTerminal:  true,
+			wantTermState: "Done",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &fakeLinearStateMutationServer{stateIDs: tc.stateIDs}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+
+			proxy := guardedLinearProxy(httpServer, tc.snapshot)
+			proxy.currentIssueGuard.terminalStates = []string{"Done"}
+			var rejections []linearGraphQLMutationRejected
+			ctx := WithLinearGraphQLMutationRejectedSink(context.Background(), func(rejection linearGraphQLMutationRejected) {
+				rejections = append(rejections, rejection)
+			})
+			op := linearGraphQLOperation{Kind: linearGraphQLOperationMutation, FieldName: "issueUpdate"}
+
+			authorization := proxy.authorizeMutation(ctx, tc.query, op, nil)
+			if authorization.rejected != tc.wantRejected {
+				t.Fatalf("authorizeMutation(%q).rejected = %v; want %v", tc.query, authorization.rejected, tc.wantRejected)
+			}
+			if tc.wantRejected {
+				assertStructuredFailure(t, authorization.result, authorization.err, tc.wantReason)
+				if len(rejections) != 1 || rejections[0].Reason != tc.wantReason {
+					t.Fatalf("rejections = %+v; want one reason %s", rejections, tc.wantReason)
+				}
+				return
+			}
+			if len(rejections) != 0 {
+				t.Fatalf("rejections = %+v; want none for allowed handoff", rejections)
+			}
+			if authorization.currentIssueHandoff.nonActive != tc.wantHandoff {
+				t.Fatalf("authorizeMutation(%q) handoff = %v; want %v", tc.query, authorization.currentIssueHandoff.nonActive, tc.wantHandoff)
+			}
+			if got := authorization.currentIssueHandoff.terminalState != ""; got != tc.wantTerminal {
+				t.Fatalf("authorizeMutation(%q) terminal handoff = %v; want %v", tc.query, got, tc.wantTerminal)
+			}
+			if authorization.currentIssueHandoff.terminalState != tc.wantTermState {
+				t.Fatalf("authorizeMutation(%q) terminal state = %q; want %q", tc.query, authorization.currentIssueHandoff.terminalState, tc.wantTermState)
+			}
+			if got := server.issueUpdateRequests(); got != 0 {
+				t.Fatalf("issueUpdate HTTP requests = %d; want 0 during authorization", got)
+			}
+		})
+	}
+}
+
 // TestLinearGraphQLEmitsAuditEventForSuccessfulMutation covers the
 // audit-trail layer (#298 Layer 3): when the context carries a mutation
 // sink, the proxy fires it exactly once per successful mutation, with
