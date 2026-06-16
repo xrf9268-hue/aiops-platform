@@ -33,14 +33,14 @@ func TestReviewerProtocolDocumentsSubagentDiscoveryBeforeCLIFallback(t *testing.
 		"Subagent review complements the two-family gate",
 		"Codex-family and Claude-family",
 		"Best-practice reviewer modes",
-		"No subagent authorization",
+		"Subagents unavailable / opted out",
 		"One sidecar subagent",
 		"Parallel specialized subagents",
 		"#891",
-		"spawn_agent available but skipped",
-		"ask one concise authorization question before pre-push review when interactive timing allows",
-		"handle issue N with subagent review enabled",
-		"review this PR with parallel subagents",
+		"an available subagent reviewer",
+		"subagent review is the default there (#900)",
+		"CLI review only",
+		"Codex inline is different",
 	} {
 		if !containsReviewerDocText(protocol, want) {
 			t.Fatalf("pr-review-merge-protocol.md missing %q", want)
@@ -56,7 +56,7 @@ func TestIssueAndPRSkillsPointToSubagentFirstReviewerRouting(t *testing.T) {
 		body := readReviewerDoc(t, path)
 		for _, want := range []string{
 			"subagent-first reviewer routing",
-			"subagent review enabled",
+			"CLI review only",
 			"pr-review-merge-protocol.md",
 		} {
 			if !containsReviewerDocText(body, want) {
