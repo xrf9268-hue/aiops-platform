@@ -13,6 +13,19 @@ func expandConfig(cfg *Config) error {
 	return expandConfigForWorkflowPath("", cfg)
 }
 
+// defaultAgentMaxContinuationTurns mirrors agent.max_turns into
+// agent.max_continuation_turns unless the operator set the continuation cap
+// explicitly in front matter, so the two SPEC §16.5 budgets default together.
+func defaultAgentMaxContinuationTurns(cfg *Config, hasFrontMatter bool, front []byte) {
+	if cfg == nil {
+		return
+	}
+	if hasFrontMatter && hasNestedKey(front, "agent", "max_continuation_turns") {
+		return
+	}
+	cfg.Agent.MaxContinuationTurns = cfg.Agent.MaxTurns
+}
+
 func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nolint:gocognit,funlen // baseline (#521)
 	var err error
 	if envName, ok := explicitEnvReferenceName(cfg.Tracker.APIKey); ok {
