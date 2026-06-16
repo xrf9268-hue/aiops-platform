@@ -216,12 +216,9 @@ Prompt body
 		if got := wf.Config.Polling.IntervalMs; got != 12345 {
 			t.Fatalf("polling.interval_ms = %d, want 12345", got)
 		}
-		if got := wf.Config.Tracker.PollIntervalMs; got != 12345 {
-			t.Fatalf("legacy tracker poll interval mirror = %d, want 12345", got)
-		}
 	})
 
-	t.Run("legacy tracker poll interval still migrates with warning", func(t *testing.T) {
+	t.Run("legacy tracker poll interval is rejected", func(t *testing.T) {
 		path := writeTempWorkflow(t, `---
 repo:
   owner: xrf9268-hue
@@ -233,27 +230,18 @@ tracker:
 ---
 Prompt body
 `)
-		var logs bytes.Buffer
-		previous := log.Writer()
-		log.SetOutput(&logs)
-		t.Cleanup(func() { log.SetOutput(previous) })
-
-		wf, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
+		_, err := Load(path)
+		if err == nil {
+			t.Fatal("Load succeeded, want tracker.poll_interval_ms rejection")
 		}
-		if got := wf.Config.Polling.IntervalMs; got != 45678 {
-			t.Fatalf("polling.interval_ms migrated from tracker.poll_interval_ms = %d, want 45678", got)
-		}
-		if got := wf.Config.Tracker.PollIntervalMs; got != 45678 {
-			t.Fatalf("tracker.poll_interval_ms compatibility mirror = %d, want 45678", got)
-		}
-		if !strings.Contains(logs.String(), "tracker.poll_interval_ms is deprecated; use polling.interval_ms") {
-			t.Fatalf("legacy tracker.poll_interval_ms did not emit deprecation warning; logs: %s", logs.String())
+		for _, want := range []string{"tracker.poll_interval_ms", "polling.interval_ms"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load error = %q, want substring %q", err, want)
+			}
 		}
 	})
 
-	t.Run("both spellings prefer spec key and warn", func(t *testing.T) {
+	t.Run("both poll interval spellings reject legacy key", func(t *testing.T) {
 		path := writeTempWorkflow(t, `---
 repo:
   owner: xrf9268-hue
@@ -267,27 +255,18 @@ polling:
 ---
 Prompt body
 `)
-		var logs bytes.Buffer
-		previous := log.Writer()
-		log.SetOutput(&logs)
-		t.Cleanup(func() { log.SetOutput(previous) })
-
-		wf, err := Load(path)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
+		_, err := Load(path)
+		if err == nil {
+			t.Fatal("Load succeeded, want tracker.poll_interval_ms rejection")
 		}
-		if got := wf.Config.Polling.IntervalMs; got != 12345 {
-			t.Fatalf("polling.interval_ms = %d, want spec value 12345", got)
-		}
-		if got := wf.Config.Tracker.PollIntervalMs; got != 12345 {
-			t.Fatalf("tracker.poll_interval_ms mirror = %d, want spec value 12345", got)
-		}
-		if !strings.Contains(logs.String(), "tracker.poll_interval_ms is deprecated and ignored because polling.interval_ms is set") {
-			t.Fatalf("conflicting legacy tracker.poll_interval_ms did not emit warning; logs: %s", logs.String())
+		for _, want := range []string{"tracker.poll_interval_ms", "polling.interval_ms"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("Load error = %q, want substring %q", err, want)
+			}
 		}
 	})
 
-	t.Run("defaults keep spec and legacy mirrors synchronized", func(t *testing.T) {
+	t.Run("defaults keep spec polling value", func(t *testing.T) {
 		path := writeTempWorkflow(t, `---
 repo:
   owner: xrf9268-hue
@@ -304,9 +283,6 @@ Prompt body
 		}
 		if got := wf.Config.Polling.IntervalMs; got != 30000 {
 			t.Fatalf("polling.interval_ms default = %d, want 30000", got)
-		}
-		if got := wf.Config.Tracker.PollIntervalMs; got != wf.Config.Polling.IntervalMs {
-			t.Fatalf("tracker.poll_interval_ms default mirror = %d, want %d", got, wf.Config.Polling.IntervalMs)
 		}
 	})
 
@@ -329,9 +305,6 @@ Prompt body
 		}
 		if got := wf.Config.Polling.IntervalMs; got != 30000 {
 			t.Fatalf("polling.interval_ms with explicit 0 = %d, want default 30000", got)
-		}
-		if got := wf.Config.Tracker.PollIntervalMs; got != wf.Config.Polling.IntervalMs {
-			t.Fatalf("tracker.poll_interval_ms compatibility mirror = %d, want %d", got, wf.Config.Polling.IntervalMs)
 		}
 	})
 }

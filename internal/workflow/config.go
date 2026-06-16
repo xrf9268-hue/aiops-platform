@@ -131,14 +131,7 @@ type TrackerConfig struct {
 	// Endpoint is the tracker base/GraphQL URL (SPEC §5.3.1). For
 	// `kind: linear` the default is `https://api.linear.app/graphql`;
 	// GitHub Enterprise / Gitea installs name their REST root here.
-	// `tracker.base_url` is accepted as a deprecated alias and migrated
-	// by the loader (see migrateTrackerEndpoint in loader.go).
-	Endpoint string `yaml:"endpoint" json:"endpoint"`
-	// BaseURL is the pre-#242 field name kept for one release as a
-	// deprecated alias. Reads/writes outside the loader should use
-	// Endpoint; this field exists so legacy WORKFLOW.md files keep
-	// parsing while the loader emits a deprecation log.
-	BaseURL        string   `yaml:"base_url" json:"base_url,omitempty"`
+	Endpoint       string   `yaml:"endpoint" json:"endpoint"`
 	TeamKey        string   `yaml:"team_key" json:"team_key"`
 	ProjectSlug    string   `yaml:"project_slug" json:"project_slug"`
 	ActiveStates   []string `yaml:"active_states" json:"active_states"`
@@ -163,7 +156,6 @@ type TrackerConfig struct {
 	// page cap and a single issue carrying 250+ labels is pathological, keep
 	// the marker set small rather than relying on labels beyond the ceiling.
 	RequiredLabels []string `yaml:"required_labels" json:"required_labels"`
-	PollIntervalMs int      `yaml:"poll_interval_ms" json:"poll_interval_ms"`
 	// PaginationMaxPages caps one tracker pagination scan. Zero keeps the
 	// selected adapter's default budget.
 	PaginationMaxPages int `yaml:"pagination_max_pages" json:"pagination_max_pages,omitempty"`
@@ -419,7 +411,6 @@ func DefaultConfig() Config {
 		Tracker: TrackerConfig{
 			ActiveStates:   []string{"Todo", "In Progress"},
 			TerminalStates: []string{"Closed", "Cancelled", "Canceled", "Duplicate", "Done"},
-			PollIntervalMs: 30000,
 		},
 		Polling:   PollingConfig{IntervalMs: 30000},
 		Hooks:     WorkspaceHooks{TimeoutMs: 60000},

@@ -6,7 +6,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-func TestBaseURLFromTrackerConfigUsesEndpointBeforeProjectSlugAndFallback(t *testing.T) {
+func TestBaseURLFromTrackerConfigUsesEndpointBeforeFallback(t *testing.T) {
 	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{
 		Endpoint:    " https://gitea-endpoint.example.test/ ",
 		ProjectSlug: "https://gitea-legacy.example.test/",
@@ -16,12 +16,12 @@ func TestBaseURLFromTrackerConfigUsesEndpointBeforeProjectSlugAndFallback(t *tes
 	}
 }
 
-func TestBaseURLFromTrackerConfigUsesLegacyProjectSlugBeforeFallback(t *testing.T) {
+func TestBaseURLFromTrackerConfigIgnoresProjectSlugAsFallback(t *testing.T) {
 	got := BaseURLFromTrackerConfig(workflow.TrackerConfig{
 		ProjectSlug: " https://gitea-legacy.example.test/ ",
 	}, "https://gitea-env.example.test/")
-	if got != "https://gitea-legacy.example.test" {
-		t.Fatalf("BaseURLFromTrackerConfig = %q, want legacy tracker.project_slug without trailing slash", got)
+	if got != "https://gitea-env.example.test" {
+		t.Fatalf("BaseURLFromTrackerConfig = %q, want fallback without Gitea tracker.project_slug", got)
 	}
 }
 

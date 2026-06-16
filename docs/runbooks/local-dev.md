@@ -42,8 +42,7 @@ needs Postgres, it is stale — file an issue.
     and a bot token.
   - `tracker.kind: github` → a GitHub token (`gh auth token` works).
 - A scratch workspace root. `workspace.root` in `WORKFLOW.md` is the
-  source of truth; `AIOPS_WORKSPACE_ROOT` (legacy alias `WORKSPACE_ROOT`)
-  is the fallback when omitted.
+  source of truth; `AIOPS_WORKSPACE_ROOT` is the fallback when omitted.
 - Optional: Docker and Docker Compose v2, only if you want the
   containerized worker or e2e tests. To deploy the worker as a plain
   binary under an init system instead, see the
@@ -91,9 +90,8 @@ a real `.env`.
 
 The worker resolves its workflow source from `AIOPS_WORKFLOW_PATH` and
 its fallback workspace root from `AIOPS_WORKSPACE_ROOT`. Worker env vars
-share the `AIOPS_` prefix; the legacy unprefixed forms (`WORKSPACE_ROOT`,
-`MIRROR_ROOT`, `WORKFLOW_PATH`) are still honored as deprecated aliases
-but log a warning at startup. See `.env.example`.
+share the `AIOPS_` prefix; legacy unprefixed forms are not read. See
+`.env.example`.
 
 For first-time local testing keep `agent.default: mock` in the
 selected `WORKFLOW.md`. The mock runner produces a deterministic change
@@ -390,8 +388,7 @@ The worker keeps a per-repo bare mirror under `AIOPS_MIRROR_ROOT`
 (default `os.UserCacheDir()/aiops-platform/mirrors`) and creates a
 per-task worktree under the selected workflow's `workspace.root` for
 every claimed task. If `workspace.root` is omitted from `WORKFLOW.md`,
-the worker falls back to `AIOPS_WORKSPACE_ROOT` (legacy alias
-`WORKSPACE_ROOT`). This avoids re-cloning on
+the worker falls back to `AIOPS_WORKSPACE_ROOT`. This avoids re-cloning on
 every retry and lets two tasks run concurrently without sharing a
 working tree. See the dedicated
 [workspace cache runbook](workspace-cache.md) for the on-disk layout,

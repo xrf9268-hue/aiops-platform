@@ -2327,7 +2327,7 @@ for line in sys.stdin:
 	in.Workflow.Config.Codex.StallTimeoutMs = 1000
 	in.Workflow.Config.Tracker.Kind = "gitea"
 	in.Workflow.Config.Tracker.APIKey = "token"
-	in.Workflow.Config.Tracker.ProjectSlug = "http://127.0.0.1:1"
+	in.Workflow.Config.Tracker.Endpoint = "http://127.0.0.1:1"
 	in.Workflow.Config.Repo.Owner = "o"
 	in.Workflow.Config.Repo.Name = "r"
 	// Hang-guard only; the assertion is that the dynamic tool call + its output

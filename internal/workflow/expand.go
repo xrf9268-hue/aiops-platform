@@ -60,12 +60,8 @@ func expandConfigForWorkflowPath(workflowPath string, cfg *Config) error { //nol
 		cfg.Agent.Timeout = 30 * time.Minute
 	}
 	if cfg.Polling.IntervalMs <= 0 {
-		cfg.Polling.IntervalMs = cfg.Tracker.PollIntervalMs
-	}
-	if cfg.Polling.IntervalMs <= 0 {
 		cfg.Polling.IntervalMs = 30000
 	}
-	cfg.Tracker.PollIntervalMs = cfg.Polling.IntervalMs
 	if cfg.Sandbox.Backend == "" {
 		cfg.Sandbox.Backend = "none"
 	}

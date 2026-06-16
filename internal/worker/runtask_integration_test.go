@@ -190,7 +190,7 @@ func TestRunTaskHonorsWorkspaceRootPrecedence(t *testing.T) {
 	})
 
 	// SPEC §6.4 default fallback (#319): with no `workspace.root` in
-	// WORKFLOW.md and no WORKSPACE_ROOT env, the worker must land on
+	// WORKFLOW.md and no AIOPS_WORKSPACE_ROOT env, the worker must land on
 	// `<system-temp>/symphony_workspaces` — the same path
 	// `worker --print-config` reports. Pre-#319 it silently landed on
 	// the env loader's `/tmp/aiops-workspaces` literal.

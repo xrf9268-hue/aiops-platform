@@ -1888,7 +1888,7 @@ func TestStartupReconcileConfigHonorsWorkflowWorkspaceRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load workflow: %v", err)
 	}
-	t.Setenv("WORKSPACE_ROOT", filepath.Join(t.TempDir(), "env-workspaces"))
+	t.Setenv("AIOPS_WORKSPACE_ROOT", filepath.Join(t.TempDir(), "env-workspaces"))
 
 	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
 	if reconcile.WorkspaceRoot != yamlRoot {
@@ -1903,7 +1903,7 @@ func TestStartupReconcileConfigFallsBackToEnvWorkspaceRoot(t *testing.T) {
 		t.Fatalf("Load workflow: %v", err)
 	}
 	envRoot := filepath.Join(t.TempDir(), "env-workspaces")
-	t.Setenv("WORKSPACE_ROOT", envRoot)
+	t.Setenv("AIOPS_WORKSPACE_ROOT", envRoot)
 
 	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
 	if reconcile.WorkspaceRoot != envRoot {
@@ -1913,7 +1913,7 @@ func TestStartupReconcileConfigFallsBackToEnvWorkspaceRoot(t *testing.T) {
 
 func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *testing.T) {
 	// Pin SPEC §6.4 precedence: an explicit `workspace.root` in
-	// WORKFLOW.md wins over WORKSPACE_ROOT env even when its value
+	// WORKFLOW.md wins over AIOPS_WORKSPACE_ROOT env even when its value
 	// equals the SPEC default itself. Pre-#319 this test used the
 	// personal-profile legacy `~/aiops-workspaces` literal — the same
 	// literal PR #316 retired at the workflow-loader floor — which kept
@@ -1925,7 +1925,7 @@ func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *tes
 		t.Fatalf("Load workflow: %v", err)
 	}
 	envRoot := filepath.Join(t.TempDir(), "env-workspaces")
-	t.Setenv("WORKSPACE_ROOT", envRoot)
+	t.Setenv("AIOPS_WORKSPACE_ROOT", envRoot)
 
 	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
 	if reconcile.WorkspaceRoot != yamlRoot {
@@ -1935,7 +1935,7 @@ func TestStartupReconcileConfigHonorsExplicitDefaultWorkflowWorkspaceRoot(t *tes
 
 // TestStartupReconcileConfigFallsBackToSPECWorkspaceRootDefault covers
 // the #319 fix: when WORKFLOW.md omits `workspace.root` and
-// WORKSPACE_ROOT is unset, the startup reconcile resolves to the SPEC
+// AIOPS_WORKSPACE_ROOT is unset, the startup reconcile resolves to the SPEC
 // §6.4 default (`<system-temp>/symphony_workspaces`) that
 // workflow.DefaultConfig seeds. Pre-#319 the env loader's
 // `/tmp/aiops-workspaces` literal shadowed the SPEC default in this
@@ -1947,7 +1947,7 @@ func TestStartupReconcileConfigFallsBackToSPECWorkspaceRootDefault(t *testing.T)
 	if err != nil {
 		t.Fatalf("Load workflow: %v", err)
 	}
-	t.Setenv("WORKSPACE_ROOT", "")
+	t.Setenv("AIOPS_WORKSPACE_ROOT", "")
 
 	reconcile := startupReconcileConfigForWorkflow(wf.Config, nil)
 	want := filepath.Join(os.TempDir(), "symphony_workspaces")
@@ -1973,7 +1973,7 @@ tracker:
 	return path
 }
 
-func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeProjectSlugAndEnvBaseURL(t *testing.T) {
+func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeEnvBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
@@ -1995,7 +1995,7 @@ func TestTrackerClientForWorkflowUsesGiteaEndpointBeforeProjectSlugAndEnvBaseURL
 	}
 }
 
-func TestTrackerClientForWorkflowUsesDeprecatedGiteaProjectSlugBeforeEnvBaseURL(t *testing.T) {
+func TestTrackerClientForWorkflowIgnoresGiteaProjectSlugBaseURL(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "https://gitea-env.example.test/")
 	cfg := workflow.DefaultConfig()
 	cfg.Tracker.Kind = "gitea"
@@ -2011,8 +2011,8 @@ func TestTrackerClientForWorkflowUsesDeprecatedGiteaProjectSlugBeforeEnvBaseURL(
 	if !ok {
 		t.Fatalf("client type = %T, want *gitea.TrackerClient", client)
 	}
-	if giteaClient.BaseURL != "https://gitea-legacy.example.test" {
-		t.Fatalf("base URL = %q, want legacy tracker.project_slug without trailing slash", giteaClient.BaseURL)
+	if giteaClient.BaseURL != "https://gitea-env.example.test" {
+		t.Fatalf("base URL = %q, want GITEA_BASE_URL fallback when tracker.endpoint is empty", giteaClient.BaseURL)
 	}
 }
 
@@ -2099,8 +2099,8 @@ func TestWorkerReconciliationConfigIncludesInactiveStates(t *testing.T) {
 
 // TestTrackerClientForWorkflowUsesGiteaLocalhostDefaultWhenNoEnvAndNoConfig
 // pins the all-empty arm of the shared gitea.BaseURLFromEnv resolution: with
-// no endpoint, no legacy project_slug, and no GITEA_BASE_URL, both the worker
-// and doctor must land on the local-dev default.
+// no endpoint and no GITEA_BASE_URL, both the worker and doctor must land on
+// the local-dev default.
 func TestTrackerClientForWorkflowUsesGiteaLocalhostDefaultWhenNoEnvAndNoConfig(t *testing.T) {
 	t.Setenv("GITEA_BASE_URL", "")
 	cfg := workflow.DefaultConfig()

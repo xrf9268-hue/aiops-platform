@@ -121,8 +121,7 @@ leaves the worker unauthenticated against the tracker.
 `WORKFLOW.md` front matter is the source of truth for runtime workspace
 placement: when `workspace.root` is set in the selected workflow, the worker
 creates and reconciles task workspaces under that path. `AIOPS_WORKSPACE_ROOT`
-(legacy alias: `WORKSPACE_ROOT`) is only the fallback for workflows that omit
-`workspace.root`.
+is only the fallback for workflows that omit `workspace.root`.
 
 No `DATABASE_URL` or Postgres service is required. Restart recovery follows
 SPEC §14.3: the worker starts with fresh runtime state, cleans terminal
@@ -372,13 +371,12 @@ summarized (length + first line) rather than printed verbatim — `cat
 `shadowed_by` is omitted unless future non-legacy resolution metadata is added.
 
 A `provenance` block reports where each multi-layer value resolved from —
-`default`, `env` (with the env var name and whether it was a deprecated
-unprefixed alias), `workflow`, or `cli`. It currently covers the workspace root
-(`AIOPS_WORKSPACE_ROOT` / legacy `WORKSPACE_ROOT` / `workspace.root`), the mirror
-root (`AIOPS_MIRROR_ROOT`), `server.port` (including the `--port` override), and
-the workflow path source. The `provenance` values are the effective ones the
-worker would actually use, so they reflect env/CLI overrides that the masked
-`config` block (the raw WORKFLOW.md/default values) does not.
+`default`, `env` (with the canonical env var name), `workflow`, or `cli`. It
+currently covers the workspace root (`workspace.root` / `AIOPS_WORKSPACE_ROOT`),
+the mirror root (`AIOPS_MIRROR_ROOT`), `server.port` (including the `--port`
+override), and the workflow path source. The `provenance` values are the
+effective ones the worker would actually use, so they reflect env/CLI overrides
+that the masked `config` block (the raw WORKFLOW.md/default values) does not.
 
 ## Runner modes and first safe mode
 

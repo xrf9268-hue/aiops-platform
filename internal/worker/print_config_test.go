@@ -514,9 +514,7 @@ func TestPrintConfig_SchemaErrorReturnsExitOne(t *testing.T) {
 func clearWorkerEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv(workspaceRootEnv, "")
-	t.Setenv(workspaceRootEnvLegacy, "")
 	t.Setenv(mirrorRootEnv, "")
-	t.Setenv(mirrorRootEnvLegacy, "")
 }
 
 // runPrintConfigProvenance writes body (when non-empty) as WORKFLOW.md in a
@@ -552,18 +550,15 @@ func validFrontMatter(extra string) string {
 
 // TestPrintConfig_WorkspaceRootProvenance pins the #375 acceptance
 // criterion for workspace root: every SPEC §6.4 precedence layer
-// (workflow > env, canonical vs deprecated alias > default) is annotated
-// with the correct source, env var name, and deprecation flag.
+// (workflow > env > default) is annotated with the correct source and env var.
 func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
 	cases := []struct {
-		name           string
-		body           string
-		envCanonical   string
-		envLegacy      string
-		wantValue      string
-		wantSource     string
-		wantEnvVar     string
-		wantDeprecated bool
+		name         string
+		body         string
+		envCanonical string
+		wantValue    string
+		wantSource   string
+		wantEnvVar   string
 	}{
 		{
 			// workflow.root wins even though an env var is also set.
@@ -582,15 +577,6 @@ func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
 			wantEnvVar:   workspaceRootEnv,
 		},
 		{
-			name:           "env_deprecated_alias",
-			body:           "",
-			envLegacy:      "/legacy/ws",
-			wantValue:      "/legacy/ws",
-			wantSource:     sourceEnv,
-			wantEnvVar:     workspaceRootEnvLegacy,
-			wantDeprecated: true,
-		},
-		{
 			name:       "default_no_file_no_env",
 			body:       "",
 			wantSource: sourceDefault,
@@ -602,9 +588,6 @@ func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
 			if tc.envCanonical != "" {
 				t.Setenv(workspaceRootEnv, tc.envCanonical)
 			}
-			if tc.envLegacy != "" {
-				t.Setenv(workspaceRootEnvLegacy, tc.envLegacy)
-			}
 			prov, dir := runPrintConfigProvenance(t, tc.body, nil)
 			got := prov.WorkspaceRoot
 			if got.Source != tc.wantSource {
@@ -612,9 +595,6 @@ func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
 			}
 			if got.EnvVar != tc.wantEnvVar {
 				t.Fatalf("workspace_root.env_var = %q, want %q", got.EnvVar, tc.wantEnvVar)
-			}
-			if got.EnvVarDeprecated != tc.wantDeprecated {
-				t.Fatalf("workspace_root.env_var_deprecated = %v, want %v", got.EnvVarDeprecated, tc.wantDeprecated)
 			}
 			// The reported value must equal what the worker would actually
 			// use, so it cannot drift from EffectiveWorkspaceRoot.
@@ -637,17 +617,15 @@ func TestPrintConfig_WorkspaceRootProvenance(t *testing.T) {
 }
 
 // TestPrintConfig_MirrorRootProvenance pins the #375 acceptance criterion
-// for mirror root. There is no WORKFLOW.md field, so only env (canonical /
-// deprecated alias) and the computed default apply.
+// for mirror root. There is no WORKFLOW.md field, so only canonical env and the
+// computed default apply.
 func TestPrintConfig_MirrorRootProvenance(t *testing.T) {
 	cases := []struct {
-		name           string
-		envCanonical   string
-		envLegacy      string
-		wantSource     string
-		wantEnvVar     string
-		wantValue      string
-		wantDeprecated bool
+		name         string
+		envCanonical string
+		wantSource   string
+		wantEnvVar   string
+		wantValue    string
 	}{
 		{
 			name:         "env_canonical",
@@ -655,14 +633,6 @@ func TestPrintConfig_MirrorRootProvenance(t *testing.T) {
 			wantSource:   sourceEnv,
 			wantEnvVar:   mirrorRootEnv,
 			wantValue:    "/env/mirror",
-		},
-		{
-			name:           "env_deprecated_alias",
-			envLegacy:      "/legacy/mirror",
-			wantSource:     sourceEnv,
-			wantEnvVar:     mirrorRootEnvLegacy,
-			wantValue:      "/legacy/mirror",
-			wantDeprecated: true,
 		},
 		{
 			name:       "default_no_env",
@@ -675,9 +645,6 @@ func TestPrintConfig_MirrorRootProvenance(t *testing.T) {
 			if tc.envCanonical != "" {
 				t.Setenv(mirrorRootEnv, tc.envCanonical)
 			}
-			if tc.envLegacy != "" {
-				t.Setenv(mirrorRootEnvLegacy, tc.envLegacy)
-			}
 			prov, _ := runPrintConfigProvenance(t, "", nil)
 			got := prov.MirrorRoot
 			if got.Source != tc.wantSource {
@@ -685,9 +652,6 @@ func TestPrintConfig_MirrorRootProvenance(t *testing.T) {
 			}
 			if got.EnvVar != tc.wantEnvVar {
 				t.Fatalf("mirror_root.env_var = %q, want %q", got.EnvVar, tc.wantEnvVar)
-			}
-			if got.EnvVarDeprecated != tc.wantDeprecated {
-				t.Fatalf("mirror_root.env_var_deprecated = %v, want %v", got.EnvVarDeprecated, tc.wantDeprecated)
 			}
 			if tc.wantValue != "" && got.Value != tc.wantValue {
 				t.Fatalf("mirror_root.value = %q, want %q", got.Value, tc.wantValue)

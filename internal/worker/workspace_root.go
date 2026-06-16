@@ -10,7 +10,7 @@ import (
 // SPEC §6.4 precedence:
 //
 //  1. WORKFLOW.md `workspace.root` (explicit; RootSet=true) wins outright.
-//  2. WORKSPACE_ROOT env (non-empty cfg.WorkspaceRoot) wins over the
+//  2. AIOPS_WORKSPACE_ROOT env (non-empty cfg.WorkspaceRoot) wins over the
 //     SPEC default — operators can still steer a host without touching
 //     WORKFLOW.md.
 //  3. Otherwise fall back to the workflow's `Workspace.Root`, which
