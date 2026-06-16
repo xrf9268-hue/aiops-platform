@@ -403,32 +403,46 @@ func stateHTTPTokenMatches(got, want string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
 }
-func isLoopbackHTTPHost(hostport string) bool { //nolint:gocognit // baseline (#521)
-	if hostport == "" {
+func isLoopbackHTTPHost(hostport string) bool {
+	host, ok := normalizeHostFromHostport(hostport)
+	if !ok {
 		return false
-	}
-	host := hostport
-	if h, _, err := net.SplitHostPort(hostport); err == nil {
-		host = h
-	} else if strings.Contains(hostport, ":") && !strings.HasPrefix(hostport, "[") {
-		// "host:port" without IPv6 brackets that failed to split — malformed.
-		return false
-	}
-	// Strip IPv6 brackets only when the host is properly bracketed (e.g. "[::1]").
-	// Reject unpaired brackets — "[::1" or "::1]" are malformed Host values.
-	if strings.HasPrefix(host, "[") || strings.HasSuffix(host, "]") {
-		if !strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]") {
-			return false
-		}
-		host = host[1 : len(host)-1]
 	}
 	if host == "localhost" {
 		return true
 	}
-	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
-		return true
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// normalizeHostFromHostport extracts the bare host from an HTTP Host value,
+// dropping an optional port and matched IPv6 brackets. It fails closed
+// (ok=false) for any Host the no-auth loopback gate cannot parse unambiguously
+// — empty input, an unbracketed "host:port" that failed to split, or unpaired
+// IPv6 brackets — so a malformed Host can never reach the loopback decision and
+// authorize a request alongside a non-loopback peer.
+func normalizeHostFromHostport(hostport string) (host string, ok bool) {
+	if hostport == "" {
+		return "", false
 	}
-	return false
+	host = hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	} else if strings.Contains(hostport, ":") && !strings.HasPrefix(hostport, "[") {
+		// "host:port" without IPv6 brackets that failed to split — malformed.
+		return "", false
+	}
+	// Strip IPv6 brackets only when the host is properly bracketed (e.g. "[::1]").
+	// An opening bracket without a closing one (or vice versa) is a malformed
+	// Host value, so reject it rather than guessing.
+	hasOpen, hasClose := strings.HasPrefix(host, "["), strings.HasSuffix(host, "]")
+	if hasOpen != hasClose {
+		return "", false
+	}
+	if hasOpen {
+		host = host[1 : len(host)-1]
+	}
+	return host, true
 }
 func isLoopbackHTTPRemoteAddr(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(remoteAddr)
