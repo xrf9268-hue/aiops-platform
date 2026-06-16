@@ -44,6 +44,68 @@ func TestSandboxEnvDoesNotCarryOperatorOrHostGoCaches(t *testing.T) {
 	}
 }
 
+// TestCarryWorkerInjectedGoCacheCarriesOnlyWorkerInjected pins the leak-vs-no-leak
+// boundary of the extracted helper directly: a worker-injected value (under
+// aiopsGoCacheRoot) is carried, while an operator path the allowlist loop did
+// not admit stays blocked (codex review #548).
+func TestCarryWorkerInjectedGoCacheCarriesOnlyWorkerInjected(t *testing.T) {
+	t.Setenv("TMPDIR", "/sandbox-tmp")
+	workerCache := filepath.Join(aiopsGoCacheRoot(), "build", "k")
+	primaryByName := map[string]string{
+		"GOCACHE":    workerCache,     // worker-injected -> carried
+		"GOMODCACHE": "/operator/mod", // operator path -> blocked
+	}
+	seen := map[string]struct{}{}
+	body := strings.Join(carryWorkerInjectedGoCache(nil, primaryByName, seen), "\n")
+	if !strings.Contains(body, "GOCACHE="+workerCache) {
+		t.Errorf("carryWorkerInjectedGoCache(%q) dropped worker-injected GOCACHE; got:\n%s", workerCache, body)
+	}
+	if strings.Contains(body, "GOMODCACHE") {
+		t.Errorf("carryWorkerInjectedGoCache leaked operator GOMODCACHE=/operator/mod past the boundary; got:\n%s", body)
+	}
+	if _, ok := seen["GOCACHE"]; !ok {
+		t.Errorf("carryWorkerInjectedGoCache(%q) did not mark carried GOCACHE seen; seen=%v", workerCache, seen)
+	}
+}
+
+// TestCarryWorkerInjectedGoCacheSkipsAlreadySeen pins the no-duplicate invariant:
+// a name the allowlist loop already emitted (recorded in seen) is not re-appended.
+func TestCarryWorkerInjectedGoCacheSkipsAlreadySeen(t *testing.T) {
+	t.Setenv("TMPDIR", "/sandbox-tmp")
+	workerCache := filepath.Join(aiopsGoCacheRoot(), "build", "k")
+	primaryByName := map[string]string{"GOCACHE": workerCache}
+	seen := map[string]struct{}{"GOCACHE": {}} // allowlist loop already emitted it
+	env := carryWorkerInjectedGoCache([]string{"GOCACHE=" + workerCache}, primaryByName, seen)
+	if got := strings.Count(strings.Join(env, "\n"), "GOCACHE="); got != 1 {
+		t.Errorf("carryWorkerInjectedGoCache duplicated an already-seen GOCACHE; want 1 occurrence, got %d in %q", got, env)
+	}
+}
+
+// TestCarryWorkerInjectedGoCacheSkipsAbsentName pins that nothing is fabricated
+// when no Go cache name is present in primary (e.g. a non-codex runner path).
+func TestCarryWorkerInjectedGoCacheSkipsAbsentName(t *testing.T) {
+	t.Setenv("TMPDIR", "/sandbox-tmp")
+	env := carryWorkerInjectedGoCache(nil, map[string]string{"PATH": "/login"}, map[string]struct{}{})
+	if len(env) != 0 {
+		t.Errorf("carryWorkerInjectedGoCache fabricated env for absent Go cache names; got %q", env)
+	}
+}
+
+// TestSandboxEnvEmitsSingleGoCacheWhenAllowlistedAndWorkerInjected pins the
+// WIRING SEAM (clean-code rule 11), not just the leaf: sandboxEnv must share its
+// seen set between the allowlist loop and carryWorkerInjectedGoCache so a GOCACHE
+// that is BOTH allowlisted and worker-injected is emitted exactly once. The
+// helper-level dedup test stays green even if sandboxEnv drops its allowlist-loop
+// seen mark or hands carry a fresh map, so this drives the production wiring.
+func TestSandboxEnvEmitsSingleGoCacheWhenAllowlistedAndWorkerInjected(t *testing.T) {
+	t.Setenv("TMPDIR", "/sandbox-tmp")
+	workerCache := filepath.Join(aiopsGoCacheRoot(), "build", "k")
+	env := sandboxEnv([]string{"GOCACHE=" + workerCache}, []string{"GOCACHE"}, workflow.Config{})
+	if got := strings.Count(strings.Join(env, "\n"), "GOCACHE="); got != 1 {
+		t.Errorf("sandboxEnv emitted GOCACHE %d times; want exactly 1 (allowlisted + worker-injected must not duplicate): %q", got, env)
+	}
+}
+
 func TestWithSandboxGoToolchainCachesDefaults(t *testing.T) {
 	t.Setenv("TMPDIR", "/sandbox-tmp")
 	got := withSandboxGoToolchainCaches([]string{"PATH=/login"}, "/ws/issue-1")

@@ -123,6 +123,25 @@ func TestScopedEnvRejectsTrackerAPIKeyValue(t *testing.T) {
 	}
 }
 
+// TestAllowlistedEnvValueDeniesTrackerToken isolates the deny boundary in the
+// extracted resolver: a tracker token name resolves to nothing even when a
+// value is present in primary, so it can never cross into the sandbox.
+func TestAllowlistedEnvValueDeniesTrackerToken(t *testing.T) {
+	if value, ok := allowlistedEnvValue("GITHUB_TOKEN", map[string]string{"GITHUB_TOKEN": "from-primary"}, workflow.Config{}); ok {
+		t.Errorf("allowlistedEnvValue(GITHUB_TOKEN) = (%q, true); want denied", value)
+	}
+}
+
+// TestAllowlistedEnvValuePrefersPrimaryOverHost isolates the lookup order: a
+// worker-supplied (primary) value wins over the host environment.
+func TestAllowlistedEnvValuePrefersPrimaryOverHost(t *testing.T) {
+	t.Setenv("AIOPS_RUNNER_CANARY", "from-host")
+	value, ok := allowlistedEnvValue("AIOPS_RUNNER_CANARY", map[string]string{"AIOPS_RUNNER_CANARY": "from-primary"}, workflow.Config{})
+	if !ok || value != "from-primary" {
+		t.Errorf("allowlistedEnvValue(AIOPS_RUNNER_CANARY) = (%q, %v); want (from-primary, true)", value, ok)
+	}
+}
+
 func TestSandboxEnvTreatsAllowlistAsFinalBoundary(t *testing.T) {
 	t.Setenv("AIOPS_RUNNER_CANARY", "from-worker-env")
 	t.Setenv("AIOPS_SANDBOX_CANARY", "from-sandbox-allowlist")
