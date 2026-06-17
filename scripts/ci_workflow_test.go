@@ -1,6 +1,7 @@
 package scripts
 
 import (
+	"encoding/json"
 	"os"
 	"regexp"
 	"strings"
@@ -142,5 +143,34 @@ func TestCIDashboardBuildFeedsGoEmbedWithoutCommittedDist(t *testing.T) {
 	}
 	if strings.Contains(text, "git diff --exit-code -- cmd/worker/dashboard/dist") {
 		t.Fatal("CI workflow still diffs generated dashboard dist against git")
+	}
+}
+
+func TestReleasePleaseAlwaysUpdatesPendingReleasePRs(t *testing.T) {
+	configBody, err := os.ReadFile("../release-please-config.json")
+	if err != nil {
+		t.Fatalf("ReadFile(release-please-config.json): %v", err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(configBody, &config); err != nil {
+		t.Fatalf("json.Unmarshal(release-please-config.json): %v", err)
+	}
+	if got, ok := config["always-update"].(bool); !ok || !got {
+		t.Fatalf(`release-please-config.json "always-update" = %v (%T); want true`, config["always-update"], config["always-update"])
+	}
+
+	runbookBody, err := os.ReadFile("../docs/runbooks/ci.md")
+	if err != nil {
+		t.Fatalf("ReadFile(ci.md): %v", err)
+	}
+	runbook := strings.Join(strings.Fields(string(runbookBody)), " ")
+	for _, want := range []string{
+		`"always-update": true`,
+		"non-releasable",
+		"strict required status checks",
+	} {
+		if !strings.Contains(runbook, want) {
+			t.Fatalf("docs/runbooks/ci.md missing %q", want)
+		}
 	}
 }
