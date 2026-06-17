@@ -6,6 +6,7 @@ repo:
   clone_url: http://localhost:3000/aiops-bot/demo-scripted-agent.git
 tracker:
   kind: gitea
+  api_key: $AIOPS_TRACKER_SECRET
   active_states:
     - Todo
   terminal_states:
@@ -19,6 +20,12 @@ claude:
   # scripted-agent shell script (the script path is only known at test
   # runtime, so it cannot be checked in).
   command: __SCRIPTED_AGENT_COMMAND__
+hooks:
+  env_passthrough:
+    - EXTRA_BUILD_VAR
+    - AIOPS_TRACKER_SECRET
+  before_remove:
+    - printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET" > ../before-remove-env
 policy:
   mode: draft_pr
 verify:

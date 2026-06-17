@@ -276,6 +276,40 @@ func TestShellRunnerHonorsExplicitEnvPassthrough(t *testing.T) {
 	}
 }
 
+func TestShellRunnerRejectsTrackerAPIKeyValuePassthrough(t *testing.T) {
+	workdir := shellTestWorkdir(t)
+	t.Setenv("AIOPS_RUNNER_CANARY", "allowed-value")
+	t.Setenv("AIOPS_TRACKER_SECRET", "tracker-secret")
+
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Tracker:   workflow.TrackerConfig{APIKey: "tracker-secret"},
+		Claude: workflow.CommandConfig{
+			Command:        "env > shell-env.txt",
+			EnvPassthrough: []string{"AIOPS_RUNNER_CANARY", "AIOPS_TRACKER_SECRET"},
+		},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_shell_env_tracker_deny"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	body, err := os.ReadFile(filepath.Join(workdir, "shell-env.txt"))
+	if err != nil {
+		t.Fatalf("read shell-env.txt: %v", err)
+	}
+	if !strings.Contains(string(body), "AIOPS_RUNNER_CANARY=allowed-value") {
+		t.Fatalf("runner env missing explicit passthrough:\n%s", body)
+	}
+	if strings.Contains(string(body), "AIOPS_TRACKER_SECRET=") {
+		t.Fatalf("runner env leaked configured tracker API key value:\n%s", body)
+	}
+}
+
 func TestAgentEnvRejectsTrackerTokenPassthrough(t *testing.T) {
 	t.Setenv("AIOPS_RUNNER_CANARY", "allowed-value")
 	t.Setenv("LINEAR_API_KEY", "linear-secret")
@@ -328,6 +362,84 @@ func TestAgentEnvUsesLoginShellPATHSnapshot(t *testing.T) {
 	if strings.Contains(body, "PATH=/worker/path") {
 		t.Fatalf("agent env used raw worker PATH instead of login-shell snapshot:\n%s", body)
 	}
+}
+
+func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
+	cfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
+	}
+	lookupValues := map[string]string{
+		"PATH":                       "/worker/path",
+		"HOME":                       "/home/agent",
+		"USER":                       "agent-user",
+		"AIOPS_ALLOWED":              "allowed-value",
+		"AIOPS_DUPLICATE":            "duplicate-value",
+		"LINEAR_API_KEY":             "linear-secret",
+		"GITEA_TOKEN":                "gitea-secret",
+		"GITHUB_TOKEN":               "github-secret",
+		"AIOPS_CONFIGURED_TRACKER":   "configured-tracker-secret",
+		"AIOPS_UNRELATED_TRACKERISH": "not-the-configured-secret",
+	}
+	env := agentEnvWithLookup(
+		[]string{
+			"AIOPS_ALLOWED",
+			"LINEAR_API_KEY",
+			"GITEA_TOKEN",
+			"GITHUB_TOKEN",
+			"AIOPS_CONFIGURED_TRACKER",
+			"AIOPS_UNRELATED_TRACKERISH",
+			"AIOPS_DUPLICATE",
+			"AIOPS_DUPLICATE",
+			"BAD=NAME",
+			"",
+			"PATH",
+		},
+		cfg,
+		func(name string) (string, bool) {
+			value, ok := lookupValues[name]
+			return value, ok
+		},
+		func() string { return "/login/path" },
+	)
+
+	values, counts := envByName(env)
+	for _, tc := range []struct {
+		name      string
+		wantValue string
+	}{
+		{name: "PATH", wantValue: "/login/path"},
+		{name: "HOME", wantValue: "/home/agent"},
+		{name: "USER", wantValue: "agent-user"},
+		{name: "AIOPS_ALLOWED", wantValue: "allowed-value"},
+		{name: "AIOPS_DUPLICATE", wantValue: "duplicate-value"},
+		{name: "AIOPS_UNRELATED_TRACKERISH", wantValue: "not-the-configured-secret"},
+	} {
+		if values[tc.name] != tc.wantValue {
+			t.Fatalf("%s = %q, want %q in env %#v", tc.name, values[tc.name], tc.wantValue, env)
+		}
+		if counts[tc.name] != 1 {
+			t.Fatalf("%s appeared %d times, want 1 in env %#v", tc.name, counts[tc.name], env)
+		}
+	}
+	for _, denied := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "AIOPS_CONFIGURED_TRACKER", "BAD"} {
+		if counts[denied] != 0 {
+			t.Fatalf("denied env %s appeared %d times in env %#v", denied, counts[denied], env)
+		}
+	}
+}
+
+func envByName(env []string) (map[string]string, map[string]int) {
+	values := make(map[string]string, len(env))
+	counts := make(map[string]int, len(env))
+	for _, pair := range env {
+		name, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		values[name] = value
+		counts[name]++
+	}
+	return values, counts
 }
 
 func TestIsTimeoutNilAndOther(t *testing.T) {

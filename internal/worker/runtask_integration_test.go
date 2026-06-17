@@ -331,6 +331,82 @@ func TestRunTaskExecutesWorkspaceHooksAroundRunner(t *testing.T) {
 	}
 }
 
+func TestRunTaskWorkspaceHooksRejectTrackerAPIKeyValuePassthrough(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "task-tracker-secret")
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Tracker.APIKey = "task-tracker-secret"
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		AfterCreate:    workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("after_create")}},
+		BeforeRun:      workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("before_run")}},
+		AfterRun:       workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("after_run")}},
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
+	body, err := os.ReadFile(filepath.Join(workdir, "hook-env.log"))
+	if err != nil {
+		t.Fatalf("read hook-env.log: %v", err)
+	}
+	got := string(body)
+	for _, want := range []string{
+		"after_create:<let-me-in><>\n",
+		"before_run:<let-me-in><>\n",
+		"after_run:<let-me-in><>\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hook env log missing %q; got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "task-tracker-secret") {
+		t.Fatalf("hook env leaked configured tracker API key value:\n%s", got)
+	}
+}
+
+func TestRunTaskWorkspaceHooksRejectTrackerAPIKeySourceEnvPassthrough(t *testing.T) {
+	workflowBody := strings.Replace(linearWorkflowBody, "  project_slug: platform\n", "  project_slug: platform\n  api_key: $AIOPS_TRACKER_SECRET\n", 1)
+	if workflowBody == linearWorkflowBody {
+		t.Fatal("test workflow fixture no longer contains tracker project_slug insertion point")
+	}
+	t.Setenv("AIOPS_TRACKER_SECRET", "loaded-tracker-secret")
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, workflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegrationWithWorkflow(t, workflowBody)
+	t.Setenv("AIOPS_TRACKER_SECRET", "rotated-tracker-secret")
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		BeforeRun:      workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("before_run_source_env")}},
+	}
+
+	if rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg); rterr != nil {
+		t.Fatalf("runTask: %v", rterr.Err)
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
+	body, err := os.ReadFile(filepath.Join(workdir, "hook-env.log"))
+	if err != nil {
+		t.Fatalf("read hook-env.log: %v", err)
+	}
+	if got := string(body); got != "before_run_source_env:<let-me-in><>\n" {
+		t.Fatalf("hook env log = %q, want tracker source env slot empty after env value rotation", got)
+	}
+}
+
+func hookEnvLogCommand(hook string) string {
+	return fmt.Sprintf("printf '%s:<%%s><%%s>\\n' \"$EXTRA_BUILD_VAR\" \"$AIOPS_TRACKER_SECRET\" >> hook-env.log", hook)
+}
+
 // The worker RUN_SUMMARY.md gate was removed under #561 (it ran after the agent
 // had already pushed, so it could only flag — never prevent — and it raced
 // reconcile-cancel like the verify gate did in #557). The characterization test
@@ -627,14 +703,18 @@ func TestRunTaskDoesNotExecuteAfterRunHookWhenRunnerSetupFails(t *testing.T) {
 func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
 	t.Setenv("REPO_URL", cloneURL)
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "cleanup-tracker-secret")
 
 	ev := &fakeEmitter{}
 	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Tracker.APIKey = "cleanup-tracker-secret"
 	marker := filepath.Join(cfg.WorkspaceRoot, "before-remove.marker")
 	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
-		AfterCreate: workflow.WorkspaceHook{Commands: []string{"printf after_create > hook.log", "exit 7"}},
+		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		AfterCreate:    workflow.WorkspaceHook{Commands: []string{"printf after_create > hook.log", "exit 7"}},
 		BeforeRemove: workflow.WorkspaceHook{Commands: []string{
-			"test -d . && printf before_remove > " + shellQuoteForTest(marker),
+			`test -d . && printf '<%s><%s>' "$EXTRA_BUILD_VAR" "$AIOPS_TRACKER_SECRET" > ` + shellQuoteForTest(marker),
 		}},
 	}
 
@@ -647,8 +727,8 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
 		t.Fatalf("workdir stat err = %v, want removed after after_create failure", err)
 	}
-	if body, err := os.ReadFile(marker); err != nil || string(body) != "before_remove" {
-		t.Fatalf("before_remove marker = %q, %v; want hook to run before removing failed workspace", body, err)
+	if body, err := os.ReadFile(marker); err != nil || string(body) != "<let-me-in><>" {
+		t.Fatalf("before_remove marker = %q, %v; want hook to run before removing failed workspace without tracker secret", body, err)
 	}
 	var beforeRemoveStarts int
 	for _, e := range ev.byKind(task.EventWorkspaceHookStart) {
@@ -662,6 +742,37 @@ func TestRunTaskRunsBeforeRemoveHookWhenAfterCreateFails(t *testing.T) {
 	}
 	if beforeRemoveStarts != 1 {
 		t.Fatalf("before_remove hook starts = %d, want 1; events=%#v", beforeRemoveStarts, ev.events)
+	}
+}
+
+func TestRunTaskAfterRunHookRejectsTrackerAPIKeyValuePassthroughOnRunnerFailure(t *testing.T) {
+	cloneURL, tk := initBareUpstreamWithWorkflow(t, linearWorkflowBody)
+	t.Setenv("REPO_URL", cloneURL)
+	t.Setenv("EXTRA_BUILD_VAR", "let-me-in")
+	t.Setenv("AIOPS_TRACKER_SECRET", "runner-failure-tracker-secret")
+	tk.Model = "claude"
+
+	ev := &fakeEmitter{}
+	cfg := workerCfgForIntegration(t)
+	cfg.Workflow.Config.Tracker.APIKey = "runner-failure-tracker-secret"
+	cfg.Workflow.Config.Claude.Command = "exit 3"
+	cfg.Workflow.Config.Hooks = workflow.WorkspaceHooks{
+		EnvPassthrough: []string{"EXTRA_BUILD_VAR", "AIOPS_TRACKER_SECRET"},
+		AfterRun:       workflow.WorkspaceHook{Commands: []string{hookEnvLogCommand("after_run_failure")}},
+	}
+
+	rterr := worker.RunTaskForTest(context.Background(), ev, tk, cfg)
+	if rterr == nil {
+		t.Fatal("runTask succeeded, want runner failure")
+	}
+
+	workdir := filepath.Join(cfg.WorkspaceRoot, "acme", "demo", "linear_issue", "issue-uuid")
+	body, err := os.ReadFile(filepath.Join(workdir, "hook-env.log"))
+	if err != nil {
+		t.Fatalf("read hook-env.log: %v", err)
+	}
+	if got := string(body); got != "after_run_failure:<let-me-in><>\n" {
+		t.Fatalf("after_run hook env log = %q, want tracker secret slot empty", got)
 	}
 }
 

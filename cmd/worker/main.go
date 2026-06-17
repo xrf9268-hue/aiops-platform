@@ -348,6 +348,7 @@ func startupReconcileConfigForWorkflow(cfg workflow.Config, trackerClient worker
 		Tracker:            trackerClient,
 		Emitter:            worker.LogEventEmitter{},
 		ReconcileTaskID:    "reconcile-startup",
+		WorkflowConfig:     cfg,
 		BeforeRemoveHook:   hooks.BeforeRemove,
 		HookTimeoutMillis:  hooks.TimeoutMs,
 		HookEnvPassthrough: hooks.EnvPassthrough,

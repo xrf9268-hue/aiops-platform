@@ -135,9 +135,10 @@ The current Go implementation provides these safety controls:
   in the worker's `.env` are excluded — a malicious or buggy WORKFLOW.md cannot
   `env > /tmp/dump` and exfiltrate them. Operators opt non-tracker vars back in
   per workflow with `codex.env_passthrough`, `claude.env_passthrough`, or
-  `hooks.env_passthrough`; agent passthrough
-  rejects tracker/repo API token names so those credentials stay behind
-  orchestrator-owned tools. See
+  `hooks.env_passthrough`; agent and hook passthrough reject tracker/repo API
+  token names, the configured `tracker.api_key` env-var name, and env vars
+  whose current value equals the configured `tracker.api_key`, so those
+  credentials stay behind orchestrator-owned tools. See
   [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
 - allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
   `turn/completed` protocol payloads: returned error strings and

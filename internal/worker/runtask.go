@@ -115,7 +115,7 @@ func emitHookResults(ctx context.Context, ev EventEmitter, taskID, identifier st
 	}
 }
 
-func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string) error {
+func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, workdir string, name workspace.HookName, hook workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, cfg workflow.Config) error {
 	if len(hook.Commands) == 0 {
 		return nil
 	}
@@ -124,13 +124,13 @@ func runWorkspaceHook(ctx context.Context, ev EventEmitter, taskID, identifier, 
 		"commands":   len(hook.Commands),
 		"timeout_ms": timeoutMs,
 	})
-	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs, envPassthrough)
+	results, err := workspace.RunWorkspaceHook(ctx, workdir, name, hook, timeoutMs, envPassthrough, cfg)
 	emitHookResults(ctx, ev, taskID, identifier, results)
 	return err
 }
 
-func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, identifier, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, reason string) {
-	if err := runWorkspaceHook(ctx, ev, taskID, identifier, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough); err != nil {
+func removeWorkdirAfterHookFailure(ctx context.Context, ev EventEmitter, taskID, identifier, workspaceRoot, workdir string, beforeRemove workflow.WorkspaceHook, timeoutMs int, envPassthrough []string, cfg workflow.Config, reason string) {
+	if err := runWorkspaceHook(ctx, ev, taskID, identifier, workdir, workspace.HookBeforeRemove, beforeRemove, timeoutMs, envPassthrough, cfg); err != nil {
 		LogTaskIDEventf(taskID, identifier, "before_remove_hook_failed", "reason=%s error=%q", reason, err)
 	}
 	if err := workspace.SafeRemove(workspaceRoot, workdir); err != nil {
@@ -243,8 +243,8 @@ func (rs *runState) prepareWorkspace() *RunTaskError {
 		// is newly created. Reuses skip it so bootstrap commands
 		// (`npm ci`, `pip install`, …) remain the one-time init they're
 		// documented as.
-		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterCreate, rs.hooks.AfterCreate, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
-			removeWorkdirAfterHookFailure(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workspaceRoot, rs.workdir, rs.hooks.BeforeRemove, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, "after_create")
+		if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterCreate, rs.hooks.AfterCreate, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, rs.wcfg); err != nil {
+			removeWorkdirAfterHookFailure(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workspaceRoot, rs.workdir, rs.hooks.BeforeRemove, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, rs.wcfg, "after_create")
 			rs.releaseWorkspaceOwnership()
 			return &RunTaskError{Cfg: rs.wcfg, Err: err}
 		}
@@ -333,7 +333,7 @@ func (rs *runState) runAgent() *RunTaskError {
 		return rtErr
 	}
 
-	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookBeforeRun, rs.hooks.BeforeRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookBeforeRun, rs.hooks.BeforeRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, rs.wcfg); err != nil {
 		return &RunTaskError{Cfg: rs.wcfg, Err: err}
 	}
 
@@ -362,7 +362,7 @@ func (rs *runState) runAgent() *RunTaskError {
 		return rs.handleRunnerFailure(runErr)
 	}
 
-	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, rs.wcfg); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "error=%q", err)
 	}
 	return nil
@@ -379,7 +379,7 @@ func (rs *runState) runAgent() *RunTaskError {
 // `worker --doctor` (#542) is the preventive layer that catches the host
 // misconfiguration before dispatch.
 func (rs *runState) handleRunnerFailure(runErr error) *RunTaskError {
-	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough); err != nil {
+	if err := runWorkspaceHook(rs.ctx, rs.ev, rs.t.ID, rs.t.SourceEventID, rs.workdir, workspace.HookAfterRun, rs.hooks.AfterRun, rs.hooks.TimeoutMs, rs.hooks.EnvPassthrough, rs.wcfg); err != nil {
 		LogIssueSessionEventf(rs.t, rs.sessionID, "after_run_hook_failed", "after_runner_error=true error=%q", err)
 	}
 	return &RunTaskError{Cfg: rs.wcfg, Err: runErr}

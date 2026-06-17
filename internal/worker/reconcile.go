@@ -36,6 +36,7 @@ type ReconcileConfig struct {
 	Tracker            ReconcileTracker
 	Emitter            EventEmitter
 	ReconcileTaskID    string
+	WorkflowConfig     workflow.Config
 	BeforeRemoveHook   workflow.WorkspaceHook
 	HookTimeoutMillis  int
 	HookEnvPassthrough []string
@@ -385,6 +386,7 @@ func removeWorkspace(ctx context.Context, cfg ReconcileConfig, taskID, path stri
 		Identifier:         issue.Identifier,
 		State:              issue.State,
 		Reason:             reason,
+		WorkflowConfig:     cfg.WorkflowConfig,
 		BeforeRemoveHook:   cfg.BeforeRemoveHook,
 		HookTimeoutMillis:  cfg.HookTimeoutMillis,
 		HookEnvPassthrough: cfg.HookEnvPassthrough,
@@ -402,6 +404,7 @@ type RemoveWorkspaceRequest struct {
 	Identifier         string
 	State              string
 	Reason             string
+	WorkflowConfig     workflow.Config
 	BeforeRemoveHook   workflow.WorkspaceHook
 	HookTimeoutMillis  int
 	HookEnvPassthrough []string
@@ -417,7 +420,7 @@ type RemoveWorkspaceRequest struct {
 // upstream Workspace.remove_issue_workspaces, which both paths also share.
 // It returns true when the directory was removed.
 func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorkspaceRequest) (bool, error) {
-	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough); err != nil {
+	if err := runWorkspaceHook(ctx, ev, req.TaskID, req.Identifier, req.Path, workspace.HookBeforeRemove, req.BeforeRemoveHook, req.HookTimeoutMillis, req.HookEnvPassthrough, req.WorkflowConfig); err != nil {
 		log.Printf("event=before_remove_hook_failed task_id=%s issue_id=%s issue_identifier=%s reason=%s workspace=%q error=%q", req.TaskID, req.IssueID, req.Identifier, req.Reason, req.Path, err)
 	}
 	if err := workspace.SafeRemove(req.WorkspaceRoot, req.Path); err != nil {
