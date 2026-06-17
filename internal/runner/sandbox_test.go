@@ -35,6 +35,15 @@ func requireLinuxSandboxHost(t *testing.T) {
 	}
 }
 
+func writeSandboxStub(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write %s stub: %v", name, err)
+	}
+	return path
+}
+
 func TestSandboxDisabledLeavesCommandUnwrappedAndEnvironmentInherited(t *testing.T) {
 	base := exec.CommandContext(context.Background(), "codex", "exec")
 	base.Dir = t.TempDir()
@@ -49,6 +58,109 @@ func TestSandboxDisabledLeavesCommandUnwrappedAndEnvironmentInherited(t *testing
 	}
 	if wrapped.Env != nil {
 		t.Fatalf("disabled sandbox should not scope environment, got %q", wrapped.Env)
+	}
+}
+
+func TestApplySandboxPreconditionTable(t *testing.T) {
+	requireLinuxSandboxHost(t)
+	root := t.TempDir()
+	workdir := filepath.Join(root, "issue-123")
+	if err := os.Mkdir(workdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		in       RunInput
+		cmd      *exec.Cmd
+		wantErr  string
+		wantSame bool
+	}{
+		{
+			name: "disabled sandbox returns original command",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Workspace: workflow.WorkspaceConfig{Root: root},
+				Sandbox:   workflow.SandboxConfig{},
+			}}, Workdir: workdir},
+			cmd:      exec.CommandContext(context.Background(), "codex", "exec"),
+			wantSame: true,
+		},
+		{
+			name: "allowlist requires firejail backend",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Workspace: workflow.WorkspaceConfig{Root: root},
+				Sandbox: workflow.SandboxConfig{
+					Enabled:               true,
+					Backend:               "bubblewrap",
+					NetworkMode:           "allowlist",
+					NetworkAllowlistCIDRs: []string{"203.0.113.10/32"},
+				},
+			}}, Workdir: workdir},
+			cmd:     exec.CommandContext(context.Background(), "codex", "exec"),
+			wantErr: "sandbox.backend firejail",
+		},
+		{
+			name: "allowlist requires cidrs",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Workspace: workflow.WorkspaceConfig{Root: root},
+				Sandbox: workflow.SandboxConfig{
+					Enabled:     true,
+					Backend:     "firejail",
+					NetworkMode: "allowlist",
+				},
+			}}, Workdir: workdir},
+			cmd:     exec.CommandContext(context.Background(), "codex", "exec"),
+			wantErr: "sandbox.network_allowlist_cidrs",
+		},
+		{
+			name: "missing workspace root rejected before wrapping",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Sandbox: workflow.SandboxConfig{Enabled: true, Backend: "bubblewrap"},
+			}}, Workdir: workdir},
+			cmd:     exec.CommandContext(context.Background(), "codex", "exec"),
+			wantErr: "runtime workspace root",
+		},
+		{
+			name: "empty command rejected",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Workspace: workflow.WorkspaceConfig{Root: root},
+				Sandbox:   workflow.SandboxConfig{Enabled: true, Backend: "bubblewrap"},
+			}}, Workdir: workdir},
+			cmd:     &exec.Cmd{},
+			wantErr: "cannot wrap empty command",
+		},
+		{
+			name: "unsupported backend rejected",
+			in: RunInput{Workflow: workflow.Workflow{Config: workflow.Config{
+				Workspace: workflow.WorkspaceConfig{Root: root},
+				Sandbox:   workflow.SandboxConfig{Enabled: true, Backend: "nsjail"},
+			}}, Workdir: workdir},
+			cmd:     exec.CommandContext(context.Background(), "codex", "exec"),
+			wantErr: "not supported",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.cmd != nil {
+				tt.cmd.Dir = tt.in.Workdir
+			}
+			wrapped, err := applySandbox(context.Background(), tt.in, tt.cmd)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("applySandbox() = nil error; want substring %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("applySandbox() error = %q; want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applySandbox() error = %v; want nil", err)
+			}
+			if tt.wantSame && wrapped != tt.cmd {
+				t.Fatalf("applySandbox() returned %p; want original command %p", wrapped, tt.cmd)
+			}
+		})
 	}
 }
 
@@ -226,6 +338,127 @@ func envContains(env []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestBubblewrapCommandContractTable(t *testing.T) {
+	binDir := t.TempDir()
+	writeSandboxStub(t, binDir, "bwrap")
+	codex := writeSandboxStub(t, binDir, "codex")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	workdir := t.TempDir()
+	credential := filepath.Join(t.TempDir(), "credential")
+	if err := os.WriteFile(credential, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name            string
+		cfg             workflow.SandboxConfig
+		childArgs       []string
+		env             []string
+		wantErr         string
+		wantUnshareNet  bool
+		wantCredential  bool
+		wantSetenv      bool
+		wantResolvedCmd bool
+	}{
+		{
+			name: "network none unshares network and mounts credentials read-only",
+			cfg: workflow.SandboxConfig{
+				NetworkMode:     "none",
+				CredentialFiles: []string{credential},
+			},
+			childArgs:       []string{"codex", "exec"},
+			env:             []string{"AIOPS_RUN_TOKEN=allowed"},
+			wantUnshareNet:  true,
+			wantCredential:  true,
+			wantSetenv:      true,
+			wantResolvedCmd: true,
+		},
+		{
+			name:            "default network mode is closed",
+			cfg:             workflow.SandboxConfig{},
+			childArgs:       []string{"codex", "exec"},
+			wantUnshareNet:  true,
+			wantResolvedCmd: true,
+		},
+		{
+			name:      "allowlist network rejected for bubblewrap",
+			cfg:       workflow.SandboxConfig{NetworkMode: "allowlist"},
+			childArgs: []string{"codex", "exec"},
+			wantErr:   "firejail --netfilter",
+		},
+		{
+			name:      "empty child command rejected",
+			cfg:       workflow.SandboxConfig{},
+			childArgs: nil,
+			wantErr:   "cannot wrap empty command",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped, err := bubblewrapCommand(context.Background(), tt.cfg, workdir, tt.childArgs, tt.env)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("bubblewrapCommand() = nil error; want substring %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("bubblewrapCommand() error = %q; want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("bubblewrapCommand() error = %v; want nil", err)
+			}
+			if filepath.Base(wrapped.Path) != "bwrap" {
+				t.Fatalf("wrapped.Path = %q, want bwrap", wrapped.Path)
+			}
+			if wrapped.Dir != workdir {
+				t.Fatalf("wrapped.Dir = %q, want %q", wrapped.Dir, workdir)
+			}
+			if !reflect.DeepEqual(wrapped.Env, tt.env) {
+				t.Fatalf("wrapped.Env = %#v, want %#v", wrapped.Env, tt.env)
+			}
+			if tt.wantUnshareNet && !sandboxArgsContainSequence(wrapped.Args, "--unshare-net") {
+				t.Fatalf("bubblewrap args missing --unshare-net: %#v", wrapped.Args)
+			}
+			if tt.wantCredential && !sandboxArgsContainSequence(wrapped.Args, "--ro-bind", credential, credential) {
+				t.Fatalf("bubblewrap args missing credential read-only bind for %q: %#v", credential, wrapped.Args)
+			}
+			if tt.wantSetenv && !sandboxArgsContainSequence(wrapped.Args, "--setenv", "AIOPS_RUN_TOKEN", "allowed") {
+				t.Fatalf("bubblewrap args missing setenv pair: %#v", wrapped.Args)
+			}
+			child := sandboxArgsAfterSeparator(wrapped.Args)
+			if tt.wantResolvedCmd && (len(child) == 0 || child[0] != codex) {
+				t.Fatalf("bubblewrap child args = %#v, want first arg resolved to %q", child, codex)
+			}
+		})
+	}
+}
+
+func sandboxArgsContainSequence(args []string, want ...string) bool {
+	for i := 0; i+len(want) <= len(args); i++ {
+		matched := true
+		for j, part := range want {
+			if args[i+j] != part {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+func sandboxArgsAfterSeparator(args []string) []string {
+	for i, arg := range args {
+		if arg == "--" {
+			return args[i+1:]
+		}
+	}
+	return nil
 }
 
 func TestSandboxBubblewrapSkipsMissingLib64Bind(t *testing.T) {
@@ -706,6 +939,118 @@ func TestFirejailNetfilterAcceptsIPv4CIDR(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "-A OUTPUT -d 203.0.113.10/32 -j ACCEPT") {
 		t.Fatalf("netfilter file missing IPv4 allow rule: %s", content)
+	}
+}
+
+func TestFirejailNetfilterRulesTable(t *testing.T) {
+	tests := []struct {
+		name      string
+		cidrs     []string
+		wantRules []string
+		wantErr   string
+	}{
+		{
+			name:      "multiple ipv4 cidrs become explicit output allow rules",
+			cidrs:     []string{" 203.0.113.10/32 ", "198.51.100.0/24"},
+			wantRules: []string{"-A OUTPUT -d 203.0.113.10/32 -j ACCEPT", "-A OUTPUT -d 198.51.100.0/24 -j ACCEPT"},
+		},
+		{
+			name:    "empty cidr list rejected",
+			cidrs:   nil,
+			wantErr: "at least one CIDR",
+		},
+		{
+			name:    "invalid cidr rejected with value",
+			cidrs:   []string{"not-a-cidr"},
+			wantErr: "not-a-cidr",
+		},
+		{
+			name:    "ipv6 cidr rejected",
+			cidrs:   []string{"2001:db8::/32"},
+			wantErr: "IPv6",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, err := writeFirejailNetfilter(tt.cidrs)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("writeFirejailNetfilter(%q) = nil error; want substring %q", tt.cidrs, tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("writeFirejailNetfilter(%q) error = %q; want substring %q", tt.cidrs, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("writeFirejailNetfilter(%q): %v", tt.cidrs, err)
+			}
+			defer func() { _ = os.Remove(path) }()
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+			body := string(content)
+			if !strings.HasPrefix(body, "*filter\n:OUTPUT DROP [0:0]\n") || !strings.HasSuffix(body, "COMMIT\n") {
+				t.Fatalf("netfilter file = %q; want DROP policy header and COMMIT footer", body)
+			}
+			for _, want := range tt.wantRules {
+				if !strings.Contains(body, want) {
+					t.Fatalf("netfilter file missing %q: %s", want, body)
+				}
+			}
+		})
+	}
+}
+
+func TestWireFirejailCleanupContractTable(t *testing.T) {
+	tests := []struct {
+		name         string
+		cleanupFiles []string
+		wantShell    bool
+		wantErr      string
+	}{
+		{name: "no cleanup files runs firejail directly"},
+		{name: "one cleanup file wraps firejail with cancel and wait delay", cleanupFiles: []string{filepath.Join(t.TempDir(), "netfilter.conf")}, wantShell: true},
+		{name: "multiple cleanup files rejected", cleanupFiles: []string{"one", "two"}, wantErr: "expected one cleanup file"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped, err := wireFirejailCleanup(context.Background(), "/bin/firejail", []string{"--quiet", "--"}, tt.cleanupFiles)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("wireFirejailCleanup() = nil error; want substring %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("wireFirejailCleanup() error = %q; want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("wireFirejailCleanup(): %v", err)
+			}
+			if tt.wantShell {
+				if wrapped.Path != "/bin/sh" {
+					t.Fatalf("cleanup wrapper path = %q, want /bin/sh", wrapped.Path)
+				}
+				if wrapped.Cancel == nil {
+					t.Fatal("cleanup wrapper must install Cancel cleanup hook")
+				}
+				if wrapped.WaitDelay != 1 {
+					t.Fatalf("cleanup wrapper WaitDelay = %v, want 1", wrapped.WaitDelay)
+				}
+				if !sandboxArgsContainSequence(wrapped.Args, "aiops-firejail-cleanup", tt.cleanupFiles[0], "/bin/firejail") {
+					t.Fatalf("cleanup wrapper args missing cleanup file and firejail command: %#v", wrapped.Args)
+				}
+				return
+			}
+			if wrapped.Path != "/bin/firejail" {
+				t.Fatalf("direct firejail path = %q, want /bin/firejail", wrapped.Path)
+			}
+			if wrapped.WaitDelay != 0 {
+				t.Fatalf("direct firejail WaitDelay = %v, want 0 without cleanup wrapper", wrapped.WaitDelay)
+			}
+		})
 	}
 }
 

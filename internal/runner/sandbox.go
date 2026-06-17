@@ -13,44 +13,21 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, error) { //nolint:gocognit // baseline (#521)
+func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, error) {
 	cfg := in.Workflow.Config.Sandbox
-	if !cfg.Enabled || cfg.Backend == "" || cfg.Backend == "none" {
+	if !sandboxActive(cfg) {
 		return cmd, nil
 	}
-	if runtime.GOOS != "linux" {
-		return nil, fmt.Errorf("sandbox.backend %q requires linux host OS; current host OS is %s", cfg.Backend, runtime.GOOS)
-	}
-	if cfg.NetworkMode == "allowlist" {
-		if cfg.Backend != "firejail" {
-			return nil, fmt.Errorf("sandbox network allowlist requires sandbox.backend firejail")
-		}
-		if len(cfg.NetworkAllowlistCIDRs) == 0 {
-			return nil, fmt.Errorf("sandbox.network=allowlist requires sandbox.network_allowlist_cidrs")
-		}
-	}
-	workdir, err := filepath.Abs(in.Workdir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve sandbox workdir: %w", err)
-	}
-	root := strings.TrimSpace(in.WorkspaceRoot)
-	if root == "" {
-		root = strings.TrimSpace(in.Workflow.Config.Workspace.Root)
-	}
-	if root == "" {
-		return nil, fmt.Errorf("sandbox requires runtime workspace root so the workspace-root invariant can be enforced")
-	}
-	rootAbs, err := filepath.Abs(root)
-	if err != nil {
-		return nil, fmt.Errorf("resolve runtime workspace root: %w", err)
-	}
-	if err := ensurePathWithinRoot(workdir, rootAbs); err != nil {
+	if err := validateSandboxRuntimeConfig(cfg); err != nil {
 		return nil, err
 	}
-
-	childArgs := append([]string{}, cmd.Args...)
-	if len(childArgs) == 0 {
-		return nil, fmt.Errorf("sandbox cannot wrap empty command")
+	workdir, err := sandboxWorkdirForInput(in)
+	if err != nil {
+		return nil, err
+	}
+	childArgs, err := sandboxChildArgs(cmd)
+	if err != nil {
+		return nil, err
 	}
 	env := sandboxEnv(cmd.Env, cfg.EnvAllowlist, in.Workflow.Config)
 
@@ -62,6 +39,55 @@ func applySandbox(ctx context.Context, in RunInput, cmd *exec.Cmd) (*exec.Cmd, e
 	default:
 		return nil, fmt.Errorf("sandbox.backend %q is not supported (allowed: none, bubblewrap, firejail)", cfg.Backend)
 	}
+}
+
+func sandboxActive(cfg workflow.SandboxConfig) bool {
+	return cfg.Enabled && cfg.Backend != "" && cfg.Backend != "none"
+}
+
+func validateSandboxRuntimeConfig(cfg workflow.SandboxConfig) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("sandbox.backend %q requires linux host OS; current host OS is %s", cfg.Backend, runtime.GOOS)
+	}
+	if cfg.NetworkMode == "allowlist" {
+		if cfg.Backend != "firejail" {
+			return fmt.Errorf("sandbox network allowlist requires sandbox.backend firejail")
+		}
+		if len(cfg.NetworkAllowlistCIDRs) == 0 {
+			return fmt.Errorf("sandbox.network=allowlist requires sandbox.network_allowlist_cidrs")
+		}
+	}
+	return nil
+}
+
+func sandboxWorkdirForInput(in RunInput) (string, error) {
+	workdir, err := filepath.Abs(in.Workdir)
+	if err != nil {
+		return "", fmt.Errorf("resolve sandbox workdir: %w", err)
+	}
+	root := strings.TrimSpace(in.WorkspaceRoot)
+	if root == "" {
+		root = strings.TrimSpace(in.Workflow.Config.Workspace.Root)
+	}
+	if root == "" {
+		return "", fmt.Errorf("sandbox requires runtime workspace root so the workspace-root invariant can be enforced")
+	}
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve runtime workspace root: %w", err)
+	}
+	if err := ensurePathWithinRoot(workdir, rootAbs); err != nil {
+		return "", err
+	}
+	return workdir, nil
+}
+
+func sandboxChildArgs(cmd *exec.Cmd) ([]string, error) {
+	childArgs := append([]string{}, cmd.Args...)
+	if len(childArgs) == 0 {
+		return nil, fmt.Errorf("sandbox cannot wrap empty command")
+	}
+	return childArgs, nil
 }
 
 func ensurePathWithinRoot(path, root string) error {
@@ -177,7 +203,7 @@ func carryWorkerInjectedGoCache(env []string, primaryByName map[string]string, s
 	return env
 }
 
-func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) { //nolint:gocognit // baseline (#521)
+func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) {
 	bwrap, err := exec.LookPath("bwrap")
 	if err != nil {
 		return nil, fmt.Errorf("bubblewrap sandbox requested but bwrap binary not found in PATH: %w", err)
@@ -189,7 +215,27 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 	if cfg.NetworkMode == "allowlist" {
 		return nil, fmt.Errorf("sandbox network allowlist requires firejail --netfilter support; bubblewrap only supports network: none via --unshare-net")
 	}
-	args := []string{
+	args := bubblewrapBaseArgs(workdir)
+	args, err = appendOptionalBubblewrapLib64(args)
+	if err != nil {
+		return nil, err
+	}
+	args = appendBubblewrapNetworkArgs(args, cfg)
+	args = appendBubblewrapEnvArgs(args, env)
+	args, err = appendCredentialMounts(args, cfg.CredentialFiles, bubblewrapCredentialMount)
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, "--")
+	args = append(args, childArgs...)
+	wrapped := exec.CommandContext(ctx, bwrap, args...)
+	wrapped.Dir = workdir
+	wrapped.Env = env
+	return wrapped, nil
+}
+
+func bubblewrapBaseArgs(workdir string) []string {
+	return []string{
 		"--die-with-parent",
 		"--new-session",
 		"--unshare-pid",
@@ -204,28 +250,30 @@ func bubblewrapCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir 
 		"--bind", workdir, workdir,
 		"--chdir", workdir,
 	}
+}
+
+func appendOptionalBubblewrapLib64(args []string) ([]string, error) {
 	if _, err := os.Stat("/lib64"); err == nil {
 		args = append(args, "--ro-bind", "/lib64", "/lib64")
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("check optional bubblewrap /lib64 bind source: %w", err)
 	}
+	return args, nil
+}
+
+func appendBubblewrapNetworkArgs(args []string, cfg workflow.SandboxConfig) []string {
 	if cfg.NetworkMode == "none" || cfg.NetworkMode == "" {
 		args = append(args, "--unshare-net")
 	}
+	return args
+}
+
+func appendBubblewrapEnvArgs(args []string, env []string) []string {
 	for _, envPair := range env {
 		name, value, _ := strings.Cut(envPair, "=")
 		args = append(args, "--setenv", name, value)
 	}
-	args, err = appendCredentialMounts(args, cfg.CredentialFiles, bubblewrapCredentialMount)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, "--")
-	args = append(args, childArgs...)
-	wrapped := exec.CommandContext(ctx, bwrap, args...)
-	wrapped.Dir = workdir
-	wrapped.Env = env
-	return wrapped, nil
+	return args
 }
 
 func firejailCommand(ctx context.Context, cfg workflow.SandboxConfig, workdir string, childArgs []string, env []string) (*exec.Cmd, error) {
@@ -368,34 +416,53 @@ func firejailAllowlistNetArg(cfg workflow.SandboxConfig) (string, error) {
 	return "--net=" + iface, nil
 }
 
-func writeFirejailNetfilter(cidrs []string) (string, error) { //nolint:gocognit // baseline (#521)
+func writeFirejailNetfilter(cidrs []string) (string, error) {
+	body, err := firejailNetfilterContent(cidrs)
+	if err != nil {
+		return "", err
+	}
+	return writeFirejailNetfilterFile(body)
+}
+
+func firejailNetfilterContent(cidrs []string) (string, error) {
 	if len(cidrs) == 0 {
 		return "", fmt.Errorf("sandbox network allowlist requires at least one CIDR")
 	}
 	var b strings.Builder
 	b.WriteString("*filter\n:OUTPUT DROP [0:0]\n")
 	for _, cidr := range cidrs {
-		cidr = strings.TrimSpace(cidr)
-		if cidr == "" {
-			continue
+		if err := appendFirejailNetfilterRule(&b, cidr); err != nil {
+			return "", err
 		}
-		ip, parsed, err := net.ParseCIDR(cidr)
-		if err != nil {
-			return "", fmt.Errorf("sandbox network allowlist contains invalid CIDR %q: %w", cidr, err)
-		}
-		if ip.To4() == nil {
-			return "", fmt.Errorf("sandbox network allowlist CIDR %q is IPv6; Firejail --netfilter supports IPv4 rules only", cidr)
-		}
-		b.WriteString("-A OUTPUT -d ")
-		b.WriteString(parsed.String())
-		b.WriteString(" -j ACCEPT\n")
 	}
 	b.WriteString("COMMIT\n")
+	return b.String(), nil
+}
+
+func appendFirejailNetfilterRule(b *strings.Builder, cidr string) error {
+	cidr = strings.TrimSpace(cidr)
+	if cidr == "" {
+		return nil
+	}
+	ip, parsed, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return fmt.Errorf("sandbox network allowlist contains invalid CIDR %q: %w", cidr, err)
+	}
+	if ip.To4() == nil {
+		return fmt.Errorf("sandbox network allowlist CIDR %q is IPv6; Firejail --netfilter supports IPv4 rules only", cidr)
+	}
+	b.WriteString("-A OUTPUT -d ")
+	b.WriteString(parsed.String())
+	b.WriteString(" -j ACCEPT\n")
+	return nil
+}
+
+func writeFirejailNetfilterFile(body string) (string, error) {
 	f, err := os.CreateTemp("", "aiops-firejail-netfilter-*.conf")
 	if err != nil {
 		return "", fmt.Errorf("create firejail netfilter allowlist: %w", err)
 	}
-	if _, err := f.WriteString(b.String()); err != nil {
+	if _, err := f.WriteString(body); err != nil {
 		_ = f.Close()
 		return "", fmt.Errorf("write firejail netfilter allowlist: %w", err)
 	}
