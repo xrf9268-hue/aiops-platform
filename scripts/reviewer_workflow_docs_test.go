@@ -16,10 +16,11 @@ func TestReviewerProtocolDocumentsSubagentDiscoveryBeforeCLIFallback(t *testing.
 		"tool_search",
 		"spawn_agent",
 		"before CLI fallback",
-		"current user request explicitly authorizes subagent delegation and the tool contract allows spawning for that request",
-		"workflow prompt or runbook instruction alone is not sufficient authorization",
-		"If subagent use is not authorized",
-		"do not spawn",
+		"tool contract exposes a default-on reviewer path",
+		"If Codex inline exposes `spawn_agent` only behind an explicit current-request subagent/delegation precondition",
+		"record the contract-blocked fallback",
+		"use the bounded CLI fallback",
+		"Record the agent id/verdict",
 		"Do not recursively spawn reviewers unless the parent task explicitly asks",
 		"no authorized and appropriate Codex-family subagent path is available",
 		"codex exec --output-schema",
@@ -40,10 +41,34 @@ func TestReviewerProtocolDocumentsSubagentDiscoveryBeforeCLIFallback(t *testing.
 		"an available subagent reviewer",
 		"subagent review is the default there (#900)",
 		"CLI review only",
-		"Codex inline is different",
 	} {
 		if !containsReviewerDocText(protocol, want) {
 			t.Fatalf("pr-review-merge-protocol.md missing %q", want)
+		}
+	}
+}
+
+func TestReviewerProtocolRejectsStaleCodexInlineAuthorizationWording(t *testing.T) {
+	for _, path := range []string{
+		"../docs/runbooks/pr-review-merge-protocol.md",
+		"../docs/runbooks/github-local-automation.md",
+		"../.claude/skills/handle-issue/SKILL.md",
+		"../.claude/skills/handle-pr/SKILL.md",
+	} {
+		body := readReviewerDoc(t, path)
+		for _, forbidden := range []string{
+			"current user request explicitly authorizes subagent delegation",
+			"workflow prompt or runbook instruction alone is not sufficient authorization",
+			"If subagent use is not authorized",
+			"do not spawn; follow",
+			"Codex inline is different",
+			"Codex inline without per-request authorization",
+			"Codex inline 环境仍按协议逐请求授权",
+			"subagent review is unavailable or not authorized",
+		} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("%s still contains stale Codex inline reviewer authorization wording %q", path, forbidden)
+			}
 		}
 	}
 }

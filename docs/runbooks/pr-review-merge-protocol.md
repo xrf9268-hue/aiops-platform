@@ -51,32 +51,37 @@ findings (keep each review ≤700 words) and a final verdict —
 SHA, changed files, intent (issue/PR), relevant SPEC/upstream pointers, and
 AGENTS.md policy.
 
-Subagent review is the **default** in interactive Claude Code: when the Agent
-tool and a Codex-family subagent (`codex:codex-rescue`) are available, run the
-subagent dual review **without asking** — the operator's standing preference is
-the authorization. The per-request authorization ask was retired in #900 as
-pure ceremony (the operator invariably opted in, so the question only added a
+Subagent review is the **default** in main interactive sessions when the tool
+contract exposes a default-on reviewer path. Interactive Claude Code uses the
+Agent tool and a Codex-family subagent (`codex:codex-rescue`); Codex inline uses
+that same policy only when its `spawn_agent` tool contract exposes a default-on
+reviewer path for the session. Run the subagent dual review **without asking** —
+the operator's standing preference is the authorization. The per-request
+authorization ask was retired in #900 as pure ceremony for default-on reviewer
+paths (the operator invariably opted in, so the question only added a
 round-trip and contradicted the autonomy-first default). The #891 lesson still
 holds in the *other* direction: never *skip* an available subagent reviewer.
 Within this default, pick one sidecar reviewer (normal-risk) vs parallel
 specialized reviewers (high-risk diff) by **blast radius**, per "review depth
 matches blast radius" below — that escalation is automatic, not a second
-authorization to ask for. Two paths narrow this default:
+authorization to ask for. Three paths narrow this default:
 
 - **Opt out in-turn.** A current-turn phrase such as "CLI review only" or
   "subagent review disabled" switches that request to the bounded CLI fallback.
-- **Codex inline is different.** When the main agent is Codex inline (not Claude
-  Code), its tool contract requires per-request authorization to spawn, so a
-  runbook instruction alone is not sufficient there — see the Codex inline
-  routing bullet below. The standing-default-on rule is scoped to interactive
-  Claude Code, where the Agent tool is first-party.
+- **Runtime contract block.** If Codex inline exposes `spawn_agent` only behind
+  an explicit current-request subagent/delegation precondition, record the
+  contract-blocked fallback and use the bounded CLI fallback. This is a runtime
+  tool-contract limit, not a standing-preference question to ask again.
+- **Sub-agent self-exemption.** When the current session is already a spawned
+  sub-agent, obey the parent assignment and do not recursively spawn reviewers
+  unless the parent task explicitly asks for that.
 
 Best-practice reviewer modes:
 
 | Mode | Use when | Required handling |
 | --- | --- | --- |
-| Subagents unavailable / opted out | The Agent tool or a Codex-family subagent is unavailable, the tool contract forbids spawning (e.g. Codex inline without per-request authorization), or the operator opted out in-turn | Discover availability when relevant, record why subagents were not used, and use the bounded CLI fallback. **Do not** ask a standing-preference authorization question in interactive Claude Code — subagent review is the default there (#900) |
-| One sidecar subagent (default, normal-risk) | Interactive Claude Code with the Agent tool available, and the diff is low-risk/docs-only or normal-risk | Run one independent read-only diff reviewer sidecar focused on correctness, safety/security, and test gaps, plus the existing Codex-family and Claude-family gates. No authorization phrase required |
+| Subagents unavailable / opted out / contract-blocked | The Agent tool, requested reviewer subagent, or Codex inline `spawn_agent` path is unavailable; the Codex inline tool contract does not expose a default-on reviewer path for this request; the current role forbids spawning (for example, already inside `codex-sub-agent`); the subagent call fails; or the operator opted out in-turn | Discover availability when relevant, record why subagents were not used, and use the bounded CLI fallback. **Do not** ask a standing-preference authorization question in main interactive sessions with a default-on reviewer path — subagent review is the default there (#900) |
+| One sidecar subagent (default, normal-risk) | Interactive Claude Code or Codex inline with a default-on reviewer subagent path available, and the diff is low-risk/docs-only or normal-risk | Run one independent read-only diff reviewer sidecar focused on correctness, safety/security, and test gaps, plus the existing Codex-family and Claude-family gates. No authorization phrase required |
 | Parallel specialized subagents | The diff touches high-risk security, sandbox, filesystem deletion, concurrency, tracker mutation, workflow, or orchestrator behavior | Split read-only reviewers by concern, such as security/safety, tests/mutation gaps, races/lifecycle, and maintainability/scope, then merge their findings into the same dual-family gate |
 
 Reviewer routing is environment-dependent:
@@ -88,14 +93,14 @@ Reviewer routing is environment-dependent:
   in-turn.
 - **Codex inline.** When the environment hints that subagents or multi-agent
   tools are available, call `tool_search` for `multi_agent` / `spawn_agent`
-  before CLI fallback. If `spawn_agent` is available, use it for an independent
-  final-diff reviewer or quality-check sidecar only when the current user
-  request explicitly authorizes subagent delegation and the tool contract allows
-  spawning for that request. A workflow prompt or runbook instruction alone is
-  not sufficient authorization to spawn. Record the agent id/verdict in review
-  notes. If subagent use is not authorized for the current session, do not
-  spawn; follow the "Subagents unavailable / opted out" mode above. Do not wait
-  for a human reminder to discover the tool.
+  before CLI fallback. If `spawn_agent` is available and its tool metadata
+  exposes a default-on reviewer path, use it for an independent final-diff
+  reviewer or quality-check sidecar by default unless the operator opts out
+  in-turn. Record the agent id/verdict in review notes. If the tool metadata
+  requires an explicit current-request subagent/delegation ask and the request
+  does not include one, do not spawn; record the contract-blocked fallback and
+  use the bounded CLI fallback. Do not wait for a human reminder to discover the
+  tool.
 - **codex-sub-agent.** If the current session is already a spawned sub-agent,
   obey the parent assignment and the sub-agent notice first. Do not recursively
   spawn reviewers unless the parent task explicitly asks for that; return the
