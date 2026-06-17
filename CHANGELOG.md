@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.5...v0.1.6) (2026-06-17)
+
+
+### Bug Fixes
+
+* harden env passthrough boundaries ([d861451](https://github.com/xrf9268-hue/aiops-platform/commit/d86145138934887c62adc1af81d956a574af42f7)), closes [#910](https://github.com/xrf9268-hue/aiops-platform/issues/910)
+
 ## [0.1.5](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.4...v0.1.5) (2026-06-16)
 
 
