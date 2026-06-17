@@ -33,7 +33,7 @@ allowed-tools: Bash(git *) Bash(ls *) Bash(grep *) Bash(find *) Bash(go *) Bash(
    - 测试是否安慰剂（assertion 真的读到新代码改的字段吗？）
    - 错位机制（在 §1 scheduler/runner 边界的错误一侧）：worker/orchestrator 侧「消费 agent 产物」的 phase/gate/artifact/config，先 grep Elixir 有没有等价物——没有就是过度设计信号，判**删除**（非搬进 prompt、非只记 DEVIATIONS），归宿默认是 WORKFLOW prompt（worker post-turn phase 在 push 后只能 flag 不能 prevent，且抢跑 D9 reconcile-cancel / §16.5 self-stop——#557 即此；AGENTS.md 原则 6；#557/#561 拆的就是这类）
 
-2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，并先执行协议里的 **subagent-first reviewer routing**；具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。交互式 Claude Code 下 subagent 双审**默认开启、不问授权**（#900）；操作者可在当前请求写 `CLI review only` 等短语 opt-out，Codex inline 环境仍按协议逐请求授权。HIGH/MEDIUM/Critical 先验证技术正确性，再决定修复 / 反证 / 延后；不要盲从，也不要把 finding 当噪音略过。若 finding 证明计划本身错了，同轮更新代码、测试、SPEC/deviation 文档和 PR body。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
+2. **修一轮、提交一轮、push 前双审一轮**：按协议 §2–§3 对稳定 head SHA 派 Codex + Claude Code 双 reviewer，并先执行协议里的 **subagent-first reviewer routing**；具体 reviewer-routing 细节以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md) 为唯一来源。主交互会话里的 reviewer subagent 路径在工具契约允许默认派生时**默认开启、不问授权**（#900）；运行时契约挡住时按协议记录 fallback，操作者可在当前请求写 `CLI review only` 等短语 opt-out。HIGH/MEDIUM/Critical 先验证技术正确性，再决定修复 / 反证 / 延后；不要盲从，也不要把 finding 当噪音略过。若 finding 证明计划本身错了，同轮更新代码、测试、SPEC/deviation 文档和 PR body。每 push 后按协议 §4 跑 `@codex review` 收敛、§5 用 GraphQL 处理 review threads。
 
 3. **Deferred 偏差必须开 issue**：标 `area:spec-alignment`，body 含 upstream 行号引用 + acceptance criteria（AGENTS.md rule 2）。决定延后就**当场**告知用户并立即开 issue，别攒到收尾汇报。
 
