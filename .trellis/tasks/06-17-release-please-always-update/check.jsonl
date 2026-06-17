@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for this repo"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Quality guidance for CI/governance-adjacent changes"}
+{"file": ".trellis/spec/backend/agent-workflow-guidelines.md", "reason": "Trellis workflow requirements for implementation tasks"}
+{"file": ".trellis/tasks/06-17-release-please-always-update/research/release-please-always-update.md", "reason": "Official release-please behavior and decision rationale"}

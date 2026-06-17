@@ -131,6 +131,13 @@ release-please's default, which hides `chore`/`refactor`/`docs`/`style`/`test`/
 document (breaking changes of any type still surface). If you add a new required
 CI job, register its check name in `.github/governance/main-ruleset.json`.
 
+`release-please-config.json` sets `"always-update": true` so an existing Release
+PR is refreshed when `main` advances even if the newest commit is
+non-releasable and does not change release notes. This keeps the Release PR
+compatible with the repository's strict required status checks, at the cost of
+rerunning PR CI after docs/refactor/ci-only merges that would otherwise leave
+the Release PR branch stale.
+
 The workflow authenticates with a short-lived GitHub App installation token,
 not `GITHUB_TOKEN`: GitHub suppresses workflow runs for events created by
 `GITHUB_TOKEN`, so a `GITHUB_TOKEN`-cut tag would never trigger
