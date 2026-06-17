@@ -56,6 +56,8 @@ light/dark themes and Anthropic brand styling. The built output is generated in
 [the dashboard design note](docs/design/dashboard-brand-redesign.md) for the
 brand/UX rationale.
 
+![Worker dashboard screenshot](docs/assets/worker-dashboard.png)
+
 ### Packages (`internal/`)
 
 - `internal/orchestrator` — single in-memory runtime state, serialized dispatch

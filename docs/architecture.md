@@ -31,18 +31,25 @@ flowchart TD
         ORCH["Orchestrator actor<br/>poll · reconcile · claim · dispatch"]
         WORK["Worker run loop<br/>resolve workflow · build prompt · invoke runner"]
         RUN["Runner<br/>mock · codex · claude"]
+        API["Status HTTP surface<br/>GET /api/v1/state · POST /api/v1/refresh · /readyz"]
+        WEB["Embedded web dashboard<br/>read-only operator UI"]
     end
 
     WS["Deterministic Git workspace<br/>clone · checkout · task files · artifacts"]
     WF["WORKFLOW.md<br/>config front-matter + prompt template"]
     AGENT["Agent session"]
+    TUI["cmd/tui<br/>terminal dashboard"]
 
     trackers -->|"active issues"| ORCH
     ORCH -->|"claimed task"| WORK
+    ORCH -->|"snapshot"| API
+    API -->|"refresh request"| ORCH
     WORK --> WS
     WF -->|"resolved config + prompt"| WORK
     WORK --> RUN
     RUN --> AGENT
+    API --> WEB
+    API --> TUI
     AGENT -.->|"edits · verify · push · draft PR"| WS
     AGENT -.->|"label / state write-back"| trackers
 
@@ -54,6 +61,15 @@ The dashed edges are **agent-owned**: per SPEC §1 the worker never pushes,
 opens PRs, or writes tracker state itself. Verification is appended to the
 prompt as a directive the agent runs before handing off, not executed as a
 worker phase.
+
+The status HTTP listener exposes separate read and operator-action endpoints.
+`GET /api/v1/state` and `GET /api/v1/:issue` are read-only snapshots over the
+same in-memory orchestrator state. The embedded dashboard and `cmd/tui` consume
+that JSON contract; they do not schedule work, mutate trackers, or participate
+in agent handoff. `POST /api/v1/refresh` is the explicit operator action: it
+queues an immediate poll/reconcile wake through `orchestrator.RequestRefresh`,
+so it can dispatch eligible work, but it still does not write trackers or open
+PRs.
 
 This boundary is structural, not just convention. A class-hierarchy callgraph
 (Go SSA + CHA) over the module finds no call path from any `worker` or
@@ -67,15 +83,18 @@ enforces today.
 
 ## Package layout
 
-The `internal/` packages form an acyclic dependency graph. `task` and
-`workflow` are dependency-free leaves; `orchestrator` is the coordinating
-package that wires everything together behind small, consumer-defined
-interfaces.
+The `internal/` packages form an acyclic dependency graph. `buildinfo`,
+`stateapi`, `task`, and `workflow` have no internal imports; `orchestrator` is
+the coordinating package that wires the worker-facing runtime together behind
+small, consumer-defined interfaces.
 
 ```mermaid
 flowchart BT
     task["task<br/>domain types"]
+    buildinfo["buildinfo<br/>binary version resolution"]
+    stateapi["stateapi<br/>/api/v1/state wire DTOs"]
     workflow["workflow<br/>WORKFLOW.md load/resolve"]
+    envpolicy["envpolicy<br/>child-process env allowlist"]
     tracker["tracker<br/>Linear / GitHub clients"]
     workspace["workspace<br/>deterministic git workspaces"]
     gitea["gitea<br/>REST client + label/state map"]
@@ -84,11 +103,14 @@ flowchart BT
     doctor["doctor<br/>preflight diagnostics"]
     orchestrator["orchestrator<br/>actor + poller"]
 
+    envpolicy --> workflow
     tracker --> workflow
+    workspace --> envpolicy
     workspace --> task
     workspace --> workflow
     gitea --> tracker
     gitea --> workflow
+    runner --> envpolicy
     runner --> task
     runner --> tracker
     runner --> workflow
@@ -99,6 +121,7 @@ flowchart BT
     worker --> tracker
     worker --> workflow
     worker --> workspace
+    doctor --> gitea
     doctor --> runner
     doctor --> tracker
     doctor --> workflow
@@ -109,6 +132,12 @@ flowchart BT
     orchestrator --> workflow
     orchestrator --> workspace
 ```
+
+The command packages sit above this graph. `cmd/worker` maps
+`orchestrator.StateView` into `stateapi.StateResponse` and serves the HTTP
+surface; `cmd/tui` decodes the same `stateapi` DTOs. Both binaries use
+`buildinfo` for the version string, while the scheduler core stays independent
+of the dashboard renderer.
 
 ## Run-attempt lifecycle
 
