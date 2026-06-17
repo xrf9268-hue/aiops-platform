@@ -540,6 +540,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)
 - [Gitea bot and branch protection](docs/runbooks/gitea-bot-and-branch-protection.md)
+- [Local Gitea Web Todo lifecycle E2E](docs/runbooks/local-gitea-webtodo-lifecycle-e2e.md)
 
 ## Safety notes
 
