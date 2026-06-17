@@ -1,0 +1,38 @@
+[1m╭─ AIOPS STATUS[0m
+[1m│ Agents: [0m[32m1[0m[90m/[0m[90m1[0m
+[1m│ Handoffs: [0m[32mcompleted 0[0m[90m | [0m[32magent 5[0m[90m (recent 4)[0m
+[1m│ Throughput: [0m[36m0 tps[0m
+[1m│ Runtime:    [0m[35m16m 41s[0m
+[1m│ Tokens:     [0m[33min 3,536,136[0m[90m | [0m[33mout 19,306[0m[90m | [0m[33mtotal 3,555,442[0m
+[1m│ Rate Limits: [0m[33mcodex[0m[90m | [0m[36mprimary n/a reset 1781684903s[0m[90m | [0m[36msecondary n/a reset 1782117652s[0m[90m | [0m[32mcredits n/a[0m
+[1m│ Dashboard:   [0m[36mhttp://127.0.0.1:4102/[0m
+[1m│ Next refresh: [0m[36m5s[0m
+[1m├─ Running[0m
+│
+│   [90mID       STAGE          PID      AGE / TURN       TOKENS SESSION        EVENT                                       [0m
+│   [90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+│ [34m●[0m [36m#4      [0m [34mHuman Review  [0m [33m79526   [0m [35m2m 14s      [0m [33m   378,577[0m [36m019e...3bb6c6 [0m [34mnotification                                [0m
+│
+[1m├─ Backoff queue[0m
+│
+│  [90mNo queued retries[0m
+[1m╰─[0m
+[1m╭─ AIOPS STATUS[0m
+[1m│ Agents: [0m[32m1[0m[90m/[0m[90m1[0m
+[1m│ Handoffs: [0m[32mcompleted 0[0m[90m | [0m[32magent 5[0m[90m (recent 4)[0m
+[1m│ Throughput: [0m[36m0 tps[0m
+[1m│ Runtime:    [0m[35m16m 46s[0m
+[1m│ Tokens:     [0m[33min 3,536,136[0m[90m | [0m[33mout 19,306[0m[90m | [0m[33mtotal 3,555,442[0m
+[1m│ Rate Limits: [0m[33mcodex[0m[90m | [0m[36mprimary n/a reset 1781684903s[0m[90m | [0m[36msecondary n/a reset 1782117652s[0m[90m | [0m[32mcredits n/a[0m
+[1m│ Dashboard:   [0m[36mhttp://127.0.0.1:4102/[0m
+[1m│ Next refresh: [0m[36m5s[0m
+[1m├─ Running[0m
+│
+│   [90mID       STAGE          PID      AGE / TURN       TOKENS SESSION        EVENT                                       [0m
+│   [90m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+│ [34m●[0m [36m#4      [0m [34mHuman Review  [0m [33m79526   [0m [35m2m 19s      [0m [33m   378,577[0m [36m019e...3bb6c6 [0m [34mnotification                                [0m
+│
+[1m├─ Backoff queue[0m
+│
+│  [90mNo queued retries[0m
+[1m╰─[0m

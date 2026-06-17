@@ -1,0 +1,11 @@
+\n$ gofmt -l .
+\n$ go vet ./...
+\n$ go test ./...
+ok  	web-todo/cmd/server	1.225s
+ok  	web-todo/internal/store	1.513s
+\n$ make test
+go test ./...
+ok  	web-todo/cmd/server	(cached)
+ok  	web-todo/internal/store	(cached)
+\n$ make build
+go build ./cmd/server
