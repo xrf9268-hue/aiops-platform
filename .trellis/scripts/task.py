@@ -43,6 +43,7 @@ from common.active_task import (
     set_active_task,
 )
 from common.io import read_json, write_json
+from common.prd import prd_is_ready
 from common.task_utils import resolve_task_dir, run_task_hooks
 from common.tasks import iter_active_tasks, children_progress
 
@@ -91,6 +92,15 @@ def cmd_start(args: argparse.Namespace) -> int:
         task_dir = str(full_path)
 
     task_json_path = full_path / FILE_TASK_JSON
+    task_data = read_json(task_json_path) if task_json_path.is_file() else {}
+    if task_data and task_data.get("status") == "planning" and not prd_is_ready(full_path / "prd.md"):
+        print(
+            colored(
+                "Error: prd.md is incomplete. Fill requirements and acceptance criteria and remove default TBD placeholders before task.py start.",
+                Colors.RED,
+            )
+        )
+        return 1
 
     if not resolve_context_key():
         # Degraded mode: no session identity available.
@@ -110,7 +120,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         # Still flip task.json status: planning → in_progress so downstream phases proceed.
         if task_json_path.is_file():
-            data = read_json(task_json_path)
+            data = task_data
             if data and data.get("status") == "planning":
                 data["status"] = "in_progress"
                 if write_json(task_json_path, data):
@@ -124,7 +134,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"Source: {active.source}")
 
         if task_json_path.is_file():
-            data = read_json(task_json_path)
+            data = task_data
             if data and data.get("status") == "planning":
                 data["status"] = "in_progress"
                 if write_json(task_json_path, data):
@@ -369,10 +379,10 @@ def main() -> int:
             file=sys.stderr,
         )
         print(
-            "sub-agent-capable platforms and curated by the AI during Phase 1.3.",
+            "sub-agent-capable platforms and curated by the AI during planning when needed.",
             file=sys.stderr,
         )
-        print("See .trellis/workflow.md Phase 1.3 or run:", file=sys.stderr)
+        print("See .trellis/workflow.md planning artifact guidance or run:", file=sys.stderr)
         print(
             "  python3 ./.trellis/scripts/get_context.py --mode phase --step 1.3",
             file=sys.stderr,
