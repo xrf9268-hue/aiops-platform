@@ -2,8 +2,9 @@
 
 Status: proposed
 Issue: #931
-Scope: design and inventory only. This document does not add a worker phase,
-durable scheduler state, tracker write, PR writer, prompt rewriter, or merge gate.
+Scope: design, inventory, and milestone plan only. This document does not add
+a worker phase, durable scheduler state, tracker write, PR writer, prompt
+rewriter, or merge gate.
 
 ## Problem
 
@@ -116,7 +117,9 @@ The default L4 artifact is a report, not a trace lake.
 ## Grouping model
 
 Group by failure class, not by run id. A cluster should contain enough evidence
-for a reviewer to decide whether to update a harness surface.
+for a reviewer to decide whether to update a harness surface. Grouping is agent
+or tool work, not operator homework; the operator may approve promotion to an
+issue or draft PR, but should not have to hand-assemble the report.
 
 Required fields:
 
@@ -137,22 +140,37 @@ why waiting for recurrence is unacceptable.
 
 ## Workflow
 
-1. **Inventory/design (this PR).** Keep the first PR documentation-only and use
-   it to settle boundaries, evidence sources, redaction, retention, and the MVP
-   sequence.
-2. **Manual grouped report.** Add a command or script that reads existing logs,
-   workspace artifacts, tracker/PR state, review findings, and CI status, then
-   writes a grouped report. The command should not mutate tracker state, open a
-   PR, edit prompts, or merge anything.
-3. **Issue / draft-PR proposal.** Let the report renderer produce paste-ready
-   issue bodies or draft-PR plans against repo-owned harness files. Creation can
-   be an explicit operator/agent action, not worker business logic.
-4. **Outer-agent automation.** After reports prove useful, an outside workflow
-   may schedule an agent to read the report and propose diffs. It still acts as
-   a normal coding agent: reviewed branch, normal tests, normal PR.
-5. **Evaluator last.** If a cluster suggests a regression evaluator or gate, the
-   evaluator ships through review first and only then may become a CI/runtime
-   gate.
+Split delivery into complete milestones. Do not leave a phase that only creates
+manual sorting work for the operator; each milestone must produce a reviewable,
+usable artifact and explicit next action.
+
+1. **Milestone 0: inventory/design (this PR).** Settle boundaries, evidence
+   sources, redaction, retention, and the delivery sequence. Done means the next
+   implementation PR can point to this document for what to read, what to omit,
+   and what runtime boundaries not to cross.
+2. **Milestone 1: agent-generated grouped report.** Add a command or agent
+   workflow that reads existing logs, workspace artifacts, tracker/PR state,
+   review findings, and CI status, then writes a grouped report without manual
+   clustering by the operator. The report command should not mutate tracker
+   state, open a PR, edit prompts, or merge anything. Done means an operator can
+   point it at an issue, PR, run directory, or bounded evidence bundle and
+   receive clusters with evidence references, redaction notes, and proposed
+   next actions.
+3. **Milestone 2: issue / draft-PR proposal.** Extend the report renderer so
+   each actionable cluster can produce a ready-to-open issue body or draft-PR
+   plan against repo-owned harness files. Done means the agent can promote a
+   reviewed cluster into an issue or draft PR through normal workflow tooling;
+   the operator should approve intent, not write the body by hand.
+4. **Milestone 3: agent follow-through.** Let an outside coding-agent workflow
+   consume an approved report/proposal and create the actual harness diff. It
+   still acts as a normal coding agent: owned branch, reviewed change, normal
+   tests, normal PR, and no worker-side writeback. Done means the result is a
+   merge-ready PR or a clearly closed no-op with evidence.
+5. **Milestone 4: reviewed evaluator candidate.** If a cluster proves a
+   recurring class of failure, ship an advisory evaluator through ordinary
+   review with fixtures and false-positive expectations. Done means the
+   evaluator can produce report-only signal. Making it a CI/runtime gate is a
+   separate later decision after the evaluator itself has review history.
 
 ## Rejected alternatives
 
