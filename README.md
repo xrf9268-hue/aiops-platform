@@ -193,8 +193,8 @@ diverge, **this README is canonical**.
 
 For workflow-authoring patterns — including the repo-owned `LEARNINGS.md`
 cross-run memory convention (read-before-plan, verified-facts-only entries
-reviewed inside PRs) — see the [workflow authoring
-runbook](docs/runbooks/workflow-authoring.md).
+reviewed inside PRs) and how it maps to loop-engineering levels — see the
+[workflow authoring runbook](docs/runbooks/workflow-authoring.md).
 
 ## Operator surfaces
 
@@ -533,6 +533,8 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Symphony integration guide](docs/symphony-integration.md)
 - [Dashboard brand redesign & UX](docs/design/dashboard-brand-redesign.md)
 - [Research: Symphony-style personal productivity](docs/research/symphony-personal-productivity.md)
+- [Research: LangChain loop-engineering levels](docs/research/2026-06-16-langchain-art-of-loop-engineering.md)
+- [Research: Zach Lloyd self-improving Skills](docs/research/2026-06-16-zach-lloyd-self-improving-skills.md)
 - [ADR 0001: Adopt a Symphony-style personal orchestrator](docs/adr/0001-symphony-style-personal-orchestrator.md)
 - [ADR 0002: Ready-gated binary self-hosted development](docs/adr/0002-ready-gated-binary-self-hosting.md)
 - [Local development runbook](docs/runbooks/local-dev.md)
