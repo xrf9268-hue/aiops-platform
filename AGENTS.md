@@ -111,6 +111,16 @@ calibrating harness-engineering decisions):
   — Addy Osmani's harness-engineering thread. Provides the
   vocabulary and principles for evaluating components (see "Harness
   engineering principles" below).
+- [`docs/research/2026-06-16-langchain-art-of-loop-engineering.md`](docs/research/2026-06-16-langchain-art-of-loop-engineering.md)
+  — LangChain's four-level loop-engineering frame. Useful for naming
+  aiops-platform's supported agent, verification, and event-driven loops,
+  and for keeping the trace-driven hill-climbing loop as an explicit
+  follow-up rather than an implied worker-side verifier.
+- [`docs/research/2026-06-16-zach-lloyd-self-improving-skills.md`](docs/research/2026-06-16-zach-lloyd-self-improving-skills.md)
+  — Zach Lloyd's Warp/Oz practitioner account for self-improving
+  file-based Skills. Useful for shaping the planned outer improvement loop:
+  run evidence plus feedback should produce ordinary Skill/workflow/rubric
+  diffs, not worker-owned post-turn mutation.
 
 The project is **pre-release** — there are no users to migrate, so the cost of
 aligning with SPEC and the reference is at its minimum **right now**. Treat
