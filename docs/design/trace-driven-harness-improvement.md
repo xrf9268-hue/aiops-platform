@@ -121,6 +121,13 @@ state of the loop.
 - Do not store full prompts, full agent streams, full CI logs, raw GraphQL
   payloads, tokens, clone URLs with userinfo, or complete tracker comments by
   default.
+- Treat human-formatted runner output, error text, unsupported tool arguments,
+  raw protocol payloads, and runtime params as opaque. The report importer may
+  keep trusted top-level scalar metadata, but it should redact those opaque
+  payload fields wholesale instead of trying to parse GraphQL or recover ids
+  from free-form text. The first opaque payload key is a hard boundary for the
+  rest of that payload, including values that look bracket-balanced: losing
+  trailing metadata is safer than promoting agent text as affected ids.
 - Use the existing `workflow.MaskCloneURL` convention for any clone URL that
   enters a report.
 - A generated report should cap each run's embedded evidence at 64 KiB and each

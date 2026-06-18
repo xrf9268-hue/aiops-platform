@@ -188,3 +188,35 @@ can hold Issues:read without Pull requests:read — so a token could pass
 doctor and fail every poll. Fixed by probing the worker's actual poll
 endpoints (`internal/doctor/doctor_tracker.go`, request shapes pinned in
 `doctor_tracker_preflight_test.go`).
+
+---
+
+## Evidence Importers Need Opaque Text Boundaries
+
+Reports and importers often sit between structured runtime metadata and
+human-formatted text. Treat that as a cross-layer boundary: the importer should
+extract only fields whose format is owned by the emitting layer, and should
+redact arbitrary agent output, protocol payloads, tool arguments, and error text
+as opaque unless the issue explicitly requires a reviewed parser.
+
+### Checklist: When Importing Logs, Reports, Or Agent Output
+
+- [ ] Identify which fields are owned structured metadata and which fields are
+  human/agent/protocol text.
+- [ ] Preserve safe scalar metadata first; redact text payloads wholesale when
+  they can contain secrets, GraphQL, tool arguments, prompts, or copied issue
+  content.
+- [ ] Do not recover ids from free-form text just because it contains
+  key-shaped substrings such as `session_id:` or `pr_number:`.
+- [ ] If a scalar opaque value is followed by key-shaped text, stop parsing at
+  the opaque boundary unless there is a structured delimiter proving the next
+  field is top-level.
+- [ ] Add tests that fail if opaque text leaks or becomes affected metadata.
+
+**Real-world example (#938 / PR #942)**: the trace harness report importer
+originally tried to identify GraphQL and parse Go `%v` `map[...]` payloads
+inside runner output and error text. The issue and design already said not to
+include raw GraphQL payloads, but the implementation translated that into a
+complex redaction parser instead of an opaque boundary. The safer fix was to
+extract trusted top-level scalar metadata and redact `output_head`,
+`output_tail`, `error`, `arguments`, `raw`, and `params` wholesale.

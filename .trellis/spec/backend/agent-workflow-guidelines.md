@@ -50,12 +50,18 @@ Before changing code or workflow behavior:
 1. Open or update the relevant Trellis task.
 2. Write a short plan with goal, scope, acceptance criteria, dependencies, and
    verification.
-3. Run a `grill-with-docs` review of the plan against `CONTEXT.md`, ADRs, and
+3. For issue work driven by a design document, extract the negative constraints
+   before choosing an implementation: non-goals, unsupported inputs, redaction
+   and retention limits, forbidden runtime side effects, and any "do not store /
+   do not parse / do not mutate" wording. If the simplest design would require
+   understanding arbitrary human or agent text, treat that as a warning sign and
+   prefer an opaque boundary unless the issue explicitly asks for a parser.
+4. Run a `grill-with-docs` review of the plan against `CONTEXT.md`, ADRs, and
    the relevant runbooks.
-4. Capture settled terminology in `CONTEXT.md` only when it is domain language,
+5. Capture settled terminology in `CONTEXT.md` only when it is domain language,
    and capture durable trade-off decisions in `docs/adr/` only when they meet
    the ADR bar.
-5. Before pre-push review, follow
+6. Before pre-push review, follow
    [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md)
    as the single source of truth. Do not restate reviewer-routing mechanics in
    Trellis specs or task notes.
