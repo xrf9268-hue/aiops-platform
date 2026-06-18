@@ -19,6 +19,25 @@ the worker as a scheduler/runner/tracker reader. Harness changes should ship as
 ordinary reviewed artifacts: a report, issue, or draft PR against `WORKFLOW.md`,
 reviewer rubrics, `LEARNINGS.md`, skills, hooks, tests, CI, or docs.
 
+## North star
+
+The goal of loop engineering is not to create more automation or more reports.
+The goal is to turn real run feedback into durable harness learning so future
+agent runs fail less often, need less operator cleanup, and preserve the same
+SPEC boundary.
+
+Reports diagnose, issues and PRs transport, and evaluators remember regressions.
+The successful L4 loop is the ratchet across those artifacts: each confirmed
+failure class should either become a reviewed harness improvement, a reviewed
+regression check, or an explicit known limitation with evidence. If the same
+class keeps recurring without changing a harness surface or a tracked decision,
+the loop is only observing, not improving.
+
+Useful success signals include fewer repeated `Rework` cycles for the same
+cause, fewer merge-blocking reviewer findings that match prior clusters, fewer
+local/CI mismatches, fewer input-required or stuck-state runs caused by prompt
+gaps, and less operator time spent re-explaining known workflow rules.
+
 ## Authority and constraints
 
 - [SPEC section 1](../research/SPEC.md) is authoritative: Symphony is a
@@ -92,7 +111,8 @@ durable dataset:
 
 ## Redaction, retention, and bounds
 
-The default L4 artifact is a report, not a trace lake.
+The first L4 artifact is a diagnostic report, not a trace lake and not the end
+state of the loop.
 
 - Store metadata first: issue/PR ids, session id, event kind, timestamps,
   command/check names, URLs, and file paths.
