@@ -450,3 +450,36 @@ Fixed release-please dropping real work from CHANGELOG/version bumps (it only ac
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Document loop engineering sources
+
+**Date**: 2026-06-18
+**Task**: Document loop engineering sources
+**Branch**: `codex/langchain-loop-engineering-docs`
+
+### Summary
+
+Added LangChain and Zach Lloyd research notes, mapped loop levels to aiops-platform surfaces, and created/commented #931 for L4 trace-driven harness improvement.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e92a73d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
