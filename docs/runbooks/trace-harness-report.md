@@ -35,14 +35,42 @@ worker logs already collected by the operator. It also does not automatically
 open issues or draft PRs; that belongs to the later proposal-rendering
 milestone.
 
+## How the importer reads a worker log
+
+Each worker event is one log record beginning with the Go log timestamp and
+`event=<kind>`. The structured prefix up to ` payload=` is single line and
+`%q`-escaped, so the importer reads event kind, `task_id`/`issue_id`,
+`issue_identifier`, `session_id`, and PR ids from it directly. The
+`payload=map[...]` region is Go's `%v` map rendering: unescaped, lexically
+key-sorted, and free-form values can span multiple physical lines and contain
+arbitrary brackets, timestamps, and `event=` text. That rendering is a one-way
+diagnostic format, not a parseable one, so the importer never tries to find
+where a `map[...]` ends. It reads trusted scalar metadata from the record's
+first line only, stops at the first opaque payload key, and treats the rest of
+the payload — including continuation lines — as opaque and never parsed.
+
+### Known limitation
+
+Because a scalar Go sorts behind an opaque key lands on a skipped continuation
+line, its value is not recovered: `unsupported_tool_call` sorts `arguments`
+before `tool`, `turn_input_required` sorts `params` before `session_id`, and
+`runner_timeout` sorts `output_head`/`output_tail` before `timeout_ms`. The
+cluster still reports the failure class and the affected run/issue ids from the
+prefix. The harness fix is for the worker to emit a structured payload (for
+example a `%q`-quoted JSON object) so those scalars become recoverable; that is
+exactly the kind of improvement this report is meant to surface. A related,
+unavoidable consequence of the unescaped format is that opaque output which
+reproduces the full record-start grammar (a log timestamp plus `event=<known
+kind>`) is indistinguishable from a real record and may be surfaced.
+
 ## Output schema
 
 The JSON output uses schema `trace-harness-report/v1`. Each cluster contains:
 
 - cluster id and short title
 - symptom class
-- affected issue, issue identifier, PR, run, and session ids when present in
-  the structured prefix or in trusted top-level scalar payload fields before the
+- affected issue, issue identifier, PR, run, and session ids read from the
+  structured prefix or from trusted top-level scalar payload fields before the
   first opaque payload key;
   pathological clusters may include `affected.omitted` counts when the cluster
   byte cap requires truncating these id lists
@@ -56,30 +84,24 @@ The JSON output uses schema `trace-harness-report/v1`. Each cluster contains:
 ## Redaction and bounds
 
 The report stores metadata first: event kind, timestamp, issue/run/session ids,
-source path, line number, and known scalar payload fields. Text evidence is
-excerpted only to prove grouping. Payload fields that can contain arbitrary
-agent, protocol, or tool text are opaque: `output_head`, `output_tail`, `error`,
-`arguments`, `arguments_raw`, `raw`, and `params` are redacted from excerpts
-instead of parsed. The importer keeps safe scalar metadata before the first
-opaque payload key, then treats the rest of that payload as opaque; it does not
-parse GraphQL or other embedded protocol text. This hard boundary applies even
-when an opaque value looks bracket-balanced, because Go's human-readable
-`map[...]` formatting does not escape arbitrary string values and cannot prove
-that later key-shaped text is a real top-level field. The same rule applies to
-ambiguous multiline closures: a single trailing `]` inside an opaque value does
-not prove that a following event-shaped line is a real worker log record, so the
-importer prefers omission over fabricating affected issues.
+source path, line number, and known scalar payload fields. Text evidence is the
+record's structured prefix only; the entire `payload=map[...]` region is omitted
+from excerpts and replaced with `payload=[redacted-payload]`, so arbitrary
+agent, protocol, or tool text in `output_head`, `output_tail`, `error`,
+`arguments`, `arguments_raw`, `raw`, and `params` is never reproduced. The
+importer keeps safe scalar metadata before the first opaque payload key, which
+is a hard boundary for the rest of that payload; it does not parse GraphQL or
+other embedded protocol text.
 
 Bounds are enforced at 64 KiB per run and 256 KiB per cluster. Individual
 evidence excerpts are smaller, known scalar metadata is byte-bounded per field
 and in aggregate, and oversized affected id lists are truncated with omitted
 counts, so a reviewer can inspect the cluster without opening full prompts,
 full agent streams, full CI logs, raw GraphQL payloads, tokens, clone URLs with
-userinfo, or complete tracker comments. Clone URL userinfo that appears in
-trusted scalar metadata is masked with the same `MaskCloneURL` convention used
-by worker diagnostics, and token-like prefixes are replaced with
-`[redacted-token]`; clone URLs inside opaque text are omitted with the rest of
-the opaque payload.
+userinfo, or complete tracker comments. Clone URL userinfo that reaches the
+prefix or trusted scalar metadata is masked with the same `MaskCloneURL`
+convention used by worker diagnostics, and token-like prefixes are replaced with
+`[redacted-token]`.
 
 ## Examples
 

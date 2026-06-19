@@ -1,5 +1,24 @@
 #!/usr/bin/env python3
-"""Generate grouped trace-driven harness reports from worker logs."""
+"""Generate grouped trace-driven harness reports from worker logs.
+
+The worker emits one structured log line per event:
+
+    <timestamp> event=<kind> task_id=<id> issue_id=<id> [issue_identifier=<id>]
+        [session_id=<id>] msg=<%q-quoted> payload=<%v map rendering>
+
+Everything up to ` payload=` is a single line of Go `key=value` logging with a
+`%q`-escaped `msg`, so it is safe to parse. Everything after ` payload=` is Go's
+`%v` rendering of a map: it is unescaped, lexically key-sorted, and free-form
+values (output, errors, tool arguments, params) can span multiple physical lines
+and contain arbitrary brackets, timestamps, and `event=` text. That rendering is
+a one-way diagnostic format, not a parseable one, so this importer never tries to
+find where a `map[...]` ends. It reads trusted scalar metadata from the first
+physical line only, stops at the first opaque payload key, and treats the rest of
+the payload (including continuation lines) as opaque. The documented cost is that
+scalars Go sorts behind an opaque key (e.g. `tool`, `timeout_ms`, payload
+`session_id`) are not recovered; the harness fix is to make the worker emit a
+structured payload, which this report is meant to surface as an improvement.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +36,7 @@ MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 102
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 
 FIELD_RE = re.compile(r'\b(event|task_id|issue_id|issue_identifier|session_id|pr|pr_number|pr_url|pull_request|pull_request_url)=("[^"]*"|\S+)')
-PAYLOAD_KEY_RE = re.compile(r"(?:^|\s)([A-Za-z0-9_]+):")
+PAYLOAD_FIELD_RE = re.compile(r"(?:^|\s)([A-Za-z0-9_]+):(\S+)")
 CLONE_URL_SCHEME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
 TIMESTAMP_RE = re.compile(r"^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b")
 WORKER_RECORD_START_RE = re.compile(r"^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+event=")
@@ -28,28 +47,20 @@ TOKEN_RE = re.compile(
 )
 PR_KEYS = ("pr", "pr_number", "pr_url", "pull_request", "pull_request_url")
 AFFECTED_KEYS = ("issues", "issue_identifiers", "pull_requests", "runs", "sessions")
-OPAQUE_PAYLOAD_KEYS = (
-    "arguments",
-    "arguments_raw",
-    "error",
-    "output_head",
-    "output_tail",
-    "params",
-    "raw",
-)
-FREEFORM_PAYLOAD_KEYS = OPAQUE_PAYLOAD_KEYS
+# Free-form payload values: unescaped, possibly multi-line, never parsed. The
+# first of these keys on a record's first line ends trusted scalar extraction.
+OPAQUE_PAYLOAD_KEYS = ("arguments", "arguments_raw", "error", "output_head", "output_tail", "params", "raw")
 SAFE_PAYLOAD_KEYS = set(
     "elapsed_ms timeout_ms duration_ms output_bytes output_dropped model method task_id issue_id "
     "issue_identifier session_id pr pr_number pr_url pull_request pull_request_url exit_code ok tool".split()
 )
-PAYLOAD_KEYS = SAFE_PAYLOAD_KEYS | set(OPAQUE_PAYLOAD_KEYS)
-ERROR_REDACTION = "[redacted-error]"
 CLASS_BY_EVENT = {
     "runner_timeout": ("runner-timeout", "Runner timeouts", "runner timeout"),
     "turn_input_required": ("input-required", "Input required stops", "input required"),
     "unsupported_tool_call": ("tool-unsupported", "Unsupported tool calls", "tool unsupported"),
     "malformed": ("malformed-protocol", "Malformed protocol output", "malformed protocol output"),
 }
+
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
@@ -107,91 +118,32 @@ def input_ref(path: Path) -> dict:
 def parse_worker_log(path: Path) -> list[dict]:
     findings = []
     with path.open(encoding="utf-8", errors="replace") as handle:
-        for line_no, record in worker_log_records(handle):
-            if parsed := parse_line(path, line_no, record):
+        for line_no, line in enumerate(handle, 1):
+            if parsed := parse_line(path, line_no, line.rstrip("\n")):
                 findings.append(parsed)
     return findings
 
 
-def worker_log_records(lines):
-    current, start_line = [], 0
-    for line_no, line in enumerate(lines, 1):
-        text = line.rstrip("\n")
-        if current:
-            if record_payload_open(current):
-                if event_after_freeform_bracket(current, text):
-                    yield start_line, "\n".join(current)
-                    current, start_line = [text], line_no
-                    continue
-                if timestamped_log_after_freeform_bracket(current, text):
-                    yield start_line, "\n".join(current)
-                    current, start_line = [], 0
-                else:
-                    current.append(text)
-                    continue
-            yield start_line, "\n".join(current)
-            current, start_line = [], 0
-        if is_worker_log_record_start(text):
-            current, start_line = [text], line_no
-        else:
-            yield line_no, text
-    if current:
-        yield start_line, "\n".join(current)
-
-
-def is_worker_log_record_start(line: str) -> bool:
-    return bool(WORKER_RECORD_START_RE.match(line))
-
-
-def record_payload_open(lines: list[str]) -> bool:
-    if not lines:
-        return False
-    _, payload = split_payload("\n".join(lines))
-    return payload.startswith("map[") and not record_map_payload_closed(payload)
-
-
-def event_after_freeform_bracket(lines: list[str], text: str) -> bool:
-    if not is_worker_log_record_start(text):
-        return False
-    return freeform_bracket_closes_record(lines)
-
-
-def timestamped_log_after_freeform_bracket(lines: list[str], text: str) -> bool:
-    if not TIMESTAMP_RE.match(text) or is_worker_log_record_start(text):
-        return False
-    return freeform_bracket_closes_record(lines)
-
-
-def freeform_bracket_closes_record(lines: list[str]) -> bool:
-    _, payload = split_payload("\n".join(lines))
-    if not payload.startswith("map["):
-        return False
-    body = map_payload_body(payload)
-    if freeform_payload_start(body) == len(body):
-        return False
-    return freeform_terminal_bracket_closes_map(lines[-1])
-
-
 def parse_line(path: Path, line_no: int, line: str) -> dict | None:
-    if not is_worker_log_record_start(line):
+    if not WORKER_RECORD_START_RE.match(line):
         return None
-    prefix, payload = split_payload(line)
+    prefix, payload, has_payload = split_payload(line)
     fields = prefix_field_values(prefix)
     kind = fields.get("event", "")
-    metadata = scalar_payload(payload, kind)
-    if timestamp := line_timestamp(prefix):
-        metadata.setdefault("timestamp", timestamp)
-    event_class = classify(kind, prefix, metadata)
+    event_class = classify(kind, prefix)
     if not event_class:
         return None
     cid, title, symptom = event_class
+    metadata = scalar_payload(payload)
+    if timestamp := line_timestamp(prefix):
+        metadata.setdefault("timestamp", timestamp)
     return {
         "id": cid,
         "title": title,
         "symptom": symptom,
         "ref": f"{mask(str(path))}:{line_no}",
         "kind": kind,
-        "excerpt": evidence_excerpt(kind, line),
+        "excerpt": evidence_excerpt(prefix, has_payload),
         "metadata": metadata,
         "issue": fields.get("issue_id", "") or metadata.get("issue_id", ""),
         "identifier": fields.get("issue_identifier", "") or metadata.get("issue_identifier", ""),
@@ -201,31 +153,19 @@ def parse_line(path: Path, line_no: int, line: str) -> dict | None:
     }
 
 
-def classify(kind: str, line: str, metadata: dict) -> tuple[str, str, str] | None:
+def classify(kind: str, prefix: str) -> tuple[str, str, str] | None:
     if kind in CLASS_BY_EVENT:
         return CLASS_BY_EVENT[kind]
-    lower = line.lower()
-    if kind == "runner_end" and runner_end_failed(lower, metadata):
+    if kind == "runner_end" and "runner failed" in prefix.lower():
         return ("runner-failure", "Runner failures", "runner failure")
     return None
 
 
-def runner_end_failed(line: str, metadata: dict) -> bool:
-    ok = metadata.get("ok", "").lower()
-    if ok == "true":
-        return False
-    if ok == "false":
-        return True
-    if "runner failed" in line:
-        return True
-    return bool(metadata.get("error"))
-
-
-def split_payload(line: str) -> tuple[str, str]:
+def split_payload(line: str) -> tuple[str, str, bool]:
     if " payload=" not in line:
-        return line, ""
+        return line, "", False
     prefix, payload = line.split(" payload=", 1)
-    return prefix, payload
+    return prefix, payload, True
 
 
 def line_timestamp(prefix: str) -> str:
@@ -233,197 +173,40 @@ def line_timestamp(prefix: str) -> str:
     return mask(match.group(1)) if match else ""
 
 
-def prefix_fields(prefix: str) -> str:
-    return prefix.split(" msg=", 1)[0]
-
-
 def prefix_field_values(prefix: str) -> dict:
-    return {m.group(1): mask(m.group(2).strip('"')) for m in FIELD_RE.finditer(prefix_fields(prefix))}
+    # Cut at ` msg=` so the %q-quoted message body is never scanned for fields.
+    head = prefix.split(" msg=", 1)[0]
+    return {m.group(1): mask(m.group(2).strip('"')) for m in FIELD_RE.finditer(head)}
 
 
-def scalar_payload(payload: str, kind: str) -> dict:
-    if not payload:
+def scalar_payload(payload: str) -> dict:
+    if not payload.startswith("map["):
         return {}
-    payload = mask(payload)
-    if payload.startswith("map["):
-        payload = map_payload_body(payload)
-    return scalar_payload_fields(payload)
-
-
-def map_payload_body(payload: str) -> str:
-    body = payload[4:]
-    return body[:-1] if map_payload_closed(payload) else body
-
-
-def scalar_payload_fields(payload: str) -> dict:
-    fields = {}
-    for key, value in top_level_payload_fields(payload):
-        if key in fields:
-            continue
-        if key in SAFE_PAYLOAD_KEYS and value:
-            fields[key] = metadata_value(value)
-            continue
-        if key == "error":
-            fields[key] = ERROR_REDACTION
-    return fields
-
-
-def metadata_value(value: str) -> str:
-    return mask(value.strip().strip('"'))
-
-
-def map_payload_closed(payload: str) -> bool:
-    return payload.rstrip().endswith("]")
-
-
-def record_map_payload_closed(payload: str) -> bool:
-    if not map_payload_closed(payload):
-        return False
-    body = map_payload_body(payload)
-    if "\n" not in payload:
-        return single_line_map_payload_closed(payload)
-    if freeform_payload_start(body) < len(body) and not freeform_terminal_bracket_strongly_closes_map(payload):
-        return False
-    if freeform_payload_start(body) == len(body):
-        return True
-    last_line = payload.rsplit("\n", 1)[-1]
-    return freeform_terminal_bracket_strongly_closes_map(last_line)
-
-
-def single_line_map_payload_closed(payload: str) -> bool:
-    raw_body = payload[4:].rstrip() if payload.startswith("map[") else payload.rstrip()
-    start = freeform_payload_start(raw_body)
-    if start == len(raw_body):
-        return True
-    if freeform_terminal_bracket_strongly_closes_map(payload):
-        return True
-    return not terminal_bracket_may_close_payload_text(raw_body[start:])
-
-
-def terminal_bracket_may_close_payload_text(value: str) -> bool:
-    text = value.rstrip()
-    if not text.endswith("]"):
-        return False
-    before_terminal = text[:-1]
-    return before_terminal.count("[") > before_terminal.count("]")
-
-
-def freeform_terminal_bracket_closes_map(line: str) -> bool:
-    return freeform_terminal_bracket_strongly_closes_map(line)
-
-
-def freeform_terminal_bracket_strongly_closes_map(line: str) -> bool:
-    text = line.rstrip()
-    return text.endswith("]]") or text.endswith("] ]")
-
-
-def evidence_excerpt(kind: str, line: str) -> str:
-    if kind == "malformed":
-        return redact_malformed_payload(line)
-    prefix, payload = split_payload(line)
-    if not payload:
-        return mask(line)
-    if payload_has_opaque_field(payload):
-        return f"{mask(prefix)} payload=[redacted-payload]"
-    return f"{mask(prefix)} payload={mask(payload)}"
-
-
-def redact_malformed_payload(line: str) -> str:
-    prefix, payload = split_payload(line)
-    if not payload:
-        return mask(line)
-    return f"{mask(prefix)} payload=[redacted-malformed-payload]"
-
-
-def freeform_payload_start(payload: str) -> int:
-    starts = [idx for key in FREEFORM_PAYLOAD_KEYS if (idx := payload.find(f"{key}:")) >= 0]
-    return min(starts) if starts else len(payload)
-
-
-def payload_has_opaque_field(payload: str) -> bool:
-    if payload.startswith("map["):
-        payload = map_payload_body(payload)
-    return any(key in OPAQUE_PAYLOAD_KEYS for key, _ in top_level_payload_fields(payload))
-
-
-def top_level_payload_fields(payload: str) -> list[tuple[str, str]]:
-    fields, cursor = [], 0
-    while cursor < len(payload):
-        match = next_payload_field(payload, cursor)
-        if not match:
-            break
+    body = map_payload_first_line_body(payload)
+    fields: dict[str, str] = {}
+    for match in PAYLOAD_FIELD_RE.finditer(body):
         key = match.group(1)
-        value_start = match.end()
-        value_end, keep_scanning = top_level_value_end(payload, value_start, key)
-        fields.append((key, payload[value_start:value_end].strip()))
-        if not keep_scanning:
-            break
-        cursor = value_end
+        if key in OPAQUE_PAYLOAD_KEYS:
+            break  # design hard boundary: stop at the first opaque payload key.
+        if key in SAFE_PAYLOAD_KEYS and key not in fields:
+            fields[key] = mask(match.group(2))
     return fields
 
 
-def next_payload_field(payload: str, start: int) -> re.Match | None:
-    for match in PAYLOAD_KEY_RE.finditer(payload, start):
-        if match.group(1) in PAYLOAD_KEYS:
-            return match
-    return None
+def map_payload_first_line_body(payload: str) -> str:
+    # `payload` is the first physical line only. Drop `map[` and, when this is a
+    # single-line payload, the matching trailing `]`. A multi-line payload's
+    # first line has no trailing `]`, and its continuation lines are skipped by
+    # parse_line because they do not start a worker record.
+    body = payload[len("map["):]
+    return body[:-1] if body.endswith("]") else body
 
 
-def top_level_value_end(payload: str, start: int, key: str) -> tuple[int, bool]:
-    value_start = first_non_space(payload, start)
-    if key in OPAQUE_PAYLOAD_KEYS:
-        return len(payload), False
-    bracket_end = bracketed_value_end(payload, value_start)
-    if bracket_end > value_start:
-        return bracket_end, True
-    next_key = next_payload_field_boundary(payload, value_start)
-    return (next_key, True) if next_key >= 0 else (len(payload), False)
-
-
-def first_non_space(text: str, start: int) -> int:
-    while start < len(text) and text[start].isspace():
-        start += 1
-    return start
-
-
-def bracketed_value_end(text: str, start: int) -> int:
-    if text.startswith("map[", start):
-        return scan_balanced(text, start + len("map"), "[", "]")
-    if start < len(text) and text[start] in "[{":
-        return scan_balanced(text, start, text[start], "]" if text[start] == "[" else "}")
-    return -1
-
-
-def scan_balanced(text: str, start: int, opener: str, closer: str) -> int:
-    depth, in_string, escape = 0, False, False
-    for idx in range(start, len(text)):
-        ch = text[idx]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-            continue
-        if ch == opener:
-            depth += 1
-            continue
-        if ch == closer and depth:
-            depth -= 1
-            if depth == 0:
-                return idx + 1
-    return -1
-
-
-def next_payload_field_boundary(payload: str, start: int) -> int:
-    for match in PAYLOAD_KEY_RE.finditer(payload, start):
-        if match.group(1) in PAYLOAD_KEYS:
-            return match.start()
-    return -1
+def evidence_excerpt(prefix: str, has_payload: bool) -> str:
+    # The payload region is never reproduced: trusted scalars already live in
+    # metadata, and opaque values are unescaped free-form text.
+    excerpt = mask(prefix)
+    return f"{excerpt} payload=[redacted-payload]" if has_payload else excerpt
 
 
 def add_finding(clusters: dict[str, dict], run_bytes: dict[str, int], finding: dict) -> None:
@@ -456,7 +239,12 @@ def new_cluster(finding: dict) -> dict:
             "Future runs cover this failure class with a reviewed harness surface or a documented no-op decision.",
             "The change remains report/agent/workflow-owned and does not add a worker-side gate or tracker writer.",
         ],
-        "redaction_note": "Evidence stores trusted metadata before opaque payloads; output_head, output_tail, error, arguments, arguments_raw, raw, and params are omitted from excerpts. Clone URL userinfo follows workflow.MaskCloneURL, and token-like values are redacted.",
+        "redaction_note": (
+            "Every payload=map[...] region is omitted from excerpts because Go's %v map rendering is unescaped "
+            "and not reliably parseable. Only trusted top-level scalar metadata before the first opaque payload "
+            "key is kept; output_head, output_tail, error, arguments, arguments_raw, raw, and params are treated "
+            "as opaque. Clone URL userinfo follows workflow.MaskCloneURL, and token-like values are redacted."
+        ),
     }
 
 
@@ -516,8 +304,7 @@ def evidence_array_bytes_after(cluster: dict, entry_size: int) -> int:
 
 def finalize_cluster(cluster: dict) -> dict:
     for key in AFFECTED_KEYS:
-        values = cluster["affected"][key]
-        values.sort()
+        cluster["affected"][key].sort()
     cluster.pop("_evidence_bytes", None)
     cluster.pop("_evidence_count", None)
     enforce_cluster_bound(cluster)
