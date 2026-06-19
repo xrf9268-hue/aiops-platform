@@ -551,6 +551,7 @@ def enforce_cluster_bound(cluster: dict) -> None:
         return
 
     omitted = cluster["affected"].setdefault("omitted", {})
+    base_omitted = {key: int(omitted.get(key, 0)) for key in AFFECTED_KEYS}
     originals = {key: list(cluster["affected"][key]) for key in AFFECTED_KEYS}
     for key in sorted(AFFECTED_KEYS, key=lambda name: len(originals[name]), reverse=True):
         if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
@@ -558,12 +559,9 @@ def enforce_cluster_bound(cluster: dict) -> None:
         values = originals[key]
         if not values:
             continue
-        keep = max_affected_keep_count(cluster, key, values)
+        keep = max_affected_keep_count(cluster, key, values, base_omitted[key])
         cluster["affected"][key] = values[:keep]
-        if len(values) > keep:
-            omitted[key] = len(values) - keep
-        else:
-            omitted.pop(key, None)
+        set_affected_omitted(cluster, key, base_omitted[key] + len(values) - keep)
 
     for key, count in list(omitted.items()):
         if count <= 0:
@@ -573,18 +571,28 @@ def enforce_cluster_bound(cluster: dict) -> None:
     trim_evidence_to_cluster_bound(cluster)
 
 
-def max_affected_keep_count(cluster: dict, key: str, values: list[str]) -> int:
+def max_affected_keep_count(cluster: dict, key: str, values: list[str], base_omitted: int) -> int:
     low, high, best = 0, len(values), 0
     while low <= high:
         keep = (low + high) // 2
         cluster["affected"][key] = values[:keep]
-        cluster["affected"]["omitted"][key] = len(values) - keep
+        set_affected_omitted(cluster, key, base_omitted + len(values) - keep)
         if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
             best = keep
             low = keep + 1
         else:
             high = keep - 1
     return best
+
+
+def set_affected_omitted(cluster: dict, key: str, count: int) -> None:
+    omitted = cluster["affected"].setdefault("omitted", {})
+    if count > 0:
+        omitted[key] = count
+    else:
+        omitted.pop(key, None)
+    if not omitted:
+        cluster["affected"].pop("omitted", None)
 
 
 def trim_evidence_to_cluster_bound(cluster: dict) -> None:

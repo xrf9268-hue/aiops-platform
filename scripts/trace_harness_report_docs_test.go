@@ -717,6 +717,22 @@ func TestTraceHarnessReportScriptRerendersProposalsAfterFinalClusterTrimming(t *
 	}
 }
 
+func TestTraceHarnessReportScriptPreservesCumulativeOmittedAffectedCounts(t *testing.T) {
+	root := repoRoot(t)
+	const totalSessions = 18000
+	var body strings.Builder
+	for idx := 0; idx < totalSessions; idx++ {
+		fmt.Fprintf(&body, "2026/06/18 09:00:00 event=runner_timeout task_id=run-%d issue_id=issue-shared session_id=session-%d msg=\"x\"\n", idx%64, idx)
+	}
+	report := runTraceHarnessReport(t, root, body.String())
+
+	cluster := findCluster(t, report, "runner-timeout")
+	got := len(cluster.Affected.Sessions) + cluster.Affected.Omitted["sessions"]
+	if got != totalSessions {
+		t.Fatalf("sessions accounted for = %d; want %d (kept=%d omitted=%d)", got, totalSessions, len(cluster.Affected.Sessions), cluster.Affected.Omitted["sessions"])
+	}
+}
+
 func TestTraceHarnessReportScriptBoundsLargeScalarMetadata(t *testing.T) {
 	root := repoRoot(t)
 	body := `2026/06/18 09:00:00 event=runner_timeout task_id=issue-1 issue_id=issue-1 msg="timeout" payload=map[model:` + strings.Repeat("m", 300*1024) + ` timeout_ms:60000]` + "\n"
