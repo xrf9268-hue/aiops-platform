@@ -1,11 +1,12 @@
 # Trace harness report
 
 Use this read-only command to generate the first trace-driven harness report
-from existing evidence. It implements the Milestone 1 subset from
-`docs/design/trace-driven-harness-improvement.md`: group bounded evidence into
-reviewable clusters. It does not mutate tracker state. It does not open PRs.
-It does not edit prompts. It does not create a worker phase, merge gate, or
-evaluator gate.
+from existing evidence. It implements the Milestone 1 grouped-report path plus
+the later proposal surfaces from
+`docs/design/trace-driven-harness-improvement.md`: issue/draft-PR proposals and
+advisory evaluator candidates. It does not mutate tracker state. It does not
+open PRs. It does not edit prompts. It does not create a worker phase, merge
+gate, runtime gate, or evaluator gate.
 
 ```bash
 python3 scripts/trace-harness-report.py \
@@ -71,7 +72,7 @@ kind>`) is indistinguishable from a real record and may be surfaced.
 
 ## Output schema
 
-The JSON output uses schema `trace-harness-report/v2`. Each cluster contains:
+The JSON output uses schema `trace-harness-report/v3`. Each cluster contains:
 
 - cluster id and short title
 - symptom class
@@ -80,16 +81,21 @@ The JSON output uses schema `trace-harness-report/v2`. Each cluster contains:
   first opaque payload key;
   pathological clusters may include `affected.omitted` counts when the cluster
   byte cap requires truncating these id lists
-- evidence references with bounded excerpts
+- evidence references with bounded excerpts and the affected ids recovered for
+  each retained evidence entry
 - suspected harness surface to change
-- proposed next action, currently `issue or draft-PR proposal` for supported
-  worker-log failure clusters
+- proposed next action, currently `issue, draft-PR, or advisory evaluator
+  proposal` for supported worker-log failure clusters
 - acceptance criteria for the proposed harness change
 - redaction note naming what was omitted
 - `proposals.github_issue.body`, a ready-to-open issue body for promoting the
   reviewed cluster without hand-writing the issue
 - `proposals.draft_pr.plan`, a draft-PR plan a normal coding agent can use for
   follow-through after the operator approves the intent
+- `proposals.advisory_evaluator`, a report-only evaluator candidate with
+  recovered affected ids, bounded fixtures/examples, expected true-positive and
+  false-positive behavior, a future report-output contract, and the evidence
+  required before a later gate-promotion PR
 
 The proposal fields repeat references and bounded metadata, not raw unbounded
 logs. They preserve the same redaction note and SPEC boundary as the cluster:
@@ -114,6 +120,36 @@ explicit workflow action outside this report command.
 Use [`trace-harness-follow-through.md`](trace-harness-follow-through.md) for
 the approved-proposal handoff into a normal coding-agent branch, PR, or no-op
 closure.
+
+## Advisory evaluator candidates
+
+Each cluster also renders an advisory evaluator candidate:
+
+```bash
+jq '.clusters[] | select(.id == "runner-timeout").proposals.advisory_evaluator' \
+  ./trace-report.json > /tmp/runner-timeout-evaluator-candidate.json
+```
+
+The candidate is report-only. Its `execution` block explicitly records that it
+does not block CI, runtime, or merge. Its `recovered_affected_ids` block is an
+independently bounded issue/run/session/PR summary with omitted counts, not a
+full duplicate of the cluster's top-level affected arrays. It carries enough of
+the references used to compute `current_signal` for the candidate to remain
+reviewable when it is extracted on its own. `current_signal` counts independent
+retained evidence occurrences by
+merging entries that share a recovered affected id; same-column omitted counts
+from byte-bound clusters still count as recurrence evidence. Its fixtures are
+bounded examples copied from the cluster's
+already-redacted evidence references, not raw logs or prompt text. Its
+`expected_signal_behavior.false_positive` section names cases the candidate must
+not treat as signal, including successful or unrelated events that only mention
+the failure inside opaque payload text.
+
+The candidate's `future_report_output` schema is stable enough for a future L4
+report importer to cite evaluator results, but this command does not install a
+gate. Promotion to a required CI/runtime/merge gate needs a separate reviewed PR
+after multiple reviewed reports show stable true positives and documented false
+positive handling.
 
 ## Redaction and bounds
 

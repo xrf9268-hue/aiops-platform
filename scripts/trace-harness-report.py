@@ -35,11 +35,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-SCHEMA_VERSION = "trace-harness-report/v2"
+SCHEMA_VERSION = "trace-harness-report/v3"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 MAX_PROPOSAL_EVIDENCE_REFS, MAX_PROPOSAL_AFFECTED_VALUES = 5, 5
 MAX_PROPOSAL_INPUT_REFS, MAX_PROPOSAL_FIELD_BYTES = 3, 512
+MAX_EVALUATOR_FIXTURES, MAX_EVALUATOR_FIXTURE_EXCERPT_BYTES = 3, 512
 
 FIELD_RE = re.compile(r'\b(event|task_id|issue_id|issue_identifier|session_id|pr|pr_number|pr_url|pull_request|pull_request_url)=("[^"]*"|\S+)')
 CLONE_URL_SCHEME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
@@ -272,7 +273,7 @@ def new_cluster(finding: dict) -> dict:
         "_evidence_bytes": byte_len("[]"),
         "_evidence_count": 0,
         "suspected_harness_surface": "WORKFLOW.md, reviewer rubrics, skills, hooks, tests, CI, or docs",
-        "proposed_next_action": "issue or draft-PR proposal",
+        "proposed_next_action": "issue, draft-PR, or advisory evaluator proposal",
         "acceptance_criteria": [
             "Future runs cover this failure class with a reviewed harness surface or a documented no-op decision.",
             "The change remains report/agent/workflow-owned and does not add a worker-side gate or tracker writer.",
@@ -312,8 +313,20 @@ def evidence_entry(finding: dict, excerpt: str) -> dict:
         "ref": finding["ref"],
         "kind": finding["kind"],
         "excerpt": excerpt,
+        "affected": finding_affected(finding),
         "metadata": bounded_metadata(finding["metadata"]),
     }
+
+
+def finding_affected(finding: dict) -> dict:
+    keys = (
+        ("issues", "issue"),
+        ("issue_identifiers", "identifier"),
+        ("pull_requests", "pull_request"),
+        ("runs", "run"),
+        ("sessions", "session"),
+    )
+    return {affected_key: [finding[finding_key]] for affected_key, finding_key in keys if finding.get(finding_key)}
 
 
 def bounded_metadata(metadata: dict) -> dict:
@@ -378,6 +391,7 @@ def render_proposals(cluster: dict, report_ref: str) -> dict:
             "title": f"fix(harness): address {cluster['id']} trace cluster",
             "plan": render_draft_pr_plan(cluster, report_ref),
         },
+        "advisory_evaluator": render_advisory_evaluator_candidate(cluster, report_ref),
     }
 
 
@@ -540,6 +554,141 @@ def verification_lines() -> list[str]:
         "- Run the local gate appropriate to the touched files before opening or updating the PR.",
         "- Confirm the change preserves the redaction and SPEC-boundary constraints from the trace-driven harness design.",
     ]
+
+
+def render_advisory_evaluator_candidate(cluster: dict, report_ref: str) -> dict:
+    return {
+        "id": f"{cluster['id']}-advisory-evaluator",
+        "title": f"Advisory evaluator candidate for {cluster['id']} trace cluster",
+        "mode": "report-only/advisory",
+        "target_failure_class": cluster["symptom_class"],
+        "source": {
+            "report": report_ref,
+            "cluster_id": cluster["id"],
+        },
+        "current_signal": evaluator_current_signal(cluster),
+        "recovered_affected_ids": evaluator_recovered_affected_ids(cluster),
+        "fixtures": evaluator_fixtures(cluster),
+        "expected_signal_behavior": {
+            "true_positive": [
+                f"Report {cluster['symptom_class']} when a future grouped report has at least two independent recovered issue, run, session, or PR references for {cluster['id']}.",
+                "Use only trusted metadata and redacted evidence references already present in trace harness reports.",
+            ],
+            "false_positive": [
+                "Do not fire on successful or unrelated events that only mention the failure in opaque payload text.",
+                "Do not parse raw logs, forge comments, prompts, model output, GraphQL payloads, or other natural language as a machine contract.",
+            ],
+        },
+        "execution": {
+            "mode": "report-only",
+            "blocks_ci": False,
+            "blocks_runtime": False,
+            "blocks_merge": False,
+        },
+        "future_report_output": {
+            "schema": "trace-harness-advisory-evaluator-result/v1",
+            "fields": [
+                "evaluator_id",
+                "source_cluster_id",
+                "mode",
+                "signal",
+                "evidence_refs",
+                "false_positive_notes",
+            ],
+        },
+        "gate_promotion_evidence": [
+            "Multiple reviewed reports show stable true positives for the same failure class.",
+            "False positives are triaged and documented with fixtures or examples.",
+            "A separate PR explicitly proposes gate promotion after review history exists.",
+        ],
+    }
+
+
+def evaluator_current_signal(cluster: dict) -> str:
+    if independent_occurrence_count(cluster) >= 2:
+        return "positive-recurring-cluster"
+    return "candidate-only-needs-more-evidence"
+
+
+def evaluator_recovered_affected_ids(cluster: dict) -> dict:
+    affected = cluster.get("affected", {})
+    existing_omitted = affected.get("omitted", {})
+    recovered = {}
+    omitted = {}
+    for key in AFFECTED_KEYS:
+        values = list(affected.get(key, []))
+        recovered[key] = values[:MAX_PROPOSAL_AFFECTED_VALUES]
+        omitted_count = len(values) - len(recovered[key]) + int(existing_omitted.get(key, 0))
+        if omitted_count > 0:
+            omitted[key] = omitted_count
+    if omitted:
+        recovered["omitted"] = omitted
+    return recovered
+
+
+def independent_occurrence_count(cluster: dict) -> int:
+    # Retained evidence is overlap-merged so records sharing a recovered affected id
+    # count once; byte-bound trimmed records survive only as omitted counts, so add
+    # them rather than letting a single column max override the overlap merge (#941).
+    return independent_evidence_occurrence_count(cluster) + trimmed_affected_occurrence_count(cluster)
+
+
+def independent_evidence_occurrence_count(cluster: dict) -> int:
+    components: list[set[str]] = []
+    for entry in cluster.get("evidence", []):
+        tokens = evidence_affected_tokens(entry.get("affected", {}))
+        if tokens:
+            add_occurrence_component(components, tokens)
+    return len(components)
+
+
+def evidence_affected_tokens(affected: dict) -> set[str]:
+    tokens = set()
+    for key in AFFECTED_KEYS:
+        for value in affected.get(key, []):
+            if value:
+                tokens.add(f"{key}:{value}")
+    return tokens
+
+
+def add_occurrence_component(components: list[set[str]], tokens: set[str]) -> None:
+    overlaps = [idx for idx, component in enumerate(components) if component & tokens]
+    if not overlaps:
+        components.append(tokens)
+        return
+    merged = set(tokens)
+    for idx in reversed(overlaps):
+        merged.update(components.pop(idx))
+    components.append(merged)
+
+
+def trimmed_affected_occurrence_count(cluster: dict) -> int:
+    # Only counts affected ids dropped by the byte cap: retained ids are already
+    # represented in (overlap-merged) evidence, so counting them here would let the
+    # cluster cap inflate recurrence beyond independent records.
+    omitted = cluster.get("affected", {}).get("omitted", {})
+    return max((int(omitted.get(key, 0)) for key in AFFECTED_KEYS), default=0)
+
+
+def evaluator_fixtures(cluster: dict) -> list[dict]:
+    fixtures = []
+    for idx, entry in enumerate(cluster.get("evidence", [])[:MAX_EVALUATOR_FIXTURES], 1):
+        fixtures.append(
+            {
+                "name": f"{cluster['id']}-positive-{idx}",
+                "source_ref": entry.get("ref", ""),
+                "event_kind": entry.get("kind", ""),
+                "expected": "match",
+                "bounded_excerpt": truncate(entry.get("excerpt", ""), MAX_EVALUATOR_FIXTURE_EXCERPT_BYTES),
+                "metadata": evaluator_fixture_metadata(entry.get("metadata", {})),
+            }
+        )
+    return fixtures
+
+
+def evaluator_fixture_metadata(metadata: dict) -> dict:
+    keep = ("timestamp", "method", "model", "exit_code", "timeout_ms", "elapsed_ms", "duration_ms", "output_bytes", "output_dropped")
+    return {key: metadata[key] for key in keep if metadata.get(key)}
 
 
 def enforce_cluster_bound(cluster: dict) -> None:
