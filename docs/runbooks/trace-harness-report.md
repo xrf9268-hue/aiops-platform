@@ -111,6 +111,9 @@ jq -r '.clusters[] | select(.id == "runner-timeout").proposals.draft_pr.plan' \
 
 Opening the issue, starting the draft PR, or running a coding agent remains an
 explicit workflow action outside this report command.
+Use [`trace-harness-follow-through.md`](trace-harness-follow-through.md) for
+the approved-proposal handoff into a normal coding-agent branch, PR, or no-op
+closure.
 
 ## Redaction and bounds
 
