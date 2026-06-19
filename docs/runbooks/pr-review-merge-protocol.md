@@ -51,6 +51,13 @@ findings (keep each review ≤700 words) and a final verdict —
 SHA, changed files, intent (issue/PR), relevant SPEC/upstream pointers, and
 AGENTS.md policy.
 
+For issue work that required a negative-constraint preflight, the **first**
+pre-push reviewer brief must also include that guardrail: required behavior,
+negative constraints, opaque boundaries, and the decision to omit arbitrary text
+opaquely unless the issue explicitly asks for structured parsing with fixtures.
+Ask reviewers to challenge the implementation direction and boundary before
+spending their review budget on parser or redaction edge cases.
+
 Subagent review is the **default** in main interactive sessions when the tool
 contract exposes a default-on reviewer path. Interactive Claude Code uses the
 Agent tool and a Codex-family subagent (`codex:codex-rescue`); Codex inline uses

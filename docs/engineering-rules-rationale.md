@@ -201,6 +201,24 @@ shipped.
   `issueHasRequiredLabels` tests passed; #683's refresh label-carry
   (`issue.Labels = st.Labels`) had no positive test until one was added.
 
+## Workflow and PR protocol
+
+- **Issue workflow negative-constraint preflight.** For issues that cite a
+  design doc, runbook, SPEC boundary, redaction/retention rule, or non-goal
+  list, convert the negative constraints into a short implementation guardrail
+  before writing code, and include that guardrail in the first pre-push reviewer
+  brief. Redaction/retention over arbitrary human, agent, protocol, or Go `%v`
+  map text defaults to opaque omission unless the issue explicitly asks for
+  structured parsing with fixtures. **Earned by:** #938 / PR #942, where the
+  design already said bounded evidence, metadata-first output, no raw GraphQL
+  payloads, and no worker/runtime mutation, but the first implementation still
+  chased a complex parser for GraphQL-like runner output and `%v` map text.
+  Review pressure then found parser/redaction edge cases one by one instead of
+  challenging the boundary choice up front. This is separate from #943, which
+  tracks the LOC/readability budget incentive exposed by the same PR; #944 is
+  the direction-setting lesson: choose an opaque boundary before parser edge
+  cases exist.
+
 ## Conventions
 
 - **All external I/O is timeout-bounded.** **Earned by:** #287

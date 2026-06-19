@@ -34,6 +34,18 @@ metadata:
 
 动手前先执行协议 §9 的 **issue-phase 探测**，判定命令与处置路由全部以 [`docs/runbooks/pr-review-merge-protocol.md`](../../../docs/runbooks/pr-review-merge-protocol.md#9-concurrent-sessions-on-one-pr) §9 为唯一来源，照其结果执行。**模式自主选定并通报，不询问。**
 
+### 1.5 负面约束 preflight（设计 / 边界类 issue 必须）
+如果 issue 引用了 design doc、runbook、SPEC boundary、redaction/retention rule、non-goal list，或正文里出现 "do not store / parse / mutate / persist / automate / gate" 这类负面约束，**写代码前先写短 guardrail**。至少列出：
+
+- **Required behavior**：必须生成 / 修改 / 证明什么。
+- **Negative constraints**：不得存储、解析、变更、持久化、自动化、当成 gate 的东西。
+- **Opaque boundaries**：哪些输入是任意 human / agent / protocol text，除非 issue 明确要求 parser，否则不得解析。
+- **Design challenge**：如果 redaction / retention 需求看起来必须靠 grammar / parser / heuristic 理解自由文本才能满足，先停下，说明为什么 opaque omission 不够。
+
+默认规则：对任意文本的 redaction / retention 要求，优先 **opaque omission**（整体省略 / 引用元数据 / 有界摘要），不要为了"更聪明地删敏"去写 protocol-specific parser。只有当 issue 明确要求 structured parsing 且给出 fixtures / grammar 时，才把解析器当实现范围。
+
+首轮 pre-push reviewer brief 必须带上这份 guardrail，让 reviewer 先攻击方向和边界，而不是只追 edge cases；具体 reviewer 路由仍只按共享协议 §3 执行，不在这里复述。
+
 ### 2. SPEC / upstream 调研（写代码之前）
 - 读 SPEC.md 相关章节 + 对应 Elixir 模块（`orchestrator.ex` / `codex/app_server.ex` / `tracker.ex` / `config/schema.ex`），歧义以 Elixir 为准。
 - **审查相邻路径**（AGENTS.md「Cross-cutting checklist」item 1）：grep 你要改的 SPEC 概念符号，列出其它 consumer；aiops 扩展（service routing `selectRoutedCandidates`、multi-tracker fan-out、per-state capacity caps、eligibility filter、reconcile hooks）要么也在你的新路径生效，要么写明为何不同。**踩坑实例**：blocked vs running 清理路径只兑现了一半契约。
