@@ -63,6 +63,69 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 	}
 }
 
+func TestTraceHarnessFollowThroughRunbookDocumentsAgentBoundary(t *testing.T) {
+	root := repoRoot(t)
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatalf("read README: %v", err)
+	}
+	if !strings.Contains(string(readme), "docs/runbooks/trace-harness-follow-through.md") {
+		t.Fatalf("README does not link the trace harness follow-through runbook")
+	}
+
+	reportRunbook, err := os.ReadFile(filepath.Join(root, "docs", "runbooks", "trace-harness-report.md"))
+	if err != nil {
+		t.Fatalf("read trace harness report runbook: %v", err)
+	}
+	if !strings.Contains(string(reportRunbook), "trace-harness-follow-through.md") {
+		t.Fatalf("trace harness report runbook does not link follow-through runbook")
+	}
+
+	path := filepath.Join(root, "docs", "runbooks", "trace-harness-follow-through.md")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(body)
+	normalizedText := strings.Join(strings.Fields(text), " ")
+	for _, want := range []string{
+		"approved proposal",
+		"trace-harness-report/v2",
+		"approved cluster id",
+		"proposals.github_issue.body",
+		"proposals.draft_pr.plan",
+		"source report",
+		"cluster id",
+		"operator approval",
+		"WORKFLOW.md",
+		"reviewer rubrics",
+		"LEARNINGS.md",
+		"skills",
+		"hooks",
+		"tests",
+		"CI",
+		"docs",
+		"owned branch",
+		"normal PR",
+		"closed no-op with evidence",
+		"no worker-side writeback",
+		"unattended merge",
+		"evaluator gates",
+		"pr-review-merge-protocol.md",
+		".claude/skills/handle-issue/SKILL.md",
+		".claude/skills/handle-pr/SKILL.md",
+		"failure report",
+		"L4 evidence trail",
+	} {
+		if !strings.Contains(normalizedText, want) {
+			t.Fatalf("follow-through runbook missing %q\n%s", want, text)
+		}
+	}
+	if got, want := strings.Count(normalizedText, "operator approval reference"), 3; got < want {
+		t.Fatalf("follow-through runbook mentions operator approval reference %d times; want at least %d\n%s", got, want, text)
+	}
+}
+
 func TestTraceHarnessReportScriptGroupsWorkerLogsAndRedactsCloneURLs(t *testing.T) {
 	root := repoRoot(t)
 	dir := t.TempDir()
