@@ -34,6 +34,7 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 	for _, want := range []string{
 		"python3 scripts/trace-harness-report.py",
 		"--worker-log",
+		"trace-harness-report/v2",
 		"Supported inputs",
 		"worker process logs",
 		"64 KiB per run",
@@ -51,6 +52,9 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 		"Known limitation",
 		"Unsupported inputs",
 		"workspace `.aiops` artifacts",
+		"proposals.github_issue.body",
+		"proposals.draft_pr.plan",
+		"without hand-writing",
 		"Examples",
 	} {
 		if !strings.Contains(normalizedText, want) {
@@ -84,7 +88,7 @@ func TestTraceHarnessReportScriptGroupsWorkerLogsAndRedactsCloneURLs(t *testing.
 		t.Fatalf("read report: %v", err)
 	}
 	report := parseTraceReport(t, raw)
-	if report.SchemaVersion != "trace-harness-report/v1" || len(report.Clusters) != 2 {
+	if report.SchemaVersion != "trace-harness-report/v2" || len(report.Clusters) != 2 {
 		t.Fatalf("unexpected report: %#v", report)
 	}
 	timeout := findCluster(t, report, "runner-timeout")
@@ -169,6 +173,83 @@ func TestTraceHarnessReportScriptReportsAffectedPullRequests(t *testing.T) {
 	cluster := findCluster(t, report, "runner-timeout")
 	if !contains(cluster.Affected.PullRequests, "938") {
 		t.Fatalf("pull request id was not reported as affected: %#v", cluster.Affected.PullRequests)
+	}
+}
+
+func TestTraceHarnessReportScriptRendersActionableProposals(t *testing.T) {
+	root := repoRoot(t)
+	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 issue_identifier=GH-1 session_id=session-1 msg="timeout" payload=map[elapsed_ms:60000 output_bytes:70000 output_head:secret-output]` + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "runner-timeout")
+	if cluster.ProposedNextAction != "issue or draft-PR proposal" {
+		t.Fatalf("ProposedNextAction = %q; want issue or draft-PR proposal", cluster.ProposedNextAction)
+	}
+	if cluster.Proposals.GitHubIssue.Title != "Trace harness: address runner-timeout cluster" {
+		t.Fatalf("GitHub issue title = %q", cluster.Proposals.GitHubIssue.Title)
+	}
+	issueBody := cluster.Proposals.GitHubIssue.Body
+	for _, want := range []string{
+		"Trace harness cluster `runner-timeout` reports runner timeout.",
+		"Part of #937",
+		"docs/design/trace-driven-harness-improvement.md",
+		"Report: trace-harness-report/v2",
+		"Failure class: runner timeout",
+		"- issues: `issue-1`",
+		"- issue_identifiers: `GH-1`",
+		"- runs: `run-1`",
+		"- sessions: `session-1`",
+		"Evidence references:",
+		"worker.log:1",
+		"Suspected harness surface",
+		"Non-goals / SPEC boundary",
+		"Do not automatically open issues or PRs from the worker.",
+		"Acceptance criteria",
+		"Verification expectations",
+		"Redaction",
+	} {
+		if !strings.Contains(issueBody, want) {
+			t.Fatalf("issue proposal missing %q\n%s", want, issueBody)
+		}
+	}
+	if strings.Contains(issueBody, "secret-output") || strings.Contains(issueBody, "output_head:secret-output") {
+		t.Fatalf("issue proposal leaked opaque payload:\n%s", issueBody)
+	}
+
+	plan := cluster.Proposals.DraftPR.Plan
+	for _, want := range []string{
+		"## Goal",
+		"## Implementation plan",
+		"normal coding-agent workflow",
+		"Record a reviewed no-op decision",
+		"Do not create worker-owned verifier or evaluator gates.",
+		"Confirm the change preserves the redaction and SPEC-boundary constraints",
+	} {
+		if !strings.Contains(plan, want) {
+			t.Fatalf("draft PR plan missing %q\n%s", want, plan)
+		}
+	}
+	if cluster.Proposals.DraftPR.Title != "fix(harness): address runner-timeout trace cluster" {
+		t.Fatalf("draft PR title = %q", cluster.Proposals.DraftPR.Title)
+	}
+}
+
+func TestTraceHarnessReportScriptRendersStableProposalText(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "worker.log")
+	body := []byte(`2026/06/18 09:00:00 event=turn_input_required task_id=run-1 issue_id=issue-1 msg="input" payload=map[method:approval]` + "\n")
+	if err := os.WriteFile(logPath, body, 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	first := findCluster(t, parseTraceReport(t, runTraceHarnessReportRawPath(t, root, logPath)), "input-required")
+	second := findCluster(t, parseTraceReport(t, runTraceHarnessReportRawPath(t, root, logPath)), "input-required")
+	if first.Proposals.GitHubIssue.Body != second.Proposals.GitHubIssue.Body || first.Proposals.DraftPR.Plan != second.Proposals.DraftPR.Plan {
+		t.Fatalf("proposal text was not deterministic\nfirst issue:\n%s\nsecond issue:\n%s", first.Proposals.GitHubIssue.Body, second.Proposals.GitHubIssue.Body)
+	}
+	if strings.Contains(first.Proposals.GitHubIssue.Body, "generated_at") || strings.Contains(first.Proposals.DraftPR.Plan, "generated_at") {
+		t.Fatalf("proposal should not include generation time:\n%s\n%s", first.Proposals.GitHubIssue.Body, first.Proposals.DraftPR.Plan)
 	}
 }
 
@@ -619,6 +700,39 @@ func TestTraceHarnessReportScriptBoundsFullClusterByBytes(t *testing.T) {
 	}
 }
 
+func TestTraceHarnessReportScriptRerendersProposalsAfterFinalClusterTrimming(t *testing.T) {
+	root := repoRoot(t)
+	var body strings.Builder
+	for idx := 0; idx < 9500; idx++ {
+		fmt.Fprintf(&body, "2026/06/18 09:00:00 event=runner_timeout task_id=run-%d issue_id=issue-%d session_id=session-%d msg=\"x\"\n", idx%64, idx, idx)
+	}
+	report := runTraceHarnessReport(t, root, body.String())
+
+	cluster := findCluster(t, report, "runner-timeout")
+	for key, omitted := range cluster.Affected.Omitted {
+		want := fmt.Sprintf("%d omitted by cluster byte cap", omitted)
+		if !strings.Contains(cluster.Proposals.GitHubIssue.Body, want) || !strings.Contains(cluster.Proposals.DraftPR.Plan, want) {
+			t.Fatalf("proposal omitted count for %s is stale: want %q\nissue:\n%s\nplan:\n%s", key, want, cluster.Proposals.GitHubIssue.Body, cluster.Proposals.DraftPR.Plan)
+		}
+	}
+}
+
+func TestTraceHarnessReportScriptPreservesCumulativeOmittedAffectedCounts(t *testing.T) {
+	root := repoRoot(t)
+	const totalSessions = 18000
+	var body strings.Builder
+	for idx := 0; idx < totalSessions; idx++ {
+		fmt.Fprintf(&body, "2026/06/18 09:00:00 event=runner_timeout task_id=run-%d issue_id=issue-shared session_id=session-%d msg=\"x\"\n", idx%64, idx)
+	}
+	report := runTraceHarnessReport(t, root, body.String())
+
+	cluster := findCluster(t, report, "runner-timeout")
+	got := len(cluster.Affected.Sessions) + cluster.Affected.Omitted["sessions"]
+	if got != totalSessions {
+		t.Fatalf("sessions accounted for = %d; want %d (kept=%d omitted=%d)", got, totalSessions, len(cluster.Affected.Sessions), cluster.Affected.Omitted["sessions"])
+	}
+}
+
 func TestTraceHarnessReportScriptBoundsLargeScalarMetadata(t *testing.T) {
 	root := repoRoot(t)
 	body := `2026/06/18 09:00:00 event=runner_timeout task_id=issue-1 issue_id=issue-1 msg="timeout" payload=map[model:` + strings.Repeat("m", 300*1024) + ` timeout_ms:60000]` + "\n"
@@ -766,8 +880,9 @@ type traceReport struct {
 }
 
 type traceCluster struct {
-	ID       string `json:"id"`
-	Affected struct {
+	ID                 string `json:"id"`
+	ProposedNextAction string `json:"proposed_next_action"`
+	Affected           struct {
 		Issues           []string       `json:"issues"`
 		IssueIdentifiers []string       `json:"issue_identifiers"`
 		PullRequests     []string       `json:"pull_requests"`
@@ -779,4 +894,14 @@ type traceCluster struct {
 		Excerpt  string            `json:"excerpt"`
 		Metadata map[string]string `json:"metadata"`
 	} `json:"evidence"`
+	Proposals struct {
+		GitHubIssue struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+		} `json:"github_issue"`
+		DraftPR struct {
+			Title string `json:"title"`
+			Plan  string `json:"plan"`
+		} `json:"draft_pr"`
+	} `json:"proposals"`
 }
