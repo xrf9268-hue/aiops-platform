@@ -133,7 +133,7 @@ Useful filters:
 ```bash
 trellis channel wait T --as main --from check --kind done --timeout 15m
 trellis channel wait T --as main --from check,check-cx --kind done --all --timeout 15m
-trellis channel wait T --as worker --kind interrupt_requested,interrupted --timeout 1h
+trellis channel wait T --as worker --tag interrupt --timeout 1h
 trellis channel wait T --as main --thread release-note --action status --timeout 10m
 ```
 
@@ -149,7 +149,7 @@ Don't make it a habit, and **never** do it for forum channels.
 Why subcommands first:
 
 - `messages` already replays the file with filters (`--kind`, `--from`,
-  `--last`, `--thread`, `--action`) and gives you `--raw` for the
+  `--last`, `--tag`, `--thread`, `--action`) and gives you `--raw` for the
   exact JSON. Anything you would write a one-liner for, `messages` already
   does.
 - `wait` consumes the same file with EOF semantics — re-implementing that
@@ -161,7 +161,7 @@ Why subcommands first:
 ### Forum channels: never parse `events.jsonl` directly
 
 Forum channels multiplex many logical threads onto a single `events.jsonl`.
-Each event carries `thread` and `action` fields that the forum
+Each event carries `thread`, `action`, and tag fields that the forum
 subcommands know how to fold together. Parsing the file by hand will:
 
 - Mix threads together and make a thread look incoherent.
@@ -174,16 +174,16 @@ Use the forum-aware views instead:
 
 ```bash
 # List logical threads inside the forum channel
-trellis channel forum <channel>
+trellis channel forum list <channel>
 
 # Inspect one thread end-to-end
-trellis channel thread <channel> <thread>
+trellis channel thread show <channel> <thread>
 
 # Replay messages for a thread (supports --raw, --kind, --last)
 trellis channel messages <channel> --thread <thread> --raw --last 100
 
-# View projected context entries
-trellis channel context list <channel>
+# What a specific worker still has pending
+trellis channel context <channel> --as <worker>
 ```
 
 Direct reads of `events.jsonl` are reserved for the case where the CLI

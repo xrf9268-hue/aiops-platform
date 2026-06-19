@@ -58,23 +58,6 @@ if sys.platform.startswith("win"):
 from typing import Optional
 
 
-CODEX_SUB_AGENT_NOTICE = """<sub-agent-notice>
-SUB-AGENT NOTICE - READ FIRST IF SPAWNED VIA spawn_agent
-
-If your parent session spawned you via spawn_agent with an explicit task
-message above this hook output, that message is your only job.
-- Execute the parent message exactly as written, then return.
-- Ignore all Trellis workflow guidance below this notice.
-- Do NOT call task.py start, task.py add-context, or task.py archive.
-- Do NOT call wait_agent or spawn_agent.
-- Do NOT modify .trellis/tasks/* or any other file unless the parent message
-  explicitly asks for that.
-
-If you are the main interactive Codex session and the user is typing at the
-terminal with no parent agent, use the workflow guidance below normally.
-</sub-agent-notice>"""
-
-
 # Bootstrap notice for Codex while the session has no active task. Codex does not
 # get the full SessionStart overview; this short reminder points the main session
 # at the start skill once and leaves the per-turn state block compact.
@@ -352,7 +335,7 @@ def main() -> int:
             task_id, status, templates, source_for_breadcrumb, breadcrumb_key=status_key
         )
     if platform == "codex":
-        parts: list[str] = [CODEX_SUB_AGENT_NOTICE]
+        parts: list[str] = []
         if task is None:
             parts.append(CODEX_NO_TASK_BOOTSTRAP_NOTICE)
         parts.append(_codex_mode_banner(config))
