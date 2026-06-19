@@ -34,7 +34,7 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 	for _, want := range []string{
 		"python3 scripts/trace-harness-report.py",
 		"--worker-log",
-		"trace-harness-report/v2",
+		"trace-harness-report/v3",
 		"Supported inputs",
 		"worker process logs",
 		"64 KiB per run",
@@ -54,6 +54,13 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 		"workspace `.aiops` artifacts",
 		"proposals.github_issue.body",
 		"proposals.draft_pr.plan",
+		"proposals.advisory_evaluator",
+		"report-only evaluator candidate",
+		"expected true-positive and false-positive",
+		"future report-output contract",
+		"does not block CI, runtime, or merge",
+		"false_positive",
+		"gate-promotion PR",
 		"without hand-writing",
 		"Examples",
 	} {
@@ -90,7 +97,7 @@ func TestTraceHarnessFollowThroughRunbookDocumentsAgentBoundary(t *testing.T) {
 	normalizedText := strings.Join(strings.Fields(text), " ")
 	for _, want := range []string{
 		"approved proposal",
-		"trace-harness-report/v2",
+		"trace-harness-report/v3",
 		"approved cluster id",
 		"proposals.github_issue.body",
 		"proposals.draft_pr.plan",
@@ -151,7 +158,7 @@ func TestTraceHarnessReportScriptGroupsWorkerLogsAndRedactsCloneURLs(t *testing.
 		t.Fatalf("read report: %v", err)
 	}
 	report := parseTraceReport(t, raw)
-	if report.SchemaVersion != "trace-harness-report/v2" || len(report.Clusters) != 2 {
+	if report.SchemaVersion != "trace-harness-report/v3" || len(report.Clusters) != 2 {
 		t.Fatalf("unexpected report: %#v", report)
 	}
 	timeout := findCluster(t, report, "runner-timeout")
@@ -245,8 +252,8 @@ func TestTraceHarnessReportScriptRendersActionableProposals(t *testing.T) {
 	report := runTraceHarnessReport(t, root, body)
 
 	cluster := findCluster(t, report, "runner-timeout")
-	if cluster.ProposedNextAction != "issue or draft-PR proposal" {
-		t.Fatalf("ProposedNextAction = %q; want issue or draft-PR proposal", cluster.ProposedNextAction)
+	if cluster.ProposedNextAction != "issue, draft-PR, or advisory evaluator proposal" {
+		t.Fatalf("ProposedNextAction = %q; want issue, draft-PR, or advisory evaluator proposal", cluster.ProposedNextAction)
 	}
 	if cluster.Proposals.GitHubIssue.Title != "Trace harness: address runner-timeout cluster" {
 		t.Fatalf("GitHub issue title = %q", cluster.Proposals.GitHubIssue.Title)
@@ -256,7 +263,7 @@ func TestTraceHarnessReportScriptRendersActionableProposals(t *testing.T) {
 		"Trace harness cluster `runner-timeout` reports runner timeout.",
 		"Part of #937",
 		"docs/design/trace-driven-harness-improvement.md",
-		"Report: trace-harness-report/v2",
+		"Report: trace-harness-report/v3",
 		"Failure class: runner timeout",
 		"- issues: `issue-1`",
 		"- issue_identifiers: `GH-1`",
@@ -294,6 +301,118 @@ func TestTraceHarnessReportScriptRendersActionableProposals(t *testing.T) {
 	}
 	if cluster.Proposals.DraftPR.Title != "fix(harness): address runner-timeout trace cluster" {
 		t.Fatalf("draft PR title = %q", cluster.Proposals.DraftPR.Title)
+	}
+}
+
+func TestTraceHarnessReportScriptRendersAdvisoryEvaluatorCandidate(t *testing.T) {
+	root := repoRoot(t)
+	body := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout msg="timeout" payload=map[issue_id:issue-1 issue_identifier:GH-1 task_id:run-1 session_id:session-1 elapsed_ms:60000 output_bytes:70000 output_head:secret-output]`,
+		`2026/06/18 09:01:00 event=runner_timeout msg="timeout" payload=map[issue_id:issue-2 issue_identifier:GH-2 task_id:run-2 session_id:session-2 elapsed_ms:61000 output_bytes:71000 output_head:another-secret]`,
+	}, "\n") + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "runner-timeout")
+	evaluator := cluster.Proposals.AdvisoryEvaluator
+	if evaluator.ID != "runner-timeout-advisory-evaluator" {
+		t.Fatalf("evaluator ID = %q", evaluator.ID)
+	}
+	if evaluator.Mode != "report-only/advisory" || evaluator.TargetFailureClass != "runner timeout" {
+		t.Fatalf("evaluator mode/class = %q/%q", evaluator.Mode, evaluator.TargetFailureClass)
+	}
+	if evaluator.CurrentSignal != "positive-recurring-cluster" {
+		t.Fatalf("current signal = %q; want positive recurring cluster", evaluator.CurrentSignal)
+	}
+	if len(evaluator.Fixtures) != 2 {
+		t.Fatalf("fixtures = %d; want 2", len(evaluator.Fixtures))
+	}
+	if !contains(evaluator.RecoveredAffectedIDs.Issues, "issue-1") ||
+		!contains(evaluator.RecoveredAffectedIDs.Issues, "issue-2") ||
+		!contains(evaluator.RecoveredAffectedIDs.IssueIdentifiers, "GH-1") ||
+		!contains(evaluator.RecoveredAffectedIDs.Runs, "run-1") ||
+		!contains(evaluator.RecoveredAffectedIDs.Sessions, "session-2") {
+		t.Fatalf("evaluator recovered affected ids = %#v", evaluator.RecoveredAffectedIDs)
+	}
+	if !contains(cluster.Evidence[0].Affected.Issues, "issue-1") ||
+		!contains(cluster.Evidence[0].Affected.IssueIdentifiers, "GH-1") ||
+		!contains(cluster.Evidence[0].Affected.Runs, "run-1") ||
+		!contains(cluster.Evidence[0].Affected.Sessions, "session-1") {
+		t.Fatalf("first evidence affected ids = %#v", cluster.Evidence[0].Affected)
+	}
+	first := evaluator.Fixtures[0]
+	if first.Name != "runner-timeout-positive-1" || first.EventKind != "runner_timeout" || first.Expected != "match" {
+		t.Fatalf("first fixture = %#v", first)
+	}
+	if !strings.Contains(first.SourceRef, "worker.log:1") || !strings.Contains(first.BoundedExcerpt, "payload=[redacted-payload]") {
+		t.Fatalf("first fixture missing redacted source evidence: %#v", first)
+	}
+	raw, err := json.Marshal(evaluator)
+	if err != nil {
+		t.Fatalf("marshal evaluator: %v", err)
+	}
+	if strings.Contains(string(raw), "secret-output") || strings.Contains(string(raw), "another-secret") {
+		t.Fatalf("evaluator leaked opaque payload:\n%s", raw)
+	}
+	for _, want := range []string{"two independent recovered issue, run, session, or PR references", "trusted metadata", "redacted evidence references"} {
+		if !containsSubstring(evaluator.ExpectedSignalBehavior.TruePositive, want) {
+			t.Fatalf("true-positive behavior missing %q: %#v", want, evaluator.ExpectedSignalBehavior.TruePositive)
+		}
+	}
+	for _, want := range []string{"opaque payload text", "natural language as a machine contract"} {
+		if !containsSubstring(evaluator.ExpectedSignalBehavior.FalsePositive, want) {
+			t.Fatalf("false-positive behavior missing %q: %#v", want, evaluator.ExpectedSignalBehavior.FalsePositive)
+		}
+	}
+	if evaluator.Execution.Mode != "report-only" || evaluator.Execution.BlocksCI || evaluator.Execution.BlocksRuntime || evaluator.Execution.BlocksMerge {
+		t.Fatalf("evaluator execution should be report-only and non-blocking: %#v", evaluator.Execution)
+	}
+	if evaluator.FutureReportOutput.Schema != "trace-harness-advisory-evaluator-result/v1" {
+		t.Fatalf("future report schema = %q", evaluator.FutureReportOutput.Schema)
+	}
+	for _, want := range []string{"evaluator_id", "source_cluster_id", "signal", "false_positive_notes"} {
+		if !contains(evaluator.FutureReportOutput.Fields, want) {
+			t.Fatalf("future output fields missing %q: %#v", want, evaluator.FutureReportOutput.Fields)
+		}
+	}
+	if !contains(evaluator.GatePromotionEvidence, "A separate PR explicitly proposes gate promotion after review history exists.") {
+		t.Fatalf("gate promotion evidence missing separate-PR requirement: %#v", evaluator.GatePromotionEvidence)
+	}
+}
+
+func TestTraceHarnessReportScriptMarksMixedAffectedEvidenceRecurring(t *testing.T) {
+	root := repoRoot(t)
+	body := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout task_id=run-only msg="timeout" payload=map[elapsed_ms:60000]`,
+		`2026/06/18 09:01:00 event=runner_timeout msg="timeout" payload=map[issue_id:issue-only elapsed_ms:61000]`,
+	}, "\n") + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "runner-timeout")
+	evaluator := cluster.Proposals.AdvisoryEvaluator
+	if got := evaluator.CurrentSignal; got != "positive-recurring-cluster" {
+		t.Fatalf("current signal for mixed affected evidence = %q; want positive-recurring-cluster", got)
+	}
+	if !contains(cluster.Evidence[0].Affected.Runs, "run-only") ||
+		!contains(cluster.Evidence[1].Affected.Issues, "issue-only") {
+		t.Fatalf("mixed evidence affected ids = %#v / %#v", cluster.Evidence[0].Affected, cluster.Evidence[1].Affected)
+	}
+}
+
+func TestTraceHarnessReportScriptDoesNotMarkDuplicateEvidenceRecurring(t *testing.T) {
+	root := repoRoot(t)
+	body := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout" payload=map[elapsed_ms:60000]`,
+		`2026/06/18 09:01:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout" payload=map[elapsed_ms:61000]`,
+	}, "\n") + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "runner-timeout")
+	evaluator := cluster.Proposals.AdvisoryEvaluator
+	if got := evaluator.CurrentSignal; got != "candidate-only-needs-more-evidence" {
+		t.Fatalf("current signal for duplicate evidence = %q; want candidate-only-needs-more-evidence", got)
+	}
+	if len(evaluator.Fixtures) != 2 {
+		t.Fatalf("duplicate evidence fixtures = %d; want retained examples even when signal is candidate-only", len(evaluator.Fixtures))
 	}
 }
 
@@ -761,6 +880,16 @@ func TestTraceHarnessReportScriptBoundsFullClusterByBytes(t *testing.T) {
 	if got := cluster.Affected.Omitted["issues"]; got == 0 {
 		t.Fatalf("affected omitted counts were not reported: %#v", cluster.Affected.Omitted)
 	}
+	if len(cluster.Affected.Issues) == 0 || len(cluster.Affected.Sessions) == 0 {
+		t.Fatalf("cluster lost all concrete affected ids: issues=%d sessions=%d omitted=%#v", len(cluster.Affected.Issues), len(cluster.Affected.Sessions), cluster.Affected.Omitted)
+	}
+	evaluator := cluster.Proposals.AdvisoryEvaluator
+	if len(evaluator.RecoveredAffectedIDs.Issues) > 5 || len(evaluator.RecoveredAffectedIDs.Sessions) > 5 {
+		t.Fatalf("evaluator recovered affected ids are unbounded: %#v", evaluator.RecoveredAffectedIDs)
+	}
+	if evaluator.RecoveredAffectedIDs.Omitted["issues"] == 0 || evaluator.RecoveredAffectedIDs.Omitted["sessions"] == 0 {
+		t.Fatalf("evaluator recovered affected ids omitted counts missing: %#v", evaluator.RecoveredAffectedIDs)
+	}
 }
 
 func TestTraceHarnessReportScriptRerendersProposalsAfterFinalClusterTrimming(t *testing.T) {
@@ -937,6 +1066,15 @@ func contains(values []string, want string) bool {
 	return false
 }
 
+func containsSubstring(values []string, want string) bool {
+	for _, value := range values {
+		if strings.Contains(value, want) {
+			return true
+		}
+	}
+	return false
+}
+
 type traceReport struct {
 	SchemaVersion string `json:"schema_version"`
 	Clusters      []traceCluster
@@ -956,6 +1094,14 @@ type traceCluster struct {
 	Evidence []struct {
 		Excerpt  string            `json:"excerpt"`
 		Metadata map[string]string `json:"metadata"`
+		Affected struct {
+			Issues           []string       `json:"issues"`
+			IssueIdentifiers []string       `json:"issue_identifiers"`
+			PullRequests     []string       `json:"pull_requests"`
+			Runs             []string       `json:"runs"`
+			Sessions         []string       `json:"sessions"`
+			Omitted          map[string]int `json:"omitted"`
+		} `json:"affected"`
 	} `json:"evidence"`
 	Proposals struct {
 		GitHubIssue struct {
@@ -966,5 +1112,43 @@ type traceCluster struct {
 			Title string `json:"title"`
 			Plan  string `json:"plan"`
 		} `json:"draft_pr"`
+		AdvisoryEvaluator struct {
+			ID                   string `json:"id"`
+			Title                string `json:"title"`
+			Mode                 string `json:"mode"`
+			TargetFailureClass   string `json:"target_failure_class"`
+			CurrentSignal        string `json:"current_signal"`
+			RecoveredAffectedIDs struct {
+				Issues           []string       `json:"issues"`
+				IssueIdentifiers []string       `json:"issue_identifiers"`
+				PullRequests     []string       `json:"pull_requests"`
+				Runs             []string       `json:"runs"`
+				Sessions         []string       `json:"sessions"`
+				Omitted          map[string]int `json:"omitted"`
+			} `json:"recovered_affected_ids"`
+			Fixtures []struct {
+				Name           string            `json:"name"`
+				SourceRef      string            `json:"source_ref"`
+				EventKind      string            `json:"event_kind"`
+				Expected       string            `json:"expected"`
+				BoundedExcerpt string            `json:"bounded_excerpt"`
+				Metadata       map[string]string `json:"metadata"`
+			} `json:"fixtures"`
+			ExpectedSignalBehavior struct {
+				TruePositive  []string `json:"true_positive"`
+				FalsePositive []string `json:"false_positive"`
+			} `json:"expected_signal_behavior"`
+			Execution struct {
+				Mode          string `json:"mode"`
+				BlocksCI      bool   `json:"blocks_ci"`
+				BlocksRuntime bool   `json:"blocks_runtime"`
+				BlocksMerge   bool   `json:"blocks_merge"`
+			} `json:"execution"`
+			FutureReportOutput struct {
+				Schema string   `json:"schema"`
+				Fields []string `json:"fields"`
+			} `json:"future_report_output"`
+			GatePromotionEvidence []string `json:"gate_promotion_evidence"`
+		} `json:"advisory_evaluator"`
 	} `json:"proposals"`
 }

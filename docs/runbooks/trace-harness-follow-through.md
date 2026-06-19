@@ -14,7 +14,7 @@ any other issue.
 
 ## Inputs
 
-- source report JSON using schema `trace-harness-report/v2`
+- source report JSON using schema `trace-harness-report/v3`
 - approved cluster id
 - generated `proposals.github_issue.body` or `proposals.draft_pr.plan`
 - operator approval record, such as an issue comment, chat instruction, or
