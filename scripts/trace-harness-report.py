@@ -627,7 +627,10 @@ def evaluator_recovered_affected_ids(cluster: dict) -> dict:
 
 
 def independent_occurrence_count(cluster: dict) -> int:
-    return max(independent_evidence_occurrence_count(cluster), independent_affected_column_count(cluster))
+    # Retained evidence is overlap-merged so records sharing a recovered affected id
+    # count once; byte-bound trimmed records survive only as omitted counts, so add
+    # them rather than letting a single column max override the overlap merge (#941).
+    return independent_evidence_occurrence_count(cluster) + trimmed_affected_occurrence_count(cluster)
 
 
 def independent_evidence_occurrence_count(cluster: dict) -> int:
@@ -659,13 +662,12 @@ def add_occurrence_component(components: list[set[str]], tokens: set[str]) -> No
     components.append(merged)
 
 
-def independent_affected_column_count(cluster: dict) -> int:
-    affected = cluster.get("affected", {})
-    omitted = affected.get("omitted", {})
-    counts = []
-    for key in AFFECTED_KEYS:
-        counts.append(len(affected.get(key, [])) + int(omitted.get(key, 0)))
-    return max(counts, default=0)
+def trimmed_affected_occurrence_count(cluster: dict) -> int:
+    # Only counts affected ids dropped by the byte cap: retained ids are already
+    # represented in (overlap-merged) evidence, so counting them here would let the
+    # cluster cap inflate recurrence beyond independent records.
+    omitted = cluster.get("affected", {}).get("omitted", {})
+    return max((int(omitted.get(key, 0)) for key in AFFECTED_KEYS), default=0)
 
 
 def evaluator_fixtures(cluster: dict) -> list[dict]:

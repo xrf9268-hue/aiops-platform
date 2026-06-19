@@ -416,6 +416,21 @@ func TestTraceHarnessReportScriptDoesNotMarkDuplicateEvidenceRecurring(t *testin
 	}
 }
 
+func TestTraceHarnessReportScriptMergesRetainedEvidenceSharingAffectedID(t *testing.T) {
+	root := repoRoot(t)
+	body := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout" payload=map[elapsed_ms:60000]`,
+		`2026/06/18 09:01:00 event=runner_timeout task_id=run-2 issue_id=issue-1 session_id=session-2 msg="timeout" payload=map[elapsed_ms:61000]`,
+	}, "\n") + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "runner-timeout")
+	evaluator := cluster.Proposals.AdvisoryEvaluator
+	if got := evaluator.CurrentSignal; got != "candidate-only-needs-more-evidence" {
+		t.Fatalf("current signal for retained evidence sharing issue-1 = %q; want candidate-only-needs-more-evidence", got)
+	}
+}
+
 func TestTraceHarnessReportScriptRendersStableProposalText(t *testing.T) {
 	root := repoRoot(t)
 	dir := t.TempDir()
