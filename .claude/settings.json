@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR": "1"
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -6,12 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/session-start.sh",
-            "timeout": 120
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.py",
+            "command": "python3 .claude/hooks/session-start.py",
             "timeout": 30
           }
         ]
@@ -21,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.py",
+            "command": "python3 .claude/hooks/session-start.py",
             "timeout": 30
           }
         ]
@@ -31,30 +29,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.py",
+            "command": "python3 .claude/hooks/session-start.py",
             "timeout": 30
-          }
-        ]
-      },
-      {
-        "matcher": "resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/session-start.py",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/scripts/format-go.sh",
-            "timeout": 15
           }
         ]
       }
@@ -65,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/inject-subagent-context.py",
+            "command": "python3 .claude/hooks/inject-subagent-context.py",
             "timeout": 30
           }
         ]
@@ -75,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/inject-subagent-context.py",
+            "command": "python3 .claude/hooks/inject-subagent-context.py",
             "timeout": 30
           }
         ]
@@ -86,11 +62,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/.claude/hooks/inject-workflow-state.py",
+            "command": "python3 .claude/hooks/inject-workflow-state.py",
             "timeout": 15
           }
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {}
 }

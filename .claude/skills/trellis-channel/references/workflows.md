@@ -64,7 +64,7 @@ trellis channel spawn cr-foo \
 
 trellis channel send cr-foo --as main --to check --text-file /tmp/cr-brief.md
 trellis channel wait cr-foo --as main --kind done --from check --timeout 15m
-trellis channel messages cr-foo --kind done --from check --last 1 --raw
+trellis channel messages cr-foo --kind message --from check --tag final_answer
 ```
 
 For implement work, use `--agent implement` and send an implementation brief.

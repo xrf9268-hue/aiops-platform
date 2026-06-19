@@ -120,17 +120,6 @@ def _has_curated_jsonl_entry(jsonl_path: Path) -> bool:
     return False
 
 
-def _prd_is_ready(task_dir: Path) -> bool:
-    scripts_dir = task_dir.parents[1] / "scripts"
-    if str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
-    try:
-        from common.prd import prd_is_ready  # type: ignore[import-not-found]
-    except Exception:
-        return (task_dir / "prd.md").is_file()
-    return prd_is_ready(task_dir / "prd.md")
-
-
 def should_skip_injection() -> bool:
     """Check if any platform's non-interactive flag is set, or if Trellis
     hooks are explicitly disabled via TRELLIS_HOOKS=0 / TRELLIS_DISABLE_HOOKS=1.
@@ -375,7 +364,7 @@ def _get_task_status(trellis_dir: Path, input_data: dict) -> str:
             "Next-Action: Run `/trellis:finish-work`. If the working tree is dirty, return to Phase 3.4 first."
         )
 
-    prd_ready = _prd_is_ready(task_dir)
+    has_prd = (task_dir / "prd.md").is_file()
     has_design = (task_dir / "design.md").is_file()
     has_implement_plan = (task_dir / "implement.md").is_file()
     implement_jsonl = task_dir / "implement.jsonl"
@@ -385,11 +374,11 @@ def _get_task_status(trellis_dir: Path, input_data: dict) -> str:
         and (not check_jsonl.is_file() or _has_curated_jsonl_entry(check_jsonl))
     )
 
-    if task_status == "planning" and not prd_ready:
+    if task_status == "planning" and not has_prd:
         return (
             f"Status: PLANNING\nTask: {task_title}\n"
             f"Present: {present_line}\n"
-            "Next-Action: Load `trellis-brainstorm` and fill `prd.md` requirements and acceptance criteria. Stay in planning."
+            "Next-Action: Load `trellis-brainstorm` and write `prd.md`. Stay in planning."
         )
 
     if task_status == "planning":
@@ -706,6 +695,7 @@ def _strip_breadcrumb_tag_blocks(content: str) -> str:
     """
     stripped = _BREADCRUMB_TAG_RE.sub("", content)
     stripped = re.sub(r"<!--.*?-->", "", stripped, flags=re.DOTALL)
+    stripped = re.sub(r"^\[(?!/?workflow-state:)/?[^\]\n]+\]\s*\n?", "", stripped, flags=re.MULTILINE)
     return re.sub(r"\n{3,}", "\n\n", stripped).strip()
 
 

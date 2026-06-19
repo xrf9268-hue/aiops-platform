@@ -146,18 +146,18 @@ Flags:
 - `--scope <project|global>` — channel scope.
 - `--stdin` / `--text-file <path>` / `[text]` — replacement instruction body.
 
-The command appends interrupt lifecycle events — downstream `wait` / `messages`
-filters can subscribe with `--kind interrupt_requested,interrupted` to react to
-redirections (e.g. to log the rerouting, or to gate other workers behind a
-coordinator's correction).
+The appended event has `kind: "interrupt"` — downstream `wait` / `messages`
+filters can subscribe with `--kind interrupt` to react to redirections (e.g.
+to log the rerouting, or to gate other workers behind a coordinator's
+correction).
 
 For low-priority hints that should wait for the worker's next turn, send a
-plain targeted message instead:
+plain tagged message instead:
 
 ```bash
 echo "Check this when you reach the next turn." \
   | trellis channel send impl-task --as dispatcher --to codex-impl \
-      --stdin
+      --stdin --tag question
 ```
 
 ## Hard Interrupt — `kill` + `--resume`
