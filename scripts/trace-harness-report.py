@@ -35,9 +35,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-SCHEMA_VERSION = "trace-harness-report/v1"
+SCHEMA_VERSION = "trace-harness-report/v2"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
+MAX_PROPOSAL_EVIDENCE_REFS, MAX_PROPOSAL_AFFECTED_VALUES = 5, 5
+MAX_PROPOSAL_INPUT_REFS, MAX_PROPOSAL_FIELD_BYTES = 3, 512
 
 FIELD_RE = re.compile(r'\b(event|task_id|issue_id|issue_identifier|session_id|pr|pr_number|pr_url|pull_request|pull_request_url)=("[^"]*"|\S+)')
 CLONE_URL_SCHEME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
@@ -99,6 +101,7 @@ def generate(paths: list[Path]) -> dict:
     clusters: dict[str, dict] = {}
     run_bytes: dict[str, int] = {}
     inputs = [input_ref(path) for path in paths]
+    report_ref = proposal_report_reference(inputs)
     for path in paths:
         for finding in parse_worker_log(path):
             add_finding(clusters, run_bytes, finding)
@@ -110,7 +113,7 @@ def generate(paths: list[Path]) -> dict:
             "max_run_evidence_bytes": MAX_RUN_EVIDENCE_BYTES,
             "max_cluster_bytes": MAX_CLUSTER_BYTES,
         },
-        "clusters": [finalize_cluster(clusters[key]) for key in sorted(clusters)],
+        "clusters": [finalize_cluster(clusters[key], report_ref) for key in sorted(clusters)],
     }
 
 
@@ -128,6 +131,19 @@ def input_ref(path: Path) -> dict:
         "bytes": size,
         "sha256": digest.hexdigest(),
     }
+
+
+def proposal_report_reference(inputs: list[dict]) -> str:
+    refs = []
+    for item in inputs[:MAX_PROPOSAL_INPUT_REFS]:
+        sha = item.get("sha256", "")
+        refs.append(
+            f"{item.get('type', 'input')} {md_code(str(item.get('path', '')))} "
+            f"sha256:{sha[:12]} bytes:{item.get('bytes', 0)}"
+        )
+    if len(inputs) > MAX_PROPOSAL_INPUT_REFS:
+        refs.append(f"plus {len(inputs) - MAX_PROPOSAL_INPUT_REFS} more input(s) in report.inputs")
+    return f"{SCHEMA_VERSION}; inputs: " + "; ".join(refs)
 
 
 def parse_worker_log(path: Path) -> Iterator[dict]:
@@ -256,7 +272,7 @@ def new_cluster(finding: dict) -> dict:
         "_evidence_bytes": byte_len("[]"),
         "_evidence_count": 0,
         "suspected_harness_surface": "WORKFLOW.md, reviewer rubrics, skills, hooks, tests, CI, or docs",
-        "proposed_next_action": "issue proposal",
+        "proposed_next_action": "issue or draft-PR proposal",
         "acceptance_criteria": [
             "Future runs cover this failure class with a reviewed harness surface or a documented no-op decision.",
             "The change remains report/agent/workflow-owned and does not add a worker-side gate or tracker writer.",
@@ -324,14 +340,192 @@ def evidence_array_bytes_after(cluster: dict, entry_size: int) -> int:
     return cluster["_evidence_bytes"] + byte_len(",") + entry_size
 
 
-def finalize_cluster(cluster: dict) -> dict:
+def finalize_cluster(cluster: dict, report_ref: str) -> dict:
     for key in AFFECTED_KEYS:
         cluster["affected"][key].sort()
     cluster.pop("_seen", None)  # drop before any encoded_bytes call: sets are not JSON-serializable.
     cluster.pop("_evidence_bytes", None)
     cluster.pop("_evidence_count", None)
     enforce_cluster_bound(cluster)
+    cluster["proposals"] = render_proposals(cluster, report_ref)
+    enforce_cluster_bound(cluster)
+    cluster["proposals"] = render_proposals(cluster, report_ref)
+    enforce_cluster_bound(cluster)
     return cluster
+
+
+def render_proposals(cluster: dict, report_ref: str) -> dict:
+    return {
+        "github_issue": {
+            "title": f"Trace harness: address {cluster['id']} cluster",
+            "body": render_issue_body(cluster, report_ref),
+        },
+        "draft_pr": {
+            "title": f"fix(harness): address {cluster['id']} trace cluster",
+            "plan": render_draft_pr_plan(cluster, report_ref),
+        },
+    }
+
+
+def render_issue_body(cluster: dict, report_ref: str) -> str:
+    lines = [
+        "## Summary",
+        "",
+        f"Trace harness cluster {md_code(cluster['id'])} reports {cluster['symptom_class']}.",
+        "",
+        "Part of #937. Design source: `docs/design/trace-driven-harness-improvement.md`.",
+        "",
+        "## Source",
+        "",
+        f"- Report: {report_ref}",
+        f"- Cluster: {md_code(cluster['id'])}",
+        f"- Failure class: {cluster['symptom_class']}",
+        "",
+        "## Observed evidence",
+        "",
+        *affected_lines(cluster),
+        *evidence_reference_lines(cluster),
+        "",
+        "## Suspected harness surface",
+        "",
+        cluster["suspected_harness_surface"],
+        "",
+        "## Proposed scope",
+        "",
+        proposed_scope(cluster),
+        "",
+        "## Non-goals / SPEC boundary",
+        "",
+        *non_goal_lines(),
+        "",
+        "## Acceptance criteria",
+        "",
+        *checkbox_lines(cluster["acceptance_criteria"]),
+        "",
+        "## Verification expectations",
+        "",
+        *verification_lines(),
+        "",
+        "## Redaction",
+        "",
+        cluster["redaction_note"],
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def render_draft_pr_plan(cluster: dict, report_ref: str) -> str:
+    lines = [
+        "## Goal",
+        "",
+        proposed_scope(cluster),
+        "",
+        "## Source cluster",
+        "",
+        f"- Report: {report_ref}",
+        f"- Cluster: {md_code(cluster['id'])}",
+        f"- Failure class: {cluster['symptom_class']}",
+        "",
+        "## Evidence to review",
+        "",
+        *affected_lines(cluster),
+        *evidence_reference_lines(cluster),
+        "",
+        "## Implementation plan",
+        "",
+        "1. Inspect the suspected harness surface and confirm the smallest repo-owned change.",
+        "2. Implement that change through normal coding-agent workflow on a branch and draft PR.",
+        "3. Add or update focused tests, docs, or fixtures that pin the harness behavior.",
+        "4. Record a reviewed no-op decision instead if the cluster is not actionable.",
+        "",
+        "## Non-goals / SPEC boundary",
+        "",
+        *non_goal_lines(),
+        "",
+        "## Acceptance criteria",
+        "",
+        *checkbox_lines(cluster["acceptance_criteria"]),
+        "",
+        "## Verification expectations",
+        "",
+        *verification_lines(),
+        "",
+        "## Redaction",
+        "",
+        cluster["redaction_note"],
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def proposed_scope(cluster: dict) -> str:
+    return (
+        f"Make a reviewed harness change, or a reviewed no-op decision, that addresses "
+        f"{md_code(cluster['id'])} ({cluster['symptom_class']}) at the suspected harness surface. "
+        "Keep the worker as scheduler/runner/tracker reader and keep issue/PR creation as an explicit "
+        "operator or coding-agent action."
+    )
+
+
+def affected_lines(cluster: dict) -> list[str]:
+    lines = ["Affected ids recovered from trusted metadata:"]
+    affected = cluster.get("affected", {})
+    omitted = affected.get("omitted", {})
+    emitted = False
+    for key in AFFECTED_KEYS:
+        values = affected.get(key, [])
+        if not values and not omitted.get(key):
+            continue
+        sample = ", ".join(md_code(value) for value in values[:MAX_PROPOSAL_AFFECTED_VALUES])
+        if len(values) > MAX_PROPOSAL_AFFECTED_VALUES:
+            sample += f", plus {len(values) - MAX_PROPOSAL_AFFECTED_VALUES} more"
+        if omitted.get(key):
+            sample = f"{sample}; {omitted[key]} omitted by cluster byte cap" if sample else f"{omitted[key]} omitted by cluster byte cap"
+        lines.append(f"- {key}: {sample}")
+        emitted = True
+    if not emitted:
+        lines.append("- No affected ids were recovered beyond the evidence references.")
+    return lines
+
+
+def evidence_reference_lines(cluster: dict) -> list[str]:
+    lines = ["Evidence references:"]
+    evidence = cluster.get("evidence", [])
+    for entry in evidence[:MAX_PROPOSAL_EVIDENCE_REFS]:
+        lines.append(f"- {md_code(entry.get('ref', ''))} ({entry.get('kind', 'event')}{metadata_suffix(entry.get('metadata', {}))})")
+    remaining = len(evidence) - MAX_PROPOSAL_EVIDENCE_REFS
+    if remaining > 0:
+        lines.append(f"- plus {remaining} additional bounded evidence entries in the report cluster.")
+    if not evidence:
+        lines.append("- No bounded evidence entry was retained; inspect the source report inputs.")
+    return lines
+
+
+def metadata_suffix(metadata: dict) -> str:
+    parts = []
+    for key in ("timestamp", "method", "model", "exit_code", "timeout_ms", "elapsed_ms", "duration_ms", "output_bytes", "output_dropped"):
+        if value := metadata.get(key):
+            parts.append(f"{key}={md_code(value)}")
+    return "; " + ", ".join(parts) if parts else ""
+
+
+def checkbox_lines(values: list[str]) -> list[str]:
+    return [f"- [ ] {value}" for value in values]
+
+
+def non_goal_lines() -> list[str]:
+    return [
+        "- Do not automatically open issues or PRs from the worker.",
+        "- Do not mutate tracker state as worker business logic.",
+        "- Do not edit WORKFLOW.md, rubrics, skills, tests, CI, or docs unless a normal reviewed coding-agent change is approved.",
+        "- Do not create worker-owned verifier or evaluator gates.",
+    ]
+
+
+def verification_lines() -> list[str]:
+    return [
+        "- Add deterministic tests or fixtures for the changed harness surface.",
+        "- Run the local gate appropriate to the touched files before opening or updating the PR.",
+        "- Confirm the change preserves the redaction and SPEC-boundary constraints from the trace-driven harness design.",
+    ]
 
 
 def enforce_cluster_bound(cluster: dict) -> None:
@@ -463,6 +657,10 @@ def truncate(text: str, limit: int) -> str:
         return data[:limit].decode(errors="ignore")
     head = data[: limit - len(suffix_data)].decode(errors="ignore")
     return head + suffix
+
+
+def md_code(text: str) -> str:
+    return "`" + truncate(text, MAX_PROPOSAL_FIELD_BYTES).replace("`", "'") + "`"
 
 
 def byte_len(text: str) -> int:

@@ -32,8 +32,8 @@ review comments, human reviews, CI logs, or workspace `.aiops` artifacts such as
 `.aiops/CODEX_APP_SERVER_OUTPUT.txt`, `.aiops/PLAN.md`, or `.aiops/TASK.md`.
 Those are still valid design inputs, but this command only reports from local
 worker logs already collected by the operator. It also does not automatically
-open issues or draft PRs; that belongs to the later proposal-rendering
-milestone.
+open issues or draft PRs; proposal text is rendered for an explicit operator or
+agent action.
 
 ## How the importer reads a worker log
 
@@ -71,7 +71,7 @@ kind>`) is indistinguishable from a real record and may be surfaced.
 
 ## Output schema
 
-The JSON output uses schema `trace-harness-report/v1`. Each cluster contains:
+The JSON output uses schema `trace-harness-report/v2`. Each cluster contains:
 
 - cluster id and short title
 - symptom class
@@ -82,10 +82,35 @@ The JSON output uses schema `trace-harness-report/v1`. Each cluster contains:
   byte cap requires truncating these id lists
 - evidence references with bounded excerpts
 - suspected harness surface to change
-- proposed next action, currently `issue proposal` for supported worker-log
-  failure clusters
+- proposed next action, currently `issue or draft-PR proposal` for supported
+  worker-log failure clusters
 - acceptance criteria for the proposed harness change
 - redaction note naming what was omitted
+- `proposals.github_issue.body`, a ready-to-open issue body for promoting the
+  reviewed cluster without hand-writing the issue
+- `proposals.draft_pr.plan`, a draft-PR plan a normal coding agent can use for
+  follow-through after the operator approves the intent
+
+The proposal fields repeat references and bounded metadata, not raw unbounded
+logs. They preserve the same redaction note and SPEC boundary as the cluster:
+the worker does not open the issue or PR, mutate tracker state, rewrite harness
+files, or create evaluator gates.
+
+## Promoting a reviewed cluster
+
+After reviewing a cluster, extract the generated issue body or draft-PR plan and
+pass it to the normal GitHub or coding-agent workflow:
+
+```bash
+jq -r '.clusters[] | select(.id == "runner-timeout").proposals.github_issue.body' \
+  ./trace-report.json > /tmp/runner-timeout-issue.md
+
+jq -r '.clusters[] | select(.id == "runner-timeout").proposals.draft_pr.plan' \
+  ./trace-report.json > /tmp/runner-timeout-pr-plan.md
+```
+
+Opening the issue, starting the draft PR, or running a coding agent remains an
+explicit workflow action outside this report command.
 
 ## Redaction and bounds
 
