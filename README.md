@@ -541,6 +541,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Binary (non-Docker) deployment runbook](docs/runbooks/binary-deployment.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
+- [Trace harness report](docs/runbooks/trace-harness-report.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)
 - [Gitea bot and branch protection](docs/runbooks/gitea-bot-and-branch-protection.md)
