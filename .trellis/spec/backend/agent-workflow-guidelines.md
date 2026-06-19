@@ -50,12 +50,14 @@ Before changing code or workflow behavior:
 1. Open or update the relevant Trellis task.
 2. Write a short plan with goal, scope, acceptance criteria, dependencies, and
    verification.
-3. For issue work driven by a design document, extract the negative constraints
-   before choosing an implementation: non-goals, unsupported inputs, redaction
-   and retention limits, forbidden runtime side effects, and any "do not store /
-   do not parse / do not mutate" wording. If the simplest design would require
-   understanding arbitrary human or agent text, treat that as a warning sign and
-   prefer an opaque boundary unless the issue explicitly asks for a parser.
+3. For issue work driven by a design document, runbook, SPEC boundary,
+   redaction/retention rule, or non-goal list, extract the negative constraints
+   before choosing an implementation: required behavior, unsupported inputs,
+   redaction and retention limits, forbidden runtime side effects, and any "do
+   not store / parse / mutate / persist / automate / gate" wording. If the
+   simplest design would require understanding arbitrary human, agent, or
+   protocol text, stop and prefer opaque omission unless the issue explicitly
+   asks for structured parsing with fixtures.
 4. Run a `grill-with-docs` review of the plan against `CONTEXT.md`, ADRs, and
    the relevant runbooks.
 5. Capture settled terminology in `CONTEXT.md` only when it is domain language,
