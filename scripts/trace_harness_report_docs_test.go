@@ -1,6 +1,8 @@
 package scripts_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -133,6 +135,29 @@ func TestTraceHarnessReportScriptUsesPayloadIssueAndRunIDs(t *testing.T) {
 	}
 	if !contains(cluster.Affected.IssueIdentifiers, "PAY-1") {
 		t.Fatalf("payload issue_identifier was not reported as affected: %#v", cluster.Affected.IssueIdentifiers)
+	}
+}
+
+func TestTraceHarnessReportScriptReportsStreamedInputDigest(t *testing.T) {
+	root := repoRoot(t)
+	body := []byte(`2026/06/18 09:00:00 event=runner_timeout task_id=issue-1 issue_id=issue-1 msg="timeout"` + "\n")
+	raw := runTraceHarnessReportRawBytes(t, root, body)
+
+	var report struct {
+		Inputs []struct {
+			Bytes  int    `json:"bytes"`
+			Sha256 string `json:"sha256"`
+		} `json:"inputs"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("unmarshal report: %v\n%s", err, raw)
+	}
+	if len(report.Inputs) != 1 {
+		t.Fatalf("inputs = %d; want 1", len(report.Inputs))
+	}
+	wantSum := sha256.Sum256(body)
+	if report.Inputs[0].Bytes != len(body) || report.Inputs[0].Sha256 != hex.EncodeToString(wantSum[:]) {
+		t.Fatalf("input digest = {%d,%s}; want {%d,%s}", report.Inputs[0].Bytes, report.Inputs[0].Sha256, len(body), hex.EncodeToString(wantSum[:]))
 	}
 }
 

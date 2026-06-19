@@ -114,12 +114,18 @@ def generate(paths: list[Path]) -> dict:
 
 
 def input_ref(path: Path) -> dict:
-    data = path.read_bytes()
+    # Stream the digest/byte count so a multi-GB production log is never read
+    # whole into memory; the parser below already reads it line by line.
+    digest, size = hashlib.sha256(), 0
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+            size += len(chunk)
     return {
         "type": "worker_log",
         "path": mask(str(path)),
-        "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(),
+        "bytes": size,
+        "sha256": digest.hexdigest(),
     }
 
 
