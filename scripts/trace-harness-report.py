@@ -13,11 +13,14 @@ values (output, errors, tool arguments, params) can span multiple physical lines
 and contain arbitrary brackets, timestamps, and `event=` text. That rendering is
 a one-way diagnostic format, not a parseable one, so this importer never tries to
 find where a `map[...]` ends. It reads trusted scalar metadata from the first
-physical line only, stops at the first opaque payload key, and treats the rest of
-the payload (including continuation lines) as opaque. The documented cost is that
-scalars Go sorts behind an opaque key (e.g. `tool`, `timeout_ms`, payload
-`session_id`) are not recovered; the harness fix is to make the worker emit a
-structured payload, which this report is meant to surface as an improvement.
+physical line only, as a contiguous left-to-right run of space-free `key:value`
+chunks, stopping at the first chunk that is not a recognized safe scalar (an
+opaque key, an agent-controlled key such as the chosen `tool` name, an
+unrecognized key, or free-form text). The rest of the payload — including
+continuation lines — is treated as opaque. The documented cost is that scalars Go
+sorts behind such a boundary (e.g. `tool`, `timeout_ms`, payload `session_id`)
+are not recovered; the harness fix is to make the worker emit a structured
+payload, which this report is meant to surface as an improvement.
 """
 
 from __future__ import annotations
@@ -36,7 +39,6 @@ MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 102
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 
 FIELD_RE = re.compile(r'\b(event|task_id|issue_id|issue_identifier|session_id|pr|pr_number|pr_url|pull_request|pull_request_url)=("[^"]*"|\S+)')
-PAYLOAD_FIELD_RE = re.compile(r"(?:^|\s)([A-Za-z0-9_]+):(\S+)")
 CLONE_URL_SCHEME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
 TIMESTAMP_RE = re.compile(r"^(\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\b")
 WORKER_RECORD_START_RE = re.compile(r"^\d{4}/\d{2}/\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?\s+event=")
@@ -47,12 +49,18 @@ TOKEN_RE = re.compile(
 )
 PR_KEYS = ("pr", "pr_number", "pr_url", "pull_request", "pull_request_url")
 AFFECTED_KEYS = ("issues", "issue_identifiers", "pull_requests", "runs", "sessions")
-# Free-form payload values: unescaped, possibly multi-line, never parsed. The
-# first of these keys on a record's first line ends trusted scalar extraction.
+# Free-form payload values: unescaped, possibly multi-line, never parsed. They
+# are named in the redaction note; the first of these (or any unrecognized key)
+# on a record's first line ends trusted scalar extraction.
 OPAQUE_PAYLOAD_KEYS = ("arguments", "arguments_raw", "error", "output_head", "output_tail", "params", "raw")
+# Trusted scalars: worker/tracker-generated and space-free by construction. Go
+# renders map values unquoted, so a key whose value can contain a space (e.g. the
+# agent-chosen `tool` name) is NOT listed here — its value tail would otherwise be
+# misread as later top-level keys. Such keys, like any unrecognized key, stop the
+# scan (see scalar_payload).
 SAFE_PAYLOAD_KEYS = set(
     "elapsed_ms timeout_ms duration_ms output_bytes output_dropped model method task_id issue_id "
-    "issue_identifier session_id pr pr_number pr_url pull_request pull_request_url exit_code ok tool".split()
+    "issue_identifier session_id pr pr_number pr_url pull_request pull_request_url exit_code ok".split()
 )
 CLASS_BY_EVENT = {
     "runner_timeout": ("runner-timeout", "Runner timeouts", "runner timeout"),
@@ -180,16 +188,21 @@ def prefix_field_values(prefix: str) -> dict:
 
 
 def scalar_payload(payload: str) -> dict:
+    # Scan the first line's map body as a left-to-right run of space-separated
+    # `key:value` chunks. Stop at the first chunk that is not a recognized safe
+    # scalar — an opaque key, an agent-controlled key, an unrecognized key, or
+    # free-form text. Because Go renders values unquoted, this contiguous-run
+    # boundary is the only sound way to avoid promoting text inside an earlier
+    # value as if it were a later top-level key.
     if not payload.startswith("map["):
         return {}
-    body = map_payload_first_line_body(payload)
     fields: dict[str, str] = {}
-    for match in PAYLOAD_FIELD_RE.finditer(body):
-        key = match.group(1)
-        if key in OPAQUE_PAYLOAD_KEYS:
-            break  # design hard boundary: stop at the first opaque payload key.
-        if key in SAFE_PAYLOAD_KEYS and key not in fields:
-            fields[key] = mask(match.group(2))
+    for chunk in map_payload_first_line_body(payload).split():
+        key, sep, value = chunk.partition(":")
+        if not sep or key not in SAFE_PAYLOAD_KEYS:
+            break
+        if key not in fields:
+            fields[key] = mask(value)
     return fields
 
 

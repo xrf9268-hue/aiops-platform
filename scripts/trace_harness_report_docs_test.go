@@ -351,6 +351,32 @@ func TestTraceHarnessReportScriptDoesNotExtractScalarsBuriedAfterOpaqueKey(t *te
 	}
 }
 
+func TestTraceHarnessReportScriptDoesNotSmuggleFakeFieldsViaUnquotedToolValue(t *testing.T) {
+	root := repoRoot(t)
+	// An unsupported_tool_call with no thread context renders `tool` first (no
+	// key sorts before it). `tool` is agent-controlled and Go renders it
+	// unquoted, so a tool name carrying spaces and key-shaped text would, if
+	// `tool` were a recognized safe scalar, resync the scan onto the embedded
+	// `session_id:`/`pr_url:` fragments. The scan must instead stop at the
+	// `tool` chunk, so no fake top-level scalar is promoted.
+	body := `2026/06/18 09:00:00 event=unsupported_tool_call task_id=real-run issue_id=real-issue msg="unsupported" payload=map[tool:evil session_id:GHOST-SESSION pr_url:https://ghost/pull/1 turn_id:U]` + "\n"
+	report := runTraceHarnessReport(t, root, body)
+
+	cluster := findCluster(t, report, "tool-unsupported")
+	if contains(cluster.Affected.Sessions, "GHOST-SESSION") || contains(cluster.Affected.PullRequests, "https://ghost/pull/1") {
+		t.Fatalf("unquoted tool value smuggled fake top-level fields: %#v", cluster.Affected)
+	}
+	meta := cluster.Evidence[0].Metadata
+	for _, key := range []string{"tool", "session_id", "pr_url"} {
+		if got, ok := meta[key]; ok {
+			t.Fatalf("Metadata[%s] = %q; want absent (scan must stop at the agent-controlled tool chunk)", key, got)
+		}
+	}
+	if !contains(cluster.Affected.Runs, "real-run") || !contains(cluster.Affected.Issues, "real-issue") {
+		t.Fatalf("prefix ids were dropped: %#v", cluster.Affected)
+	}
+}
+
 func TestTraceHarnessReportScriptDoesNotPromoteIdentifiersFromOpaquePayload(t *testing.T) {
 	root := repoRoot(t)
 	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-real issue_id=issue-real msg="timeout" payload=map[output_head:issue_id:ghost-issue session_id:ghost-session]` + "\n"

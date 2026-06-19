@@ -46,15 +46,21 @@ key-sorted, and free-form values can span multiple physical lines and contain
 arbitrary brackets, timestamps, and `event=` text. That rendering is a one-way
 diagnostic format, not a parseable one, so the importer never tries to find
 where a `map[...]` ends. It reads trusted scalar metadata from the record's
-first line only, stops at the first opaque payload key, and treats the rest of
-the payload — including continuation lines — as opaque and never parsed.
+first line only, as a contiguous left-to-right run of space-free `key:value`
+chunks, and stops at the first chunk that is not a recognized safe scalar — an
+opaque payload key, an agent-controlled key (the chosen `tool` name, whose value
+Go renders unquoted and may contain spaces), an unrecognized key, or free-form
+text. The rest of the payload — including continuation lines — is treated as
+opaque and never parsed. Stopping at that boundary is what keeps text inside an
+earlier unquoted value from being promoted as if it were a later top-level key.
 
 ### Known limitation
 
-Because a scalar Go sorts behind an opaque key lands on a skipped continuation
-line, its value is not recovered: `unsupported_tool_call` sorts `arguments`
-before `tool`, `turn_input_required` sorts `params` before `session_id`, and
-`runner_timeout` sorts `output_head`/`output_tail` before `timeout_ms`. The
+Because a scalar Go sorts behind that boundary lands past it (often on a skipped
+continuation line), its value is not recovered: `unsupported_tool_call` exposes
+`arguments` (opaque) and the agent-controlled `tool`, `turn_input_required`
+sorts `params` before `session_id`, and `runner_timeout` sorts
+`output_head`/`output_tail` before `timeout_ms`. The
 cluster still reports the failure class and the affected run/issue ids from the
 prefix. The harness fix is for the worker to emit a structured payload (for
 example a `%q`-quoted JSON object) so those scalars become recoverable; that is
