@@ -546,6 +546,14 @@ func TestTraceHarnessReportScriptBoundsFullEvidenceEntriesByBytes(t *testing.T) 
 	if !contains(cluster.Affected.Issues, "issue-shared") {
 		t.Fatalf("affected ids stopped when evidence cap was reached: %#v", cluster.Affected.Issues)
 	}
+	// 4000 records cycle 16 distinct task_ids and one shared issue id; dedup must
+	// collapse them, not append duplicates.
+	if got := len(cluster.Affected.Runs); got != 16 {
+		t.Fatalf("len(Affected.Runs) = %d; want 16 (deduped)", got)
+	}
+	if got := len(cluster.Affected.Issues); got != 1 {
+		t.Fatalf("len(Affected.Issues) = %d; want 1 (deduped)", got)
+	}
 }
 
 func TestTraceHarnessReportScriptBoundsFullClusterByBytes(t *testing.T) {

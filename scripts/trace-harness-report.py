@@ -224,11 +224,11 @@ def evidence_excerpt(prefix: str, has_payload: bool) -> str:
 
 def add_finding(clusters: dict[str, dict], run_bytes: dict[str, int], finding: dict) -> None:
     cluster = clusters.setdefault(finding["id"], new_cluster(finding))
-    add_unique(cluster["affected"]["issues"], finding["issue"])
-    add_unique(cluster["affected"]["issue_identifiers"], finding["identifier"])
-    add_unique(cluster["affected"]["pull_requests"], finding["pull_request"])
-    add_unique(cluster["affected"]["runs"], finding["run"])
-    add_unique(cluster["affected"]["sessions"], finding["session"])
+    add_unique(cluster, "issues", finding["issue"])
+    add_unique(cluster, "issue_identifiers", finding["identifier"])
+    add_unique(cluster, "pull_requests", finding["pull_request"])
+    add_unique(cluster, "runs", finding["run"])
+    add_unique(cluster, "sessions", finding["session"])
     entry, entry_size = bounded_evidence_entry(cluster, run_bytes, finding)
     if not entry:
         return
@@ -244,6 +244,8 @@ def new_cluster(finding: dict) -> dict:
         "symptom_class": finding["symptom"],
         "affected": {"issues": [], "issue_identifiers": [], "pull_requests": [], "runs": [], "sessions": []},
         "evidence": [],
+        # O(1) dedup membership per affected key; emitted arrays stay sorted.
+        "_seen": {key: set() for key in AFFECTED_KEYS},
         "_evidence_bytes": byte_len("[]"),
         "_evidence_count": 0,
         "suspected_harness_surface": "WORKFLOW.md, reviewer rubrics, skills, hooks, tests, CI, or docs",
@@ -318,6 +320,7 @@ def evidence_array_bytes_after(cluster: dict, entry_size: int) -> int:
 def finalize_cluster(cluster: dict) -> dict:
     for key in AFFECTED_KEYS:
         cluster["affected"][key].sort()
+    cluster.pop("_seen", None)  # drop before any encoded_bytes call: sets are not JSON-serializable.
     cluster.pop("_evidence_bytes", None)
     cluster.pop("_evidence_count", None)
     enforce_cluster_bound(cluster)
@@ -374,10 +377,14 @@ def trim_evidence_to_cluster_bound(cluster: dict) -> None:
         cluster["evidence"].pop()
 
 
-def add_unique(values: list[str], value: str) -> None:
+def add_unique(cluster: dict, key: str, value: str) -> None:
     value = value.strip()
-    if value and value not in values:
-        values.append(value)
+    if not value:
+        return
+    seen = cluster["_seen"][key]
+    if value not in seen:  # set membership keeps large-log accumulation linear.
+        seen.add(value)
+        cluster["affected"][key].append(value)
 
 
 def first_mapped_value(primary: dict, secondary: dict, keys: tuple[str, ...]) -> str:
