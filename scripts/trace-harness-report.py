@@ -347,11 +347,25 @@ def finalize_cluster(cluster: dict, report_ref: str) -> dict:
     cluster.pop("_evidence_bytes", None)
     cluster.pop("_evidence_count", None)
     enforce_cluster_bound(cluster)
-    cluster["proposals"] = render_proposals(cluster, report_ref)
-    enforce_cluster_bound(cluster)
-    cluster["proposals"] = render_proposals(cluster, report_ref)
-    enforce_cluster_bound(cluster)
+    sync_proposals(cluster, report_ref)
     return cluster
+
+
+def sync_proposals(cluster: dict, report_ref: str) -> None:
+    while True:
+        before = proposal_source_signature(cluster)
+        cluster["proposals"] = render_proposals(cluster, report_ref)
+        enforce_cluster_bound(cluster)
+        if proposal_source_signature(cluster) == before:
+            return
+
+
+def proposal_source_signature(cluster: dict) -> str:
+    return json.dumps(
+        {"affected": cluster.get("affected", {}), "evidence": cluster.get("evidence", [])},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def render_proposals(cluster: dict, report_ref: str) -> dict:

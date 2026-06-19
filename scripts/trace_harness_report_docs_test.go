@@ -700,6 +700,23 @@ func TestTraceHarnessReportScriptBoundsFullClusterByBytes(t *testing.T) {
 	}
 }
 
+func TestTraceHarnessReportScriptRerendersProposalsAfterFinalClusterTrimming(t *testing.T) {
+	root := repoRoot(t)
+	var body strings.Builder
+	for idx := 0; idx < 9500; idx++ {
+		fmt.Fprintf(&body, "2026/06/18 09:00:00 event=runner_timeout task_id=run-%d issue_id=issue-%d session_id=session-%d msg=\"x\"\n", idx%64, idx, idx)
+	}
+	report := runTraceHarnessReport(t, root, body.String())
+
+	cluster := findCluster(t, report, "runner-timeout")
+	for key, omitted := range cluster.Affected.Omitted {
+		want := fmt.Sprintf("%d omitted by cluster byte cap", omitted)
+		if !strings.Contains(cluster.Proposals.GitHubIssue.Body, want) || !strings.Contains(cluster.Proposals.DraftPR.Plan, want) {
+			t.Fatalf("proposal omitted count for %s is stale: want %q\nissue:\n%s\nplan:\n%s", key, want, cluster.Proposals.GitHubIssue.Body, cluster.Proposals.DraftPR.Plan)
+		}
+	}
+}
+
 func TestTraceHarnessReportScriptBoundsLargeScalarMetadata(t *testing.T) {
 	root := repoRoot(t)
 	body := `2026/06/18 09:00:00 event=runner_timeout task_id=issue-1 issue_id=issue-1 msg="timeout" payload=map[model:` + strings.Repeat("m", 300*1024) + ` timeout_ms:60000]` + "\n"
