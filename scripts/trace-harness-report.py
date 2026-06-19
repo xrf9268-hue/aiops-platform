@@ -30,6 +30,7 @@ import hashlib
 import json
 import re
 import sys
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -129,13 +130,13 @@ def input_ref(path: Path) -> dict:
     }
 
 
-def parse_worker_log(path: Path) -> list[dict]:
-    findings = []
+def parse_worker_log(path: Path) -> Iterator[dict]:
+    # Yield findings so generate() folds them into bounded cluster state one at a
+    # time; a large log never materializes every hit in memory at once.
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line_no, line in enumerate(handle, 1):
             if parsed := parse_line(path, line_no, line.rstrip("\n")):
-                findings.append(parsed)
-    return findings
+                yield parsed
 
 
 def parse_line(path: Path, line_no: int, line: str) -> dict | None:
