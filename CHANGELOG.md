@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.7](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.6...v0.1.7) (2026-06-20)
+
+
+### Features
+
+* **harness:** add durable redacted trace evidence manifest ([#957](https://github.com/xrf9268-hue/aiops-platform/issues/957)) ([2676bed](https://github.com/xrf9268-hue/aiops-platform/commit/2676bed291dc87221c2a56228791f8844fe8c2ee))
+* **harness:** add trace advisory evaluator candidates ([#950](https://github.com/xrf9268-hue/aiops-platform/issues/950)) ([12c6abb](https://github.com/xrf9268-hue/aiops-platform/commit/12c6abbf585879a68a5d80ecf59d29f725aaa57e))
+* **harness:** close evaluator-result ratchet ([#959](https://github.com/xrf9268-hue/aiops-platform/issues/959)) ([6a34937](https://github.com/xrf9268-hue/aiops-platform/commit/6a34937cd35650c0f622401696c01767b114b318))
+* **harness:** document trace proposal follow-through ([#949](https://github.com/xrf9268-hue/aiops-platform/issues/949)) ([023fd10](https://github.com/xrf9268-hue/aiops-platform/commit/023fd10886f785e3cfabc9c365ba7baaf17b9b24))
+* **harness:** recover per-class affected ids for capped manifest runs ([#960](https://github.com/xrf9268-hue/aiops-platform/issues/960)) ([6fbd0b9](https://github.com/xrf9268-hue/aiops-platform/commit/6fbd0b9d429e40f6fdd6c2d292d940977506326d))
+* render trace harness proposals ([#948](https://github.com/xrf9268-hue/aiops-platform/issues/948)) ([4ab90b3](https://github.com/xrf9268-hue/aiops-platform/commit/4ab90b3daad8731e969bc2e7cd7868c5b8d5a7cd))
+* **trace:** generate harness reports from worker logs ([#942](https://github.com/xrf9268-hue/aiops-platform/issues/942)) ([9287eb3](https://github.com/xrf9268-hue/aiops-platform/commit/9287eb30dfbf32cda0657834e25aa1306445725f))
+
+
+### Bug Fixes
+
+* **gitea:** close terminal issues through label tool ([#965](https://github.com/xrf9268-hue/aiops-platform/issues/965)) ([45f3a14](https://github.com/xrf9268-hue/aiops-platform/commit/45f3a14c46925e74864295eb685b395219ff69c4))
+* **harness:** dedupe byte-identical trace inputs to stop omitted inflation ([#962](https://github.com/xrf9268-hue/aiops-platform/issues/962)) ([f3d660e](https://github.com/xrf9268-hue/aiops-platform/commit/f3d660e94e3c23291f364698887806d567393432))
+* **workflow:** tighten web todo rework convergence ([#966](https://github.com/xrf9268-hue/aiops-platform/issues/966)) ([81e349c](https://github.com/xrf9268-hue/aiops-platform/commit/81e349c8841108637be2d980f75992722f79b758))
+
 ## [0.1.6](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.5...v0.1.6) (2026-06-17)
 
 
