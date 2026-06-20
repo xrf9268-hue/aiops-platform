@@ -94,6 +94,14 @@ func TestTraceEvidenceManifestGroupsRunsAndRedactsOpaquePayload(t *testing.T) {
 	if run1.Events[0].Class != "runner-timeout" || run1.Events[1].Class != "runner-failure" {
 		t.Fatalf("run-1 event classes = %q/%q; want runner-timeout/runner-failure", run1.Events[0].Class, run1.Events[1].Class)
 	}
+	// The second run is grouped separately with its own event and affected ids.
+	run2 := manifestRun(t, manifest, "run-2")
+	if len(run2.Events) != 1 || run2.Events[0].Class != "input-required" {
+		t.Fatalf("run-2 = %#v; want one input-required event", run2.Events)
+	}
+	if !contains(run2.Affected.Issues, "issue-2") || !contains(run2.Affected.Sessions, "session-2") {
+		t.Fatalf("run-2 affected = %#v; want issue-2/session-2", run2.Affected)
+	}
 	// Mutation-style redaction check: dropping the reused mask()/opaque omission
 	// would surface the clone-URL userinfo and the raw payload here.
 	if strings.Contains(string(raw), "secret") {
