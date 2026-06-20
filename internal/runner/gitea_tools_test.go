@@ -85,8 +85,8 @@ func TestDynamicToolsExposeGiteaIssueLabelsWithTokenIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tool input schema is not JSON-marshalable: %v", err)
 	}
-	if !strings.Contains(string(schemaBytes), `"issue_number"`) || strings.Contains(string(schemaBytes), token) {
-		t.Fatalf("tool input schema = %s, want issue_number field and no token leak", schemaBytes)
+	if !strings.Contains(string(schemaBytes), `"issue_number"`) || !strings.Contains(string(schemaBytes), `"close_issue"`) || strings.Contains(string(schemaBytes), token) {
+		t.Fatalf("tool input schema = %s, want issue_number and close_issue fields with no token leak", schemaBytes)
 	}
 
 	server := &fakeGiteaLabelServer{}
@@ -692,6 +692,270 @@ func TestGiteaIssueLabelsNoOpWhenDesiredAlreadyPresentAndNoStale(t *testing.T) {
 	defer mu.Unlock()
 	if strings.Join(methods, ",") != "GET" {
 		t.Fatalf("methods = %#v; want GET only for an already-satisfied issue", methods)
+	}
+}
+
+func TestGiteaIssueLabelsCloseIssueAfterTerminalLabelReplace(t *testing.T) {
+	var mu sync.Mutex
+	var methods, paths, bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.String())
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/in-progress"}]`)
+		case http.MethodPost:
+			if !strings.Contains(string(body), "aiops/done") {
+				t.Fatalf("POST body = %s, want terminal aiops/done label", body)
+			}
+			_, _ = io.WriteString(w, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+		case http.MethodDelete:
+			_, _ = io.WriteString(w, `{}`)
+		case http.MethodPatch:
+			if r.URL.String() != "/api/v1/repos/owner/repo/issues/7" {
+				t.Fatalf("PATCH path = %q, want issue endpoint", r.URL.String())
+			}
+			if string(body) != `{"state":"closed"}` {
+				t.Fatalf("PATCH body = %s; want closed state payload", body)
+			}
+			_, _ = io.WriteString(w, `{"state":"closed"}`)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	proxy := giteaClassificationProxy(server.URL)
+	proxy.http = server.Client()
+
+	var audits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
+		audits = append(audits, audit)
+	})
+	result, err := proxy.call(ctx, ToolCall{IssueNumber: 7, Labels: []string{"aiops/done"}, CloseIssue: true})
+	if err != nil {
+		t.Fatalf("call error = %v; want nil", err)
+	}
+	if !toolResultSucceeded(result) || !strings.Contains(result, `\"closed\":true`) || !strings.Contains(result, `\"label_result\":{\"labels\"`) {
+		t.Fatalf("result = %s; want successful close_issue result with label_result", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,POST,DELETE,PATCH" {
+		t.Fatalf("methods = %#v; want GET, POST terminal label, DELETE stale label, PATCH close", methods)
+	}
+	if paths[3] != "/api/v1/repos/owner/repo/issues/7" {
+		t.Fatalf("paths = %#v; want PATCH to issue endpoint", paths)
+	}
+	if bodies[3] != `{"state":"closed"}` {
+		t.Fatalf("PATCH body = %s; want closed state payload", bodies[3])
+	}
+	want := ToolMutationAudit{
+		CurrentIssueNonActiveStateUpdate: true,
+		CurrentIssueTerminalStateUpdate:  true,
+		CurrentIssueTerminalState:        "Done",
+	}
+	if len(audits) != 1 || audits[0] != want {
+		t.Fatalf("audits = %+v; want exactly [%+v]", audits, want)
+	}
+}
+
+func TestGiteaIssueLabelsCloseIssueRepairsAlreadyTerminalOpenIssue(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":303,"name":"aiops/done"},{"id":202,"name":"bug"}]`)
+		case http.MethodPatch:
+			if string(body) != `{"state":"closed"}` {
+				t.Fatalf("PATCH body = %s; want closed state payload", body)
+			}
+			_, _ = io.WriteString(w, `{"state":"closed"}`)
+		case http.MethodPost:
+			t.Fatalf("POST must not run when terminal label is already present")
+		case http.MethodDelete:
+			t.Fatalf("DELETE must not run when there is no stale aiops label")
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	proxy := giteaClassificationProxy(server.URL)
+	proxy.http = server.Client()
+
+	var audits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
+		audits = append(audits, audit)
+	})
+	result, err := proxy.call(ctx, ToolCall{IssueNumber: 7, Labels: []string{"aiops/done"}, CloseIssue: true})
+	if err != nil {
+		t.Fatalf("call error = %v; want nil", err)
+	}
+	if !toolResultSucceeded(result) || !strings.Contains(result, `\"closed\":true`) || !strings.Contains(result, `\"label_result\":{\"labels\":[]`) {
+		t.Fatalf("result = %s; want successful close_issue result with label_result", result)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,PATCH" {
+		t.Fatalf("methods = %#v; want GET then PATCH close for already-terminal issue", methods)
+	}
+	if len(audits) != 0 {
+		t.Fatalf("audits = %+v; want none because no label handoff write landed", audits)
+	}
+}
+
+func TestGiteaIssueLabelsRejectsInvalidCloseIssueWithoutHTTPRequest(t *testing.T) {
+	cases := []struct {
+		name   string
+		call   ToolCall
+		reason string
+	}{
+		{
+			name:   "different issue",
+			call:   ToolCall{IssueNumber: 8, Labels: []string{"aiops/done"}, CloseIssue: true},
+			reason: "gitea_issue_labels close_issue is only supported for the current issue",
+		},
+		{
+			name:   "non-terminal label",
+			call:   ToolCall{IssueNumber: 7, Labels: []string{"aiops/human-review"}, CloseIssue: true},
+			reason: "gitea_issue_labels close_issue requires a configured terminal aiops/* label",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := &fakeGiteaLabelServer{}
+			httpServer := httptest.NewServer(server.handler())
+			defer httpServer.Close()
+			proxy := giteaClassificationProxy(httpServer.URL)
+			proxy.http = httpServer.Client()
+
+			result, err := proxy.call(context.Background(), tc.call)
+			assertStructuredFailure(t, result, err, tc.reason)
+			_, _, requests := server.recorded()
+			if requests != 0 {
+				t.Fatalf("server received %d requests; want 0", requests)
+			}
+		})
+	}
+}
+
+func TestGiteaIssueLabelsRestoresActiveStateWhenCloseIssueFails(t *testing.T) {
+	var mu sync.Mutex
+	var methods, bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/in-progress"}]`)
+		case http.MethodPost:
+			switch {
+			case strings.Contains(string(body), "aiops/done"):
+				_, _ = io.WriteString(w, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+			case strings.Contains(string(body), "aiops/in-progress"):
+				_, _ = io.WriteString(w, `{"labels":[{"id":101,"name":"aiops/in-progress"}]}`)
+			default:
+				t.Fatalf("POST body = %s; want terminal add or active-state restore", body)
+			}
+		case http.MethodDelete:
+			_, _ = io.WriteString(w, `{}`)
+		case http.MethodPatch:
+			http.Error(w, `{"message":"temporary failure"}`, http.StatusBadGateway)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	proxy := giteaClassificationProxy(server.URL)
+	proxy.http = server.Client()
+
+	var audits []ToolMutationAudit
+	ctx := WithToolMutationSink(context.Background(), func(audit ToolMutationAudit) {
+		audits = append(audits, audit)
+	})
+	result, err := proxy.call(ctx, ToolCall{IssueNumber: 7, Labels: []string{"aiops/done"}, CloseIssue: true})
+	assertStructuredFailure(t, result, err, "Gitea label request failed", "502 Bad Gateway")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "GET,POST,DELETE,PATCH,POST" {
+		t.Fatalf("methods = %#v; want close failure followed by active-state restore", methods)
+	}
+	if !strings.Contains(bodies[4], "aiops/in-progress") {
+		t.Fatalf("rollback POST body = %s; want original active state restored", bodies[4])
+	}
+	if len(audits) != 0 {
+		t.Fatalf("audits = %+v; want none because close failure restored retryable active state", audits)
+	}
+}
+
+func TestGiteaIssueLabelsCloseRollbackIgnoresCanceledRunContext(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPatch:
+			http.Error(w, `{"message":"temporary failure"}`, http.StatusBadGateway)
+		case http.MethodPost:
+			if !strings.Contains(string(body), "aiops/human-review") {
+				t.Fatalf("rollback POST body = %s; want active state restore", body)
+			}
+			_, _ = io.WriteString(w, `{"labels":[{"id":202,"name":"aiops/human-review"}]}`)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	proxy := giteaClassificationProxy(server.URL)
+	proxy.http = server.Client()
+	labelResult, _ := dynamicToolResult(true, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, deleted, labelReplaceSucceeded, failure := proxy.closeIssueAfterLabelReplace(
+		ctx,
+		server.Client(),
+		server.URL+"/api/v1/repos/owner/repo/issues/7",
+		server.URL+"/api/v1/repos/owner/repo/issues/7/labels",
+		labelResult,
+		[]giteaIssueLabel{{ID: 202, Name: "aiops/human-review"}},
+	)
+	if failure == "" {
+		t.Fatalf("failure = %q; want close failure preserved", failure)
+	}
+	if result != labelResult || len(deleted) != 0 || labelReplaceSucceeded {
+		t.Fatalf("result/deleted/succeeded = %q/%+v/%t; want restored active state and failed handoff", result, deleted, labelReplaceSucceeded)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "PATCH,POST" {
+		t.Fatalf("methods = %#v; want close and rollback despite canceled parent context", methods)
 	}
 }
 

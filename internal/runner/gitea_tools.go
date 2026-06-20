@@ -64,30 +64,40 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	if !ok {
 		return failureResult, failureErr
 	}
+	// validateDesiredStateLabels proves desiredStateLabels has exactly one
+	// canonical label; close validation depends on that resolved state.
+	if failureResult, failureErr, ok := p.validateCloseIssue(call, desiredStateLabels[0]); !ok {
+		return failureResult, failureErr
+	}
 
-	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d/labels", strings.TrimRight(p.baseURL, "/"), url.PathEscape(p.owner), url.PathEscape(p.repo), call.IssueNumber)
+	issueEndpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d", strings.TrimRight(p.baseURL, "/"), url.PathEscape(p.owner), url.PathEscape(p.repo), call.IssueNumber)
+	labelsEndpoint := issueEndpoint + "/labels"
 	client := p.http
 	if client == nil {
 		client = http.DefaultClient
 	}
-	currentLabels, failure := p.currentIssueLabels(ctx, client, endpoint)
+	currentLabels, failure := p.currentIssueLabels(ctx, client, labelsEndpoint)
 	if failure != "" {
 		return failure, nil
 	}
 	staleStateLabels := computeStaleStateLabels(currentLabels, desiredStateLabels)
 	labelsToAdd := missingLabels(currentLabels, desiredStateLabels)
-	result, failure := p.addAndConfirmDesiredLabels(ctx, client, endpoint, labelsToAdd, desiredStateLabels)
+	result, failure := p.addAndConfirmDesiredLabels(ctx, client, labelsEndpoint, labelsToAdd, desiredStateLabels)
 	if failure != "" {
 		return failure, nil
 	}
-	deletedStaleLabels, failure := p.deleteStaleStateLabels(ctx, client, endpoint, staleStateLabels)
+	deletedStaleLabels, failure := p.deleteStaleStateLabels(ctx, client, labelsEndpoint, staleStateLabels)
+	labelReplaceSucceeded := failure == ""
+	if labelReplaceSucceeded && call.CloseIssue {
+		result, deletedStaleLabels, labelReplaceSucceeded, failure = p.closeIssueAfterLabelReplace(ctx, client, issueEndpoint, labelsEndpoint, result, deletedStaleLabels)
+	}
 	p.fireMutationAudit(ctx, mutationAuditFacts{
-		issueNumber:   call.IssueNumber,
-		desiredLabel:  desiredStateLabels[0],
-		currentLabels: currentLabels,
-		deletedLabels: deletedStaleLabels,
-		wroteAdd:      len(labelsToAdd) > 0,
-		fullSuccess:   failure == "",
+		issueNumber:           call.IssueNumber,
+		desiredLabel:          desiredStateLabels[0],
+		currentLabels:         currentLabels,
+		deletedLabels:         deletedStaleLabels,
+		wroteAdd:              len(labelsToAdd) > 0,
+		labelReplaceSucceeded: labelReplaceSucceeded,
 	})
 	if failure != "" {
 		return failure, nil
@@ -99,12 +109,12 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 // so the audit decision can reason about the writes that landed, not the
 // writes that were intended.
 type mutationAuditFacts struct {
-	issueNumber   int
-	desiredLabel  string
-	currentLabels []giteaIssueLabel
-	deletedLabels []giteaIssueLabel
-	wroteAdd      bool
-	fullSuccess   bool
+	issueNumber           int
+	desiredLabel          string
+	currentLabels         []giteaIssueLabel
+	deletedLabels         []giteaIssueLabel
+	wroteAdd              bool
+	labelReplaceSucceeded bool
 }
 
 // fireMutationAudit mirrors the Linear proxy's success-audit contract (#748):
@@ -132,7 +142,7 @@ func (p giteaIssueLabelsProxy) fireMutationAudit(ctx context.Context, facts muta
 		return
 	}
 	audit := p.classifyLabelMutation(facts)
-	if facts.fullSuccess || audit.CurrentIssueNonActiveStateUpdate {
+	if facts.labelReplaceSucceeded || audit.CurrentIssueNonActiveStateUpdate {
 		sink(audit)
 	}
 }
@@ -263,6 +273,26 @@ func (p giteaIssueLabelsProxy) validateDesiredStateLabels(call ToolCall) (desire
 	return desiredStateLabels, "", nil, true
 }
 
+func (p giteaIssueLabelsProxy) validateCloseIssue(call ToolCall, desiredLabel string) (failureResult string, failureErr error, ok bool) {
+	if !call.CloseIssue {
+		return "", nil, true
+	}
+	if p.currentIssueNumber <= 0 || call.IssueNumber != p.currentIssueNumber {
+		failureResult, failureErr = dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue is only supported for the current issue"},
+		})
+		return failureResult, failureErr, false
+	}
+	desiredState, _ := gitea.IssueStateFromLabels([]gitea.Label{{Name: desiredLabel}}, nil)
+	if desiredState == "" || matchStateFold(p.terminalStates, desiredState) == "" {
+		failureResult, failureErr = dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue requires a configured terminal aiops/* label"},
+		})
+		return failureResult, failureErr, false
+	}
+	return "", nil, true
+}
+
 // computeStaleStateLabels selects the aiops/* labels currently on the issue
 // that are not the desired state label and therefore must be removed.
 func computeStaleStateLabels(currentLabels []giteaIssueLabel, desiredStateLabels []string) []giteaIssueLabel {
@@ -322,6 +352,30 @@ func (p giteaIssueLabelsProxy) deleteStaleStateLabels(ctx context.Context, clien
 	return deleted, ""
 }
 
+func (p giteaIssueLabelsProxy) closeIssueAfterLabelReplace(ctx context.Context, client *http.Client, issueEndpoint, labelsEndpoint, labelResult string, deleted []giteaIssueLabel) (string, []giteaIssueLabel, bool, string) {
+	postHandoffCtx := context.WithoutCancel(ctx)
+	closedResult, failure := p.closeIssue(postHandoffCtx, client, issueEndpoint, labelResult)
+	if failure == "" {
+		return closedResult, deleted, true, ""
+	}
+	if p.restoreDeletedStateLabels(postHandoffCtx, client, labelsEndpoint, deleted) == "" {
+		return labelResult, nil, false, failure
+	}
+	return labelResult, deleted, true, failure
+}
+
+func (p giteaIssueLabelsProxy) restoreDeletedStateLabels(ctx context.Context, client *http.Client, endpoint string, deleted []giteaIssueLabel) string {
+	if len(deleted) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(deleted))
+	for _, label := range deleted {
+		labels = append(labels, label.Name)
+	}
+	_, failure := p.addAndConfirmDesiredLabels(ctx, client, endpoint, labels, labels)
+	return failure
+}
+
 func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.Client, endpoint string, labels []string) (string, string) {
 	payload := map[string]any{"labels": labels}
 	body, err := json.Marshal(payload)
@@ -372,6 +426,50 @@ func (p giteaIssueLabelsProxy) deleteIssueLabel(ctx context.Context, client *htt
 		return ""
 	}
 	return failure
+}
+
+func (p giteaIssueLabelsProxy) closeIssue(ctx context.Context, client *http.Client, endpoint, labelResult string) (string, string) {
+	body, err := json.Marshal(map[string]string{"state": "closed"})
+	if err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue payload could not be encoded", "reason": err.Error()},
+		})
+		return "", failure
+	}
+	if _, _, failure := p.doGiteaRequest(ctx, client, http.MethodPatch, endpoint, body); failure != "" {
+		return "", failure
+	}
+	return closedIssueToolResult(labelResult)
+}
+
+func closedIssueToolResult(labelResult string) (string, string) {
+	var envelope struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal([]byte(labelResult), &envelope); err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue label result envelope could not be decoded", "reason": err.Error()},
+		})
+		return "", failure
+	}
+	if !json.Valid([]byte(envelope.Output)) {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue label result body could not be decoded", "body": envelope.Output},
+		})
+		return "", failure
+	}
+	body, err := json.Marshal(map[string]any{
+		"closed":       true,
+		"label_result": json.RawMessage(envelope.Output),
+	})
+	if err != nil {
+		failure, _ := dynamicToolFailure(map[string]any{
+			"error": map[string]any{"message": "gitea_issue_labels close_issue result could not be encoded", "reason": err.Error()},
+		})
+		return "", failure
+	}
+	result, _ := dynamicToolResult(true, string(body))
+	return result, ""
 }
 
 func (p giteaIssueLabelsProxy) doGiteaRequest(ctx context.Context, client *http.Client, method, endpoint string, body []byte) (int, []byte, string) {

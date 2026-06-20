@@ -54,7 +54,7 @@ Two worker processes, one Gitea repo/project, **two bot accounts**:
 | `tracker.inactive_states` | `[Human Review, In Progress, Merging]` | `[Todo, In Progress, Merging, Rework]` |
 | `workspace.root` | `~/aiops-workspaces/maker` | `~/aiops-workspaces/reviewer` — **must differ (hard)** |
 | `AIOPS_MIRROR_ROOT` | `~/aiops-mirrors/maker` | `~/aiops-mirrors/reviewer` — **must differ (hard)** |
-| agent state writes | flips → `aiops/human-review`; opens PR; comments PR URL | approves + enables auto-merge; **confirms the merge, then** flips → `aiops/done`; stays in `Human Review` (re-checks next poll) if CI is still landing; `aiops/rework` on fail |
+| agent state writes | flips → `aiops/human-review`; opens PR; comments PR URL | approves + enables auto-merge; **confirms the merge, then** calls `gitea_issue_labels` with `aiops/done` + `close_issue:true`; stays in `Human Review` (re-checks next poll) if CI is still landing; `aiops/rework` on fail |
 
 ```
 Todo ──maker──▶ Human Review ──reviewer──▶ approve + enable CI-gated auto-merge
@@ -189,16 +189,18 @@ for this DAG"*):
 2. Reviewer claims `Human Review` → fetches head → runs the rubric incl.
    `build/test`. **PASS**: approves (review-bot), enables `merge_when_checks_succeed`,
    then — while still `Human Review` (so it is not reconcile-cancelled) — confirms
-   the merge via `GET …/pulls/<number>` → `merged:true`, flips `Done`, and closes
-   the issue (it owns closure, since the maker left it open). If CI is slow/flaky
-   and the merge has not landed within its budget, it makes **no** terminal flip
-   and leaves the issue in `Human Review`; the next poll re-claims it and re-checks
-   until the forge confirms the merge.
+   the merge via `GET …/pulls/<number>` → `merged:true`, and calls
+   `gitea_issue_labels` once with `aiops/done` + `close_issue:true` (it owns
+   closure, since the maker left it open). If CI is slow/flaky and the merge has
+   not landed within its budget, it makes **no** terminal flip and leaves the issue
+   in `Human Review`; the next poll re-claims it and re-checks until the forge
+   confirms the merge.
    **FAIL**: posts findings, flips `Rework` (maker re-dispatches).
 3. CI runs on the PR; when `build-test` is green and the approval is present,
    Gitea auto-merges (squash) and deletes the branch. The merge does **not** close
    the issue (the maker used `Refs #<N>`, not a closing keyword); the reviewer
-   flips `Done` and closes it only after confirming the merge, never before.
+   uses `gitea_issue_labels` with `aiops/done` + `close_issue:true` only after
+   confirming the merge, never before.
    **Why not `Closes #<N>`:** the poller lists `Human Review` (a non-terminal
    active state) with `state=open`, so an issue auto-closed at merge-time would
    drop out of the reviewer's poll *before* it could set `Done` — stranding it
@@ -241,7 +243,7 @@ Keep the prevention in the workflow prompts, not in a worker-side verifier:
 - [ ] Maker `verify.commands` == the required CI checks (a green local run predicts a green merge).
 - [ ] Maker never sets `aiops/done`; reviewer is the only Done/auto-merge path.
 - [ ] Reviewer issues `aiops/done` **only after the forge confirms the merge** — never on the verdict alone (else `Depends on #N` dependents unblock from stale `main`).
-- [ ] Maker references the issue with a **non-closing** `Refs #<N>` (not `Closes`); the reviewer flips `Done` and closes the issue post-merge. A closing keyword auto-closes the issue at merge, dropping it from the reviewer's `state=open` poll before `Done` is set — stranding it and its dependents.
+- [ ] Maker references the issue with a **non-closing** `Refs #<N>` (not `Closes`); the reviewer uses `gitea_issue_labels` with `aiops/done` + `close_issue:true` post-merge. A closing keyword auto-closes the issue at merge, dropping it from the reviewer's `state=open` poll before `Done` is set — stranding it and its dependents.
 - [ ] Rework turns push a new head and include a `Rework response:`; reviewer
       comments cite the reviewed head SHA and use `Operator attention:` after
       repeated same-class failures.
@@ -282,11 +284,11 @@ models this landing phase as a dedicated `Merging` state with an agent that
 forge-native auto-merge, then flips the issue to `aiops/merging`. A separate
 landing worker watches `tracker.active_states: [Merging]`, follows the land loop,
 confirms the forge reports `merged:true`, and only then flips `aiops/done` and
-closes the issue. Add `Merging` to the maker/reviewer workers' inactive states
-so the handoff reconcile-cancels any still-running prior owner. `Merging` is
-non-terminal: `Depends on #N` dependents remain blocked until the landing worker
-reaches `Done` (or an operator intentionally uses the terminal `Canceled` escape
-hatch).
+closes the issue with `gitea_issue_labels` `close_issue:true`. Add `Merging` to
+the maker/reviewer workers' inactive states so the handoff reconcile-cancels any
+still-running prior owner. `Merging` is non-terminal: `Depends on #N` dependents
+remain blocked until the landing worker reaches `Done` (or an operator
+intentionally uses the terminal `Canceled` escape hatch).
 
 The landing worker is a third worker with its own `workspace.root`,
 `AIOPS_MIRROR_ROOT`, and bot credentials. Its workflow should keep `Merging` as
