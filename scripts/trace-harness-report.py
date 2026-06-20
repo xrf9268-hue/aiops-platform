@@ -36,6 +36,9 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA_VERSION = "trace-harness-report/v3"
+# Single source of truth for the manifest schema id, shared by the producer
+# (trace-evidence-manifest.py) and the --evidence-manifest consumer's validation.
+EVIDENCE_MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v1"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 MAX_PROPOSAL_EVIDENCE_REFS, MAX_PROPOSAL_AFFECTED_VALUES = 5, 5
@@ -72,11 +75,27 @@ CLASS_BY_EVENT = {
     "unsupported_tool_call": ("tool-unsupported", "Unsupported tool calls", "tool unsupported"),
     "malformed": ("malformed-protocol", "Malformed protocol output", "malformed protocol output"),
 }
+# runner_end is the one kind classified from its prefix message, not its kind, so
+# its (id, title, symptom) lives here as the single source for both classify()
+# and the cluster-id lookup CLASS_BY_ID below.
+RUNNER_FAILURE_CLASS = ("runner-failure", "Runner failures", "runner failure")
+# cluster id -> (id, title, symptom), so a durable manifest event that already
+# carries its resolved failure class is folded without re-running classify() on a
+# byte-truncated, redacted excerpt (which could lose the runner_end prefix match).
+CLASS_BY_ID = {value[0]: value for value in CLASS_BY_EVENT.values()}
+CLASS_BY_ID[RUNNER_FAILURE_CLASS[0]] = RUNNER_FAILURE_CLASS
 
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--worker-log", action="append", default=[], type=Path)
+    p.add_argument(
+        "--evidence-manifest",
+        action="append",
+        default=[],
+        type=Path,
+        help="durable trace-evidence manifest (scripts/trace-evidence-manifest.py) to consume instead of, or alongside, raw worker logs",
+    )
     p.add_argument("--json-out", type=Path, help="write JSON report to this path; default stdout")
     return p
 
@@ -84,7 +103,7 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = parser().parse_args(argv)
     try:
-        report = generate(args.worker_log)
+        report = generate(args.worker_log, args.evidence_manifest)
         raw = report_json(report)
         if args.json_out:
             args.json_out.write_text(raw)
@@ -96,16 +115,20 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-def generate(paths: list[Path]) -> dict:
-    if not paths:
-        raise ValueError("at least one --worker-log is required")
+def generate(worker_logs: list[Path], manifests: list[Path] | None = None) -> dict:
+    manifests = manifests or []
+    if not worker_logs and not manifests:
+        raise ValueError("at least one --worker-log or --evidence-manifest is required")
     clusters: dict[str, dict] = {}
     run_bytes: dict[str, int] = {}
-    inputs = [input_ref(path) for path in paths]
+    inputs = [input_ref(path) for path in worker_logs]
+    inputs += [input_ref(path, "evidence_manifest") for path in manifests]
     report_ref = proposal_report_reference(inputs)
-    for path in paths:
+    for path in worker_logs:
         for finding in parse_worker_log(path):
             add_finding(clusters, run_bytes, finding)
+    for path in manifests:
+        fold_manifest(clusters, run_bytes, path)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -118,7 +141,7 @@ def generate(paths: list[Path]) -> dict:
     }
 
 
-def input_ref(path: Path) -> dict:
+def input_ref(path: Path, kind: str = "worker_log") -> dict:
     # Stream the digest/byte count so a multi-GB production log is never read
     # whole into memory; the parser below already reads it line by line.
     digest, size = hashlib.sha256(), 0
@@ -127,7 +150,7 @@ def input_ref(path: Path) -> dict:
             digest.update(chunk)
             size += len(chunk)
     return {
-        "type": "worker_log",
+        "type": kind,
         "path": mask(str(path)),
         "bytes": size,
         "sha256": digest.hexdigest(),
@@ -189,8 +212,77 @@ def classify(kind: str, prefix: str) -> tuple[str, str, str] | None:
     if kind in CLASS_BY_EVENT:
         return CLASS_BY_EVENT[kind]
     if kind == "runner_end" and "runner failed" in prefix.lower():
-        return ("runner-failure", "Runner failures", "runner failure")
+        return RUNNER_FAILURE_CLASS
     return None
+
+
+def fold_manifest(clusters: dict, run_bytes: dict, path: Path) -> None:
+    # A trace-evidence manifest (scripts/trace-evidence-manifest.py) is the
+    # durable, pre-redacted form of the same worker-event evidence
+    # parse_worker_log() yields. Its events are already masked and byte-bounded,
+    # so consuming one re-clusters by failure class without re-reading raw logs.
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # Reject a wrong artifact (e.g. a trace-harness-report/v3 output) loudly:
+    # silently treating an unrecognized JSON dict as an empty manifest would hide
+    # real evidence behind a clean-looking zero-cluster report.
+    if not isinstance(data, dict) or data.get("schema_version") != EVIDENCE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"{mask(str(path))}: not a {EVIDENCE_MANIFEST_SCHEMA_VERSION} evidence manifest")
+    runs = data.get("runs", [])
+    if not isinstance(runs, list):
+        raise ValueError(f"{mask(str(path))}: evidence manifest 'runs' must be a list")
+    for run in runs:
+        if isinstance(run, dict):
+            fold_manifest_run(clusters, run_bytes, run)
+
+
+def fold_manifest_run(clusters: dict, run_bytes: dict, run: dict) -> None:
+    # Cluster only from retained events. The manifest's per-run `affected` summary
+    # also holds ids from events dropped by its 64 KiB cap, but that summary is
+    # not partitioned by failure class, so folding it would mis-attribute a
+    # dropped event's ids to a retained class (and could invent a cluster the raw
+    # path would key differently). The capped-run undercount is a documented
+    # limitation; faithful per-class recovery is tracked in #958.
+    for event in run.get("events", []):
+        finding = manifest_event_finding(event)
+        if finding:
+            add_finding(clusters, run_bytes, finding)
+
+
+def manifest_event_finding(event: dict) -> dict | None:
+    if not isinstance(event, dict):
+        return None
+    # The manifest stores the resolved failure class, so trust it through a fixed
+    # set lookup instead of re-parsing the redacted excerpt; an unknown class is
+    # skipped rather than guessed.
+    event_class = CLASS_BY_ID.get(event.get("class", ""))
+    if not event_class:
+        return None
+    cid, title, symptom = event_class
+    affected = event.get("affected", {})
+    affected = affected if isinstance(affected, dict) else {}
+    metadata = event.get("metadata", {})
+    return {
+        "id": cid,
+        "title": title,
+        "symptom": symptom,
+        "ref": event.get("ref", ""),
+        "kind": event.get("kind", ""),
+        "excerpt": event.get("excerpt", ""),
+        "metadata": metadata if isinstance(metadata, dict) else {},
+        "issue": first_affected(affected, "issues"),
+        "identifier": first_affected(affected, "issue_identifiers"),
+        # Use the event's own run id; the manifest's run group key is an
+        # issue-id fallback when the source event had no task_id, and promoting
+        # it here would fabricate an affected run the raw path never reports.
+        "run": first_affected(affected, "runs"),
+        "session": first_affected(affected, "sessions"),
+        "pull_request": first_affected(affected, "pull_requests"),
+    }
+
+
+def first_affected(affected: dict, key: str) -> str:
+    values = affected.get(key) or []
+    return values[0] if isinstance(values, list) and values else ""
 
 
 def split_payload(line: str) -> tuple[str, str, bool]:

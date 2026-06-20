@@ -34,6 +34,8 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 	for _, want := range []string{
 		"python3 scripts/trace-harness-report.py",
 		"--worker-log",
+		"--evidence-manifest",
+		"trace-evidence-manifest.md",
 		"trace-harness-report/v3",
 		"Supported inputs",
 		"worker process logs",
