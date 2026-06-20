@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -34,6 +35,8 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 	for _, want := range []string{
 		"python3 scripts/trace-harness-report.py",
 		"--worker-log",
+		"--evidence-manifest",
+		"trace-evidence-manifest.md",
 		"trace-harness-report/v3",
 		"Supported inputs",
 		"worker process logs",
@@ -58,6 +61,14 @@ func TestTraceHarnessReportRunbookDocumentsSupportedInputsAndBounds(t *testing.T
 		"report-only evaluator candidate",
 		"expected true-positive and false-positive",
 		"future report-output contract",
+		"--evaluator-results-out",
+		"--prior-evaluator-results",
+		"trace-harness-advisory-evaluator-results/v1",
+		"trace-harness-advisory-evaluator-result/v1",
+		"recurrence_escalations",
+		"clusters[].proposals.recurrence_escalation",
+		"trace-harness-recurrence:<source_cluster_id>:<evaluator_id>",
+		"forge_comment",
 		"does not block CI, runtime, or merge",
 		"false_positive",
 		"gate-promotion PR",
@@ -376,6 +387,290 @@ func TestTraceHarnessReportScriptRendersAdvisoryEvaluatorCandidate(t *testing.T)
 	}
 	if !contains(evaluator.GatePromotionEvidence, "A separate PR explicitly proposes gate promotion after review history exists.") {
 		t.Fatalf("gate promotion evidence missing separate-PR requirement: %#v", evaluator.GatePromotionEvidence)
+	}
+}
+
+func TestTraceHarnessReportScriptPersistsAdvisoryEvaluatorResults(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "worker.log")
+	secretURL := "https://user:secret@example.test/org/repo.git"
+	body := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout msg="timeout" payload=map[issue_id:issue-1 task_id:run-1 output_head:` + secretURL + `]`,
+		`2026/06/18 09:01:00 event=runner_timeout msg="timeout" payload=map[issue_id:issue-2 task_id:run-2 output_head:secret-output]`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	reportPath := filepath.Join(dir, "report.json")
+	resultsPath := filepath.Join(dir, "evaluator-results.json")
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", logPath, "--json-out", reportPath, "--evaluator-results-out", resultsPath)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("trace-harness-report failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(resultsPath)
+	if err != nil {
+		t.Fatalf("read evaluator results: %v", err)
+	}
+	if len(raw) > 256*1024 {
+		t.Fatalf("evaluator result artifact bytes = %d; want <= 262144", len(raw))
+	}
+	if strings.Contains(string(raw), "secret") || strings.Contains(string(raw), "user:secret") {
+		t.Fatalf("evaluator result artifact leaked opaque or clone-URL secret:\n%s", raw)
+	}
+
+	var artifact struct {
+		SchemaVersion string `json:"schema_version"`
+		Bounds        struct {
+			MaxArtifactBytes int `json:"max_artifact_bytes"`
+			MaxEvidenceRefs  int `json:"max_evidence_refs"`
+			MaxNoteBytes     int `json:"max_note_bytes"`
+		} `json:"bounds"`
+		Results []map[string]json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(raw, &artifact); err != nil {
+		t.Fatalf("unmarshal evaluator results: %v\n%s", err, raw)
+	}
+	if artifact.SchemaVersion != "trace-harness-advisory-evaluator-results/v1" {
+		t.Fatalf("artifact schema = %q; want trace-harness-advisory-evaluator-results/v1", artifact.SchemaVersion)
+	}
+	if artifact.Bounds.MaxArtifactBytes != 256*1024 || artifact.Bounds.MaxEvidenceRefs != 5 || artifact.Bounds.MaxNoteBytes != 512 {
+		t.Fatalf("artifact bounds = %#v; want 262144/5/512", artifact.Bounds)
+	}
+	if len(artifact.Results) != 1 {
+		t.Fatalf("results = %d; want one runner-timeout result\n%s", len(artifact.Results), raw)
+	}
+	wantKeys := []string{"schema", "evaluator_id", "source_cluster_id", "mode", "signal", "evidence_refs", "false_positive_notes"}
+	for _, key := range wantKeys {
+		if _, ok := artifact.Results[0][key]; !ok {
+			t.Fatalf("evaluator result missing %q: %#v", key, artifact.Results[0])
+		}
+	}
+	if len(artifact.Results[0]) != len(wantKeys) {
+		t.Fatalf("evaluator result has extra fields: %#v", artifact.Results[0])
+	}
+
+	var result struct {
+		Schema             string   `json:"schema"`
+		EvaluatorID        string   `json:"evaluator_id"`
+		SourceClusterID    string   `json:"source_cluster_id"`
+		Mode               string   `json:"mode"`
+		Signal             string   `json:"signal"`
+		EvidenceRefs       []string `json:"evidence_refs"`
+		FalsePositiveNotes []string `json:"false_positive_notes"`
+	}
+	resultRaw, err := json.Marshal(artifact.Results[0])
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if err := json.Unmarshal(resultRaw, &result); err != nil {
+		t.Fatalf("unmarshal result: %v\n%s", err, resultRaw)
+	}
+	if result.Schema != "trace-harness-advisory-evaluator-result/v1" ||
+		result.EvaluatorID != "runner-timeout-advisory-evaluator" ||
+		result.SourceClusterID != "runner-timeout" ||
+		result.Mode != "report-only" ||
+		result.Signal != "positive-recurring-cluster" {
+		t.Fatalf("unexpected evaluator result: %#v", result)
+	}
+	if len(result.EvidenceRefs) != 2 || !containsSubstring(result.FalsePositiveNotes, "opaque payload text") {
+		t.Fatalf("result refs/false-positive notes = %#v / %#v", result.EvidenceRefs, result.FalsePositiveNotes)
+	}
+}
+
+func TestTraceHarnessReportScriptConsumesPriorResultsForRecurrenceEscalation(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	firstLog := filepath.Join(dir, "first.log")
+	firstBody := strings.Join([]string{
+		`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 msg="timeout"`,
+		`2026/06/18 09:01:00 event=runner_timeout task_id=run-2 issue_id=issue-2 msg="timeout"`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(firstLog, []byte(firstBody), 0o600); err != nil {
+		t.Fatalf("write first log: %v", err)
+	}
+	priorResults := filepath.Join(dir, "prior-results.json")
+	firstReport := filepath.Join(dir, "first-report.json")
+	build := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", firstLog, "--json-out", firstReport, "--evaluator-results-out", priorResults)
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build prior evaluator results failed: %v\n%s", err, out)
+	}
+
+	secondLog := filepath.Join(dir, "second.log")
+	secondBody := strings.Join([]string{
+		`2026/06/19 09:00:00 event=runner_timeout task_id=run-3 issue_id=issue-3 msg="timeout"`,
+		`2026/06/19 09:01:00 event=runner_timeout task_id=run-4 issue_id=issue-4 msg="timeout"`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(secondLog, []byte(secondBody), 0o600); err != nil {
+		t.Fatalf("write second log: %v", err)
+	}
+	reportPath := filepath.Join(dir, "second-report.json")
+	run := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", secondLog, "--prior-evaluator-results", priorResults, "--json-out", reportPath)
+	run.Dir = root
+	out, err := run.CombinedOutput()
+	if err != nil {
+		t.Fatalf("consume prior evaluator results failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read second report: %v", err)
+	}
+	report := parseTraceReport(t, raw)
+	if len(report.RecurrenceEscalations) != 1 {
+		t.Fatalf("recurrence escalations = %d; want 1\n%s", len(report.RecurrenceEscalations), raw)
+	}
+	cluster := findCluster(t, report, "runner-timeout")
+	escalation := cluster.Proposals.RecurrenceEscalation
+	wantMarker := "trace-harness-recurrence:runner-timeout:runner-timeout-advisory-evaluator"
+	if escalation.Action != "reopen-or-comment" || escalation.DedupeMarker != wantMarker {
+		t.Fatalf("escalation = %#v; want reopen-or-comment with %q", escalation, wantMarker)
+	}
+	if escalation.PriorPositiveResults != 1 || len(escalation.CurrentEvidenceRefs) != 2 || len(escalation.PriorEvidenceRefs) != 2 {
+		t.Fatalf("escalation refs/counts = %#v", escalation)
+	}
+	for _, want := range []string{wantMarker, "reopen the existing tracking issue", "does not block CI, runtime, or merge"} {
+		if !strings.Contains(escalation.ForgeComment, want) {
+			t.Fatalf("recurrence comment missing %q:\n%s", want, escalation.ForgeComment)
+		}
+	}
+}
+
+func TestTraceHarnessReportKeepsTopLevelRecurrenceWhenClusterMirrorDoesNotFit(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	priorResults := filepath.Join(dir, "prior-results.json")
+	firstReport := filepath.Join(dir, "first-report.json")
+	firstLog := filepath.Join(dir, "first.log")
+	largeRecurringLog(t, firstLog)
+	build := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", firstLog, "--json-out", firstReport, "--evaluator-results-out", priorResults)
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build prior evaluator results failed: %v\n%s", err, out)
+	}
+
+	secondLog := filepath.Join(dir, "second.log")
+	largeRecurringLog(t, secondLog)
+	reportPath := filepath.Join(dir, "second-report.json")
+	run := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", secondLog, "--prior-evaluator-results", priorResults, "--json-out", reportPath)
+	run.Dir = root
+	if out, err := run.CombinedOutput(); err != nil {
+		t.Fatalf("consume prior evaluator results failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read second report: %v", err)
+	}
+
+	var report struct {
+		Clusters              []json.RawMessage           `json:"clusters"`
+		RecurrenceEscalations []traceRecurrenceEscalation `json:"recurrence_escalations"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("unmarshal second report: %v\n%s", err, raw)
+	}
+	wantMarker := "trace-harness-recurrence:runner-timeout:runner-timeout-advisory-evaluator"
+	if len(report.RecurrenceEscalations) != 1 || report.RecurrenceEscalations[0].DedupeMarker != wantMarker {
+		t.Fatalf("top-level recurrence escalations = %#v; want marker %q", report.RecurrenceEscalations, wantMarker)
+	}
+	if !strings.Contains(report.RecurrenceEscalations[0].ForgeComment, "reopen the existing tracking issue") {
+		t.Fatalf("top-level recurrence comment missing forge action:\n%s", report.RecurrenceEscalations[0].ForgeComment)
+	}
+	if len(report.Clusters) != 1 {
+		t.Fatalf("clusters = %d; want 1\n%s", len(report.Clusters), raw)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, report.Clusters[0]); err != nil {
+		t.Fatalf("compact cluster: %v", err)
+	}
+	if compact.Len() > 256*1024 {
+		t.Fatalf("cluster compact bytes = %d; want <= 262144", compact.Len())
+	}
+}
+
+func TestTraceHarnessReportRejectsOversizedPriorEvaluatorResultsBeforeParsing(t *testing.T) {
+	root := repoRoot(t)
+	token := "ghp_" + strings.Repeat("a", 36)
+	dir := filepath.Join(t.TempDir(), token)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatalf("mkdir token dir: %v", err)
+	}
+	logPath := filepath.Join(dir, "worker.log")
+	if err := os.WriteFile(logPath, []byte(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 msg="timeout"`+"\n"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	priorPath := filepath.Join(dir, "prior-results.json")
+	oversized := []byte(`{"schema_version":"trace-harness-advisory-evaluator-results/v1","results":[],"padding":"` + strings.Repeat("x", 256*1024) + `"}`)
+	if err := os.WriteFile(priorPath, oversized, 0o600); err != nil {
+		t.Fatalf("write oversized prior results: %v", err)
+	}
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", logPath, "--prior-evaluator-results", priorPath)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("trace-harness-report accepted oversized prior evaluator results:\n%s", out)
+	}
+	if !strings.Contains(string(out), "exceeds max_artifact_bytes") {
+		t.Fatalf("oversized prior error did not name max_artifact_bytes:\n%s", out)
+	}
+	if strings.Contains(string(out), token) || !strings.Contains(string(out), "[redacted-token]") {
+		t.Fatalf("oversized prior error leaked token-like path:\n%s", out)
+	}
+}
+
+func TestTraceHarnessReportRejectsPriorEvaluatorResultsWithoutResultsList(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "worker.log")
+	if err := os.WriteFile(logPath, []byte(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 msg="timeout"`+"\n"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	priorPath := filepath.Join(dir, "prior-results.json")
+	if err := os.WriteFile(priorPath, []byte(`{"schema_version":"trace-harness-advisory-evaluator-results/v1"}`), 0o600); err != nil {
+		t.Fatalf("write prior results: %v", err)
+	}
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", logPath, "--prior-evaluator-results", priorPath)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("trace-harness-report accepted prior evaluator results without results list:\n%s", out)
+	}
+	if !strings.Contains(string(out), "missing 'results'") {
+		t.Fatalf("missing results error did not name field:\n%s", out)
+	}
+}
+
+func TestTraceHarnessReportDoesNotDropEvaluatorResultRecordsToFitArtifactBound(t *testing.T) {
+	root := repoRoot(t)
+	body, err := os.ReadFile(filepath.Join(root, "scripts", "trace-harness-report.py"))
+	if err != nil {
+		t.Fatalf("read trace-harness-report.py: %v", err)
+	}
+	source := string(body)
+	start := strings.Index(source, "def enforce_evaluator_results_artifact_bound")
+	if start < 0 {
+		t.Fatalf("missing enforce_evaluator_results_artifact_bound")
+	}
+	end := strings.Index(source[start:], "\n\ndef ")
+	if end < 0 {
+		t.Fatalf("could not isolate enforce_evaluator_results_artifact_bound")
+	}
+	snippet := source[start : start+end]
+	if strings.Contains(snippet, `artifact["results"].pop`) || strings.Contains(snippet, `artifact['results'].pop`) {
+		t.Fatalf("enforce_evaluator_results_artifact_bound drops evaluator results:\n%s", snippet)
+	}
+	if !strings.Contains(snippet, "evaluator result artifact exceeds max_artifact_bytes") {
+		t.Fatalf("enforce_evaluator_results_artifact_bound should fail closed when refs/notes trimming is insufficient:\n%s", snippet)
 	}
 }
 
@@ -1090,9 +1385,23 @@ func containsSubstring(values []string, want string) bool {
 	return false
 }
 
+func largeRecurringLog(t *testing.T, path string) {
+	t.Helper()
+	var body strings.Builder
+	for idx := 0; idx < 5000; idx++ {
+		fmt.Fprintf(&body,
+			"2026/06/18 09:00:%02d event=runner_timeout task_id=run-%06d issue_id=issue-%06d session_id=session-%06d msg=\"timeout\"\n",
+			idx%60, idx, idx, idx)
+	}
+	if err := os.WriteFile(path, []byte(body.String()), 0o600); err != nil {
+		t.Fatalf("write large recurring log: %v", err)
+	}
+}
+
 type traceReport struct {
-	SchemaVersion string `json:"schema_version"`
-	Clusters      []traceCluster
+	SchemaVersion         string                      `json:"schema_version"`
+	Clusters              []traceCluster              `json:"clusters"`
+	RecurrenceEscalations []traceRecurrenceEscalation `json:"recurrence_escalations"`
 }
 
 type traceCluster struct {
@@ -1165,5 +1474,18 @@ type traceCluster struct {
 			} `json:"future_report_output"`
 			GatePromotionEvidence []string `json:"gate_promotion_evidence"`
 		} `json:"advisory_evaluator"`
+		RecurrenceEscalation traceRecurrenceEscalation `json:"recurrence_escalation"`
 	} `json:"proposals"`
+}
+
+type traceRecurrenceEscalation struct {
+	Action               string   `json:"action"`
+	DedupeMarker         string   `json:"dedupe_marker"`
+	SourceClusterID      string   `json:"source_cluster_id"`
+	EvaluatorID          string   `json:"evaluator_id"`
+	Signal               string   `json:"signal"`
+	PriorPositiveResults int      `json:"prior_positive_results"`
+	CurrentEvidenceRefs  []string `json:"current_evidence_refs"`
+	PriorEvidenceRefs    []string `json:"prior_evidence_refs"`
+	ForgeComment         string   `json:"forge_comment"`
 }

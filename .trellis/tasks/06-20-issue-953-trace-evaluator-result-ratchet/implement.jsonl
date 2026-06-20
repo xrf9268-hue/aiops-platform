@@ -1,0 +1,4 @@
+{"file":"docs/research/SPEC.md","reason":"SPEC section 1 and observability boundaries keep worker as scheduler/runner/tracker reader."}
+{"file":"docs/design/trace-driven-harness-improvement.md","reason":"Source design for L4 evaluator-result ratchet, redaction, retention, and non-goals."}
+{"file":"docs/runbooks/trace-harness-report.md","reason":"Operator-facing contract for report generation, advisory evaluator candidates, and M6 feedback loop."}
+{"file":"docs/runbooks/trace-evidence-manifest.md","reason":"M5 durable bounded evidence input that M6 must reuse rather than replacing with a DB or worker artifact."}
