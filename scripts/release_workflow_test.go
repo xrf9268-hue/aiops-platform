@@ -14,7 +14,7 @@ func TestReleaseWorkflowPinsGitHubActionsBySHA(t *testing.T) {
 	}
 
 	actionUse := regexp.MustCompile(`uses:\s+(actions/[A-Za-z0-9_.-]+)@(.+)`)
-	pinned := regexp.MustCompile(`^[0-9a-f]{40}\s+#\s+v[0-9]+(?:\s|$)`)
+	pinned := regexp.MustCompile(`^[0-9a-f]{40}\s+#\s+v[0-9]+(?:\.[0-9]+)*(?:\s|$)`)
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(body), "\n") {
 		match := actionUse.FindStringSubmatch(strings.TrimSpace(line))
