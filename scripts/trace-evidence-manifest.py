@@ -26,8 +26,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v1"
-
 # (manifest affected key, finding scalar key) pairs, mirroring the report's
 # finding_affected() so per-run affected id arrays use one vocabulary.
 AFFECTED_FROM_FINDING = (
@@ -51,6 +49,9 @@ def load_report():
 
 
 report = load_report()
+# Shared with the report so the producer and the --evidence-manifest consumer's
+# validation agree on one schema id.
+MANIFEST_SCHEMA_VERSION = report.EVIDENCE_MANIFEST_SCHEMA_VERSION
 
 
 def parser() -> argparse.ArgumentParser:

@@ -36,6 +36,9 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA_VERSION = "trace-harness-report/v3"
+# Single source of truth for the manifest schema id, shared by the producer
+# (trace-evidence-manifest.py) and the --evidence-manifest consumer's validation.
+EVIDENCE_MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v1"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 MAX_PROPOSAL_EVIDENCE_REFS, MAX_PROPOSAL_AFFECTED_VALUES = 5, 5
@@ -222,7 +225,14 @@ def findings_from_manifest(path: Path) -> Iterator[dict]:
     # classify() stays the single source of failure-class truth: it runs again
     # here on each event's kind plus its already-redacted excerpt.
     data = json.loads(path.read_text(encoding="utf-8"))
-    runs = data.get("runs", []) if isinstance(data, dict) else []
+    # Reject a wrong artifact (e.g. a trace-harness-report/v3 output) loudly:
+    # silently treating an unrecognized JSON dict as an empty manifest would hide
+    # real evidence behind a clean-looking zero-cluster report.
+    if not isinstance(data, dict) or data.get("schema_version") != EVIDENCE_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(f"{mask(str(path))}: not a {EVIDENCE_MANIFEST_SCHEMA_VERSION} evidence manifest")
+    runs = data.get("runs", [])
+    if not isinstance(runs, list):
+        raise ValueError(f"{mask(str(path))}: evidence manifest 'runs' must be a list")
     for run in runs:
         if not isinstance(run, dict):
             continue

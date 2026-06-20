@@ -317,6 +317,35 @@ func TestTraceEvidenceManifestRoundTripsThroughReport(t *testing.T) {
 	}
 }
 
+func TestTraceHarnessReportRejectsNonManifestJSONOnEvidenceManifest(t *testing.T) {
+	root := repoRoot(t)
+	dir := t.TempDir()
+	// A trace-harness-report/v3 output has clusters, not runs: feeding it to
+	// --evidence-manifest must fail loudly, not silently produce an empty report.
+	logPath := filepath.Join(dir, "worker.log")
+	if err := os.WriteFile(logPath, []byte(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 msg="timeout"`+"\n"), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	reportPath := filepath.Join(dir, "report-v3.json")
+	build := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--worker-log", logPath, "--json-out", reportPath)
+	build.Dir = root
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build v3 report: %v\n%s", err, out)
+	}
+
+	misuse := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--evidence-manifest", reportPath)
+	misuse.Dir = root
+	out, err := misuse.CombinedOutput()
+	if err == nil {
+		t.Fatalf("report accepted a v3 report as an evidence manifest:\n%s", out)
+	}
+	if !strings.Contains(string(out), "not a trace-evidence-manifest/v1 evidence manifest") {
+		t.Fatalf("misuse error did not name the schema mismatch:\n%s", out)
+	}
+}
+
 func TestTraceEvidenceManifestRequiresWorkerLog(t *testing.T) {
 	root := repoRoot(t)
 	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-evidence-manifest.py"))
