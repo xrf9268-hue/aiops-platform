@@ -36,28 +36,28 @@ The repository Dockerfile now exposes this as the `codex-worker` target:
 docker build --target codex-worker -t aiops-platform:codex-worker .
 ```
 
-The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.137.0`, checks
+The target supports Linux `amd64` and `arm64`, pins Codex CLI `0.141.0`, checks
 the release artifact SHA-256, and runs `codex --version` during the build.
 
 ## Linux ARM64 fallback
 
-Install the pinned Codex CLI (`0.137.0`) directly when the official installer
+Install the pinned Codex CLI (`0.141.0`) directly when the official installer
 cannot resolve the ARM64 package:
 
 ```bash
 curl -fL -o /tmp/codex.tar.gz \
-  https://github.com/openai/codex/releases/download/rust-v0.137.0/codex-package-aarch64-unknown-linux-musl.tar.gz
-echo '8756c80ad058199676d058bbd919812466d796886e7574a57c4e007f766e707c  /tmp/codex.tar.gz' | sha256sum -c -
+  https://github.com/openai/codex/releases/download/rust-v0.141.0/codex-package-aarch64-unknown-linux-musl.tar.gz
+echo 'b70030338592de3e361f3cde83d624f88061df300abe31b62075a5c5a058a6fc  /tmp/codex.tar.gz' | sha256sum -c -
 mkdir -p /opt/codex
 tar -xzf /tmp/codex.tar.gz -C /opt/codex
-ln -sf /opt/codex/codex-aarch64-unknown-linux-musl /usr/local/bin/codex
+ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 codex --version
 ```
 
 Expected version output:
 
 ```text
-codex-cli 0.137.0
+codex-cli 0.141.0
 ```
 
 Keep the version and checksum together in any derived Dockerfile so future
