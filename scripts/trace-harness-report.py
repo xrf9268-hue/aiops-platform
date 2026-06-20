@@ -31,7 +31,7 @@ import hashlib
 import json
 import re
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -39,7 +39,7 @@ from urllib.parse import urlsplit, urlunsplit
 SCHEMA_VERSION = "trace-harness-report/v3"
 # Single source of truth for the manifest schema id, shared by the producer
 # (trace-evidence-manifest.py) and the --evidence-manifest consumer's validation.
-EVIDENCE_MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v1"
+EVIDENCE_MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v2"
 EVALUATOR_RESULT_SCHEMA_VERSION = "trace-harness-advisory-evaluator-result/v1"
 EVALUATOR_RESULTS_ARTIFACT_SCHEMA_VERSION = "trace-harness-advisory-evaluator-results/v1"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
@@ -253,16 +253,62 @@ def fold_manifest(clusters: dict, run_bytes: dict, path: Path) -> None:
 
 
 def fold_manifest_run(clusters: dict, run_bytes: dict, run: dict) -> None:
-    # Cluster only from retained events. The manifest's per-run `affected` summary
-    # also holds ids from events dropped by its 64 KiB cap, but that summary is
-    # not partitioned by failure class, so folding it would mis-attribute a
-    # dropped event's ids to a retained class (and could invent a cluster the raw
-    # path would key differently). The capped-run undercount is a documented
-    # limitation; faithful per-class recovery is tracked in #958.
+    # The run's per-class `affected_by_class` summary is the authoritative source of
+    # affected ids: it was accumulated from every event (retained and cap-dropped)
+    # before the 64 KiB cap, so it is the superset of the retained events' own ids.
+    # Fold the retained events for evidence only (record_affected=False) and recover
+    # all affected ids — including dropped events' — from the summary, attributed to
+    # each id's own failure class (#958). Sourcing ids from one place keeps the
+    # kept+omitted accounting exact and never mis-attributes across classes.
     for event in run.get("events", []):
         finding = manifest_event_finding(event)
         if finding:
-            add_finding(clusters, run_bytes, finding)
+            add_finding(clusters, run_bytes, finding, record_affected=False)
+    fold_manifest_affected_by_class(clusters, run.get("affected_by_class", {}))
+
+
+def fold_manifest_affected_by_class(clusters: dict, affected_by_class: dict) -> None:
+    if not isinstance(affected_by_class, dict):
+        return
+    for class_id, affected in affected_by_class.items():
+        event_class = CLASS_BY_ID.get(class_id)
+        if not event_class or not isinstance(affected, dict):
+            continue
+        # A class whose events were all dropped has no retained evidence, so create
+        # an evidence-less cluster carrying only the recovered affected ids. It
+        # contributes no evidence-derived occurrences but still carries the summary's
+        # byte-cap omitted counts, so its signal (candidate-only or positive-recurring)
+        # matches whatever the raw --worker-log path reports for the same class — never
+        # a *false* escalation, since both count the same distinct trimmed ids.
+        cluster = clusters.get(class_id) or new_evidence_less_cluster(clusters, event_class)
+        for key in AFFECTED_KEYS:
+            for value in affected.get(key, []):
+                add_unique(cluster, key, value)
+        merge_manifest_affected_omitted(cluster, affected.get("omitted", {}))
+
+
+def new_evidence_less_cluster(clusters: dict, event_class: tuple[str, str, str]) -> dict:
+    cid, title, symptom = event_class
+    cluster = new_cluster({"id": cid, "title": title, "symptom": symptom})
+    clusters[cid] = cluster
+    return cluster
+
+
+def merge_manifest_affected_omitted(cluster: dict, omitted: dict) -> None:
+    # Carry the summary's own byte-cap omitted counts into the cluster. Kept ids come
+    # solely from these summaries (events add no ids), so for a single manifest
+    # kept + omitted equals the class's true distinct-id count, matching the raw
+    # path. Counts from separate summaries are summed because the dropped id *values*
+    # are gone (the byte bound discarded them), so overlapping inputs cannot be
+    # deduped here and may inflate omitted — an advisory-only count; the kept id
+    # lists stay correct. Tracked in #961.
+    if not isinstance(omitted, dict):
+        return
+    for key in AFFECTED_KEYS:
+        count = int(omitted.get(key, 0) or 0)
+        if count > 0:
+            target = cluster["affected"].setdefault("omitted", {})
+            target[key] = int(target.get(key, 0)) + count
 
 
 def manifest_event_finding(event: dict) -> dict | None:
@@ -355,13 +401,17 @@ def evidence_excerpt(prefix: str, has_payload: bool) -> str:
     return f"{excerpt} payload=[redacted-payload]" if has_payload else excerpt
 
 
-def add_finding(clusters: dict[str, dict], run_bytes: dict[str, int], finding: dict) -> None:
+def add_finding(clusters: dict[str, dict], run_bytes: dict[str, int], finding: dict, record_affected: bool = True) -> None:
     cluster = clusters.setdefault(finding["id"], new_cluster(finding))
-    add_unique(cluster, "issues", finding["issue"])
-    add_unique(cluster, "issue_identifiers", finding["identifier"])
-    add_unique(cluster, "pull_requests", finding["pull_request"])
-    add_unique(cluster, "runs", finding["run"])
-    add_unique(cluster, "sessions", finding["session"])
+    # The manifest path passes record_affected=False: its per-class summary, not the
+    # retained evidence, is the authoritative source of cluster-level affected ids.
+    # The evidence entry still carries its own affected for occurrence counting.
+    if record_affected:
+        add_unique(cluster, "issues", finding["issue"])
+        add_unique(cluster, "issue_identifiers", finding["identifier"])
+        add_unique(cluster, "pull_requests", finding["pull_request"])
+        add_unique(cluster, "runs", finding["run"])
+        add_unique(cluster, "sessions", finding["session"])
     entry, entry_size = bounded_evidence_entry(cluster, run_bytes, finding)
     if not entry:
         return
@@ -1032,34 +1082,38 @@ def enforce_cluster_bound(cluster: dict) -> None:
     if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
         return
 
-    omitted = cluster["affected"].setdefault("omitted", {})
+    trim_affected_to_cap(cluster["affected"], lambda: encoded_bytes(cluster))
+    trim_evidence_to_cluster_bound(cluster)
+
+
+def trim_affected_to_cap(affected: dict, size: Callable[[], int]) -> None:
+    # Shared by the report cluster and the manifest's per-class summary (one trim
+    # implementation). `size` reports the bytes of the enclosing object so the same
+    # 256 KiB ceiling applies whether the affected dict is a cluster's or a run
+    # group's per-class bucket. Trim the longest id arrays first, recording omitted.
+    omitted = affected.setdefault("omitted", {})
     base_omitted = {key: int(omitted.get(key, 0)) for key in AFFECTED_KEYS}
-    originals = {key: list(cluster["affected"][key]) for key in AFFECTED_KEYS}
+    originals = {key: list(affected.get(key, [])) for key in AFFECTED_KEYS}
     for key in sorted(AFFECTED_KEYS, key=lambda name: len(originals[name]), reverse=True):
-        if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
+        if size() <= MAX_CLUSTER_BYTES:
             break
         values = originals[key]
         if not values:
             continue
-        keep = max_affected_keep_count(cluster, key, values, base_omitted[key])
-        cluster["affected"][key] = values[:keep]
-        set_affected_omitted(cluster, key, base_omitted[key] + len(values) - keep)
-
-    for key, count in list(omitted.items()):
-        if count <= 0:
-            omitted.pop(key)
-    if not omitted:
-        cluster["affected"].pop("omitted", None)
-    trim_evidence_to_cluster_bound(cluster)
+        keep = max_affected_keep_count(affected, key, values, base_omitted[key], size)
+        affected[key] = values[:keep]
+        set_affected_omitted(affected, key, base_omitted[key] + len(values) - keep)
+    if not affected.get("omitted"):
+        affected.pop("omitted", None)
 
 
-def max_affected_keep_count(cluster: dict, key: str, values: list[str], base_omitted: int) -> int:
+def max_affected_keep_count(affected: dict, key: str, values: list[str], base_omitted: int, size: Callable[[], int]) -> int:
     low, high, best = 0, len(values), 0
     while low <= high:
         keep = (low + high) // 2
-        cluster["affected"][key] = values[:keep]
-        set_affected_omitted(cluster, key, base_omitted + len(values) - keep)
-        if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
+        affected[key] = values[:keep]
+        set_affected_omitted(affected, key, base_omitted + len(values) - keep)
+        if size() <= MAX_CLUSTER_BYTES:
             best = keep
             low = keep + 1
         else:
@@ -1067,14 +1121,14 @@ def max_affected_keep_count(cluster: dict, key: str, values: list[str], base_omi
     return best
 
 
-def set_affected_omitted(cluster: dict, key: str, count: int) -> None:
-    omitted = cluster["affected"].setdefault("omitted", {})
+def set_affected_omitted(affected: dict, key: str, count: int) -> None:
+    omitted = affected.setdefault("omitted", {})
     if count > 0:
         omitted[key] = count
     else:
         omitted.pop(key, None)
     if not omitted:
-        cluster["affected"].pop("omitted", None)
+        affected.pop("omitted", None)
 
 
 def trim_evidence_to_cluster_bound(cluster: dict) -> None:
