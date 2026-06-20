@@ -612,7 +612,11 @@ func appServerDynamicToolSpecs(cfg workflow.Config) []map[string]any {
 		if schema == nil {
 			schema = map[string]any{"type": "object"}
 		}
-		specs = append(specs, map[string]any{"name": tool.Name, "description": tool.Description, "inputSchema": schema})
+		// type:"function" is the DynamicToolSpec tagged-union discriminator codex
+		// 0.141 requires (serde tag="type"; the Function variant renames to
+		// "function"); every aiops dynamic tool is a function tool. Codex <=0.137
+		// had an untagged spec, so this field is new with the 0.141 schema bump.
+		specs = append(specs, map[string]any{"type": "function", "name": tool.Name, "description": tool.Description, "inputSchema": schema})
 	}
 	return specs
 }

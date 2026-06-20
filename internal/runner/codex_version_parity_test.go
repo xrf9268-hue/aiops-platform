@@ -24,7 +24,7 @@ func TestCodexVersionPinParity(t *testing.T) {
 
 	// The vendored schema filename carries the FULL v<major>_<minor>_<patch>
 	// stamp. The patch must be included: codex generates the schema per exact
-	// version, so a patch bump (0.137.0 -> 0.137.1) that forgets to regenerate
+	// version, so a patch bump (0.141.0 -> 0.141.1) that forgets to regenerate
 	// would otherwise keep the same major/minor filename, let this parity check
 	// pass, and leave the contract test validating a stale patch schema (#629 P2).
 	stamp := "v" + m[1] + "_" + m[2] + "_" + m[3]
