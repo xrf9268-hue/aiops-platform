@@ -136,13 +136,14 @@ def generate(worker_logs: list[Path], manifests: list[Path] | None = None, prior
         raise ValueError("at least one --worker-log or --evidence-manifest is required")
     clusters: dict[str, dict] = {}
     run_bytes: dict[str, int] = {}
-    inputs = [input_ref(path) for path in worker_logs]
-    inputs += [input_ref(path, "evidence_manifest") for path in manifests]
+    worker_inputs = unique_inputs_by_digest(worker_logs, "worker_log")
+    manifest_inputs = unique_inputs_by_digest(manifests, "evidence_manifest")
+    inputs = [ref for _, ref in worker_inputs] + [ref for _, ref in manifest_inputs]
     report_ref = proposal_report_reference(inputs)
-    for path in worker_logs:
+    for path, _ in worker_inputs:
         for finding in parse_worker_log(path):
             add_finding(clusters, run_bytes, finding)
-    for path in manifests:
+    for path, _ in manifest_inputs:
         fold_manifest(clusters, run_bytes, path)
     report = {
         "schema_version": SCHEMA_VERSION,
@@ -172,6 +173,24 @@ def input_ref(path: Path, kind: str = "worker_log") -> dict:
         "bytes": size,
         "sha256": digest.hexdigest(),
     }
+
+
+def unique_inputs_by_digest(paths: list[Path], kind: str) -> list[tuple[Path, dict]]:
+    # Collapse byte-identical inputs (the same path repeated, or two paths with the
+    # same bytes) before folding. Folding one twice doubles its evidence and, because
+    # a manifest's per-class `omitted` is a count whose dropped id values are gone,
+    # inflates the recovered omitted vs the raw --worker-log path (#961). The digest
+    # is over raw bytes (no content is parsed); distinct-but-overlapping inputs keep
+    # different digests and are not deduped here.
+    seen: set[str] = set()
+    unique: list[tuple[Path, dict]] = []
+    for path in paths:
+        ref = input_ref(path, kind)
+        if ref["sha256"] in seen:
+            continue
+        seen.add(ref["sha256"])
+        unique.append((path, ref))
+    return unique
 
 
 def proposal_report_reference(inputs: list[dict]) -> str:
@@ -298,10 +317,11 @@ def merge_manifest_affected_omitted(cluster: dict, omitted: dict) -> None:
     # Carry the summary's own byte-cap omitted counts into the cluster. Kept ids come
     # solely from these summaries (events add no ids), so for a single manifest
     # kept + omitted equals the class's true distinct-id count, matching the raw
-    # path. Counts from separate summaries are summed because the dropped id *values*
-    # are gone (the byte bound discarded them), so overlapping inputs cannot be
-    # deduped here and may inflate omitted — an advisory-only count; the kept id
-    # lists stay correct. Tracked in #961.
+    # path. Counts from separate summaries are summed. Byte-identical inputs are
+    # collapsed upstream by digest (#961), but two *distinct* manifests with
+    # overlapping content keep different digests and cannot be deduped here (the
+    # dropped id values are gone), so they may inflate omitted — an advisory-only
+    # count; the kept id lists stay correct. Use non-overlapping log slices.
     if not isinstance(omitted, dict):
         return
     for key in AFFECTED_KEYS:

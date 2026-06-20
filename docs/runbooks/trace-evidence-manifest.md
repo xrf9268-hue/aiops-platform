@@ -29,6 +29,15 @@ python3 scripts/trace-evidence-manifest.py \
 Multiple `--worker-log` flags are allowed. The command writes compact JSON, so
 for local inspection pipe it through `python3 -m json.tool` or `jq`.
 
+Byte-identical inputs are collapsed by their `sha256` digest before folding, so
+passing the same log (or, for the report, the same manifest) twice does not
+double events or inflate the per-class affected summary (#961). Two *distinct*
+inputs whose contents **overlap** (for example, log-rotation slices that share
+lines) keep different digests and are not deduped: their kept affected-id lists
+still merge correctly, but the per-class `omitted` counts — bounded counts whose
+dropped id values are gone — are summed and may over-state recurrence. Prefer
+**non-overlapping** log slices.
+
 ## What is captured (metadata first)
 
 The output uses schema `trace-evidence-manifest/v2`.
