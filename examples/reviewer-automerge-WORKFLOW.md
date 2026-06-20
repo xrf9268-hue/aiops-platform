@@ -96,6 +96,12 @@ commented. Obtain the diff either way:
 If you cannot identify the PR, comment what you looked for and flip to
 `aiops/rework` so the maker re-hands-off.
 
+Before deciding whether this is a fresh review, read the prior review-bot
+findings on this issue and note the latest PR head SHA you previously reviewed.
+If the maker re-posted the same PR URL and the PR head is unchanged from your
+latest Rework comment, do not run the full rubric again: comment that the head
+is unchanged and still missing the named fix, then set `aiops/rework`.
+
 If a previous poll already acted on this PR, do NOT blindly re-run the rubric —
 but work out the situation first, in this order:
 1. **Already merged?** `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
@@ -131,7 +137,12 @@ but work out the situation first, in this order:
 1. The diff implements what the issue asked; each acceptance criterion is met or
    explicitly addressed in the PR body.
 2. Tests cover the changed behavior and would fail if the change were reverted
-   (no placebo tests).
+   (no placebo tests). Static source-string or markup-presence tests only cover
+   static assets. They do not cover browser/client behavior: if the change is
+   JavaScript behavior, require a test that executes that behavior in a
+   DOM/browser/JS runtime with mocked `fetch`, or an equivalent refactor into
+   executable testable code. A test that still passes when the behavior in
+   `web/app.js` is removed or its event handlers stop running is a failing test.
 3. The diff is scoped to this issue — no unrelated changes ride along.
 4. No correctness/safety problems (races, unchecked errors, secrets in code/logs).
 5. Executable gate: on the fetched head, `go build ./...` and `go test ./...` pass.
@@ -171,8 +182,14 @@ PASS (every item passes):
 
 FAIL (any item fails):
   - Comment the failing items with concrete, actionable findings (file, line,
-    what to change), then set the label to `aiops/rework` via gitea_issue_labels.
-    The maker re-runs from your findings. This is your LAST action.
+    what to change, and the PR head SHA reviewed), then set the label to
+    `aiops/rework` via gitea_issue_labels. If this is the same finding on an
+    unchanged head, say so explicitly. If the head changed but the same class of
+    placebo/coverage failure remains, name one concrete mutation that would still
+    pass so the maker can see why it has not converged. If the same class has
+    failed twice already, prefix the comment with `Operator attention:` and
+    summarize the repeated failure before setting `aiops/rework`. The maker
+    re-runs from your findings. This is your LAST action.
 
 ## Hard constraints (review-only)
 - Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the

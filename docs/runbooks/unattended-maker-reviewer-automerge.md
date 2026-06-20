@@ -206,6 +206,34 @@ for this DAG"*):
    drop out of the reviewer's poll *before* it could set `Done` — stranding it
    (closed + still `Human Review`) and blocking every `Depends on #N` dependent.
 
+## Rework convergence
+
+The maker/reviewer loop is allowed to return work through `Rework`, but it must
+make progress on each lap. The observed #964 failure class was not a scheduler
+bug: the maker re-posted the same PR head on early laps, then later added a
+source-substring test for `web/app.js` that still did not execute the browser
+behavior the reviewer was rejecting.
+
+Keep the prevention in the workflow prompts, not in a worker-side verifier:
+
+- Maker Rework turns must read the latest review-bot finding first, treat it as
+  an acceptance criterion, and push a new commit before handing off again. The
+  maker comment / PR body should include a `Rework response:` section with the
+  reviewed head, new head, and how each finding was addressed.
+- A maker must not satisfy a behavior-test finding with static markup or
+  source-substring checks. For browser JavaScript, the test should execute the
+  client behavior in a DOM/browser/JS runtime with mocked `fetch`, or refactor
+  the behavior into executable testable code.
+- Reviewer Rework comments must cite the PR head SHA reviewed. If the head is
+  unchanged, the reviewer should skip the full rubric and say the same head still
+  lacks the named fix. If a new head still has the same class of placebo test,
+  the reviewer should name one mutation that would still pass so the maker has a
+  concrete target.
+- When the same class of failure has bounced twice, the reviewer should prefix
+  the next comment with `Operator attention:` and summarize the repeated failure
+  before returning to `Rework`. This gives operators a clear intervention marker
+  without adding a new tracker state or worker phase outside the SPEC boundary.
+
 ## Best-practice checklist
 
 - [ ] Distinct `workspace.root` **and** distinct `AIOPS_MIRROR_ROOT` per worker (both hard).
@@ -216,6 +244,9 @@ for this DAG"*):
 - [ ] Maker never sets `aiops/done`; reviewer is the only Done/auto-merge path.
 - [ ] Reviewer issues `aiops/done` **only after the forge confirms the merge** — never on the verdict alone (else `Depends on #N` dependents unblock from stale `main`).
 - [ ] Maker references the issue with a **non-closing** `Refs #<N>` (not `Closes`); the reviewer uses `gitea_issue_labels` with `aiops/done` + `close_issue:true` post-merge. A closing keyword auto-closes the issue at merge, dropping it from the reviewer's `state=open` poll before `Done` is set — stranding it and its dependents.
+- [ ] Rework turns push a new head and include a `Rework response:`; reviewer
+      comments cite the reviewed head SHA and use `Operator attention:` after
+      repeated same-class failures.
 - [ ] Maker uses the numeric issue number (digits of `{{ issue.identifier }}`, no leading `#`) in every API path / issue reference — `{{ issue.identifier }}` renders as `#N` on Gitea.
 - [ ] Branch protection: required checks + 1 approval + no direct push to `main` + squash + auto-merge enabled.
 - [ ] One-issue-per-PR; agents file follow-up issues for out-of-scope finds.

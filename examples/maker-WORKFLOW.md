@@ -93,6 +93,25 @@ Your Gitea push + API credential is the basic-auth token already embedded in the
 Description:
 {{ task.description }}
 
+If this dispatch is a Rework return, first read the newest review-bot issue
+comments / PR reviews and treat every unresolved reviewer finding as an
+acceptance criterion for this turn. Record the PR head SHA the reviewer cited
+and compare it with `git rev-parse HEAD` before you hand off again.
+
+Rework convergence rules:
+- Do not repost the same PR URL for an unchanged head. A Rework handoff must
+  push a new commit that directly addresses the latest reviewer findings.
+- If a reviewer says tests are placebo / static-only, add tests that execute the
+  changed behavior at the relevant boundary. For browser JavaScript behavior,
+  source-substring checks or `index.html` markup checks are not enough; use a
+  DOM/browser/JS runtime test with mocked `fetch`, or refactor the behavior into
+  executable testable code.
+- In the issue comment or PR body, include a `Rework response:` section naming
+  the reviewed head, the new head, and how each reviewer finding was addressed.
+- If you cannot produce a new commit that addresses the findings, post one
+  `Blocked rework:` comment explaining the blocker and stop without moving the
+  issue to `Human Review`; repeated unchanged handoffs only burn reviewer turns.
+
 Do all of the following end to end, without asking for confirmation:
 
 1. Implement the change in this worktree. If the issue body says `Depends on #M`,
