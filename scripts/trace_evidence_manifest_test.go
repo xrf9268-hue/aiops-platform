@@ -239,6 +239,66 @@ func TestTraceEvidenceManifestRoundTripsOversizedRunnerEndPrefix(t *testing.T) {
 	}
 }
 
+func TestTraceEvidenceManifestRoundTripDoesNotFabricateRunWithoutTaskID(t *testing.T) {
+	root := repoRoot(t)
+	// An event with issue_id but no task_id: the raw parser leaves affected.runs
+	// empty, so the manifest's issue-id group key must not be promoted to a run.
+	body := `2026/06/18 09:00:00 event=runner_timeout issue_id=issue-1 msg="timeout"` + "\n"
+	cluster := findCluster(t, reportFromManifest(t, root, body), "runner-timeout")
+	if len(cluster.Affected.Runs) != 0 {
+		t.Fatalf("manifest fabricated affected runs from the issue-id group key: %#v", cluster.Affected.Runs)
+	}
+	if !contains(cluster.Affected.Issues, "issue-1") {
+		t.Fatalf("manifest dropped the affected issue id: %#v", cluster.Affected.Issues)
+	}
+}
+
+func TestTraceEvidenceManifestRoundTripRecoversCappedRunLevelAffected(t *testing.T) {
+	root := repoRoot(t)
+	// One chatty single-class run (one issue, many sessions, large excerpts) so
+	// the manifest's 64 KiB event cap drops later events. The run-level affected
+	// summary the manifest preserves must be folded back, so the manifest round
+	// trip reports the same affected sessions as the raw --worker-log path.
+	const sessions = 60
+	var body strings.Builder
+	for i := 0; i < sessions; i++ {
+		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-`)
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(` msg="`)
+		body.WriteString(strings.Repeat("x", 1500))
+		body.WriteString(`"` + "\n")
+	}
+	rawSessions := findCluster(t, runTraceHarnessReport(t, root, body.String()), "runner-timeout").Affected.Sessions
+	manSessions := findCluster(t, reportFromManifest(t, root, body.String()), "runner-timeout").Affected.Sessions
+	if len(rawSessions) != sessions {
+		t.Fatalf("raw path recorded %d affected sessions; want %d", len(rawSessions), sessions)
+	}
+	if len(manSessions) != len(rawSessions) {
+		t.Fatalf("manifest round trip undercounted affected sessions: got %d want %d (single-class run-level summary must be folded)", len(manSessions), len(rawSessions))
+	}
+}
+
+func reportFromManifest(t *testing.T, root, body string) traceReport {
+	t.Helper()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "manifest.json")
+	if err := os.WriteFile(manifestPath, manifestRawBytes(t, root, body), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	reportPath := filepath.Join(dir, "report.json")
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-harness-report.py"),
+		"--evidence-manifest", manifestPath, "--json-out", reportPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("report consuming manifest failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	return parseTraceReport(t, raw)
+}
+
 func clusterIDs(report traceReport) []string {
 	ids := make([]string, 0, len(report.Clusters))
 	for _, cluster := range report.Clusters {

@@ -128,8 +128,7 @@ def generate(worker_logs: list[Path], manifests: list[Path] | None = None) -> di
         for finding in parse_worker_log(path):
             add_finding(clusters, run_bytes, finding)
     for path in manifests:
-        for finding in findings_from_manifest(path):
-            add_finding(clusters, run_bytes, finding)
+        fold_manifest(clusters, run_bytes, path)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -217,13 +216,11 @@ def classify(kind: str, prefix: str) -> tuple[str, str, str] | None:
     return None
 
 
-def findings_from_manifest(path: Path) -> Iterator[dict]:
+def fold_manifest(clusters: dict, run_bytes: dict, path: Path) -> None:
     # A trace-evidence manifest (scripts/trace-evidence-manifest.py) is the
     # durable, pre-redacted form of the same worker-event evidence
     # parse_worker_log() yields. Its events are already masked and byte-bounded,
     # so consuming one re-clusters by failure class without re-reading raw logs.
-    # classify() stays the single source of failure-class truth: it runs again
-    # here on each event's kind plus its already-redacted excerpt.
     data = json.loads(path.read_text(encoding="utf-8"))
     # Reject a wrong artifact (e.g. a trace-harness-report/v3 output) loudly:
     # silently treating an unrecognized JSON dict as an empty manifest would hide
@@ -234,15 +231,37 @@ def findings_from_manifest(path: Path) -> Iterator[dict]:
     if not isinstance(runs, list):
         raise ValueError(f"{mask(str(path))}: evidence manifest 'runs' must be a list")
     for run in runs:
-        if not isinstance(run, dict):
+        if isinstance(run, dict):
+            fold_manifest_run(clusters, run_bytes, run)
+
+
+def fold_manifest_run(clusters: dict, run_bytes: dict, run: dict) -> None:
+    classes = set()
+    for event in run.get("events", []):
+        finding = manifest_event_finding(event)
+        if not finding:
             continue
-        run_id = run.get("run", "")
-        for event in run.get("events", []):
-            if finding := manifest_event_finding(run_id, event):
-                yield finding
+        classes.add(finding["id"])
+        add_finding(clusters, run_bytes, finding)
+    # The manifest records the full run-level affected summary before its 64 KiB
+    # event cap drops later events. When every retained event shares one failure
+    # class, fold that summary into the cluster so a chatty capped run does not
+    # undercount affected ids and recurrence/advisory signal matches the raw
+    # --worker-log path. A multi-class run is left to its retained events to
+    # avoid attributing a dropped event's ids to the wrong class.
+    if len(classes) == 1:
+        fold_run_affected(clusters[next(iter(classes))], run.get("affected", {}))
 
 
-def manifest_event_finding(run_id: str, event: dict) -> dict | None:
+def fold_run_affected(cluster: dict, affected: dict) -> None:
+    if not isinstance(affected, dict):
+        return
+    for key in AFFECTED_KEYS:
+        for value in affected.get(key, []) or []:
+            add_unique(cluster, key, value)
+
+
+def manifest_event_finding(event: dict) -> dict | None:
     if not isinstance(event, dict):
         return None
     # The manifest stores the resolved failure class, so trust it through a fixed
@@ -252,7 +271,6 @@ def manifest_event_finding(run_id: str, event: dict) -> dict | None:
     if not event_class:
         return None
     cid, title, symptom = event_class
-    kind, excerpt = event.get("kind", ""), event.get("excerpt", "")
     affected = event.get("affected", {})
     affected = affected if isinstance(affected, dict) else {}
     metadata = event.get("metadata", {})
@@ -261,12 +279,15 @@ def manifest_event_finding(run_id: str, event: dict) -> dict | None:
         "title": title,
         "symptom": symptom,
         "ref": event.get("ref", ""),
-        "kind": kind,
-        "excerpt": excerpt,
+        "kind": event.get("kind", ""),
+        "excerpt": event.get("excerpt", ""),
         "metadata": metadata if isinstance(metadata, dict) else {},
         "issue": first_affected(affected, "issues"),
         "identifier": first_affected(affected, "issue_identifiers"),
-        "run": run_id or first_affected(affected, "runs"),
+        # Use the event's own run id; the manifest's run group key is an
+        # issue-id fallback when the source event had no task_id, and promoting
+        # it here would fabricate an affected run the raw path never reports.
+        "run": first_affected(affected, "runs"),
         "session": first_affected(affected, "sessions"),
         "pull_request": first_affected(affected, "pull_requests"),
     }
