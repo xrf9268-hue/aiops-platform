@@ -73,6 +73,19 @@ exactly what the report omits:
   output. The manifest is evidence for harness improvement, not scheduler state,
   and must never become restart/recovery state.
 
+### Known limitation: capped-run affected ids
+
+When a single run's events exceed the 64 KiB event cap, the dropped events'
+issue/session/PR ids are still preserved in that run's class-less `affected`
+summary, but the report does **not** re-cluster them: the summary is not
+partitioned by failure class, so attributing a dropped event's ids to a retained
+cluster could mis-label them (e.g. fold a dropped `turn_input_required` id into a
+`runner-timeout` cluster). For such capped runs the report's affected counts can
+therefore be lower than the raw `--worker-log` path. Faithful per-class recovery
+(persisting affected summaries by failure class in the manifest) is tracked in
+#958. This only affects very chatty runs that overflow the per-run cap;
+non-capped runs round-trip with identical affected ids.
+
 ## How it is consumed
 
 - The **trace harness report** consumes it directly:

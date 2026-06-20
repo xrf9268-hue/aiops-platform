@@ -236,29 +236,16 @@ def fold_manifest(clusters: dict, run_bytes: dict, path: Path) -> None:
 
 
 def fold_manifest_run(clusters: dict, run_bytes: dict, run: dict) -> None:
-    classes = set()
+    # Cluster only from retained events. The manifest's per-run `affected` summary
+    # also holds ids from events dropped by its 64 KiB cap, but that summary is
+    # not partitioned by failure class, so folding it would mis-attribute a
+    # dropped event's ids to a retained class (and could invent a cluster the raw
+    # path would key differently). The capped-run undercount is a documented
+    # limitation; faithful per-class recovery is tracked in #958.
     for event in run.get("events", []):
         finding = manifest_event_finding(event)
-        if not finding:
-            continue
-        classes.add(finding["id"])
-        add_finding(clusters, run_bytes, finding)
-    # The manifest records the full run-level affected summary before its 64 KiB
-    # event cap drops later events. When every retained event shares one failure
-    # class, fold that summary into the cluster so a chatty capped run does not
-    # undercount affected ids and recurrence/advisory signal matches the raw
-    # --worker-log path. A multi-class run is left to its retained events to
-    # avoid attributing a dropped event's ids to the wrong class.
-    if len(classes) == 1:
-        fold_run_affected(clusters[next(iter(classes))], run.get("affected", {}))
-
-
-def fold_run_affected(cluster: dict, affected: dict) -> None:
-    if not isinstance(affected, dict):
-        return
-    for key in AFFECTED_KEYS:
-        for value in affected.get(key, []) or []:
-            add_unique(cluster, key, value)
+        if finding:
+            add_finding(clusters, run_bytes, finding)
 
 
 def manifest_event_finding(event: dict) -> dict | None:

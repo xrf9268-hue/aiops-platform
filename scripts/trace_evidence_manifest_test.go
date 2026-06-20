@@ -253,28 +253,29 @@ func TestTraceEvidenceManifestRoundTripDoesNotFabricateRunWithoutTaskID(t *testi
 	}
 }
 
-func TestTraceEvidenceManifestRoundTripRecoversCappedRunLevelAffected(t *testing.T) {
+func TestTraceEvidenceManifestRoundTripDoesNotMisattributeDroppedEventClass(t *testing.T) {
 	root := repoRoot(t)
-	// One chatty single-class run (one issue, many sessions, large excerpts) so
-	// the manifest's 64 KiB event cap drops later events. The run-level affected
-	// summary the manifest preserves must be folded back, so the manifest round
-	// trip reports the same affected sessions as the raw --worker-log path.
-	const sessions = 60
+	// Many runner_timeout events fill the manifest's 64 KiB event cap, then a
+	// later turn_input_required event for the same run is dropped. Its session id
+	// survives only in the run-level affected summary, which is class-less: the
+	// consumer must not fold it into the retained runner-timeout cluster.
 	var body strings.Builder
-	for i := 0; i < sessions; i++ {
-		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-`)
-		body.WriteString(strconv.Itoa(i))
-		body.WriteString(` msg="`)
+	for i := 0; i < 60; i++ {
+		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-rt msg="`)
 		body.WriteString(strings.Repeat("x", 1500))
 		body.WriteString(`"` + "\n")
 	}
-	rawSessions := findCluster(t, runTraceHarnessReport(t, root, body.String()), "runner-timeout").Affected.Sessions
-	manSessions := findCluster(t, reportFromManifest(t, root, body.String()), "runner-timeout").Affected.Sessions
-	if len(rawSessions) != sessions {
-		t.Fatalf("raw path recorded %d affected sessions; want %d", len(rawSessions), sessions)
+	body.WriteString(`2026/06/18 09:00:01 event=turn_input_required task_id=run-1 issue_id=issue-1 session_id=session-ir msg="input"` + "\n")
+
+	manifest := runTraceEvidenceManifest(t, root, body.String())
+	run := manifestRun(t, manifest, "run-1")
+	if run.DroppedEvents == 0 || !contains(run.Affected.Sessions, "session-ir") {
+		t.Fatalf("setup invalid: want dropped events and session-ir preserved in the run summary: dropped=%d sessions=%#v", run.DroppedEvents, run.Affected.Sessions)
 	}
-	if len(manSessions) != len(rawSessions) {
-		t.Fatalf("manifest round trip undercounted affected sessions: got %d want %d (single-class run-level summary must be folded)", len(manSessions), len(rawSessions))
+
+	cluster := findCluster(t, reportFromManifest(t, root, body.String()), "runner-timeout")
+	if contains(cluster.Affected.Sessions, "session-ir") {
+		t.Fatalf("dropped input-required session was mis-attributed to the runner-timeout cluster: %#v", cluster.Affected.Sessions)
 	}
 }
 
