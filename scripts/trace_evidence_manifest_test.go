@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func TestTraceEvidenceManifestRunbookDocumentsCaptureOmissionAndConsumers(t *tes
 	text := strings.Join(strings.Fields(string(body)), " ")
 	for _, want := range []string{
 		"python3 scripts/trace-evidence-manifest.py",
-		"trace-evidence-manifest/v1",
+		"trace-evidence-manifest/v2",
 		"--evidence-manifest",
 		"a trace database, queue, metrics store",
 		"restart recovery stays tracker/filesystem-driven",
@@ -70,8 +71,8 @@ func TestTraceEvidenceManifestGroupsRunsAndRedactsOpaquePayload(t *testing.T) {
 	raw := manifestRawBytes(t, root, body)
 	manifest := parseManifest(t, raw)
 
-	if manifest.SchemaVersion != "trace-evidence-manifest/v1" {
-		t.Fatalf("schema_version = %q; want trace-evidence-manifest/v1", manifest.SchemaVersion)
+	if manifest.SchemaVersion != "trace-evidence-manifest/v2" {
+		t.Fatalf("schema_version = %q; want trace-evidence-manifest/v2", manifest.SchemaVersion)
 	}
 	if manifest.Bounds.MaxRunEvidenceBytes != 64*1024 || manifest.Bounds.MaxClusterBytes != 256*1024 {
 		t.Fatalf("bounds = %#v; want 65536/262144", manifest.Bounds)
@@ -83,8 +84,14 @@ func TestTraceEvidenceManifestGroupsRunsAndRedactsOpaquePayload(t *testing.T) {
 	if len(run1.Events) != 2 {
 		t.Fatalf("run-1 events = %d; want 2 (timeout + runner failure)\n%s", len(run1.Events), raw)
 	}
-	if !contains(run1.Affected.Issues, "issue-1") || !contains(run1.Affected.Sessions, "session-1") {
-		t.Fatalf("run-1 affected = %#v; want issue-1/session-1", run1.Affected)
+	// Affected ids are partitioned by failure class: the timeout event's ids land
+	// under runner-timeout, the runner_end event's under runner-failure.
+	rtAffected := classAffected(t, run1, "runner-timeout")
+	if !contains(rtAffected.Issues, "issue-1") || !contains(rtAffected.Sessions, "session-1") {
+		t.Fatalf("run-1 runner-timeout affected = %#v; want issue-1/session-1", rtAffected)
+	}
+	if !contains(classAffected(t, run1, "runner-failure").Issues, "issue-1") {
+		t.Fatalf("run-1 runner-failure affected = %#v; want issue-1", run1.AffectedByClass["runner-failure"])
 	}
 	if run1.Events[0].Metadata["output_bytes"] != "70000" || run1.Events[0].Metadata["timestamp"] != "2026/06/18 09:00:00" {
 		t.Fatalf("run-1 first event metadata = %#v; want metadata-first scalars before the opaque key", run1.Events[0].Metadata)
@@ -99,8 +106,9 @@ func TestTraceEvidenceManifestGroupsRunsAndRedactsOpaquePayload(t *testing.T) {
 	if len(run2.Events) != 1 || run2.Events[0].Class != "input-required" {
 		t.Fatalf("run-2 = %#v; want one input-required event", run2.Events)
 	}
-	if !contains(run2.Affected.Issues, "issue-2") || !contains(run2.Affected.Sessions, "session-2") {
-		t.Fatalf("run-2 affected = %#v; want issue-2/session-2", run2.Affected)
+	run2Affected := classAffected(t, run2, "input-required")
+	if !contains(run2Affected.Issues, "issue-2") || !contains(run2Affected.Sessions, "session-2") {
+		t.Fatalf("run-2 input-required affected = %#v; want issue-2/session-2", run2Affected)
 	}
 	// Mutation-style redaction check: dropping the reused mask()/opaque omission
 	// would surface the clone-URL userinfo and the raw payload here.
@@ -167,9 +175,10 @@ func TestTraceEvidenceManifestBoundsPerRunEvidenceBytes(t *testing.T) {
 	if len(encoded) > 64*1024+2*1024 {
 		t.Fatalf("per-run evidence bytes = %d; want bounded near 65536", len(encoded))
 	}
-	// The byte cap drops whole events but never the affected-id summary.
-	if !contains(run.Affected.Issues, "issue-1") {
-		t.Fatalf("byte cap dropped the affected id summary: %#v", run.Affected)
+	// The byte cap drops whole events but never the per-class affected-id summary.
+	rtAffected := classAffected(t, run, "runner-timeout")
+	if !contains(rtAffected.Issues, "issue-1") {
+		t.Fatalf("byte cap dropped the affected id summary: %#v", rtAffected)
 	}
 }
 
@@ -200,15 +209,16 @@ func TestTraceEvidenceManifestBoundsRunGroupByBytesIncludingAffectedIDs(t *testi
 	if len(encoded) > 256*1024 {
 		t.Fatalf("run group bytes = %d; want <= 262144 (affected-id arrays must be capped too)", len(encoded))
 	}
-	if run.Affected.Omitted["issues"] == 0 {
-		t.Fatalf("affected id explosion did not record omitted counts: %#v", run.Affected.Omitted)
+	rtAffected := classAffected(t, run, "runner-timeout")
+	if rtAffected.Omitted["issues"] == 0 {
+		t.Fatalf("affected id explosion did not record omitted counts: %#v", rtAffected.Omitted)
 	}
-	if len(run.Affected.Issues) == 0 {
-		t.Fatalf("run group lost every concrete affected issue id: omitted=%#v", run.Affected.Omitted)
+	if len(rtAffected.Issues) == 0 {
+		t.Fatalf("run group lost every concrete affected issue id: omitted=%#v", rtAffected.Omitted)
 	}
 	// Accounting must be complete: kept + omitted equals every distinct issue id.
-	if got := len(run.Affected.Issues) + run.Affected.Omitted["issues"]; got != total {
-		t.Fatalf("issues accounted for = %d; want %d (kept=%d omitted=%d)", got, total, len(run.Affected.Issues), run.Affected.Omitted["issues"])
+	if got := len(rtAffected.Issues) + rtAffected.Omitted["issues"]; got != total {
+		t.Fatalf("issues accounted for = %d; want %d (kept=%d omitted=%d)", got, total, len(rtAffected.Issues), rtAffected.Omitted["issues"])
 	}
 }
 
@@ -261,30 +271,206 @@ func TestTraceEvidenceManifestRoundTripDoesNotFabricateRunWithoutTaskID(t *testi
 	}
 }
 
-func TestTraceEvidenceManifestRoundTripDoesNotMisattributeDroppedEventClass(t *testing.T) {
+func TestTraceEvidenceManifestRoundTripRecoversDroppedEventClassPerClass(t *testing.T) {
 	root := repoRoot(t)
-	// Many runner_timeout events fill the manifest's 64 KiB event cap, then a
-	// later turn_input_required event for the same run is dropped. Its session id
-	// survives only in the run-level affected summary, which is class-less: the
-	// consumer must not fold it into the retained runner-timeout cluster.
+	// Many runner_timeout events fill the manifest's 64 KiB event cap, then a large
+	// turn_input_required event for the same run is dropped whole — leaving the
+	// input-required class with no retained evidence. Its session id must still be
+	// recovered under an input-required cluster (not the retained runner-timeout
+	// one), matching the raw --worker-log path with no cross-class mis-attribution.
 	var body strings.Builder
 	for i := 0; i < 60; i++ {
 		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-rt msg="`)
 		body.WriteString(strings.Repeat("x", 1500))
 		body.WriteString(`"` + "\n")
 	}
-	body.WriteString(`2026/06/18 09:00:01 event=turn_input_required task_id=run-1 issue_id=issue-1 session_id=session-ir msg="input"` + "\n")
+	body.WriteString(`2026/06/18 09:00:01 event=turn_input_required task_id=run-1 issue_id=issue-1 session_id=session-ir msg="`)
+	body.WriteString(strings.Repeat("y", 5000))
+	body.WriteString(`"` + "\n")
 
-	manifest := runTraceEvidenceManifest(t, root, body.String())
-	run := manifestRun(t, manifest, "run-1")
-	if run.DroppedEvents == 0 || !contains(run.Affected.Sessions, "session-ir") {
-		t.Fatalf("setup invalid: want dropped events and session-ir preserved in the run summary: dropped=%d sessions=%#v", run.DroppedEvents, run.Affected.Sessions)
+	// The class is dropped whole at the event cap, so it survives only in the
+	// per-class summary — never in a retained event for that class.
+	run := manifestRun(t, runTraceEvidenceManifest(t, root, body.String()), "run-1")
+	if run.DroppedEvents == 0 {
+		t.Fatalf("setup invalid: want a dropped event from the 64 KiB cap, got dropped=%d", run.DroppedEvents)
+	}
+	if got := classAffected(t, run, "input-required").Sessions; !contains(got, "session-ir") {
+		t.Fatalf("dropped class summary lost session-ir: %#v", got)
 	}
 
-	cluster := findCluster(t, reportFromManifest(t, root, body.String()), "runner-timeout")
-	if contains(cluster.Affected.Sessions, "session-ir") {
-		t.Fatalf("dropped input-required session was mis-attributed to the runner-timeout cluster: %#v", cluster.Affected.Sessions)
+	report := reportFromManifest(t, root, body.String())
+	timeout := findCluster(t, report, "runner-timeout")
+	if contains(timeout.Affected.Sessions, "session-ir") {
+		t.Fatalf("dropped input-required session was mis-attributed to runner-timeout: %#v", timeout.Affected.Sessions)
 	}
+	// Faithful per-class recovery: an evidence-less input-required cluster carries
+	// the dropped session id under its own class.
+	inputRequired := findCluster(t, report, "input-required")
+	if !contains(inputRequired.Affected.Sessions, "session-ir") {
+		t.Fatalf("dropped class session-ir was not recovered under input-required: %#v", inputRequired.Affected.Sessions)
+	}
+	if len(inputRequired.Evidence) != 0 {
+		t.Fatalf("input-required cluster should be evidence-less (its events were all dropped): %#v", inputRequired.Evidence)
+	}
+
+	// Affected ids round-trip to exactly what the raw --worker-log path reports.
+	raw := runTraceHarnessReport(t, root, body.String())
+	assertSamePerClassAffected(t, report, raw)
+}
+
+func assertSamePerClassAffected(t *testing.T, got, want traceReport) {
+	t.Helper()
+	wantByID := map[string]traceCluster{}
+	for _, cluster := range want.Clusters {
+		wantByID[cluster.ID] = cluster
+	}
+	for _, cluster := range got.Clusters {
+		other, ok := wantByID[cluster.ID]
+		if !ok {
+			t.Fatalf("manifest report has cluster %q absent from the raw path", cluster.ID)
+		}
+		if a, b := sortedStrings(cluster.Affected.Sessions), sortedStrings(other.Affected.Sessions); !equalStrings(a, b) {
+			t.Fatalf("cluster %q sessions = %v; raw path = %v", cluster.ID, a, b)
+		}
+		if a, b := sortedStrings(cluster.Affected.Issues), sortedStrings(other.Affected.Issues); !equalStrings(a, b) {
+			t.Fatalf("cluster %q issues = %v; raw path = %v", cluster.ID, a, b)
+		}
+	}
+	if len(got.Clusters) != len(want.Clusters) {
+		t.Fatalf("manifest produced %d clusters; raw path produced %d", len(got.Clusters), len(want.Clusters))
+	}
+}
+
+func sortedStrings(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestTraceHarnessReportDedupesIdenticalManifestInputs(t *testing.T) {
+	root := repoRoot(t)
+	// Many distinct ids push the manifest's per-class summary over the 256 KiB cap,
+	// so it records omitted>0. Folding the SAME manifest twice must not double that
+	// omitted count: the kept ids dedup, but the count's dropped values are gone, so
+	// summing it twice would inflate the recovered count vs the raw path (#961).
+	var body strings.Builder
+	for i := 0; i < 12000; i++ {
+		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-`)
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(` session_id=session-`)
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(` msg="x"` + "\n")
+	}
+	manPath := filepath.Join(t.TempDir(), "m.json")
+	if err := os.WriteFile(manPath, manifestRawBytes(t, root, body.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	once := runTraceReportArgs(t, root, "--evidence-manifest", manPath)
+	twice := runTraceReportArgs(t, root, "--evidence-manifest", manPath, "--evidence-manifest", manPath)
+
+	if got := inputsLen(t, twice); got != 1 {
+		t.Fatalf("identical manifest inputs = %d; want 1 (deduped by digest)", got)
+	}
+	o1 := findCluster(t, parseTraceReport(t, once), "runner-timeout").Affected.Omitted["issues"]
+	o2 := findCluster(t, parseTraceReport(t, twice), "runner-timeout").Affected.Omitted["issues"]
+	if o1 == 0 {
+		t.Fatalf("setup invalid: want omitted issues > 0, got 0")
+	}
+	if o2 != o1 {
+		t.Fatalf("folding the same manifest twice changed omitted: once=%d twice=%d", o1, o2)
+	}
+}
+
+func TestTraceHarnessReportDedupesIdenticalWorkerLogInputs(t *testing.T) {
+	root := repoRoot(t)
+	logPath := filepath.Join(t.TempDir(), "worker.log")
+	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout"` + "\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	once := parseTraceReport(t, runTraceReportArgs(t, root, "--worker-log", logPath))
+	twiceRaw := runTraceReportArgs(t, root, "--worker-log", logPath, "--worker-log", logPath)
+
+	if got := inputsLen(t, twiceRaw); got != 1 {
+		t.Fatalf("identical worker-log inputs = %d; want 1 (deduped by digest)", got)
+	}
+	// A byte-identical log folded twice must not double the cluster's evidence.
+	e1 := len(findCluster(t, once, "runner-timeout").Evidence)
+	e2 := len(findCluster(t, parseTraceReport(t, twiceRaw), "runner-timeout").Evidence)
+	if e1 == 0 || e2 != e1 {
+		t.Fatalf("identical worker-log folded twice changed evidence count: once=%d twice=%d", e1, e2)
+	}
+}
+
+func TestTraceEvidenceManifestDedupesIdenticalWorkerLogInputs(t *testing.T) {
+	root := repoRoot(t)
+	logPath := filepath.Join(t.TempDir(), "worker.log")
+	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout"` + "\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	once := manifestRun(t, parseManifest(t, runTraceEvidenceManifestRawPath(t, root, logPath)), "run-1")
+	jsonPath := filepath.Join(t.TempDir(), "m.json")
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-evidence-manifest.py"),
+		"--worker-log", logPath, "--worker-log", logPath, "--json-out", jsonPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("manifest with duplicate log failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	twice := parseManifest(t, raw)
+	if len(twice.Inputs) != 1 {
+		t.Fatalf("identical worker-log inputs = %d; want 1 (deduped by digest)", len(twice.Inputs))
+	}
+	if got := manifestRun(t, twice, "run-1"); len(got.Events) != len(once.Events) {
+		t.Fatalf("same log twice doubled events: once=%d twice=%d", len(once.Events), len(got.Events))
+	}
+}
+
+func runTraceReportArgs(t *testing.T, root string, args ...string) []byte {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "report.json")
+	cmdArgs := append([]string{filepath.Join(root, "scripts", "trace-harness-report.py")}, args...)
+	cmdArgs = append(cmdArgs, "--json-out", out)
+	cmd := exec.Command("python3", cmdArgs...)
+	cmd.Dir = root
+	if o, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("trace-harness-report failed: %v\n%s", err, o)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	return raw
+}
+
+func inputsLen(t *testing.T, raw []byte) int {
+	t.Helper()
+	var v struct {
+		Inputs []json.RawMessage `json:"inputs"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("unmarshal inputs: %v\n%s", err, raw)
+	}
+	return len(v.Inputs)
 }
 
 func reportFromManifest(t *testing.T, root, body string) traceReport {
@@ -410,7 +596,7 @@ func TestTraceHarnessReportRejectsNonManifestJSONOnEvidenceManifest(t *testing.T
 	if err == nil {
 		t.Fatalf("report accepted a v3 report as an evidence manifest:\n%s", out)
 	}
-	if !strings.Contains(string(out), "not a trace-evidence-manifest/v1 evidence manifest") {
+	if !strings.Contains(string(out), "not a trace-evidence-manifest/v2 evidence manifest") {
 		t.Fatalf("misuse error did not name the schema mismatch:\n%s", out)
 	}
 }
@@ -505,17 +691,21 @@ type traceManifest struct {
 	Runs []traceManifestRun `json:"runs"`
 }
 
+type traceAffectedSummary struct {
+	Issues           []string       `json:"issues"`
+	IssueIdentifiers []string       `json:"issue_identifiers"`
+	PullRequests     []string       `json:"pull_requests"`
+	Runs             []string       `json:"runs"`
+	Sessions         []string       `json:"sessions"`
+	Omitted          map[string]int `json:"omitted"`
+}
+
 type traceManifestRun struct {
-	Run      string `json:"run"`
-	Affected struct {
-		Issues           []string       `json:"issues"`
-		IssueIdentifiers []string       `json:"issue_identifiers"`
-		PullRequests     []string       `json:"pull_requests"`
-		Runs             []string       `json:"runs"`
-		Sessions         []string       `json:"sessions"`
-		Omitted          map[string]int `json:"omitted"`
-	} `json:"affected"`
-	Events []struct {
+	Run string `json:"run"`
+	// Affected ids partitioned by resolved failure class (#958), so a dropped
+	// event's ids are recovered under its own class on the report round trip.
+	AffectedByClass map[string]traceAffectedSummary `json:"affected_by_class"`
+	Events          []struct {
 		Source   string            `json:"source"`
 		Ref      string            `json:"ref"`
 		Kind     string            `json:"kind"`
@@ -528,4 +718,13 @@ type traceManifestRun struct {
 		} `json:"affected"`
 	} `json:"events"`
 	DroppedEvents int `json:"dropped_events"`
+}
+
+func classAffected(t *testing.T, run traceManifestRun, classID string) traceAffectedSummary {
+	t.Helper()
+	affected, ok := run.AffectedByClass[classID]
+	if !ok {
+		t.Fatalf("missing affected_by_class[%q] in %#v", classID, run.AffectedByClass)
+	}
+	return affected
 }
