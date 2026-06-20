@@ -109,7 +109,8 @@ Do all of the following end to end, without asking for confirmation:
    *after* it confirms the merge, and the poller lists `Human Review` issues with
    `state=open` — a merge-closed issue drops out of the reviewer's poll before
    `Done` is ever set, deadlocking the issue and its `Depends on #N` dependents.
-   The reviewer owns issue closure.
+   The reviewer owns issue closure through its terminal `gitea_issue_labels`
+   handoff.
    `POST /repos/{{ repo.owner }}/{{ repo.name }}/pulls`
    body `{"head":"<branch>","base":"{{ repo.branch }}","title":"<type(scope): summary>","body":"Refs #<N>\n\n<what + how tested>"}`.
    Use the basic-auth credential from `origin` for the call.

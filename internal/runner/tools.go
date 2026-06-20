@@ -15,15 +15,16 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
-// ToolCall is the JSON-shaped input accepted by the dynamic linear_graphql
-// tool. Query and Variables are agent-controlled. The Linear endpoint is held
-// by the orchestrator-side proxy and is not part of this public call shape, so
-// an agent cannot redirect the orchestrator-held token to another host.
+// ToolCall is the JSON-shaped input accepted by dynamic tools. Tracker
+// endpoints are held by orchestrator-side proxies and are not part of this
+// public call shape, so an agent cannot redirect orchestrator-held tokens to
+// another host.
 type ToolCall struct {
 	Query       string         `json:"query"`
 	Variables   map[string]any `json:"variables,omitempty"`
 	IssueNumber int            `json:"issue_number,omitempty"`
 	Labels      []string       `json:"labels,omitempty"`
+	CloseIssue  bool           `json:"close_issue,omitempty"`
 }
 
 // DynamicTool is a client-side tool implemented by the orchestrator and made
@@ -143,7 +144,7 @@ func DynamicToolsForWorkflow(wf workflow.Workflow, toolOptions ...DynamicToolOpt
 		}.withCurrentIssueClassification(trackerCfg, opts)
 		tools.tools["gitea_issue_labels"] = DynamicTool{
 			Name:        "gitea_issue_labels",
-			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[]} with exactly one aiops/* label. The Gitea API token is never exposed to the agent process.",
+			Description: "Replace the aiops/* state label on one Gitea issue using orchestrator-configured Gitea auth. Input: {issue_number:number, labels:string[], close_issue?:boolean} with exactly one aiops/* label. close_issue is accepted only for the current issue with a configured terminal state label, and closes that issue in the same tool call. The Gitea API token is never exposed to the agent process.",
 			InputSchema: giteaIssueLabelsInputSchema(),
 			Call:        client.call,
 		}
@@ -201,6 +202,10 @@ func giteaIssueLabelsInputSchema() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"minItems":    1,
 				"maxItems":    1,
+			},
+			"close_issue": map[string]any{
+				"type":        "boolean",
+				"description": "When true, close the current Gitea issue after replacing it with a configured terminal aiops/* state label.",
 			},
 		},
 		"required":             []string{"issue_number", "labels"},

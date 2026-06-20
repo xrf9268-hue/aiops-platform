@@ -100,7 +100,8 @@ If a previous poll already acted on this PR, do NOT blindly re-run the rubric �
 but work out the situation first, in this order:
 1. **Already merged?** `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
    → if `merged:true` (CI finished before this poll landed it), go straight to
-   Step 3d's Merged action — flip `aiops/done`, then close the issue. Do NOT
+   Step 3d's Merged action — one `gitea_issue_labels` call with
+   `{"issue_number":<N>,"labels":["aiops/done"],"close_issue":true}`. Do NOT
    re-post the merge endpoint on a merged PR (Gitea returns HTTP 405, which would
    derail you).
 2. **Not merged — is your approval still CURRENT?** Check
@@ -114,11 +115,12 @@ but work out the situation first, in this order:
      is set, so poll Step 3d. On any error (Gitea returns HTTP 405 for an
      already-merged PR but ALSO for not-mergeable / WIP / no-permission states), do
      NOT conclude it merged: re-check `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>`
-     and take the Done path (flip `aiops/done` + close) ONLY if `merged:true`;
-     otherwise — unmerged, or the check itself did not confirm a merge — leave the
-     issue in `Human Review` for the next poll (a persistent error is an operator
-     signal). Never flip `aiops/done` without a confirming `merged:true` —
-     a status code alone is not proof.
+     and take the Done path (one `gitea_issue_labels` call with `aiops/done` and
+     `close_issue:true`) ONLY if `merged:true`; otherwise — unmerged, or the check
+     itself did not confirm a merge — leave the issue in `Human Review` for the
+     next poll (a persistent error is an operator signal). Never flip
+     `aiops/done` without a confirming `merged:true` — a status code alone is not
+     proof.
    - **No current approval** — your only approval is `stale`/dismissed or was for
      an older commit (the head moved after you approved: a rebase or a pushed fix)
      → do NOT short-circuit. Fall through to Step 2 and review the new head from
@@ -151,11 +153,12 @@ PASS (every item passes):
      `GET /repos/{{ repo.owner }}/{{ repo.name }}/pulls/<number>` → `merged: true`
      (a short bounded wait — e.g. poll every ~30s for a few attempts, not a busy
      loop; required CI here is fast).
-       - Merged → set the label to `aiops/done` via gitea_issue_labels, then close
-         the issue: `PATCH /repos/{{ repo.owner }}/{{ repo.name }}/issues/<N>`
-         body `{"state":"closed"}`. The maker referenced the issue with a
-         non-closing `Refs #<N>`, so the forge did NOT close it on merge — you own
-         closure, after `Done`. This is your LAST action.
+       - Merged → call `gitea_issue_labels` once with
+         `{"issue_number":<N>,"labels":["aiops/done"],"close_issue":true}`. The
+         tool flips `Done` and closes the issue in one agent-side handoff. The
+         maker referenced the issue with a non-closing `Refs #<N>`, so the forge
+         did NOT close it on merge — you own closure, after `Done`. This is your
+         LAST action.
        - Not merged within your budget (slow/flaky CI) → do NOT flip any label.
          Leave the issue in `Human Review` and stop. It stays in your active set,
          so the next poll re-claims it and re-checks the merge (Step 1 sends you
@@ -175,7 +178,8 @@ FAIL (any item fails):
 - Do NOT modify, commit, or push code. Your only writes are tracker/PR writes: the
   review comment, the approval, enabling auto-merge, the verdict label flip
   (`aiops/done` after the merge is confirmed, or `aiops/rework` on failure), and —
-  on the Done path — closing the issue (the maker left it open via `Refs #<N>`).
+  on the Done path — issue closure through the same `gitea_issue_labels` call with
+  `close_issue:true` (the maker left it open via `Refs #<N>`).
 - Judge only what the diff and its tests prove; unverified PR-description claims
   count for nothing.
 - Issue the terminal verdict exactly once: `aiops/done` only after the merge is
