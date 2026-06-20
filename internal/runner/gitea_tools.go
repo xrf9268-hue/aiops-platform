@@ -90,6 +90,10 @@ func (p giteaIssueLabelsProxy) call(ctx context.Context, call ToolCall) (string,
 	labelReplaceSucceeded := failure == ""
 	if labelReplaceSucceeded && call.CloseIssue {
 		result, failure = p.closeIssue(ctx, client, issueEndpoint, result)
+		if failure != "" && p.restoreDeletedStateLabels(ctx, client, labelsEndpoint, deletedStaleLabels) == "" {
+			deletedStaleLabels = nil
+			labelReplaceSucceeded = false
+		}
 	}
 	p.fireMutationAudit(ctx, mutationAuditFacts{
 		issueNumber:           call.IssueNumber,
@@ -350,6 +354,18 @@ func (p giteaIssueLabelsProxy) deleteStaleStateLabels(ctx context.Context, clien
 		deleted = append(deleted, label)
 	}
 	return deleted, ""
+}
+
+func (p giteaIssueLabelsProxy) restoreDeletedStateLabels(ctx context.Context, client *http.Client, endpoint string, deleted []giteaIssueLabel) string {
+	if len(deleted) == 0 {
+		return ""
+	}
+	labels := make([]string, 0, len(deleted))
+	for _, label := range deleted {
+		labels = append(labels, label.Name)
+	}
+	_, failure := p.addAndConfirmDesiredLabels(ctx, client, endpoint, labels, labels)
+	return failure
 }
 
 func (p giteaIssueLabelsProxy) addIssueLabels(ctx context.Context, client *http.Client, endpoint string, labels []string) (string, string) {

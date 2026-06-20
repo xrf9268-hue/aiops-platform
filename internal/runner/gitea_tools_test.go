@@ -853,12 +853,14 @@ func TestGiteaIssueLabelsRejectsInvalidCloseIssueWithoutHTTPRequest(t *testing.T
 	}
 }
 
-func TestGiteaIssueLabelsReportsCloseIssueFailureAfterLabelReplace(t *testing.T) {
+func TestGiteaIssueLabelsRestoresActiveStateWhenCloseIssueFails(t *testing.T) {
 	var mu sync.Mutex
-	var methods []string
+	var methods, bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		methods = append(methods, r.Method)
+		bodies = append(bodies, string(body))
 		mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
@@ -866,7 +868,14 @@ func TestGiteaIssueLabelsReportsCloseIssueFailureAfterLabelReplace(t *testing.T)
 		case http.MethodGet:
 			_, _ = io.WriteString(w, `[{"id":101,"name":"aiops/in-progress"}]`)
 		case http.MethodPost:
-			_, _ = io.WriteString(w, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+			switch {
+			case strings.Contains(string(body), "aiops/done"):
+				_, _ = io.WriteString(w, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+			case strings.Contains(string(body), "aiops/in-progress"):
+				_, _ = io.WriteString(w, `{"labels":[{"id":101,"name":"aiops/in-progress"}]}`)
+			default:
+				t.Fatalf("POST body = %s; want terminal add or active-state restore", body)
+			}
 		case http.MethodDelete:
 			_, _ = io.WriteString(w, `{}`)
 		case http.MethodPatch:
@@ -888,16 +897,14 @@ func TestGiteaIssueLabelsReportsCloseIssueFailureAfterLabelReplace(t *testing.T)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if strings.Join(methods, ",") != "GET,POST,DELETE,PATCH" {
-		t.Fatalf("methods = %#v; want close attempt after successful label replace", methods)
+	if strings.Join(methods, ",") != "GET,POST,DELETE,PATCH,POST" {
+		t.Fatalf("methods = %#v; want close failure followed by active-state restore", methods)
 	}
-	want := ToolMutationAudit{
-		CurrentIssueNonActiveStateUpdate: true,
-		CurrentIssueTerminalStateUpdate:  true,
-		CurrentIssueTerminalState:        "Done",
+	if !strings.Contains(bodies[4], "aiops/in-progress") {
+		t.Fatalf("rollback POST body = %s; want original active state restored", bodies[4])
 	}
-	if len(audits) != 1 || audits[0] != want {
-		t.Fatalf("audits = %+v; want terminal label handoff audit even when close fails", audits)
+	if len(audits) != 0 {
+		t.Fatalf("audits = %+v; want none because close failure restored retryable active state", audits)
 	}
 }
 
