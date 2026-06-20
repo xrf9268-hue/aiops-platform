@@ -157,6 +157,72 @@ gate. Promotion to a required CI/runtime/merge gate needs a separate reviewed PR
 after multiple reviewed reports show stable true positives and documented false
 positive handling.
 
+## Advisory evaluator result artifacts
+
+Milestone 6 closes the report-only evaluator feedback loop without adding a
+worker phase or tracker writer. Add `--evaluator-results-out` to a report run to
+emit a durable result artifact:
+
+```bash
+python3 scripts/trace-harness-report.py \
+  --evidence-manifest ./trace-evidence-manifest.json \
+  --json-out ./trace-report.json \
+  --evaluator-results-out ./trace-evaluator-results.json
+```
+
+The artifact uses schema `trace-harness-advisory-evaluator-results/v1`. Its
+`results[]` entries keep the M4-declared record shape
+`trace-harness-advisory-evaluator-result/v1`:
+
+- `schema`
+- `evaluator_id`
+- `source_cluster_id`
+- `mode`
+- `signal`
+- `evidence_refs`
+- `false_positive_notes`
+
+The artifact is metadata-first and bounded like the trace evidence manifest: it
+stores input digests, byte bounds, bounded redacted evidence refs, and bounded
+false-positive notes. It does not store raw prompts, raw worker streams, forge
+comments, GraphQL payloads, CI logs, tokens, unmasked clone URLs, or full
+payload text.
+
+## Consuming prior evaluator results
+
+A later manual report run can consume one or more prior result artifacts:
+
+```bash
+python3 scripts/trace-harness-report.py \
+  --evidence-manifest ./new-trace-evidence-manifest.json \
+  --prior-evaluator-results ./trace-evaluator-results.json \
+  --json-out ./new-trace-report.json
+```
+
+If the current report and a prior artifact both show a
+`positive-recurring-cluster` signal for the same `source_cluster_id`, the report
+adds a top-level `recurrence_escalations[]` entry. When the affected cluster has
+room under its byte cap, the report also mirrors the same proposal at
+`clusters[].proposals.recurrence_escalation`; high-volume clusters may omit that
+mirror to preserve the cluster bound, but the top-level proposal remains the
+canonical M6 ratchet output. The report remembers that the same failure class
+returned and produces a reviewable forge/agent action proposal.
+
+The recurrence proposal is idempotent by construction. It carries a stable
+dedupe marker:
+
+```text
+trace-harness-recurrence:<source_cluster_id>:<evaluator_id>
+```
+
+Use that marker when reopening or bumping the existing tracking issue through
+ordinary forge tooling. For example, search the issue comments/body for the
+marker first; if absent, reopen the issue if closed or add the generated
+`forge_comment` once. The report command itself remains read-only: it does not
+open issues, post comments, mutate tracker state, rewrite harness files, or
+promote an evaluator to a CI/runtime/merge gate. The later scheduled M7 driver
+can reuse the same marker when it automates this explicit forge step.
+
 ## Redaction and bounds
 
 The report stores metadata first: event kind, timestamp, issue/run/session ids,
