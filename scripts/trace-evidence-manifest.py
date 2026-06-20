@@ -99,7 +99,9 @@ def build_manifest(paths: list[Path]) -> dict:
 def fold_event(runs: dict[str, dict], finding: dict) -> None:
     run_id = finding["run"] or finding["issue"] or "unknown"
     group = runs.setdefault(run_id, new_run_group(run_id))
-    record_affected(group, finding)
+    # Record the per-class affected summary before the cap check so a later
+    # dropped event's ids survive under its own failure class (#958).
+    record_affected_by_class(group, finding)
     excerpt = report.truncate(report.mask(finding["excerpt"]), report.MAX_EVIDENCE_EXCERPT_BYTES)
     entry = report.evidence_entry(finding, excerpt)
     # Record the resolved failure class so consumers re-cluster without re-parsing
@@ -116,27 +118,36 @@ def fold_event(runs: dict[str, dict], finding: dict) -> None:
 def new_run_group(run_id: str) -> dict:
     return {
         "run": run_id,
-        "affected": {key: [] for key in report.AFFECTED_KEYS},
-        # O(1) dedup membership per affected key; emitted arrays stay sorted.
-        "_seen": {key: set() for key in report.AFFECTED_KEYS},
+        # Affected ids partitioned by resolved failure class so the report consumer
+        # folds a dropped event's ids into the correct cluster (#958). Each bucket
+        # mirrors a cluster's affected dict (AFFECTED_KEYS arrays + an omitted map).
+        "affected_by_class": {},
+        # O(1) dedup membership per class/affected key; emitted arrays stay sorted.
+        "_seen_by_class": {},
         "events": [],
         "_bytes": 0,
         "_dropped": 0,
     }
 
 
-def record_affected(group: dict, finding: dict) -> None:
+def record_affected_by_class(group: dict, finding: dict) -> None:
+    class_id = finding["id"]
     for affected_key, finding_key in AFFECTED_FROM_FINDING:
         value = (finding.get(finding_key) or "").strip()
-        if value and value not in group["_seen"][affected_key]:
-            group["_seen"][affected_key].add(value)
-            group["affected"][affected_key].append(value)
+        if not value:
+            continue
+        seen = group["_seen_by_class"].setdefault(class_id, {key: set() for key in report.AFFECTED_KEYS})
+        affected = group["affected_by_class"].setdefault(class_id, {key: [] for key in report.AFFECTED_KEYS})
+        if value not in seen[affected_key]:
+            seen[affected_key].add(value)
+            affected[affected_key].append(value)
 
 
 def finalize_run(group: dict) -> dict:
-    for key in report.AFFECTED_KEYS:
-        group["affected"][key].sort()
-    group.pop("_seen", None)  # drop before any encoded_bytes call: sets are not JSON-serializable.
+    for affected in group["affected_by_class"].values():
+        for key in report.AFFECTED_KEYS:
+            affected[key].sort()
+    group.pop("_seen_by_class", None)  # drop before any encoded_bytes call: sets are not JSON-serializable.
     group.pop("_bytes", None)
     # Keep dropped_events in the dict while enforcing the cap so its bytes are
     # accounted for; remove it only when nothing was dropped.
@@ -150,30 +161,32 @@ def finalize_run(group: dict) -> dict:
 def enforce_run_group_bound(group: dict) -> None:
     # Cluster-equivalent cap (#952): keep the whole run group under the same
     # 256 KiB ceiling, matching the report's enforce_cluster_bound on both axes —
-    # trim events first, then the affected-id arrays (recording omitted counts) so
-    # an affected-id explosion cannot push the group over the cap.
+    # trim events first, then the per-class affected-id arrays (recording omitted
+    # counts) so an affected-id explosion cannot push the group over the cap.
     trim_events_to_cap(group)
     if report.encoded_bytes(group) <= report.MAX_CLUSTER_BYTES:
         return
-    affected = group["affected"]
-    omitted = affected.setdefault("omitted", {})
-    base = {key: int(omitted.get(key, 0)) for key in report.AFFECTED_KEYS}
-    originals = {key: list(affected[key]) for key in report.AFFECTED_KEYS}
-    for key in sorted(report.AFFECTED_KEYS, key=lambda name: len(originals[name]), reverse=True):
-        if report.encoded_bytes(group) <= report.MAX_CLUSTER_BYTES:
-            break
-        values = originals[key]
-        if not values:
-            continue
-        keep = report.max_affected_keep_count(group, key, values, base[key])
-        affected[key] = values[:keep]
-        report.set_affected_omitted(group, key, base[key] + len(values) - keep)
-    for key, count in list(omitted.items()):
-        if count <= 0:
-            omitted.pop(key)
-    if not omitted:
-        affected.pop("omitted", None)
+    trim_affected_by_class(group)
     trim_events_to_cap(group)
+
+
+def trim_affected_by_class(group: dict) -> None:
+    # Trim the longest id arrays across every (class, key) slot first, reusing the
+    # report's single trim implementation so the producer and the report cluster
+    # cap stay one source of truth. `size` measures the whole run group's bytes.
+    size = lambda: report.encoded_bytes(group)  # noqa: E731 - small local size probe
+    affected_by_class = group["affected_by_class"]
+    slots = [(cid, key) for cid, affected in affected_by_class.items() for key in report.AFFECTED_KEYS if affected.get(key)]
+    slots.sort(key=lambda slot: len(affected_by_class[slot[0]][slot[1]]), reverse=True)
+    for class_id, key in slots:
+        if size() <= report.MAX_CLUSTER_BYTES:
+            break
+        affected = affected_by_class[class_id]
+        values = list(affected[key])
+        base = int(affected.get("omitted", {}).get(key, 0))
+        keep = report.max_affected_keep_count(affected, key, values, base, size)
+        affected[key] = values[:keep]
+        report.set_affected_omitted(affected, key, base + len(values) - keep)
 
 
 def trim_events_to_cap(group: dict) -> None:

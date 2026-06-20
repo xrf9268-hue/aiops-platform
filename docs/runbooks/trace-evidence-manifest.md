@@ -31,11 +31,16 @@ for local inspection pipe it through `python3 -m json.tool` or `jq`.
 
 ## What is captured (metadata first)
 
-The output uses schema `trace-evidence-manifest/v1`.
+The output uses schema `trace-evidence-manifest/v2`.
 
 - Per input: the source log path, byte count, and `sha256` digest.
-- Per run (keyed by `task_id`, falling back to the issue id): the affected
-  issue, issue identifier, PR, run, and session ids.
+- Per run (keyed by `task_id`, falling back to the issue id): an
+  `affected_by_class` map from each resolved failure class to the affected
+  issue, issue identifier, PR, run, and session ids seen for that class. The
+  per-class summary is accumulated from every event **before** the per-run event
+  cap drops evidence, so a dropped event's ids survive under its own class and
+  the report consumer folds them into the matching cluster without ever
+  mis-attributing a dropped event to a different class.
 - Per event: `source`, the masked source reference (`path:line`), event `kind`,
   the resolved failure `class` (so consumers re-cluster without re-parsing the
   redacted excerpt), the redacted structured-prefix `excerpt`, and trusted
@@ -63,28 +68,33 @@ exactly what the report omits:
 - Evidence is bounded at **64 KiB per run** and each run group at the
   cluster-equivalent **256 KiB** cap, matching the report's per-cluster bounds on
   both axes. Whole events are dropped past the cap (reported as `dropped_events`)
-  and, if the affected-id arrays alone would still exceed the cap, those arrays
-  are truncated too with the dropped counts recorded under `affected.omitted`.
-  Larger artifacts are referenced by `path:line` plus the input digest and byte
-  count, never inlined.
+  and, if the per-class `affected_by_class` arrays alone would still exceed the
+  cap, those arrays are truncated too — the longest first — with the dropped
+  counts recorded per class under `affected_by_class.<class>.omitted`. Larger
+  artifacts are referenced by `path:line` plus the input digest and byte count,
+  never inlined.
 - Manifests are operator-owned artifacts. If committed, keep them under
   `docs/validation/` (or another explicit evidence directory) with a short
   retention rationale; otherwise treat them as local, rotation-bounded scratch
   output. The manifest is evidence for harness improvement, not scheduler state,
   and must never become restart/recovery state.
 
-### Known limitation: capped-run affected ids
+### Capped-run affected ids: faithful per-class recovery
 
 When a single run's events exceed the 64 KiB event cap, the dropped events'
-issue/session/PR ids are still preserved in that run's class-less `affected`
-summary, but the report does **not** re-cluster them: the summary is not
-partitioned by failure class, so attributing a dropped event's ids to a retained
-cluster could mis-label them (e.g. fold a dropped `turn_input_required` id into a
-`runner-timeout` cluster). For such capped runs the report's affected counts can
-therefore be lower than the raw `--worker-log` path. Faithful per-class recovery
-(persisting affected summaries by failure class in the manifest) is tracked in
-#958. This only affects very chatty runs that overflow the per-run cap;
-non-capped runs round-trip with identical affected ids.
+issue/session/PR ids are still recovered on the report round trip, attributed to
+their own failure class (#958). Because `affected_by_class` is partitioned by the
+class resolved at parse time, the consumer folds each class's summary into the
+matching cluster, so a dropped `turn_input_required` id lands in an
+`input-required` cluster — never in a retained `runner-timeout` one. When *every*
+event of a class was dropped, the report still creates an **evidence-less**
+cluster for that class carrying only the recovered affected ids. It contributes
+no evidence-derived occurrences but still carries the summary's byte-cap
+`omitted` counts, so its recurrence signal — `candidate-only` or
+`positive-recurring` — matches whatever the raw `--worker-log` path reports for
+the same class; it is never a *false* escalation, because both paths count the
+same distinct trimmed ids. Capped and non-capped runs therefore round-trip the
+same per-class affected ids the raw `--worker-log` path reports.
 
 ## How it is consumed
 
