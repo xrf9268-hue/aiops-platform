@@ -19,8 +19,14 @@ python3 scripts/trace-harness-report.py \
 - worker process logs emitted by the existing worker event emitter, including
   `runner_timeout`, failed `runner_end`, `turn_input_required`,
   `unsupported_tool_call`, and malformed protocol runtime events.
+- durable trace-evidence manifests (`--evidence-manifest`) produced by
+  [`trace-evidence-manifest.py`](trace-evidence-manifest.md) from retained
+  worker logs. A manifest carries the same already-redacted, byte-bounded
+  worker-event evidence, so the report re-clusters it by failure class without
+  re-reading raw logs and records it as an `evidence_manifest` input.
 
-Multiple `--worker-log` flags are allowed.
+Multiple `--worker-log` and `--evidence-manifest` flags are allowed, and the two
+input kinds may be combined.
 
 The command writes compact JSON so the emitted report uses the same byte
 accounting as the documented bounds. For local inspection, pipe the file through
@@ -189,5 +195,14 @@ Multiple worker logs:
 python3 scripts/trace-harness-report.py \
   --worker-log ./maker.log \
   --worker-log ./reviewer.log \
+  --json-out ./trace-report.json
+```
+
+Durable evidence manifest (see
+[`trace-evidence-manifest.md`](trace-evidence-manifest.md)):
+
+```bash
+python3 scripts/trace-harness-report.py \
+  --evidence-manifest ./trace-evidence-manifest.json \
   --json-out ./trace-report.json
 ```

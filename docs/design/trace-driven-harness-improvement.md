@@ -140,6 +140,10 @@ state of the loop.
   harness improvement, not scheduler state. The smallest acceptable shape would
   be a bounded per-run evidence manifest containing ids, event kinds, byte
   counts, digests, and redacted references, not raw logs.
+- Milestone 5 (#952) implements this bounded per-run evidence manifest as the
+  standalone, SPEC-safe `scripts/trace-evidence-manifest.py` (boundary
+  preference 1: normalize retained logs, no worker-written capture). See
+  [`docs/runbooks/trace-evidence-manifest.md`](../runbooks/trace-evidence-manifest.md).
 
 ## Grouping model
 

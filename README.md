@@ -541,6 +541,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Binary (non-Docker) deployment runbook](docs/runbooks/binary-deployment.md)
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
+- [Trace evidence manifest](docs/runbooks/trace-evidence-manifest.md)
 - [Trace harness report](docs/runbooks/trace-harness-report.md)
 - [Trace harness proposal follow-through](docs/runbooks/trace-harness-follow-through.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
