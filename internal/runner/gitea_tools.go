@@ -353,11 +353,12 @@ func (p giteaIssueLabelsProxy) deleteStaleStateLabels(ctx context.Context, clien
 }
 
 func (p giteaIssueLabelsProxy) closeIssueAfterLabelReplace(ctx context.Context, client *http.Client, issueEndpoint, labelsEndpoint, labelResult string, deleted []giteaIssueLabel) (string, []giteaIssueLabel, bool, string) {
-	closedResult, failure := p.closeIssue(ctx, client, issueEndpoint, labelResult)
+	postHandoffCtx := context.WithoutCancel(ctx)
+	closedResult, failure := p.closeIssue(postHandoffCtx, client, issueEndpoint, labelResult)
 	if failure == "" {
 		return closedResult, deleted, true, ""
 	}
-	if p.restoreDeletedStateLabels(ctx, client, labelsEndpoint, deleted) == "" {
+	if p.restoreDeletedStateLabels(postHandoffCtx, client, labelsEndpoint, deleted) == "" {
 		return labelResult, nil, false, failure
 	}
 	return labelResult, deleted, true, failure

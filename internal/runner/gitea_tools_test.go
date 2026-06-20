@@ -908,6 +908,57 @@ func TestGiteaIssueLabelsRestoresActiveStateWhenCloseIssueFails(t *testing.T) {
 	}
 }
 
+func TestGiteaIssueLabelsCloseRollbackIgnoresCanceledRunContext(t *testing.T) {
+	var mu sync.Mutex
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		methods = append(methods, r.Method)
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPatch:
+			http.Error(w, `{"message":"temporary failure"}`, http.StatusBadGateway)
+		case http.MethodPost:
+			if !strings.Contains(string(body), "aiops/human-review") {
+				t.Fatalf("rollback POST body = %s; want active state restore", body)
+			}
+			_, _ = io.WriteString(w, `{"labels":[{"id":202,"name":"aiops/human-review"}]}`)
+		default:
+			t.Fatalf("unexpected method %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	proxy := giteaClassificationProxy(server.URL)
+	proxy.http = server.Client()
+	labelResult, _ := dynamicToolResult(true, `{"labels":[{"id":303,"name":"aiops/done"}]}`)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, deleted, labelReplaceSucceeded, failure := proxy.closeIssueAfterLabelReplace(
+		ctx,
+		server.Client(),
+		server.URL+"/api/v1/repos/owner/repo/issues/7",
+		server.URL+"/api/v1/repos/owner/repo/issues/7/labels",
+		labelResult,
+		[]giteaIssueLabel{{ID: 202, Name: "aiops/human-review"}},
+	)
+	if failure == "" {
+		t.Fatalf("failure = %q; want close failure preserved", failure)
+	}
+	if result != labelResult || len(deleted) != 0 || labelReplaceSucceeded {
+		t.Fatalf("result/deleted/succeeded = %q/%+v/%t; want restored active state and failed handoff", result, deleted, labelReplaceSucceeded)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(methods, ",") != "PATCH,POST" {
+		t.Fatalf("methods = %#v; want close and rollback despite canceled parent context", methods)
+	}
+}
+
 // giteaEchoLabelServer serves the labels endpoint for handoff-classification
 // tests: GET returns currentLabels JSON, POST echoes the requested labels with
 // synthetic ids, DELETE succeeds unless the trailing label id is listed in
