@@ -359,6 +359,120 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
+func TestTraceHarnessReportDedupesIdenticalManifestInputs(t *testing.T) {
+	root := repoRoot(t)
+	// Many distinct ids push the manifest's per-class summary over the 256 KiB cap,
+	// so it records omitted>0. Folding the SAME manifest twice must not double that
+	// omitted count: the kept ids dedup, but the count's dropped values are gone, so
+	// summing it twice would inflate the recovered count vs the raw path (#961).
+	var body strings.Builder
+	for i := 0; i < 12000; i++ {
+		body.WriteString(`2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-`)
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(` session_id=session-`)
+		body.WriteString(strconv.Itoa(i))
+		body.WriteString(` msg="x"` + "\n")
+	}
+	manPath := filepath.Join(t.TempDir(), "m.json")
+	if err := os.WriteFile(manPath, manifestRawBytes(t, root, body.String()), 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	once := runTraceReportArgs(t, root, "--evidence-manifest", manPath)
+	twice := runTraceReportArgs(t, root, "--evidence-manifest", manPath, "--evidence-manifest", manPath)
+
+	if got := inputsLen(t, twice); got != 1 {
+		t.Fatalf("identical manifest inputs = %d; want 1 (deduped by digest)", got)
+	}
+	o1 := findCluster(t, parseTraceReport(t, once), "runner-timeout").Affected.Omitted["issues"]
+	o2 := findCluster(t, parseTraceReport(t, twice), "runner-timeout").Affected.Omitted["issues"]
+	if o1 == 0 {
+		t.Fatalf("setup invalid: want omitted issues > 0, got 0")
+	}
+	if o2 != o1 {
+		t.Fatalf("folding the same manifest twice changed omitted: once=%d twice=%d", o1, o2)
+	}
+}
+
+func TestTraceHarnessReportDedupesIdenticalWorkerLogInputs(t *testing.T) {
+	root := repoRoot(t)
+	logPath := filepath.Join(t.TempDir(), "worker.log")
+	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout"` + "\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	once := parseTraceReport(t, runTraceReportArgs(t, root, "--worker-log", logPath))
+	twiceRaw := runTraceReportArgs(t, root, "--worker-log", logPath, "--worker-log", logPath)
+
+	if got := inputsLen(t, twiceRaw); got != 1 {
+		t.Fatalf("identical worker-log inputs = %d; want 1 (deduped by digest)", got)
+	}
+	// A byte-identical log folded twice must not double the cluster's evidence.
+	e1 := len(findCluster(t, once, "runner-timeout").Evidence)
+	e2 := len(findCluster(t, parseTraceReport(t, twiceRaw), "runner-timeout").Evidence)
+	if e1 == 0 || e2 != e1 {
+		t.Fatalf("identical worker-log folded twice changed evidence count: once=%d twice=%d", e1, e2)
+	}
+}
+
+func TestTraceEvidenceManifestDedupesIdenticalWorkerLogInputs(t *testing.T) {
+	root := repoRoot(t)
+	logPath := filepath.Join(t.TempDir(), "worker.log")
+	body := `2026/06/18 09:00:00 event=runner_timeout task_id=run-1 issue_id=issue-1 session_id=session-1 msg="timeout"` + "\n"
+	if err := os.WriteFile(logPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+
+	once := manifestRun(t, parseManifest(t, runTraceEvidenceManifestRawPath(t, root, logPath)), "run-1")
+	jsonPath := filepath.Join(t.TempDir(), "m.json")
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "trace-evidence-manifest.py"),
+		"--worker-log", logPath, "--worker-log", logPath, "--json-out", jsonPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("manifest with duplicate log failed: %v\n%s", err, out)
+	}
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	twice := parseManifest(t, raw)
+	if len(twice.Inputs) != 1 {
+		t.Fatalf("identical worker-log inputs = %d; want 1 (deduped by digest)", len(twice.Inputs))
+	}
+	if got := manifestRun(t, twice, "run-1"); len(got.Events) != len(once.Events) {
+		t.Fatalf("same log twice doubled events: once=%d twice=%d", len(once.Events), len(got.Events))
+	}
+}
+
+func runTraceReportArgs(t *testing.T, root string, args ...string) []byte {
+	t.Helper()
+	out := filepath.Join(t.TempDir(), "report.json")
+	cmdArgs := append([]string{filepath.Join(root, "scripts", "trace-harness-report.py")}, args...)
+	cmdArgs = append(cmdArgs, "--json-out", out)
+	cmd := exec.Command("python3", cmdArgs...)
+	cmd.Dir = root
+	if o, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("trace-harness-report failed: %v\n%s", err, o)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read report: %v", err)
+	}
+	return raw
+}
+
+func inputsLen(t *testing.T, raw []byte) int {
+	t.Helper()
+	var v struct {
+		Inputs []json.RawMessage `json:"inputs"`
+	}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		t.Fatalf("unmarshal inputs: %v\n%s", err, raw)
+	}
+	return len(v.Inputs)
+}
+
 func reportFromManifest(t *testing.T, root, body string) traceReport {
 	t.Helper()
 	dir := t.TempDir()

@@ -79,9 +79,13 @@ def main(argv: list[str]) -> int:
 def build_manifest(paths: list[Path]) -> dict:
     if not paths:
         raise ValueError("at least one --worker-log is required")
-    inputs = [report.input_ref(path, "worker_log") for path in paths]
+    # Collapse byte-identical logs so passing the same file twice does not double
+    # events or inflate the per-class affected summary (#961); shared with the
+    # report so both tools dedupe inputs identically.
+    unique = report.unique_inputs_by_digest(paths, "worker_log")
+    inputs = [ref for _, ref in unique]
     runs: dict[str, dict] = {}
-    for path in paths:
+    for path, _ in unique:
         for finding in report.parse_worker_log(path):
             fold_event(runs, finding)
     return {
