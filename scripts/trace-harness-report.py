@@ -26,6 +26,7 @@ payload, which this report is meant to surface as an improvement.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -39,11 +40,14 @@ SCHEMA_VERSION = "trace-harness-report/v3"
 # Single source of truth for the manifest schema id, shared by the producer
 # (trace-evidence-manifest.py) and the --evidence-manifest consumer's validation.
 EVIDENCE_MANIFEST_SCHEMA_VERSION = "trace-evidence-manifest/v1"
+EVALUATOR_RESULT_SCHEMA_VERSION = "trace-harness-advisory-evaluator-result/v1"
+EVALUATOR_RESULTS_ARTIFACT_SCHEMA_VERSION = "trace-harness-advisory-evaluator-results/v1"
 MAX_RUN_EVIDENCE_BYTES, MAX_CLUSTER_BYTES, MAX_EVIDENCE_EXCERPT_BYTES = 64 * 1024, 256 * 1024, 4 * 1024
 MAX_METADATA_BYTES, MAX_METADATA_VALUE_BYTES = 16 * 1024, 4 * 1024
 MAX_PROPOSAL_EVIDENCE_REFS, MAX_PROPOSAL_AFFECTED_VALUES = 5, 5
 MAX_PROPOSAL_INPUT_REFS, MAX_PROPOSAL_FIELD_BYTES = 3, 512
 MAX_EVALUATOR_FIXTURES, MAX_EVALUATOR_FIXTURE_EXCERPT_BYTES = 3, 512
+POSITIVE_RECURRING_SIGNAL = "positive-recurring-cluster"
 
 FIELD_RE = re.compile(r'\b(event|task_id|issue_id|issue_identifier|session_id|pr|pr_number|pr_url|pull_request|pull_request_url)=("[^"]*"|\S+)')
 CLONE_URL_SCHEME_RE = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://")
@@ -96,27 +100,38 @@ def parser() -> argparse.ArgumentParser:
         type=Path,
         help="durable trace-evidence manifest (scripts/trace-evidence-manifest.py) to consume instead of, or alongside, raw worker logs",
     )
+    p.add_argument(
+        "--prior-evaluator-results",
+        action="append",
+        default=[],
+        type=Path,
+        help="prior advisory evaluator result artifact to consume for recurrence escalation proposals",
+    )
     p.add_argument("--json-out", type=Path, help="write JSON report to this path; default stdout")
+    p.add_argument("--evaluator-results-out", type=Path, help="write advisory evaluator result artifact to this path")
     return p
 
 
 def main(argv: list[str]) -> int:
     args = parser().parse_args(argv)
     try:
-        report = generate(args.worker_log, args.evidence_manifest)
+        report = generate(args.worker_log, args.evidence_manifest, args.prior_evaluator_results)
         raw = report_json(report)
         if args.json_out:
             args.json_out.write_text(raw)
         else:
             sys.stdout.write(raw)
+        if args.evaluator_results_out:
+            args.evaluator_results_out.write_text(report_json(render_evaluator_results_artifact(report)))
     except Exception as exc:  # argparse has already handled usage errors.
         print(mask(str(exc)), file=sys.stderr)
         return 1
     return 0
 
 
-def generate(worker_logs: list[Path], manifests: list[Path] | None = None) -> dict:
+def generate(worker_logs: list[Path], manifests: list[Path] | None = None, prior_results: list[Path] | None = None) -> dict:
     manifests = manifests or []
+    prior_results = prior_results or []
     if not worker_logs and not manifests:
         raise ValueError("at least one --worker-log or --evidence-manifest is required")
     clusters: dict[str, dict] = {}
@@ -129,7 +144,7 @@ def generate(worker_logs: list[Path], manifests: list[Path] | None = None) -> di
             add_finding(clusters, run_bytes, finding)
     for path in manifests:
         fold_manifest(clusters, run_bytes, path)
-    return {
+    report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "inputs": inputs,
@@ -139,6 +154,8 @@ def generate(worker_logs: list[Path], manifests: list[Path] | None = None) -> di
         },
         "clusters": [finalize_cluster(clusters[key], report_ref) for key in sorted(clusters)],
     }
+    attach_recurrence_escalations(report, prior_results)
+    return report
 
 
 def input_ref(path: Path, kind: str = "worker_log") -> dict:
@@ -678,7 +695,7 @@ def render_advisory_evaluator_candidate(cluster: dict, report_ref: str) -> dict:
             "blocks_merge": False,
         },
         "future_report_output": {
-            "schema": "trace-harness-advisory-evaluator-result/v1",
+            "schema": EVALUATOR_RESULT_SCHEMA_VERSION,
             "fields": [
                 "evaluator_id",
                 "source_cluster_id",
@@ -696,9 +713,233 @@ def render_advisory_evaluator_candidate(cluster: dict, report_ref: str) -> dict:
     }
 
 
+def render_evaluator_results_artifact(report: dict) -> dict:
+    artifact = {
+        "schema_version": EVALUATOR_RESULTS_ARTIFACT_SCHEMA_VERSION,
+        "generated_at": report.get("generated_at", ""),
+        "source_report": {
+            "schema_version": report.get("schema_version", ""),
+            "inputs": evaluator_artifact_inputs(report.get("inputs", [])),
+        },
+        "bounds": {
+            "max_artifact_bytes": MAX_CLUSTER_BYTES,
+            "max_evidence_refs": MAX_PROPOSAL_EVIDENCE_REFS,
+            "max_note_bytes": MAX_PROPOSAL_FIELD_BYTES,
+        },
+        "results": [render_evaluator_result(cluster) for cluster in report.get("clusters", [])],
+    }
+    enforce_evaluator_results_artifact_bound(artifact)
+    return artifact
+
+
+def evaluator_artifact_inputs(inputs: list[dict]) -> list[dict]:
+    refs = []
+    for item in inputs[:MAX_PROPOSAL_INPUT_REFS]:
+        refs.append(
+            {
+                "type": item.get("type", ""),
+                "path": truncate(str(item.get("path", "")), MAX_PROPOSAL_FIELD_BYTES),
+                "bytes": item.get("bytes", 0),
+                "sha256": item.get("sha256", ""),
+            }
+        )
+    return refs
+
+
+def render_evaluator_result(cluster: dict) -> dict:
+    evaluator = cluster["proposals"]["advisory_evaluator"]
+    return {
+        "schema": EVALUATOR_RESULT_SCHEMA_VERSION,
+        "evaluator_id": result_scalar(evaluator["id"]),
+        "source_cluster_id": result_scalar(cluster["id"]),
+        "mode": result_scalar(evaluator["execution"]["mode"]),
+        "signal": result_scalar(evaluator["current_signal"]),
+        "evidence_refs": evaluator_result_evidence_refs(cluster),
+        "false_positive_notes": evaluator_result_false_positive_notes(evaluator),
+    }
+
+
+def result_scalar(value: str) -> str:
+    return truncate(mask(str(value)), MAX_PROPOSAL_FIELD_BYTES)
+
+
+def evaluator_result_evidence_refs(cluster: dict) -> list[str]:
+    refs = []
+    for entry in cluster.get("evidence", [])[:MAX_PROPOSAL_EVIDENCE_REFS]:
+        if ref := entry.get("ref", ""):
+            refs.append(truncate(mask(ref), MAX_PROPOSAL_FIELD_BYTES))
+    return refs
+
+
+def evaluator_result_false_positive_notes(evaluator: dict) -> list[str]:
+    notes = evaluator.get("expected_signal_behavior", {}).get("false_positive", [])
+    return [truncate(mask(note), MAX_PROPOSAL_FIELD_BYTES) for note in notes[:MAX_PROPOSAL_EVIDENCE_REFS]]
+
+
+def enforce_evaluator_results_artifact_bound(artifact: dict) -> None:
+    if encoded_bytes(artifact) <= MAX_CLUSTER_BYTES:
+        return
+    for result in artifact["results"]:
+        result["evidence_refs"] = result.get("evidence_refs", [])[:1]
+        result["false_positive_notes"] = [truncate(note, 80) for note in result.get("false_positive_notes", [])[:1]]
+    if encoded_bytes(artifact) > MAX_CLUSTER_BYTES:
+        raise ValueError("evaluator result artifact exceeds max_artifact_bytes")
+
+
+def attach_recurrence_escalations(report: dict, paths: list[Path]) -> None:
+    prior_positive = prior_positive_results(paths)
+    escalations = []
+    for cluster in report.get("clusters", []):
+        result = render_evaluator_result(cluster)
+        if result["signal"] != POSITIVE_RECURRING_SIGNAL:
+            continue
+        matches = prior_positive.get(result["source_cluster_id"], [])
+        if not matches:
+            continue
+        escalation = render_recurrence_escalation(cluster, result, matches)
+        cluster["proposals"]["recurrence_escalation"] = copy.deepcopy(escalation)
+        fit_recurrence_escalation_to_cluster_bound(cluster)
+        escalations.append(escalation)
+    if escalations:
+        report["recurrence_escalations"] = escalations
+
+
+def prior_positive_results(paths: list[Path]) -> dict[str, list[dict]]:
+    by_cluster: dict[str, list[dict]] = {}
+    for path in paths:
+        for result in load_evaluator_results(path):
+            if result["signal"] != POSITIVE_RECURRING_SIGNAL:
+                continue
+            by_cluster.setdefault(result["source_cluster_id"], []).append(result)
+    return by_cluster
+
+
+def load_evaluator_results(path: Path) -> list[dict]:
+    if path.stat().st_size > MAX_CLUSTER_BYTES:
+        raise ValueError(f"{mask(str(path))}: evaluator result artifact exceeds max_artifact_bytes")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or data.get("schema_version") != EVALUATOR_RESULTS_ARTIFACT_SCHEMA_VERSION:
+        raise ValueError(f"{mask(str(path))}: not a {EVALUATOR_RESULTS_ARTIFACT_SCHEMA_VERSION} evaluator result artifact")
+    if "results" not in data:
+        raise ValueError(f"{mask(str(path))}: evaluator result artifact missing 'results'")
+    results = data["results"]
+    if not isinstance(results, list):
+        raise ValueError(f"{mask(str(path))}: evaluator result artifact 'results' must be a list")
+    return [validate_evaluator_result(path, result) for result in results]
+
+
+def validate_evaluator_result(path: Path, result: dict) -> dict:
+    required = ("schema", "evaluator_id", "source_cluster_id", "mode", "signal", "evidence_refs", "false_positive_notes")
+    if not isinstance(result, dict) or result.get("schema") != EVALUATOR_RESULT_SCHEMA_VERSION:
+        raise ValueError(f"{mask(str(path))}: evaluator result has wrong or missing schema")
+    missing = [key for key in required if key not in result]
+    if missing:
+        raise ValueError(f"{mask(str(path))}: evaluator result missing {', '.join(missing)}")
+    if not isinstance(result["evidence_refs"], list) or not isinstance(result["false_positive_notes"], list):
+        raise ValueError(f"{mask(str(path))}: evaluator result refs and false-positive notes must be lists")
+    return {
+        "schema": result["schema"],
+        "evaluator_id": mask(str(result["evaluator_id"])),
+        "source_cluster_id": mask(str(result["source_cluster_id"])),
+        "mode": mask(str(result["mode"])),
+        "signal": mask(str(result["signal"])),
+        "evidence_refs": [truncate(mask(str(ref)), MAX_PROPOSAL_FIELD_BYTES) for ref in result["evidence_refs"][:MAX_PROPOSAL_EVIDENCE_REFS]],
+        "false_positive_notes": [
+            truncate(mask(str(note)), MAX_PROPOSAL_FIELD_BYTES) for note in result["false_positive_notes"][:MAX_PROPOSAL_EVIDENCE_REFS]
+        ],
+    }
+
+
+def render_recurrence_escalation(cluster: dict, result: dict, prior_results: list[dict]) -> dict:
+    marker = recurrence_marker(result["source_cluster_id"], result["evaluator_id"])
+    prior_refs = unique_limited_refs([ref for prior in prior_results for ref in prior.get("evidence_refs", [])])
+    current_refs = result.get("evidence_refs", [])[:MAX_PROPOSAL_EVIDENCE_REFS]
+    escalation = {
+        "action": "reopen-or-comment",
+        "dedupe_marker": marker,
+        "source_cluster_id": result["source_cluster_id"],
+        "evaluator_id": result["evaluator_id"],
+        "signal": result["signal"],
+        "prior_positive_results": len(prior_results),
+        "current_evidence_refs": current_refs,
+        "prior_evidence_refs": prior_refs,
+    }
+    escalation["forge_comment"] = render_recurrence_comment(cluster, escalation)
+    return escalation
+
+
+def recurrence_marker(source_cluster_id: str, evaluator_id: str) -> str:
+    return f"trace-harness-recurrence:{source_cluster_id}:{evaluator_id}"
+
+
+def unique_limited_refs(values: list[str]) -> list[str]:
+    seen, refs = set(), []
+    for value in values:
+        ref = truncate(mask(str(value)), MAX_PROPOSAL_FIELD_BYTES)
+        if ref and ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+        if len(refs) >= MAX_PROPOSAL_EVIDENCE_REFS:
+            break
+    return refs
+
+
+def render_recurrence_comment(cluster: dict, escalation: dict) -> str:
+    lines = [
+        "## Trace harness recurrence",
+        "",
+        f"Cluster {md_code(cluster['id'])} has a stable positive advisory evaluator signal again.",
+        "",
+        f"- Dedupe marker: {md_code(escalation['dedupe_marker'])}",
+        f"- Evaluator: {md_code(escalation['evaluator_id'])}",
+        f"- Signal: {md_code(escalation['signal'])}",
+        f"- Prior positive result artifacts matched: {escalation['prior_positive_results']}",
+        "",
+        "Current evidence refs:",
+        *reference_bullets(escalation["current_evidence_refs"]),
+        "",
+        "Prior evidence refs:",
+        *reference_bullets(escalation["prior_evidence_refs"]),
+        "",
+        "Recommended forge action: reopen the existing tracking issue for this marker if it is closed, otherwise add this comment once.",
+        "",
+        "Boundary: this is report-only advisory output. It does not block CI, runtime, or merge, and it does not mutate tracker state from the worker.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def fit_recurrence_escalation_to_cluster_bound(cluster: dict) -> None:
+    if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
+        return
+    escalation = cluster["proposals"]["recurrence_escalation"]
+    for key in ("current_evidence_refs", "prior_evidence_refs"):
+        while escalation[key] and encoded_bytes(cluster) > MAX_CLUSTER_BYTES:
+            escalation[key].pop()
+            escalation["forge_comment"] = render_recurrence_comment(cluster, escalation)
+    if encoded_bytes(cluster) <= MAX_CLUSTER_BYTES:
+        return
+    escalation["forge_comment"] = render_compact_recurrence_comment(cluster, escalation)
+    if encoded_bytes(cluster) > MAX_CLUSTER_BYTES:
+        cluster["proposals"].pop("recurrence_escalation", None)
+
+
+def render_compact_recurrence_comment(cluster: dict, escalation: dict) -> str:
+    return (
+        "Trace harness recurrence for "
+        f"{md_code(cluster['id'])}; marker {md_code(escalation['dedupe_marker'])}. "
+        "Reopen or comment once through forge tooling. Report-only; no CI/runtime/merge gate.\n"
+    )
+
+
+def reference_bullets(refs: list[str]) -> list[str]:
+    if not refs:
+        return ["- No bounded evidence refs were retained."]
+    return [f"- {md_code(ref)}" for ref in refs]
+
+
 def evaluator_current_signal(cluster: dict) -> str:
     if independent_occurrence_count(cluster) >= 2:
-        return "positive-recurring-cluster"
+        return POSITIVE_RECURRING_SIGNAL
     return "candidate-only-needs-more-evidence"
 
 
