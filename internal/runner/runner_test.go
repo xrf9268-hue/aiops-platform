@@ -145,6 +145,41 @@ func TestShellRunnerDeliversPromptOnStdin(t *testing.T) {
 	}
 }
 
+// TestShellRunnerFailsFastWhenPromptMissing asserts the runner surfaces a clear
+// open error and never launches the command when .aiops/PROMPT.md is missing.
+// PROMPT.md is opened before applySandbox so this failure path cannot leak the
+// firejail netfilter temp file applySandbox would allocate (codex review #972);
+// failing before cmd.Run is the observable contract that ordering preserves.
+func TestShellRunnerFailsFastWhenPromptMissing(t *testing.T) {
+	t.Parallel()
+	workdir := t.TempDir() // deliberately no .aiops/PROMPT.md
+	sentinel := filepath.Join(t.TempDir(), "ran")
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "touch " + sentinel},
+	}}
+
+	_, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_noprompt"},
+		Workflow: wf,
+		Workdir:  workdir,
+	})
+	if err == nil {
+		t.Fatal("Run(claude) with missing PROMPT.md = nil error; want open failure")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Run(claude) error = %v; want errors.Is(err, os.ErrNotExist)", err)
+	}
+	if IsTimeout(err) {
+		t.Fatalf("Run(claude) error = %v; want a non-timeout open failure", err)
+	}
+	if _, statErr := os.Stat(sentinel); statErr == nil {
+		t.Fatal("command executed despite missing PROMPT.md; runner must fail before cmd.Run")
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat sentinel: %v", statErr)
+	}
+}
+
 // TestShellRunnerKillsRunawayProcess wires the real ShellRunner against
 // a `sleep 30` command and asserts that a 50ms timeout actually kills
 // the subprocess (i.e. ctx-driven SIGTERM/SIGKILL works end-to-end). The

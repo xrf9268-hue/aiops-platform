@@ -40,22 +40,25 @@ func (r ShellRunner) Run(ctx context.Context, in RunInput) (Result, error) {
 	if err := validateAgentCommandWorkdir(in, cmd); err != nil {
 		return Result{}, err
 	}
-	wrapped, err := applySandbox(ctx, in, cmd)
-	if err != nil {
-		return Result{}, err
-	}
-	cmd = wrapped
 	// Deliver PROMPT.md on the child's stdin at the exec.Cmd level rather than
 	// splicing a `< .aiops/PROMPT.md` redirection onto the operator-configured
 	// command string: concatenation is swallowed by a trailing comment and
-	// misbinds under pipelines/here-docs/background jobs. Opening the host fd
-	// here (after applySandbox) also lets bwrap/firejail pass the descriptor
+	// misbinds under pipelines/here-docs/background jobs. Open before
+	// applySandbox so an open failure cannot leak the firejail netfilter temp
+	// file that applySandbox would otherwise allocate (its cleanup is wired to
+	// the wrapper's run/Cancel, neither of which fires if we return here). The
+	// host fd is assigned after wrapping so bwrap/firejail pass the descriptor
 	// straight through instead of resolving the path inside the sandbox mount.
 	prompt, err := os.Open(filepath.Join(in.Workdir, ".aiops", "PROMPT.md"))
 	if err != nil {
 		return Result{}, fmt.Errorf("open prompt file: %w", err)
 	}
 	defer func() { _ = prompt.Close() }()
+	wrapped, err := applySandbox(ctx, in, cmd)
+	if err != nil {
+		return Result{}, err
+	}
+	cmd = wrapped
 	cmd.Stdin = prompt
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
