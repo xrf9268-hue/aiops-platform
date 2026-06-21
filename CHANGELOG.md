@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.7...v0.1.8) (2026-06-21)
+
+
+### Bug Fixes
+
+* **runner:** wire claude PROMPT.md via cmd.Stdin ([#972](https://github.com/xrf9268-hue/aiops-platform/issues/972)) ([62424fc](https://github.com/xrf9268-hue/aiops-platform/commit/62424fcb7e127037147e6287d33939124bb734c2))
+
 ## [0.1.7](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.6...v0.1.7) (2026-06-20)
 
 
