@@ -32,10 +32,9 @@ func TestNew_RemovedCodexExecRunnerIsUnknown(t *testing.T) {
 	}
 }
 
-// shellTestWorkdir creates a temp workdir with a stub .aiops/PROMPT.md
-// so the ShellRunner's `< .aiops/PROMPT.md` redirection does not fail
-// before the actual command runs (we care about the kill path, not
-// the prompt plumbing).
+// shellTestWorkdir creates a temp workdir with a stub .aiops/PROMPT.md so the
+// ShellRunner can open it for the child's stdin before the actual command runs
+// (we care about the kill path here, not the prompt content).
 func shellTestWorkdir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -107,6 +106,42 @@ func TestMockRunnerNoTimeoutWhenSleepShort(t *testing.T) {
 	}
 	if IsTimeout(err) {
 		t.Fatal("IsTimeout should be false for nil error")
+	}
+}
+
+// TestShellRunnerDeliversPromptOnStdin asserts the runner hands PROMPT.md to the
+// child on stdin via cmd.Stdin, not by splicing `< .aiops/PROMPT.md` onto the
+// command string. The command carries a trailing comment: the old
+// string-concatenation would have appended the redirection *after* the `#`,
+// swallowing it so the child saw empty stdin. Mutation-verify by deleting the
+// `cmd.Stdin = prompt` assignment in shell.go — the capture file goes empty.
+func TestShellRunnerDeliversPromptOnStdin(t *testing.T) {
+	t.Parallel()
+	workdir := shellTestWorkdir(t)
+	prompt := "prompt body line 1\nprompt body line 2 # keep me literal\n"
+	if err := os.WriteFile(filepath.Join(workdir, ".aiops", "PROMPT.md"), []byte(prompt), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	capture := filepath.Join(t.TempDir(), "stdin-capture")
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "cat > " + capture + " # deliver prompt"},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_stdin"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run(claude) error = %v; want nil", err)
+	}
+
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read stdin capture: %v", err)
+	}
+	if string(got) != prompt {
+		t.Fatalf("child stdin = %q; want %q", string(got), prompt)
 	}
 }
 
