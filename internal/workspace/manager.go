@@ -235,16 +235,34 @@ func attachWorktree(ctx context.Context, root, workdir, mirror, workBranch, star
 	return true, createWorktree(ctx, root, workdir, mirror, workBranch, startRef, foreignCommonDir)
 }
 
-// resolveStartRef resolves the base ref via `origin/<base>` because the bare
-// cache stores upstream branches as remote-tracking refs (see EnsureMirror);
-// it falls back to the bare name to cover `file://` test fixtures where the
-// upstream is the same on-disk repo.
+// resolveStartRef resolves the base ref to a FULLY-QUALIFIED ref so a stray
+// local branch named `origin/<base>` (refs/heads/origin/<base>, written into
+// the shared bare mirror by an agent's `git fetch origin <base>:origin/<base>`)
+// cannot make the short name `origin/<base>` ambiguous and wedge the subsequent
+// `git worktree add` / `git checkout` with `fatal: ambiguous object name` on
+// every retry (#976). A short `origin/<base>` only warns under `rev-parse
+// --verify` (it resolves to the first match), so the ambiguity surfaces fatally
+// at `worktree add` instead — the gate has to avoid the short name entirely.
+//
+// `refs/remotes/origin/<base>` is preferred: the bare cache stores upstream
+// branches there (see EnsureMirror), and it is the freshest base — the
+// `refs/heads/<base>` that `git clone --bare` copies once goes stale after the
+// first refspec fetch. `refs/heads/<base>` is the fallback for `file://` test
+// fixtures and for a pruned remote-tracking ref. When neither resolves (a
+// base-less mirror) the canonical remote-tracking ref is returned so the
+// inevitable `worktree add` failure names the intended base, never the
+// pollution.
 func resolveStartRef(ctx context.Context, mirror, baseBranch string) string {
-	startRef := "origin/" + baseBranch
-	if err := runGitQuiet(ctx, mirror, "rev-parse", "--verify", startRef); err != nil {
-		startRef = baseBranch
+	candidates := []string{
+		"refs/remotes/origin/" + baseBranch,
+		"refs/heads/" + baseBranch,
 	}
-	return startRef
+	for _, ref := range candidates {
+		if err := runGitQuiet(ctx, mirror, "rev-parse", "--verify", ref); err == nil {
+			return ref
+		}
+	}
+	return candidates[0]
 }
 
 // classifyExistingWorkdir decides whether an existing workdir is a valid,

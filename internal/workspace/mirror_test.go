@@ -1053,8 +1053,8 @@ func TestWriteSensitiveArtifactReplacesHardLinkedArtifact(t *testing.T) {
 // `startRef = t.BaseBranch` fallback in PrepareGitWorkspace. The production
 // path (HTTPS clone via EnsureMirror) always populates
 // `refs/remotes/origin/<base>` through the post-clone fetch refspec
-// rewrite, so `git rev-parse --verify origin/<base>` succeeds and the
-// fallback never fires in production. This test drives the fallback
+// rewrite, so `git rev-parse --verify refs/remotes/origin/<base>` succeeds
+// and the fallback never fires in production. This test drives the fallback
 // explicitly by deleting the base branch on the UPSTREAM so the next
 // `ensureMirrorLocked`'s `fetch --prune` removes `refs/remotes/origin/main`
 // from the mirror while the mirror keeps its bare `refs/heads/main` from
@@ -1102,10 +1102,10 @@ func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T)
 	}
 
 	// New task → first-touch path runs through the startRef resolution.
-	// The refresh fetch prunes `origin/main`, the `git rev-parse --verify
-	// origin/main` gate fails, and startRef falls back to bare `main`; the
-	// subsequent `git worktree add ... main` must succeed against the
-	// mirror's `refs/heads/main`.
+	// The refresh fetch prunes `refs/remotes/origin/main`, so resolveStartRef's
+	// first candidate fails `rev-parse --verify` and it falls back to
+	// `refs/heads/main`; the subsequent `git worktree add ... refs/heads/main`
+	// must succeed against the mirror's bare head.
 	tk := makeTask("task-fallback", upstream)
 	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
 	if err != nil {
@@ -1135,6 +1135,91 @@ func TestPrepareGitWorkspace_StartRefFallsBackToBareBaseBranchName(t *testing.T)
 	if got := strings.TrimSpace(string(branchOut)); got != tk.WorkBranch {
 		t.Fatalf("worktree on branch %q, want %q", got, tk.WorkBranch)
 	}
+}
+
+// TestPrepareGitWorkspace_StartRefIgnoresPollutingLocalOriginBranch is the #976
+// regression: a maker/reviewer agent with git access can run
+// `git fetch origin main:origin/main` inside its worktree, which writes a LOCAL
+// branch `refs/heads/origin/main` into the SHARED bare mirror. That makes the
+// short ref `origin/main` ambiguous, so the previous short-ref `git worktree add
+// ... origin/main` failed with `fatal: ambiguous object name: 'origin/main'` and
+// wedged every subsequent dispatch on that mirror in retry/backoff. Preparing a
+// workspace over the polluted mirror must still succeed by resolving the
+// fully-qualified remote-tracking base, never the local pollution.
+func TestPrepareGitWorkspace_StartRefIgnoresPollutingLocalOriginBranch(t *testing.T) {
+	upstream := initBareUpstream(t)
+	mgr := newTestManager(t)
+	ctx := context.Background()
+
+	// Prime the mirror so refs/remotes/origin/main exists, exactly as the
+	// production HTTPS clone path builds it.
+	primer := makeTask("task-primer", upstream)
+	if _, _, err := mgr.PrepareGitWorkspace(ctx, primer); err != nil {
+		t.Fatalf("prime mirror: %v", err)
+	}
+	mirror := mirrorPathFor(MirrorRoot(mgr.MirrorRoot), upstream)
+
+	// The intended base: the remote-tracking tip the worktree must start from.
+	wantBase, err := exec.Command("git", "--git-dir", mirror, "rev-parse", "refs/remotes/origin/main").Output()
+	if err != nil {
+		t.Fatalf("mirror rev-parse refs/remotes/origin/main: %v", err)
+	}
+	wantBaseSHA := strings.TrimSpace(string(wantBase))
+
+	// Pollute exactly as the agent's bad fetch did: a local branch literally
+	// named origin/main (refs/heads/origin/main) at a DIVERGENT commit, so the
+	// short name is genuinely ambiguous AND a base mix-up would be observable in
+	// the worktree's HEAD (not merely hidden behind an identical SHA).
+	pollutingSHA := rootCommitInMirror(t, mirror)
+	if pollutingSHA == wantBaseSHA {
+		t.Fatalf("polluting commit %q must differ from the remote-tracking base", pollutingSHA)
+	}
+	if out, err := exec.Command("git", "--git-dir", mirror, "update-ref", "refs/heads/origin/main", pollutingSHA).CombinedOutput(); err != nil {
+		t.Fatalf("seed refs/heads/origin/main: %v\n%s", err, out)
+	}
+	// Precondition: the short ref is now genuinely ambiguous (the wedge trigger).
+	if err := exec.Command("git", "--git-dir", mirror, "rev-parse", "--verify", "refs/heads/origin/main").Run(); err != nil {
+		t.Fatalf("precondition: refs/heads/origin/main not seeded: %v", err)
+	}
+
+	// Real preparation path. Pre-fix this fails at `worktree add` with
+	// `fatal: ambiguous object name: 'origin/main'`.
+	tk := makeTask("task-polluted", upstream)
+	dir, createdNow, err := mgr.PrepareGitWorkspace(ctx, tk)
+	if err != nil {
+		t.Fatalf("prepare over polluted mirror: %v", err)
+	}
+	if !createdNow {
+		t.Fatal("prepare for new task reported createdNow=false")
+	}
+	// The worktree must be based on the remote-tracking ref, never the pollution.
+	headOut, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("worktree rev-parse HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(headOut)); got != wantBaseSHA {
+		t.Fatalf("worktree HEAD = %q, want remote-tracking base %q (did startRef resolve the polluting local branch %q?)", got, wantBaseSHA, pollutingSHA)
+	}
+}
+
+// rootCommitInMirror writes a parent-less commit over the empty tree directly
+// into the bare mirror's object store and returns its SHA. It seeds a polluting
+// ref at a commit that diverges from the real base without needing a worktree;
+// the identity is passed explicitly so the test never depends on the host's
+// global git config.
+func rootCommitInMirror(t *testing.T, mirror string) string {
+	t.Helper()
+	const emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	cmd := exec.Command("git", "--git-dir", mirror, "commit-tree", emptyTree, "-m", "pollution")
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=pollution", "GIT_AUTHOR_EMAIL=pollution@example.com",
+		"GIT_COMMITTER_NAME=pollution", "GIT_COMMITTER_EMAIL=pollution@example.com",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("commit-tree in mirror: %v", err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // TestPrepareGitWorkspace_ReclaimsBranchAfterWorkspaceRootChange is the #854
