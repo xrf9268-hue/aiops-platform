@@ -32,10 +32,9 @@ func TestNew_RemovedCodexExecRunnerIsUnknown(t *testing.T) {
 	}
 }
 
-// shellTestWorkdir creates a temp workdir with a stub .aiops/PROMPT.md
-// so the ShellRunner's `< .aiops/PROMPT.md` redirection does not fail
-// before the actual command runs (we care about the kill path, not
-// the prompt plumbing).
+// shellTestWorkdir creates a temp workdir with a stub .aiops/PROMPT.md so the
+// ShellRunner can open it for the child's stdin before the actual command runs
+// (we care about the kill path here, not the prompt content).
 func shellTestWorkdir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -107,6 +106,77 @@ func TestMockRunnerNoTimeoutWhenSleepShort(t *testing.T) {
 	}
 	if IsTimeout(err) {
 		t.Fatal("IsTimeout should be false for nil error")
+	}
+}
+
+// TestShellRunnerDeliversPromptOnStdin asserts the runner hands PROMPT.md to the
+// child on stdin via cmd.Stdin, not by splicing `< .aiops/PROMPT.md` onto the
+// command string. The command carries a trailing comment: the old
+// string-concatenation would have appended the redirection *after* the `#`,
+// swallowing it so the child saw empty stdin. Mutation-verify by deleting the
+// `cmd.Stdin = prompt` assignment in shell.go — the capture file goes empty.
+func TestShellRunnerDeliversPromptOnStdin(t *testing.T) {
+	t.Parallel()
+	workdir := shellTestWorkdir(t)
+	prompt := "prompt body line 1\nprompt body line 2 # keep me literal\n"
+	if err := os.WriteFile(filepath.Join(workdir, ".aiops", "PROMPT.md"), []byte(prompt), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	capture := filepath.Join(t.TempDir(), "stdin-capture")
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "cat > " + capture + " # deliver prompt"},
+	}}
+
+	if _, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_stdin"},
+		Workflow: wf,
+		Workdir:  workdir,
+	}); err != nil {
+		t.Fatalf("Run(claude) error = %v; want nil", err)
+	}
+
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read stdin capture: %v", err)
+	}
+	if string(got) != prompt {
+		t.Fatalf("child stdin = %q; want %q", string(got), prompt)
+	}
+}
+
+// TestShellRunnerFailsFastWhenPromptMissing asserts the runner surfaces a clear
+// open error and never launches the command when .aiops/PROMPT.md is missing.
+// PROMPT.md is opened before applySandbox so this failure path cannot leak the
+// firejail netfilter temp file applySandbox would allocate (codex review #972);
+// failing before cmd.Run is the observable contract that ordering preserves.
+func TestShellRunnerFailsFastWhenPromptMissing(t *testing.T) {
+	t.Parallel()
+	workdir := t.TempDir() // deliberately no .aiops/PROMPT.md
+	sentinel := filepath.Join(t.TempDir(), "ran")
+	wf := workflow.Workflow{Config: workflow.Config{
+		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
+		Claude:    workflow.CommandConfig{Command: "touch " + sentinel},
+	}}
+
+	_, err := (ShellRunner{Name: "claude"}).Run(context.Background(), RunInput{
+		Task:     task.Task{ID: "tsk_noprompt"},
+		Workflow: wf,
+		Workdir:  workdir,
+	})
+	if err == nil {
+		t.Fatal("Run(claude) with missing PROMPT.md = nil error; want open failure")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Run(claude) error = %v; want errors.Is(err, os.ErrNotExist)", err)
+	}
+	if IsTimeout(err) {
+		t.Fatalf("Run(claude) error = %v; want a non-timeout open failure", err)
+	}
+	if _, statErr := os.Stat(sentinel); statErr == nil {
+		t.Fatal("command executed despite missing PROMPT.md; runner must fail before cmd.Run")
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat sentinel: %v", statErr)
 	}
 }
 
