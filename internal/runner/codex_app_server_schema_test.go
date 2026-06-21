@@ -86,8 +86,7 @@ func TestCodexAppServerInitializePayloadMatchesSchema(t *testing.T) {
 
 func TestCodexAppServerThreadStartPayloadMatchesSchema(t *testing.T) {
 	in := codexSchemaTestInput(t)
-	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
-	payload := buildThreadStartParams(in, approval)
+	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
 	// Guard: the input must actually carry a dynamic tool, else this would
 	// validate the optional-absent path and never exercise DynamicToolSpec.
@@ -109,7 +108,7 @@ func TestCodexAppServerThreadConfigMatchesSchema(t *testing.T) {
 
 func TestCodexAppServerTurnStartPayloadMatchesSchema(t *testing.T) {
 	in := codexSchemaTestInput(t)
-	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+	approval := in.Workflow.Config.Codex.ApprovalPolicy
 	payload := buildTurnStartParams(in, "thread-1", "do the task", 1, approval)
 	sch := compileCodexDef(t, codexSchemaCompiler(t), "TurnStartParams")
 	if err := validateWire(t, sch, payload); err != nil {
@@ -123,7 +122,7 @@ func TestCodexAppServerTurnStartPayloadMatchesSchema(t *testing.T) {
 // the UserInput oneOf discriminator, not just a top-level required key.
 func TestCodexAppServerTurnStartPayloadRejectsDrift(t *testing.T) {
 	in := codexSchemaTestInput(t)
-	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+	approval := in.Workflow.Config.Codex.ApprovalPolicy
 	base := buildTurnStartParams(in, "thread-1", "do the task", 1, approval)
 	sch := compileCodexDef(t, codexSchemaCompiler(t), "TurnStartParams")
 
@@ -175,7 +174,7 @@ func TestCodexAppServerTurnStartPayloadRejectsDrift(t *testing.T) {
 // without needing the codex binary.
 func TestCodexAppServerPayloadKeysKnownToSchema(t *testing.T) {
 	in := codexSchemaTestInput(t)
-	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+	approval := in.Workflow.Config.Codex.ApprovalPolicy
 	props := codexSchemaDefProps(t)
 
 	cases := []struct {

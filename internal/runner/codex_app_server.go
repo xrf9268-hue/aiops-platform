@@ -373,14 +373,12 @@ func (c *appServerClient) initSession(in RunInput) {
 	c.turnTimeoutMs = in.Workflow.Config.Codex.TurnTimeoutMs
 	c.readTimeoutMs = in.Workflow.Config.Codex.ReadTimeoutMs
 	c.stallTimeoutMs = in.Workflow.Config.Codex.StallTimeoutMs
-	// Translate once at this boundary and reuse the same value for both the
-	// codex wire payload (thread/start, turn/start) and the harness-side
-	// auto-approve decisions (autoApproveRequest). Storing the raw workflow
-	// value here while sending the translated one to codex desyncs the two:
-	// a legacy reject:{...} config would reach codex as granular:{...} (codex
-	// emits approval prompts) but autoApproveRequest, which no longer handles
-	// reject:, would decline them unconditionally and flip behavior (#335).
-	c.approvalPolicy = codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
+	// The workflow loader rejects the obsolete codex `reject:` approval shape
+	// (#969), so the stored value is already a current codex AskForApproval
+	// value. The same value feeds both the codex wire payload (thread/start,
+	// turn/start) and the harness-side auto-approve decisions
+	// (autoApproveRequest), so the two can never desync.
+	c.approvalPolicy = in.Workflow.Config.Codex.ApprovalPolicy
 }
 
 // startThread runs the SPEC §10.1 handshake — initialize, initialized,

@@ -187,12 +187,14 @@ func rejectRemovedPolicyFields(raw map[string]any) error {
 	return nil
 }
 
-// rejectRemovedCodexFields surfaces clear errors for codex.* keys that
-// configured the removed one-shot `codex exec` runner (issue #541): the
-// `codex.profile` field and a `codex.command` whose argv runs `codex exec`.
-// Both would otherwise be silently dropped or fall through to a `sh -c
-// "codex exec"` launch that the app-server runner cannot speak, failing the
-// first real run with an opaque protocol/timeout error.
+// rejectRemovedCodexFields surfaces clear errors for codex.* keys that either
+// configured the removed one-shot `codex exec` runner (issue #541) — the
+// `codex.profile` field and a `codex.command` whose argv runs `codex exec` —
+// or use the obsolete `approval_policy.reject` shape (#969). The exec keys
+// would otherwise be silently dropped or fall through to a `sh -c "codex exec"`
+// launch the app-server runner cannot speak; the `reject:` shape used to be
+// silently translated to `granular:` with an inverted polarity, which could
+// hand the operator the opposite approval policy with no signal.
 func rejectRemovedCodexFields(raw map[string]any) error {
 	codex, ok := raw["codex"].(map[string]any)
 	if !ok {
@@ -203,6 +205,11 @@ func rejectRemovedCodexFields(raw map[string]any) error {
 	}
 	if command, ok := codex["command"].(string); ok && commandRunsCodexExec(command) {
 		return fmt.Errorf("codex.command %q runs the removed one-shot `codex exec` runner (issue #541); the SPEC §10 runner is `codex app-server` — set codex.command to `codex app-server`", command)
+	}
+	if approval, ok := codex["approval_policy"].(map[string]any); ok {
+		if _, present := approval["reject"]; present {
+			return fmt.Errorf("codex.approval_policy.reject is no longer supported (#969): codex renamed the `reject` approval variant to `granular` and inverted its polarity (PR #14516, 2026-03-12). Rewrite as codex.approval_policy.granular with every flag negated — a `reject.<flag>: true` (\"reject this prompt\") becomes `granular.<flag>: false` (\"don't allow it\")")
+		}
 	}
 	return nil
 }

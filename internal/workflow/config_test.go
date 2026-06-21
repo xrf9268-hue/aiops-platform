@@ -1634,6 +1634,77 @@ prompt body
 	}
 }
 
+// TestLoad_RejectsObsoleteCodexApprovalRejectShape verifies that the obsolete
+// codex `approval_policy: {reject: {...}}` shape fails Load with a clear error.
+// Codex renamed the `reject` approval variant to `granular` and inverted its
+// polarity (PR #14516, 2026-03-12); the runner used to translate it silently,
+// which could hand an operator the opposite policy with no signal. The loader
+// now rejects it and documents the polarity-flipped migration (#969).
+func TestLoad_RejectsObsoleteCodexApprovalRejectShape(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: codex-app-server
+codex:
+  approval_policy:
+    reject:
+      sandbox_approval: true
+      rules: true
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	_, err := Load(p)
+	if err == nil {
+		t.Fatalf("Load(codex.approval_policy.reject) = nil error; want rejection of the obsolete reject shape (#969)")
+	}
+	for _, want := range []string{"codex.approval_policy.reject", "granular"} {
+		if msg := err.Error(); !strings.Contains(msg, want) {
+			t.Fatalf("Load(codex.approval_policy.reject) error %q: want substring %q", err.Error(), want)
+		}
+	}
+}
+
+// TestLoad_AcceptsCodexApprovalGranularShape pins the positive case: the current
+// `approval_policy: {granular: {...}}` shape still loads cleanly, so the
+// reject-shape guard does not over-reject the supported approval policy (#969).
+func TestLoad_AcceptsCodexApprovalGranularShape(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  default: codex-app-server
+codex:
+  approval_policy:
+    granular:
+      sandbox_approval: true
+      rules: false
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	if _, err := Load(p); err != nil {
+		t.Fatalf("Load(codex.approval_policy.granular) = %v; want nil for the current approval shape", err)
+	}
+}
+
 // TestLoad_RejectsMissingCloneURL verifies that a workflow front matter
 // that omits `repo.clone_url` (or sets it to an empty string after env
 // expansion) fails Load with an error that names the file path and the
