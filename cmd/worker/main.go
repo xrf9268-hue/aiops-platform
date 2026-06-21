@@ -383,6 +383,7 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 
 	state := orchestrator.NewOrchestratorState(int64(wf.Config.Polling.IntervalMs), wf.Config.Agent.MaxConcurrentAgents)
 	state.MaxContinuationTurns = wf.Config.Agent.MaxContinuationTurns
+	state.AgentDefault = wf.Config.Agent.Default
 	runtime, err := orchestrator.NewWorkflowRuntime(orchestrator.WorkflowRuntimeConfig{
 		Initial:              wf,
 		Path:                 resolution.Path,

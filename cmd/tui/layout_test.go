@@ -96,7 +96,7 @@ func TestFormatRunningRow_TokensDoNotCorruptAlignment(t *testing.T) {
 	now := time.Now()
 	started := now.Add(-90 * time.Second)
 	const eventWidth = 44
-	wantWidth := fixedRunningWidth() + chromeWidth + eventWidth // 66 + 10 + 44 = 120
+	wantWidth := fixedRunningWidth() + chromeWidth + eventWidth // 86 + 11 + 44 = 141
 
 	r := stateapi.Running{
 		Identifier:        "ENG-1234",
@@ -125,6 +125,7 @@ func representativeState(now time.Time) *stateapi.StateResponse {
 	due := now.Add(30 * time.Second)
 	return &stateapi.StateResponse{
 		MaxConcurrentAgents: 10,
+		AgentDefault:        "codex-app-server",
 		Counts: stateapi.Counts{
 			CompletedTotal:                    12,
 			AgentHandoffReconcileStoppedTotal: 3,
@@ -142,6 +143,8 @@ func representativeState(now time.Time) *stateapi.StateResponse {
 			LastEventAt:       &now,
 			Tokens:            stateapi.RunningTokens{TotalTokens: 1_000_000_000},
 			CodexAppServerPID: 12345,
+			AgentProvider:     "codex-app-server",
+			AgentModel:        "gpt-5.3-codex-spark",
 		}},
 		Retrying: []stateapi.Retry{{
 			Identifier: "ENG-9999",
@@ -223,6 +226,48 @@ func TestRenderFrame_ShowsAgentHandoffCount(t *testing.T) {
 
 	if !strings.Contains(frame, "Handoffs: completed 12 | agent 3 (recent 2)") {
 		t.Fatalf("renderFrame missing agent handoff count: %q", frame)
+	}
+}
+
+// TestRenderFrame_ShowsAgentModel pins #977 on the TUI surface: the running
+// table carries a MODEL column with the per-claim model, and the header shows
+// the worker default provider. A wide terminal avoids truncating the column.
+func TestRenderFrame_ShowsAgentModel(t *testing.T) {
+	orig := liveTerminalWidth
+	t.Cleanup(func() { liveTerminalWidth = orig })
+	liveTerminalWidth = func() (int, bool) { return 160, true }
+
+	now := time.Now()
+	frame := visibleString(renderFrame(representativeState(now), nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
+
+	if !strings.Contains(frame, "MODEL") {
+		t.Fatalf("renderFrame missing MODEL running-table column: %q", frame)
+	}
+	if !strings.Contains(frame, "gpt-5.3-codex-spark") {
+		t.Fatalf("renderFrame missing per-claim model: %q", frame)
+	}
+	// The worker default line pins the provider (agent.default) and renders the
+	// model as "unknown" — it is resolved per-run, not configured (#977).
+	if !strings.Contains(frame, "Default:    codex-app-server · model unknown") {
+		t.Fatalf("renderFrame missing worker default provider/model line: %q", frame)
+	}
+}
+
+// TestRenderFrame_RendersUnknownModelWhenAbsent pins the "unknown, never blank"
+// criterion: a running claim with no reported model still renders "unknown" in
+// the MODEL column rather than an empty cell (#977).
+func TestRenderFrame_RendersUnknownModelWhenAbsent(t *testing.T) {
+	orig := liveTerminalWidth
+	t.Cleanup(func() { liveTerminalWidth = orig })
+	liveTerminalWidth = func() (int, bool) { return 160, true }
+
+	now := time.Now()
+	state := representativeState(now)
+	state.Running[0].AgentModel = ""
+	frame := visibleString(renderFrame(state, nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
+
+	if !strings.Contains(frame, "unknown") {
+		t.Fatalf("renderFrame should render an absent model as \"unknown\": %q", frame)
 	}
 }
 

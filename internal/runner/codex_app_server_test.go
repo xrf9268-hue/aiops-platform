@@ -406,6 +406,15 @@ for line in sys.stdin:
 	if n, _ := pid.(int); n <= 0 {
 		t.Fatalf("session_started codex_app_server_pid = %#v, want positive int (real codex subprocess PID)", pid)
 	}
+	// This thread/start response carries no `model`, so agent_model must be
+	// omitted (leaving RunningView.AgentModel empty → "unknown"), while the
+	// runtime/provider is always reported (#977).
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "agent_provider"); got != NameCodexAppServer {
+		t.Fatalf("session_started agent_provider = %#v, want %q", got, NameCodexAppServer)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "agent_model"); got != nil {
+		t.Fatalf("session_started agent_model = %#v, want absent when thread/start omits model", got)
+	}
 	if res.RuntimeEvents[1].Event != task.EventTurnStarted {
 		t.Fatalf("second event = %q, want %q", res.RuntimeEvents[1].Event, task.EventTurnStarted)
 	}
@@ -423,6 +432,43 @@ for line in sys.stdin:
 	}
 	if got := runtimeEventField(t, res.RuntimeEvents[3], "turn_id"); got != "turn-1" {
 		t.Fatalf("turn_completed turn_id = %#v, want turn-1", got)
+	}
+}
+
+// TestCodexAppServerRunnerEmitsAgentModelOnSessionStarted pins the #977 capture
+// seam: the model resolved in the thread/start response surfaces on the
+// session_started event as agent_model, alongside agent_provider, so
+// /api/v1/state can show which model/runtime drove the claim. The model is read
+// from the protocol response, not parsed out of the operator's codex.command.
+func TestCodexAppServerRunnerEmitsAgentModelOnSessionStarted(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}, 'model': 'gpt-5.3-codex-spark'}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "agent model capture")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.RuntimeEvents) == 0 || res.RuntimeEvents[0].Event != task.EventSessionStarted {
+		t.Fatalf("first event = %#v, want session_started", res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "agent_model"); got != "gpt-5.3-codex-spark" {
+		t.Fatalf("session_started agent_model = %#v, want gpt-5.3-codex-spark (thread/start response)", got)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "agent_provider"); got != NameCodexAppServer {
+		t.Fatalf("session_started agent_provider = %#v, want %q", got, NameCodexAppServer)
 	}
 }
 

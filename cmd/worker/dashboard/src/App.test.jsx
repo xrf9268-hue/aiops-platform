@@ -10,6 +10,7 @@ function busyState(overrides = {}) {
   return {
     generated_at: iso(0),
     poll_interval_ms: 20000,
+    agent_default: 'codex-app-server',
     max_concurrent_agents: 3,
     max_concurrent_agents_by_state: { 'In Progress': 3 },
     counts: {
@@ -27,6 +28,7 @@ function busyState(overrides = {}) {
         workspace_path: '/tmp/aiops_workspaces/MT-614',
         tokens: { input_tokens: 286400, output_tokens: 41200, total_tokens: 327600 },
         codex_app_server_pid: 48213,
+        agent_provider: 'codex-app-server', agent_model: 'gpt-5.3-codex-spark',
       },
     ],
     retrying: [
@@ -124,6 +126,33 @@ describe('Worker status dashboard', () => {
     const link = await screen.findByRole('link', { name: 'MT-614' });
     expect(link.getAttribute('href')).toBe('/api/v1/MT-614');
     expect(screen.getByText('Wired counter into reconciler.')).toBeTruthy();
+  });
+
+  it('shows the active agent model per running claim and the worker default provider', async () => {
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-614' });
+    const modelCell = container.querySelector('td[data-label="Model"]');
+    expect(modelCell).toBeTruthy();
+    expect(modelCell.textContent).toContain('gpt-5.3-codex-spark');
+    expect(modelCell.textContent).toContain('codex-app-server'); // provider sub-line
+    // worker default provider in the title meta (the model is resolved per-run).
+    expect(screen.getByText('codex-app-server · model unknown')).toBeTruthy();
+  });
+
+  it('renders a missing agent model as "unknown", never blank', async () => {
+    current = busyState({
+      running: [{
+        issue_id: 'no-model', issue_identifier: 'MT-700', state: 'In Progress',
+        session_id: 'thread-x', turn_count: 1, last_event: 'turn_started',
+        started_at: iso(1000), last_event_at: iso(1000), workspace_path: '/tmp/w',
+        tokens: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      }],
+    });
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-700' });
+    const modelCell = container.querySelector('td[data-label="Model"]');
+    expect(modelCell.textContent).toContain('unknown');
+    expect(modelCell.textContent.trim()).not.toBe('');
   });
 
   it('renders Codex rate-limit windows as percent bars, not raw JSON', async () => {

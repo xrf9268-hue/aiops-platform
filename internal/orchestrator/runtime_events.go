@@ -157,6 +157,12 @@ func (s *OrchestratorState) recordSessionFields(run *RunningEntry, event task.Ru
 	if pid, ok := intField(payload, "codex_app_server_pid"); ok && pid > 0 {
 		run.Session.CodexAppServerPID = pid
 	}
+	if provider, ok := stringField(payload, "agent_provider"); ok {
+		run.Session.AgentProvider = provider
+	}
+	if model, ok := stringField(payload, "agent_model"); ok {
+		run.Session.AgentModel = model
+	}
 	if event.Event == task.EventTurnCompleted {
 		run.Session.TurnCount++
 	}

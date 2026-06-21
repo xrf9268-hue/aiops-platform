@@ -1009,6 +1009,39 @@ func TestRecordRuntimeEventPropagatesCodexAppServerPID(t *testing.T) {
 	}
 }
 
+// TestRecordRuntimeEventPropagatesAgentModel pins the #977 round-trip: a
+// `session_started` event carrying agent_provider/agent_model populates
+// RunningView so `/api/v1/state` surfaces which model/runtime drove a claim.
+func TestRecordRuntimeEventPropagatesAgentModel(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-MODEL")
+	defer cancel()
+
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventSessionStarted,
+		Payload: map[string]any{
+			"session_id":     "thread-1-turn-1",
+			"agent_provider": "codex-app-server",
+			"agent_model":    "gpt-5.3-codex-spark",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].AgentProvider; got != "codex-app-server" {
+		t.Fatalf("RunningView.AgentProvider = %q, want %q (session_started payload)", got, "codex-app-server")
+	}
+	if got := view.Running[0].AgentModel; got != "gpt-5.3-codex-spark" {
+		t.Fatalf("RunningView.AgentModel = %q, want %q (session_started payload)", got, "gpt-5.3-codex-spark")
+	}
+}
+
 // TestRecordRuntimeEventTracksLastEventAndMessage pins SPEC §13.7.2:
 // last_event surfaces the most-recent runtime event kind on the running row,
 // and last_message captures the payload `message` field when present (e.g.
@@ -3005,6 +3038,29 @@ func TestUpdatePollIntervalMsRefreshesSnapshotMetadata(t *testing.T) {
 	}
 	if view.PollIntervalMs != 42000 {
 		t.Fatalf("PollIntervalMs = %d, want 42000", view.PollIntervalMs)
+	}
+}
+
+// TestUpdateAgentDefaultRefreshesSnapshotProviderAndIgnoresEmpty pins the #982
+// review fix at the actor: a reloaded default updates the surfaced provider, and
+// an empty value is ignored so a malformed reload never blanks it.
+func TestUpdateAgentDefaultRefreshesSnapshotProviderAndIgnoresEmpty(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp})
+	defer cancel()
+
+	if err := o.UpdateAgentDefault(context.Background(), "codex-app-server"); err != nil {
+		t.Fatalf("UpdateAgentDefault: %v", err)
+	}
+	if got := snapshotAgentDefault(t, context.Background(), o); got != "codex-app-server" {
+		t.Fatalf("AgentDefault = %q, want %q", got, "codex-app-server")
+	}
+	// An empty reload value must not clobber the surfaced default.
+	if err := o.UpdateAgentDefault(context.Background(), "  "); err != nil {
+		t.Fatalf("UpdateAgentDefault(empty): %v", err)
+	}
+	if got := snapshotAgentDefault(t, context.Background(), o); got != "codex-app-server" {
+		t.Fatalf("AgentDefault after empty update = %q, want unchanged %q", got, "codex-app-server")
 	}
 }
 

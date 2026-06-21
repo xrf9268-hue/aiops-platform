@@ -29,6 +29,10 @@ type RunningView struct {
 	WorkspacePath     string
 	Tokens            TokensView
 	CodexAppServerPID int
+	// AgentProvider / AgentModel expose the runtime and resolved model driving
+	// this claim (#977); empty until the runner reports them.
+	AgentProvider string
+	AgentModel    string
 }
 
 // TokensView mirrors the SPEC §13.7.2 per-issue `tokens` object: the

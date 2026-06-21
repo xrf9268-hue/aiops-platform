@@ -277,13 +277,20 @@ type appServerClient struct {
 	// consumer. readCh carries lines and is closed only by the reader; readErr is
 	// the sticky terminal scan error, published before close(readCh) so the close
 	// is the happens-before edge that lets the consumer read it race-free.
-	readCh              chan []byte
-	readErr             error
-	out                 io.Writer
-	nextID              int
-	codexAppServerPID   int
-	threadID            string
-	turnID              string
+	readCh            chan []byte
+	readErr           error
+	out               io.Writer
+	nextID            int
+	codexAppServerPID int
+	threadID          string
+	turnID            string
+	// agentModel is the resolved model identity the app-server reports in the
+	// thread/start response (ThreadStartResponse `model`). It is captured from
+	// the protocol — the authoritative source — rather than parsed out of the
+	// operator's free-text codex.command, and surfaces on /api/v1/state so an
+	// operator can tell which model produced a run (#977). Empty when the
+	// app-server omits it; the dashboard renders that as "unknown".
+	agentModel          string
 	lastMessage         string
 	runtimeEvents       []task.RuntimeEvent
 	runtimeEventSink    func(task.RuntimeEvent)
@@ -404,6 +411,10 @@ func (c *appServerClient) startThread(ctx context.Context, in RunInput) (string,
 		return "", fmt.Errorf("codex app-server thread/start: %w", err)
 	}
 	c.threadID = threadID
+	// model is a top-level ThreadStartResponse field; capture best-effort so a
+	// protocol that omits it leaves agentModel empty (rendered "unknown") rather
+	// than failing the handshake.
+	c.agentModel, _ = threadResult["model"].(string)
 	c.recordPhaseTransition(task.PhaseLaunchingAgentProcess, task.PhaseInitializingSession)
 	return threadID, nil
 }
@@ -560,6 +571,13 @@ func (c *appServerClient) recordFirstTurnStarted(threadID, turnID string) {
 		"session_id": threadID + "-" + turnID,
 		"thread_id":  threadID,
 		"turn_id":    turnID,
+		// agent_provider is the runtime/runner identity; for this client it is
+		// always the codex app-server. agent_model is the resolved model (may be
+		// empty). Both surface per-claim on /api/v1/state (#977).
+		"agent_provider": NameCodexAppServer,
+	}
+	if c.agentModel != "" {
+		payload["agent_model"] = c.agentModel
 	}
 	if c.codexAppServerPID > 0 {
 		payload["codex_app_server_pid"] = c.codexAppServerPID

@@ -384,6 +384,8 @@ func apiRunningFromView(row orchestrator.RunningView) stateapi.Running {
 			TotalTokens:  row.Tokens.TotalTokens,
 		},
 		CodexAppServerPID: row.CodexAppServerPID,
+		AgentProvider:     row.AgentProvider,
+		AgentModel:        row.AgentModel,
 	}
 }
 func apiRetryFromView(row orchestrator.RetryView) stateapi.Retry {
@@ -469,6 +471,7 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 	operatorStops := sortedAPIOperatorTerminalStops(view.OperatorTerminalStops)
 	return stateapi.StateResponse{
 		Version:                      resolveVersion(),
+		AgentDefault:                 view.AgentDefault,
 		GeneratedAt:                  generatedAt,
 		PollIntervalMs:               view.PollIntervalMs,
 		MaxConcurrentAgents:          view.MaxConcurrentAgents,

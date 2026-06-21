@@ -140,6 +140,67 @@ func TestApiStateRowsEmitIssueURLWhenAvailable(t *testing.T) {
 	keyAbsent(t, rawBlockedNo)
 }
 
+// TestApiStateSurfacesAgentModelMetadata pins the #977 projection seam: a
+// running row carries agent_provider/agent_model when the runner reported them
+// and omits the keys (omitempty) otherwise, and the top-level worker default
+// surfaces as agent_default. Mutation: dropping a field in apiRunningFromView /
+// apiStateFromView fails the "present" case; dropping omitempty fails "absent".
+func TestApiStateSurfacesAgentModelMetadata(t *testing.T) {
+	stringKey := func(t *testing.T, raw []byte, key, want string) {
+		t.Helper()
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		v, ok := got[key]
+		if want == "" {
+			if ok {
+				t.Fatalf("%s present; want omitted (omitempty) in %s", key, raw)
+			}
+			return
+		}
+		if !ok {
+			t.Fatalf("%s missing; want %q in %s", key, want, raw)
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			t.Fatalf("%s unmarshal: %v", key, err)
+		}
+		if s != want {
+			t.Fatalf("%s = %q; want %q", key, s, want)
+		}
+	}
+
+	withModel, err := json.Marshal(apiRunningFromView(orchestrator.RunningView{
+		IssueID: "i1", Identifier: "MT-649",
+		AgentProvider: "codex-app-server", AgentModel: "gpt-5.3-codex-spark",
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stringKey(t, withModel, "agent_provider", "codex-app-server")
+	stringKey(t, withModel, "agent_model", "gpt-5.3-codex-spark")
+
+	noModel, err := json.Marshal(apiRunningFromView(orchestrator.RunningView{IssueID: "i1", Identifier: "MT-649"}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stringKey(t, noModel, "agent_provider", "")
+	stringKey(t, noModel, "agent_model", "")
+
+	withDefault, err := json.Marshal(apiStateFromView(orchestrator.StateView{AgentDefault: "codex-app-server"}))
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	stringKey(t, withDefault, "agent_default", "codex-app-server")
+
+	noDefault, err := json.Marshal(apiStateFromView(orchestrator.StateView{}))
+	if err != nil {
+		t.Fatalf("marshal state: %v", err)
+	}
+	stringKey(t, noDefault, "agent_default", "")
+}
+
 func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
 	view := orchestrator.StateView{
 		Completed: []orchestrator.IssueID{"linear-global-id"},
