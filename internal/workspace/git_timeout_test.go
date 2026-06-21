@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,6 +105,34 @@ func TestRunGitParentCancellationPreemptsBudget(t *testing.T) {
 	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("runGit(canceled parent) returned after %v; want prompt cancellation", elapsed)
+	}
+}
+
+// TestRunGitFoldsActionableStderrIntoError pins #978: a failed local git op
+// must surface git's actionable fatal/error line in the returned error — what
+// the runtime event / dashboard shows — not just "exit status NNN", while
+// keeping the underlying *exec.ExitError classifiable for callers. The stub
+// emits a trailing non-actionable `hint:` line after the `fatal:` so the test
+// also proves the fold selects the fatal line, not merely the last line.
+// Deleting the foldGitStderr call in runGit makes the fatal-substring
+// assertion fail against a bare "exit status".
+func TestRunGitFoldsActionableStderrIntoError(t *testing.T) {
+	installHungGitStub(t, "#!/bin/sh\n"+
+		"echo \"warning: noisy progress\" >&2\n"+
+		"echo \"fatal: ambiguous object name: 'origin/main'\" >&2\n"+
+		"echo \"hint: use a fully-qualified ref\" >&2\n"+
+		"exit 128\n")
+	err := runGit(context.Background(), t.TempDir(), "worktree", "add", "wd", "origin/main")
+	if err == nil {
+		t.Fatal("runGit(failing git) = nil error; want the git failure")
+	}
+	const want = "fatal: ambiguous object name: 'origin/main'"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("runGit(failing git) = %q; want error containing git's actionable line %q", err.Error(), want)
+	}
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("runGit(failing git) = %v; want errors.As(err, *exec.ExitError) preserved for classification", err)
 	}
 }
 
