@@ -173,57 +173,6 @@ func approvalRuleEnabled(rules map[string]any, key string) bool {
 	return enabled
 }
 
-// codexWireApprovalPolicy maps aiops-platform's ApprovalPolicy value to the
-// codex app-server JSON-RPC wire format. Codex's `AskForApproval` enum
-// (codex-rs/protocol/src/protocol.rs and
-// codex-rs/app-server-protocol/src/protocol/v2/shared.rs) accepts exactly
-// {"untrusted", "on-failure", "on-request", "granular": {...}, "never"}.
-// Sending anything else makes thread/start return JSON-RPC -32600
-// `Invalid request: unknown variant ...` and breaks startup (#329).
-//
-// The obsolete `{"reject": {...}}` shape — which used to be valid in codex
-// up to PR #14516 (commit b7dba72db, renamed to `granular` and field
-// polarity inverted on 2026-03-12) — is translated here for back-compat
-// with WORKFLOW.md files written against the old protocol. The polarity
-// flip (`reject.sandbox_approval=true` meant "reject"; the new
-// `granular.sandbox_approval=true` means "allow") is preserved so the
-// translated payload retains the operator's original intent.
-//
-// All codex-recognized values (`"untrusted"`/`"on-failure"`/`"on-request"`/
-// `"never"` strings, and the `{"granular": {...}}` map) pass through
-// unchanged. Unrecognized shapes also pass through so codex's own
-// validation error reaches the operator verbatim rather than getting
-// masked behind a translator silently rewriting their payload.
-func codexWireApprovalPolicy(internal any) any {
-	policy, ok := internal.(map[string]any)
-	if !ok {
-		return internal
-	}
-	rejectShape, hasReject := policy["reject"].(map[string]any)
-	if !hasReject {
-		return internal
-	}
-	// Translate obsolete reject:{flag:true} → granular:{flag:false} per the
-	// codex #14516 polarity flip. Pass through any extra keys verbatim so a
-	// future codex addition doesn't get lost.
-	granular := make(map[string]any, len(rejectShape))
-	for k, v := range rejectShape {
-		if b, ok := v.(bool); ok {
-			granular[k] = !b
-			continue
-		}
-		granular[k] = v
-	}
-	translated := make(map[string]any, len(policy))
-	for k, v := range policy {
-		if k == "reject" {
-			continue
-		}
-		translated[k] = v
-	}
-	translated["granular"] = granular
-	return translated
-}
 func protocolUserInputResult(msg map[string]any) map[string]any {
 	params, _ := msg["params"].(map[string]any)
 	questions, _ := params["questions"].([]any)

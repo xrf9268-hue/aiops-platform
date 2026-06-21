@@ -282,9 +282,7 @@ func TestBuildThreadStartParamsDisablesInheritedCodexAppTools(t *testing.T) {
 	in := appServerInput(codexWorkdir(t, "disable app tools"))
 	in.Workflow.Config.Tracker.Kind = "linear"
 	in.Workflow.Config.Tracker.APIKey = "linear-secret"
-	approval := codexWireApprovalPolicy(in.Workflow.Config.Codex.ApprovalPolicy)
-
-	payload := buildThreadStartParams(in, approval)
+	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
 	config, ok := payload["config"].(map[string]any)
 	if !ok {
@@ -2519,21 +2517,14 @@ for line in sys.stdin:
 	}
 }
 
-// TestCodexAppServerRunnerTranslatesLegacyRejectPolicyForApprovalDecisions
-// pins the boundary contract from #335: the approval policy is translated to
-// codex's `granular` wire shape exactly once (codexWireApprovalPolicy) and the
-// SAME translated value drives both the wire payload and the harness-side
-// auto-approve decision (autoApproveRequest).
-//
-// The config below is the obsolete reject:{...} shape with every flag false —
-// legacy operator intent "don't reject, allow these approval flows". Codex
-// receives the translated granular:{...true} (so it emits approval prompts),
-// and autoApproveRequest — which no longer special-cases reject: since #334 —
-// only produces the right ALLOW decision if it is fed the translated value.
-// If c.approvalPolicy were instead the raw reject:{...} map, autoApproveRequest
-// would fall through to its safe-fallback decline, the runner would emit
-// turn_input_required + InputRequiredError, and Run would error here.
-func TestCodexAppServerRunnerTranslatesLegacyRejectPolicyForApprovalDecisions(t *testing.T) {
+// TestCodexAppServerRunnerFeedsGranularApprovalPolicyToWireAndDecisions pins the
+// boundary invariant from #335: the stored approval policy drives BOTH the codex
+// wire payload (thread/start, turn/start) and the harness-side auto-approve
+// decision (autoApproveRequest), so the two cannot desync. granular: is the
+// default shape (config.go cheat-sheet defaults), so a granular policy that
+// allows sandbox/command-exec prompts must auto-approve the command-exec request
+// with acceptForSession and reach codex carrying that same granular policy.
+func TestCodexAppServerRunnerFeedsGranularApprovalPolicyToWireAndDecisions(t *testing.T) {
 	binDir := codexAppServerStubScript(t, `
 import json
 log=open(os.environ['CODEX_STDIN_LOG'], 'w')
@@ -2556,12 +2547,12 @@ for line in sys.stdin:
 `)
 	wd := codexWorkdir(t, "x")
 	in := appServerInput(wd)
-	// Obsolete reject:{flag:false} == "don't reject; allow these prompts".
-	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{"reject": map[string]any{"sandbox_approval": false, "rules": false, "mcp_elicitations": false}}
+	// granular sandbox_approval:true == "allow sandbox/command-exec prompts".
+	in.Workflow.Config.Codex.ApprovalPolicy = map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "request_permissions": false}}
 
 	res, err := (CodexAppServerRunner{}).Run(context.Background(), in)
 	if err != nil {
-		t.Fatalf("Run: %v (legacy reject:{false} must auto-approve, not decline)", err)
+		t.Fatalf("Run: %v (granular sandbox_approval:true must auto-approve, not decline)", err)
 	}
 	if res.Summary != "approvals handled" {
 		t.Fatalf("Summary = %q, want approvals handled", res.Summary)
@@ -2576,13 +2567,10 @@ for line in sys.stdin:
 	if !strings.Contains(string(stdin), `"decision":"acceptForSession"`) {
 		t.Fatalf("stdin missing acceptForSession in approval response: %s", stdin)
 	}
-	// The translated granular payload — not the raw reject: shape — must be
-	// what reached codex on the wire.
-	if strings.Contains(string(stdin), `"reject"`) {
-		t.Fatalf("raw reject: shape leaked onto the wire: %s", stdin)
-	}
+	// The same granular policy that drove the acceptForSession decision must
+	// also reach codex on the wire (thread/start, turn/start).
 	if !strings.Contains(string(stdin), `"granular"`) {
-		t.Fatalf("stdin missing translated granular policy on the wire: %s", stdin)
+		t.Fatalf("stdin missing granular approval policy on the wire: %s", stdin)
 	}
 }
 
@@ -2634,13 +2622,11 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 		{name: "on-request", policy: "on-request", wantModernDecision: "decline"},
 		{name: "untrusted", policy: "untrusted", wantModernDecision: "decline"},
 		{name: "on-failure", policy: "on-failure", wantModernDecision: "acceptForSession", wantPermissions: true},
-		// `reject:` is the obsolete codex variant renamed to `granular:` in
-		// PR #14516 (b7dba72db). Harness no longer special-cases it — the
-		// codexWireApprovalPolicy boundary translates it to granular before
-		// going to codex, so by the time protocolServerRequestResult sees a
-		// payload it should never observe a raw reject:. The case below
-		// pins the safe fallback: unknown shapes don't auto-approve.
-		{name: "reject legacy map (unknown to harness)", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
+		// The obsolete `reject:` shape is now rejected at load time (#969), so
+		// protocolServerRequestResult can never see it from a real config. It is
+		// kept here only as a representative *unknown* approval shape, pinning the
+		// safe fallback: an unrecognized policy never auto-approves.
+		{name: "unknown approval shape declines", policy: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true}}, wantModernDecision: "decline"},
 		{name: "granular denies all disabled allowances", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": false}}, wantModernDecision: "decline"},
 		{name: "granular allows sandbox only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "request_permissions": false}}, wantModernDecision: "acceptForSession"},
 		{name: "granular allows permissions only", policy: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "request_permissions": true}}, wantModernDecision: "decline", wantPermissions: true},
@@ -2675,84 +2661,6 @@ func TestProtocolServerRequestResultApprovalPolicyMatrix(t *testing.T) {
 	}
 	if _, ok := elicitationResult["content"]; !ok || elicitationResult["content"] != nil {
 		t.Fatalf("elicitation content = %#v, present %v; want explicit null content", elicitationResult["content"], ok)
-	}
-}
-
-// TestCodexWireApprovalPolicy pins the translation contract between
-// aiops-platform's ApprovalPolicy value and codex's `AskForApproval` wire
-// format (codex-rs/protocol/src/protocol.rs `AskForApproval`).
-//
-// The codex enum is the source of truth: codex commit b7dba72db (PR #14516,
-// 2026-03-12) renamed the `Reject` variant to `Granular` and inverted the
-// field polarity (true = ALLOW, was true = REJECT). Sending the obsolete
-// `{"reject": {...}}` payload to a current codex returns
-// `-32600 unknown variant ` and breaks startup (#329).
-//
-// Future maintainers: do NOT "fix" this by reverting to `reject:` — the
-// rename is a deliberate codex protocol change. Check
-// codex-rs/protocol/src/protocol.rs `pub enum AskForApproval` first.
-func TestCodexWireApprovalPolicy(t *testing.T) {
-	cases := []struct {
-		name string
-		in   any
-		want any
-	}{
-		{
-			name: "never string passes through",
-			in:   "never",
-			want: "never",
-		},
-		{
-			name: "untrusted string passes through",
-			in:   "untrusted",
-			want: "untrusted",
-		},
-		{
-			name: "on-failure string passes through",
-			in:   "on-failure",
-			want: "on-failure",
-		},
-		{
-			name: "on-request string passes through",
-			in:   "on-request",
-			want: "on-request",
-		},
-		{
-			name: "granular map passes through unchanged",
-			in:   map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": true}},
-			want: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": true}},
-		},
-		{
-			name: "legacy reject:{true} translates to granular:{false}",
-			// Operator intent: reject sandbox+rules+mcp prompts.
-			in: map[string]any{"reject": map[string]any{"sandbox_approval": true, "rules": true, "mcp_elicitations": true}},
-			// Codex equivalent: granular flags ALL false (none allowed).
-			want: map[string]any{"granular": map[string]any{"sandbox_approval": false, "rules": false, "mcp_elicitations": false}},
-		},
-		{
-			name: "legacy reject:{false} translates to granular:{true}",
-			// Operator intent: don't reject; allow sandbox approvals.
-			in:   map[string]any{"reject": map[string]any{"sandbox_approval": false, "rules": true, "mcp_elicitations": true}},
-			want: map[string]any{"granular": map[string]any{"sandbox_approval": true, "rules": false, "mcp_elicitations": false}},
-		},
-		{
-			name: "unrecognized shape passes through so codex surfaces its own validation error",
-			in:   map[string]any{"future_variant": map[string]any{"x": 1}},
-			want: map[string]any{"future_variant": map[string]any{"x": 1}},
-		},
-		{
-			name: "nil passes through",
-			in:   nil,
-			want: nil,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := codexWireApprovalPolicy(tc.in)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("codexWireApprovalPolicy(%#v) = %#v, want %#v", tc.in, got, tc.want)
-			}
-		})
 	}
 }
 
