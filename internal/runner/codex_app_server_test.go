@@ -472,6 +472,55 @@ for line in sys.stdin:
 	}
 }
 
+// TestCodexAppServerRunnerFoldsModelRerouteIntoAgentModel pins the #977/#982
+// reroute fix: when codex emits a model/rerouted notification mid-claim, the
+// runner re-surfaces the new toModel as the canonical agent_model so the
+// orchestrator updates the running row instead of keeping the thread/start
+// model for the rest of the claim. The fallback/reroute case is exactly where
+// the displayed model matters most.
+func TestCodexAppServerRunnerFoldsModelRerouteIntoAgentModel(t *testing.T) {
+	codexAppServerStubScript(t, `
+import json
+for line in sys.stdin:
+    msg=json.loads(line)
+    method=msg.get('method')
+    if method == 'initialize':
+        print(json.dumps({'id': msg['id'], 'result': {}}), flush=True)
+    elif method == 'thread/start':
+        print(json.dumps({'id': msg['id'], 'result': {'thread': {'id': 'thread-1'}, 'model': 'gpt-5.3-codex-spark'}}), flush=True)
+    elif method == 'turn/start':
+        print(json.dumps({'id': msg['id'], 'result': {'turn': {'id': 'turn-1'}}}), flush=True)
+        print(json.dumps({'method': 'model/rerouted', 'params': {'fromModel': 'gpt-5.3-codex-spark', 'toModel': 'gpt-5.3-codex', 'reason': 'fallback', 'threadId': 'thread-1', 'turnId': 'turn-1'}}), flush=True)
+        print(json.dumps({'method': 'turn/completed', 'params': {'turnId': 'turn-1'}}), flush=True)
+        break
+`)
+	wd := codexWorkdir(t, "model reroute capture")
+
+	res, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := runtimeEventField(t, res.RuntimeEvents[0], "agent_model"); got != "gpt-5.3-codex-spark" {
+		t.Fatalf("session_started agent_model = %#v, want gpt-5.3-codex-spark (thread/start response)", got)
+	}
+	notifs := runtimeEventsNamed(res.RuntimeEvents, task.EventNotification)
+	if len(notifs) != 1 {
+		t.Fatalf("notification events = %d, want the reroute notification preserved; events=%#v", len(notifs), res.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, notifs[0], "agent_model"); got != "gpt-5.3-codex" {
+		t.Fatalf("reroute notification agent_model = %#v, want gpt-5.3-codex (toModel folded into canonical field)", got)
+	}
+	if got := runtimeEventField(t, notifs[0], "to_model"); got != "gpt-5.3-codex" {
+		t.Fatalf("reroute notification to_model = %#v, want raw toModel preserved alongside agent_model", got)
+	}
+	if got := runtimeEventField(t, notifs[0], "from_model"); got != "gpt-5.3-codex-spark" {
+		t.Fatalf("reroute notification from_model = %#v, want raw fromModel preserved for observability", got)
+	}
+	if got := runtimeEventField(t, notifs[0], "reason"); got != "fallback" {
+		t.Fatalf("reroute notification reason = %#v, want raw reason preserved for observability", got)
+	}
+}
+
 func TestCodexAppServerRunnerIgnoresDeprecationNoticeForSummary(t *testing.T) {
 	codexAppServerStubScript(t, `
 import json

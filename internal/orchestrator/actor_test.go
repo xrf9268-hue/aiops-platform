@@ -1042,6 +1042,51 @@ func TestRecordRuntimeEventPropagatesAgentModel(t *testing.T) {
 	}
 }
 
+// TestRecordRuntimeEventModelRerouteOverwritesAgentModel pins the #982 reroute
+// fold: a later event carrying a fresh agent_model (the runner re-surfaces a
+// codex model/rerouted toModel as the canonical agent_model) overwrites the
+// sticky session_started model, so /api/v1/state and the dashboards track the
+// model actually running after a mid-claim fallback.
+func TestRecordRuntimeEventModelRerouteOverwritesAgentModel(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-REROUTE")
+	defer cancel()
+
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventSessionStarted,
+		Payload: map[string]any{
+			"session_id":     "thread-1-turn-1",
+			"agent_provider": "codex-app-server",
+			"agent_model":    "gpt-5.3-codex-spark",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent session_started: %v", err)
+	}
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventNotification,
+		Payload: map[string]any{
+			"from_model":  "gpt-5.3-codex-spark",
+			"to_model":    "gpt-5.3-codex",
+			"agent_model": "gpt-5.3-codex",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent reroute: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].AgentModel; got != "gpt-5.3-codex" {
+		t.Fatalf("RunningView.AgentModel = %q, want %q (reroute toModel overwrites session_started model)", got, "gpt-5.3-codex")
+	}
+	if got := view.Running[0].AgentProvider; got != "codex-app-server" {
+		t.Fatalf("RunningView.AgentProvider = %q, want %q (provider stays sticky across reroute)", got, "codex-app-server")
+	}
+}
+
 // TestRecordRuntimeEventTracksLastEventAndMessage pins SPEC §13.7.2:
 // last_event surfaces the most-recent runtime event kind on the running row,
 // and last_message captures the payload `message` field when present (e.g.
