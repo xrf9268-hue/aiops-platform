@@ -53,6 +53,14 @@ type LiveSession struct {
 	TurnID            string
 	TurnCount         int
 	CodexAppServerPID int
+	// AgentProvider is the runtime/runner identity (e.g. "codex-app-server")
+	// and AgentModel the resolved model (e.g. "gpt-5.3-codex-spark"), both
+	// folded from the runner's `session_started` event payload and surfaced on
+	// /api/v1/state so an operator can tell which model/runtime produced a run
+	// (#977). Empty until observed; the dashboard renders missing values as
+	// "unknown".
+	AgentProvider string
+	AgentModel    string
 }
 
 // RateLimitSnapshot is the latest SPEC §13.3 rate-limits payload emitted by
@@ -210,6 +218,11 @@ type OrchestratorState struct {
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
 	MaxContinuationTurns       int
+	// AgentDefault is the worker's configured default runner/provider
+	// (`agent.default`, e.g. "codex-app-server"). It is surfaced as the
+	// top-summary worker default provider on /api/v1/state (#977); the model is
+	// resolved per-run by the agent, so there is no worker-default model.
+	AgentDefault string
 
 	Running       map[IssueID]*RunningEntry
 	Blocked       map[IssueID]*BlockedEntry

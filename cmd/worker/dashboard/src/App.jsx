@@ -300,25 +300,33 @@ function RunningTable({ rows }) {
       <table className="sessions">
         <caption className="sr-only">Running sessions</caption>
         <thead><tr>
-          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Runtime</th>
+          <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Model</th><th scope="col">Runtime</th>
           <th scope="col">Latest activity</th><th scope="col" className="r tok-h">Tokens<span className="th-sub"> in / out</span></th>
         </tr></thead>
         <tbody>
-          {rows.map((r) => (
+          {rows.map((r) => {
+            // Resolved per-claim model/runtime; a missing model renders as
+            // "unknown" (explicit diagnostic data, never blank) and collapses
+            // into the issue detail line for narrow layouts (#977).
+            const model = r.agent_model || 'unknown';
+            const provider = r.agent_provider || 'unknown';
+            return (
             <tr key={r.issue_id}>
               <td className="issue-cell">
                 <div className="issue">
                   <IssueLink row={r} />
                   <div className="upd" style={{ maxWidth: '38ch' }} title={r.last_message}>{r.last_message}</div>
-                  <span className="wp">{r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ''}</span>
+                  <span className="wp">model {model} · {provider} · {r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ''}</span>
                 </div>
               </td>
               <td data-label="State"><Badge kind="running">{r.state}</Badge><div className="dim">turn {r.turn_count}</div></td>
+              <td data-label="Model"><span className="mono" style={{ fontSize: '11.5px' }}>{model}</span><div className="dim">{provider}</div></td>
               <td data-label="Runtime"><span className="runtime tnum">{sinceISO(r.started_at)}</span><div className="dim">started</div></td>
               <td data-label="Latest activity"><span className="mono" style={{ fontSize: '11.5px' }}>{r.last_event}</span><div className="dim">{sinceISO(r.last_event_at)} ago</div></td>
               <td className="tok" data-label="Tokens in / out"><b>{compact(r.tokens?.input_tokens)}</b> / {compact(r.tokens?.output_tokens)}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -492,6 +500,9 @@ export default function App() {
   const rl = s.rate_limits;
   const total = (c.running || 0) + (c.retrying || 0) + (c.blocked || 0);
   const pollSec = Math.round((s.poll_interval_ms || 0) / 1000);
+  // Worker default runtime/provider (agent.default). The model is resolved
+  // per-run by the agent, so the worker-level default model is unknown (#977).
+  const agentDefault = s.agent_default || 'unknown';
   const maxConc = s.max_concurrent_agents ?? '—';
   const byState = s.max_concurrent_agents_by_state;
   const byStateStr = byState && Object.keys(byState).length
@@ -531,6 +542,7 @@ export default function App() {
         <div className="title-meta">
           <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
           <div className="row"><span>concurrency</span><b>{maxConc} max{byStateStr}</b></div>
+          <div className="row"><span>default agent</span><b>{agentDefault} · model unknown</b></div>
         </div>
       </div>
 

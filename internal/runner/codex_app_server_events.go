@@ -21,6 +21,36 @@ func (c *appServerClient) recordRuntimeMessage(event string, msg map[string]any)
 	}
 	c.recordRuntimeEvent(event, c.withRuntimeContext(payload))
 }
+
+// codexModelReroutedMethod is the SPEC §10.4 notification (ModelReroutedNotification
+// in the app-server schema) codex emits when it falls back mid-claim from one
+// model to another — e.g. the requested model is unavailable. Its toModel is the
+// model now actually running the turn.
+const codexModelReroutedMethod = "model/rerouted"
+
+// recordModelRerouted folds a model/rerouted notification's toModel into the
+// canonical agent_model the orchestrator reads (recordSessionFields). The
+// thread/start model is captured once on session_started; a later reroute must
+// update it, or /api/v1/state, the web dashboard, and the TUI keep reporting the
+// originally requested model for the rest of the claim — wrong in exactly the
+// fallback/reroute case #977 must surface. The raw notification is still recorded
+// as EventNotification (so the reason/from_model stay observable); agent_model is
+// added so the existing session-field fold tracks the new model without a second
+// event kind.
+func (c *appServerClient) recordModelRerouted(msg map[string]any) {
+	params, _ := msg["params"].(map[string]any)
+	if to, _ := params["toModel"].(string); strings.TrimSpace(to) != "" {
+		c.agentModel = strings.TrimSpace(to)
+	}
+	payload := normalizeRuntimePayload(params)
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if c.agentModel != "" {
+		payload["agent_model"] = c.agentModel
+	}
+	c.recordRuntimeEvent(task.EventNotification, c.withRuntimeContext(payload))
+}
 func (c *appServerClient) recordOtherRuntimeMessage(msg map[string]any, raw []byte) {
 	payload := normalizeRuntimePayload(msg)
 	if payload == nil {

@@ -199,6 +199,10 @@ func (c *appServerClient) handleTurnNotification(msg map[string]any, method stri
 	}
 	c.lastTerminal = time.Now()
 	c.handleNotification(msg)
+	if method == codexModelReroutedMethod {
+		c.recordModelRerouted(msg)
+		return false, nil
+	}
 	c.recordRuntimeMessage(task.EventNotification, msg)
 	return false, nil
 }

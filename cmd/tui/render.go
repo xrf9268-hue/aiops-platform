@@ -26,9 +26,10 @@ const (
 	colAge      = 12
 	colTokens   = 10
 	colSession  = 14
+	colModel    = 20
 	colEventMin = 12
 	colEventDef = 44
-	chromeWidth = 10 // "│  ● " prefix + spacing
+	chromeWidth = 11 // "│ ● " prefix + one space between each of the 8 running columns
 
 	defaultTermCols = 115 // Elixir @default_terminal_columns
 )
@@ -75,6 +76,13 @@ func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, t
 			colorize(formatCount(int64(agentCount)), ansiGreen) +
 			colorize("/", ansiGray) +
 			colorize(formatCount(int64(maxAgents)), ansiGray),
+		// Worker default runtime/provider (agent.default). The model is resolved
+		// per-run by the agent (shown per-claim in the MODEL column), so the
+		// worker-level default model is "unknown" rather than hidden (#977).
+		colorize("│ Default:    ", ansiBold) +
+			colorize(orUnknown(state.AgentDefault), ansiCyan) +
+			colorize(" · model ", ansiGray) +
+			colorize("unknown", ansiGray),
 		colorize("│ Handoffs: ", ansiBold) +
 			colorize("completed "+formatCount(state.Counts.CompletedTotal), ansiGreen) +
 			colorize(" | ", ansiGray) +
@@ -151,6 +159,7 @@ func runningTableHeader(eventWidth int) string {
 		padRight("AGE / TURN", colAge),
 		padLeft("TOKENS", colTokens),
 		padRight("SESSION", colSession),
+		padRight("MODEL", colModel),
 		padRight("EVENT", eventWidth),
 	}, " ")
 	return "│   " + colorize(header, ansiGray)
@@ -158,12 +167,12 @@ func runningTableHeader(eventWidth int) string {
 
 // runningTableSep mirrors running_table_separator_row/1.
 func runningTableSep(eventWidth int) string {
-	width := fixedRunningWidth() + eventWidth + 6
+	width := fixedRunningWidth() + eventWidth + 7
 	return "│   " + colorize(strings.Repeat("─", width), ansiGray)
 }
 
 func fixedRunningWidth() int {
-	return colID + colStage + colPID + colAge + colTokens + colSession
+	return colID + colStage + colPID + colAge + colTokens + colSession + colModel
 }
 
 // formatRunningRow mirrors format_running_summary/2.
@@ -186,6 +195,7 @@ func formatRunningRow(r stateapi.Running, now time.Time, eventWidth int) string 
 	// token count must not widen the row and push EVENT out of alignment (#466).
 	tokens := cellRight(formatCount(r.Tokens.TotalTokens), colTokens)
 	session := cell(compactSession(r.SessionID), colSession)
+	model := cell(orUnknown(r.AgentModel), colModel)
 
 	eventText := r.LastMessage
 	if eventText == "" {
@@ -206,7 +216,17 @@ func formatRunningRow(r stateapi.Running, now time.Time, eventWidth int) string 
 		colorize(age, ansiMagenta) + " " +
 		colorize(tokens, ansiYellow) + " " +
 		colorize(session, ansiCyan) + " " +
+		colorize(model, ansiGray) + " " +
 		colorize(event, dotColor)
+}
+
+// orUnknown renders an agent model/provider value, falling back to "unknown" so
+// a missing value is explicit diagnostic data rather than a blank cell (#977).
+func orUnknown(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "unknown"
+	}
+	return s
 }
 
 // formatRetryRow mirrors format_retry_summary/1.

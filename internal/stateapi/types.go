@@ -22,7 +22,14 @@ type StateResponse struct {
 	// VCS-revision fallback, or "devel"), so a bug report can name the exact
 	// build. omitempty drops the key only when the resolved version is empty —
 	// which the "devel" default normally prevents (#796).
-	Version                    string         `json:"version,omitempty"`
+	Version string `json:"version,omitempty"`
+	// AgentDefault is the worker's configured default runner/provider
+	// (`agent.default`, e.g. "codex-app-server"), surfaced as the dashboard's
+	// top-summary worker default provider (#977). The model is resolved per-run
+	// by the agent (see Running.AgentModel), so there is no worker-default
+	// model. omitempty keeps older payloads (and the mock/unconfigured default)
+	// from forcing the key; the dashboard renders a missing value as "unknown".
+	AgentDefault               string         `json:"agent_default,omitempty"`
 	GeneratedAt                time.Time      `json:"generated_at"`
 	PollIntervalMs             int64          `json:"poll_interval_ms"`
 	MaxConcurrentAgents        int            `json:"max_concurrent_agents"`
@@ -117,6 +124,14 @@ type Running struct {
 	WorkspacePath     string        `json:"workspace_path,omitempty"`
 	Tokens            RunningTokens `json:"tokens"`
 	CodexAppServerPID int           `json:"codex_app_server_pid,omitempty"`
+	// AgentProvider is the runtime/runner driving this claim (e.g.
+	// "codex-app-server") and AgentModel the resolved model (e.g.
+	// "gpt-5.3-codex-spark"), so an operator can tell which model/runtime
+	// produced a run rather than reconstructing it from workflow files or logs
+	// (#977). omitempty drops the key when unknown; the dashboard renders a
+	// missing value as "unknown", so older payloads stay usable.
+	AgentProvider string `json:"agent_provider,omitempty"`
+	AgentModel    string `json:"agent_model,omitempty"`
 }
 
 // RunningTokens mirrors SPEC §13.7.2's per-running-row `tokens` object.

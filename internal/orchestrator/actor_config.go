@@ -128,6 +128,33 @@ func (o *Orchestrator) UpdateMaxContinuationTurns(ctx context.Context, maxContin
 	}
 }
 
+// UpdateAgentDefault applies the reloaded default runner/provider through the
+// actor so the /api/v1/state top-summary provider tracks a hot WORKFLOW.md
+// reload that changes `agent.default` — dispatch already reads the live
+// snapshot, so without this the summary would report the startup runner while
+// new runs launch with the reloaded default (#977 / #982 review). An empty
+// value is ignored so a malformed reload never blanks the surfaced default.
+func (o *Orchestrator) UpdateAgentDefault(ctx context.Context, agentDefault string) error {
+	if strings.TrimSpace(agentDefault) == "" {
+		return nil
+	}
+	done := make(chan struct{}, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		st.AgentDefault = agentDefault
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // UpdatePollIntervalMs applies reloaded workflow poll cadence metadata through
 // the actor so /api/v1/state reflects the runtime cadence after workflow reload.
 func (o *Orchestrator) UpdatePollIntervalMs(ctx context.Context, pollIntervalMs int64) error {

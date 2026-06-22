@@ -21,6 +21,10 @@ type StateView struct {
 	PollIntervalMs             int64
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
+	// AgentDefault is the worker's configured default runner/provider
+	// (`agent.default`), surfaced as the top-summary worker default on
+	// /api/v1/state (#977).
+	AgentDefault string
 
 	Running  []RunningView
 	Blocked  []BlockedView
@@ -93,6 +97,8 @@ func (s *OrchestratorState) snapshotRunningViews() []RunningView {
 				TotalTokens:  r.CodexTotalTokens,
 			},
 			CodexAppServerPID: r.Session.CodexAppServerPID,
+			AgentProvider:     r.Session.AgentProvider,
+			AgentModel:        r.Session.AgentModel,
 		})
 	}
 	return rows
@@ -132,6 +138,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		PollIntervalMs:               s.PollIntervalMs,
 		MaxConcurrentAgents:          s.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState:   copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
+		AgentDefault:                 s.AgentDefault,
 		Blocked:                      make([]BlockedView, 0, len(s.Blocked)),
 		Retrying:                     make([]RetryView, 0, len(s.RetryAttempts)),
 		Completed:                    make([]IssueID, 0, len(s.completedOrder)),

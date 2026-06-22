@@ -228,6 +228,62 @@ func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsToDispatchCapacity(t *te
 	waitForBlockingDispatcherCount(t, dispatcher, 2)
 }
 
+// TestRuntimePollerAppliesReloadedAgentDefaultToStateSummary pins the #982
+// review fix: dispatch already reads the live snapshot's agent.default, so a hot
+// WORKFLOW.md reload that changes it must also refresh the /api/v1/state
+// top-summary provider — otherwise the dashboard reports the startup runner
+// while new runs launch with the reloaded default. Mutation: dropping the
+// PollOnce->UpdateAgentDefault wiring (or the snapshot field) leaves
+// AgentDefault at the reloaded miss and fails the second assertion.
+func TestRuntimePollerAppliesReloadedAgentDefaultToStateSummary(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	path := writeWorkflowForReloadTest(t, "linear", 30000)
+	initial, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("load initial workflow: %v", err)
+	}
+	runtime, err := NewWorkflowRuntime(WorkflowRuntimeConfig{Initial: initial, Path: path, Source: workflow.SourceFile})
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	trackerClient := &fakeIssueStateTracker{}
+	orch := New(NewOrchestratorState(30000, initial.Config.Agent.MaxConcurrentAgents), Deps{Dispatcher: &blockingDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller := newRuntimePollerForTest(t, trackerClient, orch, runtime)
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	if got := snapshotAgentDefault(t, ctx, orch); got != "mock" {
+		t.Fatalf("AgentDefault after first poll = %q, want %q (startup default)", got, "mock")
+	}
+
+	writeWorkflowForReloadTestAt(t, path, "linear", 30000, "Todo", withReloadTestAgentDefault("codex-app-server"))
+	if err := runtime.ReloadOnce(ctx); err != nil {
+		t.Fatalf("reload workflow: %v", err)
+	}
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("second poll: %v", err)
+	}
+	if got := snapshotAgentDefault(t, ctx, orch); got != "codex-app-server" {
+		t.Fatalf("AgentDefault after reload = %q, want %q (reloaded default)", got, "codex-app-server")
+	}
+}
+
+func snapshotAgentDefault(t *testing.T, ctx context.Context, orch *Orchestrator) string {
+	t.Helper()
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	return view.AgentDefault
+}
+
 func TestRuntimePollerAppliesReloadedMaxConcurrentAgentsByStateToDispatchCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -728,7 +784,7 @@ func writeWorkflowForReloadTest(t *testing.T, trackerKind string, pollIntervalMs
 
 func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIntervalMs int, activeState string, opts ...reloadWorkflowTestOption) {
 	t.Helper()
-	cfg := reloadWorkflowTestConfig{maxConcurrentAgents: 100, maxRetryBackoffMs: 300000}
+	cfg := reloadWorkflowTestConfig{maxConcurrentAgents: 100, maxRetryBackoffMs: 300000, agentDefault: "mock"}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -746,7 +802,7 @@ func writeWorkflowForReloadTestAt(t *testing.T, path, trackerKind string, pollIn
 		"polling:\n" +
 		"  interval_ms: " + itoaForReloadTest(pollIntervalMs) + "\n" +
 		"agent:\n" +
-		"  default: mock\n" +
+		"  default: " + cfg.agentDefault + "\n" +
 		"  max_concurrent_agents: " + itoaForReloadTest(cfg.maxConcurrentAgents) + "\n" +
 		"  max_retry_backoff_ms: " + itoaForReloadTest(cfg.maxRetryBackoffMs) + "\n" +
 		reloadTestMaxContinuationTurnsYAML(cfg.maxContinuationTurns) +
@@ -770,9 +826,16 @@ type reloadWorkflowTestConfig struct {
 	maxRetryBackoffMs          int
 	maxContinuationTurns       int
 	maxConcurrentAgentsByState map[string]int
+	agentDefault               string
 }
 
 type reloadWorkflowTestOption func(*reloadWorkflowTestConfig)
+
+func withReloadTestAgentDefault(d string) reloadWorkflowTestOption {
+	return func(cfg *reloadWorkflowTestConfig) {
+		cfg.agentDefault = d
+	}
+}
 
 func withReloadTestMaxConcurrentAgents(n int) reloadWorkflowTestOption {
 	return func(cfg *reloadWorkflowTestConfig) {
