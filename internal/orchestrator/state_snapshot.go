@@ -99,6 +99,8 @@ func (s *OrchestratorState) snapshotRunningViews() []RunningView {
 			CodexAppServerPID: r.Session.CodexAppServerPID,
 			AgentProvider:     r.Session.AgentProvider,
 			AgentModel:        r.Session.AgentModel,
+			WorkflowSource:    r.Session.WorkflowSource,
+			WorkflowPath:      r.Session.WorkflowPath,
 		})
 	}
 	return rows

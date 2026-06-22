@@ -977,6 +977,39 @@ func TestRuntimeEventForwardingEmitterDropsNotificationFromOperatorLog(t *testin
 	}
 }
 
+// TestRuntimeEventForwardingEmitterForwardsWorkflowResolved pins the #983
+// wiring seam: workflow_resolved is not in the SPEC §10.4 runtimeEventKinds set,
+// so the forwarding emitter must forward it explicitly to RecordRuntimeEvent
+// (folding the profile into /api/v1/state) while still delegating it to the
+// base emitter so it stays persisted as a task event (it is not a notification).
+func TestRuntimeEventForwardingEmitterForwardsWorkflowResolved(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-WF-FWD")
+	defer cancel()
+
+	base := &recordingWorkerEmitter{}
+	emitter := runtimeEventForwardingEmitter{EventEmitter: base, Orchestrator: o, IssueID: issueID}
+	payload := map[string]any{"source": "file", "path": "/srv/reviewer/WORKFLOW.md"}
+	if err := emitter.AddEventWithPayload(context.Background(), "task-1", task.EventWorkflowResolved, task.EventWorkflowResolved, payload); err != nil {
+		t.Fatalf("AddEventWithPayload(workflow_resolved): %v", err)
+	}
+
+	// Still delegated to the operator log / task-event store.
+	if len(base.kinds) != 1 || base.kinds[0] != task.EventWorkflowResolved {
+		t.Fatalf("operator-log kinds = %v; want [%s] (workflow_resolved must stay a persisted task event)", base.kinds, task.EventWorkflowResolved)
+	}
+	// And folded into the live state surface.
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].WorkflowPath; got != "/srv/reviewer/WORKFLOW.md" {
+		t.Fatalf("Running[0].WorkflowPath = %q; want %q (forwarding emitter must fold the profile)", got, "/srv/reviewer/WORKFLOW.md")
+	}
+}
+
 // TestRecordRuntimeEventPropagatesCodexAppServerPID pins the SPEC §4.1.6 /
 // §10.4 round-trip: a `session_started` event carrying
 // `codex_app_server_pid` populates RunningView.CodexAppServerPID so
@@ -1084,6 +1117,81 @@ func TestRecordRuntimeEventModelRerouteOverwritesAgentModel(t *testing.T) {
 	}
 	if got := view.Running[0].AgentProvider; got != "codex-app-server" {
 		t.Fatalf("RunningView.AgentProvider = %q, want %q (provider stays sticky across reroute)", got, "codex-app-server")
+	}
+}
+
+// TestRecordRuntimeEventPropagatesWorkflowProfile pins the #983 fold: a
+// `workflow_resolved` event carrying source/path populates RunningView so
+// `/api/v1/state` surfaces which WORKFLOW.md (the profile) produced a claim.
+func TestRecordRuntimeEventPropagatesWorkflowProfile(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-WF")
+	defer cancel()
+
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event: task.EventWorkflowResolved,
+		Payload: map[string]any{
+			"source": "file",
+			"path":   "/srv/reviewer/WORKFLOW.md",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	if got := view.Running[0].WorkflowSource; got != "file" {
+		t.Fatalf("RunningView.WorkflowSource = %q, want %q (workflow_resolved payload)", got, "file")
+	}
+	if got := view.Running[0].WorkflowPath; got != "/srv/reviewer/WORKFLOW.md" {
+		t.Fatalf("RunningView.WorkflowPath = %q, want %q (workflow_resolved payload)", got, "/srv/reviewer/WORKFLOW.md")
+	}
+}
+
+// TestRecordWorkflowResolvedDoesNotTouchLastEvent pins the #983 design choice
+// that workflow_resolved is a worker lifecycle event, not a SPEC §10.4 runtime
+// event: folding its profile must not land it in last_event/last_message or
+// reset the §8.5 stall clock (last_event_at). A later real runtime event still
+// owns those fields; the profile rides alongside without polluting them.
+func TestRecordWorkflowResolvedDoesNotTouchLastEvent(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-WF-LASTEVENT")
+	defer cancel()
+
+	// A real runtime event establishes last_event/last_message first.
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventNotification,
+		Payload: map[string]any{"message": "Working on it..."},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent notification: %v", err)
+	}
+	// workflow_resolved arrives afterwards: it must not become the last_event.
+	if err := o.RecordRuntimeEvent(context.Background(), issueID, task.RuntimeEvent{
+		Event:   task.EventWorkflowResolved,
+		Payload: map[string]any{"source": "file", "path": "/srv/maker/WORKFLOW.md", "message": "workflow resolved"},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent workflow_resolved: %v", err)
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Running) != 1 {
+		t.Fatalf("running rows = %d, want 1", len(view.Running))
+	}
+	row := view.Running[0]
+	if row.LastEvent != task.EventNotification {
+		t.Errorf("LastEvent = %q, want %q (workflow_resolved must not overwrite the last runtime event)", row.LastEvent, task.EventNotification)
+	}
+	if row.LastMessage != "Working on it..." {
+		t.Errorf("LastMessage = %q, want %q (workflow_resolved payload message must not leak into last_message)", row.LastMessage, "Working on it...")
+	}
+	if row.WorkflowPath != "/srv/maker/WORKFLOW.md" {
+		t.Errorf("WorkflowPath = %q, want %q (profile still folded)", row.WorkflowPath, "/srv/maker/WORKFLOW.md")
 	}
 }
 

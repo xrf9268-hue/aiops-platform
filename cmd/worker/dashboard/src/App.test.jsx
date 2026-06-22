@@ -29,6 +29,7 @@ function busyState(overrides = {}) {
         tokens: { input_tokens: 286400, output_tokens: 41200, total_tokens: 327600 },
         codex_app_server_pid: 48213,
         agent_provider: 'codex-app-server', agent_model: 'gpt-5.3-codex-spark',
+        workflow_source: 'file', workflow_path: '/srv/reviewer/WORKFLOW.md',
       },
     ],
     retrying: [
@@ -153,6 +154,45 @@ describe('Worker status dashboard', () => {
     const modelCell = container.querySelector('td[data-label="Model"]');
     expect(modelCell.textContent).toContain('unknown');
     expect(modelCell.textContent.trim()).not.toBe('');
+  });
+
+  it('shows which WORKFLOW.md (the profile) produced each running claim', async () => {
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-614' });
+    const detail = container.querySelector('tbody .wp');
+    expect(detail).toBeTruthy();
+    expect(detail.textContent).toContain('workflow /srv/reviewer/WORKFLOW.md');
+  });
+
+  it('falls back to the workflow source when no path is reported (default workflow)', async () => {
+    current = busyState({
+      running: [{
+        issue_id: 'wf-default', issue_identifier: 'MT-983D', state: 'In Progress',
+        session_id: 'thread-x', turn_count: 1, last_event: 'turn_started',
+        started_at: iso(1000), last_event_at: iso(1000), workspace_path: '/tmp/w',
+        tokens: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        workflow_source: 'default',
+      }],
+    });
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-983D' });
+    const detail = container.querySelector('tbody .wp');
+    expect(detail.textContent).toContain('workflow default');
+  });
+
+  it('renders a missing workflow profile as "unknown", never blank', async () => {
+    current = busyState({
+      running: [{
+        issue_id: 'no-wf', issue_identifier: 'MT-983', state: 'In Progress',
+        session_id: 'thread-x', turn_count: 1, last_event: 'turn_started',
+        started_at: iso(1000), last_event_at: iso(1000), workspace_path: '/tmp/w',
+        tokens: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      }],
+    });
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-983' });
+    const detail = container.querySelector('tbody .wp');
+    expect(detail.textContent).toContain('workflow unknown');
   });
 
   it('renders Codex rate-limit windows as percent bars, not raw JSON', async () => {

@@ -125,6 +125,10 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 				TotalTokens:  2000,
 			},
 			CodexAppServerPID: 12345,
+			AgentProvider:     "codex-app-server",
+			AgentModel:        "gpt-5.3-codex-spark",
+			WorkflowSource:    "file",
+			WorkflowPath:      "/srv/reviewer/WORKFLOW.md",
 		}},
 		Blocked: []stateapi.Blocked{{
 			IssueID:           "issue-2",

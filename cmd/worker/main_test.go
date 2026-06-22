@@ -201,6 +201,65 @@ func TestApiStateSurfacesAgentModelMetadata(t *testing.T) {
 	stringKey(t, noDefault, "agent_default", "")
 }
 
+// TestApiStateSurfacesWorkflowProfileMetadata pins the #983 projection seam: a
+// running row carries workflow_source/workflow_path when the worker reported
+// them and omits each key (omitempty) otherwise — a default-workflow run keeps
+// workflow_source=default with no workflow_path. Mutation: dropping a field in
+// apiRunningFromView fails the "present" case; dropping omitempty fails "absent".
+func TestApiStateSurfacesWorkflowProfileMetadata(t *testing.T) {
+	stringKey := func(t *testing.T, raw []byte, key, want string) {
+		t.Helper()
+		var got map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		v, ok := got[key]
+		if want == "" {
+			if ok {
+				t.Fatalf("%s present; want omitted (omitempty) in %s", key, raw)
+			}
+			return
+		}
+		if !ok {
+			t.Fatalf("%s missing; want %q in %s", key, want, raw)
+		}
+		var s string
+		if err := json.Unmarshal(v, &s); err != nil {
+			t.Fatalf("%s unmarshal: %v", key, err)
+		}
+		if s != want {
+			t.Fatalf("%s = %q; want %q", key, s, want)
+		}
+	}
+
+	withFile, err := json.Marshal(apiRunningFromView(orchestrator.RunningView{
+		IssueID: "i1", Identifier: "MT-983",
+		WorkflowSource: "file", WorkflowPath: "/srv/reviewer/WORKFLOW.md",
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stringKey(t, withFile, "workflow_source", "file")
+	stringKey(t, withFile, "workflow_path", "/srv/reviewer/WORKFLOW.md")
+
+	// Default workflow: source=default with no resolved file path.
+	withDefault, err := json.Marshal(apiRunningFromView(orchestrator.RunningView{
+		IssueID: "i1", Identifier: "MT-983", WorkflowSource: "default",
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stringKey(t, withDefault, "workflow_source", "default")
+	stringKey(t, withDefault, "workflow_path", "")
+
+	none, err := json.Marshal(apiRunningFromView(orchestrator.RunningView{IssueID: "i1", Identifier: "MT-983"}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	stringKey(t, none, "workflow_source", "")
+	stringKey(t, none, "workflow_path", "")
+}
+
 func TestApiIssueFromViewFindsRecentTerminalEventByIdentifier(t *testing.T) {
 	view := orchestrator.StateView{
 		Completed: []orchestrator.IssueID{"linear-global-id"},

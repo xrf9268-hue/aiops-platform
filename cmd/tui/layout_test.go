@@ -145,6 +145,8 @@ func representativeState(now time.Time) *stateapi.StateResponse {
 			CodexAppServerPID: 12345,
 			AgentProvider:     "codex-app-server",
 			AgentModel:        "gpt-5.3-codex-spark",
+			WorkflowSource:    "file",
+			WorkflowPath:      "/srv/reviewer/WORKFLOW.md",
 		}},
 		Retrying: []stateapi.Retry{{
 			Identifier: "ENG-9999",
@@ -250,6 +252,68 @@ func TestRenderFrame_ShowsAgentModel(t *testing.T) {
 	// model as "unknown" — it is resolved per-run, not configured (#977).
 	if !strings.Contains(frame, "Default:    codex-app-server · model unknown") {
 		t.Fatalf("renderFrame missing worker default provider/model line: %q", frame)
+	}
+}
+
+// TestResolvedWorkflowLabel pins every branch of the #983 TUI profile summary:
+// path is the discriminator, source is the fallback when no path was resolved
+// (default workflow), an unreported row is skipped (continue, not break) so a
+// later profile is still found, identical profiles dedupe, and distinct
+// profiles (a hot reload mid-flight) are joined so the summary hides none.
+func TestResolvedWorkflowLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []stateapi.Running
+		want string
+	}{
+		{"no rows", nil, "unknown"},
+		{"row present but no profile reported yet", []stateapi.Running{{Identifier: "ENG-1"}}, "unknown"},
+		{"path is the discriminator", []stateapi.Running{{WorkflowSource: "file", WorkflowPath: "/srv/reviewer/WORKFLOW.md"}}, "/srv/reviewer/WORKFLOW.md"},
+		{"falls back to source when path absent", []stateapi.Running{{WorkflowSource: "default"}}, "default"},
+		{"skips an unreported row and still finds a later profile", []stateapi.Running{{Identifier: "ENG-1"}, {WorkflowPath: "/srv/reviewer/WORKFLOW.md"}}, "/srv/reviewer/WORKFLOW.md"},
+		{"dedupes identical profiles", []stateapi.Running{{WorkflowPath: "/srv/maker/WORKFLOW.md"}, {WorkflowPath: "/srv/maker/WORKFLOW.md"}}, "/srv/maker/WORKFLOW.md"},
+		{"joins distinct profiles", []stateapi.Running{{WorkflowPath: "/srv/maker/WORKFLOW.md"}, {WorkflowPath: "/srv/reviewer/WORKFLOW.md"}}, "/srv/maker/WORKFLOW.md, /srv/reviewer/WORKFLOW.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolvedWorkflowLabel(tc.rows); got != tc.want {
+				t.Errorf("resolvedWorkflowLabel(%+v) = %q; want %q", tc.rows, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderFrame_ShowsWorkflowProfile pins #983 on the TUI surface: the header
+// summarizes which WORKFLOW.md (the profile) produced the active runs, sourced
+// from the per-claim workflow_path the worker reported.
+func TestRenderFrame_ShowsWorkflowProfile(t *testing.T) {
+	orig := liveTerminalWidth
+	t.Cleanup(func() { liveTerminalWidth = orig })
+	liveTerminalWidth = func() (int, bool) { return 160, true }
+
+	now := time.Now()
+	frame := visibleString(renderFrame(representativeState(now), nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
+
+	if !strings.Contains(frame, "Workflow:   /srv/reviewer/WORKFLOW.md") {
+		t.Fatalf("renderFrame missing resolved workflow profile line: %q", frame)
+	}
+}
+
+// TestRenderFrame_RendersUnknownWorkflowWhenAbsent pins the "unknown, never
+// blank" criterion for the profile: with no running claim reporting a workflow,
+// the header line renders "unknown" rather than an empty value (#983).
+func TestRenderFrame_RendersUnknownWorkflowWhenAbsent(t *testing.T) {
+	orig := liveTerminalWidth
+	t.Cleanup(func() { liveTerminalWidth = orig })
+	liveTerminalWidth = func() (int, bool) { return 160, true }
+
+	now := time.Now()
+	state := representativeState(now)
+	state.Running = nil
+	frame := visibleString(renderFrame(state, nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
+
+	if !strings.Contains(frame, "Workflow:   unknown") {
+		t.Fatalf("renderFrame should render an absent workflow profile as \"unknown\": %q", frame)
 	}
 }
 
