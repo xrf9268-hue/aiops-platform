@@ -33,6 +33,11 @@ type RunningView struct {
 	// this claim (#977); empty until the runner reports them.
 	AgentProvider string
 	AgentModel    string
+	// WorkflowSource / WorkflowPath expose which WORKFLOW.md (the profile, e.g.
+	// reviewer vs maker) produced this claim (#983); empty until the worker's
+	// workflow_resolved event is observed.
+	WorkflowSource string
+	WorkflowPath   string
 }
 
 // TokensView mirrors the SPEC §13.7.2 per-issue `tokens` object: the

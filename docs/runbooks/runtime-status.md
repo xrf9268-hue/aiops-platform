@@ -169,7 +169,11 @@ the shape here without updating the handler — or vice versa — fails the buil
         "output_tokens": 800,
         "total_tokens": 2000
       },
-      "codex_app_server_pid": 12345
+      "codex_app_server_pid": 12345,
+      "agent_provider": "codex-app-server",
+      "agent_model": "gpt-5.3-codex-spark",
+      "workflow_source": "file",
+      "workflow_path": "/srv/reviewer/WORKFLOW.md"
     }
   ],
   "blocked": [
@@ -313,6 +317,20 @@ Each entry in the `running` array follows SPEC §13.7.2:
   the active session.
 - `codex_app_server_pid` — OS pid of the Codex subprocess, populated from
   `session_started`; absent when the runner did not emit a pid.
+- `agent_provider` / `agent_model` — the runtime/runner (e.g.
+  `codex-app-server`) and the resolved model (e.g. `gpt-5.3-codex-spark`)
+  driving this claim, folded from `session_started` (and re-surfaced on a Codex
+  model reroute), so an operator can tell which model/runtime produced a run
+  (#977). Each is omitted until observed; the dashboard renders a missing value
+  as `unknown`.
+- `workflow_source` / `workflow_path` — which WORKFLOW.md (the profile, e.g.
+  reviewer vs maker) produced this run, folded from the worker's
+  `workflow_resolved` event (#983). `workflow_source` is one of `file`,
+  `prompt_only`, or `default`; `workflow_path` is absent when the run used the
+  built-in defaults (`source == default`). Lets an operator running maker +
+  reviewer workflows correlate a failure with the workflow that produced it,
+  not just the model. Each is omitted until observed; the dashboard renders a
+  missing value as `unknown`.
 
 ## Tracker pagination overflow
 

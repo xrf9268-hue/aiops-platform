@@ -49,6 +49,15 @@ function sinceISO(iso) {
 function issueLabel(row) {
   return row.issue_identifier || row.issue_id || 'unknown issue';
 }
+
+// Which WORKFLOW.md (the profile, e.g. reviewer vs maker) produced a run (#983).
+// The path is the discriminator operators recognize; a default-workflow run
+// reports source=default with no path. A missing value renders "unknown" so the
+// cell is explicit diagnostic data, never blank (matching the model/provider
+// convention from #977).
+function workflowProfile(row) {
+  return row.workflow_path || row.workflow_source || 'unknown';
+}
 function detailPath(row) {
   const id = row.issue_identifier || row.issue_id;
   return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
@@ -310,13 +319,14 @@ function RunningTable({ rows }) {
             // into the issue detail line for narrow layouts (#977).
             const model = r.agent_model || 'unknown';
             const provider = r.agent_provider || 'unknown';
+            const profile = workflowProfile(r);
             return (
             <tr key={r.issue_id}>
               <td className="issue-cell">
                 <div className="issue">
                   <IssueLink row={r} />
                   <div className="upd" style={{ maxWidth: '38ch' }} title={r.last_message}>{r.last_message}</div>
-                  <span className="wp">model {model} · {provider} · {r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ''}</span>
+                  <span className="wp">model {model} · {provider} · workflow {profile} · {r.workspace_path} · {r.session_id}{r.codex_app_server_pid ? ` · pid ${r.codex_app_server_pid}` : ''}</span>
                 </div>
               </td>
               <td data-label="State"><Badge kind="running">{r.state}</Badge><div className="dim">turn {r.turn_count}</div></td>

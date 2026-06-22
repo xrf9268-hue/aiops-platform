@@ -386,6 +386,8 @@ func apiRunningFromView(row orchestrator.RunningView) stateapi.Running {
 		CodexAppServerPID: row.CodexAppServerPID,
 		AgentProvider:     row.AgentProvider,
 		AgentModel:        row.AgentModel,
+		WorkflowSource:    row.WorkflowSource,
+		WorkflowPath:      row.WorkflowPath,
 	}
 }
 func apiRetryFromView(row orchestrator.RetryView) stateapi.Retry {

@@ -83,6 +83,13 @@ func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, t
 			colorize(orUnknown(state.AgentDefault), ansiCyan) +
 			colorize(" · model ", ansiGray) +
 			colorize("unknown", ansiGray),
+		// Which WORKFLOW.md (the profile, e.g. reviewer vs maker) produced the
+		// active runs (#983). /api/v1/state carries the profile per claim, but a
+		// single TUI views one worker — which resolves one workflow — so a
+		// per-row column would be identical cells stealing width from EVENT;
+		// summarize it once here, "unknown" until a run reports it.
+		colorize("│ Workflow:   ", ansiBold) +
+			colorize(resolvedWorkflowLabel(state.Running), ansiCyan),
 		colorize("│ Handoffs: ", ansiBold) +
 			colorize("completed "+formatCount(state.Counts.CompletedTotal), ansiGreen) +
 			colorize(" | ", ansiGray) +
@@ -227,6 +234,35 @@ func orUnknown(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// resolvedWorkflowLabel summarizes which WORKFLOW.md produced the active runs
+// (#983). The path is the discriminator operators recognize; a default-workflow
+// run reports source=default with no path. The worker resolves one workflow, so
+// every running row carries the same profile and the first reported one is the
+// label; distinct profiles (a hot reload mid-flight) are joined so the summary
+// never hides one. Returns "unknown" until a run reports a profile.
+func resolvedWorkflowLabel(rows []stateapi.Running) string {
+	seen := map[string]struct{}{}
+	var labels []string
+	for _, r := range rows {
+		label := strings.TrimSpace(r.WorkflowPath)
+		if label == "" {
+			label = strings.TrimSpace(r.WorkflowSource)
+		}
+		if label == "" {
+			continue
+		}
+		if _, dup := seen[label]; dup {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	if len(labels) == 0 {
+		return "unknown"
+	}
+	return strings.Join(labels, ", ")
 }
 
 // formatRetryRow mirrors format_retry_summary/1.

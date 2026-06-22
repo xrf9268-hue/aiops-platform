@@ -60,6 +60,14 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 	if s == nil || run == nil || event.Event == "" {
 		return
 	}
+	// workflow_resolved is a worker lifecycle event, not a SPEC §10.4 app-server
+	// runtime event: fold its profile identity but return before the general
+	// fold so it never lands in last_event/last_message or resets the §8.5 stall
+	// clock (LastEventAt) — the runner's session/turn events own those.
+	if event.Event == task.EventWorkflowResolved {
+		s.recordWorkflowFields(run, event)
+		return
+	}
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
@@ -140,6 +148,26 @@ func (s *OrchestratorState) recordInputRequiredFields(run *RunningEntry, event t
 	payload, _ := asStringMap(event.Payload)
 	if method, ok := stringField(payload, "method"); ok {
 		run.InputRequiredMethod = method
+	}
+}
+
+// recordWorkflowFields folds the workflow_resolved event's profile identity
+// (Resolution.Source / .Path) into the live session so /api/v1/state can report
+// which WORKFLOW.md produced a run (#983). The worker omits `path` from the
+// payload when Source == default, so WorkflowPath stays empty there while
+// WorkflowSource still records "default". The worker emits workflow_resolved
+// once per task (ResolveWorkflow), so this is effectively a single write;
+// last-write-wins is intentional should a future caller re-resolve mid-run.
+func (s *OrchestratorState) recordWorkflowFields(run *RunningEntry, event task.RuntimeEvent) {
+	payload, ok := asStringMap(event.Payload)
+	if !ok {
+		return
+	}
+	if source, ok := stringField(payload, "source"); ok {
+		run.Session.WorkflowSource = source
+	}
+	if path, ok := stringField(payload, "path"); ok {
+		run.Session.WorkflowPath = path
 	}
 }
 
@@ -391,7 +419,12 @@ func (e runtimeEventForwardingEmitter) AddEvent(ctx context.Context, taskID, typ
 }
 
 func (e runtimeEventForwardingEmitter) AddEventWithPayload(ctx context.Context, taskID, typ, msg string, payload any) error {
-	if _, ok := runtimeEventKinds[typ]; ok && e.Orchestrator != nil && e.IssueID != "" {
+	// workflow_resolved is forwarded explicitly rather than via runtimeEventKinds
+	// membership: that set is the SPEC §10.4 runner app-server vocabulary, and
+	// workflow_resolved is a worker lifecycle event. recordRuntimeEvent special-
+	// cases it to fold only the profile identity (#983), not the last-event fold.
+	_, isRuntimeEvent := runtimeEventKinds[typ]
+	if (isRuntimeEvent || typ == task.EventWorkflowResolved) && e.Orchestrator != nil && e.IssueID != "" {
 		_ = e.Orchestrator.RecordRuntimeEvent(ctx, e.IssueID, task.RuntimeEvent{Event: typ, Payload: payload})
 	}
 	// The generic per-notification stream (SPEC §10.4 agent-driven notifications:

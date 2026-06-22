@@ -61,6 +61,16 @@ type LiveSession struct {
 	// "unknown".
 	AgentProvider string
 	AgentModel    string
+	// WorkflowSource / WorkflowPath identify which WORKFLOW.md (the "profile",
+	// e.g. reviewer vs maker) produced this run, folded from the worker's
+	// `workflow_resolved` event (Resolution.Source / .Path). Surfacing them per
+	// claim lets an operator running maker + reviewer workflows correlate a
+	// failure with the workflow that produced it, not just the model (#983).
+	// WorkflowSource is one of file / prompt_only / default; WorkflowPath is
+	// empty when Source == default (built-in defaults, no file). Empty until the
+	// event is observed; the dashboard renders a missing value as "unknown".
+	WorkflowSource string
+	WorkflowPath   string
 }
 
 // RateLimitSnapshot is the latest SPEC §13.3 rate-limits payload emitted by

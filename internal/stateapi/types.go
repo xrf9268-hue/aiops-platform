@@ -132,6 +132,15 @@ type Running struct {
 	// missing value as "unknown", so older payloads stay usable.
 	AgentProvider string `json:"agent_provider,omitempty"`
 	AgentModel    string `json:"agent_model,omitempty"`
+	// WorkflowSource / WorkflowPath identify which WORKFLOW.md (the profile, e.g.
+	// reviewer vs maker) produced this run, so an operator running maker +
+	// reviewer workflows can correlate a failure with the workflow that produced
+	// it, not just the model (#983). WorkflowSource is one of file / prompt_only
+	// / default; WorkflowPath is absent when the run used built-in defaults
+	// (Source == default). omitempty drops each key when unknown; the dashboard
+	// renders a missing value as "unknown", so older payloads stay usable.
+	WorkflowSource string `json:"workflow_source,omitempty"`
+	WorkflowPath   string `json:"workflow_path,omitempty"`
 }
 
 // RunningTokens mirrors SPEC §13.7.2's per-running-row `tokens` object.
