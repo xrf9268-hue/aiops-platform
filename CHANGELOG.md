@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.9](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.8...v0.1.9) (2026-06-22)
+
+
+### Features
+
+* **dashboard:** expose per-run workflow profile on /api/v1/state ([#984](https://github.com/xrf9268-hue/aiops-platform/issues/984)) ([8742237](https://github.com/xrf9268-hue/aiops-platform/commit/874223755aa181bebf8affdec0e4fc3296c6dc3d)), closes [#983](https://github.com/xrf9268-hue/aiops-platform/issues/983)
+* **dashboard:** show active agent model and runtime profile ([#982](https://github.com/xrf9268-hue/aiops-platform/issues/982)) ([809c583](https://github.com/xrf9268-hue/aiops-platform/commit/809c583f9b153380b4dc6ba322e26d4baad85e6d))
+
+
+### Bug Fixes
+
+* resolve worktree base to a fully-qualified ref to survive mirror ref pollution ([#979](https://github.com/xrf9268-hue/aiops-platform/issues/979)) ([4f58533](https://github.com/xrf9268-hue/aiops-platform/commit/4f585337105cb0f76b50ac431994f7643245215a)), closes [#976](https://github.com/xrf9268-hue/aiops-platform/issues/976)
+* surface local git op stderr in worker dispatch errors ([#981](https://github.com/xrf9268-hue/aiops-platform/issues/981)) ([0765cd3](https://github.com/xrf9268-hue/aiops-platform/commit/0765cd36846c4c13299bec598d51ac9b9d61ef06)), closes [#978](https://github.com/xrf9268-hue/aiops-platform/issues/978)
+
 ## [0.1.8](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.7...v0.1.8) (2026-06-21)
 
 
