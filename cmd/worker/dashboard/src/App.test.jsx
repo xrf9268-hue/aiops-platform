@@ -18,6 +18,7 @@ function busyState(overrides = {}) {
       completed: 14, completed_total: 137,
       reconcile_stopped_with_progress: 1, reconcile_stopped_with_progress_total: 4,
       agent_handoff_reconcile_stopped: 1, agent_handoff_reconcile_stopped_total: 9,
+      active_success_no_handoff: 1, active_success_no_handoff_total: 6,
     },
     running: [
       {
@@ -51,6 +52,7 @@ function busyState(overrides = {}) {
     completed: ['aa0112', 'aa0245', 'aa0388'],
     reconcile_stopped_with_progress: ['bb0190'],
     agent_handoff_reconcile_stopped: ['cc0271'],
+    active_success_no_handoff: ['dd0442'],
     codex_totals: { input_tokens: 4812000, output_tokens: 631400, total_tokens: 5443400, seconds_running: 7338 },
     rate_limits: {
       limit_name: 'codex',
@@ -70,9 +72,10 @@ const idleState = {
     running: 0, retrying: 0, blocked: 0, completed: 9, completed_total: 132,
     reconcile_stopped_with_progress: 0, reconcile_stopped_with_progress_total: 3,
     agent_handoff_reconcile_stopped: 0, agent_handoff_reconcile_stopped_total: 8,
+    active_success_no_handoff: 0, active_success_no_handoff_total: 5,
   },
   running: [], retrying: [], blocked: [],
-  completed: [], reconcile_stopped_with_progress: [], agent_handoff_reconcile_stopped: [],
+  completed: [], reconcile_stopped_with_progress: [], agent_handoff_reconcile_stopped: [], active_success_no_handoff: [],
   codex_totals: { input_tokens: 2140000, output_tokens: 288900, total_tokens: 2428900, seconds_running: 4292 },
   rate_limits: null,
 };
@@ -115,7 +118,8 @@ describe('Worker status dashboard', () => {
     const delivered = screen.getByText('Delivered').closest('.kpi');
     expect(within(delivered).getByText('1')).toBeTruthy();
     expect(within(delivered).getByText(/9 state handoffs lifetime/)).toBeTruthy();
-    expect(within(delivered).getByText(/137 clean exits/)).toBeTruthy();
+    expect(within(delivered).getByText(/137 completed exits/)).toBeTruthy();
+    expect(within(delivered).getByText(/1 no handoff/)).toBeTruthy();
     expect(screen.queryByText(/^Completed$/)).toBeNull();
 
     // codex token totals strip (5,443,400 → 5.4M) and a compacted running token cell.
@@ -329,7 +333,13 @@ describe('Worker status dashboard', () => {
     render(<App />);
     const rollup = (await screen.findByText('Reconcile roll-up')).closest('.panel');
 
-    // both buckets render as compact rows inside the single roll-up panel
+    const noHandoffCell = within(rollup).getByText('No handoff').closest('.rollup-cell');
+    expect(within(noHandoffCell).getByText('dd0442')).toBeTruthy();
+    expect(noHandoffCell.querySelector('.rollup-v b').textContent).toBe('1');
+    expect(noHandoffCell.querySelector('.rollup-v .tot').textContent).toBe('· 6 total');
+    expect(noHandoffCell.textContent).toContain('no guarded handoff');
+
+    // all outcome buckets render as compact rows inside the single roll-up panel
     const stoppedCell = within(rollup).getByText('Stopped w/ progress').closest('.rollup-cell');
     expect(within(stoppedCell).getByText('bb0190')).toBeTruthy();
     // v2: the window count is the serif-numeric anchor (<b>), the lifetime
@@ -349,13 +359,14 @@ describe('Worker status dashboard', () => {
     expect(screen.getAllByText('Agent handoff')).toHaveLength(1);
   });
 
-  it('hides the reconcile roll-up when both buckets are empty', async () => {
+  it('hides the reconcile roll-up when all buckets are empty', async () => {
     current = idleState;
     render(<App />);
     await screen.findByRole('heading', { name: /Worker status/i });
     expect(screen.queryByText('Reconcile roll-up')).toBeNull();
     expect(screen.queryByText('Agent handoff')).toBeNull();
     expect(screen.queryByText('Stopped w/ progress')).toBeNull();
+    expect(screen.queryByText('No handoff')).toBeNull();
   });
 
   it('shows the retry queue with attempt count, backoff kind, and startup phase', async () => {

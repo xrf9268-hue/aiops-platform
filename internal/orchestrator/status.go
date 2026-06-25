@@ -31,10 +31,16 @@ const (
 	// that observed a current-issue state handoff through an agent-visible
 	// tracker mutation tool (linear_graphql, linear_ai_workpad,
 	// gitea_issue_labels — #748) before the tracker made the issue inactive.
-	// This is a scheduler/reader observability signal only: completed
-	// accounting stays limited to clean worker exits, and tracker writes
-	// remain agent-owned.
+	// This is a scheduler/reader observability signal only: completed accounting
+	// stays separate from reconcile-stopped handoffs, and tracker writes remain
+	// agent-owned.
 	RuntimeEventAgentHandoffReconcileStopped RuntimeEventKind = "agent_handoff_reconcile_stopped"
+	// RuntimeEventActiveSuccessNoHandoff marks a clean worker exit whose issue
+	// still has the active tracker state last observed by the orchestrator, with
+	// no guarded current-issue handoff event. The scheduler still queues the
+	// normal continuation; this is an operator-visible "no handoff yet" outcome,
+	// not a tracker write.
+	RuntimeEventActiveSuccessNoHandoff RuntimeEventKind = "active_success_no_handoff"
 	// RuntimeEventDispatchPreflightFailed flags SPEC §8.1 step 2 failures:
 	// the per-tick dispatch preflight could not validate the workflow's
 	// tracker / agent / API-key config, so the orchestrator skipped

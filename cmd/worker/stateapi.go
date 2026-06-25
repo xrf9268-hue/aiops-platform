@@ -280,6 +280,7 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 			ev.Kind != orchestrator.RuntimeEventFailed &&
 			ev.Kind != orchestrator.RuntimeEventReconcileStopped &&
 			ev.Kind != orchestrator.RuntimeEventAgentHandoffReconcileStopped &&
+			ev.Kind != orchestrator.RuntimeEventActiveSuccessNoHandoff &&
 			ev.Kind != orchestrator.RuntimeEventOperatorTerminalStop {
 			continue
 		}
@@ -293,23 +294,27 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 		}
 		return payload, true
 	}
-	for _, issueID := range view.Completed {
-		if matchesIssueLookup(issueID, "", normalizedWant) {
-			return base(issueID, string(issueID), "completed"), true
-		}
-	}
 	for _, issueID := range view.AgentHandoffReconcileStopped {
 		if matchesIssueLookup(issueID, "", normalizedWant) {
 			return base(issueID, string(issueID), "agent_handoff_reconcile_stopped"), true
 		}
 	}
+	for _, issueID := range view.ActiveSuccessNoHandoff {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "active_success_no_handoff"), true
+		}
+	}
+	for _, issueID := range view.Completed {
+		if matchesIssueLookup(issueID, "", normalizedWant) {
+			return base(issueID, string(issueID), "completed"), true
+		}
+	}
 	// Keep the per-issue lookup consistent with the aggregate: an ID surfaced in
 	// reconcile_stopped_with_progress must be drillable here instead of returning
-	// issue_not_found (#557). Checked after completed and agent handoff so a later
-	// clean exit or a more-specific delivery signal for the same id takes
-	// precedence. A failed run is surfaced by the RuntimeEventFailed scan above
-	// (failures now retry per SPEC §8.4 rather than being parked in a suppression
-	// set).
+	// issue_not_found (#557). Checked after the more-specific buckets and
+	// completed so those newer signals take precedence for overlapping IDs. A
+	// failed run is surfaced by the RuntimeEventFailed scan above (failures now
+	// retry per SPEC §8.4 rather than being parked in a suppression set).
 	for _, issueID := range view.ReconcileStoppedWithProgress {
 		if matchesIssueLookup(issueID, "", normalizedWant) {
 			return base(issueID, string(issueID), "reconcile_stopped_with_progress"), true
@@ -497,6 +502,7 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 		Completed:                    sortedIssueIDStrings(view.Completed),
 		ReconcileStoppedWithProgress: sortedIssueIDStrings(view.ReconcileStoppedWithProgress),
 		AgentHandoffReconcileStopped: sortedIssueIDStrings(view.AgentHandoffReconcileStopped),
+		ActiveSuccessNoHandoff:       sortedIssueIDStrings(view.ActiveSuccessNoHandoff),
 		OperatorTerminalStops:        operatorStops,
 		CodexTotals: stateapi.CodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
@@ -554,6 +560,8 @@ func apiCountsFromView(view orchestrator.StateView) stateapi.Counts {
 		ReconcileStoppedWithProgressTotal: view.CumulativeReconcileStoppedWithProgressTotal,
 		AgentHandoffReconcileStopped:      len(view.AgentHandoffReconcileStopped),
 		AgentHandoffReconcileStoppedTotal: view.CumulativeAgentHandoffReconcileStoppedTotal,
+		ActiveSuccessNoHandoff:            len(view.ActiveSuccessNoHandoff),
+		ActiveSuccessNoHandoffTotal:       view.CumulativeActiveSuccessNoHandoffTotal,
 		OperatorTerminalStops:             len(view.OperatorTerminalStops),
 		OperatorTerminalStopsTotal:        view.CumulativeOperatorTerminalStopsTotal,
 	}

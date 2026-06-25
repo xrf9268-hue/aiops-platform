@@ -265,7 +265,7 @@ func TestFetchState_DecodesSharedContractFields(t *testing.T) {
 	body := `{
 	  "poll_interval_ms": 5000,
 	  "max_concurrent_agents": 4,
-	  "counts": {"completed_total": 12, "agent_handoff_reconcile_stopped_total": 3, "agent_handoff_reconcile_stopped": 2},
+	  "counts": {"completed_total": 12, "agent_handoff_reconcile_stopped_total": 3, "agent_handoff_reconcile_stopped": 2, "active_success_no_handoff_total": 5, "active_success_no_handoff": 1},
 	  "running": [{"issue_id": "i1", "issue_identifier": "ENG-1", "state": "In Progress", "session_id": "sess-1", "turn_count": 7, "last_event": "turn_completed", "last_message": "working", "started_at": "2026-05-21T09:09:55Z", "codex_app_server_pid": 12345, "tokens": {"total_tokens": 2000}}],
 	  "retrying": [{"issue_id": "i2", "attempt": 2, "due_at": "2026-05-21T09:11:00Z", "error": "retry soon", "kind": "quota_backoff", "startup_failure": {"phase": "thread/start", "error": "codex app-server read timeout after 5000ms"}}],
 	  "codex_totals": {"total_tokens": 300, "seconds_running": 1.5},
@@ -286,6 +286,12 @@ func TestFetchState_DecodesSharedContractFields(t *testing.T) {
 	}
 	if got := state.Counts.CompletedTotal; got != 12 {
 		t.Errorf("Counts.CompletedTotal = %d, want 12 (completed_total tag)", got)
+	}
+	if got := state.Counts.ActiveSuccessNoHandoffTotal; got != 5 {
+		t.Errorf("Counts.ActiveSuccessNoHandoffTotal = %d, want 5 (active_success_no_handoff_total tag)", got)
+	}
+	if got := state.Counts.ActiveSuccessNoHandoff; got != 1 {
+		t.Errorf("Counts.ActiveSuccessNoHandoff = %d, want 1 (active_success_no_handoff tag)", got)
 	}
 	// Pin every running-row field the dashboard renders (render.go formatRunningRow)
 	// so a tag typo on any of them fails here rather than blanking a column.

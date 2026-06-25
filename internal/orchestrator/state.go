@@ -262,10 +262,11 @@ type OrchestratorState struct {
 	// behavior is the default.
 	MaxRecentCompleted int
 
-	// CumulativeCompletedTotal is a monotonic counter of every Completed
-	// transition observed since process start. It survives cap-eviction, so
-	// operators can read a true lifetime total from /api/v1/state even when
-	// the per-id slice has been trimmed.
+	// CumulativeCompletedTotal is a monotonic counter of every clean worker
+	// exit observed since process start. Active clean exits with no handoff
+	// are also classified in CumulativeActiveSuccessNoHandoffTotal.
+	// It survives cap-eviction, so operators can read a true lifetime total from
+	// /api/v1/state even when the per-id slice has been trimmed.
 	CumulativeCompletedTotal int64
 
 	// ReconcileStoppedWithProgress records reconcile-stopped runs that had completed
@@ -289,6 +290,15 @@ type OrchestratorState struct {
 	AgentHandoffReconcileStopped                map[IssueID]struct{}
 	agentHandoffReconcileStoppedOrder           []IssueID
 	CumulativeAgentHandoffReconcileStoppedTotal int64
+
+	// ActiveSuccessNoHandoff records clean worker exits where the tracker issue
+	// stayed in the active state last observed by the orchestrator and no
+	// guarded current-issue handoff event was seen. The continuation retry still
+	// owns re-dispatch; this bucket is an additional classification on top of
+	// normal Completed accounting so operators can inspect "no handoff yet" loops.
+	ActiveSuccessNoHandoff                map[IssueID]struct{}
+	activeSuccessNoHandoffOrder           []IssueID
+	CumulativeActiveSuccessNoHandoffTotal int64
 
 	OperatorTerminalStops     map[IssueID]*OperatorTerminalStopEntry
 	operatorTerminalStopOrder []IssueID
@@ -369,6 +379,7 @@ func NewOrchestratorState(pollIntervalMs int64, maxConcurrentAgents int) *Orches
 		Completed:                      map[IssueID]struct{}{},
 		ReconcileStoppedWithProgress:   map[IssueID]struct{}{},
 		AgentHandoffReconcileStopped:   map[IssueID]struct{}{},
+		ActiveSuccessNoHandoff:         map[IssueID]struct{}{},
 		OperatorTerminalStops:          map[IssueID]*OperatorTerminalStopEntry{},
 		cleaningWorkspaces:             map[IssueID]struct{}{},
 		MaxRecentCompleted:             DefaultMaxRecentCompleted,
@@ -431,7 +442,7 @@ func (s *OrchestratorState) IsClaimed(id IssueID) bool {
 // MaxRecentCompleted by evicting the oldest entry. A repeat call for
 // the same id is a no-op for the slice (FIFO position is preserved
 // from the first transition) but still increments the cumulative
-// counter — every observed succeeded transition is a real event.
+// counter — every observed Completed transition is a real event.
 func (s *OrchestratorState) recordCompleted(id IssueID) {
 	s.CumulativeCompletedTotal++
 	if _, ok := s.Completed[id]; ok {
@@ -480,6 +491,20 @@ func (s *OrchestratorState) recordAgentHandoffReconcileStopped(id IssueID) {
 		oldest := s.agentHandoffReconcileStoppedOrder[0]
 		s.agentHandoffReconcileStoppedOrder = s.agentHandoffReconcileStoppedOrder[1:]
 		delete(s.AgentHandoffReconcileStopped, oldest)
+	}
+}
+
+func (s *OrchestratorState) recordActiveSuccessNoHandoff(id IssueID) {
+	s.CumulativeActiveSuccessNoHandoffTotal++
+	if _, ok := s.ActiveSuccessNoHandoff[id]; ok {
+		return
+	}
+	s.ActiveSuccessNoHandoff[id] = struct{}{}
+	s.activeSuccessNoHandoffOrder = append(s.activeSuccessNoHandoffOrder, id)
+	if s.MaxRecentCompleted > 0 && len(s.activeSuccessNoHandoffOrder) > s.MaxRecentCompleted {
+		oldest := s.activeSuccessNoHandoffOrder[0]
+		s.activeSuccessNoHandoffOrder = s.activeSuccessNoHandoffOrder[1:]
+		delete(s.ActiveSuccessNoHandoff, oldest)
 	}
 }
 
@@ -599,6 +624,22 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 	delete(s.Claimed, id)
 	delete(s.ClaimedIssues, id)
 	s.recordCompleted(id)
+	s.CodexTotals.AddSeconds(elapsed)
+	return true
+}
+
+// FinishRunActiveSuccessNoHandoff releases a clean worker exit that did not
+// hand off its issue. It preserves the SPEC §16.6 completed bookkeeping and
+// also records the distinct no-handoff observability bucket.
+func (s *OrchestratorState) FinishRunActiveSuccessNoHandoff(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	if current, ok := s.Running[id]; !ok || current != run {
+		return false
+	}
+	delete(s.Running, id)
+	delete(s.Claimed, id)
+	delete(s.ClaimedIssues, id)
+	s.recordCompleted(id)
+	s.recordActiveSuccessNoHandoff(id)
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }

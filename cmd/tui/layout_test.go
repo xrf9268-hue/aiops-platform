@@ -130,6 +130,7 @@ func representativeState(now time.Time) *stateapi.StateResponse {
 			CompletedTotal:                    12,
 			AgentHandoffReconcileStoppedTotal: 3,
 			AgentHandoffReconcileStopped:      2,
+			ActiveSuccessNoHandoffTotal:       5,
 		},
 		CodexTotals: stateapi.CodexTotals{InputTokens: 123456, OutputTokens: 654321, TotalTokens: 1_000_000_000, SecondsRunning: 3600},
 		Running: []stateapi.Running{{
@@ -226,7 +227,7 @@ func TestRenderFrame_ShowsAgentHandoffCount(t *testing.T) {
 	now := time.Now()
 	frame := visibleString(renderFrame(representativeState(now), nil, now, 0, "http://127.0.0.1:4001", 5*time.Second))
 
-	if !strings.Contains(frame, "Handoffs: completed 12 | agent 3 (recent 2)") {
+	if !strings.Contains(frame, "Handoffs: completed 12 | agent 3 (recent 2) | no handoff 5") {
 		t.Fatalf("renderFrame missing agent handoff count: %q", frame)
 	}
 }

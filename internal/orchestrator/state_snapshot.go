@@ -47,6 +47,11 @@ type StateView struct {
 	// handoff. It may overlap ReconcileStoppedWithProgress when the handoff also
 	// completed a turn before reconcile reaped it.
 	AgentHandoffReconcileStopped []IssueID
+	// ActiveSuccessNoHandoff is the FIFO-bounded recent set of clean exits that
+	// left the issue active with no guarded handoff signal. These exits still
+	// re-dispatch through the normal continuation retry and also remain in
+	// Completed per SPEC §16.6.
+	ActiveSuccessNoHandoff []IssueID
 	// OperatorTerminalStops is the FIFO-bounded recent set of D35 latches (oldest
 	// first), capped by MaxRecentOperatorTerminalStops. For the lifetime total that
 	// survives eviction, read CumulativeOperatorTerminalStopsTotal.
@@ -54,6 +59,7 @@ type StateView struct {
 	CumulativeCompletedTotal                    int64
 	CumulativeReconcileStoppedWithProgressTotal int64
 	CumulativeAgentHandoffReconcileStoppedTotal int64
+	CumulativeActiveSuccessNoHandoffTotal       int64
 	CumulativeOperatorTerminalStopsTotal        int64
 	CodexTotals                                 CodexTotals
 	CodexRateLimits                             *RateLimitSnapshot
@@ -108,6 +114,64 @@ func (s *OrchestratorState) snapshotRunningViews() []RunningView {
 	return rows
 }
 
+func (s *OrchestratorState) snapshotBlockedViews() []BlockedView {
+	rows := make([]BlockedView, 0, len(s.Blocked))
+	for id, b := range s.Blocked {
+		rows = append(rows, BlockedView{
+			IssueID:           id,
+			Identifier:        b.Identifier,
+			IssueURL:          b.Issue.URL,
+			State:             b.Issue.State,
+			BlockedAt:         b.BlockedAt,
+			WorkspacePath:     b.Workspace.Path,
+			SessionID:         b.Session.SessionID,
+			LastEventAt:       b.LastEventAt,
+			Method:            b.Method,
+			Error:             b.Error,
+			CodexAppServerPID: b.Session.CodexAppServerPID,
+		})
+	}
+	return rows
+}
+
+func (s *OrchestratorState) snapshotRetryViews() []RetryView {
+	rows := make([]RetryView, 0, len(s.RetryAttempts))
+	for id, r := range s.RetryAttempts {
+		rows = append(rows, RetryView{
+			IssueID:        id,
+			Identifier:     r.Identifier,
+			IssueURL:       r.Issue.URL,
+			Attempt:        r.Attempt,
+			DueAt:          r.DueAt,
+			Error:          r.Error,
+			Kind:           r.Kind,
+			StartupFailure: task.CopyStartupFailure(r.StartupFailure),
+		})
+	}
+	return rows
+}
+
+func (s *OrchestratorState) snapshotOperatorTerminalStopViews() []OperatorTerminalStopView {
+	rows := make([]OperatorTerminalStopView, 0, len(s.operatorTerminalStopOrder))
+	for _, id := range s.operatorTerminalStopOrder {
+		entry, ok := s.LookupOperatorTerminalStop(id)
+		if !ok {
+			continue
+		}
+		rows = append(rows, OperatorTerminalStopView{
+			IssueID:               id,
+			Identifier:            entry.Identifier,
+			State:                 entry.State,
+			StoppedAt:             entry.StoppedAt,
+			SuppressedDispatches:  entry.SuppressedDispatches,
+			FirstSuppressedAt:     entry.FirstSuppressedAt,
+			FirstSuppressedState:  entry.FirstSuppressedState,
+			FirstSuppressedReason: entry.FirstSuppressedReason,
+		})
+	}
+	return rows
+}
+
 func (s *OrchestratorState) Snapshot() StateView {
 	// Keep the live-aggregate math on the monotonic clock: `time.Now()`
 	// carries a monotonic component that `time.Time.Sub` uses for elapsed
@@ -143,48 +207,23 @@ func (s *OrchestratorState) Snapshot() StateView {
 		MaxConcurrentAgents:          s.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState:   copyStateConcurrencyLimits(s.MaxConcurrentAgentsByState),
 		AgentDefault:                 s.AgentDefault,
-		Blocked:                      make([]BlockedView, 0, len(s.Blocked)),
-		Retrying:                     make([]RetryView, 0, len(s.RetryAttempts)),
+		Blocked:                      s.snapshotBlockedViews(),
+		Retrying:                     s.snapshotRetryViews(),
 		Completed:                    make([]IssueID, 0, len(s.completedOrder)),
 		ReconcileStoppedWithProgress: make([]IssueID, 0, len(s.reconcileStoppedWithProgressOrder)),
 		AgentHandoffReconcileStopped: make([]IssueID, 0, len(s.agentHandoffReconcileStoppedOrder)),
-		OperatorTerminalStops:        make([]OperatorTerminalStopView, 0, len(s.operatorTerminalStopOrder)),
+		ActiveSuccessNoHandoff:       make([]IssueID, 0, len(s.activeSuccessNoHandoffOrder)),
+		OperatorTerminalStops:        s.snapshotOperatorTerminalStopViews(),
 		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
 		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
 		CumulativeAgentHandoffReconcileStoppedTotal: s.CumulativeAgentHandoffReconcileStoppedTotal,
+		CumulativeActiveSuccessNoHandoffTotal:       s.CumulativeActiveSuccessNoHandoffTotal,
 		CumulativeOperatorTerminalStopsTotal:        s.CumulativeOperatorTerminalStopsTotal,
 		CodexTotals:                                 totals,
 		CodexRateLimits:                             copyRateLimitSnapshot(s.CodexRateLimits),
 		RecentEvents:                                append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
 	view.Running = s.snapshotRunningViews()
-	for id, b := range s.Blocked {
-		view.Blocked = append(view.Blocked, BlockedView{
-			IssueID:           id,
-			Identifier:        b.Identifier,
-			IssueURL:          b.Issue.URL,
-			State:             b.Issue.State,
-			BlockedAt:         b.BlockedAt,
-			WorkspacePath:     b.Workspace.Path,
-			SessionID:         b.Session.SessionID,
-			LastEventAt:       b.LastEventAt,
-			Method:            b.Method,
-			Error:             b.Error,
-			CodexAppServerPID: b.Session.CodexAppServerPID,
-		})
-	}
-	for id, r := range s.RetryAttempts {
-		view.Retrying = append(view.Retrying, RetryView{
-			IssueID:        id,
-			Identifier:     r.Identifier,
-			IssueURL:       r.Issue.URL,
-			Attempt:        r.Attempt,
-			DueAt:          r.DueAt,
-			Error:          r.Error,
-			Kind:           r.Kind,
-			StartupFailure: task.CopyStartupFailure(r.StartupFailure),
-		})
-	}
 	// Iterate the FIFO order slices, not the map. The map's iteration
 	// order is undefined in Go; using the slices preserves observed
 	// insertion order so /api/v1/state consumers see "oldest first"
@@ -192,22 +231,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 	view.Completed = append(view.Completed, s.completedOrder...)
 	view.ReconcileStoppedWithProgress = append(view.ReconcileStoppedWithProgress, s.reconcileStoppedWithProgressOrder...)
 	view.AgentHandoffReconcileStopped = append(view.AgentHandoffReconcileStopped, s.agentHandoffReconcileStoppedOrder...)
-	for _, id := range s.operatorTerminalStopOrder {
-		entry, ok := s.LookupOperatorTerminalStop(id)
-		if !ok {
-			continue
-		}
-		view.OperatorTerminalStops = append(view.OperatorTerminalStops, OperatorTerminalStopView{
-			IssueID:               id,
-			Identifier:            entry.Identifier,
-			State:                 entry.State,
-			StoppedAt:             entry.StoppedAt,
-			SuppressedDispatches:  entry.SuppressedDispatches,
-			FirstSuppressedAt:     entry.FirstSuppressedAt,
-			FirstSuppressedState:  entry.FirstSuppressedState,
-			FirstSuppressedReason: entry.FirstSuppressedReason,
-		})
-	}
+	view.ActiveSuccessNoHandoff = append(view.ActiveSuccessNoHandoff, s.activeSuccessNoHandoffOrder...)
 	return view
 }
 

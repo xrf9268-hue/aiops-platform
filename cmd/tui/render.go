@@ -94,7 +94,9 @@ func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, t
 			colorize("completed "+formatCount(state.Counts.CompletedTotal), ansiGreen) +
 			colorize(" | ", ansiGray) +
 			colorize("agent "+formatCount(state.Counts.AgentHandoffReconcileStoppedTotal), ansiGreen) +
-			colorize(" (recent "+formatCount(int64(state.Counts.AgentHandoffReconcileStopped))+")", ansiGray),
+			colorize(" (recent "+formatCount(int64(state.Counts.AgentHandoffReconcileStopped))+")", ansiGray) +
+			colorize(" | ", ansiGray) +
+			colorize("no handoff "+formatCount(state.Counts.ActiveSuccessNoHandoffTotal), ansiYellow),
 		colorize("│ Throughput: ", ansiBold) + colorize(formatTPS(tps)+" tps", ansiCyan),
 		colorize("│ Runtime:    ", ansiBold) + colorize(formatRuntimeSecs(state.CodexTotals.SecondsRunning), ansiMagenta),
 		colorize("│ Tokens:     ", ansiBold) +

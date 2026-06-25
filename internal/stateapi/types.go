@@ -47,10 +47,15 @@ type StateResponse struct {
 	// rather than absent from completed (#557). It does not overlap
 	// completed: a reconcile-stopped run is not a clean §16.5 exit, matching
 	// upstream's accounting, so completed stays unchanged.
-	ReconcileStoppedWithProgress []string               `json:"reconcile_stopped_with_progress"`
-	AgentHandoffReconcileStopped []string               `json:"agent_handoff_reconcile_stopped"`
-	OperatorTerminalStops        []OperatorTerminalStop `json:"operator_terminal_stops"`
-	CodexTotals                  CodexTotals            `json:"codex_totals"`
+	ReconcileStoppedWithProgress []string `json:"reconcile_stopped_with_progress"`
+	AgentHandoffReconcileStopped []string `json:"agent_handoff_reconcile_stopped"`
+	// ActiveSuccessNoHandoff lists clean runner exits that left the issue in the
+	// active tracker state last observed by the orchestrator, with no guarded
+	// current-issue handoff event. These still re-dispatch through the normal
+	// continuation path and also remain in Completed per SPEC §16.6.
+	ActiveSuccessNoHandoff []string               `json:"active_success_no_handoff"`
+	OperatorTerminalStops  []OperatorTerminalStop `json:"operator_terminal_stops"`
+	CodexTotals            CodexTotals            `json:"codex_totals"`
 	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
 	// is emitted unconditionally — `null` until a `rate_limit_updated`
 	// notification is observed — so operators can rely on the key always
@@ -78,10 +83,9 @@ type Counts struct {
 	// totals across worker restarts and FIFO evictions, use
 	// completed_total. SPEC §13.7 §4.1.8.
 	Completed int `json:"completed"`
-	// CompletedTotal is a monotonic counter of every observed Succeeded
-	// transition since process start, independent of FIFO eviction. Added
-	// for #234 so long-running deployments still expose a true lifetime
-	// number when the bounded set has rotated.
+	// CompletedTotal is a monotonic counter of every clean worker exit observed
+	// since process start, independent of FIFO eviction. Active clean exits with
+	// no handoff are also classified in active_success_no_handoff_total.
 	CompletedTotal int64 `json:"completed_total"`
 	// ReconcileStoppedWithProgress is the size of the FIFO-bounded recent set of
 	// reconcile-stopped runs that had made progress (≥1 completed turn; the same set
@@ -92,6 +96,8 @@ type Counts struct {
 	ReconcileStoppedWithProgressTotal int64 `json:"reconcile_stopped_with_progress_total"`
 	AgentHandoffReconcileStopped      int   `json:"agent_handoff_reconcile_stopped"`
 	AgentHandoffReconcileStoppedTotal int64 `json:"agent_handoff_reconcile_stopped_total"`
+	ActiveSuccessNoHandoff            int   `json:"active_success_no_handoff"`
+	ActiveSuccessNoHandoffTotal       int64 `json:"active_success_no_handoff_total"`
 	// OperatorTerminalStops is the size of the FIFO-bounded recent D35 latch set
 	// (the same set published as `state.operator_terminal_stops`).
 	// OperatorTerminalStopsTotal is the lifetime monotonic counter that survives

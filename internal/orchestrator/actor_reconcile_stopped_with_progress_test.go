@@ -575,3 +575,66 @@ func TestReconcileCancelAfterUnclassifiedGiteaMutationDoesNotRecordAgentHandoff(
 		t.Fatalf("ReconcileStoppedWithProgress = %v; want [%s] (progress is still recorded)", v.ReconcileStoppedWithProgress, iss.ID)
 	}
 }
+
+func TestCleanGiteaActiveExitRecordsNoHandoffAndStillRedispatches(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "8842", Identifier: "#12", State: "Todo"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	disp.finishAt(0, WorkerResult{Err: nil, Elapsed: time.Millisecond})
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Running) == 0 && len(v.ActiveSuccessNoHandoff) == 1 && len(v.Retrying) == 1
+	}, time.Second)
+
+	v, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(v.ActiveSuccessNoHandoff) != 1 || v.ActiveSuccessNoHandoff[0] != IssueID(iss.ID) {
+		t.Fatalf("ActiveSuccessNoHandoff = %v; want [%s]", v.ActiveSuccessNoHandoff, iss.ID)
+	}
+	if v.CumulativeActiveSuccessNoHandoffTotal != 1 {
+		t.Fatalf("CumulativeActiveSuccessNoHandoffTotal = %d; want 1", v.CumulativeActiveSuccessNoHandoffTotal)
+	}
+	if len(v.Completed) != 1 || v.Completed[0] != IssueID(iss.ID) || v.CumulativeCompletedTotal != 1 {
+		t.Fatalf("Completed = %v total=%d; want [%s]/1 for active success without handoff", v.Completed, v.CumulativeCompletedTotal, iss.ID)
+	}
+	if len(v.Retrying) != 1 || v.Retrying[0].Kind != RetryKindContinuation {
+		t.Fatalf("Retrying = %+v; want one continuation retry", v.Retrying)
+	}
+	if !recentEventKind(v.RecentEvents, IssueID(iss.ID), RuntimeEventActiveSuccessNoHandoff) {
+		t.Fatalf("RecentEvents = %+v; want active_success_no_handoff for %s", v.RecentEvents, iss.ID)
+	}
+	if !recentEventKind(v.RecentEvents, IssueID(iss.ID), RuntimeEventCompleted) {
+		t.Fatalf("RecentEvents = %+v; want completed for %s", v.RecentEvents, iss.ID)
+	}
+
+	select {
+	case <-o.retryWakeCh():
+	case <-time.After(time.Second):
+		t.Fatal("continuation retry did not wake poll loop")
+	}
+	if err := o.RequestDispatchAfterTrackerRecheck(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatchAfterTrackerRecheck: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 2 }, time.Second)
+}
+
+func recentEventKind(events []RuntimeEvent, issueID IssueID, kind RuntimeEventKind) bool {
+	for _, ev := range events {
+		if ev.IssueID == issueID && ev.Kind == kind {
+			return true
+		}
+	}
+	return false
+}

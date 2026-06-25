@@ -437,6 +437,7 @@ function Topbar({ status, generatedAt, version, onRefresh, settings }) {
 // these explain why each bucket is informational vs worth inspecting.
 const STOPPED_DESC = 'Runs reaped by reconcile after making progress — worth inspecting, not a guaranteed success.';
 const HANDOFF_DESC = 'Runs the reconcile loop stopped after the agent had already completed its handoff (opened its PR / wrote back to the tracker) — finished before being reaped; informational, not an error.';
+const NO_HANDOFF_DESC = 'Clean runner exits that left the issue active with no guarded handoff — the worker will continue normally, but the run did not deliver tracker progress.';
 
 // ── main app ─────────────────────────────────────────────────────────────────
 export default function App() {
@@ -522,8 +523,13 @@ export default function App() {
     : '';
   const stopped = s.reconcile_stopped_with_progress || [];
   const handoff = s.agent_handoff_reconcile_stopped || [];
+  const noHandoff = s.active_success_no_handoff || [];
   const deliveredRecent = c.agent_handoff_reconcile_stopped || 0;
   const deliveredTotal = c.agent_handoff_reconcile_stopped_total || 0;
+  const deliveredFlag = [
+    c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : '',
+    c.active_success_no_handoff > 0 ? `${c.active_success_no_handoff} no handoff` : '',
+  ].filter(Boolean).join(' · ') || null;
   const online = status === 'live';
 
   return (
@@ -566,8 +572,8 @@ export default function App() {
         <Kpi
           label="Delivered"
           value={deliveredRecent}
-          sub={`${compact(deliveredTotal)} state handoffs lifetime · ${compact(c.completed_total)} clean exits`}
-          flag={c.reconcile_stopped_with_progress > 0 ? `${c.reconcile_stopped_with_progress} stopped w/ progress` : null}
+          sub={`${compact(deliveredTotal)} state handoffs lifetime · ${compact(c.completed_total)} completed exits`}
+          flag={deliveredFlag}
           status="done"
         />
       </div>
@@ -627,18 +633,26 @@ export default function App() {
             <RateLimits rl={rl} />
           </div>
 
-          {/* Reconcile roll-up — Stopped-with-progress (#557) + Agent-handoff
-              (#617) folded from two full panels into one compact strip; each
+          {/* Reconcile roll-up — Stopped-with-progress (#557), Agent-handoff
+              (#617), and active-success/no-handoff (#988) folded into one compact strip; each
               bucket's explanatory prose is exposed via a hover title + an
-              sr-only span (STOPPED_DESC / HANDOFF_DESC) so it costs no visible
-              vertical budget. Hidden when both buckets are empty. */}
-          {(stopped.length > 0 || handoff.length > 0) ? (
+              sr-only span so it costs no visible vertical budget. Hidden when
+              all buckets are empty. */}
+          {(stopped.length > 0 || handoff.length > 0 || noHandoff.length > 0) ? (
             <div className="panel">
               <div className="panel-head">
                 <div className="panel-title"><span className="accent-stroke" />Reconcile roll-up</div>
-                <div className="panel-meta">reaped by the reconcile loop</div>
+                <div className="panel-meta">handoff and continuation outcomes</div>
               </div>
               <div className="rollup-grid">
+                {noHandoff.length > 0 ? (
+                  <div className="rollup-cell" title={NO_HANDOFF_DESC}>
+                    <span className="rollup-k"><span className="kpi-dot retry" />No handoff</span>
+                    <span className="rollup-v"><b>{c.active_success_no_handoff}</b> this window<span className="tot">· {c.active_success_no_handoff_total} total</span></span>
+                    <span className="rollup-ids">{noHandoff.map((id) => <span key={id} className="tier-badge">{id}</span>)}</span>
+                    <span className="sr-only">{NO_HANDOFF_DESC}</span>
+                  </div>
+                ) : null}
                 {stopped.length > 0 ? (
                   <div className="rollup-cell" title={STOPPED_DESC}>
                     <span className="rollup-k"><span className="kpi-dot retry" />Stopped w/ progress</span>

@@ -105,6 +105,8 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 			ReconcileStoppedWithProgressTotal: 2,
 			AgentHandoffReconcileStopped:      3,
 			AgentHandoffReconcileStoppedTotal: 4,
+			ActiveSuccessNoHandoff:            1,
+			ActiveSuccessNoHandoffTotal:       5,
 		},
 		Running: []stateapi.Running{{
 			IssueID:       "issue-1",
@@ -153,6 +155,8 @@ func fullyPopulatedAPIStateResponseJSON(t *testing.T) []byte {
 		}},
 		Completed:                    []string{"issue-4"},
 		ReconcileStoppedWithProgress: []string{"issue-6"},
+		AgentHandoffReconcileStopped: []string{"issue-7"},
+		ActiveSuccessNoHandoff:       []string{"issue-8"},
 		CodexTotals: stateapi.CodexTotals{
 			InputTokens:    100,
 			OutputTokens:   200,
