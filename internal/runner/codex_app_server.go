@@ -528,6 +528,7 @@ func buildThreadStartParams(in RunInput, approvalPolicy any) map[string]any {
 		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
 		"cwd":            in.Workdir,
 		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
+		"multiAgentMode": "none",
 	}
 }
 

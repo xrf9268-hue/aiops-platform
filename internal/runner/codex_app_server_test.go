@@ -320,6 +320,15 @@ func TestBuildThreadStartParamsDisablesInheritedCodexAppTools(t *testing.T) {
 	}
 }
 
+func TestBuildThreadStartParamsPinsMultiAgentMode(t *testing.T) {
+	in := appServerInput(codexWorkdir(t, "pin multi-agent mode"))
+	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
+
+	if got := payload["multiAgentMode"]; got != "none" {
+		t.Fatalf("thread/start multiAgentMode = %#v; want none to preserve WORKFLOW-only instructions", got)
+	}
+}
+
 func TestCodexAppServerRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 	codexAppServerEnvStubScript(t, `
 import json
