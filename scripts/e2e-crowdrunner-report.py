@@ -127,7 +127,7 @@ def control_issue_status_failure(
     forbidden_labels = expectation.get("forbidden_terminal_labels") or [
         "aiops/done",
         "aiops/canceled",
-        "Human Review",
+        "aiops/human-review",
     ]
     forbidden = [str(label) for label in forbidden_labels]
     for issue in issues:

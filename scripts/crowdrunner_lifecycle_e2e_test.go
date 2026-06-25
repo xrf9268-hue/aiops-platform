@@ -153,6 +153,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		"CONTINUATION_BUDGET_CANARY",
 		".aiops/operator-continuation-release",
+		"both aiops/todo and aiops/stress",
 		"must not edit files, commit, push, open a PR",
 		`method of continuation_budget for issue #16`,
 	} {
@@ -165,8 +166,11 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		`"kind": "continuation_budget_control_expectation"`,
 		`"issue_number": 16`,
+		`"active_label": "aiops/todo"`,
+		`"routing_label": "aiops/stress"`,
 		`"expected_blocked_method": "continuation_budget"`,
 		`"forbidden_pr_issue_reference": "#16"`,
+		`"aiops/human-review"`,
 	} {
 		if !strings.Contains(expectation, want) {
 			t.Fatalf("continuation expectation missing %q\n%s", want, expectation)
@@ -232,7 +236,9 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  max_turns: 1",
 				"  max_continuation_turns: 2",
-				"    - Stress",
+				"    - Todo",
+				"  required_labels:",
+				"    - aiops/stress",
 				"  root: " + filepath.Join(runRoot, "workspaces", "stress"),
 				"deterministic continuation-budget stress-control agent",
 				"Do not edit files, create branches, commit, push, open a pull request",
@@ -251,8 +257,8 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(stressWorkflow, "    - Todo") || strings.Contains(stressWorkflow, "    - Rework") {
-		t.Fatalf("stress workflow should not claim Todo/Rework states:\n%s", stressWorkflow)
+	if strings.Contains(stressWorkflow, "    - Stress") || strings.Contains(stressWorkflow, "    - Rework") {
+		t.Fatalf("stress workflow should use mapped Todo plus required labels, not Stress/Rework states:\n%s", stressWorkflow)
 	}
 	if strings.Contains(stressWorkflow, "You are an autonomous MAKER agent") {
 		t.Fatalf("stress workflow should not inherit the maker PR prompt:\n%s", stressWorkflow)
@@ -373,7 +379,7 @@ func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) 
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
-	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithControlJSON("open", "Human Review"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithControlJSON("open", "aiops/human-review"))
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[]`)
 	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
 		"counts":{"running":0,"blocked":1},
@@ -383,7 +389,7 @@ func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) 
 		"kind":"continuation_budget_control_expectation",
 		"issue_number":16,
 		"expected_blocked_method":"continuation_budget",
-		"forbidden_terminal_labels":["aiops/done","aiops/canceled","Human Review"]
+		"forbidden_terminal_labels":["aiops/done","aiops/canceled","aiops/human-review"]
 	}`)
 
 	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
@@ -393,7 +399,7 @@ func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) 
 		t.Fatalf("report failed: %v\n%s", err, out)
 	}
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
-	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 has forbidden label(s) Human Review.") {
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 has forbidden label(s) aiops/human-review.") {
 		t.Fatalf("report did not reject the control terminal label:\n%s", report)
 	}
 }
