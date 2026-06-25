@@ -107,6 +107,36 @@ def asset_bullets(paths: list[Path], root: Path) -> list[str]:
     return [f"- `{rel(path, root)}`" for path in files] or ["- none captured"]
 
 
+def load_milestone_freezes(run_root: Path) -> list[tuple[Path, dict[str, Any]]]:
+    records = []
+    for path in sorted((run_root / "state").glob("operator-milestone-freeze-*.json")):
+        data = load_json(path, {})
+        if isinstance(data, dict) and data.get("kind") == "operator_milestone_freeze":
+            records.append((path, data))
+    return records
+
+
+def milestone_freeze_bullets(run_root: Path) -> list[str]:
+    freezes = load_milestone_freezes(run_root)
+    if not freezes:
+        return ["- none recorded"]
+    lines = []
+    for path, freeze in freezes:
+        removed = ", ".join(
+            f"#{item.get('number')}" for item in freeze.get("ready_labels_removed", [])
+        ) or "none"
+        lines.append(
+            "- operator milestone freeze after {stop_after}: "
+            "{completed} completed, ready labels removed from {removed}; evidence `{path}`".format(
+                stop_after=freeze.get("stop_after", "?"),
+                completed=freeze.get("completed_product_issues", "?"),
+                removed=removed,
+                path=rel(path, run_root),
+            )
+        )
+    return lines
+
+
 def lifecycle_verdict(product_done: list[dict[str, Any]], merged_prs: list[dict[str, Any]]) -> str:
     if len(product_done) >= 10 and len(merged_prs) >= 10:
         return "READY FOR OPERATOR PASS REVIEW"
@@ -147,6 +177,7 @@ def operator_checklist() -> list[str]:
         "- [ ] Rework was exercised and reviewer findings are linked.",
         "- [ ] Reconcile cancellation control was captured.",
         "- [ ] Continuation / turn-budget stress evidence was captured.",
+        "- [ ] Operator milestone freeze evidence was captured when used.",
         "- [ ] Fresh-clone npm verification passed.",
         "- [ ] Product screenshots include gameplay, mobile, performance, and boss/finale evidence.",
         "- [ ] Maker, reviewer, and optional stress dashboards are idle or intentionally stopped.",
@@ -204,6 +235,10 @@ def write_report(args: argparse.Namespace) -> Path:
         "## PR Results",
         "",
         *pr_rows(prs),
+        "",
+        "## Operator Milestone Freezes",
+        "",
+        *milestone_freeze_bullets(run_root),
         "",
         "## Evidence Inventory",
         "",
