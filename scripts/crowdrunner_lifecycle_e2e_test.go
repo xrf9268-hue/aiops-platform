@@ -153,7 +153,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		"CONTINUATION_BUDGET_CANARY",
 		".aiops/operator-continuation-release",
-		"both aiops/todo and aiops/stress",
+		"both aiops/in-progress and aiops/stress",
 		"must not edit files, commit, push, open a PR",
 		`method of continuation_budget for issue #16`,
 	} {
@@ -166,7 +166,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		`"kind": "continuation_budget_control_expectation"`,
 		`"issue_number": 16`,
-		`"active_label": "aiops/todo"`,
+		`"active_label": "aiops/in-progress"`,
 		`"routing_label": "aiops/stress"`,
 		`"expected_blocked_method": "continuation_budget"`,
 		`"forbidden_pr_issue_reference": "#16"`,
@@ -236,7 +236,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  max_turns: 1",
 				"  max_continuation_turns: 2",
-				"    - Todo",
+				"    - In Progress",
 				"  required_labels:",
 				"    - aiops/stress",
 				"  root: " + filepath.Join(runRoot, "workspaces", "stress"),
@@ -257,8 +257,10 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(stressWorkflow, "    - Stress") || strings.Contains(stressWorkflow, "    - Rework") {
-		t.Fatalf("stress workflow should use mapped Todo plus required labels, not Stress/Rework states:\n%s", stressWorkflow)
+	if strings.Contains(stressWorkflow, "    - Todo") ||
+		strings.Contains(stressWorkflow, "    - Stress") ||
+		strings.Contains(stressWorkflow, "    - Rework") {
+		t.Fatalf("stress workflow should use mapped In Progress plus required labels, not maker/stress states:\n%s", stressWorkflow)
 	}
 	if strings.Contains(stressWorkflow, "You are an autonomous MAKER agent") {
 		t.Fatalf("stress workflow should not inherit the maker PR prompt:\n%s", stressWorkflow)

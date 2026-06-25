@@ -122,9 +122,9 @@ For issue #16:
 - On every turn, inspect whether the sentinel exists. If it is absent, report
   that the control remains intentionally active and stop the turn cleanly
   without tracker handoff.
-- Leave the Gitea issue with both `aiops/todo` and `aiops/stress` so the
-  mapped `Todo` state dispatches only through this stress worker's required
-  routing label until `agent.max_continuation_turns` is exhausted.
+- Leave the Gitea issue with both `aiops/in-progress` and `aiops/stress` so the
+  mapped `In Progress` state dispatches only through this stress worker's
+  required routing label until `agent.max_continuation_turns` is exhausted.
 
 Expected harness result: `/api/v1/state` shows issue #16 in `blocked` with
 `method: "continuation_budget"`. Any PR, terminal label, or Human Review handoff
@@ -169,7 +169,7 @@ STRESS_PROMPT
         fi ;;
       "    - Todo")
         if [ "$mode" = "stress" ]; then
-          printf '%s\n' "$line"
+          printf '    - In Progress\n'
         else
           printf '%s\n' "$line"
         fi ;;
@@ -202,7 +202,7 @@ cat >"$run_root/state/continuation-control-expected.json" <<'EOF'
   "kind": "continuation_budget_control_expectation",
   "issue_number": 16,
   "worker": "stress",
-  "active_label": "aiops/todo",
+  "active_label": "aiops/in-progress",
   "routing_label": "aiops/stress",
   "expected_state_file": "state/stress-final.json",
   "expected_blocked_method": "continuation_budget",
@@ -466,8 +466,8 @@ write_issue 15 control-blocked-held "CONTROL blocked issue held out of ready gat
 write_issue 16 control-continuation-budget "CONTROL continuation budget stress worker" \
 "Control scenario:
 - This is CONTINUATION_BUDGET_CANARY and must not produce product code.
-- Run only with workflows/maker-low-turn-WORKFLOW.md on Todo plus the aiops/stress routing label.
-- Label this issue with both aiops/todo and aiops/stress when starting the control.
+- Run only with workflows/maker-low-turn-WORKFLOW.md on In Progress plus the aiops/stress routing label.
+- Label this issue with both aiops/in-progress and aiops/stress when starting the control.
 - The required sentinel .aiops/operator-continuation-release is intentionally absent and may only be created by the operator.
 - The stress agent must not edit files, commit, push, open a PR, move labels, or hand off to Human Review.
 - Expected terminal evidence is state/stress-final.json with counts.blocked >= 1 and a blocked row method of continuation_budget for issue #16.

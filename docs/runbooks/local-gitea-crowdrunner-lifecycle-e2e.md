@@ -130,7 +130,8 @@ Required labels:
 - `aiops/done`
 - `aiops/canceled`
 - `aiops/stress` (auxiliary routing label for issue 16; pair it with
-  `aiops/todo` so Gitea derives the mapped `Todo` state)
+  `aiops/in-progress` so Gitea derives a mapped state that the main maker
+  workflow treats as inactive)
 
 Create issues from `issues/*.md` without `aiops/*` state labels. Keep product
 issues inactive until the dashboard doctor passes; after that gate, activate
@@ -139,8 +140,9 @@ issues 1-12 by adding `aiops/todo`. Keep control issues staged:
 - Issue 13: no `aiops/*` label.
 - Issue 14: add `aiops/todo` only when testing cancellation.
 - Issue 15: leave unlabeled or blocked.
-- Issue 16: run only with the low-turn stress workflow; add both `aiops/todo`
-  and `aiops/stress` when starting the continuation-budget control.
+- Issue 16: run only with the low-turn stress workflow; add both
+  `aiops/in-progress` and `aiops/stress` when starting the continuation-budget
+  control.
 
 Save the created issue list:
 
@@ -274,8 +276,8 @@ scripts/e2e-crowdrunner-capture.py \
   after state.
 - **Blocked held:** confirm issue 15 remains undispatched.
 - **Continuation budget:** start the stress worker on port 4203 with
-  `workflows/maker-low-turn-WORKFLOW.md`, label issue 16 with both `aiops/todo`
-  and `aiops/stress`, then
+  `workflows/maker-low-turn-WORKFLOW.md`, label issue 16 with both
+  `aiops/in-progress` and `aiops/stress`, then
   wait for local continuation-budget exhaustion. The bootstrap writes
   `state/continuation-control-expected.json`; the expected machine evidence is
   `state/stress-final.json` with `counts.blocked >= 1` and a blocked row for
