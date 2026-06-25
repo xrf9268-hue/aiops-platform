@@ -7,7 +7,7 @@ package runner
 // TestCodexVersionPinParity fails the build if any of them drift. Bump it only
 // via scripts/refresh-codex-schema.sh, which regenerates the schema from the
 // matching codex binary.
-const CodexProtocolVersion = "0.141.0"
+const CodexProtocolVersion = "0.142.0"
 
 // codexProtocolSchemaFile is the vendored JSON Schema bundle produced by
 // `codex app-server generate-json-schema --out <dir> --experimental` for
@@ -17,6 +17,6 @@ const CodexProtocolVersion = "0.141.0"
 // thread/start dynamicTools, which the default (non-experimental) schema export
 // strips — validating against a non-experimental bundle would falsely reject
 // dynamicTools.
-const codexProtocolSchemaFile = "codex_app_server_protocol_v0_141_0.v2.schemas.json"
+const codexProtocolSchemaFile = "codex_app_server_protocol_v0_142_0.v2.schemas.json"
 
 //go:generate sh -c "cd ../.. && scripts/refresh-codex-schema.sh"

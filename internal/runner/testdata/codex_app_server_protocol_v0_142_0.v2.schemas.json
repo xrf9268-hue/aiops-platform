@@ -193,6 +193,18 @@
         }
       ]
     },
+    "LegacyAppPathString": {
+      "type": "string"
+    },
+    "MultiAgentMode": {
+      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
+      "type": "string",
+      "enum": [
+        "none",
+        "explicitRequestOnly",
+        "proactive"
+      ]
+    },
     "Personality": {
       "type": "string",
       "enum": [
@@ -249,7 +261,7 @@
       ],
       "properties": {
         "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
+          "$ref": "#/definitions/LegacyAppPathString"
         },
         "environmentId": {
           "type": "string"
@@ -354,6 +366,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "multiAgentMode": {
+          "description": "Set the initial multi-agent mode for this thread. `none` leaves the multi-agent tools available without injecting mode instructions. Omitted defaults to `explicitRequestOnly`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "permissions": {
@@ -653,6 +676,18 @@
         "original"
       ]
     },
+    "InternalChatMessageMetadataPassthrough": {
+      "description": "Internal Responses API passthrough metadata copied into underlying chat messages.\n\nResponses API strongly types this payload. Do not modify it without first getting API approval and making the corresponding Responses API change.",
+      "type": "object",
+      "properties": {
+        "turn_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "LocalShellAction": {
       "oneOf": [
         {
@@ -821,16 +856,15 @@
               }
             },
             "id": {
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
               ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -878,10 +912,16 @@
                 "$ref": "#/definitions/AgentMessageInputContent"
               }
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -924,10 +964,16 @@
                 "null"
               ]
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -970,16 +1016,15 @@
             },
             "id": {
               "description": "Legacy id field retained for compatibility with older payloads.",
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
               ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1015,16 +1060,15 @@
               "type": "string"
             },
             "id": {
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
               ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1069,16 +1113,15 @@
               "type": "string"
             },
             "id": {
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
               ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1112,10 +1155,16 @@
             "call_id": {
               "type": "string"
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1148,7 +1197,6 @@
               "type": "string"
             },
             "id": {
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
@@ -1157,10 +1205,10 @@
             "input": {
               "type": "string"
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1197,10 +1245,16 @@
             "call_id": {
               "type": "string"
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1244,10 +1298,16 @@
             "execution": {
               "type": "string"
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1288,16 +1348,15 @@
               ]
             },
             "id": {
-              "writeOnly": true,
               "type": [
                 "string",
                 "null"
               ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1323,19 +1382,21 @@
         {
           "type": "object",
           "required": [
-            "id",
             "result",
             "status",
             "type"
           ],
           "properties": {
             "id": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1374,10 +1435,16 @@
             "encrypted_content": {
               "type": "string"
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1400,10 +1467,10 @@
             "type"
           ],
           "properties": {
-            "metadata": {
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1432,10 +1499,16 @@
                 "null"
               ]
             },
-            "metadata": {
+            "id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "internal_chat_message_metadata_passthrough": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/ResponseItemMetadata"
+                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
                 },
                 {
                   "type": "null"
@@ -1469,17 +1542,6 @@
           "title": "OtherResponseItem"
         }
       ]
-    },
-    "ResponseItemMetadata": {
-      "type": "object",
-      "properties": {
-        "turn_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
     },
     "ResponsesApiWebSearchAction": {
       "oneOf": [
@@ -2389,6 +2451,17 @@
             "null"
           ]
         },
+        "multiAgentMode": {
+          "description": "Select the multi-agent mode for subsequent turns.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "permissions": {
           "description": "Select a named permissions profile id for subsequent turns. Cannot be combined with `sandboxPolicy`.",
           "type": [
@@ -2622,7 +2695,8 @@
       "type": "string",
       "enum": [
         "created_at",
-        "updated_at"
+        "updated_at",
+        "recency_at"
       ]
     },
     "ThreadSourceKind": {
@@ -3946,6 +4020,17 @@
             "null"
           ]
         },
+        "multiAgentMode": {
+          "description": "Controls multi-agent v2 delegation instructions. `none` leaves the multi-agent tools available without injecting mode instructions. Omitted keeps the loaded session's current mode.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "outputSchema": {
           "description": "Optional JSON Schema used to constrain the final assistant message for this turn."
         },
@@ -4089,13 +4174,6 @@
         }
       }
     },
-    "RealtimeConversationArchitecture": {
-      "type": "string",
-      "enum": [
-        "realtimeapi",
-        "avas"
-      ]
-    },
     "RealtimeConversationVersion": {
       "type": "string",
       "enum": [
@@ -4186,15 +4264,18 @@
         "threadId"
       ],
       "properties": {
-        "architecture": {
-          "description": "Overrides the configured realtime architecture for this session only.",
-          "anyOf": [
-            {
-              "$ref": "#/definitions/RealtimeConversationArchitecture"
-            },
-            {
-              "type": "null"
-            }
+        "clientManagedHandoffs": {
+          "description": "Leaves Codex response handoffs to the client's explicit append calls instead of forwarding them automatically. Defaults to false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "codexResponseHandoffPrefix": {
+          "description": "Optional prefix added to automatic V1 Codex commentary sent with `conversation.handoff.append` when `codexResponsesAsItems` is not true. Final answers are sent without the prefix.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "codexResponseItemPrefix": {
@@ -4341,7 +4422,8 @@
       "type": "string",
       "enum": [
         "user",
-        "developer"
+        "developer",
+        "assistant"
       ]
     },
     "ThreadRealtimeAppendTextParams": {
@@ -4806,6 +4888,15 @@
         "execServerUrl"
       ],
       "properties": {
+        "connectTimeoutMs": {
+          "description": "Optional WebSocket connection timeout. The server default applies when omitted.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        },
         "environmentId": {
           "type": "string"
         },
@@ -5557,7 +5648,7 @@
           }
         },
         "includeHome": {
-          "description": "If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+          "description": "If true, include detection under the user's home directory.",
           "type": "boolean"
         }
       }
@@ -5751,6 +5842,13 @@
           "items": {
             "$ref": "#/definitions/ExternalAgentConfigMigrationItem"
           }
+        },
+        "source": {
+          "description": "Source product that produced the migration items. Missing means unspecified.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -6298,6 +6396,29 @@
         }
       }
     },
+    "McpToolCallAppContext": {
+      "type": "object",
+      "required": [
+        "connectorId"
+      ],
+      "properties": {
+        "connectorId": {
+          "type": "string"
+        },
+        "linkId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resourceUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "McpToolCallError": {
       "type": "object",
       "required": [
@@ -6679,6 +6800,14 @@
           "description": "Usually the first user message in the thread, if available.",
           "type": "string"
         },
+        "recencyAt": {
+          "description": "Unix timestamp (in seconds) used for thread recency ordering.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
         "sessionId": {
           "description": "Session id shared by threads that belong to the same session tree.",
           "type": "string"
@@ -6934,7 +7063,7 @@
               "description": "The command's working directory.",
               "allOf": [
                 {
-                  "$ref": "#/definitions/AbsolutePathBuf"
+                  "$ref": "#/definitions/LegacyAppPathString"
                 }
               ]
             },
@@ -7027,6 +7156,16 @@
             "type"
           ],
           "properties": {
+            "appContext": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/McpToolCallAppContext"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "arguments": true,
             "durationMs": {
               "description": "The duration of the MCP tool call in milliseconds.",
@@ -7050,6 +7189,7 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "description": "Deprecated: use `appContext.resourceUri` instead.",
               "type": [
                 "string",
                 "null"
@@ -7785,11 +7925,11 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         },
         "instructionSources": {
-          "description": "Instruction source files currently loaded for this thread.",
+          "description": "Environment-native paths to instruction source files currently loaded for this thread.",
           "default": [],
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           }
         },
         "model": {
@@ -7797,6 +7937,15 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "multiAgentMode": {
+          "description": "Current multi-agent mode for this thread.",
+          "default": "explicitRequestOnly",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ]
         },
         "reasoningEffort": {
           "anyOf": [
@@ -7914,11 +8063,11 @@
           ]
         },
         "instructionSources": {
-          "description": "Instruction source files currently loaded for this thread.",
+          "description": "Environment-native paths to instruction source files currently loaded for this thread.",
           "default": [],
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           }
         },
         "model": {
@@ -7926,6 +8075,15 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "multiAgentMode": {
+          "description": "Current multi-agent mode for this thread.",
+          "default": "explicitRequestOnly",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ]
         },
         "reasoningEffort": {
           "anyOf": [
@@ -8005,11 +8163,11 @@
           "$ref": "#/definitions/AbsolutePathBuf"
         },
         "instructionSources": {
-          "description": "Instruction source files currently loaded for this thread.",
+          "description": "Environment-native paths to instruction source files currently loaded for this thread.",
           "default": [],
           "type": "array",
           "items": {
-            "$ref": "#/definitions/AbsolutePathBuf"
+            "$ref": "#/definitions/LegacyAppPathString"
           }
         },
         "model": {
@@ -8017,6 +8175,15 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "multiAgentMode": {
+          "description": "Current multi-agent mode for this thread.",
+          "default": "explicitRequestOnly",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ]
         },
         "reasoningEffort": {
           "anyOf": [
@@ -10920,9 +11087,14 @@
     "PermissionProfileSummary": {
       "type": "object",
       "required": [
+        "allowed",
         "id"
       ],
       "properties": {
+        "allowed": {
+          "description": "Whether the effective requirements allow selecting this profile.",
+          "type": "boolean"
+        },
         "description": {
           "description": "Optional user-facing description for display in clients.",
           "type": [
@@ -12117,6 +12289,71 @@
         }
       }
     },
+    "WorkspaceMessage": {
+      "type": "object",
+      "required": [
+        "messageBody",
+        "messageId",
+        "messageType"
+      ],
+      "properties": {
+        "archivedAt": {
+          "description": "Unix timestamp (in seconds) when the message was archived.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "createdAt": {
+          "description": "Unix timestamp (in seconds) when the message was created.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "messageBody": {
+          "type": "string"
+        },
+        "messageId": {
+          "type": "string"
+        },
+        "messageType": {
+          "$ref": "#/definitions/WorkspaceMessageType"
+        }
+      }
+    },
+    "WorkspaceMessageType": {
+      "type": "string",
+      "enum": [
+        "headline",
+        "announcement",
+        "unknown"
+      ]
+    },
+    "GetWorkspaceMessagesResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "GetWorkspaceMessagesResponse",
+      "type": "object",
+      "required": [
+        "featureEnabled",
+        "messages"
+      ],
+      "properties": {
+        "featureEnabled": {
+          "description": "Whether the workspace-message backend route is available for this client.",
+          "type": "boolean"
+        },
+        "messages": {
+          "description": "Active workspace messages returned by the backend.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WorkspaceMessage"
+          }
+        }
+      }
+    },
     "AddCreditsNudgeEmailStatus": {
       "type": "string",
       "enum": [
@@ -12342,6 +12579,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/ApprovalsReviewer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_tools_approval_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppToolApproval"
             },
             {
               "type": "null"
@@ -12932,6 +13179,7 @@
       "enum": [
         "disabled",
         "cached",
+        "indexed",
         "live"
       ]
     },
@@ -13025,6 +13273,118 @@
       "properties": {
         "importId": {
           "type": "string"
+        }
+      }
+    },
+    "ExternalAgentConfigImportHistory": {
+      "type": "object",
+      "required": [
+        "completedAtMs",
+        "failures",
+        "importId",
+        "successes"
+      ],
+      "properties": {
+        "completedAtMs": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeFailure"
+          }
+        },
+        "importId": {
+          "type": "string"
+        },
+        "successes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
+          }
+        }
+      }
+    },
+    "ExternalAgentConfigImportItemTypeFailure": {
+      "type": "object",
+      "required": [
+        "failureStage",
+        "itemType",
+        "message"
+      ],
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "errorType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "failureStage": {
+          "type": "string"
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "message": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ExternalAgentConfigImportItemTypeSuccess": {
+      "type": "object",
+      "required": [
+        "itemType"
+      ],
+      "properties": {
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "itemType": {
+          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ExternalAgentConfigImportHistoriesReadResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ExternalAgentConfigImportHistoriesReadResponse",
+      "type": "object",
+      "required": [
+        "data"
+      ],
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportHistory"
+          }
         }
       }
     },
@@ -13593,7 +13953,10 @@
           ],
           "properties": {
             "email": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "planType": {
               "$ref": "#/definitions/PlanType"
@@ -13614,6 +13977,14 @@
             "type"
           ],
           "properties": {
+            "credentialSource": {
+              "default": "awsManaged",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/AmazonBedrockCredentialSource"
+                }
+              ]
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -13624,6 +13995,13 @@
           },
           "title": "AmazonBedrockAccount"
         }
+      ]
+    },
+    "AmazonBedrockCredentialSource": {
+      "type": "string",
+      "enum": [
+        "codexManaged",
+        "awsManaged"
       ]
     },
     "GetAccountResponse": {
@@ -13866,6 +14244,15 @@
         },
         "modelProvider": {
           "type": "string"
+        },
+        "multiAgentMode": {
+          "description": "Current multi-agent mode for this thread.",
+          "default": "explicitRequestOnly",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MultiAgentMode"
+            }
+          ]
         },
         "personality": {
           "anyOf": [
@@ -14328,7 +14715,7 @@
             "null"
           ],
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           }
         },
         "write": {
@@ -14338,7 +14725,7 @@
             "null"
           ],
           "items": {
-            "$ref": "#/definitions/ApiPathString"
+            "$ref": "#/definitions/LegacyAppPathString"
           }
         }
       }
@@ -14353,9 +14740,6 @@
           ]
         }
       }
-    },
-    "ApiPathString": {
-      "type": "string"
     },
     "FileSystemAccessMode": {
       "type": "string",
@@ -14375,7 +14759,7 @@
           ],
           "properties": {
             "path": {
-              "$ref": "#/definitions/ApiPathString"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "type": "string",
@@ -15566,66 +15950,6 @@
         }
       }
     },
-    "ExternalAgentConfigImportItemTypeFailure": {
-      "type": "object",
-      "required": [
-        "failureStage",
-        "itemType",
-        "message"
-      ],
-      "properties": {
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "failureStage": {
-          "type": "string"
-        },
-        "itemType": {
-          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
-        },
-        "message": {
-          "type": "string"
-        },
-        "source": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
-    "ExternalAgentConfigImportItemTypeSuccess": {
-      "type": "object",
-      "required": [
-        "itemType"
-      ],
-      "properties": {
-        "cwd": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "itemType": {
-          "$ref": "#/definitions/ExternalAgentConfigMigrationItemType"
-        },
-        "source": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "target": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
     "ExternalAgentConfigImportTypeResult": {
       "type": "object",
       "required": [
@@ -15647,6 +15971,26 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/ExternalAgentConfigImportItemTypeSuccess"
+          }
+        }
+      }
+    },
+    "ExternalAgentConfigImportProgressNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ExternalAgentConfigImportProgressNotification",
+      "type": "object",
+      "required": [
+        "importId",
+        "itemTypeResults"
+      ],
+      "properties": {
+        "importId": {
+          "type": "string"
+        },
+        "itemTypeResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ExternalAgentConfigImportTypeResult"
           }
         }
       }
@@ -15879,6 +16223,41 @@
         },
         "turnId": {
           "type": "string"
+        }
+      }
+    },
+    "ModelSafetyBufferingUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ModelSafetyBufferingUpdatedNotification",
+      "type": "object",
+      "required": [
+        "model",
+        "reasons",
+        "threadId",
+        "turnId",
+        "useCases"
+      ],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        },
+        "useCases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -16252,131 +16631,6 @@
         }
       }
     },
-    "InitializeCapabilities": {
-      "description": "Client-declared capabilities negotiated during initialize.",
-      "type": "object",
-      "properties": {
-        "experimentalApi": {
-          "description": "Opt into receiving experimental API methods and fields.",
-          "default": false,
-          "type": "boolean"
-        },
-        "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "requestAttestation": {
-          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
-          "default": false,
-          "type": "boolean"
-        }
-      }
-    },
-    "FuzzyFileSearchSessionCompletedNotification": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionCompletedNotification",
-      "type": "object",
-      "required": [
-        "sessionId"
-      ],
-      "properties": {
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "FuzzyFileSearchSessionStartParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStartParams",
-      "type": "object",
-      "required": [
-        "roots",
-        "sessionId"
-      ],
-      "properties": {
-        "roots": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "FuzzyFileSearchParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchParams",
-      "type": "object",
-      "required": [
-        "query",
-        "roots"
-      ],
-      "properties": {
-        "cancellationToken": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "query": {
-          "type": "string"
-        },
-        "roots": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "InitializeParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "InitializeParams",
-      "type": "object",
-      "required": [
-        "clientInfo"
-      ],
-      "properties": {
-        "capabilities": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InitializeCapabilities"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "clientInfo": {
-          "$ref": "#/definitions/ClientInfo"
-        }
-      }
-    },
-    "FuzzyFileSearchSessionUpdateParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionUpdateParams",
-      "type": "object",
-      "required": [
-        "query",
-        "sessionId"
-      ],
-      "properties": {
-        "query": {
-          "type": "string"
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
     "FuzzyFileSearchSessionUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "FuzzyFileSearchSessionUpdatedNotification",
@@ -16397,47 +16651,6 @@
           "type": "string"
         },
         "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "FuzzyFileSearchMatchType": {
-      "type": "string",
-      "enum": [
-        "file",
-        "directory"
-      ]
-    },
-    "FuzzyFileSearchSessionStopParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStopParams",
-      "type": "object",
-      "required": [
-        "sessionId"
-      ],
-      "properties": {
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "ClientInfo": {
-      "type": "object",
-      "required": [
-        "name",
-        "version"
-      ],
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
           "type": "string"
         }
       }
@@ -16480,6 +16693,176 @@
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
+        }
+      }
+    },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "type": "object",
+      "properties": {
+        "experimentalApi": {
+          "description": "Opt into receiving experimental API methods and fields.",
+          "default": false,
+          "type": "boolean"
+        },
+        "mcpServerOpenaiFormElicitation": {
+          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
+          "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "requestAttestation": {
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "FuzzyFileSearchParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchParams",
+      "type": "object",
+      "required": [
+        "query",
+        "roots"
+      ],
+      "properties": {
+        "cancellationToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "FuzzyFileSearchSessionStopParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStopParams",
+      "type": "object",
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchSessionUpdateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionUpdateParams",
+      "type": "object",
+      "required": [
+        "query",
+        "sessionId"
+      ],
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchSessionCompletedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionCompletedNotification",
+      "type": "object",
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "ClientInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchSessionStartParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStartParams",
+      "type": "object",
+      "required": [
+        "roots",
+        "sessionId"
+      ],
+      "properties": {
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchMatchType": {
+      "type": "string",
+      "enum": [
+        "file",
+        "directory"
+      ]
+    },
+    "InitializeParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "InitializeParams",
+      "type": "object",
+      "required": [
+        "clientInfo"
+      ],
+      "properties": {
+        "capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InitializeCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientInfo": {
+          "$ref": "#/definitions/ClientInfo"
         }
       }
     },
@@ -18856,6 +19239,29 @@
           "type": "object",
           "required": [
             "id",
+            "method"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "account/workspaceMessages/read"
+              ],
+              "title": "Account/workspaceMessages/readRequestMethod"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "title": "Account/workspaceMessages/readRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
             "method",
             "params"
           ],
@@ -19171,6 +19577,29 @@
             }
           },
           "title": "ExternalAgentConfig/importRequest"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "method"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "externalAgentConfig/import/readHistories"
+              ],
+              "title": "ExternalAgentConfig/import/readHistoriesRequestMethod"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "title": "ExternalAgentConfig/import/readHistoriesRequest"
         },
         {
           "type": "object",
@@ -20186,6 +20615,26 @@
             "method": {
               "type": "string",
               "enum": [
+                "externalAgentConfig/import/progress"
+              ],
+              "title": "ExternalAgentConfig/import/progressNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/ExternalAgentConfigImportProgressNotification"
+            }
+          },
+          "title": "ExternalAgentConfig/import/progressNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
                 "externalAgentConfig/import/completed"
               ],
               "title": "ExternalAgentConfig/import/completedNotificationMethod"
@@ -20356,6 +20805,26 @@
             }
           },
           "title": "Turn/moderationMetadataNotification"
+        },
+        {
+          "type": "object",
+          "required": [
+            "method",
+            "params"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "model/safetyBuffering/updated"
+              ],
+              "title": "Model/safetyBuffering/updatedNotificationMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/ModelSafetyBufferingUpdatedNotification"
+            }
+          },
+          "title": "Model/safetyBuffering/updatedNotification"
         },
         {
           "type": "object",
