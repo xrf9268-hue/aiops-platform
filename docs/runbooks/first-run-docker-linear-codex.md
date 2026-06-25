@@ -127,8 +127,8 @@ Expected output is action-oriented:
 PASS Linear auth: API key authenticated and project is visible
 FAIL Codex auth: ...
      Fix: Run codex --login in the same CODEX_HOME/container user context.
-WARN Dashboard state API: not checked; no dashboard URL supplied
-     Fix: Pass --dashboard-url while the worker is running to verify state API auth.
+WARN Dashboard endpoints: not checked; no dashboard URL supplied
+     Fix: Pass --dashboard-url while the worker is running to verify /livez, /readyz, and /api/v1/state.
 ```
 
 `--mode=mock` fails on missing workflow, missing `repo.clone_url`, missing

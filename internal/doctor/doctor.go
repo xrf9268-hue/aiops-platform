@@ -27,6 +27,7 @@ const (
 	aiopsModulePath       = "github.com/xrf9268-hue/aiops-platform"
 	defaultCommandTimeout = 10 * time.Second
 	goTestProbeTimeout    = 2 * time.Minute
+	dashboardReadyPoll    = 250 * time.Millisecond
 )
 
 type Check struct {
@@ -292,29 +293,97 @@ func (r *reportBuilder) checkDockerCompose(ctx context.Context) {
 }
 
 func (r *reportBuilder) checkDashboard(ctx context.Context) {
-	if strings.TrimSpace(r.opts.DashboardURL) == "" {
-		r.warn("Dashboard state API", "not checked; no dashboard URL supplied", "Pass --dashboard-url while the worker is running to verify state API auth.")
+	baseURL := strings.TrimRight(strings.TrimSpace(r.opts.DashboardURL), "/")
+	if baseURL == "" {
+		r.warn("Dashboard endpoints", "not checked; no dashboard URL supplied", "Pass --dashboard-url while the worker is running to verify /livez, /readyz, and /api/v1/state.")
 		return
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(r.opts.DashboardURL, "/")+"/api/v1/state", nil)
+	for _, endpoint := range dashboardEndpoints {
+		r.checkDashboardEndpoint(ctx, baseURL, endpoint)
+	}
+}
+
+type dashboardEndpoint struct {
+	name string
+	path string
+	fix  string
+}
+
+type dashboardHTTPResult struct {
+	status     string
+	statusCode int
+	err        error
+	fix        string
+}
+
+var dashboardEndpoints = []dashboardEndpoint{
+	{name: "Dashboard /livez", path: "/livez", fix: "Start the worker or fix the dashboard URL/network mapping."},
+	{name: "Dashboard /readyz", path: "/readyz", fix: "Wait for startup readiness or fix the dashboard URL/network mapping."},
+	{name: "Dashboard state API", path: "/api/v1/state", fix: "Set AIOPS_STATE_API_TOKEN or use the loopback-only URL."},
+}
+
+func (r *reportBuilder) checkDashboardEndpoint(ctx context.Context, baseURL string, endpoint dashboardEndpoint) {
+	result := r.fetchDashboardEndpoint(ctx, baseURL, endpoint)
+	if endpoint.path == "/readyz" && result.statusCode == http.StatusServiceUnavailable {
+		result = r.retryDashboardReady(ctx, baseURL, endpoint, result)
+	}
+	r.addDashboardResult(endpoint, result)
+}
+
+func (r *reportBuilder) fetchDashboardEndpoint(ctx context.Context, baseURL string, endpoint dashboardEndpoint) dashboardHTTPResult {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+endpoint.path, nil)
 	if err != nil {
-		r.fail("Dashboard state API", err.Error(), "Pass a valid dashboard base URL.")
-		return
+		return dashboardHTTPResult{err: err, fix: "Pass a valid dashboard base URL."}
 	}
-	if tok := os.Getenv("AIOPS_STATE_API_TOKEN"); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
+	if endpoint.path == "/api/v1/state" {
+		if tok := os.Getenv("AIOPS_STATE_API_TOKEN"); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 	resp, err := r.opts.HTTPClient.Do(req)
 	if err != nil {
-		r.fail("Dashboard state API", err.Error(), "Start the worker or fix the dashboard URL/network mapping.")
-		return
+		return dashboardHTTPResult{err: err}
 	}
 	defer closeBody(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		r.fail("Dashboard state API", resp.Status, "Set AIOPS_STATE_API_TOKEN or use the loopback-only URL.")
+	return dashboardHTTPResult{status: resp.Status, statusCode: resp.StatusCode}
+}
+
+func (r *reportBuilder) retryDashboardReady(ctx context.Context, baseURL string, endpoint dashboardEndpoint, last dashboardHTTPResult) dashboardHTTPResult {
+	readyCtx, cancel := context.WithTimeout(ctx, defaultCommandTimeout)
+	defer cancel()
+	ticker := time.NewTicker(dashboardReadyPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-readyCtx.Done():
+			if errors.Is(readyCtx.Err(), context.DeadlineExceeded) {
+				return last
+			}
+			return dashboardHTTPResult{err: readyCtx.Err()}
+		case <-ticker.C:
+			next := r.fetchDashboardEndpoint(readyCtx, baseURL, endpoint)
+			last = next
+			if next.statusCode != http.StatusServiceUnavailable {
+				return next
+			}
+		}
+	}
+}
+
+func (r *reportBuilder) addDashboardResult(endpoint dashboardEndpoint, result dashboardHTTPResult) {
+	if result.err != nil {
+		fix := endpoint.fix
+		if result.fix != "" {
+			fix = result.fix
+		}
+		r.fail(endpoint.name, result.err.Error(), fix)
 		return
 	}
-	r.pass("Dashboard state API", resp.Status)
+	if result.statusCode < 200 || result.statusCode >= 300 {
+		r.fail(endpoint.name, result.status, endpoint.fix)
+		return
+	}
+	r.pass(endpoint.name, result.status)
 }
 
 func closeBody(body io.Closer) {

@@ -271,6 +271,93 @@ func TestCheckSandboxWarnsForCustomCodexCommand(t *testing.T) {
 	}
 }
 
+func TestCheckDashboardVerifiesHealthReadinessAndStateEndpoints(t *testing.T) {
+	var gotPaths []string
+	var gotStateAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		if r.URL.Path == "/api/v1/state" {
+			gotStateAuth = r.Header.Get("Authorization")
+		}
+		switch r.URL.Path {
+		case "/livez", "/readyz", "/api/v1/state":
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("AIOPS_STATE_API_TOKEN", "state-token")
+	r := &reportBuilder{opts: Options{DashboardURL: srv.URL, HTTPClient: srv.Client()}}
+	r.checkDashboard(context.Background())
+
+	if !slices.Equal(gotPaths, []string{"/livez", "/readyz", "/api/v1/state"}) {
+		t.Fatalf("dashboard paths = %v; want /livez, /readyz, /api/v1/state", gotPaths)
+	}
+	if gotStateAuth != "Bearer state-token" {
+		t.Fatalf("state Authorization = %q; want bearer token", gotStateAuth)
+	}
+	report := Report{Checks: r.checks}
+	for _, name := range []string{"Dashboard /livez", "Dashboard /readyz", "Dashboard state API"} {
+		check := findCheck(t, report, name)
+		if check.Status != Pass {
+			t.Fatalf("%s status = %s; want PASS (detail=%q)", name, check.Status, check.Detail)
+		}
+		if !strings.Contains(check.Detail, "200 OK") {
+			t.Fatalf("%s detail = %q; want checked HTTP status", name, check.Detail)
+		}
+	}
+}
+
+func TestCheckDashboardRetriesReadinessDuringStartup(t *testing.T) {
+	var readyCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/livez", "/api/v1/state":
+			w.WriteHeader(http.StatusOK)
+		case "/readyz":
+			readyCalls++
+			if readyCalls == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	r := &reportBuilder{opts: Options{DashboardURL: srv.URL, HTTPClient: srv.Client()}}
+	r.checkDashboard(context.Background())
+
+	if readyCalls != 2 {
+		t.Fatalf("/readyz calls = %d; want retry after transient 503", readyCalls)
+	}
+	check := findCheck(t, Report{Checks: r.checks}, "Dashboard /readyz")
+	if check.Status != Pass {
+		t.Fatalf("Dashboard /readyz status = %s; want PASS (detail=%q)", check.Status, check.Detail)
+	}
+	if !strings.Contains(check.Detail, "200 OK") {
+		t.Fatalf("Dashboard /readyz detail = %q; want final passing status", check.Detail)
+	}
+}
+
+func TestCheckDashboardWarnsWhenURLNotSupplied(t *testing.T) {
+	r := &reportBuilder{}
+	r.checkDashboard(context.Background())
+
+	check := findCheck(t, Report{Checks: r.checks}, "Dashboard endpoints")
+	if check.Status != Warn {
+		t.Fatalf("Dashboard endpoints status = %s; want WARN", check.Status)
+	}
+	if !strings.Contains(check.Detail, "not checked; no dashboard URL supplied") {
+		t.Fatalf("detail = %q; want not checked explanation", check.Detail)
+	}
+	if !strings.Contains(check.Fix, "/livez, /readyz, and /api/v1/state") {
+		t.Fatalf("fix = %q; want all dashboard endpoints named", check.Fix)
+	}
+}
+
 func TestCheckSandboxSkipsProbeWhenTurnPolicyOverridesToFullAccess(t *testing.T) {
 	noContainer(t)
 	// thread_sandbox stays workspace-write, but an explicit turn_sandbox_policy

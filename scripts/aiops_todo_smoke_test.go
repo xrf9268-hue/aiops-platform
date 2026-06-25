@@ -41,6 +41,9 @@ func TestTodoSmokeScriptRunsDoctorAndWritesReport(t *testing.T) {
 			t.Fatalf("smoke script missing %q", want)
 		}
 	}
+	if strings.Contains(text, `doctor_args+=(--dashboard-url "$dashboard_url")`) {
+		t.Fatalf("smoke script must not pass dashboard-url to doctor before the worker starts")
+	}
 }
 
 func TestTodoSmokeScriptSupportsGitHubDraftPRValidation(t *testing.T) {

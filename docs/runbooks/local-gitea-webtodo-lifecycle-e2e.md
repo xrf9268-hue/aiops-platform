@@ -142,10 +142,12 @@ Gitea boot method can vary by host, but the target state should be stable:
 - default branch: `main`
 - labels: `aiops/todo`, `aiops/in-progress`, `aiops/human-review`,
   `aiops/rework`, `aiops/done`, `aiops/canceled`
-- issues: every file in `$AIOPS_WEBTODO_RUN_ROOT/issues/`
+- issues: every file in `$AIOPS_WEBTODO_RUN_ROOT/issues/`, initially without
+  `aiops/*` state labels
 
-Seed the first ten primary issues as ready work by adding `aiops/todo`.
-Keep control issues unlabeled until their phase:
+Keep every issue inactive until the dashboard doctor passes. After that gate,
+activate the first ten primary issues by adding `aiops/todo`. Keep control
+issues unlabeled until their phase:
 
 - `CONTROL no-ready issue must stay idle`: no `aiops/*` label.
 - `CONTROL cancel running codex issue`: add `aiops/todo` only when testing
@@ -212,7 +214,27 @@ AIOPS_SERVER_HOST=127.0.0.1 \
   2>&1 | tee "$AIOPS_WEBTODO_RUN_ROOT/logs/reviewer-worker.log"
 ```
 
-In another terminal, trigger the first poll:
+After both workers are listening, validate the dashboard endpoints before you
+activate issues:
+
+```bash
+AIOPS_WORKFLOW_PATH="$AIOPS_WEBTODO_MAKER_WORKFLOW" \
+AIOPS_MIRROR_ROOT="$AIOPS_WEBTODO_MAKER_MIRROR_ROOT" \
+  "$AIOPS_WEBTODO_WORKER_BIN" --doctor --deploy=binary --mode=real \
+  --dashboard-url "$AIOPS_WEBTODO_MAKER_DASHBOARD_URL" \
+  "$AIOPS_WEBTODO_MAKER_WORKFLOW" \
+  | tee "$AIOPS_WEBTODO_RUN_ROOT/artifacts/maker-dashboard-doctor.log"
+
+AIOPS_WORKFLOW_PATH="$AIOPS_WEBTODO_REVIEWER_WORKFLOW" \
+AIOPS_MIRROR_ROOT="$AIOPS_WEBTODO_REVIEWER_MIRROR_ROOT" \
+  "$AIOPS_WEBTODO_WORKER_BIN" --doctor --deploy=binary --mode=real \
+  --dashboard-url "$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL" \
+  "$AIOPS_WEBTODO_REVIEWER_WORKFLOW" \
+  | tee "$AIOPS_WEBTODO_RUN_ROOT/artifacts/reviewer-dashboard-doctor.log"
+```
+
+After both dashboard doctors pass, add `aiops/todo` to issues 1-10. Use the
+Gitea UI or API, then trigger a work poll:
 
 ```bash
 curl -fsS -X POST -H 'X-AIOPS-Refresh: true' \

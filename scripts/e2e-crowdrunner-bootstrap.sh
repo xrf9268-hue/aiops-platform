@@ -460,15 +460,18 @@ cat >"$run_root/NEXT-STEPS.md" <<EOF
 3. Download and verify the $release_tag release archive into \`downloads/\`,
    then extract \`worker\` and \`tui\` into \`bin/\`.
 4. Create the local Gitea repo from \`seed-repo/\`.
-5. Create labels and issues from \`issues/*.md\`; initially label product issues
-   01-12 with \`aiops/todo\`, keep controls staged as described in their bodies.
+5. Create labels and issues from \`issues/*.md\`; leave product issues without
+   \`aiops/*\` state labels and keep controls staged as described in their bodies.
 6. Run maker/reviewer \`worker --doctor --deploy=binary --mode=real\`.
 7. Start maker on port $maker_port and reviewer on port $reviewer_port.
-8. Use \`scripts/e2e-crowdrunner-capture.py\` at start, mid-run, Rework,
+8. After both dashboards are listening, run maker \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"\`
+   and reviewer \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"\`.
+9. Add \`aiops/todo\` to product issues 01-12, then trigger a dashboard refresh.
+10. Use \`scripts/e2e-crowdrunner-capture.py\` at start, mid-run, Rework,
    cancellation, stress, and final milestones.
-9. Fresh-clone final main into \`final-verify/crowd-runner-product\` and run
+11. Fresh-clone final main into \`final-verify/crowd-runner-product\` and run
    npm verification plus Playwright smoke.
-10. Run \`scripts/e2e-crowdrunner-report.py --run-root "$run_root"\`.
+12. Run \`scripts/e2e-crowdrunner-report.py --run-root "$run_root"\`.
 
 See \`docs/runbooks/local-gitea-crowdrunner-lifecycle-e2e.md\` for the full SOP.
 EOF
