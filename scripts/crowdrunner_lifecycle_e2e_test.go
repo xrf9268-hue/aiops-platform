@@ -41,6 +41,9 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"operator milestone evidence",
 		"Do not commit `env.local`",
+		"`state/stress-final.json`",
+		`--tag final`,
+		`--stress-url "$AIOPS_CROWDRUNNER_STRESS_DASHBOARD_URL"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("runbook missing %q", want)
@@ -53,6 +56,13 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"add `aiops/todo` to issues 1-12",
 		"trigger a work poll:",
+	})
+	assertInOrder(t, text, []string{
+		"## 9. Generate the Report Pack",
+		"state/stress-final.json",
+		"scripts/e2e-crowdrunner-capture.py",
+		`--tag final`,
+		"scripts/e2e-crowdrunner-report.py",
 	})
 }
 
@@ -89,6 +99,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 		"issues/12-release-polish-pwa.md",
 		"issues/16-control-continuation-budget.md",
 		"state",
+		"state/continuation-control-expected.json",
 		"artifacts",
 		"logs",
 		"downloads",
@@ -145,6 +156,34 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	} {
 		if !strings.Contains(issue, want) {
 			t.Fatalf("issue 07 missing %q\n%s", want, issue)
+		}
+	}
+
+	controlIssue := readFileString(t, filepath.Join(runRoot, "issues", "16-control-continuation-budget.md"))
+	for _, want := range []string{
+		"CONTINUATION_BUDGET_CANARY",
+		".aiops/operator-continuation-release",
+		"both aiops/in-progress and aiops/stress",
+		"must not edit files, commit, push, open a PR",
+		`method of continuation_budget for issue #16`,
+	} {
+		if !strings.Contains(controlIssue, want) {
+			t.Fatalf("issue 16 missing %q\n%s", want, controlIssue)
+		}
+	}
+
+	expectation := readFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"))
+	for _, want := range []string{
+		`"kind": "continuation_budget_control_expectation"`,
+		`"issue_number": 16`,
+		`"active_label": "aiops/in-progress"`,
+		`"routing_label": "aiops/stress"`,
+		`"expected_blocked_method": "continuation_budget"`,
+		`"forbidden_pr_issue_reference": "#16"`,
+		`"aiops/human-review"`,
+	} {
+		if !strings.Contains(expectation, want) {
+			t.Fatalf("continuation expectation missing %q\n%s", want, expectation)
 		}
 	}
 
@@ -207,8 +246,13 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			want: []string{
 				"  max_turns: 1",
 				"  max_continuation_turns: 2",
-				"    - Stress",
+				"    - In Progress",
+				"  required_labels:",
+				"    - aiops/stress",
 				"  root: " + filepath.Join(runRoot, "workspaces", "stress"),
+				"deterministic continuation-budget stress-control agent",
+				"Do not edit files, create branches, commit, push, open a pull request",
+				`method: "continuation_budget"`,
 			},
 		},
 	} {
@@ -223,8 +267,13 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			}
 		}
 	}
-	if strings.Contains(stressWorkflow, "    - Todo") || strings.Contains(stressWorkflow, "    - Rework") {
-		t.Fatalf("stress workflow should not claim Todo/Rework states:\n%s", stressWorkflow)
+	if strings.Contains(stressWorkflow, "    - Todo") ||
+		strings.Contains(stressWorkflow, "    - Stress") ||
+		strings.Contains(stressWorkflow, "    - Rework") {
+		t.Fatalf("stress workflow should use mapped In Progress plus required labels, not maker/stress states:\n%s", stressWorkflow)
+	}
+	if strings.Contains(stressWorkflow, "You are an autonomous MAKER agent") {
+		t.Fatalf("stress workflow should not inherit the maker PR prompt:\n%s", stressWorkflow)
 	}
 }
 
@@ -241,11 +290,20 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 		filepath.Join(runRoot, "final-verify", "playwright-report"),
 		filepath.Join(runRoot, "logs"),
 	)
-	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), fakeMergedPRsJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "maker-final.json"), `{"counts":{"running":0,"blocked":0}}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "reviewer-final.json"), `{"counts":{"running":0,"blocked":0}}`)
-	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{"counts":{"running":0,"blocked":1}}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","issue_url":"http://gitea.local/aiops-bot/crowd-runner-product/issues/16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget",
+		"forbidden_pr_issue_reference":"#16"
+	}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "operator-milestone-freeze-after-10.json"), `{
 		"kind":"operator_milestone_freeze",
 		"stop_after":10,
@@ -283,6 +341,8 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 		"Operator milestone freeze",
 		"ready labels removed from #11, #12",
 		"Continuation / turn-budget stress evidence",
+		"Continuation control: PASS",
+		"issue #16 blocked via `continuation_budget`",
 		"#12",
 		"final-verify/videos/gameplay.webm",
 	} {
@@ -293,6 +353,127 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 	promo := readFileString(t, filepath.Join(runRoot, "promo", "notes", "promotion-materials.md"))
 	if !strings.Contains(promo, "fresh crowd-runner design") {
 		t.Fatalf("promo notes missing fresh product positioning:\n%s", promo)
+	}
+}
+
+func TestCrowdRunnerReportRejectsContinuationControlPR(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[
+		{"number":22,"title":"test: finish control","body":"","state":"closed","merged":true,"head":{"ref":"ai/16"}}
+	]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget",
+		"forbidden_pr_issue_reference":"#16"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 produced PR(s) #22") {
+		t.Fatalf("report did not reject the control PR:\n%s", report)
+	}
+}
+
+func TestCrowdRunnerReportRejectsContinuationControlPRByTrackerID(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	doneIssues := strings.TrimSuffix(strings.TrimPrefix(fakeCrowdRunnerDoneIssuesJSON(), "["), "]")
+	controlIssue := `{"id":1601,"number":16,"title":"control","state":"open","labels":[]}`
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), "["+doneIssues+","+controlIssue+"]")
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[
+		{"number":23,"title":"test: finish unrelated","body":"","state":"closed","merged":true,"head":{"ref":"ai/1601"}}
+	]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 produced PR(s) #23") {
+		t.Fatalf("report did not reject the tracker-id control PR:\n%s", report)
+	}
+}
+
+func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON("aiops/human-review"))
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget",
+		"forbidden_terminal_labels":["aiops/done","aiops/canceled","aiops/human-review"]
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 has forbidden label(s) aiops/human-review.") {
+		t.Fatalf("report did not reject the control terminal label:\n%s", report)
+	}
+}
+
+func TestCrowdRunnerReportRejectsAnonymousContinuationControlRow(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	want := "Continuation control: FAIL: stress worker blocked, but no issue #16 `continuation_budget` row was captured."
+	if !strings.Contains(report, want) {
+		t.Fatalf("report accepted anonymous continuation row; missing %q\n%s", want, report)
 	}
 }
 
@@ -469,6 +650,16 @@ func fakeCrowdRunnerDoneIssuesJSON() string {
 		rows = append(rows, `{"number":`+itoa(i)+`,"title":"issue `+itoa(i)+`","state":"closed","labels":[{"name":"aiops/done"}]}`)
 	}
 	return "[" + strings.Join(rows, ",") + "]"
+}
+
+func fakeCrowdRunnerDoneIssuesWithOpenControlJSON(labels ...string) string {
+	body := strings.TrimSuffix(strings.TrimPrefix(fakeCrowdRunnerDoneIssuesJSON(), "["), "]")
+	var labelRows []string
+	for _, label := range labels {
+		labelRows = append(labelRows, `{"name":"`+label+`"}`)
+	}
+	control := `{"number":16,"title":"control","state":"open","labels":[` + strings.Join(labelRows, ",") + `]}`
+	return "[" + body + "," + control + "]"
 }
 
 func fakeCrowdRunnerMilestoneIssuesJSON() string {

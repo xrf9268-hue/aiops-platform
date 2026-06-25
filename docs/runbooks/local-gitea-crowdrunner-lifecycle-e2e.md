@@ -129,7 +129,9 @@ Required labels:
 - `aiops/rework`
 - `aiops/done`
 - `aiops/canceled`
-- `aiops/stress`
+- `aiops/stress` (auxiliary routing label for issue 16; pair it with
+  `aiops/in-progress` so Gitea derives a mapped state that the main maker
+  workflow treats as inactive)
 
 Create issues from `issues/*.md` without `aiops/*` state labels. Keep product
 issues inactive until the dashboard doctor passes; after that gate, activate
@@ -138,7 +140,9 @@ issues 1-12 by adding `aiops/todo`. Keep control issues staged:
 - Issue 13: no `aiops/*` label.
 - Issue 14: add `aiops/todo` only when testing cancellation.
 - Issue 15: leave unlabeled or blocked.
-- Issue 16: run only with the low-turn stress workflow and `aiops/stress`.
+- Issue 16: run only with the low-turn stress workflow; add both
+  `aiops/in-progress` and `aiops/stress` when starting the continuation-budget
+  control.
 
 Save the created issue list:
 
@@ -272,8 +276,13 @@ scripts/e2e-crowdrunner-capture.py \
   after state.
 - **Blocked held:** confirm issue 15 remains undispatched.
 - **Continuation budget:** start the stress worker on port 4203 with
-  `workflows/maker-low-turn-WORKFLOW.md`, label issue 16 `aiops/stress`, then
-  capture stress worker state and logs.
+  `workflows/maker-low-turn-WORKFLOW.md`, label issue 16 with both
+  `aiops/in-progress` and `aiops/stress`, then
+  wait for local continuation-budget exhaustion. The bootstrap writes
+  `state/continuation-control-expected.json`; the expected machine evidence is
+  `state/stress-final.json` with `counts.blocked >= 1` and a blocked row for
+  issue 16 whose `method` is `continuation_budget`. A PR, terminal label, or
+  `Human Review` handoff for issue 16 means the control failed.
 
 ## 8. Final Verification
 
@@ -301,13 +310,19 @@ and `final-verify/videos/`.
 
 ## 9. Generate the Report Pack
 
-Save final state:
+Save final state. The final capture writes `state/maker-final.json`,
+`state/reviewer-final.json`, and `state/stress-final.json` from the dashboard
+state APIs before the report reads them:
 
 ```bash
-curl -fsS "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL/api/v1/state" \
-  > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/maker-final.json"
-curl -fsS "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL/api/v1/state" \
-  > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/reviewer-final.json"
+scripts/e2e-crowdrunner-capture.py \
+  --run-root "$AIOPS_CROWDRUNNER_RUN_ROOT" \
+  --maker-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL" \
+  --reviewer-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL" \
+  --stress-url "$AIOPS_CROWDRUNNER_STRESS_DASHBOARD_URL" \
+  --tui-bin "$AIOPS_CROWDRUNNER_TUI_BIN" \
+  --tag final \
+  --no-default-screenshots
 curl -fsS -H "Authorization: token $GITEA_TOKEN" \
   "$AIOPS_CROWDRUNNER_GITEA_URL/api/v1/repos/$AIOPS_CROWDRUNNER_REPO_OWNER/$AIOPS_CROWDRUNNER_REPO_NAME/issues?state=all" \
   > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/issues-final.json"
@@ -330,7 +345,7 @@ Pass when:
 - all product issues reach `aiops/done`;
 - product PRs merge through reviewer approval and CI;
 - Rework, cancellation, no-ready, blocked, and continuation-budget controls
-  behave as expected;
+  behave as expected, including the report's continuation-control assertion;
 - maker/reviewer dashboards are idle at closeout;
 - fresh-clone npm verification and Playwright smoke pass;
 - required screenshots and logs exist.

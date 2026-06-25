@@ -102,7 +102,38 @@ render_workflow() {
   local workspace_root="$3"
   local mode="${4:-normal}"
   local skip_next_go_test=0
+  local frontmatter_delims=0
   while IFS= read -r line || [ -n "$line" ]; do
+    if [ "$mode" = "stress" ] && [ "$line" = "---" ]; then
+      frontmatter_delims=$((frontmatter_delims + 1))
+      printf '%s\n' "$line"
+      if [ "$frontmatter_delims" -eq 2 ]; then
+        cat <<'STRESS_PROMPT'
+You are a deterministic continuation-budget stress-control agent.
+
+This workflow only exercises aiops-platform's continuation-budget boundary. It
+is not a product maker workflow.
+
+For issue #16:
+- Do not edit files, create branches, commit, push, open a pull request, comment
+  a PR URL, or change labels.
+- The required sentinel `.aiops/operator-continuation-release` is operator-only,
+  intentionally absent, and must not be created by the agent.
+- On every turn, inspect whether the sentinel exists. If it is absent, report
+  that the control remains intentionally active and stop the turn cleanly
+  without tracker handoff.
+- Leave the Gitea issue with both `aiops/in-progress` and `aiops/stress` so the
+  mapped `In Progress` state dispatches only through this stress worker's
+  required routing label until `agent.max_continuation_turns` is exhausted.
+
+Expected harness result: `/api/v1/state` shows issue #16 in `blocked` with
+`method: "continuation_budget"`. Any PR, terminal label, or Human Review handoff
+is a failed control.
+STRESS_PROMPT
+        break
+      fi
+      continue
+    fi
     if [ "$skip_next_go_test" -eq 1 ]; then
       skip_next_go_test=0
       case "$line" in
@@ -138,7 +169,7 @@ render_workflow() {
         fi ;;
       "    - Todo")
         if [ "$mode" = "stress" ]; then
-          printf '    - Stress\n'
+          printf '    - In Progress\n'
         else
           printf '%s\n' "$line"
         fi ;;
@@ -148,6 +179,12 @@ render_workflow() {
         else
           printf '%s\n' "$line"
         fi ;;
+      "  inactive_states:")
+        if [ "$mode" = "stress" ]; then
+          printf '  required_labels:\n'
+          printf '    - aiops/stress\n'
+        fi
+        printf '%s\n' "$line" ;;
       *)
         line="${line//go build .\/.../npm ci, npm run lint, npm run test -- --run, and npm run build}"
         line="${line//go test .\/.../npm run test -- --run}"
@@ -159,6 +196,23 @@ render_workflow() {
 render_workflow "$repo_root/examples/maker-WORKFLOW.md" "$run_root/workflows/maker-WORKFLOW.md" "$run_root/workspaces/maker" normal
 render_workflow "$repo_root/examples/reviewer-automerge-WORKFLOW.md" "$run_root/workflows/reviewer-automerge-WORKFLOW.md" "$run_root/workspaces/reviewer" normal
 render_workflow "$repo_root/examples/maker-WORKFLOW.md" "$run_root/workflows/maker-low-turn-WORKFLOW.md" "$run_root/workspaces/stress" stress
+
+cat >"$run_root/state/continuation-control-expected.json" <<'EOF'
+{
+  "kind": "continuation_budget_control_expectation",
+  "issue_number": 16,
+  "worker": "stress",
+  "active_label": "aiops/in-progress",
+  "routing_label": "aiops/stress",
+  "expected_state_file": "state/stress-final.json",
+  "expected_blocked_method": "continuation_budget",
+  "expected_counts": {
+    "blocked_at_least": 1
+  },
+  "forbidden_pr_issue_reference": "#16",
+  "forbidden_terminal_labels": ["aiops/done", "aiops/canceled", "aiops/human-review"]
+}
+EOF
 
 cat >"$run_root/seed-repo/package.json" <<'EOF'
 {
@@ -411,10 +465,14 @@ write_issue 15 control-blocked-held "CONTROL blocked issue held out of ready gat
 
 write_issue 16 control-continuation-budget "CONTROL continuation budget stress worker" \
 "Control scenario:
-- Run only with workflows/maker-low-turn-WORKFLOW.md on the Stress state.
-- Label this issue aiops/stress, not aiops/todo.
-- The task intentionally asks for broad product analysis plus implementation so one turn is unlikely to complete.
-- Capture runner timeout, continuation, clean-turn budget, or local blocked state evidence from the stress worker.
+- This is CONTINUATION_BUDGET_CANARY and must not produce product code.
+- Run only with workflows/maker-low-turn-WORKFLOW.md on In Progress plus the aiops/stress routing label.
+- Label this issue with both aiops/in-progress and aiops/stress when starting the control.
+- The required sentinel .aiops/operator-continuation-release is intentionally absent and may only be created by the operator.
+- The stress agent must not edit files, commit, push, open a PR, move labels, or hand off to Human Review.
+- Expected terminal evidence is state/stress-final.json with counts.blocked >= 1 and a blocked row method of continuation_budget for issue #16.
+- A PR, aiops/done, aiops/canceled, aiops/human-review handoff, or normal one-turn completion is a failed control.
+- Capture stress worker state and logs after the continuation budget blocks locally.
 - Do not mix this worker with the main maker/reviewer evidence."
 
 cat >"$run_root/env.example" <<EOF
