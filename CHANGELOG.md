@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.10](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.9...v0.1.10) (2026-06-25)
+
+
+### Features
+
+* **e2e:** add Crowd Runner milestone freeze ([#1001](https://github.com/xrf9268-hue/aiops-platform/issues/1001)) ([bc63631](https://github.com/xrf9268-hue/aiops-platform/commit/bc636310cb0ba9e3db6298a295559a9514aa5d8c))
+* **observability:** classify active success without handoff ([a5ab303](https://github.com/xrf9268-hue/aiops-platform/commit/a5ab3038624b04b97723a492767d06039eb0e723)), closes [#988](https://github.com/xrf9268-hue/aiops-platform/issues/988)
+
+
+### Bug Fixes
+
+* **runner:** pin codex app-server multi-agent mode ([#999](https://github.com/xrf9268-hue/aiops-platform/issues/999)) ([58e52c2](https://github.com/xrf9268-hue/aiops-platform/commit/58e52c22083603859b1f5fb9857de31d1f4d082d))
+* **runner:** surface app-server startup retry phase ([8baacc6](https://github.com/xrf9268-hue/aiops-platform/commit/8baacc6b4d09c7f1e9be42c497ae6d74c0186bbf))
+* **workflow:** claim GitHub dogfood PR before long gates ([#995](https://github.com/xrf9268-hue/aiops-platform/issues/995)) ([548b00b](https://github.com/xrf9268-hue/aiops-platform/commit/548b00b908daf280b41f9480b1824750866d663e))
+
 ## [0.1.9](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.8...v0.1.9) (2026-06-22)
 
 
