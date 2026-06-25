@@ -27,7 +27,7 @@ def load_json(path: Path, default: Any) -> Any:
         return default
 
 
-def label_names(issue: dict[str, Any]) -> str:
+def issue_label_names(issue: dict[str, Any]) -> list[str]:
     labels = issue.get("labels") or []
     names = []
     for label in labels:
@@ -35,7 +35,11 @@ def label_names(issue: dict[str, Any]) -> str:
             names.append(str(label.get("name", "")))
         else:
             names.append(str(label))
-    return ", ".join(name for name in names if name) or "-"
+    return [name for name in names if name]
+
+
+def label_names(issue: dict[str, Any]) -> str:
+    return ", ".join(issue_label_names(issue)) or "-"
 
 
 def issue_rows(issues: list[dict[str, Any]]) -> list[str]:
@@ -91,21 +95,60 @@ def control_issue_number(expectation: dict[str, Any]) -> int:
 
 def control_pr_refs(prs: list[dict[str, Any]], issue_number: int) -> list[str]:
     needle = f"#{issue_number}"
+    branch = f"ai/{issue_number}"
     slug = "control-continuation-budget"
     refs = []
     for pr in prs:
         head = pr.get("head") or {}
+        head_ref = str(head.get("ref", ""))
         text = " ".join(
             str(value)
             for value in [
                 pr.get("title", ""),
                 pr.get("body", ""),
-                head.get("ref", ""),
+                head_ref,
             ]
         )
-        if needle in text or slug in text.lower():
+        if (
+            needle in text
+            or slug in text.lower()
+            or head_ref == branch
+            or head_ref.startswith(f"{branch}-")
+        ):
             refs.append(f"#{pr.get('number', '?')}")
     return refs
+
+
+def control_issue_status_failure(
+    issues: list[dict[str, Any]],
+    expectation: dict[str, Any],
+    issue_number: int,
+) -> str:
+    forbidden_labels = expectation.get("forbidden_terminal_labels") or [
+        "aiops/done",
+        "aiops/canceled",
+        "Human Review",
+    ]
+    forbidden = [str(label) for label in forbidden_labels]
+    for issue in issues:
+        try:
+            number = int(issue.get("number", 0))
+        except (TypeError, ValueError):
+            continue
+        if number != issue_number:
+            continue
+        labels = issue_label_names(issue)
+        forbidden_found = [label for label in forbidden if label in labels]
+        if forbidden_found:
+            return (
+                f"FAIL: control issue #{issue_number} has forbidden label(s) "
+                f"{', '.join(forbidden_found)}."
+            )
+        state = str(issue.get("state", "")).lower()
+        if state and state != "open":
+            return f"FAIL: control issue #{issue_number} reached terminal state `{state}`."
+        return ""
+    return f"FAIL: control issue #{issue_number} missing from issues-final evidence."
 
 
 def continuation_budget_rows(stress: dict[str, Any], method: str, issue_number: int) -> list[dict[str, Any]]:
@@ -132,6 +175,7 @@ def continuation_budget_rows(stress: dict[str, Any], method: str, issue_number: 
 def continuation_control_verdict(
     stress: dict[str, Any],
     prs: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
     expectation: dict[str, Any],
 ) -> str:
     issue_number = control_issue_number(expectation)
@@ -139,6 +183,9 @@ def continuation_control_verdict(
     pr_refs = control_pr_refs(prs, issue_number)
     if pr_refs:
         return f"FAIL: control issue #{issue_number} produced PR(s) {', '.join(pr_refs)}."
+    status_failure = control_issue_status_failure(issues, expectation, issue_number)
+    if status_failure:
+        return status_failure
     rows = continuation_budget_rows(stress, method, issue_number)
     if rows:
         return f"PASS: issue #{issue_number} blocked via `{method}` in stress worker state."
@@ -280,7 +327,7 @@ def write_report(args: argparse.Namespace) -> Path:
         f"- aiops-platform lifecycle: **{verdict}**",
         f"- Codex product delivery: {codex_delivery_verdict(product_done)}",
         f"- Product quality: {product_quality_verdict(run_root)}",
-        f"- Continuation control: {continuation_control_verdict(stress, prs, control_expectation)}",
+        f"- Continuation control: {continuation_control_verdict(stress, prs, issues, control_expectation)}",
         "",
         "The helper does not self-certify a full pass. Mark the checklist below",
         "against the live evidence before promoting or committing the report.",
@@ -297,7 +344,7 @@ def write_report(args: argparse.Namespace) -> Path:
         "",
         "## Control Scenario Assertions",
         "",
-        f"- Continuation budget: {continuation_control_verdict(stress, prs, control_expectation)}",
+        f"- Continuation budget: {continuation_control_verdict(stress, prs, issues, control_expectation)}",
         "",
         "## Issue Results",
         "",
