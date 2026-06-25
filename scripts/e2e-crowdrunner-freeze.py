@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any
 
 
+NOT_FOUND = object()
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-root", required=True, type=Path)
@@ -41,7 +44,7 @@ def api_url(args: argparse.Namespace, path: str, query: str = "") -> str:
     return url
 
 
-def request(args: argparse.Namespace, method: str, url: str) -> Any:
+def request(args: argparse.Namespace, method: str, url: str, *, allow_not_found: bool = False) -> Any:
     req = urllib.request.Request(url, method=method)
     if args.token:
         req.add_header("Authorization", f"token {args.token}")
@@ -49,6 +52,8 @@ def request(args: argparse.Namespace, method: str, url: str) -> Any:
         with urllib.request.urlopen(req, timeout=20) as resp:
             body = resp.read()
     except urllib.error.HTTPError as exc:
+        if allow_not_found and exc.code == 404:
+            return NOT_FOUND
         detail = exc.read().decode("utf-8", errors="replace")
         raise SystemExit(f"{method} {url} failed: {exc.code} {detail}") from exc
     except urllib.error.URLError as exc:
@@ -100,12 +105,12 @@ def product_issues(args: argparse.Namespace, issues: list[dict[str, Any]]) -> li
     return sorted(products, key=lambda item: int(item.get("number", 0)))
 
 
-def delete_ready_label(args: argparse.Namespace, issue: dict[str, Any], label: dict[str, Any]) -> None:
+def delete_ready_label(args: argparse.Namespace, issue: dict[str, Any], label: dict[str, Any]) -> bool:
     label_id = label.get("id")
     if label_id is None:
         raise SystemExit(f"issue #{issue.get('number')} has ready label without an id")
     url = api_url(args, f"/issues/{issue.get('number')}/labels/{label_id}")
-    request(args, "DELETE", url)
+    return request(args, "DELETE", url, allow_not_found=True) is not NOT_FOUND
 
 
 def freeze(args: argparse.Namespace, issues: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -123,7 +128,9 @@ def freeze(args: argparse.Namespace, issues: list[dict[str, Any]]) -> dict[str, 
         if ready is None:
             already_inactive.append(issue.get("number"))
             continue
-        delete_ready_label(args, issue, ready)
+        if not delete_ready_label(args, issue, ready):
+            already_inactive.append(issue.get("number"))
+            continue
         removed.append({
             "number": issue.get("number"),
             "title": issue.get("title", ""),

@@ -308,6 +308,10 @@ func TestCrowdRunnerFreezeStopsDispatchAfterMilestone(t *testing.T) {
 			_, _ = w.Write([]byte(fakeCrowdRunnerMilestoneIssuesJSON()))
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/repos/aiops-bot/crowd-runner-product/issues/"):
 			deletes = append(deletes, r.URL.Path)
+			if strings.Contains(r.URL.Path, "/issues/11/") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
@@ -347,8 +351,10 @@ func TestCrowdRunnerFreezeStopsDispatchAfterMilestone(t *testing.T) {
 	for _, want := range []string{
 		`"kind": "operator_milestone_freeze"`,
 		`"completed_product_issues": 10`,
-		`"number": 11`,
 		`"number": 12`,
+		`"already_inactive_product_issues": [
+    11
+  ]`,
 	} {
 		if !strings.Contains(state, want) {
 			t.Fatalf("freeze state missing %q\n%s", want, state)
