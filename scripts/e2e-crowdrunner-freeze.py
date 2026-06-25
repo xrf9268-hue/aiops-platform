@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -16,6 +17,7 @@ from typing import Any
 
 
 NOT_FOUND = object()
+URL_USERINFO_RE = re.compile(r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]+@")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -44,6 +46,13 @@ def api_url(args: argparse.Namespace, path: str, query: str = "") -> str:
     return url
 
 
+def redact_text(args: argparse.Namespace, text: str) -> str:
+    redacted = URL_USERINFO_RE.sub(r"\1[redacted]@", text)
+    if args.token:
+        redacted = redacted.replace(args.token, "[redacted-token]")
+    return redacted
+
+
 def request(args: argparse.Namespace, method: str, url: str, *, allow_not_found: bool = False) -> Any:
     req = urllib.request.Request(url, method=method)
     if args.token:
@@ -55,15 +64,15 @@ def request(args: argparse.Namespace, method: str, url: str, *, allow_not_found:
         if allow_not_found and exc.code == 404:
             return NOT_FOUND
         detail = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"{method} {url} failed: {exc.code} {detail}") from exc
+        raise SystemExit(f"{method} {redact_text(args, url)} failed: {exc.code} {redact_text(args, detail)}") from exc
     except urllib.error.URLError as exc:
-        raise SystemExit(f"{method} {url} failed: {exc.reason}") from exc
+        raise SystemExit(f"{method} {redact_text(args, url)} failed: {redact_text(args, str(exc.reason))}") from exc
     if not body:
         return None
     try:
         return json.loads(body.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"{method} {url} returned invalid JSON: {exc}") from exc
+        raise SystemExit(f"{method} {redact_text(args, url)} returned invalid JSON: {exc}") from exc
 
 
 def load_issues(args: argparse.Namespace) -> list[dict[str, Any]]:

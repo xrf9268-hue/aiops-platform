@@ -366,6 +366,60 @@ func TestCrowdRunnerFreezeStopsDispatchAfterMilestone(t *testing.T) {
 	}
 }
 
+func TestCrowdRunnerFreezeRedactsFailureSecrets(t *testing.T) {
+	const token = "freeze-secret-token"
+	const proxySecret = "proxy-secret"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token "+token {
+			t.Fatalf("Authorization = %q; want token %s", got, token)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("echoed " + token + " and https://bot:" + proxySecret + "@gitea.example.test/path"))
+	}))
+	defer srv.Close()
+
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	run := func(giteaURL string) string {
+		cmd := exec.Command(
+			"python3",
+			filepath.Join(root, "scripts", "e2e-crowdrunner-freeze.py"),
+			"--run-root", runRoot,
+			"--gitea-url", giteaURL,
+			"--repo-owner", "aiops-bot",
+			"--repo-name", "crowd-runner-product",
+			"--token", token,
+			"--stop-after", "10",
+			"--timeout-seconds", "1",
+			"--poll-interval-seconds", "0.01",
+		)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("freeze helper unexpectedly succeeded:\n%s", out)
+		}
+		return string(out)
+	}
+
+	userinfoOut := run(strings.Replace(srv.URL, "http://", "http://bot:"+proxySecret+"@", 1))
+	if strings.Contains(userinfoOut, proxySecret) || !strings.Contains(userinfoOut, "http://[redacted]@") {
+		t.Fatalf("freeze helper did not redact URL userinfo:\n%s", userinfoOut)
+	}
+
+	bodyOut := run(srv.URL)
+	for _, forbidden := range []string{token, proxySecret} {
+		if strings.Contains(bodyOut, forbidden) {
+			t.Fatalf("freeze helper leaked secret %q:\n%s", forbidden, bodyOut)
+		}
+	}
+	for _, want := range []string{"[redacted-token]", "https://[redacted]@"} {
+		if !strings.Contains(bodyOut, want) {
+			t.Fatalf("freeze helper output missing redaction marker %q:\n%s", want, bodyOut)
+		}
+	}
+}
+
 func TestCrowdRunnerCaptureSkipsOnlyDefaultScreenshotsWithoutPlaywright(t *testing.T) {
 	root := repoRoot(t)
 	script := filepath.Join(root, "scripts", "e2e-crowdrunner-capture.py")
