@@ -628,7 +628,7 @@ func TestBuildReportGitHubAgentPreflightUsesAgentEnvironment(t *testing.T) {
 			return []byte(""), nil
 		case "codex":
 			if len(args) > 0 && args[0] == "--version" {
-				return []byte("codex-cli 0.141.0\n"), nil
+				return []byte("codex-cli 0.142.0\n"), nil
 			}
 			if len(args) > 1 && args[0] == "login" && args[1] == "status" {
 				return []byte("Logged in\n"), nil
@@ -815,7 +815,7 @@ func installFakeCodex(t *testing.T) {
 	path := filepath.Join(dir, "codex")
 	body := `#!/bin/sh
 case "$1" in
-  --version) echo "codex-cli 0.141.0"; exit 0 ;;
+  --version) echo "codex-cli 0.142.0"; exit 0 ;;
   login) echo "Logged in"; exit 0 ;;
   app-server) read line; echo '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}'; exit 0 ;;
 esac
@@ -1188,7 +1188,7 @@ func fakeRealRunner(_ context.Context, name string, args []string, _ []string, _
 		return []byte("Logged in\n"), nil
 	}
 	if name == "codex" && len(args) > 0 && args[0] == "--version" {
-		return []byte("codex-cli 0.141.0\n"), nil
+		return []byte("codex-cli 0.142.0\n"), nil
 	}
 	return []byte("ok\n"), nil
 }
