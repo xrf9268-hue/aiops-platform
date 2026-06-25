@@ -166,7 +166,6 @@ def continuation_budget_rows(stress: dict[str, Any], method: str, issue_number: 
             identifier == f"#{issue_number}"
             or issue_id == str(issue_number)
             or issue_url.endswith(f"/issues/{issue_number}")
-            or not (identifier or issue_id or issue_url)
         ):
             matches.append(row)
     return matches

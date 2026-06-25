@@ -290,7 +290,7 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 		filepath.Join(runRoot, "final-verify", "playwright-report"),
 		filepath.Join(runRoot, "logs"),
 	)
-	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithControlJSON("open"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), fakeMergedPRsJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "maker-final.json"), `{"counts":{"running":0,"blocked":0}}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "reviewer-final.json"), `{"counts":{"running":0,"blocked":0}}`)
@@ -360,7 +360,7 @@ func TestCrowdRunnerReportRejectsContinuationControlPR(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
-	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithControlJSON("open"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[
 		{"number":22,"title":"test: finish control","body":"","state":"closed","merged":true,"head":{"ref":"ai/16"}}
 	]`)
@@ -391,7 +391,7 @@ func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) 
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
-	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithControlJSON("open", "aiops/human-review"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON("aiops/human-review"))
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[]`)
 	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
 		"counts":{"running":0,"blocked":1},
@@ -413,6 +413,35 @@ func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) 
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
 	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 has forbidden label(s) aiops/human-review.") {
 		t.Fatalf("report did not reject the control terminal label:\n%s", report)
+	}
+}
+
+func TestCrowdRunnerReportRejectsAnonymousContinuationControlRow(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesWithOpenControlJSON())
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	want := "Continuation control: FAIL: stress worker blocked, but no issue #16 `continuation_budget` row was captured."
+	if !strings.Contains(report, want) {
+		t.Fatalf("report accepted anonymous continuation row; missing %q\n%s", want, report)
 	}
 }
 
@@ -591,13 +620,13 @@ func fakeCrowdRunnerDoneIssuesJSON() string {
 	return "[" + strings.Join(rows, ",") + "]"
 }
 
-func fakeCrowdRunnerDoneIssuesWithControlJSON(state string, labels ...string) string {
+func fakeCrowdRunnerDoneIssuesWithOpenControlJSON(labels ...string) string {
 	body := strings.TrimSuffix(strings.TrimPrefix(fakeCrowdRunnerDoneIssuesJSON(), "["), "]")
 	var labelRows []string
 	for _, label := range labels {
 		labelRows = append(labelRows, `{"name":"`+label+`"}`)
 	}
-	control := `{"number":16,"title":"control","state":"` + state + `","labels":[` + strings.Join(labelRows, ",") + `]}`
+	control := `{"number":16,"title":"control","state":"open","labels":[` + strings.Join(labelRows, ",") + `]}`
 	return "[" + body + "," + control + "]"
 }
 
