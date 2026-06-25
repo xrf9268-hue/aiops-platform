@@ -83,25 +83,36 @@ Hard requirements:
 - Read AGENTS.md, README.md, the issue text, and the relevant SPEC/reference paths before design-sensitive changes.
 - Use a focused failing test before production code changes when adding behavior or fixing bugs.
 - Keep changes small enough for review. Respect the configured policy limits unless the issue explicitly requires a larger change.
-- Run the configured verify commands before pushing.
-- Before opening or updating a PR, run two independent local reviews of the
-  final diff: Codex review and Claude Code review. Both are mandatory gates.
+- Before opening or updating a PR, check for an existing open PR that closes the
+  assigned issue (`gh pr list --state open --search "#<issue-number>"` plus a
+  direct PR-body/linked-issue check). If one exists, update and reuse that PR
+  and branch; do not open a duplicate PR for the same issue.
+- After the first meaningful commit, push the branch and open or update a draft
+  PR with an explicit issue claim before long verification or review gates. The
+  draft PR body may mark local verification, local reviews, GitHub Codex review,
+  CI, and merge readiness as pending; update the same PR body after each gate
+  completes.
+- Open or update a draft PR with a body that names the issue, summarizes
+  pending or completed tests, and records pending or completed local review
+  results.
+- The PR body must include an explicit issue claim line for the assigned GitHub
+  issue, preferably `Closes #<issue-number>`; `Issue #<issue-number>` is also
+  recognized by the local tracker as an active PR claim. Do not use only casual
+  references such as `See also #...` for the assigned issue.
+- Run the configured verify commands after the draft PR claim exists and before
+  marking the PR ready or mergeable.
+- Before marking the PR ready or mergeable, run two independent local reviews
+  of the final diff: Codex review and Claude Code review. Both are mandatory
+  gates.
 - Follow `docs/runbooks/pr-review-merge-protocol.md` for subagent-first reviewer
   routing, machine-validated review shape, Codex/Claude family coverage, and CLI
   fallback conditions. Do not inline reviewer command mechanics here.
 - Treat non-JSON output, command failure, or any non-empty
   `blocking_findings` list from either local reviewer as blocking. Fix findings
   with tests before push.
-- Before opening a PR, check for an existing open PR that closes the assigned
-  issue (`gh pr list --state open --search "#<issue-number>"` plus a direct
-  PR-body/linked-issue check). If one exists, update and reuse that PR and
-  branch; do not open a duplicate PR for the same issue.
-- Open or update a draft PR with a body that names the issue, summarizes tests,
-  and records both local review results.
-- The PR body must include an explicit issue claim line for the assigned GitHub
-  issue, preferably `Closes #<issue-number>`; `Issue #<issue-number>` is also
-  recognized by the local tracker as an active PR claim. Do not use only casual
-  references such as `See also #...` for the assigned issue.
+- Before marking the PR ready or mergeable, update the PR body with final
+  verification and local review evidence so the follow-through gate has a fresh
+  ledger for the current head.
 - Do not post ad hoc `@codex review` comments yourself. Leave the PR for the
   follow-through automation, which posts or reuses a current-head-bound GitHub
   Codex review trigger and merges only after CI and review gates are clean.
