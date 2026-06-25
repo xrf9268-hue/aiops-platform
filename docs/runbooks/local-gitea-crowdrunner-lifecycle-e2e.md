@@ -31,6 +31,7 @@ castle/King finale, mobile portrait play, and measurable performance.
 | --- | --- |
 | `scripts/e2e-crowdrunner-bootstrap.sh` | Create the run-root skeleton, render maker/reviewer/stress workflows, seed a minimal repo, and write product/control issue bodies. |
 | `scripts/e2e-crowdrunner-capture.py` | Capture worker state JSON, TUI raw frames, Gitea/dashboard/product screenshots, and a capture index. |
+| `scripts/e2e-crowdrunner-freeze.py` | Optionally freeze dispatch at an operator-selected product milestone by removing ready labels and writing evidence. |
 | `scripts/e2e-crowdrunner-report.py` | Generate the final Markdown report and promotion notes from saved state, PR, screenshot, trace, and verification evidence. |
 
 ## 0. Prepare the Host
@@ -233,6 +234,23 @@ scripts/e2e-crowdrunner-capture.py \
   --repo-name "$AIOPS_CROWDRUNNER_REPO_NAME" \
   --tui-bin "$AIOPS_CROWDRUNNER_TUI_BIN"
 ```
+
+Optional milestone freeze: run this in a separate terminal before the product
+run reaches the selected count. It leaves workers and dashboards running, removes
+`aiops/todo` from remaining product issues after N products reach `aiops/done`,
+and writes the stop as operator milestone evidence instead of a worker failure:
+
+```bash
+scripts/e2e-crowdrunner-freeze.py \
+  --run-root "$AIOPS_CROWDRUNNER_RUN_ROOT" \
+  --gitea-url "$AIOPS_CROWDRUNNER_GITEA_URL" \
+  --repo-owner "$AIOPS_CROWDRUNNER_REPO_OWNER" \
+  --repo-name "$AIOPS_CROWDRUNNER_REPO_NAME" \
+  --stop-after 10
+```
+
+To resume after the milestone report, re-add `aiops/todo` to the frozen product
+issues and trigger a dashboard refresh.
 
 For required evidence, pass explicit screenshots so missing Playwright fails
 fast:

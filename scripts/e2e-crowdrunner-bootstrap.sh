@@ -467,11 +467,13 @@ cat >"$run_root/NEXT-STEPS.md" <<EOF
 8. After both dashboards are listening, run maker \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"\`
    and reviewer \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"\`.
 9. Add \`aiops/todo\` to product issues 01-12, then trigger a dashboard refresh.
-10. Use \`scripts/e2e-crowdrunner-capture.py\` at start, mid-run, Rework,
+10. Optional: run \`scripts/e2e-crowdrunner-freeze.py --run-root "$run_root" --gitea-url "\$AIOPS_CROWDRUNNER_GITEA_URL" --repo-owner "\$AIOPS_CROWDRUNNER_REPO_OWNER" --repo-name "\$AIOPS_CROWDRUNNER_REPO_NAME" --stop-after 10\`
+    in another terminal to record an operator milestone freeze without stopping workers.
+11. Use \`scripts/e2e-crowdrunner-capture.py\` at start, mid-run, Rework,
    cancellation, stress, and final milestones.
-11. Fresh-clone final main into \`final-verify/crowd-runner-product\` and run
+12. Fresh-clone final main into \`final-verify/crowd-runner-product\` and run
    npm verification plus Playwright smoke.
-12. Run \`scripts/e2e-crowdrunner-report.py --run-root "$run_root"\`.
+13. Run \`scripts/e2e-crowdrunner-report.py --run-root "$run_root"\`.
 
 See \`docs/runbooks/local-gitea-crowdrunner-lifecycle-e2e.md\` for the full SOP.
 EOF

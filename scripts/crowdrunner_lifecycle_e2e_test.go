@@ -1,6 +1,8 @@
 package scripts_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +26,7 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 	for _, want := range []string{
 		"scripts/e2e-crowdrunner-bootstrap.sh",
 		"scripts/e2e-crowdrunner-capture.py",
+		"scripts/e2e-crowdrunner-freeze.py",
 		"scripts/e2e-crowdrunner-report.py",
 		"Local binary mode intentionally reuses the operator's usual Codex setup",
 		"aiops-platform_v0.1.9_darwin_arm64.tar.gz",
@@ -36,6 +39,7 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		"add `aiops/todo` to issues 1-12",
 		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
+		"operator milestone evidence",
 		"Do not commit `env.local`",
 	} {
 		if !strings.Contains(text, want) {
@@ -150,6 +154,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"without\n   `aiops/*` state labels",
 		"Add `aiops/todo` to product issues 01-12",
+		"e2e-crowdrunner-freeze.py",
 	} {
 		if !strings.Contains(nextSteps, want) {
 			t.Fatalf("NEXT-STEPS.md missing %q\n%s", want, nextSteps)
@@ -160,6 +165,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"Add `aiops/todo` to product issues 01-12",
+		"e2e-crowdrunner-freeze.py",
 	})
 
 	makerWorkflow := readFileString(t, filepath.Join(runRoot, "workflows", "maker-WORKFLOW.md"))
@@ -240,6 +246,12 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 	writeFileString(t, filepath.Join(runRoot, "state", "maker-final.json"), `{"counts":{"running":0,"blocked":0}}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "reviewer-final.json"), `{"counts":{"running":0,"blocked":0}}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{"counts":{"running":0,"blocked":1}}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "operator-milestone-freeze-after-10.json"), `{
+		"kind":"operator_milestone_freeze",
+		"stop_after":10,
+		"completed_product_issues":10,
+		"ready_labels_removed":[{"number":11},{"number":12}]
+	}`)
 	writeFileString(t, filepath.Join(runRoot, "promo", "screenshots", "maker-dashboard.png"), "png")
 	writeFileString(t, filepath.Join(runRoot, "promo", "pages", "tui-maker-final.txt"), "maker frame")
 	writeFileString(t, filepath.Join(runRoot, "final-verify", "screenshots", "gameplay.png"), "png")
@@ -268,6 +280,8 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 		"Product quality",
 		"READY FOR OPERATOR PASS REVIEW",
 		"At least ten product issues reached `aiops/done`",
+		"Operator milestone freeze",
+		"ready labels removed from #11, #12",
 		"Continuation / turn-budget stress evidence",
 		"#12",
 		"final-verify/videos/gameplay.webm",
@@ -279,6 +293,130 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 	promo := readFileString(t, filepath.Join(runRoot, "promo", "notes", "promotion-materials.md"))
 	if !strings.Contains(promo, "fresh crowd-runner design") {
 		t.Fatalf("promo notes missing fresh product positioning:\n%s", promo)
+	}
+}
+
+func TestCrowdRunnerFreezeStopsDispatchAfterMilestone(t *testing.T) {
+	var deletes []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token test-token" {
+			t.Fatalf("Authorization = %q; want token test-token", got)
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/repos/aiops-bot/crowd-runner-product/issues":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fakeCrowdRunnerMilestoneIssuesJSON()))
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v1/repos/aiops-bot/crowd-runner-product/issues/"):
+			deletes = append(deletes, r.URL.Path)
+			if strings.Contains(r.URL.Path, "/issues/11/") {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	script := filepath.Join(root, "scripts", "e2e-crowdrunner-freeze.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--gitea-url", srv.URL,
+		"--repo-owner", "aiops-bot",
+		"--repo-name", "crowd-runner-product",
+		"--token", "test-token",
+		"--stop-after", "10",
+		"--timeout-seconds", "1",
+		"--poll-interval-seconds", "0.01",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("freeze helper failed: %v\n%s", err, out)
+	}
+
+	wantDeletes := []string{
+		"/api/v1/repos/aiops-bot/crowd-runner-product/issues/11/labels/501",
+		"/api/v1/repos/aiops-bot/crowd-runner-product/issues/12/labels/501",
+	}
+	if strings.Join(deletes, "\n") != strings.Join(wantDeletes, "\n") {
+		t.Fatalf("delete calls = %v; want %v", deletes, wantDeletes)
+	}
+	state := readFileString(t, filepath.Join(runRoot, "state", "operator-milestone-freeze-after-10.json"))
+	for _, want := range []string{
+		`"kind": "operator_milestone_freeze"`,
+		`"completed_product_issues": 10`,
+		`"number": 12`,
+		`"already_inactive_product_issues": [
+    11
+  ]`,
+	} {
+		if !strings.Contains(state, want) {
+			t.Fatalf("freeze state missing %q\n%s", want, state)
+		}
+	}
+	fragment := readFileString(t, filepath.Join(runRoot, "reports", "operator-milestone-freeze-after-10.md"))
+	if !strings.Contains(fragment, "operator milestone freeze, not a worker failure") {
+		t.Fatalf("freeze report did not classify the stop as operator freeze:\n%s", fragment)
+	}
+}
+
+func TestCrowdRunnerFreezeRedactsFailureSecrets(t *testing.T) {
+	const token = "freeze-secret-token"
+	const proxySecret = "proxy-secret"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "token "+token {
+			t.Fatalf("Authorization = %q; want token %s", got, token)
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("echoed " + token + " and https://bot:" + proxySecret + "@gitea.example.test/path"))
+	}))
+	defer srv.Close()
+
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	run := func(giteaURL string) string {
+		cmd := exec.Command(
+			"python3",
+			filepath.Join(root, "scripts", "e2e-crowdrunner-freeze.py"),
+			"--run-root", runRoot,
+			"--gitea-url", giteaURL,
+			"--repo-owner", "aiops-bot",
+			"--repo-name", "crowd-runner-product",
+			"--token", token,
+			"--stop-after", "10",
+			"--timeout-seconds", "1",
+			"--poll-interval-seconds", "0.01",
+		)
+		cmd.Dir = root
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Fatalf("freeze helper unexpectedly succeeded:\n%s", out)
+		}
+		return string(out)
+	}
+
+	userinfoOut := run(strings.Replace(srv.URL, "http://", "http://bot:"+proxySecret+"@", 1))
+	if strings.Contains(userinfoOut, proxySecret) || !strings.Contains(userinfoOut, "http://[redacted]@") {
+		t.Fatalf("freeze helper did not redact URL userinfo:\n%s", userinfoOut)
+	}
+
+	bodyOut := run(srv.URL)
+	for _, forbidden := range []string{token, proxySecret} {
+		if strings.Contains(bodyOut, forbidden) {
+			t.Fatalf("freeze helper leaked secret %q:\n%s", forbidden, bodyOut)
+		}
+	}
+	for _, want := range []string{"[redacted-token]", "https://[redacted]@"} {
+		if !strings.Contains(bodyOut, want) {
+			t.Fatalf("freeze helper output missing redaction marker %q:\n%s", want, bodyOut)
+		}
 	}
 }
 
@@ -330,5 +468,18 @@ func fakeCrowdRunnerDoneIssuesJSON() string {
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, `{"number":`+itoa(i)+`,"title":"issue `+itoa(i)+`","state":"closed","labels":[{"name":"aiops/done"}]}`)
 	}
+	return "[" + strings.Join(rows, ",") + "]"
+}
+
+func fakeCrowdRunnerMilestoneIssuesJSON() string {
+	var rows []string
+	for i := 1; i <= 10; i++ {
+		rows = append(rows, `{"number":`+itoa(i)+`,"title":"issue `+itoa(i)+`","state":"closed","labels":[{"id":502,"name":"aiops/done"}]}`)
+	}
+	rows = append(rows,
+		`{"number":11,"title":"issue 11","state":"open","labels":[{"id":501,"name":"aiops/todo"}]}`,
+		`{"number":12,"title":"issue 12","state":"open","labels":[{"id":501,"name":"aiops/todo"}]}`,
+		`{"number":13,"title":"control","state":"open","labels":[{"id":501,"name":"aiops/todo"}]}`,
+	)
 	return "[" + strings.Join(rows, ",") + "]"
 }
