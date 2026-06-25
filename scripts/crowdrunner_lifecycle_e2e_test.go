@@ -32,12 +32,24 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		"CONTROL cancel running Codex issue",
 		"Continuation budget",
 		"npm run test:e2e",
+		"without `aiops/*` state labels",
+		"add `aiops/todo` to issues 1-12",
+		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"Do not commit `env.local`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("runbook missing %q", want)
 		}
 	}
+	assertInOrder(t, text, []string{
+		"## 5. Run Maker and Reviewer",
+		`"$AIOPS_CROWDRUNNER_WORKER_BIN" --port "$AIOPS_CROWDRUNNER_MAKER_PORT"`,
+		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
+		"add `aiops/todo` to issues 1-12",
+		"trigger a work poll:",
+	})
 }
 
 func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
@@ -131,6 +143,24 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 			t.Fatalf("issue 07 missing %q\n%s", want, issue)
 		}
 	}
+
+	nextSteps := readFileString(t, filepath.Join(runRoot, "NEXT-STEPS.md"))
+	for _, want := range []string{
+		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
+		"without\n   `aiops/*` state labels",
+		"Add `aiops/todo` to product issues 01-12",
+	} {
+		if !strings.Contains(nextSteps, want) {
+			t.Fatalf("NEXT-STEPS.md missing %q\n%s", want, nextSteps)
+		}
+	}
+	assertInOrder(t, nextSteps, []string{
+		"Start maker on port",
+		`--dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
+		"Add `aiops/todo` to product issues 01-12",
+	})
 
 	makerWorkflow := readFileString(t, filepath.Join(runRoot, "workflows", "maker-WORKFLOW.md"))
 	reviewerWorkflow := readFileString(t, filepath.Join(runRoot, "workflows", "reviewer-automerge-WORKFLOW.md"))

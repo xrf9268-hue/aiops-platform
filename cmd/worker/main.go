@@ -68,7 +68,7 @@ func parseDoctorArgs(args []string) (doctor.Options, error) {
 	fs := flag.NewFlagSet("worker --doctor", flag.ContinueOnError)
 	mode := fs.String("mode", "mock", "preflight depth: mock or real")
 	deploy := fs.String("deploy", "docker", "deployment target for remediation hints and Docker checks: binary or docker")
-	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /api/v1/state auth")
+	dashboardURL := fs.String("dashboard-url", "", "optional worker dashboard base URL to verify /livez, /readyz, and /api/v1/state")
 	goTestDir := fs.String("go-test-dir", "", "repository module root for real-mode targeted go test")
 	githubIssue := fs.Int("github-issue", 0, "optional GitHub issue number for agent-environment gh and git push preflight")
 	githubRepo := fs.String("github-repo", "", "optional owner/name or clone_url repo for --github-issue when a workflow configures multiple GitHub repos (use clone_url to disambiguate one owner/name routed to multiple clone URLs)")

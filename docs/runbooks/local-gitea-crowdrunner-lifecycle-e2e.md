@@ -130,8 +130,9 @@ Required labels:
 - `aiops/canceled`
 - `aiops/stress`
 
-Create issues from `issues/*.md`. Label issues 1-12 with `aiops/todo`.
-Keep control issues staged:
+Create issues from `issues/*.md` without `aiops/*` state labels. Keep product
+issues inactive until the dashboard doctor passes; after that gate, activate
+issues 1-12 by adding `aiops/todo`. Keep control issues staged:
 
 - Issue 13: no `aiops/*` label.
 - Issue 14: add `aiops/todo` only when testing cancellation.
@@ -189,7 +190,27 @@ AIOPS_SERVER_HOST=127.0.0.1 \
   2>&1 | tee "$AIOPS_CROWDRUNNER_RUN_ROOT/logs/reviewer-worker.log"
 ```
 
-Trigger a poll:
+After both workers are listening, validate the dashboard endpoints before
+activating product issues:
+
+```bash
+AIOPS_WORKFLOW_PATH="$AIOPS_CROWDRUNNER_MAKER_WORKFLOW" \
+AIOPS_MIRROR_ROOT="$AIOPS_CROWDRUNNER_MAKER_MIRROR_ROOT" \
+  "$AIOPS_CROWDRUNNER_WORKER_BIN" --doctor --deploy=binary --mode=real \
+  --dashboard-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL" \
+  "$AIOPS_CROWDRUNNER_MAKER_WORKFLOW" \
+  | tee "$AIOPS_CROWDRUNNER_RUN_ROOT/artifacts/maker-dashboard-doctor.log"
+
+AIOPS_WORKFLOW_PATH="$AIOPS_CROWDRUNNER_REVIEWER_WORKFLOW" \
+AIOPS_MIRROR_ROOT="$AIOPS_CROWDRUNNER_REVIEWER_MIRROR_ROOT" \
+  "$AIOPS_CROWDRUNNER_WORKER_BIN" --doctor --deploy=binary --mode=real \
+  --dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL" \
+  "$AIOPS_CROWDRUNNER_REVIEWER_WORKFLOW" \
+  | tee "$AIOPS_CROWDRUNNER_RUN_ROOT/artifacts/reviewer-dashboard-doctor.log"
+```
+
+After both dashboard doctors pass, add `aiops/todo` to issues 1-12. Use the
+Gitea UI or API, then trigger a work poll:
 
 ```bash
 curl -fsS -X POST -H 'X-AIOPS-Refresh: true' \

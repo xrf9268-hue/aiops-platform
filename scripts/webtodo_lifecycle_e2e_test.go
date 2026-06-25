@@ -37,6 +37,10 @@ func TestWebTodoLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		"CONTROL cancel running codex issue",
 		`"$AIOPS_WEBTODO_MAKER_WORKFLOW"`,
 		`"$AIOPS_WEBTODO_REVIEWER_WORKFLOW"`,
+		`--dashboard-url "$AIOPS_WEBTODO_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL"`,
+		"initially without\n  `aiops/*` state labels",
+		"add `aiops/todo` to issues 1-10",
 		"aiops/todo",
 		"aiops/human-review",
 		"aiops/rework",
@@ -47,6 +51,14 @@ func TestWebTodoLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 			t.Fatalf("runbook missing %q", want)
 		}
 	}
+	assertInOrder(t, text, []string{
+		"## 4. Run Maker and Reviewer",
+		`--port "$AIOPS_WEBTODO_MAKER_PORT"`,
+		`--dashboard-url "$AIOPS_WEBTODO_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL"`,
+		"add `aiops/todo` to issues 1-10",
+		"trigger a work poll:",
+	})
 	for _, forbidden := range []string{
 		`"$AIOPS_WEBTODO_MAKER_WORKDIR" \`,
 		`"$AIOPS_WEBTODO_REVIEWER_WORKDIR" \`,
@@ -124,11 +136,21 @@ func TestWebTodoBootstrapPreparesRunRoot(t *testing.T) {
 		"Install or verify host tools",
 		"Playwright venv",
 		"Activate the Playwright venv",
+		`--dashboard-url "$AIOPS_WEBTODO_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL"`,
+		"without `aiops/*` state labels",
+		"Add `aiops/todo` to primary issues 01-10",
 	} {
 		if !strings.Contains(nextSteps, want) {
 			t.Fatalf("NEXT-STEPS.md missing %q\n%s", want, nextSteps)
 		}
 	}
+	assertInOrder(t, nextSteps, []string{
+		"Start maker on port",
+		`--dashboard-url "$AIOPS_WEBTODO_MAKER_DASHBOARD_URL"`,
+		`--dashboard-url "$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL"`,
+		"Add `aiops/todo` to primary issues 01-10",
+	})
 
 	makerWorkflow := readFileString(t, filepath.Join(runRoot, "workflows", "maker-WORKFLOW.md"))
 	reviewerWorkflow := readFileString(t, filepath.Join(runRoot, "workflows", "reviewer-automerge-WORKFLOW.md"))

@@ -275,13 +275,17 @@ cat >"$run_root/NEXT-STEPS.md" <<EOF
    venv under \`AIOPS_WEBTODO_TOOLS_ROOT\` when screenshot evidence is needed.
 2. Copy \`env.example\` to \`env.local\`, fill secrets, and source it.
 3. Put the downloaded release \`worker\` and \`tui\` binaries in \`bin/\`.
-4. Create the local Gitea repo, labels, and issues from \`issues/*.md\`.
-5. Run \`worker --doctor --deploy=binary --mode=real\` for maker and reviewer.
+4. Create the local Gitea repo, labels, and issues from \`issues/*.md\`; leave
+   issues without \`aiops/*\` state labels.
+5. Run maker/reviewer \`worker --doctor --deploy=binary --mode=real\`.
 6. Start maker on port $maker_port and reviewer on port $reviewer_port.
-7. Activate the Playwright venv, then use \`scripts/e2e-webtodo-capture.py\`
+7. After both dashboards are listening, run maker \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_WEBTODO_MAKER_DASHBOARD_URL"\`
+   and reviewer \`worker --doctor --deploy=binary --mode=real --dashboard-url "\$AIOPS_WEBTODO_REVIEWER_DASHBOARD_URL"\`.
+8. Add \`aiops/todo\` to primary issues 01-10, then trigger a dashboard refresh.
+9. Activate the Playwright venv, then use \`scripts/e2e-webtodo-capture.py\`
    at milestones.
-8. Run final fresh-clone verification and browser smoke.
-9. Run \`scripts/e2e-webtodo-report.py --run-root "$run_root"\`.
+10. Run final fresh-clone verification and browser smoke.
+11. Run \`scripts/e2e-webtodo-report.py --run-root "$run_root"\`.
 
 See \`docs/runbooks/local-gitea-webtodo-lifecycle-e2e.md\` for the full SOP.
 EOF
