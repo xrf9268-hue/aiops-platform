@@ -82,6 +82,71 @@ def counts_line(name: str, state: dict[str, Any]) -> str:
     return f"- {name}: `{interesting}`"
 
 
+def control_issue_number(expectation: dict[str, Any]) -> int:
+    try:
+        return int(expectation.get("issue_number", 16))
+    except (TypeError, ValueError):
+        return 16
+
+
+def control_pr_refs(prs: list[dict[str, Any]], issue_number: int) -> list[str]:
+    needle = f"#{issue_number}"
+    slug = "control-continuation-budget"
+    refs = []
+    for pr in prs:
+        head = pr.get("head") or {}
+        text = " ".join(
+            str(value)
+            for value in [
+                pr.get("title", ""),
+                pr.get("body", ""),
+                head.get("ref", ""),
+            ]
+        )
+        if needle in text or slug in text.lower():
+            refs.append(f"#{pr.get('number', '?')}")
+    return refs
+
+
+def continuation_budget_rows(stress: dict[str, Any], method: str, issue_number: int) -> list[dict[str, Any]]:
+    rows = stress.get("blocked") or []
+    if not isinstance(rows, list):
+        return []
+    matches = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("method") != method:
+            continue
+        identifier = str(row.get("issue_identifier", ""))
+        issue_id = str(row.get("issue_id", ""))
+        issue_url = str(row.get("issue_url", "")).rstrip("/")
+        if (
+            identifier == f"#{issue_number}"
+            or issue_id == str(issue_number)
+            or issue_url.endswith(f"/issues/{issue_number}")
+            or not (identifier or issue_id or issue_url)
+        ):
+            matches.append(row)
+    return matches
+
+
+def continuation_control_verdict(
+    stress: dict[str, Any],
+    prs: list[dict[str, Any]],
+    expectation: dict[str, Any],
+) -> str:
+    issue_number = control_issue_number(expectation)
+    method = str(expectation.get("expected_blocked_method", "continuation_budget"))
+    pr_refs = control_pr_refs(prs, issue_number)
+    if pr_refs:
+        return f"FAIL: control issue #{issue_number} produced PR(s) {', '.join(pr_refs)}."
+    rows = continuation_budget_rows(stress, method, issue_number)
+    if rows:
+        return f"PASS: issue #{issue_number} blocked via `{method}` in stress worker state."
+    if (stress.get("counts") or {}).get("blocked", 0):
+        return f"FAIL: stress worker blocked, but no issue #{issue_number} `{method}` row was captured."
+    return f"FAIL: stress worker did not capture issue #{issue_number} `{method}` exhaustion."
+
+
 def collect_assets(run_root: Path) -> dict[str, list[Path]]:
     return {
         "promo_screenshots": sorted((run_root / "promo" / "screenshots").glob("**/*.png")),
@@ -194,6 +259,7 @@ def write_report(args: argparse.Namespace) -> Path:
     maker = load_json(run_root / "state" / "maker-final.json", {})
     reviewer = load_json(run_root / "state" / "reviewer-final.json", {})
     stress = load_json(run_root / "state" / "stress-final.json", {})
+    control_expectation = load_json(run_root / "state" / "continuation-control-expected.json", {})
     assets = collect_assets(run_root)
 
     product_done = [
@@ -214,6 +280,7 @@ def write_report(args: argparse.Namespace) -> Path:
         f"- aiops-platform lifecycle: **{verdict}**",
         f"- Codex product delivery: {codex_delivery_verdict(product_done)}",
         f"- Product quality: {product_quality_verdict(run_root)}",
+        f"- Continuation control: {continuation_control_verdict(stress, prs, control_expectation)}",
         "",
         "The helper does not self-certify a full pass. Mark the checklist below",
         "against the live evidence before promoting or committing the report.",
@@ -227,6 +294,10 @@ def write_report(args: argparse.Namespace) -> Path:
         counts_line("Maker", maker),
         counts_line("Reviewer", reviewer),
         counts_line("Stress", stress),
+        "",
+        "## Control Scenario Assertions",
+        "",
+        f"- Continuation budget: {continuation_control_verdict(stress, prs, control_expectation)}",
         "",
         "## Issue Results",
         "",

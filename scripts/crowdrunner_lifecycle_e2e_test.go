@@ -89,6 +89,7 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 		"issues/12-release-polish-pwa.md",
 		"issues/16-control-continuation-budget.md",
 		"state",
+		"state/continuation-control-expected.json",
 		"artifacts",
 		"logs",
 		"downloads",
@@ -145,6 +146,30 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	} {
 		if !strings.Contains(issue, want) {
 			t.Fatalf("issue 07 missing %q\n%s", want, issue)
+		}
+	}
+
+	controlIssue := readFileString(t, filepath.Join(runRoot, "issues", "16-control-continuation-budget.md"))
+	for _, want := range []string{
+		"CONTINUATION_BUDGET_CANARY",
+		".aiops/operator-continuation-release",
+		"must not edit files, commit, push, open a PR",
+		`method of continuation_budget for issue #16`,
+	} {
+		if !strings.Contains(controlIssue, want) {
+			t.Fatalf("issue 16 missing %q\n%s", want, controlIssue)
+		}
+	}
+
+	expectation := readFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"))
+	for _, want := range []string{
+		`"kind": "continuation_budget_control_expectation"`,
+		`"issue_number": 16`,
+		`"expected_blocked_method": "continuation_budget"`,
+		`"forbidden_pr_issue_reference": "#16"`,
+	} {
+		if !strings.Contains(expectation, want) {
+			t.Fatalf("continuation expectation missing %q\n%s", want, expectation)
 		}
 	}
 
@@ -209,6 +234,9 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 				"  max_continuation_turns: 2",
 				"    - Stress",
 				"  root: " + filepath.Join(runRoot, "workspaces", "stress"),
+				"deterministic continuation-budget stress-control agent",
+				"Do not edit files, create branches, commit, push, open a pull request",
+				`method: "continuation_budget"`,
 			},
 		},
 	} {
@@ -225,6 +253,9 @@ func TestCrowdRunnerBootstrapPreparesRunRoot(t *testing.T) {
 	}
 	if strings.Contains(stressWorkflow, "    - Todo") || strings.Contains(stressWorkflow, "    - Rework") {
 		t.Fatalf("stress workflow should not claim Todo/Rework states:\n%s", stressWorkflow)
+	}
+	if strings.Contains(stressWorkflow, "You are an autonomous MAKER agent") {
+		t.Fatalf("stress workflow should not inherit the maker PR prompt:\n%s", stressWorkflow)
 	}
 }
 
@@ -245,7 +276,16 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), fakeMergedPRsJSON())
 	writeFileString(t, filepath.Join(runRoot, "state", "maker-final.json"), `{"counts":{"running":0,"blocked":0}}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "reviewer-final.json"), `{"counts":{"running":0,"blocked":0}}`)
-	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{"counts":{"running":0,"blocked":1}}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","issue_url":"http://gitea.local/aiops-bot/crowd-runner-product/issues/16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget",
+		"forbidden_pr_issue_reference":"#16"
+	}`)
 	writeFileString(t, filepath.Join(runRoot, "state", "operator-milestone-freeze-after-10.json"), `{
 		"kind":"operator_milestone_freeze",
 		"stop_after":10,
@@ -283,6 +323,8 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 		"Operator milestone freeze",
 		"ready labels removed from #11, #12",
 		"Continuation / turn-budget stress evidence",
+		"Continuation control: PASS",
+		"issue #16 blocked via `continuation_budget`",
 		"#12",
 		"final-verify/videos/gameplay.webm",
 	} {
@@ -293,6 +335,37 @@ func TestCrowdRunnerReportGeneratesThreeVerdicts(t *testing.T) {
 	promo := readFileString(t, filepath.Join(runRoot, "promo", "notes", "promotion-materials.md"))
 	if !strings.Contains(promo, "fresh crowd-runner design") {
 		t.Fatalf("promo notes missing fresh product positioning:\n%s", promo)
+	}
+}
+
+func TestCrowdRunnerReportRejectsContinuationControlPR(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), fakeCrowdRunnerDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[
+		{"number":22,"title":"test: finish continuation control","body":"Refs #16","state":"closed","merged":true,"head":{"ref":"ai/16-control-continuation-budget"}}
+	]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget",
+		"forbidden_pr_issue_reference":"#16"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 produced PR(s) #22") {
+		t.Fatalf("report did not reject the control PR:\n%s", report)
 	}
 }
 

@@ -273,7 +273,11 @@ scripts/e2e-crowdrunner-capture.py \
 - **Blocked held:** confirm issue 15 remains undispatched.
 - **Continuation budget:** start the stress worker on port 4203 with
   `workflows/maker-low-turn-WORKFLOW.md`, label issue 16 `aiops/stress`, then
-  capture stress worker state and logs.
+  wait for local continuation-budget exhaustion. The bootstrap writes
+  `state/continuation-control-expected.json`; the expected machine evidence is
+  `state/stress-final.json` with `counts.blocked >= 1` and a blocked row for
+  issue 16 whose `method` is `continuation_budget`. A PR, terminal label, or
+  `Human Review` handoff for issue 16 means the control failed.
 
 ## 8. Final Verification
 
@@ -330,7 +334,7 @@ Pass when:
 - all product issues reach `aiops/done`;
 - product PRs merge through reviewer approval and CI;
 - Rework, cancellation, no-ready, blocked, and continuation-budget controls
-  behave as expected;
+  behave as expected, including the report's continuation-control assertion;
 - maker/reviewer dashboards are idle at closeout;
 - fresh-clone npm verification and Playwright smoke pass;
 - required screenshots and logs exist.
