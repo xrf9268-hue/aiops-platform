@@ -93,9 +93,28 @@ def control_issue_number(expectation: dict[str, Any]) -> int:
         return 16
 
 
-def control_pr_refs(prs: list[dict[str, Any]], issue_number: int) -> list[str]:
+def control_issue_branch_ids(issues: list[dict[str, Any]], issue_number: int) -> list[str]:
+    ids = {str(issue_number)}
+    for issue in issues:
+        try:
+            number = int(issue.get("number", 0))
+        except (TypeError, ValueError):
+            continue
+        if number != issue_number:
+            continue
+        issue_id = str(issue.get("id", "")).strip()
+        if issue_id:
+            ids.add(issue_id)
+    return sorted(ids)
+
+
+def control_pr_refs(
+    prs: list[dict[str, Any]],
+    issue_number: int,
+    issues: list[dict[str, Any]],
+) -> list[str]:
     needle = f"#{issue_number}"
-    branch = f"ai/{issue_number}"
+    branches = [f"ai/{issue_id}" for issue_id in control_issue_branch_ids(issues, issue_number)]
     slug = "control-continuation-budget"
     refs = []
     for pr in prs:
@@ -112,8 +131,7 @@ def control_pr_refs(prs: list[dict[str, Any]], issue_number: int) -> list[str]:
         if (
             needle in text
             or slug in text.lower()
-            or head_ref == branch
-            or head_ref.startswith(f"{branch}-")
+            or any(head_ref == branch or head_ref.startswith(f"{branch}-") for branch in branches)
         ):
             refs.append(f"#{pr.get('number', '?')}")
     return refs
@@ -179,7 +197,7 @@ def continuation_control_verdict(
 ) -> str:
     issue_number = control_issue_number(expectation)
     method = str(expectation.get("expected_blocked_method", "continuation_budget"))
-    pr_refs = control_pr_refs(prs, issue_number)
+    pr_refs = control_pr_refs(prs, issue_number, issues)
     if pr_refs:
         return f"FAIL: control issue #{issue_number} produced PR(s) {', '.join(pr_refs)}."
     status_failure = control_issue_status_failure(issues, expectation, issue_number)

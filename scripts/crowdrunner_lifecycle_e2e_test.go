@@ -387,6 +387,38 @@ func TestCrowdRunnerReportRejectsContinuationControlPR(t *testing.T) {
 	}
 }
 
+func TestCrowdRunnerReportRejectsContinuationControlPRByTrackerID(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "state"), filepath.Join(runRoot, "reports"), filepath.Join(runRoot, "promo", "notes"))
+	doneIssues := strings.TrimSuffix(strings.TrimPrefix(fakeCrowdRunnerDoneIssuesJSON(), "["), "]")
+	controlIssue := `{"id":1601,"number":16,"title":"control","state":"open","labels":[]}`
+	writeFileString(t, filepath.Join(runRoot, "state", "issues-final.json"), "["+doneIssues+","+controlIssue+"]")
+	writeFileString(t, filepath.Join(runRoot, "state", "prs-final.json"), `[
+		{"number":23,"title":"test: finish unrelated","body":"","state":"closed","merged":true,"head":{"ref":"ai/1601"}}
+	]`)
+	writeFileString(t, filepath.Join(runRoot, "state", "stress-final.json"), `{
+		"counts":{"running":0,"blocked":1},
+		"blocked":[{"issue_identifier":"#16","method":"continuation_budget"}]
+	}`)
+	writeFileString(t, filepath.Join(runRoot, "state", "continuation-control-expected.json"), `{
+		"kind":"continuation_budget_control_expectation",
+		"issue_number":16,
+		"expected_blocked_method":"continuation_budget"
+	}`)
+
+	cmd := exec.Command("python3", filepath.Join(root, "scripts", "e2e-crowdrunner-report.py"), "--run-root", runRoot)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "Continuation control: FAIL: control issue #16 produced PR(s) #23") {
+		t.Fatalf("report did not reject the tracker-id control PR:\n%s", report)
+	}
+}
+
 func TestCrowdRunnerReportRejectsContinuationControlTerminalLabel(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
