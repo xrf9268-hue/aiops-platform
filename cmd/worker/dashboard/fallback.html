@@ -82,6 +82,7 @@
           <div class="tile"><span class="label">Retrying</span><span class="value" id="retrying">-</span></div>
           <div class="tile"><span class="label">Blocked</span><span class="value" id="blocked">-</span></div>
           <div class="tile"><span class="label">Delivered</span><span class="value" id="delivered">-</span></div>
+          <div class="tile"><span class="label">No handoff</span><span class="value" id="no-handoff">-</span></div>
         </section>
         <pre id="state">Loading...</pre>
       </main>
@@ -95,6 +96,7 @@
           document.getElementById('retrying').textContent = counts.retrying ?? 0;
           document.getElementById('blocked').textContent = counts.blocked ?? 0;
           document.getElementById('delivered').textContent = counts.agent_handoff_reconcile_stopped ?? 0;
+          document.getElementById('no-handoff').textContent = counts.active_success_no_handoff ?? 0;
           document.getElementById('state').textContent = JSON.stringify(state, null, 2);
         })
         .catch(function (err) {

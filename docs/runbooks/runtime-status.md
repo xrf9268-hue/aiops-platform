@@ -147,6 +147,8 @@ the shape here without updating the handler — or vice versa — fails the buil
     "reconcile_stopped_with_progress_total": 2,
     "agent_handoff_reconcile_stopped": 3,
     "agent_handoff_reconcile_stopped_total": 4,
+    "active_success_no_handoff": 1,
+    "active_success_no_handoff_total": 5,
     "operator_terminal_stops": 1,
     "operator_terminal_stops_total": 1
   },
@@ -205,6 +207,7 @@ the shape here without updating the handler — or vice versa — fails the buil
   "completed": [],
   "reconcile_stopped_with_progress": [],
   "agent_handoff_reconcile_stopped": [],
+  "active_success_no_handoff": [],
   "operator_terminal_stops": [
     {
       "issue_id": "issue-4",
@@ -235,11 +238,13 @@ the shape here without updating the handler — or vice versa — fails the buil
 | `blocked`         | Live count of input-blocked rows (Codex elicitation / approval pending).      |
 | `retrying`        | Current retry-backoff queue depth.                                            |
 | `completed`       | Size of the FIFO-bounded recent-completed set published as `completed`.       |
-| `completed_total` | Monotonic counter of Succeeded transitions since process start (#234).        |
+| `completed_total` | Monotonic counter of clean worker exits since process start (#234); active clean exits with no handoff are included here and also classified in `active_success_no_handoff_total`. |
 | `reconcile_stopped_with_progress` | Size of the FIFO-bounded recent set of reconcile-stopped runs that had completed ≥1 agent turn (made progress) before the per-tick reconcile reaped them mid-finalization. Usually the agent's own handoff, but `turn_completed` fires after every turn, so it can also be a run stopped after an intermediate turn — treat it as "reaped after progress, worth inspecting," not a guaranteed success. Surfaced so such a run is visible rather than absent from `completed` (#557). Does not overlap `completed`: a reconcile-stopped run is not a clean exit, so `completed` is unchanged. |
 | `reconcile_stopped_with_progress_total` | Monotonic counter of reconcile-stopped-with-progress transitions since process start. |
 | `agent_handoff_reconcile_stopped` | Size of the FIFO-bounded recent set of reconcile-stopped runs that observed the guarded `linear_graphql` current issue move to a non-active state before reconcile made the issue ineligible. This covers the successful delivery visibility gap where the agent moved the issue and the worker was stopped instead of exiting cleanly; generic Linear comments, workpad writes, and unrelated mutations do not count as delivery. It does not overlap `completed`, but it may overlap `reconcile_stopped_with_progress` when the handoff also completed a turn before reconcile reaped it. |
 | `agent_handoff_reconcile_stopped_total` | Monotonic counter of agent-handoff reconcile-stop transitions since process start. |
+| `active_success_no_handoff` | Size of the FIFO-bounded recent set of clean runner exits where the issue remained in the active tracker state last observed by the orchestrator and no guarded current-issue handoff event was seen. These entries overlap `completed` because they are normal worker exits; the worker still queues the normal continuation retry, so this is an observability signal for "no tracker progress yet," not a scheduler stop or tracker mutation. |
+| `active_success_no_handoff_total` | Monotonic counter of active-success-without-handoff transitions since process start. |
 | `operator_terminal_stops` | Size of the FIFO-bounded recent set of process-local Operator Terminal Stop latches (capped by `MaxRecentOperatorTerminalStops`, default 1000, #667). A latch is recorded when this worker observes terminal tracker state for an issue without a structured agent-owned current-issue handoff fact; a latched issue is not re-dispatched by this process even if the tracker later reads active. |
 | `operator_terminal_stops_total` | Monotonic counter of distinct Operator Terminal Stop latches since process start, surviving the #667 cap eviction. Use this, not `operator_terminal_stops`, for a lifetime number once a long-running worker has rotated past the bound; the difference between the two is the count evicted from the bounded set. |
 
@@ -247,12 +252,12 @@ There is no `failed` set: per SPEC §8.4/§16.6 a failed run is retried with
 backoff (visible under `retrying`), not parked in a suppression bucket — the
 former deterministic-non-retryable suppression was removed in #584 (D29).
 
-`completed`, `reconcile_stopped_with_progress`, and
-`agent_handoff_reconcile_stopped` arrays at the top level publish the recent N
-issue IDs in those sets; for lifetime totals across FIFO eviction use the
-`_total` counters. `operator_terminal_stops` publishes full rows instead of
-only IDs so operators can see the terminal state, stop time, and first
-suppressed active-candidate evidence.
+`completed`, `reconcile_stopped_with_progress`,
+`agent_handoff_reconcile_stopped`, and `active_success_no_handoff` arrays at the
+top level publish the recent N issue IDs in those sets; for lifetime totals
+across FIFO eviction use the `_total` counters. `operator_terminal_stops`
+publishes full rows instead of only IDs so operators can see the terminal state,
+stop time, and first suppressed active-candidate evidence.
 
 ### `codex_totals.seconds_running` semantics
 

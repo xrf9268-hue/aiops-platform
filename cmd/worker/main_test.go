@@ -356,6 +356,39 @@ func TestApiIssueFromViewResolvesAgentHandoffReconcileStoppedFromBucketWhenEvent
 	}
 }
 
+func TestApiIssueFromViewFindsActiveSuccessNoHandoffByIdentifierAndID(t *testing.T) {
+	view := orchestrator.StateView{
+		ActiveSuccessNoHandoff: []orchestrator.IssueID{"gitea-issue-12"},
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventActiveSuccessNoHandoff,
+			IssueID:    "gitea-issue-12",
+			Identifier: "#12",
+			Message:    "worker exited cleanly while issue remained active with no agent handoff",
+			At:         time.Unix(1700000000, 0).UTC(),
+		}},
+	}
+	for _, want := range []string{"#12", "gitea-issue-12"} {
+		got, ok := apiIssueFromView(view, want)
+		if !ok {
+			t.Fatalf("apiIssueFromView(%q) ok = false; want true", want)
+		}
+		if got.Status != "active_success_no_handoff" || got.IssueID != "gitea-issue-12" {
+			t.Fatalf("apiIssueFromView(%q) = (%s, %s); want (active_success_no_handoff, gitea-issue-12)", want, got.Status, got.IssueID)
+		}
+	}
+}
+
+func TestApiIssueFromViewResolvesActiveSuccessNoHandoffFromBucketWhenEventAgedOut(t *testing.T) {
+	view := orchestrator.StateView{
+		Completed:              []orchestrator.IssueID{"gitea-issue-12"},
+		ActiveSuccessNoHandoff: []orchestrator.IssueID{"gitea-issue-12"},
+	}
+	got, ok := apiIssueFromView(view, "gitea-issue-12")
+	if !ok || got.Status != "active_success_no_handoff" {
+		t.Fatalf("apiIssueFromView(gitea-issue-12) = (%v, %s); want (true, active_success_no_handoff)", ok, got.Status)
+	}
+}
+
 func TestApiIssueFromViewPrefersAgentHandoffWhenBucketsOverlap(t *testing.T) {
 	view := orchestrator.StateView{
 		ReconcileStoppedWithProgress: []orchestrator.IssueID{"linear-uuid-63"},
@@ -526,7 +559,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Method:     "mcpServer/elicitation/request",
 			Error:      "input required",
 		}},
-		Completed: []orchestrator.IssueID{"issue-9", "issue-3"},
+		Completed:                             []orchestrator.IssueID{"issue-9", "issue-3"},
+		ActiveSuccessNoHandoff:                []orchestrator.IssueID{"issue-12"},
+		CumulativeActiveSuccessNoHandoffTotal: 6,
 		CodexTotals: orchestrator.CodexTotals{
 			InputTokens:    10,
 			OutputTokens:   20,
@@ -553,9 +588,11 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		PollIntervalMs      int64  `json:"poll_interval_ms"`
 		MaxConcurrentAgents int    `json:"max_concurrent_agents"`
 		Counts              struct {
-			Running  int `json:"running"`
-			Retrying int `json:"retrying"`
-			Blocked  int `json:"blocked"`
+			Running                     int   `json:"running"`
+			Retrying                    int   `json:"retrying"`
+			Blocked                     int   `json:"blocked"`
+			ActiveSuccessNoHandoff      int   `json:"active_success_no_handoff"`
+			ActiveSuccessNoHandoffTotal int64 `json:"active_success_no_handoff_total"`
 		} `json:"counts"`
 		Running []struct {
 			IssueID         string `json:"issue_id"`
@@ -579,8 +616,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 				Error string `json:"error"`
 			} `json:"startup_failure"`
 		} `json:"retrying"`
-		Completed   []string `json:"completed"`
-		CodexTotals struct {
+		Completed              []string `json:"completed"`
+		ActiveSuccessNoHandoff []string `json:"active_success_no_handoff"`
+		CodexTotals            struct {
 			InputTokens    int64   `json:"input_tokens"`
 			OutputTokens   int64   `json:"output_tokens"`
 			TotalTokens    int64   `json:"total_tokens"`
@@ -606,6 +644,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if payload.Counts.Running != 2 || payload.Counts.Retrying != 2 || payload.Counts.Blocked != 2 {
 		t.Fatalf("counts = %+v, want running=2 retrying=2 blocked=2", payload.Counts)
 	}
+	if payload.Counts.ActiveSuccessNoHandoff != 1 || payload.Counts.ActiveSuccessNoHandoffTotal != 6 {
+		t.Fatalf("active no-handoff counts = %+v, want active_success_no_handoff=1 total=6", payload.Counts)
+	}
 	if len(payload.Running) != 2 || payload.Running[0].IssueID != "issue-1" || payload.Running[1].IssueID != "issue-2" {
 		t.Fatalf("running = %+v, want sorted issue-1 then issue-2", payload.Running)
 	}
@@ -626,6 +667,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
+	}
+	if !reflect.DeepEqual(payload.ActiveSuccessNoHandoff, []string{"issue-12"}) {
+		t.Fatalf("active_success_no_handoff = %+v, want [issue-12]", payload.ActiveSuccessNoHandoff)
 	}
 	// SPEC §8.4: failures retry rather than being parked in a suppression set,
 	// so the state surface no longer emits a `failed` array (#584, D29 closed).
@@ -791,14 +835,15 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress", "active_success_no_handoff"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}
 		}
 	} else {
 		if !strings.Contains(html, "Delivered") ||
-			!strings.Contains(html, "agent_handoff_reconcile_stopped") {
+			!strings.Contains(html, "agent_handoff_reconcile_stopped") ||
+			!strings.Contains(html, "active_success_no_handoff") {
 			t.Fatalf("dashboard fallback missing delivered handoff KPI wiring:\n%s", html)
 		}
 		if strings.Contains(html, "reconcile_stopped_with_progress") {

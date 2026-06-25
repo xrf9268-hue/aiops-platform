@@ -1463,7 +1463,7 @@ func TestPollOnceRedispatchesIssueAfterPriorRunCompleted(t *testing.T) {
 		t.Fatalf("initial poll once: %v", err)
 	}
 	waitForDispatcherCount(t, dispatcher, 1)
-	waitForCompleted(t, ctx, orch, "issue-1")
+	waitForActiveSuccessNoHandoff(t, ctx, orch, "issue-1")
 
 	waitForRetryDue(t, ctx, orch, "issue-1")
 	if err := poller.PollOnce(ctx); err != nil {
@@ -1498,7 +1498,7 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 		t.Fatalf("initial poll once: %v", err)
 	}
 	waitForDispatcherCount(t, dispatcher, 1)
-	waitForCompleted(t, ctx, orch, IssueID(issue.ID))
+	waitForActiveSuccessNoHandoff(t, ctx, orch, IssueID(issue.ID))
 	waitForRetryDue(t, ctx, orch, IssueID(issue.ID))
 
 	poller.tracker = &fakeIssueTracker{}
@@ -1700,7 +1700,7 @@ func TestPollOnceDispatchesOverflowIssueAfterCapacityFrees(t *testing.T) {
 	}
 
 	close(firstRunBlocked)
-	waitForCompleted(t, ctx, orch, "issue-1")
+	waitForActiveSuccessNoHandoff(t, ctx, orch, "issue-1")
 
 	secondRunBlocked := make(chan struct{})
 	dispatcher.mu.Lock()
@@ -1741,7 +1741,7 @@ func TestPollOnceDropsOverflowIssueThatIsNoLongerActive(t *testing.T) {
 	waitForDispatcherCount(t, dispatcher, 1)
 
 	close(dispatcher.releaseCh)
-	waitForCompleted(t, ctx, orch, "issue-1")
+	waitForActiveSuccessNoHandoff(t, ctx, orch, "issue-1")
 	dispatcher.releaseCh = nil
 	trackerClient.issues = []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "Todo"}}
 	waitForRetryDue(t, ctx, orch, "issue-1")
@@ -1812,7 +1812,7 @@ func waitForBlockingDispatcherCount(t *testing.T, dispatcher *blockingDispatcher
 	t.Fatalf("dispatcher issues = %d, want %d", dispatcher.count(), want)
 }
 
-func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
+func waitForActiveSuccessNoHandoff(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -1820,14 +1820,14 @@ func waitForCompleted(t *testing.T, ctx context.Context, orch *Orchestrator, id 
 		if err != nil {
 			t.Fatalf("snapshot: %v", err)
 		}
-		for _, completed := range view.Completed {
-			if completed == id {
+		for _, noHandoff := range view.ActiveSuccessNoHandoff {
+			if noHandoff == id {
 				return
 			}
 		}
 		time.Sleep(time.Millisecond)
 	}
-	t.Fatalf("issue %s was not marked completed", id)
+	t.Fatalf("issue %s was not marked active_success_no_handoff", id)
 }
 
 func waitForRetryDue(t *testing.T, ctx context.Context, orch *Orchestrator, id IssueID) {

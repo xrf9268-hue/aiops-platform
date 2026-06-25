@@ -115,11 +115,10 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	// issue keeps getting fresh sessions until tracker state changes (reconcile /
 	// §16.5 self-stop). D34 keeps that loop bounded locally by carrying
 	// nextContinuationTurnCount through the retry entry.
-	if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
+	if !f.finishCleanContinuation(st, elapsed) {
 		close(f.done)
 		return nil
 	}
-	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
 	// Use f.entry.Issue, not f.issue: reconciliation may have refreshed
 	// the tracker state mid-run, and per-state capacity gates must see
 	// the live state, not the dispatch-time snapshot.
@@ -145,6 +144,28 @@ func (f *finalizeRunOp) applyCleanExit(st *OrchestratorState, elapsed time.Durat
 	return func() {
 		o.logRescheduleErr(o.scheduleContinuationRetry(o.runCtx, issue, identifier, nextAttempt, nextContinuationTurnCount, workspace), id, identifier)
 	}
+}
+
+func (f *finalizeRunOp) finishCleanContinuation(st *OrchestratorState, elapsed time.Duration) bool {
+	if f.shouldRecordActiveSuccessNoHandoff() {
+		if !st.FinishRunActiveSuccessNoHandoff(f.id, f.entry, elapsed) {
+			return false
+		}
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventActiveSuccessNoHandoff, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly while issue remained active with no agent handoff"})
+		return true
+	}
+	if !st.FinishRunSucceeded(f.id, f.entry, elapsed) {
+		return false
+	}
+	st.RecordEvent(RuntimeEvent{Kind: RuntimeEventCompleted, IssueID: f.id, Identifier: f.identifier, Message: "worker exited cleanly"})
+	return true
+}
+
+func (f *finalizeRunOp) shouldRecordActiveSuccessNoHandoff() bool {
+	return f.result.IssueExitState == nil &&
+		!runHasCurrentIssueHandoff(f.entry) &&
+		strings.TrimSpace(f.entry.Issue.State) != ""
 }
 
 func (f *finalizeRunOp) shouldBlockContinuationBudget(st *OrchestratorState, turnCount int) bool {
