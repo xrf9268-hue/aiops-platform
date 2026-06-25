@@ -22,6 +22,32 @@ func TestGitHubLocalWorkflowRunsUncachedFileSizeGate(t *testing.T) {
 	}
 }
 
+func TestGitHubLocalWorkflowClaimsPRBeforeLongGates(t *testing.T) {
+	body, err := os.ReadFile("../examples/github-local-WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("ReadFile(github-local-WORKFLOW.md): %v", err)
+	}
+	text := string(body)
+	claimGate := "After the first meaningful commit"
+	verifyGate := "Run the configured verify commands"
+	reviewGate := "run two independent local reviews"
+	finalGate := "Before marking the PR ready or mergeable"
+	reuseGate := "check for an existing open PR"
+
+	for _, want := range []string{claimGate, verifyGate, reviewGate, finalGate, reuseGate, "Open or update a draft PR"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("github-local-WORKFLOW.md missing %q", want)
+		}
+	}
+	claimIndex := strings.Index(text, claimGate)
+	if verifyIndex := strings.Index(text, verifyGate); claimIndex > verifyIndex {
+		t.Fatalf("github-local-WORKFLOW.md claim gate index = %d; want before verify gate index %d", claimIndex, verifyIndex)
+	}
+	if reviewIndex := strings.Index(text, reviewGate); claimIndex > reviewIndex {
+		t.Fatalf("github-local-WORKFLOW.md claim gate index = %d; want before review gate index %d", claimIndex, reviewIndex)
+	}
+}
+
 func TestWebTodoWorkflowsDocumentReworkConvergence(t *testing.T) {
 	for _, tc := range []struct {
 		path string
