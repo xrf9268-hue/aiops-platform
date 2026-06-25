@@ -168,13 +168,21 @@ type Blocked struct {
 // Retry mirrors SPEC §13.7.2's per-retry-row object. Kind is the wire form of
 // orchestrator.RetryKind (a string enum).
 type Retry struct {
-	IssueID    string     `json:"issue_id"`
-	Identifier string     `json:"issue_identifier,omitempty"`
-	IssueURL   string     `json:"issue_url,omitempty"`
-	Attempt    int        `json:"attempt"`
-	DueAt      *time.Time `json:"due_at,omitempty"`
-	Error      string     `json:"error,omitempty"`
-	Kind       string     `json:"kind"`
+	IssueID        string          `json:"issue_id"`
+	Identifier     string          `json:"issue_identifier,omitempty"`
+	IssueURL       string          `json:"issue_url,omitempty"`
+	Attempt        int             `json:"attempt"`
+	DueAt          *time.Time      `json:"due_at,omitempty"`
+	Error          string          `json:"error,omitempty"`
+	Kind           string          `json:"kind"`
+	StartupFailure *StartupFailure `json:"startup_failure,omitempty"`
+}
+
+// StartupFailure is the wire form of the runner startup phase that failed
+// before the issue entered a usable app-server session.
+type StartupFailure struct {
+	Phase string `json:"phase"`
+	Error string `json:"error,omitempty"`
 }
 
 // OperatorTerminalStop mirrors SPEC §13.7.2's per-operator-terminal-stop row.

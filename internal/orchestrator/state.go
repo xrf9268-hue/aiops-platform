@@ -14,6 +14,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -150,6 +151,10 @@ type RunningEntry struct {
 	// without a message do not clear it, so the operator-visible field keeps
 	// the last human-readable status until a new one supersedes it.
 	LastCodexMessage string
+	// LastStartupFailure is set from startup_failed runtime events and copied to
+	// failure retry rows so operators can see the failed app-server phase without
+	// parsing raw output or runner error text.
+	LastStartupFailure *task.StartupFailure
 
 	CodexInputTokens  int64
 	CodexOutputTokens int64

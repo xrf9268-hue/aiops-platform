@@ -79,6 +79,7 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		}
 	}
 	s.recordSessionFields(run, event)
+	s.recordStartupFailureFields(run, event)
 	s.recordAgentHandoffFields(run, event)
 	s.recordInputRequiredFields(run, event, now)
 	if usage, ok := tokenUsageFromEvent(event); ok {
@@ -89,6 +90,22 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		snap := RateLimitSnapshot(limits)
 		s.RecordRateLimits(&snap)
 	}
+}
+
+func (s *OrchestratorState) recordStartupFailureFields(run *RunningEntry, event task.RuntimeEvent) {
+	if event.Event != task.EventStartupFailed {
+		return
+	}
+	payload, _ := asStringMap(event.Payload)
+	phase, ok := stringField(payload, "phase")
+	if !ok || phase == "" {
+		return
+	}
+	failure := &task.StartupFailure{Phase: phase}
+	if msg, ok := stringField(payload, "error"); ok {
+		failure.Error = msg
+	}
+	run.LastStartupFailure = failure
 }
 
 func (s *OrchestratorState) recordAgentHandoffFields(run *RunningEntry, event task.RuntimeEvent) {

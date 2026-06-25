@@ -22,6 +22,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/gitea"
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -507,6 +508,10 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Identifier: "MT-649",
 			Attempt:    1,
 			Error:      "retry soon",
+			StartupFailure: &task.StartupFailure{
+				Phase: "thread/start",
+				Error: "codex app-server read timeout after 5000ms",
+			},
 		}},
 		Blocked: []orchestrator.BlockedView{{
 			IssueID:    "issue-7",
@@ -569,6 +574,10 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			Attempt         int    `json:"attempt"`
 			Error           string `json:"error"`
 			Kind            string `json:"kind"`
+			StartupFailure  *struct {
+				Phase string `json:"phase"`
+				Error string `json:"error"`
+			} `json:"startup_failure"`
 		} `json:"retrying"`
 		Completed   []string `json:"completed"`
 		CodexTotals struct {
@@ -611,6 +620,9 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 	if payload.Retrying[0].Kind != string(orchestrator.RetryKindFailure) || payload.Retrying[1].Kind != string(orchestrator.RetryKindFailure) {
 		t.Fatalf("retrying kinds = %q/%q, want failure defaults", payload.Retrying[0].Kind, payload.Retrying[1].Kind)
+	}
+	if payload.Retrying[0].StartupFailure == nil || payload.Retrying[0].StartupFailure.Phase != "thread/start" {
+		t.Fatalf("retrying startup_failure = %+v; want thread/start", payload.Retrying[0].StartupFailure)
 	}
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)

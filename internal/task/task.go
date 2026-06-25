@@ -159,6 +159,21 @@ type RuntimeEvent struct {
 	Payload any    `json:"payload,omitempty"`
 }
 
+// StartupFailure is the structured subset of a startup_failed runtime event
+// that retry/status surfaces can carry without parsing runner error strings.
+type StartupFailure struct {
+	Phase string `json:"phase"`
+	Error string `json:"error,omitempty"`
+}
+
+func CopyStartupFailure(in *StartupFailure) *StartupFailure {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
 type Task struct {
 	ID            string    `json:"id"`
 	Status        Status    `json:"status"`

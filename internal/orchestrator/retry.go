@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -36,6 +37,9 @@ type RetryEntry struct {
 	Timer      *time.Timer
 	Error      string
 	Kind       RetryKind
+	// StartupFailure is observability-only detail for a failure retry caused by
+	// a runner startup phase. The retry policy is still owned by Kind/Attempt.
+	StartupFailure *task.StartupFailure
 	// ContinuationTurnCount carries D34's cumulative clean-turn budget across
 	// RetryKindContinuation wake/re-dispatch cycles. It is ignored for failure
 	// and quota retries.

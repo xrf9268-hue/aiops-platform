@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -135,6 +136,11 @@ func (o *Orchestrator) ScheduleRetry(ctx context.Context, issue tracker.Issue, i
 func (o *Orchestrator) scheduleFailureRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, workspace Workspace) error {
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace, 0)
 }
+
+func (o *Orchestrator) scheduleFailureRetryWithStartupFailure(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, workspace Workspace, startupFailure *task.StartupFailure) error {
+	return o.scheduleRetryWithStartupFailure(ctx, issue, identifier, RetryRequest{Kind: RetryKindFailure, Attempt: attempt}, attempt, runErr, workspace, startupFailure, 0)
+}
+
 func (o *Orchestrator) scheduleQuotaBackoffRetry(ctx context.Context, issue tracker.Issue, identifier string, attempt int, runErr string, retryAfter time.Duration, workspace Workspace) error {
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindQuotaBackoff, Attempt: attempt, DelayOverride: retryAfter}, attempt, runErr, workspace, 0)
 }
@@ -163,6 +169,10 @@ func (o *Orchestrator) scheduleContinuationRetry(ctx context.Context, issue trac
 	return o.scheduleRetry(ctx, issue, identifier, RetryRequest{Kind: RetryKindContinuation, Attempt: attempt}, attempt, "", workspace, continuationTurnCount)
 }
 func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace, continuationTurnCount int) error {
+	return o.scheduleRetryWithStartupFailure(ctx, issue, identifier, req, attempt, runErr, workspace, nil, continuationTurnCount)
+}
+
+func (o *Orchestrator) scheduleRetryWithStartupFailure(ctx context.Context, issue tracker.Issue, identifier string, req RetryRequest, attempt int, runErr string, workspace Workspace, startupFailure *task.StartupFailure, continuationTurnCount int) error {
 	op := &scheduleRetryOp{
 		o:                     o,
 		issue:                 issue,
@@ -172,6 +182,7 @@ func (o *Orchestrator) scheduleRetry(ctx context.Context, issue tracker.Issue, i
 		kind:                  req.Kind,
 		req:                   req,
 		workspace:             workspace,
+		startupFailure:        task.CopyStartupFailure(startupFailure),
 		continuationTurnCount: continuationTurnCount,
 	}
 	return o.submit(ctx, op)
@@ -190,6 +201,7 @@ type scheduleRetryOp struct {
 	kind                  RetryKind
 	req                   RetryRequest
 	workspace             Workspace
+	startupFailure        *task.StartupFailure
 	continuationTurnCount int
 }
 
@@ -212,6 +224,7 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		DueAt:                 time.Now().Add(delay),
 		Error:                 s.runErr,
 		Kind:                  s.kind,
+		StartupFailure:        task.CopyStartupFailure(s.startupFailure),
 		ContinuationTurnCount: s.continuationTurnCount,
 		Workspace:             s.workspace,
 	}
@@ -416,12 +429,12 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 		// reschedule through the configured backoff with attempt+1 and a
 		// typed "no available orchestrator slots" error instead of arming a
 		// short 100ms re-fire timer.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, entry.StartupFailure, o)
 	}
 	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Same
 		// upstream-aligned reschedule shape as the global-cap branch.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, o)
+		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, entry.StartupFailure, o)
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
@@ -463,7 +476,7 @@ func suppressRetryFireAfterOperatorStop(st *OrchestratorState, entry *RetryEntry
 // 100ms re-fire loop bypassed the backoff formula, left the attempt
 // counter frozen across thousands of re-fires, and produced no runtime
 // event for the cap-pressure case.
-func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, kind RetryKind, workspace Workspace, o *Orchestrator) func() {
+func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, kind RetryKind, workspace Workspace, startupFailure *task.StartupFailure, o *Orchestrator) func() {
 	if o.runCtx.Err() != nil {
 		// Mirror retryPollFailedOp's shutdown guard (actor.go above):
 		// the followup's ScheduleRetry would fail submit anyway, so
@@ -476,6 +489,7 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 	if kind == RetryKindQuotaBackoff {
 		nextAttempt = attempt
 	}
+	startupFailure = task.CopyStartupFailure(startupFailure)
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventFailed,
 		IssueID:    id,
@@ -489,7 +503,7 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), id, identifier)
 			return
 		}
-		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), id, identifier)
+		o.logRescheduleErr(o.scheduleFailureRetryWithStartupFailure(o.runCtx, issue, identifier, nextAttempt, runErr, workspace, startupFailure), id, identifier)
 	}
 }
 func findIssueByID(issues []tracker.Issue, id IssueID) *tracker.Issue {
@@ -536,6 +550,7 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	// Carry the workspace across the reschedule so the §18.1 terminal cleanup
 	// gate still has a path on a later attempt (#341).
 	workspace := entry.Workspace
+	startupFailure := task.CopyStartupFailure(entry.StartupFailure)
 	nextAttempt := r.attempt + 1
 	if r.kind == RetryKindQuotaBackoff {
 		nextAttempt = r.attempt
@@ -555,7 +570,7 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), r.id, identifier)
 			return
 		}
-		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), r.id, identifier)
+		o.logRescheduleErr(o.scheduleFailureRetryWithStartupFailure(o.runCtx, issue, identifier, nextAttempt, runErr, workspace, startupFailure), r.id, identifier)
 	}
 }
 

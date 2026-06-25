@@ -8,6 +8,8 @@ package orchestrator
 
 import (
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
 
 // StateView is the SPEC §13.3 / §13.7 shape the orchestrator publishes
@@ -173,13 +175,14 @@ func (s *OrchestratorState) Snapshot() StateView {
 	}
 	for id, r := range s.RetryAttempts {
 		view.Retrying = append(view.Retrying, RetryView{
-			IssueID:    id,
-			Identifier: r.Identifier,
-			IssueURL:   r.Issue.URL,
-			Attempt:    r.Attempt,
-			DueAt:      r.DueAt,
-			Error:      r.Error,
-			Kind:       r.Kind,
+			IssueID:        id,
+			Identifier:     r.Identifier,
+			IssueURL:       r.Issue.URL,
+			Attempt:        r.Attempt,
+			DueAt:          r.DueAt,
+			Error:          r.Error,
+			Kind:           r.Kind,
+			StartupFailure: task.CopyStartupFailure(r.StartupFailure),
 		})
 	}
 	// Iterate the FIFO order slices, not the map. The map's iteration
