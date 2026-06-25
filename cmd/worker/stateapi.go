@@ -20,6 +20,7 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
 	"github.com/xrf9268-hue/aiops-platform/internal/stateapi"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
@@ -397,13 +398,24 @@ func apiRetryFromView(row orchestrator.RetryView) stateapi.Retry {
 		dueAt = &v
 	}
 	return stateapi.Retry{
-		IssueID:    string(row.IssueID),
-		Identifier: row.Identifier,
-		IssueURL:   row.IssueURL,
-		Attempt:    row.Attempt,
-		DueAt:      dueAt,
-		Error:      row.Error,
-		Kind:       string(retryKindOrFailure(row.Kind)),
+		IssueID:        string(row.IssueID),
+		Identifier:     row.Identifier,
+		IssueURL:       row.IssueURL,
+		Attempt:        row.Attempt,
+		DueAt:          dueAt,
+		Error:          row.Error,
+		Kind:           string(retryKindOrFailure(row.Kind)),
+		StartupFailure: apiStartupFailure(row.StartupFailure),
+	}
+}
+
+func apiStartupFailure(in *task.StartupFailure) *stateapi.StartupFailure {
+	if in == nil {
+		return nil
+	}
+	return &stateapi.StartupFailure{
+		Phase: in.Phase,
+		Error: in.Error,
 	}
 }
 func retryKindOrFailure(kind orchestrator.RetryKind) orchestrator.RetryKind {

@@ -778,6 +778,73 @@ for line in sys.stdin:
 	}
 }
 
+func TestCodexAppServerRunnerRecoversAfterThreadStartReadTimeout(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "attempts.txt")
+	t.Setenv("CODEX_RECOVERY_STATE", statePath)
+	installCodexStub(t, `#!/bin/sh
+printf '%s\n' "$@" > "$CODEX_ARGV_LOG"
+printf 'started\n' > "$CODEX_STARTED_LOG"
+attempt=$(cat "$CODEX_RECOVERY_STATE" 2>/dev/null || printf '0')
+attempt=$((attempt + 1))
+printf '%s\n' "$attempt" > "$CODEX_RECOVERY_STATE"
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> "$CODEX_STDIN_LOG"
+    case "$line" in
+        *'"method":"initialize"'*)
+            printf '{"jsonrpc":"2.0","id":1,"result":{}}\n'
+            ;;
+        *'"method":"thread/start"'*)
+            if [ "$attempt" -eq 1 ]; then
+                sleep 4
+                exit 0
+            fi
+            printf '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"},"model":"gpt-recovered"}}\n'
+            ;;
+        *'"method":"turn/start"'*)
+            printf '{"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-1"}}}\n'
+            printf '{"method":"turn/completed","params":{"turn":{"status":"completed"},"continue":false}}\n'
+            exit 0
+            ;;
+    esac
+done
+`)
+	wd := codexWorkdir(t, "recover after startup timeout")
+	in := appServerInput(wd)
+	in.Workflow.Config.Codex.EnvPassthrough = append(in.Workflow.Config.Codex.EnvPassthrough, "CODEX_RECOVERY_STATE")
+	in.Workflow.Config.Codex.ReadTimeoutMs = 2000
+	in.Workflow.Config.Codex.StallTimeoutMs = 0
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	first, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if !IsReadTimeout(err) {
+		t.Fatalf("first Run error = %T %[1]v; want thread/start read timeout", err)
+	}
+	failures := runtimeEventsNamed(first.RuntimeEvents, task.EventStartupFailed)
+	if len(failures) != 1 {
+		t.Fatalf("first startup_failed events = %d; want 1; events=%#v", len(failures), first.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, failures[0], "phase"); got != "thread/start" {
+		t.Fatalf("first startup_failed phase = %#v; want thread/start", got)
+	}
+	if got := len(runtimeEventsNamed(first.RuntimeEvents, task.EventSessionStarted)); got != 0 {
+		t.Fatalf("first session_started events = %d; want no usable session", got)
+	}
+
+	in.Workflow.Config.Codex.ReadTimeoutMs = 5000
+	second, err := (CodexAppServerRunner{}).Run(ctx, in)
+	if err != nil {
+		t.Fatalf("second Run error = %v; want recovered session", err)
+	}
+	sessions := runtimeEventsNamed(second.RuntimeEvents, task.EventSessionStarted)
+	if len(sessions) != 1 {
+		t.Fatalf("second session_started events = %d; want 1; events=%#v", len(sessions), second.RuntimeEvents)
+	}
+	if got := runtimeEventField(t, sessions[0], "agent_model"); got != "gpt-recovered" {
+		t.Fatalf("second session_started agent_model = %#v; want gpt-recovered", got)
+	}
+}
+
 // TestCodexAppServerRunnerEmitsUnsupportedToolCallForUnknownTool pins SPEC
 // §10.4: when the agent invokes a tool the runtime did not advertise, the
 // orchestrator must learn about it via task.EventUnsupportedToolCall (the

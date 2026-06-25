@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/runner"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
@@ -313,8 +314,9 @@ func (f *finalizeRunOp) applyFailureRetry(st *OrchestratorState, elapsed time.Du
 	o := f.o
 	id := f.id
 	identifier := f.identifier
+	startupFailure := task.CopyStartupFailure(f.entry.LastStartupFailure)
 	return func() {
-		o.logRescheduleErr(o.scheduleFailureRetry(o.runCtx, issue, identifier, nextAttempt, runErr, workspace), id, identifier)
+		o.logRescheduleErr(o.scheduleFailureRetryWithStartupFailure(o.runCtx, issue, identifier, nextAttempt, runErr, workspace, startupFailure), id, identifier)
 	}
 }
 

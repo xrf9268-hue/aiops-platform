@@ -293,6 +293,10 @@ func formatRetryRow(r stateapi.Retry) string {
 		}
 		errorPart = " " + colorize("error="+errStr, ansiDim)
 	}
+	startupPart := ""
+	if r.StartupFailure != nil && r.StartupFailure.Phase != "" {
+		startupPart = " " + colorize("startup_phase="+sanitize(r.StartupFailure.Phase), ansiDim)
+	}
 	return "│  " +
 		colorize("↻", ansiYellow) + " " +
 		colorize(id, ansiRed) + " " +
@@ -300,6 +304,7 @@ func formatRetryRow(r stateapi.Retry) string {
 		colorize("attempt="+attempt, ansiYellow) +
 		colorize(" in ", ansiDim) +
 		colorize(dueIn, ansiCyan) +
+		startupPart +
 		errorPart
 }
 

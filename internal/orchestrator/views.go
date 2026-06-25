@@ -1,6 +1,10 @@
 package orchestrator
 
-import "time"
+import (
+	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
+)
 
 // This file holds the public projection types that StateView exposes for the
 // SPEC §13.7 observability surface (the /api/v1/state and /api/v1/<id>
@@ -67,13 +71,14 @@ type BlockedView struct {
 // RetryView is the per-retry-entry projection in StateView. Omits the
 // *time.Timer handle because it is not meaningful outside the process.
 type RetryView struct {
-	IssueID    IssueID
-	Identifier string
-	IssueURL   string
-	Attempt    int
-	DueAt      time.Time
-	Error      string
-	Kind       RetryKind
+	IssueID        IssueID
+	Identifier     string
+	IssueURL       string
+	Attempt        int
+	DueAt          time.Time
+	Error          string
+	Kind           RetryKind
+	StartupFailure *task.StartupFailure
 }
 
 type OperatorTerminalStopView struct {

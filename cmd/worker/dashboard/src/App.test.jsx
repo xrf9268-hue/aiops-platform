@@ -37,6 +37,7 @@ function busyState(overrides = {}) {
         issue_id: '5d3177', issue_identifier: 'MT-613', attempt: 2,
         due_at: new Date(Date.now() + 46000).toISOString(),
         error: 'context deadline exceeded', kind: 'runner_error',
+        startup_failure: { phase: 'thread/start', error: 'codex app-server read timeout after 5000ms' },
       },
     ],
     blocked: [
@@ -357,11 +358,13 @@ describe('Worker status dashboard', () => {
     expect(screen.queryByText('Stopped w/ progress')).toBeNull();
   });
 
-  it('shows the retry queue with attempt count and backoff kind', async () => {
+  it('shows the retry queue with attempt count, backoff kind, and startup phase', async () => {
     render(<App />);
     expect(await screen.findByRole('link', { name: 'MT-613' })).toBeTruthy();
     expect(screen.getByText('attempt 2')).toBeTruthy();
-    expect(screen.getByText('runner_error')).toBeTruthy();
+    const kind = screen.getByText('runner_error · startup_phase=thread/start');
+    expect(kind).toBeTruthy();
+    expect(kind.getAttribute('title')).toBe('codex app-server read timeout after 5000ms');
     // the 2-line clamp can truncate long errors; the full text stays available
     // via a hover title so it is never lost.
     const err = screen.getByText('context deadline exceeded');

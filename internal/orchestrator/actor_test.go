@@ -1793,6 +1793,49 @@ func TestFinalize_AbnormalExitSchedulesRetry(t *testing.T) {
 	}
 }
 
+func TestFinalize_FailureRetryPreservesStartupFailurePhase(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{
+		Dispatcher: disp,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-STARTUP", Identifier: "ENG-STARTUP", Title: "startup flakes"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
+		Event: task.EventStartupFailed,
+		Payload: map[string]any{
+			"phase": "thread/start",
+			"error": "codex app-server read timeout after 5000ms",
+		},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent(startup_failed): %v", err)
+	}
+
+	disp.finishAt(0, WorkerResult{
+		Err:     errors.New("codex app-server thread/start: codex app-server read timeout after 5000ms"),
+		Elapsed: time.Millisecond,
+	})
+
+	waitFor(t, func() bool {
+		v, _ := o.Snapshot(context.Background())
+		return len(v.Retrying) == 1
+	}, time.Second)
+	v, _ := o.Snapshot(context.Background())
+	retry := v.Retrying[0]
+	if retry.Attempt != 1 {
+		t.Fatalf("retry Attempt = %d; want 1", retry.Attempt)
+	}
+	if retry.StartupFailure == nil || retry.StartupFailure.Phase != "thread/start" {
+		t.Fatalf("retry StartupFailure = %+v; want thread/start", retry.StartupFailure)
+	}
+}
+
 // TestFinalize_QuotaBackoffReschedulesWithRetryAfter pins that a quota-backoff
 // runner error reschedules the issue as a RetryKindQuotaBackoff entry with the
 // error's RetryAfter delay and the original attempt preserved (never Failed).
@@ -3603,7 +3646,8 @@ func TestRetryFire_GlobalCapacityFullReschedulesViaBackoff(t *testing.T) {
 	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
 
 	retryIssue := tracker.Issue{ID: "RETRY", Identifier: "RETRY", Title: "retry me"}
-	if err := o.ScheduleRetry(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient"); err != nil {
+	startupFailure := &task.StartupFailure{Phase: "thread/start", Error: "codex app-server read timeout after 5000ms"}
+	if err := o.scheduleFailureRetryWithStartupFailure(context.Background(), retryIssue, retryIssue.Identifier, 1, "transient", Workspace{}, startupFailure); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
 	waitFor(t, func() bool {
@@ -3625,7 +3669,9 @@ func TestRetryFire_GlobalCapacityFullReschedulesViaBackoff(t *testing.T) {
 		v, _ := o.Snapshot(context.Background())
 		return len(v.Retrying) == 1 &&
 			v.Retrying[0].Attempt == 2 &&
-			strings.Contains(v.Retrying[0].Error, "no available orchestrator slots")
+			strings.Contains(v.Retrying[0].Error, "no available orchestrator slots") &&
+			v.Retrying[0].StartupFailure != nil &&
+			v.Retrying[0].StartupFailure.Phase == "thread/start"
 	}, 2*time.Second)
 
 	v, _ := o.Snapshot(context.Background())
@@ -3640,6 +3686,9 @@ func TestRetryFire_GlobalCapacityFullReschedulesViaBackoff(t *testing.T) {
 	}
 	if got := v.Retrying[0].Error; !strings.Contains(got, "no available orchestrator slots") {
 		t.Fatalf("Retrying[0].Error = %q, want substring %q", got, "no available orchestrator slots")
+	}
+	if got := v.Retrying[0].StartupFailure; got == nil || got.Phase != "thread/start" {
+		t.Fatalf("Retrying[0].StartupFailure = %+v, want thread/start preserved across capacity defer", got)
 	}
 }
 
@@ -4222,7 +4271,8 @@ func TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError(t *testing.T) {
 	defer cancel()
 
 	iss := tracker.Issue{ID: "ENG-FETCH-FAIL", Identifier: "ENG-FETCH-FAIL", Title: "fetch err", State: "Todo"}
-	if err := o.ScheduleRetry(context.Background(), iss, iss.Identifier, 1, "transient"); err != nil {
+	startupFailure := &task.StartupFailure{Phase: "thread/start", Error: "codex app-server read timeout after 5000ms"}
+	if err := o.scheduleFailureRetryWithStartupFailure(context.Background(), iss, iss.Identifier, 1, "transient", Workspace{}, startupFailure); err != nil {
 		t.Fatalf("ScheduleRetry: %v", err)
 	}
 
@@ -4238,7 +4288,10 @@ func TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError(t *testing.T) {
 
 	waitFor(t, func() bool {
 		v, _ := o.Snapshot(context.Background())
-		return len(v.Retrying) == 1 && v.Retrying[0].Attempt == 2
+		return len(v.Retrying) == 1 &&
+			v.Retrying[0].Attempt == 2 &&
+			v.Retrying[0].StartupFailure != nil &&
+			v.Retrying[0].StartupFailure.Phase == "thread/start"
 	}, 2*time.Second)
 
 	v, err := o.Snapshot(context.Background())
@@ -4260,6 +4313,9 @@ func TestRetryFire_ReschedulesWithRetryPollFailedOnFetchError(t *testing.T) {
 	}
 	if !strings.Contains(got.Error, "tracker unreachable") {
 		t.Fatalf("rescheduled error = %q, want the underlying fetch error wrapped in", got.Error)
+	}
+	if got.StartupFailure == nil || got.StartupFailure.Phase != "thread/start" {
+		t.Fatalf("rescheduled StartupFailure = %+v, want thread/start preserved across retry poll failure", got.StartupFailure)
 	}
 }
 

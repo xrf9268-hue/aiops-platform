@@ -179,6 +179,21 @@ func TestFormatRetryRowDefaultsKindToFailure(t *testing.T) {
 	}
 }
 
+func TestFormatRetryRowIncludesStartupPhase(t *testing.T) {
+	got := formatRetryRow(stateapi.Retry{
+		IssueID:    "issue-1",
+		Identifier: "ENG-1",
+		Attempt:    1,
+		Kind:       "failure",
+		StartupFailure: &stateapi.StartupFailure{
+			Phase: "thread/start",
+		},
+	})
+	if !strings.Contains(got, "attempt=1") || !strings.Contains(got, "startup_phase=thread/start") {
+		t.Fatalf("formatRetryRow = %q; want attempt and startup phase", got)
+	}
+}
+
 // ── formatRuntimeSecs ─────────────────────────────────────────────────────────
 
 func TestFormatRuntimeSecs(t *testing.T) {
@@ -252,7 +267,7 @@ func TestFetchState_DecodesSharedContractFields(t *testing.T) {
 	  "max_concurrent_agents": 4,
 	  "counts": {"completed_total": 12, "agent_handoff_reconcile_stopped_total": 3, "agent_handoff_reconcile_stopped": 2},
 	  "running": [{"issue_id": "i1", "issue_identifier": "ENG-1", "state": "In Progress", "session_id": "sess-1", "turn_count": 7, "last_event": "turn_completed", "last_message": "working", "started_at": "2026-05-21T09:09:55Z", "codex_app_server_pid": 12345, "tokens": {"total_tokens": 2000}}],
-	  "retrying": [{"issue_id": "i2", "attempt": 2, "due_at": "2026-05-21T09:11:00Z", "error": "retry soon", "kind": "quota_backoff"}],
+	  "retrying": [{"issue_id": "i2", "attempt": 2, "due_at": "2026-05-21T09:11:00Z", "error": "retry soon", "kind": "quota_backoff", "startup_failure": {"phase": "thread/start", "error": "codex app-server read timeout after 5000ms"}}],
 	  "codex_totals": {"total_tokens": 300, "seconds_running": 1.5},
 	  "rate_limits": {"limit_id": "lim", "primary": {"remaining": 42, "limit": 100}}
 	}`
@@ -293,6 +308,9 @@ func TestFetchState_DecodesSharedContractFields(t *testing.T) {
 	rt := state.Retrying[0]
 	if rt.Attempt != 2 || rt.Error != "retry soon" || rt.Kind != "quota_backoff" || rt.DueAt == nil {
 		t.Errorf("Retrying[0] = %+v, want attempt/error/kind/due_at decoded", rt)
+	}
+	if rt.StartupFailure == nil || rt.StartupFailure.Phase != "thread/start" {
+		t.Errorf("Retrying[0].StartupFailure = %+v, want thread/start decoded", rt.StartupFailure)
 	}
 	if state.CodexTotals.TotalTokens != 300 || state.CodexTotals.SecondsRunning != 1.5 {
 		t.Errorf("CodexTotals = %+v, want total_tokens=300 seconds_running=1.5", state.CodexTotals)

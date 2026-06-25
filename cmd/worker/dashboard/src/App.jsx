@@ -357,12 +357,14 @@ function RetryTable({ rows }) {
           {rows.map((r) => {
             const secs = r.due_at ? (new Date(r.due_at).getTime() - Date.now()) / 1000 : NaN;
             const next = !Number.isFinite(secs) ? '—' : secs > 0 ? 'in ' + dur(secs) : 'due now';
+            const startupPhase = r.startup_failure?.phase ? `startup_phase=${r.startup_failure.phase}` : '';
+            const kindLine = [r.kind, startupPhase].filter(Boolean).join(' · ');
             return (
               <tr key={r.issue_id}>
                 <td className="issue-cell">
                   <div className="issue">
                     <IssueLink row={r} />
-                    <span className="wp">{r.kind}</span>
+                    <span className="wp" title={r.startup_failure?.error || kindLine}>{kindLine}</span>
                   </div>
                 </td>
                 <td data-label="Attempt"><span className="attempt"><span className="bd" />attempt {r.attempt}</span></td>
