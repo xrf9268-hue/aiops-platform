@@ -310,13 +310,19 @@ and `final-verify/videos/`.
 
 ## 9. Generate the Report Pack
 
-Save final state:
+Save final state. The final capture writes `state/maker-final.json`,
+`state/reviewer-final.json`, and `state/stress-final.json` from the dashboard
+state APIs before the report reads them:
 
 ```bash
-curl -fsS "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL/api/v1/state" \
-  > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/maker-final.json"
-curl -fsS "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL/api/v1/state" \
-  > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/reviewer-final.json"
+scripts/e2e-crowdrunner-capture.py \
+  --run-root "$AIOPS_CROWDRUNNER_RUN_ROOT" \
+  --maker-url "$AIOPS_CROWDRUNNER_MAKER_DASHBOARD_URL" \
+  --reviewer-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL" \
+  --stress-url "$AIOPS_CROWDRUNNER_STRESS_DASHBOARD_URL" \
+  --tui-bin "$AIOPS_CROWDRUNNER_TUI_BIN" \
+  --tag final \
+  --no-default-screenshots
 curl -fsS -H "Authorization: token $GITEA_TOKEN" \
   "$AIOPS_CROWDRUNNER_GITEA_URL/api/v1/repos/$AIOPS_CROWDRUNNER_REPO_OWNER/$AIOPS_CROWDRUNNER_REPO_NAME/issues?state=all" \
   > "$AIOPS_CROWDRUNNER_RUN_ROOT/state/issues-final.json"

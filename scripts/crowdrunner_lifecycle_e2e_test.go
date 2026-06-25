@@ -41,6 +41,9 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"operator milestone evidence",
 		"Do not commit `env.local`",
+		"`state/stress-final.json`",
+		`--tag final`,
+		`--stress-url "$AIOPS_CROWDRUNNER_STRESS_DASHBOARD_URL"`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("runbook missing %q", want)
@@ -53,6 +56,13 @@ func TestCrowdRunnerLifecycleRunbookDocumentsReusableSOP(t *testing.T) {
 		`--dashboard-url "$AIOPS_CROWDRUNNER_REVIEWER_DASHBOARD_URL"`,
 		"add `aiops/todo` to issues 1-12",
 		"trigger a work poll:",
+	})
+	assertInOrder(t, text, []string{
+		"## 9. Generate the Report Pack",
+		"state/stress-final.json",
+		"scripts/e2e-crowdrunner-capture.py",
+		`--tag final`,
+		"scripts/e2e-crowdrunner-report.py",
 	})
 }
 
