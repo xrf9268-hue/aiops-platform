@@ -110,25 +110,49 @@ gh --version | tee "$artifacts/gh-version.log"
 
 role_log="$artifacts/github-role-auth-preflight.log"
 : >"$role_log"
+
+is_placeholder_login() {
+  case "$1" in
+    REPLACE_ME_*|"")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 check_role() {
   local label="$1"
   local dir="$2"
   local expected="$3"
   if [ -z "$dir" ]; then
-    return
+    printf '%s GH_CONFIG_DIR is required for GitHub maker/reviewer preflight\n' "$label" >&2
+    exit 1
   fi
   local login
   login="$(GH_CONFIG_DIR="$dir" gh api user --jq .login)"
-  printf '%s=%s\n' "$label" "$login" | tee -a "$role_log"
-  if [ -n "$expected" ] && [ "$expected" != "REPLACE_ME_MAKER_LOGIN" ] && [ "$expected" != "REPLACE_ME_REVIEWER_LOGIN" ] && [ "$login" != "$expected" ]; then
+  printf '%s=%s\n' "$label" "$login" | tee -a "$role_log" >&2
+  if [ "$label" = "maker" ] || [ "$label" = "reviewer" ]; then
+    if is_placeholder_login "$expected"; then
+      printf 'AIOPS_GHMR_%s_LOGIN must be set to the observed %s GitHub login before preflight\n' "$(printf '%s' "$label" | tr '[:lower:]' '[:upper:]')" "$label" >&2
+      exit 1
+    fi
+  fi
+  if [ -n "$expected" ] && [ "$login" != "$expected" ]; then
     printf '%s login %s does not match expected %s\n' "$label" "$login" "$expected" >&2
     exit 1
   fi
+  printf '%s\n' "$login"
 }
 
-check_role "setup" "${AIOPS_GHMR_SETUP_GH_CONFIG_DIR:-}" ""
-check_role "maker" "${AIOPS_GHMR_MAKER_GH_CONFIG_DIR:-}" "${AIOPS_GHMR_MAKER_LOGIN:-}"
-check_role "reviewer" "${AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR:-}" "${AIOPS_GHMR_REVIEWER_LOGIN:-}"
+check_role "setup" "${AIOPS_GHMR_SETUP_GH_CONFIG_DIR:-}" "" >/dev/null
+maker_login="$(check_role "maker" "${AIOPS_GHMR_MAKER_GH_CONFIG_DIR:-}" "${AIOPS_GHMR_MAKER_LOGIN:-}")"
+reviewer_login="$(check_role "reviewer" "${AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR:-}" "${AIOPS_GHMR_REVIEWER_LOGIN:-}")"
+if [ "$maker_login" = "$reviewer_login" ]; then
+  printf 'maker and reviewer GitHub logins must differ; both resolved to %s\n' "$maker_login" >&2
+  exit 1
+fi
 
 if [ -n "${AIOPS_GHMR_REPO:-}" ] && [ -n "${AIOPS_GHMR_MAKER_GH_CONFIG_DIR:-}" ]; then
   dry_run_dir="$(mktemp -d "$run_root/state/maker-push-dry-run.XXXXXX")"

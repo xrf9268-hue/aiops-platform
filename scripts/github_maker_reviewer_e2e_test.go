@@ -266,6 +266,64 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerPreflightValidatesRoleAuth(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		makerLogin       string
+		reviewerLogin    string
+		makerExpected    string
+		reviewerExpected string
+		wantErr          bool
+		wantOutput       string
+	}{
+		{
+			name:             "placeholder maker expected login",
+			makerLogin:       "maker-bot",
+			reviewerLogin:    "reviewer-bot",
+			makerExpected:    "REPLACE_ME_MAKER_LOGIN",
+			reviewerExpected: "reviewer-bot",
+			wantErr:          true,
+			wantOutput:       "AIOPS_GHMR_MAKER_LOGIN must be set to the observed maker GitHub login before preflight",
+		},
+		{
+			name:             "same maker and reviewer login",
+			makerLogin:       "same-bot",
+			reviewerLogin:    "same-bot",
+			makerExpected:    "same-bot",
+			reviewerExpected: "same-bot",
+			wantErr:          true,
+			wantOutput:       "maker and reviewer GitHub logins must differ; both resolved to same-bot",
+		},
+		{
+			name:             "distinct maker and reviewer logins",
+			makerLogin:       "maker-bot",
+			reviewerLogin:    "reviewer-bot",
+			makerExpected:    "maker-bot",
+			reviewerExpected: "reviewer-bot",
+			wantOutput:       "release preflight complete for v0.0.0-test",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runGitHubMakerReviewerPreflightWithFakeTools(
+				t,
+				tc.makerLogin,
+				tc.reviewerLogin,
+				tc.makerExpected,
+				tc.reviewerExpected,
+			)
+			if tc.wantErr && err == nil {
+				t.Fatalf("preflight succeeded; want failure\n%s", out)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("preflight failed: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), tc.wantOutput) {
+				t.Fatalf("preflight output missing %q\n%s", tc.wantOutput, out)
+			}
+		})
+	}
+}
+
 func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -369,4 +427,146 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func runGitHubMakerReviewerPreflightWithFakeTools(
+	t *testing.T,
+	makerLogin string,
+	reviewerLogin string,
+	makerExpected string,
+	reviewerExpected string,
+) ([]byte, error) {
+	t.Helper()
+
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
+	makerDir := filepath.Join(runRoot, "secrets", "gh", "maker")
+	reviewerDir := filepath.Join(runRoot, "secrets", "gh", "reviewer")
+	mkdirAll(t, setupDir, makerDir, reviewerDir)
+	writeFileString(t, filepath.Join(setupDir, "login"), "setup-bot\n")
+	writeFileString(t, filepath.Join(makerDir, "login"), makerLogin+"\n")
+	writeFileString(t, filepath.Join(reviewerDir, "login"), reviewerLogin+"\n")
+
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForGitHubMakerReviewerPreflight())
+	writeFileString(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\necho 'codex test'\n")
+	for _, name := range []string{"gh", "codex"} {
+		if err := os.Chmod(filepath.Join(fakeBin, name), 0o755); err != nil {
+			t.Fatalf("chmod fake %s: %v", name, err)
+		}
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-release-preflight.sh")
+	cmd := exec.Command("bash", script, "--run-root", runRoot, "--release-repo", "octo-org/aiops-platform", "--tag", "v0.0.0-test")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AIOPS_GHMR_SETUP_GH_CONFIG_DIR="+setupDir,
+		"AIOPS_GHMR_MAKER_GH_CONFIG_DIR="+makerDir,
+		"AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR="+reviewerDir,
+		"AIOPS_GHMR_MAKER_LOGIN="+makerExpected,
+		"AIOPS_GHMR_REVIEWER_LOGIN="+reviewerExpected,
+	)
+	return cmd.CombinedOutput()
+}
+
+func fakeGhForGitHubMakerReviewerPreflight() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  --version|version)
+    echo "gh version 0.0.0-test"
+    ;;
+  api)
+    if [ "${2:-}" = "user" ]; then
+      cat "$GH_CONFIG_DIR/login"
+      exit 0
+    fi
+    echo "unexpected gh api args: $*" >&2
+    exit 42
+    ;;
+  attestation)
+    echo "Verified OK"
+    ;;
+  release)
+    case "${2:-}" in
+      view)
+        echo '{"tagName":"v0.0.0-test","publishedAt":"2026-06-26T00:00:00Z","url":"https://example.invalid/release","assets":[]}'
+        ;;
+      download)
+        dir=""
+        pattern=""
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --dir)
+              dir="${2:-}"
+              shift 2
+              ;;
+            --pattern)
+              pattern="${2:-}"
+              shift 2
+              ;;
+            *)
+              shift
+              ;;
+          esac
+        done
+        mkdir -p "$dir"
+        case "$pattern" in
+          *.tar.gz)
+            base="${pattern%.tar.gz}"
+            tmp="$(mktemp -d)"
+            mkdir -p "$tmp/$base"
+            cat > "$tmp/$base/worker" <<'WORKER'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--version" ]; then
+  echo "worker test"
+  exit 0
+fi
+if [ "${1:-}" = "--doctor" ]; then
+  echo "doctor ok"
+  exit 0
+fi
+echo "worker stub"
+WORKER
+            cat > "$tmp/$base/tui" <<'TUI'
+#!/usr/bin/env bash
+echo "tui test"
+TUI
+            chmod +x "$tmp/$base/worker" "$tmp/$base/tui"
+            tar -czf "$dir/$pattern" -C "$tmp" "$base"
+            rm -rf "$tmp"
+            ;;
+          *_SHA256SUMS)
+            asset="$(find "$dir" -maxdepth 1 -name 'aiops-platform_*.tar.gz' -print -quit)"
+            if [ -z "$asset" ]; then
+              echo "missing release asset before checksum download" >&2
+              exit 42
+            fi
+            (cd "$dir" && shasum -a 256 "$(basename "$asset")") > "$dir/$pattern"
+            ;;
+          *_sbom.cdx.json)
+            echo '{"bomFormat":"CycloneDX","specVersion":"1.5","serialNumber":"urn:uuid:test","components":[]}' > "$dir/$pattern"
+            ;;
+          *)
+            echo "unexpected release asset pattern: $pattern" >&2
+            exit 42
+            ;;
+        esac
+        ;;
+      *)
+        echo "unexpected gh release args: $*" >&2
+        exit 42
+        ;;
+    esac
+    ;;
+  *)
+    echo "unexpected gh args: $*" >&2
+    exit 42
+    ;;
+esac
+`
 }
