@@ -338,6 +338,29 @@ func TestGitHubMakerReviewerPreflightValidatesRoleAuth(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerPreflightRejectsReviewerWithoutRepoWrite(t *testing.T) {
+	out, err := runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
+		t,
+		"maker-bot",
+		"reviewer-bot",
+		"maker-bot",
+		"reviewer-bot",
+		"octo-org/octo-todo",
+		"false",
+	)
+	if err == nil {
+		t.Fatalf("preflight succeeded; want reviewer repo permission failure\n%s", out)
+	}
+	for _, want := range []string{
+		"reviewer_repo_write=false",
+		"reviewer login reviewer-bot must have write, maintain, or admin permission on octo-org/octo-todo",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("preflight output missing %q\n%s", want, out)
+		}
+	}
+}
+
 func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -489,6 +512,28 @@ func runGitHubMakerReviewerPreflightWithFakeTools(
 ) ([]byte, error) {
 	t.Helper()
 
+	return runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
+		t,
+		makerLogin,
+		reviewerLogin,
+		makerExpected,
+		reviewerExpected,
+		"",
+		"true",
+	)
+}
+
+func runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
+	t *testing.T,
+	makerLogin string,
+	reviewerLogin string,
+	makerExpected string,
+	reviewerExpected string,
+	repo string,
+	reviewerCanWrite string,
+) ([]byte, error) {
+	t.Helper()
+
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
@@ -519,6 +564,8 @@ func runGitHubMakerReviewerPreflightWithFakeTools(
 		"AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR="+reviewerDir,
 		"AIOPS_GHMR_MAKER_LOGIN="+makerExpected,
 		"AIOPS_GHMR_REVIEWER_LOGIN="+reviewerExpected,
+		"AIOPS_GHMR_REPO="+repo,
+		"AIOPS_FAKE_REVIEWER_CAN_WRITE="+reviewerCanWrite,
 	)
 	return cmd.CombinedOutput()
 }
@@ -536,6 +583,12 @@ case "${1:-}" in
       cat "$GH_CONFIG_DIR/login"
       exit 0
     fi
+    case "${2:-}" in
+      repos/*)
+        echo "${AIOPS_FAKE_REVIEWER_CAN_WRITE:-true}"
+        exit 0
+        ;;
+    esac
     echo "unexpected gh api args: $*" >&2
     exit 42
     ;;

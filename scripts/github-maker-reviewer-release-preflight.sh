@@ -154,6 +154,18 @@ if [ "$maker_login" = "$reviewer_login" ]; then
   exit 1
 fi
 
+if [ -n "${AIOPS_GHMR_REPO:-}" ]; then
+  reviewer_can_write="$(
+    GH_CONFIG_DIR="$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" \
+      gh api "repos/$AIOPS_GHMR_REPO" --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)'
+  )"
+  printf 'reviewer_repo_write=%s\n' "$reviewer_can_write" | tee -a "$role_log" >&2
+  if [ "$reviewer_can_write" != "true" ]; then
+    printf 'reviewer login %s must have write, maintain, or admin permission on %s\n' "$reviewer_login" "$AIOPS_GHMR_REPO" >&2
+    exit 1
+  fi
+fi
+
 if [ -n "${AIOPS_GHMR_REPO:-}" ] && [ -n "${AIOPS_GHMR_MAKER_GH_CONFIG_DIR:-}" ]; then
   dry_run_dir="$(mktemp -d "$run_root/state/maker-push-dry-run.XXXXXX")"
   trap 'rm -rf "$dry_run_dir"' EXIT
