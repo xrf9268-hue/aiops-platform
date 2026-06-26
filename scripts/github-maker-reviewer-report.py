@@ -105,11 +105,24 @@ def pr_rows(prs: list[dict[str, Any]]) -> list[str]:
     return rows
 
 
+def done_issue_titles(issues: list[dict[str, Any]]) -> list[str]:
+    titles: list[str] = []
+    for issue in issues:
+        if "aiops:done" in label_names(issue) and str(issue.get("state", "")).lower() == "closed":
+            titles.append(str(issue.get("title", "")).lower())
+    return titles
+
+
+def required_issue_scenarios_done(issues: list[dict[str, Any]]) -> bool:
+    titles = done_issue_titles(issues)
+    required = ("happy path", "rework candidate", "dependency:")
+    return all(any(marker in title for title in titles) for marker in required)
+
+
 def automated_verdict(issues: list[dict[str, Any]], prs: list[dict[str, Any]]) -> str:
-    done = [i for i in issues if "aiops:done" in label_names(i) and str(i.get("state", "")).lower() == "closed"]
     merged = [p for p in prs if p.get("mergedAt") or str(p.get("state", "")).upper() == "MERGED"]
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    if len(done) >= 3 and len(merged) >= 3 and reworked:
+    if required_issue_scenarios_done(issues) and len(merged) >= 3 and reworked:
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
 

@@ -495,6 +495,29 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerReportRequiresDependencyScenario(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubControlWithoutDependencyIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready without dependency issue evidence\n%s", report)
+	}
+	if !strings.Contains(report, "INCOMPLETE - review the evidence before claiming PASS") {
+		t.Fatalf("report missing incomplete verdict\n%s", report)
+	}
+}
+
 func TestGitHubMakerReviewerHelperEntrypoints(t *testing.T) {
 	root := repoRoot(t)
 	for _, rel := range []string{
@@ -634,9 +657,17 @@ func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 
 func fakeGitHubDoneIssuesJSON() string {
 	return `[
-  {"number":1,"title":"happy","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
-  {"number":2,"title":"rework","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
-  {"number":3,"title":"dependency","state":"closed","closedAt":"2026-06-26T08:27:22Z","labels":[{"name":"aiops:done"}]}
+  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
+  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
+  {"number":3,"title":"Dependency: bulk complete active todos","state":"closed","closedAt":"2026-06-26T08:27:22Z","labels":[{"name":"aiops:done"}]}
+]`
+}
+
+func fakeGitHubControlWithoutDependencyIssuesJSON() string {
+	return `[
+  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
+  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
+  {"number":4,"title":"Control Rework: forced stale delete proof","state":"closed","closedAt":"2026-06-26T08:20:01Z","labels":[{"name":"aiops:done"}]}
 ]`
 }
 
