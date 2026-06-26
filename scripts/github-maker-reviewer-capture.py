@@ -22,6 +22,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--reviewer-url", default="")
     p.add_argument("--gh-config-dir", default=os.environ.get("GH_CONFIG_DIR", ""))
     p.add_argument("--screenshot", action="append", default=[], help="NAME=URL")
+    p.add_argument("--include-github-pages", action="store_true", help="capture default GitHub issues/actions pages")
+    p.add_argument("--browser-storage-state", type=Path, help="Playwright storage_state JSON for authenticated browser captures")
     p.add_argument("--skip-screenshots", action="store_true")
     return p
 
@@ -162,8 +164,9 @@ def screenshot_pairs(args: argparse.Namespace) -> list[tuple[str, str]]:
         pairs.append(("maker-dashboard", args.maker_url))
     if args.reviewer_url:
         pairs.append(("reviewer-dashboard", args.reviewer_url))
-    pairs.append(("github-issues", f"https://github.com/{args.repo}/issues"))
-    pairs.append(("github-actions", f"https://github.com/{args.repo}/actions"))
+    if args.include_github_pages:
+        pairs.append(("github-issues", f"https://github.com/{args.repo}/issues"))
+        pairs.append(("github-actions", f"https://github.com/{args.repo}/actions"))
     for item in args.screenshot:
         if "=" not in item:
             raise SystemExit(f"--screenshot must be NAME=URL, got {item!r}")
@@ -188,14 +191,23 @@ def capture_screenshots(args: argparse.Namespace) -> None:
 
     out_dir = args.run_root / "screenshots"
     out_dir.mkdir(parents=True, exist_ok=True)
+    if args.browser_storage_state and not args.browser_storage_state.exists():
+        raise SystemExit(f"browser storage state not found: {args.browser_storage_state}")
+    if not args.browser_storage_state and any(url.startswith("https://github.com/") for _, url in pairs):
+        print("warning: GitHub screenshots use an unauthenticated browser; private repos need --browser-storage-state", file=sys.stderr)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        page = browser.new_page(viewport={"width": 1440, "height": 1000})
+        context_kwargs: dict[str, Any] = {"viewport": {"width": 1440, "height": 1000}}
+        if args.browser_storage_state:
+            context_kwargs["storage_state"] = str(args.browser_storage_state)
+        context = browser.new_context(**context_kwargs)
+        page = context.new_page()
         for name, url in pairs:
             path = out_dir / f"{name}-{args.tag}.png"
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_timeout(1000)
             page.screenshot(path=str(path), full_page=True)
+        context.close()
         browser.close()
 
 

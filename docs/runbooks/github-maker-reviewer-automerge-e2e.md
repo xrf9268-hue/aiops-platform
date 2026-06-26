@@ -22,7 +22,7 @@ repository.
   new head before handing off again.
 - The reviewer approves and enables GitHub native CI-gated auto-merge only after
   review passes.
-- The reviewer confirms `merged:true` or non-empty `mergedAt` before adding
+- The reviewer confirms `state: MERGED` or non-empty `mergedAt` before adding
   `aiops:done` and closing the issue.
 - A dependency issue is not activated until its prerequisite issue is Done/closed.
 
@@ -129,7 +129,7 @@ Create or reset a disposable repository:
 
 ```bash
 GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
-  gh repo create "$AIOPS_GHMR_REPO" --private --confirm
+  gh repo create "$AIOPS_GHMR_REPO" --private
 ```
 
 Seed a minimal Vite React TypeScript Web Todo app. It must have these commands:
@@ -197,8 +197,8 @@ GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
     --enable-auto-merge \
     --enable-squash-merge \
     --delete-branch-on-merge \
-    --disable-merge-commit \
-    --disable-rebase-merge
+    --enable-merge-commit=false \
+    --enable-rebase-merge=false
 ```
 
 Protect `main`:
@@ -335,6 +335,27 @@ Use the capture helper at every transition:
   --reviewer-url "$AIOPS_GHMR_REVIEWER_DASHBOARD_URL" \
   --gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"
 ```
+
+The helper always captures worker dashboard screenshots when dashboard URLs are
+provided. It captures GitHub issue/action pages only when explicitly requested:
+
+```bash
+"$AIOPS_GHMR_RUN_ROOT/tools/capture.py" \
+  --run-root "$AIOPS_GHMR_RUN_ROOT" \
+  --repo "$AIOPS_GHMR_REPO" \
+  --tag issue1-maker-handoff \
+  --maker-url "$AIOPS_GHMR_MAKER_DASHBOARD_URL" \
+  --reviewer-url "$AIOPS_GHMR_REVIEWER_DASHBOARD_URL" \
+  --gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+  --include-github-pages \
+  --browser-storage-state "$AIOPS_GHMR_RUN_ROOT/state/github-storage-state.json"
+```
+
+For private disposable repos, `GH_CONFIG_DIR` authenticates only `gh`, not the
+Playwright browser. Create `github-storage-state.json` from a logged-in browser
+profile before relying on private GitHub page screenshots, or capture those
+pages manually in the normal browser. The JSON evidence remains authoritative
+for issue/PR/Actions state.
 
 Required screenshot anchors:
 

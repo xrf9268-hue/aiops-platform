@@ -75,9 +75,9 @@ Step 1 - find the PR:
    Rework with:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
    Stop.
-3. Read PR metadata with `gh pr view <PR> --json number,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,merged,mergedAt,reviews,statusCheckRollup`.
-4. If `merged:true` or `mergedAt` is already present, skip to Step 4 and issue
-   Done/close once.
+3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,reviews,statusCheckRollup`.
+4. If `state` is `MERGED` or `mergedAt` is already present, skip to Step 4 and
+   issue Done/close once.
 
 Step 2 - review the current head:
 1. Ensure the PR author is not the reviewer login.
@@ -112,8 +112,8 @@ PASS:
 3. Enable GitHub native CI-gated auto-merge:
    `gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`.
    Do not use `--admin`.
-4. Poll `gh pr view <PR> --json merged,mergedAt,headRefOid,mergeStateStatus`
-   until GitHub reports `merged:true` or a non-empty `mergedAt`. Poll with a
+4. Poll `gh pr view <PR> --json state,mergedAt,headRefOid,mergeStateStatus`
+   until GitHub reports `state: MERGED` or a non-empty `mergedAt`. Poll with a
    short bounded wait, not a busy loop. If it has not merged within your turn
    budget, leave the issue in `aiops:human-review` and stop so the next reviewer
    continuation can re-check. Do not mark Done before merge confirmation.

@@ -36,7 +36,7 @@ source of truth.
 
 - `scripts/github-maker-reviewer-e2e-bootstrap.sh --run-root DIR --repo OWNER/NAME [--port-base PORT]`
 - `scripts/github-maker-reviewer-release-preflight.sh --run-root DIR [--release-repo OWNER/NAME] [--tag latest|vX.Y.Z]`
-- `scripts/github-maker-reviewer-capture.py --run-root DIR --repo OWNER/NAME --tag TAG [--maker-url URL] [--reviewer-url URL] [--gh-config-dir DIR]`
+- `scripts/github-maker-reviewer-capture.py --run-root DIR --repo OWNER/NAME --tag TAG [--maker-url URL] [--reviewer-url URL] [--gh-config-dir DIR] [--include-github-pages] [--browser-storage-state PATH]`
 - `scripts/github-maker-reviewer-final-verify.py --run-root DIR --repo OWNER/NAME [--gh-config-dir DIR]`
 - `scripts/github-maker-reviewer-report.py --run-root DIR --repo OWNER/NAME [--date YYYY-MM-DD]`
 
@@ -55,6 +55,9 @@ source of truth.
 - Release preflight records release metadata, checksum, attestation, SBOM
   summary, binary versions, Codex version, role identity evidence, maker
   `git push --dry-run`, and maker/reviewer doctor logs.
+- Capture records GitHub machine JSON through `gh`. Browser screenshots of
+  private GitHub pages are explicit opt-in and need a Playwright storage-state
+  file; `GH_CONFIG_DIR` does not authenticate the browser.
 
 ### 4. Validation & Error Matrix
 
@@ -65,6 +68,8 @@ source of truth.
   doctor -> run is BLOCKED; do not downgrade to single-agent merge.
 - Missing Playwright with explicit screenshot requests -> capture/final verify
   exits non-zero; default capture may skip screenshots but still records JSON.
+- Missing `--browser-storage-state` path when provided -> capture exits
+  non-zero before taking screenshots.
 
 ### 5. Good/Base/Bad Cases
 

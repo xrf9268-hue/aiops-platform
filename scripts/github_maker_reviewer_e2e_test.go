@@ -31,6 +31,8 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"worker --doctor --deploy=binary --mode=real",
 		"If `gh release view`, checksum, attestation",
 		"git push --dry-run",
+		"--include-github-pages",
+		"--browser-storage-state",
 		"Do not downgrade the scenario into\nsingle-agent merge",
 		"`gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`",
 	} {
@@ -86,11 +88,12 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			mustContain: []string{
 				"gh pr review <PR> --approve",
 				"gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>",
+				"gh pr view <PR> --json state,mergedAt,headRefOid,mergeStateStatus",
 				"Do not use `--admin`",
 				"Do NOT close an issue before GitHub confirms the PR is merged",
 				"Do NOT edit, commit, or push code",
 			},
-			mustNotContain: []string{"gitea_issue_labels"},
+			mustNotContain: []string{"gitea_issue_labels", "--json merged,"},
 		},
 	} {
 		full := filepath.Join(root, tc.path)
