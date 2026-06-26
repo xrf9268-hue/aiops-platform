@@ -204,9 +204,9 @@ Run root: \`$run_root\`
 Repository: \`$repo\`
 
 1. Create private \`env.local\` with
-   \`install -m 600 "\$AIOPS_GHMR_RUN_ROOT/env.example" "\$AIOPS_GHMR_RUN_ROOT/env.local"\`,
+   \`install -m 600 "$run_root/env.example" "$run_root/env.local"\`,
    fill the three GitHub identities, then source it with
-   \`set -a; . "\$AIOPS_GHMR_RUN_ROOT/env.local"; set +a\`.
+   \`set -a; . "$run_root/env.local"; set +a\`.
 2. Authenticate each role into its own file-backed gh home:
    - \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" gh auth login\`
    - \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh auth login\`

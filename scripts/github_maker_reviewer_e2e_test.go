@@ -79,8 +79,8 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			maxTurns: 30,
 			mustContain: []string{
 				"Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or",
-				"Refs #<N>` only",
-				"GitHub's\n   open-PR claim filter treats `Issue #<N>`",
+				"PR title and body must reference the issue with `Refs #<N>` only",
+				"open-PR claim filter scans the PR title and body",
 				"`Rework response:`",
 				"LAST action",
 			},
@@ -259,7 +259,7 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		"three GitHub identities",
 		"env -u GH_TOKEN -u GITHUB_TOKEN",
-		`install -m 600 "$AIOPS_GHMR_RUN_ROOT/env.example" "$AIOPS_GHMR_RUN_ROOT/env.local"`,
+		`install -m 600 "` + runRoot + `/env.example" "` + runRoot + `/env.local"`,
 		"release-preflight.sh",
 		"required check named `build-test`",
 		"branch protection",
