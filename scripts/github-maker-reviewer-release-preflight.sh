@@ -111,6 +111,18 @@ gh --version | tee "$artifacts/gh-version.log"
 role_log="$artifacts/github-role-auth-preflight.log"
 : >"$role_log"
 
+role_gh() {
+  local dir="$1"
+  shift
+  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" gh "$@"
+}
+
+role_git() {
+  local dir="$1"
+  shift
+  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" git "$@"
+}
+
 is_placeholder_login() {
   case "$1" in
     REPLACE_ME_*|"")
@@ -131,7 +143,7 @@ check_role() {
     exit 1
   fi
   local login
-  login="$(GH_CONFIG_DIR="$dir" gh api user --jq .login)"
+  login="$(role_gh "$dir" api user --jq .login)"
   printf '%s=%s\n' "$label" "$login" | tee -a "$role_log" >&2
   if [ "$label" = "maker" ] || [ "$label" = "reviewer" ]; then
     if is_placeholder_login "$expected"; then
@@ -156,8 +168,8 @@ fi
 
 if [ -n "${AIOPS_GHMR_REPO:-}" ]; then
   reviewer_can_write="$(
-    GH_CONFIG_DIR="$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" \
-      gh api "repos/$AIOPS_GHMR_REPO" --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)'
+    role_gh "$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" \
+      api "repos/$AIOPS_GHMR_REPO" --jq '(.permissions.admin // false) or (.permissions.maintain // false) or (.permissions.push // false)'
   )"
   printf 'reviewer_repo_write=%s\n' "$reviewer_can_write" | tee -a "$role_log" >&2
   if [ "$reviewer_can_write" != "true" ]; then
@@ -169,17 +181,18 @@ fi
 if [ -n "${AIOPS_GHMR_REPO:-}" ] && [ -n "${AIOPS_GHMR_MAKER_GH_CONFIG_DIR:-}" ]; then
   dry_run_dir="$(mktemp -d "$run_root/state/maker-push-dry-run.XXXXXX")"
   trap 'rm -rf "$dry_run_dir"' EXIT
-  GH_CONFIG_DIR="$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh repo clone "$AIOPS_GHMR_REPO" "$dry_run_dir/repo" -- --depth 1 \
+  role_gh "$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" repo clone "$AIOPS_GHMR_REPO" "$dry_run_dir/repo" -- --depth 1 \
     > "$artifacts/maker-git-clone-dry-run.log" 2>&1
-  git -C "$dry_run_dir/repo" checkout -b "aiops-preflight-dry-run" \
+  role_git "$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" -C "$dry_run_dir/repo" checkout -b "aiops-preflight-dry-run" \
     >> "$artifacts/maker-git-push-dry-run.log" 2>&1
-  git -C "$dry_run_dir/repo" \
+  role_git "$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" \
+    -C "$dry_run_dir/repo" \
     -c user.name=aiops-preflight \
     -c user.email=aiops-preflight@example.invalid \
     commit --allow-empty -m "chore: aiops preflight dry run" \
     >> "$artifacts/maker-git-push-dry-run.log" 2>&1
-  GH_CONFIG_DIR="$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" \
-    git -C "$dry_run_dir/repo" push --dry-run origin "HEAD:refs/heads/aiops-preflight-dry-run-$(date +%s)" \
+  role_git "$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" \
+    -C "$dry_run_dir/repo" push --dry-run origin "HEAD:refs/heads/aiops-preflight-dry-run-$(date +%s)" \
     2>&1 | tee -a "$artifacts/maker-git-push-dry-run.log"
   rm -rf "$dry_run_dir"
   trap - EXIT

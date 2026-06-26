@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -25,18 +26,41 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--include-github-pages", action="store_true", help="capture default GitHub issues/actions pages")
     p.add_argument("--browser-storage-state", type=Path, help="Playwright storage_state JSON for authenticated browser captures")
     p.add_argument("--skip-screenshots", action="store_true")
+    p.add_argument("--command-timeout-seconds", type=int, default=300, help="timeout for each gh subprocess")
     return p
 
 
-def run(args: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, text=True, capture_output=True, env=env, check=check)
+def command_text(args: list[str]) -> str:
+    return shlex.join(args)
+
+
+def run(
+    args: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    check: bool = True,
+    timeout_seconds: int,
+    timeout_log: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(args, text=True, capture_output=True, env=env, check=check, timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        message = f"{command_text(args)} timed out after {timeout_seconds}s"
+        if timeout_log:
+            timeout_log.parent.mkdir(parents=True, exist_ok=True)
+            with timeout_log.open("a", encoding="utf-8") as fh:
+                fh.write(f"TIMEOUT after {timeout_seconds}s\n")
+                fh.write(f"command: {command_text(args)}\n")
+            message += f"; see {timeout_log}"
+        raise SystemExit(message) from exc
 
 
 def gh(args: argparse.Namespace, *cmd: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if args.gh_config_dir:
         env["GH_CONFIG_DIR"] = args.gh_config_dir
-    return run(["gh", *cmd], env=env, check=check)
+    log = args.run_root / "logs" / f"capture-{args.tag}-commands.log"
+    return run(["gh", *cmd], env=env, check=check, timeout_seconds=args.command_timeout_seconds, timeout_log=log)
 
 
 def write_json(path: Path, raw: str) -> Any:

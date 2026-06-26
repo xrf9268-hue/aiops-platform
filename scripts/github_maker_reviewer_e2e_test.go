@@ -361,6 +361,29 @@ func TestGitHubMakerReviewerPreflightRejectsReviewerWithoutRepoWrite(t *testing.
 	}
 }
 
+func TestGitHubMakerReviewerPreflightUsesRoleScopedAuthForRepoChecks(t *testing.T) {
+	out, err := runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
+		t,
+		"maker-bot",
+		"reviewer-bot",
+		"maker-bot",
+		"reviewer-bot",
+		"octo-org/octo-todo",
+		"true",
+	)
+	if err != nil {
+		t.Fatalf("preflight failed: %v\n%s", err, out)
+	}
+	for _, want := range []string{
+		"reviewer_repo_write=true",
+		"release preflight complete for v0.0.0-test",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Fatalf("preflight output missing %q\n%s", want, out)
+		}
+	}
+}
+
 func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -438,6 +461,41 @@ func TestGitHubMakerReviewerHelperEntrypoints(t *testing.T) {
 		if !strings.Contains(strings.ToLower(string(out)), "usage:") {
 			t.Fatalf("%s --help did not print usage:\n%s", rel, out)
 		}
+	}
+}
+
+func TestGitHubMakerReviewerCaptureTimesOutStalledGitHubCalls(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), "#!/usr/bin/env bash\nsleep 5\n")
+	if err := os.Chmod(filepath.Join(fakeBin, "gh"), 0o755); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-capture.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--tag", "timeout",
+		"--skip-screenshots",
+		"--command-timeout-seconds", "1",
+	)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("capture succeeded; want gh timeout\n%s", out)
+	}
+	if !strings.Contains(string(out), "gh issue list") || !strings.Contains(string(out), "timed out after 1s; see") {
+		t.Fatalf("capture output missing timeout command and log path\n%s", out)
+	}
+	log := readFileString(t, filepath.Join(runRoot, "logs", "capture-timeout-commands.log"))
+	if !strings.Contains(log, "TIMEOUT after 1s") || !strings.Contains(log, "command: gh issue list") {
+		t.Fatalf("capture log missing timeout marker and command\n%s", log)
 	}
 }
 
@@ -547,8 +605,9 @@ func runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
 	fakeBin := filepath.Join(t.TempDir(), "fakebin")
 	mkdirAll(t, fakeBin)
 	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForGitHubMakerReviewerPreflight())
+	writeFileString(t, filepath.Join(fakeBin, "git"), fakeGitForGitHubMakerReviewerPreflight())
 	writeFileString(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\necho 'codex test'\n")
-	for _, name := range []string{"gh", "codex"} {
+	for _, name := range []string{"gh", "git", "codex"} {
 		if err := os.Chmod(filepath.Join(fakeBin, name), 0o755); err != nil {
 			t.Fatalf("chmod fake %s: %v", name, err)
 		}
@@ -566,6 +625,8 @@ func runGitHubMakerReviewerPreflightWithFakeToolsAndRepo(
 		"AIOPS_GHMR_REVIEWER_LOGIN="+reviewerExpected,
 		"AIOPS_GHMR_REPO="+repo,
 		"AIOPS_FAKE_REVIEWER_CAN_WRITE="+reviewerCanWrite,
+		"GH_TOKEN=tracker-token",
+		"GITHUB_TOKEN=tracker-token",
 	)
 	return cmd.CombinedOutput()
 }
@@ -574,17 +635,26 @@ func fakeGhForGitHubMakerReviewerPreflight() string {
 	return `#!/usr/bin/env bash
 set -euo pipefail
 
+assert_no_role_token() {
+  if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+    echo "role command leaked ambient GitHub token env" >&2
+    exit 43
+  fi
+}
+
 case "${1:-}" in
   --version|version)
     echo "gh version 0.0.0-test"
     ;;
   api)
     if [ "${2:-}" = "user" ]; then
+      assert_no_role_token
       cat "$GH_CONFIG_DIR/login"
       exit 0
     fi
     case "${2:-}" in
       repos/*)
+        assert_no_role_token
         echo "${AIOPS_FAKE_REVIEWER_CAN_WRITE:-true}"
         exit 0
         ;;
@@ -667,11 +737,38 @@ TUI
         ;;
     esac
     ;;
+  repo)
+    if [ "${2:-}" = "clone" ]; then
+      assert_no_role_token
+      dest="${4:-}"
+      if [ -z "$dest" ]; then
+        echo "missing clone destination" >&2
+        exit 42
+      fi
+      mkdir -p "$dest"
+      exit 0
+    fi
+    echo "unexpected gh repo args: $*" >&2
+    exit 42
+    ;;
   *)
     echo "unexpected gh args: $*" >&2
     exit 42
     ;;
 esac
+`
+}
+
+func fakeGitForGitHubMakerReviewerPreflight() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+  echo "role git leaked ambient GitHub token env" >&2
+  exit 43
+fi
+
+echo "fake git $*"
 `
 }
 
