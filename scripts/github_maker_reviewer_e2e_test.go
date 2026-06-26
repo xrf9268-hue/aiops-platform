@@ -25,6 +25,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"scripts/github-maker-reviewer-final-verify.py",
 		"scripts/github-maker-reviewer-report.py",
 		"distinct file-backed `GH_CONFIG_DIR`",
+		"env -u GH_TOKEN -u GITHUB_TOKEN",
 		"It does **not** pass `GITHUB_TOKEN`",
 		"required job named `build-test`",
 		"required_approving_review_count",
@@ -251,6 +252,7 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 	next := readFileString(t, filepath.Join(runRoot, "NEXT-STEPS.md"))
 	for _, want := range []string{
 		"three GitHub identities",
+		"env -u GH_TOKEN -u GITHUB_TOKEN",
 		`install -m 600 "$AIOPS_GHMR_RUN_ROOT/env.example" "$AIOPS_GHMR_RUN_ROOT/env.local"`,
 		"release-preflight.sh",
 		"required check named `build-test`",
@@ -529,6 +531,39 @@ func TestGitHubMakerReviewerCaptureTimesOutStalledGitHubCalls(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, setupDir, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForCaptureTokenCheck())
+	if err := os.Chmod(filepath.Join(fakeBin, "gh"), 0o755); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-capture.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--tag", "token",
+		"--skip-screenshots",
+		"--gh-config-dir", setupDir,
+	)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_TOKEN=tracker-token",
+		"GITHUB_TOKEN=tracker-token",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("capture failed: %v\n%s", err, out)
+	}
+}
+
 func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -552,7 +587,11 @@ func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 		"--command-timeout-seconds", "1",
 	)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_TOKEN=tracker-token",
+		"GITHUB_TOKEN=tracker-token",
+	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatalf("final verify succeeded; want npm timeout\n%s", out)
@@ -804,11 +843,39 @@ echo "fake git $*"
 `
 }
 
+func fakeGhForCaptureTokenCheck() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+  echo "capture gh leaked ambient GitHub token env" >&2
+  exit 43
+fi
+
+case "${1:-}" in
+  issue|pr|run)
+    echo '[]'
+    ;;
+  api)
+    echo '{}'
+    ;;
+  *)
+    echo "unexpected gh args: $*" >&2
+    exit 42
+    ;;
+esac
+`
+}
+
 func fakeGhForFinalVerify() string {
 	return `#!/usr/bin/env bash
 set -euo pipefail
 
 if [ "${1:-}" = "repo" ] && [ "${2:-}" = "clone" ]; then
+  if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+    echo "final verify gh leaked ambient GitHub token env" >&2
+    exit 43
+  fi
   dest="${4:-}"
   if [ -z "$dest" ]; then
     echo "missing clone destination" >&2

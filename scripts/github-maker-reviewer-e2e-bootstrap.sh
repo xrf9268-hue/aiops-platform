@@ -208,10 +208,10 @@ Repository: \`$repo\`
    fill the three GitHub identities, then source it with
    \`set -a; . "\$AIOPS_GHMR_RUN_ROOT/env.local"; set +a\`.
 2. Authenticate each role into its own file-backed gh home:
-   - \`GH_CONFIG_DIR="\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" gh auth login\`
-   - \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh auth login\`
-   - \`GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" gh auth login\`
-   - run \`gh auth setup-git\` once for each \`GH_CONFIG_DIR\`.
+   - \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" gh auth login\`
+   - \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh auth login\`
+   - \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" gh auth login\`
+   - run \`env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR=<role-dir> gh auth setup-git\` once for each role.
 3. Install Chromium into the generated Playwright browser cache:
    \`PLAYWRIGHT_BROWSERS_PATH="\$PLAYWRIGHT_BROWSERS_PATH" python -m playwright install chromium\`
 4. Seed the disposable Vite React TypeScript Web Todo repo on \`main\`.

@@ -97,6 +97,8 @@ def main() -> int:
     logs = args.run_root / "final-verify" / "logs"
     screenshots = args.run_root / "final-verify" / "screenshots"
     env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
     if args.gh_config_dir:
         env["GH_CONFIG_DIR"] = args.gh_config_dir
 

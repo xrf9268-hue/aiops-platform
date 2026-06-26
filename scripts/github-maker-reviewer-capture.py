@@ -57,6 +57,8 @@ def run(
 
 def gh(args: argparse.Namespace, *cmd: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
     if args.gh_config_dir:
         env["GH_CONFIG_DIR"] = args.gh_config_dir
     log = args.run_root / "logs" / f"capture-{args.tag}-commands.log"
