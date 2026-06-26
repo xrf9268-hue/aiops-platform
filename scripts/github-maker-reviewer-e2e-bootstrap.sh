@@ -239,7 +239,7 @@ Repository: \`$repo\`
 12. After all issues close, run \`tools/final-verify.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`.
 13. Capture final GitHub JSON with \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag final --skip-screenshots --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`.
 14. Generate reports:
-    \`tools/report.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO"\`
+    \`tools/report.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --reviewer-login "\$AIOPS_GHMR_REVIEWER_LOGIN"\`
 
 Do not commit \`env.local\`, \`secrets/\`, downloaded binaries, raw auth homes,
 or disposable run evidence.

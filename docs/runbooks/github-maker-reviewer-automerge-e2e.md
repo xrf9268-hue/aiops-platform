@@ -441,7 +441,8 @@ Generate reports:
 ```bash
 "$AIOPS_GHMR_RUN_ROOT/tools/report.py" \
   --run-root "$AIOPS_GHMR_RUN_ROOT" \
-  --repo "$AIOPS_GHMR_REPO"
+  --repo "$AIOPS_GHMR_REPO" \
+  --reviewer-login "$AIOPS_GHMR_REVIEWER_LOGIN"
 ```
 
 The final deliverables live under:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-root", required=True, type=Path)
     p.add_argument("--repo", required=True)
+    p.add_argument("--reviewer-login", default=os.environ.get("AIOPS_GHMR_REVIEWER_LOGIN", ""))
     p.add_argument("--date", default=time.strftime("%Y-%m-%d"))
     return p
 
@@ -175,28 +177,33 @@ def dependency_sequencing_evidence_present(forge_json: Path, issues: list[dict[s
         for event in events
         if isinstance(event, dict) and event.get("event") == "labeled" and event_label_name(event) == "aiops:todo"
     ]
-    return any(when and when > prerequisite_closed_at for when in todo_label_times)
+    return bool(todo_label_times) and all(when and when > prerequisite_closed_at for when in todo_label_times)
 
 
 def merged_prs(prs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for p in prs if p.get("mergedAt") or str(p.get("state", "")).upper() == "MERGED"]
 
 
-def reviewer_owned_merges(prs: list[dict[str, Any]]) -> bool:
+def reviewer_owned_merges(prs: list[dict[str, Any]], reviewer_login: str) -> bool:
+    reviewer = reviewer_login.strip()
+    if not reviewer or reviewer.startswith("REPLACE_ME"):
+        return False
     merged = merged_prs(prs)
     if len(merged) < 3:
         return False
     for pr in merged:
         author = user_login(pr.get("author"))
         merged_by = user_login(pr.get("mergedBy"))
-        if not author or not merged_by or author == merged_by:
+        if not author or merged_by != reviewer or author == reviewer:
             return False
     return True
 
 
-def automated_verdict(issues: list[dict[str, Any]], prs: list[dict[str, Any]], sequencing_evidence: bool) -> str:
+def automated_verdict(
+    issues: list[dict[str, Any]], prs: list[dict[str, Any]], sequencing_evidence: bool, reviewer_login: str
+) -> str:
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs) and reworked and sequencing_evidence:
+    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs, reviewer_login) and reworked and sequencing_evidence:
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
 
@@ -212,7 +219,8 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
     reports = args.run_root / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     sequencing_evidence = dependency_sequencing_evidence_present(args.run_root / "forge-json", issues)
-    verdict = automated_verdict(issues, prs, sequencing_evidence)
+    reviewer_merge_evidence = reviewer_owned_merges(prs, args.reviewer_login)
+    verdict = automated_verdict(issues, prs, sequencing_evidence, args.reviewer_login)
     lines = [
         "# GitHub maker + reviewer-automerge E2E Report",
         "",
@@ -244,6 +252,7 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "## Issue / PR Table",
         "",
         f"Dependency sequencing evidence: {'present' if sequencing_evidence else 'missing'}",
+        f"Reviewer merge identity evidence: {'matched' if reviewer_merge_evidence else 'missing'}",
         "",
         "Issues:",
         *issue_rows(issues),
