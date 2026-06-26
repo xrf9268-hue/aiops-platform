@@ -117,12 +117,14 @@ PASS:
    short bounded wait, not a busy loop. If it has not merged within your turn
    budget, leave the issue in `aiops:human-review` and stop so the next reviewer
    continuation can re-check. Do not mark Done before merge confirmation.
-5. After merge confirmation only, close first, then mark Done:
-   `gh issue close <N> --comment "Done after PR <PR> merged at <mergedAt>."`
-   then
+5. After merge confirmation only, mark Done, then close in one retry-safe block:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:done`
-   This keeps the transition retry-safe: if the label update fails, the issue is
-   still terminal because it is closed, and a later operator can repair the label.
+   then
+   `gh issue close <N> --comment "Done after PR <PR> merged at <mergedAt>."`
+   If close fails, immediately restore the active reviewer label with
+   `gh issue edit <N> --remove-label aiops:done --add-label aiops:human-review`
+   and stop with a non-zero failure. Do not leave an open issue labeled
+   `aiops:done`.
    This is your LAST action.
 
 Hard constraints:
