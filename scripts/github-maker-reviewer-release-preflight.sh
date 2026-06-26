@@ -44,6 +44,57 @@ maker_mirror_root="${AIOPS_GHMR_MAKER_MIRROR_ROOT:-$run_root/mirrors/maker}"
 reviewer_mirror_root="${AIOPS_GHMR_REVIEWER_MIRROR_ROOT:-$run_root/mirrors/reviewer}"
 mkdir -p "$downloads" "$artifacts" "$logs" "$bin_dir" "$run_root/state" "$maker_mirror_root" "$reviewer_mirror_root"
 
+command_timeout_seconds="${AIOPS_GHMR_COMMAND_TIMEOUT_SECONDS:-300}"
+case "$command_timeout_seconds" in
+  ''|*[!0-9]*)
+    printf 'AIOPS_GHMR_COMMAND_TIMEOUT_SECONDS must be a positive integer, got %s\n' "$command_timeout_seconds" >&2
+    exit 2
+    ;;
+  0)
+    printf 'AIOPS_GHMR_COMMAND_TIMEOUT_SECONDS must be greater than zero\n' >&2
+    exit 2
+    ;;
+esac
+
+run_timeout() {
+  local label="$1"
+  shift
+  python3 - "$command_timeout_seconds" "$label" "$@" <<'PY'
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+label = sys.argv[2]
+cmd = sys.argv[3:]
+try:
+    raise SystemExit(subprocess.run(cmd, timeout=timeout_seconds).returncode)
+except subprocess.TimeoutExpired:
+    print(f"{label} timed out after {timeout_seconds}s", file=sys.stderr)
+    raise SystemExit(124)
+PY
+}
+
+role_gh() {
+  local dir="$1"
+  shift
+  run_timeout "gh $*" env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" gh "$@"
+}
+
+role_git() {
+  local dir="$1"
+  shift
+  run_timeout "git $*" env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" git "$@"
+}
+
+setup_gh() {
+  local dir="${AIOPS_GHMR_SETUP_GH_CONFIG_DIR:-}"
+  if [ -z "$dir" ]; then
+    printf 'AIOPS_GHMR_SETUP_GH_CONFIG_DIR is required for release preflight GitHub commands\n' >&2
+    exit 1
+  fi
+  role_gh "$dir" "$@"
+}
+
 case "$(uname -s)" in
   Darwin) os_name="darwin" ;;
   Linux) os_name="linux" ;;
@@ -56,10 +107,10 @@ case "$(uname -m)" in
 esac
 
 if [ "$tag" = "latest" ]; then
-  tag="$(gh release view --repo "$release_repo" --json tagName --jq .tagName)"
+  tag="$(setup_gh release view --repo "$release_repo" --json tagName --jq .tagName)"
 fi
 
-gh release view "$tag" --repo "$release_repo" --json tagName,publishedAt,url,assets \
+setup_gh release view "$tag" --repo "$release_repo" --json tagName,publishedAt,url,assets \
   > "$artifacts/release-view-summary.json"
 
 asset="aiops-platform_${tag}_${os_name}_${arch_name}.tar.gz"
@@ -67,16 +118,16 @@ sums="aiops-platform_${tag}_SHA256SUMS"
 sbom="aiops-platform_${tag}_sbom.cdx.json"
 
 rm -f "$downloads/$asset" "$downloads/$sums" "$downloads/$sbom"
-gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$asset"
-gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$sums"
-gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$sbom"
+setup_gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$asset"
+setup_gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$sums"
+setup_gh release download "$tag" --repo "$release_repo" --dir "$downloads" --pattern "$sbom"
 
 (
   cd "$downloads"
   awk -v file="$asset" '$2 == file { print }' "$sums" | shasum -a 256 -c -
 ) | tee "$artifacts/sha256.log"
 
-gh attestation verify "$downloads/$asset" --repo "$release_repo" \
+setup_gh attestation verify "$downloads/$asset" --repo "$release_repo" \
   | tee "$artifacts/attestation.log"
 
 python3 - "$downloads/$sbom" "$artifacts/sbom-summary.json" <<'PY'
@@ -103,25 +154,13 @@ cp "$extract_dir/worker" "$bin_dir/worker"
 cp "$extract_dir/tui" "$bin_dir/tui"
 chmod +x "$bin_dir/worker" "$bin_dir/tui"
 
-"$bin_dir/worker" --version | tee "$artifacts/worker-version.log"
-"$bin_dir/tui" --version | tee "$artifacts/tui-version.log"
-codex --version | tee "$artifacts/codex-version.log"
-gh --version | tee "$artifacts/gh-version.log"
+run_timeout "worker --version" "$bin_dir/worker" --version | tee "$artifacts/worker-version.log"
+run_timeout "tui --version" "$bin_dir/tui" --version | tee "$artifacts/tui-version.log"
+run_timeout "codex --version" codex --version | tee "$artifacts/codex-version.log"
+run_timeout "gh --version" gh --version | tee "$artifacts/gh-version.log"
 
 role_log="$artifacts/github-role-auth-preflight.log"
 : >"$role_log"
-
-role_gh() {
-  local dir="$1"
-  shift
-  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" gh "$@"
-}
-
-role_git() {
-  local dir="$1"
-  shift
-  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$dir" git "$@"
-}
 
 is_placeholder_login() {
   case "$1" in
@@ -209,7 +248,8 @@ run_doctor() {
   local workflow="$1"
   local mirror_root="$2"
   local log="$3"
-  AIOPS_MIRROR_ROOT="$mirror_root" "$bin_dir/worker" --doctor --deploy=binary --mode=real "$workflow" \
+  AIOPS_MIRROR_ROOT="$mirror_root" run_timeout "worker --doctor $workflow" \
+    "$bin_dir/worker" --doctor --deploy=binary --mode=real "$workflow" \
     | tee "$log"
 }
 

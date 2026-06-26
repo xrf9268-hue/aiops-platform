@@ -384,6 +384,36 @@ func TestGitHubMakerReviewerPreflightUsesRoleScopedAuthForRepoChecks(t *testing.
 	}
 }
 
+func TestGitHubMakerReviewerPreflightTimesOutStalledGitHubCommands(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, setupDir, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), "#!/usr/bin/env bash\nsleep 5\n")
+	if err := os.Chmod(filepath.Join(fakeBin, "gh"), 0o755); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-release-preflight.sh")
+	cmd := exec.Command("bash", script, "--run-root", runRoot, "--release-repo", "octo-org/aiops-platform", "--tag", "v0.0.0-test")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AIOPS_GHMR_SETUP_GH_CONFIG_DIR="+setupDir,
+		"AIOPS_GHMR_COMMAND_TIMEOUT_SECONDS=1",
+		"GH_TOKEN=tracker-token",
+		"GITHUB_TOKEN=tracker-token",
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("preflight succeeded; want release gh timeout\n%s", out)
+	}
+	if !strings.Contains(string(out), "gh release view") || !strings.Contains(string(out), "timed out after 1s") {
+		t.Fatalf("preflight output missing timeout command\n%s", out)
+	}
+}
+
 func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -663,9 +693,11 @@ case "${1:-}" in
     exit 42
     ;;
   attestation)
+    assert_no_role_token
     echo "Verified OK"
     ;;
   release)
+    assert_no_role_token
     case "${2:-}" in
       view)
         echo '{"tagName":"v0.0.0-test","publishedAt":"2026-06-26T00:00:00Z","url":"https://example.invalid/release","assets":[]}'
