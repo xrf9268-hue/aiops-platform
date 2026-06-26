@@ -22,9 +22,17 @@ CONTROL_IDLE_ISSUE = 13
 CONTROL_CANCEL_ISSUE = 14
 MAX_SECONDS = int(os.environ.get("AIOPS_E2E_MAX_SECONDS", "28800"))
 POLL_SECONDS = int(os.environ.get("AIOPS_E2E_DRIVER_POLL_SECONDS", "20"))
+COMMAND_TIMEOUT_SECONDS = int(
+    os.environ.get("AIOPS_E2E_DRIVER_COMMAND_TIMEOUT_SECONDS", "180")
+)
 
 
-def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("NO_COLOR", "1")
     env.setdefault("npm_config_cache", str(RUN_ROOT / ".npm-cache"))
@@ -36,6 +44,7 @@ def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subpr
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=check,
+        timeout=COMMAND_TIMEOUT_SECONDS,
     )
 
 
