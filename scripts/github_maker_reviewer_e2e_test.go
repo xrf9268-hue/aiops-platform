@@ -264,6 +264,15 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 			t.Fatalf("NEXT-STEPS.md missing %q\n%s", want, next)
 		}
 	}
+	assertInOrder(t, next, []string{
+		"3. Seed the disposable",
+		"4. Enable branch protection",
+		"5. Create labels",
+		"6. Create issues",
+		"7. Run `tools/release-preflight.sh",
+		"8. Start maker",
+		"9. Start reviewer",
+	})
 }
 
 func TestGitHubMakerReviewerPreflightValidatesRoleAuth(t *testing.T) {
