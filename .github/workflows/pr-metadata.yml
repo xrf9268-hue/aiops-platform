@@ -23,7 +23,11 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # cancel-in-progress must stay false: this workflow is a required status
+  # check, and a cancelled run counts as a non-success conclusion that blocks
+  # the PR from merging. The job completes in seconds, so letting both runs
+  # finish is cheaper than the merge-blocking race.
+  cancel-in-progress: false
 
 jobs:
   validate:
