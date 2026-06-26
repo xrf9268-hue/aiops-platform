@@ -40,7 +40,9 @@ downloads="$run_root/downloads"
 artifacts="$run_root/artifacts"
 logs="$run_root/logs"
 bin_dir="$run_root/bin"
-mkdir -p "$downloads" "$artifacts" "$logs" "$bin_dir" "$run_root/state"
+maker_mirror_root="${AIOPS_GHMR_MAKER_MIRROR_ROOT:-$run_root/mirrors/maker}"
+reviewer_mirror_root="${AIOPS_GHMR_REVIEWER_MIRROR_ROOT:-$run_root/mirrors/reviewer}"
+mkdir -p "$downloads" "$artifacts" "$logs" "$bin_dir" "$run_root/state" "$maker_mirror_root" "$reviewer_mirror_root"
 
 case "$(uname -s)" in
   Darwin) os_name="darwin" ;;
@@ -154,13 +156,19 @@ if [ -z "$reviewer_workflow" ] && [ -f "$run_root/workflows/github-reviewer-auto
   reviewer_workflow="$run_root/workflows/github-reviewer-automerge-WORKFLOW.md"
 fi
 
+run_doctor() {
+  local workflow="$1"
+  local mirror_root="$2"
+  local log="$3"
+  AIOPS_MIRROR_ROOT="$mirror_root" "$bin_dir/worker" --doctor --deploy=binary --mode=real "$workflow" \
+    | tee "$log"
+}
+
 if [ -n "$maker_workflow" ]; then
-  "$bin_dir/worker" --doctor --deploy=binary --mode=real "$maker_workflow" \
-    | tee "$logs/maker-doctor.log"
+  run_doctor "$maker_workflow" "$maker_mirror_root" "$logs/maker-doctor.log"
 fi
 if [ -n "$reviewer_workflow" ]; then
-  "$bin_dir/worker" --doctor --deploy=binary --mode=real "$reviewer_workflow" \
-    | tee "$logs/reviewer-doctor.log"
+  run_doctor "$reviewer_workflow" "$reviewer_mirror_root" "$logs/reviewer-doctor.log"
 fi
 
 printf 'release preflight complete for %s (%s/%s)\n' "$tag" "$os_name" "$arch_name"

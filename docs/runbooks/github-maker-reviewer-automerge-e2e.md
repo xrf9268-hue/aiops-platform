@@ -271,9 +271,9 @@ Run this after sourcing `env.local` and before activating more work:
 ```
 
 The script runs `worker --doctor --deploy=binary --mode=real` for both
-workflows, records the role identities, and runs a maker `git push --dry-run`
-against a disposable branch ref when the repo variables are set. The preflight
-must record:
+workflows with separate maker/reviewer `AIOPS_MIRROR_ROOT` values, records the
+role identities, and runs a maker `git push --dry-run` against a disposable
+branch ref when the repo variables are set. The preflight must record:
 
 - `artifacts/release-view-summary.json`
 - `artifacts/sha256.log`
@@ -296,6 +296,7 @@ Start maker:
 
 ```bash
 GH_CONFIG_DIR="$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" \
+AIOPS_MIRROR_ROOT="$AIOPS_GHMR_MAKER_MIRROR_ROOT" \
 AIOPS_EXPECTED_GITHUB_LOGIN="$AIOPS_GHMR_MAKER_LOGIN" \
 NPM_CONFIG_CACHE="$NPM_CONFIG_CACHE" \
 PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
@@ -309,6 +310,7 @@ Start reviewer:
 
 ```bash
 GH_CONFIG_DIR="$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" \
+AIOPS_MIRROR_ROOT="$AIOPS_GHMR_REVIEWER_MIRROR_ROOT" \
 AIOPS_EXPECTED_GITHUB_LOGIN="$AIOPS_GHMR_REVIEWER_LOGIN" \
 NPM_CONFIG_CACHE="$NPM_CONFIG_CACHE" \
 PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
@@ -319,8 +321,8 @@ PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
 ```
 
 Both workers must use the downloaded `worker` binary and real
-`codex app-server`. The maker workspace root and reviewer workspace root must
-be different.
+`codex app-server`. The maker workspace and mirror roots must differ from the
+reviewer workspace and mirror roots.
 
 ## 8. Capture Key Evidence
 

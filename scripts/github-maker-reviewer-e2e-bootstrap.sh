@@ -179,6 +179,8 @@ export AIOPS_GHMR_WORKER_BIN="$run_root/bin/worker"
 export AIOPS_GHMR_TUI_BIN="$run_root/bin/tui"
 export AIOPS_GHMR_MAKER_WORKFLOW="$run_root/workflows/github-maker-WORKFLOW.md"
 export AIOPS_GHMR_REVIEWER_WORKFLOW="$run_root/workflows/github-reviewer-automerge-WORKFLOW.md"
+export AIOPS_GHMR_MAKER_MIRROR_ROOT="$run_root/mirrors/maker"
+export AIOPS_GHMR_REVIEWER_MIRROR_ROOT="$run_root/mirrors/reviewer"
 
 export AIOPS_GHMR_SETUP_GH_CONFIG_DIR="$run_root/secrets/gh/setup"
 export AIOPS_GHMR_MAKER_GH_CONFIG_DIR="$run_root/secrets/gh/maker"
@@ -224,9 +226,9 @@ Repository: \`$repo\`
    adding \`aiops:todo\`; activate downstream issues only after dependencies are
    Done/closed.
 8. Start maker:
-   \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_MAKER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_MAKER_PORT" "\$AIOPS_GHMR_MAKER_WORKFLOW"\`
+   \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" AIOPS_MIRROR_ROOT="\$AIOPS_GHMR_MAKER_MIRROR_ROOT" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_MAKER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_MAKER_PORT" "\$AIOPS_GHMR_MAKER_WORKFLOW"\`
 9. Start reviewer:
-   \`GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_REVIEWER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_REVIEWER_PORT" "\$AIOPS_GHMR_REVIEWER_WORKFLOW"\`
+   \`GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" AIOPS_MIRROR_ROOT="\$AIOPS_GHMR_REVIEWER_MIRROR_ROOT" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_REVIEWER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_REVIEWER_PORT" "\$AIOPS_GHMR_REVIEWER_WORKFLOW"\`
 10. Capture evidence at every key transition:
     \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag preflight --maker-url "\$AIOPS_GHMR_MAKER_DASHBOARD_URL" --reviewer-url "\$AIOPS_GHMR_REVIEWER_DASHBOARD_URL"\`
 11. After all issues close, run \`tools/final-verify.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO"\`.

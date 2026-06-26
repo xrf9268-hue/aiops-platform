@@ -73,7 +73,8 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			maxTurns: 30,
 			mustContain: []string{
 				"Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or",
-				"Refs #<N>` or `Issue #<N>`",
+				"Refs #<N>` only",
+				"GitHub's\n   open-PR claim filter treats `Issue #<N>`",
 				"`Rework response:`",
 				"LAST action",
 			},
@@ -194,6 +195,8 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 	for _, want := range []string{
 		`export AIOPS_GHMR_REPO="octo-org/octo-todo"`,
 		`export AIOPS_GITHUB_REPO_CLONE_URL="https://github.com/octo-org/octo-todo.git"`,
+		`export AIOPS_GHMR_MAKER_MIRROR_ROOT=`,
+		`export AIOPS_GHMR_REVIEWER_MIRROR_ROOT=`,
 		`export AIOPS_GHMR_MAKER_GH_CONFIG_DIR=`,
 		`export AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR=`,
 		`export AIOPS_GHMR_MAKER_PORT="4501"`,
@@ -251,6 +254,7 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 		"required check named `build-test`",
 		"branch protection",
 		"Activate #1 first",
+		"AIOPS_MIRROR_ROOT",
 		"AIOPS_EXPECTED_GITHUB_LOGIN",
 		"capture.py",
 		"final-verify.py",

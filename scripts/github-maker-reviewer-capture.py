@@ -184,10 +184,7 @@ def capture_screenshots(args: argparse.Namespace) -> None:
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
-        if args.screenshot:
-            raise SystemExit("Playwright is required for requested screenshots") from exc
-        print("skipped screenshots: Playwright is not installed", file=sys.stderr)
-        return
+        raise SystemExit("Playwright is required for requested screenshots") from exc
 
     out_dir = args.run_root / "screenshots"
     out_dir.mkdir(parents=True, exist_ok=True)

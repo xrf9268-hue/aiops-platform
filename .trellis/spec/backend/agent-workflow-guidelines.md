@@ -43,7 +43,8 @@ source of truth.
 ### 3. Contracts
 
 - Bootstrap creates distinct maker/reviewer workspace roots and distinct
-  setup/maker/reviewer `GH_CONFIG_DIR` directories under the run root.
+  maker/reviewer mirror roots plus distinct setup/maker/reviewer
+  `GH_CONFIG_DIR` directories under the run root.
 - GitHub workflows use labels `aiops:todo`, `aiops:rework`,
   `aiops:human-review`, `aiops:done`, and `aiops:canceled`.
 - Maker active states are `aiops:todo` and `aiops:rework`; reviewer active
@@ -67,7 +68,8 @@ source of truth.
 - Failed checksum, attestation, `codex --version`, maker push dry-run, or
   doctor -> run is BLOCKED; do not downgrade to single-agent merge.
 - Missing Playwright with explicit screenshot requests -> capture/final verify
-  exits non-zero; default capture may skip screenshots but still records JSON.
+  exits non-zero; default capture may skip screenshots only when no screenshot
+  target was requested.
 - Missing `--browser-storage-state` path when provided -> capture exits
   non-zero before taking screenshots.
 
@@ -78,8 +80,9 @@ source of truth.
   closes the issue.
 - Base: CI is slow; reviewer leaves the issue in `aiops:human-review` and a
   later continuation confirms the merge.
-- Bad: same `GH_CONFIG_DIR` for maker and reviewer, maker uses `gh pr merge`,
-  or issue is closed before GitHub reports merged.
+- Bad: same `GH_CONFIG_DIR` or same `AIOPS_MIRROR_ROOT` for maker and reviewer,
+  maker uses `gh pr merge`, maker references `Issue #N` in the PR body, or issue
+  is closed before GitHub reports merged.
 
 ### 6. Tests Required
 

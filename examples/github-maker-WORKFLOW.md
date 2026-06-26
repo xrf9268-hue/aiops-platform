@@ -89,9 +89,11 @@ Required implementation flow:
 3. Commit your changes on the current worker branch.
 4. Push the branch: `git push -u origin "$(git branch --show-current)"`.
 5. Open a PR against `{{ repo.branch }}` or update the existing PR for this
-   branch. The PR body must reference the issue with `Refs #<N>` or `Issue #<N>`,
-   NOT `Closes #<N>`, `Fixes #<N>`, or `Resolves #<N>`. The reviewer closes the
-   issue only after GitHub confirms the PR merged.
+   branch. The PR body must reference the issue with `Refs #<N>` only, NOT
+   `Issue #<N>`, `Closes #<N>`, `Fixes #<N>`, or `Resolves #<N>`. GitHub's
+   open-PR claim filter treats `Issue #<N>` as a claimed issue and can hide the
+   handoff from the reviewer worker. The reviewer closes the issue only after
+   GitHub confirms the PR merged.
 6. Comment the PR URL on the issue. The reviewer uses the newest PR URL comment
    to find your handoff.
 7. Move the issue to reviewer state as your LAST action:
