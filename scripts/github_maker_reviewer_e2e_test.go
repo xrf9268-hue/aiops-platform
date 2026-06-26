@@ -42,6 +42,9 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 			t.Fatalf("runbook missing %q", want)
 		}
 	}
+	if strings.Contains(body, "\nGH_CONFIG_DIR=\"$AIOPS_GHMR_SETUP_GH_CONFIG_DIR\" \\\n  gh ") {
+		t.Fatalf("runbook contains setup gh commands without stripping GH_TOKEN/GITHUB_TOKEN")
+	}
 	assertInOrder(t, body, []string{
 		"## 1. Prepare the Run Root",
 		"## 2. Configure GitHub Identities",
@@ -95,6 +98,8 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"Do not use `--admin`",
 				"Do NOT close an issue before GitHub confirms the PR is merged",
 				"Do NOT edit, commit, or push code",
+				"close first, then mark Done",
+				"retry-safe",
 			},
 			mustNotContain: []string{"gitea_issue_labels", "--json merged,"},
 		},

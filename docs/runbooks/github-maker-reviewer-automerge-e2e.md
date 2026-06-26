@@ -131,7 +131,7 @@ to the agent.
 Create or reset a disposable repository:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh repo create "$AIOPS_GHMR_REPO" --private
 ```
 
@@ -175,7 +175,7 @@ Push `main`, wait for the first `build-test` run to pass, and capture the seed
 state:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh run list --repo "$AIOPS_GHMR_REPO" --limit 5 \
   --json databaseId,workflowName,status,conclusion,headSha,url \
   > "$AIOPS_GHMR_RUN_ROOT/forge-json/actions-initial.json"
@@ -187,7 +187,7 @@ Create labels:
 
 ```bash
 for label in aiops:todo aiops:rework aiops:human-review aiops:done aiops:canceled; do
-  GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
     gh label create "$label" --repo "$AIOPS_GHMR_REPO" --color 5319e7 --force
 done
 ```
@@ -195,7 +195,7 @@ done
 Enable auto-merge and squash-only merges:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh repo edit "$AIOPS_GHMR_REPO" \
     --enable-auto-merge \
     --enable-squash-merge \
@@ -207,7 +207,7 @@ GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
 Protect `main`:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh api --method PUT "repos/$AIOPS_GHMR_REPO/branches/main/protection" \
   --input - <<'JSON'
 {
@@ -236,7 +236,7 @@ JSON
 Capture:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh api "repos/$AIOPS_GHMR_REPO/branches/main/protection" \
   > "$AIOPS_GHMR_RUN_ROOT/forge-json/branch-protection-initial.json"
 ```
@@ -249,7 +249,7 @@ yet:
 ```bash
 for file in "$AIOPS_GHMR_RUN_ROOT"/issues/*.md; do
   title="$(sed -n '1s/^# //p' "$file")"
-  GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+  env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
     gh issue create --repo "$AIOPS_GHMR_REPO" --title "$title" --body-file "$file"
 done
 ```
@@ -257,7 +257,7 @@ done
 Activate only the current ready issue:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh issue edit 1 --repo "$AIOPS_GHMR_REPO" --add-label aiops:todo
 ```
 
@@ -407,7 +407,7 @@ control Rework issue from `issues/04-*.md` to force deterministic proof:
 Activate the dependency issue only after prerequisite issues are Done/closed:
 
 ```bash
-GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
   gh issue edit 3 --repo "$AIOPS_GHMR_REPO" --add-label aiops:todo
 ```
 
