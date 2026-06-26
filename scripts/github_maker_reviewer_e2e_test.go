@@ -35,6 +35,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		`install -m 600 "$RUN_ROOT/env.example" "$RUN_ROOT/env.local"`,
 		"--include-github-pages",
 		"--browser-storage-state",
+		"--tag final",
 		"Do not downgrade the scenario into\nsingle-agent merge",
 		"`gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`",
 	} {
@@ -265,6 +266,7 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 		"Activate #1 first",
 		`PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" python -m playwright install chromium`,
 		`--gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"`,
+		`--tag final --skip-screenshots`,
 		"AIOPS_MIRROR_ROOT",
 		"AIOPS_EXPECTED_GITHUB_LOGIN",
 		"capture.py",
@@ -470,6 +472,26 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		if !strings.Contains(retro, want) {
 			t.Fatalf("retro missing %q\n%s", want, retro)
 		}
+	}
+}
+
+func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issues-issue3-done.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-done.json"), fakeGitHubMergedPRsJSON())
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if !strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") || !strings.Contains(report, "#3") {
+		t.Fatalf("report did not use captured plural JSON\n%s", report)
 	}
 }
 

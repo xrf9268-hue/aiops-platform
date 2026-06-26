@@ -424,6 +424,18 @@ Fresh-clone `main` and run the same gates:
   --gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"
 ```
 
+Capture the final GitHub state with the exact `final` tag consumed by the report
+helper:
+
+```bash
+"$AIOPS_GHMR_RUN_ROOT/tools/capture.py" \
+  --run-root "$AIOPS_GHMR_RUN_ROOT" \
+  --repo "$AIOPS_GHMR_REPO" \
+  --tag final \
+  --skip-screenshots \
+  --gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"
+```
+
 Generate reports:
 
 ```bash

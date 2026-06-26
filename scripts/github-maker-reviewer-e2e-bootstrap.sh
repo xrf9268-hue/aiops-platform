@@ -237,7 +237,8 @@ Repository: \`$repo\`
 11. Capture evidence at every key transition:
     \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag preflight --maker-url "\$AIOPS_GHMR_MAKER_DASHBOARD_URL" --reviewer-url "\$AIOPS_GHMR_REVIEWER_DASHBOARD_URL" --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`
 12. After all issues close, run \`tools/final-verify.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`.
-13. Generate reports:
+13. Capture final GitHub JSON with \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag final --skip-screenshots --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`.
+14. Generate reports:
     \`tools/report.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO"\`
 
 Do not commit \`env.local\`, \`secrets/\`, downloaded binaries, raw auth homes,

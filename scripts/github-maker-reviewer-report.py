@@ -28,6 +28,21 @@ def load_first(paths: list[Path], default: Any) -> Any:
     return default
 
 
+def newest_json(paths: list[Path]) -> list[Path]:
+    existing = [path for path in paths if path.exists()]
+    return sorted(existing, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def evidence_candidates(forge_json: Path, state: Path, kind: str) -> list[Path]:
+    preferred = [
+        forge_json / f"{kind}-final.json",
+        forge_json / f"final-{kind}-all.json",
+        state / f"{kind}-final.json",
+    ]
+    discovered = newest_json(list(forge_json.glob(f"{kind}-*.json")))
+    return preferred + [path for path in discovered if path not in preferred]
+
+
 def label_names(issue: dict[str, Any]) -> list[str]:
     names: list[str] = []
     for label in issue.get("labels") or []:
@@ -238,14 +253,8 @@ def main() -> int:
     args = parser().parse_args()
     fj = args.run_root / "forge-json"
     state = args.run_root / "state"
-    issues = load_first(
-        [fj / "final-issues-all.json", fj / "issues-final.json", state / "issues-final.json"],
-        [],
-    )
-    prs = load_first(
-        [fj / "final-prs-all.json", fj / "prs-final.json", state / "prs-final.json"],
-        [],
-    )
+    issues = load_first(evidence_candidates(fj, state, "issues"), [])
+    prs = load_first(evidence_candidates(fj, state, "prs"), [])
     if not isinstance(issues, list):
         issues = []
     if not isinstance(prs, list):
