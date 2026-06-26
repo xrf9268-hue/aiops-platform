@@ -31,6 +31,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"worker --doctor --deploy=binary --mode=real",
 		"If `gh release view`, checksum, attestation",
 		"git push --dry-run",
+		`install -m 600 "$RUN_ROOT/env.example" "$RUN_ROOT/env.local"`,
 		"--include-github-pages",
 		"--browser-storage-state",
 		"Do not downgrade the scenario into\nsingle-agent merge",
@@ -250,6 +251,7 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 	next := readFileString(t, filepath.Join(runRoot, "NEXT-STEPS.md"))
 	for _, want := range []string{
 		"three GitHub identities",
+		`install -m 600 "$AIOPS_GHMR_RUN_ROOT/env.example" "$AIOPS_GHMR_RUN_ROOT/env.local"`,
 		"release-preflight.sh",
 		"required check named `build-test`",
 		"branch protection",
@@ -413,6 +415,43 @@ func TestGitHubMakerReviewerHelperEntrypoints(t *testing.T) {
 		if !strings.Contains(strings.ToLower(string(out)), "usage:") {
 			t.Fatalf("%s --help did not print usage:\n%s", rel, out)
 		}
+	}
+}
+
+func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForFinalVerify())
+	writeFileString(t, filepath.Join(fakeBin, "npm"), "#!/usr/bin/env bash\nsleep 5\n")
+	for _, name := range []string{"gh", "npm"} {
+		if err := os.Chmod(filepath.Join(fakeBin, name), 0o755); err != nil {
+			t.Fatalf("chmod fake %s: %v", name, err)
+		}
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-final-verify.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--skip-screenshots",
+		"--command-timeout-seconds", "1",
+	)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("final verify succeeded; want npm timeout\n%s", out)
+	}
+	if !strings.Contains(string(out), "npm ci timed out after 1s; see") {
+		t.Fatalf("final verify output missing timeout and log path\n%s", out)
+	}
+	log := readFileString(t, filepath.Join(runRoot, "final-verify", "logs", "npm-ci.log"))
+	if !strings.Contains(log, "TIMEOUT after 1s") {
+		t.Fatalf("npm log missing timeout marker\n%s", log)
 	}
 }
 
@@ -580,5 +619,25 @@ TUI
     exit 42
     ;;
 esac
+`
+}
+
+func fakeGhForFinalVerify() string {
+	return `#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${1:-}" = "repo" ] && [ "${2:-}" = "clone" ]; then
+  dest="${4:-}"
+  if [ -z "$dest" ]; then
+    echo "missing clone destination" >&2
+    exit 42
+  fi
+  mkdir -p "$dest"
+  printf '{"scripts":{"test":"true","build":"true","test:e2e":"true"}}\n' > "$dest/package.json"
+  exit 0
+fi
+
+echo "unexpected gh args: $*" >&2
+exit 42
 `
 }

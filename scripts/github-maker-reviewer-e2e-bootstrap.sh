@@ -203,8 +203,10 @@ cat >"$run_root/NEXT-STEPS.md" <<EOF
 Run root: \`$run_root\`
 Repository: \`$repo\`
 
-1. Copy \`env.example\` to \`env.local\`, fill the three GitHub identities, then
-   source it with \`set -a; . "\$AIOPS_GHMR_RUN_ROOT/env.local"; set +a\`.
+1. Create private \`env.local\` with
+   \`install -m 600 "\$AIOPS_GHMR_RUN_ROOT/env.example" "\$AIOPS_GHMR_RUN_ROOT/env.local"\`,
+   fill the three GitHub identities, then source it with
+   \`set -a; . "\$AIOPS_GHMR_RUN_ROOT/env.local"; set +a\`.
 2. Authenticate each role into its own file-backed gh home:
    - \`GH_CONFIG_DIR="\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" gh auth login\`
    - \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh auth login\`
@@ -243,4 +245,4 @@ or disposable run evidence.
 EOF
 
 printf 'prepared GitHub maker/reviewer E2E run root: %s\n' "$run_root"
-printf 'next: cp %s/env.example %s/env.local\n' "$run_root" "$run_root"
+printf 'next: install -m 600 %s/env.example %s/env.local\n' "$run_root" "$run_root"

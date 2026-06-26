@@ -70,7 +70,7 @@ scripts/github-maker-reviewer-e2e-bootstrap.sh \
   --repo "$REPO_OWNER/$REPO_NAME" \
   --port-base 4300
 
-cp "$RUN_ROOT/env.example" "$RUN_ROOT/env.local"
+install -m 600 "$RUN_ROOT/env.example" "$RUN_ROOT/env.local"
 $EDITOR "$RUN_ROOT/env.local"
 set -a
 . "$RUN_ROOT/env.local"

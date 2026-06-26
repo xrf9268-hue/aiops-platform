@@ -20,32 +20,44 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--gh-config-dir", default=os.environ.get("GH_CONFIG_DIR", ""))
     p.add_argument("--app-dir", type=Path)
     p.add_argument("--port", type=int, default=5189)
+    p.add_argument("--command-timeout-seconds", type=int, default=900)
     p.add_argument("--skip-screenshots", action="store_true")
     return p
 
 
-def run_logged(cmd: list[str], cwd: Path, log: Path, env: dict[str, str]) -> None:
+def run_logged(cmd: list[str], cwd: Path, log: Path, env: dict[str, str], timeout_seconds: int) -> None:
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("w") as fh:
         fh.write(f"$ {' '.join(cmd)}\n")
         fh.flush()
-        proc = subprocess.run(cmd, cwd=cwd, text=True, stdout=fh, stderr=subprocess.STDOUT, env=env)
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=cwd,
+                text=True,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                env=env,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            fh.write(f"\nTIMEOUT after {timeout_seconds}s\n")
+            raise SystemExit(f"{' '.join(cmd)} timed out after {timeout_seconds}s; see {log}") from exc
     if proc.returncode != 0:
         raise SystemExit(f"{' '.join(cmd)} failed; see {log}")
 
 
-def clone_repo(args: argparse.Namespace, app_dir: Path, env: dict[str, str]) -> None:
+def clone_repo(args: argparse.Namespace, app_dir: Path, logs: Path, env: dict[str, str]) -> None:
     if app_dir.exists():
         shutil.rmtree(app_dir)
     app_dir.parent.mkdir(parents=True, exist_ok=True)
-    clone = subprocess.run(
+    run_logged(
         ["gh", "repo", "clone", args.repo, str(app_dir)],
-        text=True,
-        capture_output=True,
-        env=env,
+        app_dir.parent,
+        logs / "gh-clone.log",
+        env,
+        args.command_timeout_seconds,
     )
-    if clone.returncode != 0:
-        raise SystemExit(f"gh repo clone failed:\n{clone.stdout}\n{clone.stderr}")
 
 
 def wait_for(url: str) -> None:
@@ -88,14 +100,14 @@ def main() -> int:
     if args.gh_config_dir:
         env["GH_CONFIG_DIR"] = args.gh_config_dir
 
-    clone_repo(args, app_dir, env)
+    clone_repo(args, app_dir, logs, env)
     for name, cmd in [
         ("npm-ci.log", ["npm", "ci"]),
         ("npm-test.log", ["npm", "test"]),
         ("npm-build.log", ["npm", "run", "build"]),
         ("npm-e2e.log", ["npm", "run", "test:e2e"]),
     ]:
-        run_logged(cmd, app_dir, logs / name, env)
+        run_logged(cmd, app_dir, logs / name, env, args.command_timeout_seconds)
 
     if not args.skip_screenshots:
         url = f"http://127.0.0.1:{args.port}"
