@@ -19,6 +19,84 @@ source of truth.
 | Binary self-hosted development | [`docs/runbooks/dogfood-development.md`](../../../docs/runbooks/dogfood-development.md) |
 | Other repositories | [`docs/runbooks/agentic-project-template.md`](../../../docs/runbooks/agentic-project-template.md) |
 | Runtime status interpretation | [`docs/runbooks/runtime-status.md`](../../../docs/runbooks/runtime-status.md) |
+| GitHub maker/reviewer auto-merge release validation | [`docs/runbooks/github-maker-reviewer-automerge-e2e.md`](../../../docs/runbooks/github-maker-reviewer-automerge-e2e.md) |
+
+---
+
+## Scenario: GitHub Maker/Reviewer Auto-Merge E2E Harness
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing the reusable GitHub split-role E2E harness.
+- Source of truth: the runbook above; this section pins the executable command
+  and env contracts so future edits can be tested without rereading old run
+  logs.
+
+### 2. Signatures
+
+- `scripts/github-maker-reviewer-e2e-bootstrap.sh --run-root DIR --repo OWNER/NAME [--port-base PORT]`
+- `scripts/github-maker-reviewer-release-preflight.sh --run-root DIR [--release-repo OWNER/NAME] [--tag latest|vX.Y.Z]`
+- `scripts/github-maker-reviewer-capture.py --run-root DIR --repo OWNER/NAME --tag TAG [--maker-url URL] [--reviewer-url URL] [--gh-config-dir DIR]`
+- `scripts/github-maker-reviewer-final-verify.py --run-root DIR --repo OWNER/NAME [--gh-config-dir DIR]`
+- `scripts/github-maker-reviewer-report.py --run-root DIR --repo OWNER/NAME [--date YYYY-MM-DD]`
+
+### 3. Contracts
+
+- Bootstrap creates distinct maker/reviewer workspace roots and distinct
+  setup/maker/reviewer `GH_CONFIG_DIR` directories under the run root.
+- GitHub workflows use labels `aiops:todo`, `aiops:rework`,
+  `aiops:human-review`, `aiops:done`, and `aiops:canceled`.
+- Maker active states are `aiops:todo` and `aiops:rework`; reviewer active
+  state is `aiops:human-review`.
+- `GITHUB_TOKEN` remains worker-held and must not appear in
+  `codex.env_passthrough`; agents receive `GH_CONFIG_DIR`,
+  `NPM_CONFIG_CACHE`, `PLAYWRIGHT_BROWSERS_PATH`, and
+  `AIOPS_EXPECTED_GITHUB_LOGIN`.
+- Release preflight records release metadata, checksum, attestation, SBOM
+  summary, binary versions, Codex version, role identity evidence, maker
+  `git push --dry-run`, and maker/reviewer doctor logs.
+
+### 4. Validation & Error Matrix
+
+- Missing `--run-root` or malformed `--repo` -> helper exits 2.
+- Missing or mismatched GitHub role identity -> preflight exits non-zero and
+  the run is BLOCKED.
+- Failed checksum, attestation, `codex --version`, maker push dry-run, or
+  doctor -> run is BLOCKED; do not downgrade to single-agent merge.
+- Missing Playwright with explicit screenshot requests -> capture/final verify
+  exits non-zero; default capture may skip screenshots but still records JSON.
+
+### 5. Good/Base/Bad Cases
+
+- Good: maker opens PR with non-closing issue reference, reviewer approves,
+  GitHub required check passes, reviewer confirms `mergedAt`, then adds Done and
+  closes the issue.
+- Base: CI is slow; reviewer leaves the issue in `aiops:human-review` and a
+  later continuation confirms the merge.
+- Bad: same `GH_CONFIG_DIR` for maker and reviewer, maker uses `gh pr merge`,
+  or issue is closed before GitHub reports merged.
+
+### 6. Tests Required
+
+- `scripts/github_maker_reviewer_e2e_test.go` must cover runbook discovery,
+  workflow loading, env passthrough boundaries, bootstrap output, report output,
+  and helper `--help` entrypoints.
+- Run `go test -run 'TestGitHubMakerReviewer' -count=1 ./scripts` after edits.
+- Run `go test -count=1 ./scripts` before committing shared script/runbook
+  changes.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Use one GitHub identity for both workflows and let the worker or maker merge
+after CI passes.
+
+#### Correct
+
+Use distinct GitHub identities, distinct workspace roots, GitHub required
+checks, reviewer `--match-head-commit` auto-merge, and Done/close only after
+GitHub reports the PR merged.
 
 ---
 
@@ -91,7 +169,9 @@ Tracker-specific gates:
 - Gitea: express issue dependencies with `Depends on #N`, but keep dependent
   issues in `Todo` or out of active labels until blockers are terminal.
 - GitHub: use `aiops:ready` as the unattended queue label. Do not use `open` as
-  an active state for dogfood work.
+  an active state for dogfood work. The GitHub maker/reviewer release-validation
+  harness is a separate disposable-repo mode and uses the runbook-specific
+  `aiops:todo` -> `aiops:human-review` -> `aiops:done` label path instead.
 
 `/api/v1/state.blocked` is not a dependency backlog. It reports local blocked
 claims such as input-required or continuation-budget stops.
