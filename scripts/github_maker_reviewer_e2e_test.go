@@ -433,6 +433,7 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFileString(t, filepath.Join(runRoot, "screenshots", "github-issues-final.png"), "png")
 	writeFileString(t, filepath.Join(runRoot, "final-verify", "screenshots", "final-app-desktop.png"), "png")
 
@@ -481,6 +482,7 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issues-issue3-done.json"), fakeGitHubDoneIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-done.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "issue3-done")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
@@ -492,6 +494,29 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
 	if !strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") || !strings.Contains(report, "#3") {
 		t.Fatalf("report did not use captured plural JSON\n%s", report)
+	}
+}
+
+func TestGitHubMakerReviewerReportRequiresDependencySequencingEvidence(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready without dependency sequencing events\n%s", report)
+	}
+	if !strings.Contains(report, "Dependency sequencing evidence: missing") {
+		t.Fatalf("report missing sequencing evidence status\n%s", report)
 	}
 }
 
@@ -524,6 +549,7 @@ func TestGitHubMakerReviewerReportRequiresReviewerOwnedMerges(t *testing.T) {
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMakerMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
@@ -692,6 +718,13 @@ func fakeGitHubControlWithoutDependencyIssuesJSON() string {
   {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
   {"number":4,"title":"Control Rework: forced stale delete proof","state":"closed","closedAt":"2026-06-26T08:20:01Z","labels":[{"name":"aiops:done"}]}
 ]`
+}
+
+func writeFakeGitHubDependencySequencingEvents(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
+  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}}
+]`)
 }
 
 func fakeGitHubMergedPRsJSON() string {

@@ -28,6 +28,13 @@ def load_first(paths: list[Path], default: Any) -> Any:
     return default
 
 
+def load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def newest_json(paths: list[Path]) -> list[Path]:
     existing = [path for path in paths if path.exists()]
     return sorted(existing, key=lambda path: path.stat().st_mtime, reverse=True)
@@ -40,6 +47,16 @@ def evidence_candidates(forge_json: Path, state: Path, kind: str) -> list[Path]:
         state / f"{kind}-final.json",
     ]
     discovered = newest_json(list(forge_json.glob(f"{kind}-*.json")))
+    return preferred + [path for path in discovered if path not in preferred]
+
+
+def issue_event_candidates(forge_json: Path, issue_number: int | str) -> list[Path]:
+    number = str(issue_number)
+    preferred = [
+        forge_json / f"issue-{number}-events-final.json",
+        forge_json / f"final-issue-{number}-events.json",
+    ]
+    discovered = newest_json(list(forge_json.glob(f"issue-{number}-events-*.json")))
     return preferred + [path for path in discovered if path not in preferred]
 
 
@@ -119,6 +136,48 @@ def required_issue_scenarios_done(issues: list[dict[str, Any]]) -> bool:
     return all(any(marker in title for title in titles) for marker in required)
 
 
+def done_issue_by_title(issues: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
+    for issue in issues:
+        title = str(issue.get("title", "")).lower()
+        if marker in title and "aiops:done" in label_names(issue) and str(issue.get("state", "")).lower() == "closed":
+            return issue
+    return None
+
+
+def event_label_name(event: dict[str, Any]) -> str:
+    label = event.get("label")
+    if isinstance(label, dict):
+        return str(label.get("name") or "")
+    return str(label or "")
+
+
+def event_created_at(event: dict[str, Any]) -> str:
+    return str(event.get("created_at") or event.get("createdAt") or "")
+
+
+def dependency_sequencing_evidence_present(forge_json: Path, issues: list[dict[str, Any]]) -> bool:
+    happy = done_issue_by_title(issues, "happy path")
+    rework = done_issue_by_title(issues, "rework candidate")
+    dependency = done_issue_by_title(issues, "dependency:")
+    if not happy or not rework or not dependency:
+        return False
+    prerequisite_closed_at = max(str(happy.get("closedAt") or ""), str(rework.get("closedAt") or ""))
+    if not prerequisite_closed_at:
+        return False
+    events: list[Any] = []
+    for path in issue_event_candidates(forge_json, dependency.get("number", "")):
+        loaded = load_json(path)
+        if isinstance(loaded, list):
+            events = loaded
+            break
+    todo_label_times = [
+        event_created_at(event)
+        for event in events
+        if isinstance(event, dict) and event.get("event") == "labeled" and event_label_name(event) == "aiops:todo"
+    ]
+    return any(when and when > prerequisite_closed_at for when in todo_label_times)
+
+
 def merged_prs(prs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [p for p in prs if p.get("mergedAt") or str(p.get("state", "")).upper() == "MERGED"]
 
@@ -135,9 +194,9 @@ def reviewer_owned_merges(prs: list[dict[str, Any]]) -> bool:
     return True
 
 
-def automated_verdict(issues: list[dict[str, Any]], prs: list[dict[str, Any]]) -> str:
+def automated_verdict(issues: list[dict[str, Any]], prs: list[dict[str, Any]], sequencing_evidence: bool) -> str:
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs) and reworked:
+    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs) and reworked and sequencing_evidence:
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
 
@@ -152,7 +211,8 @@ def asset_bullets(root: Path, glob: str) -> list[str]:
 def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], prs: list[dict[str, Any]]) -> Path:
     reports = args.run_root / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    verdict = automated_verdict(issues, prs)
+    sequencing_evidence = dependency_sequencing_evidence_present(args.run_root / "forge-json", issues)
+    verdict = automated_verdict(issues, prs, sequencing_evidence)
     lines = [
         "# GitHub maker + reviewer-automerge E2E Report",
         "",
@@ -182,6 +242,8 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "- [ ] Fresh clone verification passed `npm ci`, `npm test`, `npm run build`, and `npm run test:e2e`.",
         "",
         "## Issue / PR Table",
+        "",
+        f"Dependency sequencing evidence: {'present' if sequencing_evidence else 'missing'}",
         "",
         "Issues:",
         *issue_rows(issues),

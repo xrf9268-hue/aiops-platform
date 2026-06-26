@@ -126,6 +126,10 @@ def capture_gh_json(args: argparse.Namespace) -> None:
                     "number,title,state,labels,closed,closedAt,url,updatedAt,body,comments",
                 ).stdout,
             )
+            write_json(
+                out_dir / f"issue-{number}-events-{tag}.json",
+                gh(args, "api", f"repos/{repo}/issues/{number}/events?per_page=100").stdout,
+            )
 
     prs = write_json(
         out_dir / f"prs-{tag}.json",
