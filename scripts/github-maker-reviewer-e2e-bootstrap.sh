@@ -210,30 +210,32 @@ Repository: \`$repo\`
    - \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" gh auth login\`
    - \`GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" gh auth login\`
    - run \`gh auth setup-git\` once for each \`GH_CONFIG_DIR\`.
-3. Seed the disposable Vite React TypeScript Web Todo repo on \`main\`.
+3. Install Chromium into the generated Playwright browser cache:
+   \`PLAYWRIGHT_BROWSERS_PATH="\$PLAYWRIGHT_BROWSERS_PATH" python -m playwright install chromium\`
+4. Seed the disposable Vite React TypeScript Web Todo repo on \`main\`.
    GitHub Actions must run \`npm ci\`, \`npm test\`, \`npm run build\`, and
    \`npm run test:e2e\` in a required check named \`build-test\`.
-4. Enable branch protection on \`main\`: required check \`build-test\`,
+5. Enable branch protection on \`main\`: required check \`build-test\`,
    one approving review, stale review dismissal, last-push approval, enforced
    admins, squash merge only, and repository auto-merge enabled.
-5. Create labels \`aiops:todo\`, \`aiops:rework\`, \`aiops:human-review\`,
+6. Create labels \`aiops:todo\`, \`aiops:rework\`, \`aiops:human-review\`,
    \`aiops:done\`, and \`aiops:canceled\`.
-6. Create issues from \`issues/*.md\` without ready labels. Activate #1 first by
+7. Create issues from \`issues/*.md\` without ready labels. Activate #1 first by
    adding \`aiops:todo\`; activate downstream issues only after dependencies are
    Done/closed.
-7. Run \`tools/release-preflight.sh --run-root "\$AIOPS_GHMR_RUN_ROOT"\`.
+8. Run \`tools/release-preflight.sh --run-root "\$AIOPS_GHMR_RUN_ROOT"\`.
    This resolves the latest release, downloads worker/tui/SHA/SBOM, verifies
    checksum and attestation, records versions, checks role auth, runs the maker
    push dry-run against the existing repo, and runs doctor when workflows are
    present.
-8. Start maker:
+9. Start maker:
    \`GH_CONFIG_DIR="\$AIOPS_GHMR_MAKER_GH_CONFIG_DIR" AIOPS_MIRROR_ROOT="\$AIOPS_GHMR_MAKER_MIRROR_ROOT" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_MAKER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_MAKER_PORT" "\$AIOPS_GHMR_MAKER_WORKFLOW"\`
-9. Start reviewer:
+10. Start reviewer:
    \`GH_CONFIG_DIR="\$AIOPS_GHMR_REVIEWER_GH_CONFIG_DIR" AIOPS_MIRROR_ROOT="\$AIOPS_GHMR_REVIEWER_MIRROR_ROOT" AIOPS_EXPECTED_GITHUB_LOGIN="\$AIOPS_GHMR_REVIEWER_LOGIN" "\$AIOPS_GHMR_WORKER_BIN" --port "\$AIOPS_GHMR_REVIEWER_PORT" "\$AIOPS_GHMR_REVIEWER_WORKFLOW"\`
-10. Capture evidence at every key transition:
-    \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag preflight --maker-url "\$AIOPS_GHMR_MAKER_DASHBOARD_URL" --reviewer-url "\$AIOPS_GHMR_REVIEWER_DASHBOARD_URL"\`
-11. After all issues close, run \`tools/final-verify.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO"\`.
-12. Generate reports:
+11. Capture evidence at every key transition:
+    \`tools/capture.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --tag preflight --maker-url "\$AIOPS_GHMR_MAKER_DASHBOARD_URL" --reviewer-url "\$AIOPS_GHMR_REVIEWER_DASHBOARD_URL" --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`
+12. After all issues close, run \`tools/final-verify.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO" --gh-config-dir "\$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"\`.
+13. Generate reports:
     \`tools/report.py --run-root "\$AIOPS_GHMR_RUN_ROOT" --repo "\$AIOPS_GHMR_REPO"\`
 
 Do not commit \`env.local\`, \`secrets/\`, downloaded binaries, raw auth homes,

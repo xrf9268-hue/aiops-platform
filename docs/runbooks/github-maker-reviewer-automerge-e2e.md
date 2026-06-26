@@ -48,14 +48,14 @@ Required:
 - A working host `codex app-server` auth path.
 - Permission to create or mutate a disposable GitHub repository.
 
-Install screenshot tooling once outside the repo:
+Install screenshot tooling once outside the repo. Browser binaries are installed
+into the run-root cache after `env.local` is sourced.
 
 ```bash
 python3 -m venv "$HOME/.cache/aiops-ghmr-e2e/venv"
 . "$HOME/.cache/aiops-ghmr-e2e/venv/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install playwright
-python -m playwright install chromium
 ```
 
 ## 1. Prepare the Run Root
@@ -75,6 +75,9 @@ $EDITOR "$RUN_ROOT/env.local"
 set -a
 . "$RUN_ROOT/env.local"
 set +a
+
+PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" \
+  python -m playwright install chromium
 ```
 
 Do not commit `env.local`, `secrets/`, downloaded binaries, auth homes, npm

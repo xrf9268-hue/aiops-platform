@@ -254,6 +254,8 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 		"required check named `build-test`",
 		"branch protection",
 		"Activate #1 first",
+		`PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" python -m playwright install chromium`,
+		`--gh-config-dir "$AIOPS_GHMR_SETUP_GH_CONFIG_DIR"`,
 		"AIOPS_MIRROR_ROOT",
 		"AIOPS_EXPECTED_GITHUB_LOGIN",
 		"capture.py",
@@ -265,13 +267,14 @@ func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {
 		}
 	}
 	assertInOrder(t, next, []string{
-		"3. Seed the disposable",
-		"4. Enable branch protection",
-		"5. Create labels",
-		"6. Create issues",
-		"7. Run `tools/release-preflight.sh",
-		"8. Start maker",
-		"9. Start reviewer",
+		"3. Install Chromium into the generated Playwright browser cache",
+		"4. Seed the disposable",
+		"5. Enable branch protection",
+		"6. Create labels",
+		"7. Create issues",
+		"8. Run `tools/release-preflight.sh",
+		"9. Start maker",
+		"10. Start reviewer",
 	})
 }
 
