@@ -518,6 +518,29 @@ func TestGitHubMakerReviewerReportRequiresDependencyScenario(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerReportRequiresReviewerOwnedMerges(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMakerMergedPRsJSON())
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--date", "2026-06-26")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready when maker merged own PRs\n%s", report)
+	}
+	if !strings.Contains(report, "INCOMPLETE - review the evidence before claiming PASS") {
+		t.Fatalf("report missing incomplete verdict\n%s", report)
+	}
+}
+
 func TestGitHubMakerReviewerHelperEntrypoints(t *testing.T) {
 	root := repoRoot(t)
 	for _, rel := range []string{
@@ -676,6 +699,14 @@ func fakeGitHubMergedPRsJSON() string {
   {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED"}]},
   {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED"},{"state":"APPROVED"}]},
   {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED"}]}
+]`
+}
+
+func fakeGitHubMakerMergedPRsJSON() string {
+	return `[
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED"}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"CHANGES_REQUESTED"},{"state":"APPROVED"}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED"}]}
 ]`
 }
 

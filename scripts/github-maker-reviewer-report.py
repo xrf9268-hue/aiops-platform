@@ -119,10 +119,25 @@ def required_issue_scenarios_done(issues: list[dict[str, Any]]) -> bool:
     return all(any(marker in title for title in titles) for marker in required)
 
 
+def merged_prs(prs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [p for p in prs if p.get("mergedAt") or str(p.get("state", "")).upper() == "MERGED"]
+
+
+def reviewer_owned_merges(prs: list[dict[str, Any]]) -> bool:
+    merged = merged_prs(prs)
+    if len(merged) < 3:
+        return False
+    for pr in merged:
+        author = user_login(pr.get("author"))
+        merged_by = user_login(pr.get("mergedBy"))
+        if not author or not merged_by or author == merged_by:
+            return False
+    return True
+
+
 def automated_verdict(issues: list[dict[str, Any]], prs: list[dict[str, Any]]) -> str:
-    merged = [p for p in prs if p.get("mergedAt") or str(p.get("state", "")).upper() == "MERGED"]
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    if required_issue_scenarios_done(issues) and len(merged) >= 3 and reworked:
+    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs) and reworked:
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
 
