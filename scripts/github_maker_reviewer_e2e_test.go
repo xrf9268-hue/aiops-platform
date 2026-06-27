@@ -99,6 +99,9 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"Do not use `--admin`",
 				"Do NOT close an issue before GitHub confirms the PR is merged",
 				"Do NOT edit, commit, or push code",
+				"do not jump straight\n   to Done",
+				"reviewer-owned\n   `APPROVED` review",
+				"successful `build-test`",
 				"retry-safe",
 				"Do not leave an open issue labeled",
 			},
@@ -429,11 +432,13 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	mkdirAll(t,
 		filepath.Join(runRoot, "forge-json"),
 		filepath.Join(runRoot, "screenshots"),
+		filepath.Join(runRoot, "final-verify", "logs"),
 		filepath.Join(runRoot, "final-verify", "screenshots"),
 	)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
 	writeFileString(t, filepath.Join(runRoot, "screenshots", "github-issues-final.png"), "png")
 	writeFileString(t, filepath.Join(runRoot, "final-verify", "screenshots", "final-app-desktop.png"), "png")
 
@@ -464,6 +469,10 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		"Rework Evidence",
 		"Screenshot Index",
 		"final-verify/screenshots/final-app-desktop.png",
+		"Branch protection evidence: present",
+		"Merged PR build-test evidence: present",
+		"Reviewer approval evidence: matched",
+		"Fresh clone verification evidence: present",
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
@@ -490,6 +499,7 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issues-issue3-done.json"), fakeGitHubDoneIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-done.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "issue3-done")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "issue3-done")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command(
@@ -508,6 +518,108 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
 	if !strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") || !strings.Contains(report, "#3") {
 		t.Fatalf("report did not use captured plural JSON\n%s", report)
+	}
+}
+
+func TestGitHubMakerReviewerReportRequiresGovernanceEvidenceForReady(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithoutStatusJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeFinalVerifyLogs(t, runRoot)
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	for _, want := range []string{
+		"INCOMPLETE - review the evidence before claiming PASS",
+		"Branch protection evidence: missing",
+		"Merged PR build-test evidence: missing",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
+func TestGitHubMakerReviewerReportRequiresReviewerApprovalAndFreshCloneEvidence(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithMakerApprovalJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeBranchProtectionEvidence(t, runRoot, "final")
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	for _, want := range []string{
+		"INCOMPLETE - review the evidence before claiming PASS",
+		"Reviewer approval evidence: missing",
+		"Fresh clone verification evidence: missing",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report missing %q\n%s", want, report)
+		}
+	}
+}
+
+func TestGitHubMakerReviewerReportRejectsStaleReviewerApproval(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithStaleApprovalJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready with stale reviewer approval\n%s", report)
+	}
+	if !strings.Contains(report, "Reviewer approval evidence: missing") {
+		t.Fatalf("report missing stale approval status\n%s", report)
 	}
 }
 
@@ -802,19 +914,74 @@ func writeFakeGitHubEarlyDependencySequencingEvents(t *testing.T, runRoot string
 ]`)
 }
 
+func writeFakeGitHubGovernanceEvidence(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFakeBranchProtectionEvidence(t, runRoot, tag)
+	writeFakeFinalVerifyLogs(t, runRoot)
+}
+
+func writeFakeBranchProtectionEvidence(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "branch-protection-"+tag+".json"), `{
+  "required_status_checks":{"contexts":["build-test"]},
+  "required_pull_request_reviews":{"required_approving_review_count":1}
+}`)
+}
+
+func writeFakeFinalVerifyLogs(t *testing.T, runRoot string) {
+	t.Helper()
+	logs := filepath.Join(runRoot, "final-verify", "logs")
+	mkdirAll(t, logs)
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{"npm-ci.log", "npm ci"},
+		{"npm-test.log", "npm test"},
+		{"npm-build.log", "npm run build"},
+		{"npm-e2e.log", "npm run test:e2e"},
+	} {
+		writeFileString(t, filepath.Join(logs, tc.name), "$ "+tc.command+"\nok\n")
+	}
+}
+
 func fakeGitHubMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED"},{"state":"APPROVED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED"}]}
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+]`
+}
+
+func fakeGitHubMergedPRsWithoutStatusJSON() string {
+	return `[
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]}
+]`
+}
+
+func fakeGitHubMergedPRsWithMakerApprovalJSON() string {
+	return `[
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+]`
+}
+
+func fakeGitHubMergedPRsWithStaleApprovalJSON() string {
+	return `[
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"1111111111111111111111111111111111111111"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"old2222222222222222222222222222222222222"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"3333333333333333333333333333333333333333"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMakerMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"CHANGES_REQUESTED"},{"state":"APPROVED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED"}]}
+  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 

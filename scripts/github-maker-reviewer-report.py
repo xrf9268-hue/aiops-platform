@@ -62,6 +62,10 @@ def issue_event_candidates(forge_json: Path, issue_number: int | str) -> list[Pa
     return preferred + [path for path in discovered if path not in preferred]
 
 
+def newest_prefixed_json(directory: Path, prefix: str) -> list[Path]:
+    return newest_json(list(directory.glob(f"{prefix}-*.json")))
+
+
 def label_names(issue: dict[str, Any]) -> list[str]:
     names: list[str] = []
     for label in issue.get("labels") or []:
@@ -87,6 +91,20 @@ def review_states(pr: dict[str, Any]) -> list[str]:
         if state:
             states.append(str(state))
     return states
+
+
+def review_author(review: dict[str, Any]) -> str:
+    return user_login(review.get("author") or review.get("user"))
+
+
+def review_commit(review: dict[str, Any]) -> str:
+    for key in ("commitOid", "commitId", "commit_id"):
+        if review.get(key):
+            return str(review.get(key))
+    commit = review.get("commit")
+    if isinstance(commit, dict):
+        return str(commit.get("oid") or commit.get("sha") or "")
+    return str(commit or "")
 
 
 def issue_rows(issues: list[dict[str, Any]]) -> list[str]:
@@ -199,11 +217,129 @@ def reviewer_owned_merges(prs: list[dict[str, Any]], reviewer_login: str) -> boo
     return True
 
 
+def reviewer_approved_merges(prs: list[dict[str, Any]], reviewer_login: str) -> bool:
+    reviewer = reviewer_login.strip()
+    if not reviewer or reviewer.startswith("REPLACE_ME"):
+        return False
+    merged = merged_prs(prs)
+    if not merged:
+        return False
+    for pr in merged:
+        head_sha = str(pr.get("headRefOid") or "")
+        approved = False
+        for review in pr.get("reviews") or []:
+            if not isinstance(review, dict) or str(review.get("state", "")).upper() != "APPROVED":
+                continue
+            commit_sha = review_commit(review)
+            if review_author(review) == reviewer and (not commit_sha or not head_sha or commit_sha == head_sha):
+                approved = True
+                break
+        if not approved:
+            return False
+    return True
+
+
+def branch_protection_requires_build_test_and_review(forge_json: Path) -> bool:
+    for path in newest_prefixed_json(forge_json, "branch-protection"):
+        protection = load_json(path)
+        if not isinstance(protection, dict):
+            continue
+        status_checks = protection.get("required_status_checks") or {}
+        contexts = [str(item) for item in status_checks.get("contexts") or []]
+        for check in status_checks.get("checks") or []:
+            if isinstance(check, dict):
+                contexts.append(str(check.get("context") or check.get("name") or ""))
+        pull_request_reviews = protection.get("required_pull_request_reviews") or {}
+        try:
+            review_count = int(pull_request_reviews.get("required_approving_review_count") or 0)
+        except (TypeError, ValueError):
+            review_count = 0
+        if "build-test" in contexts and review_count >= 1:
+            return True
+    return False
+
+
+def has_build_test_success(value: Any) -> bool:
+    if isinstance(value, dict):
+        names = {str(value.get(key) or "") for key in ("name", "context", "workflowName", "displayTitle", "title")}
+        states = {str(value.get(key) or "").upper() for key in ("conclusion", "status", "state")}
+        if "build-test" in names and "SUCCESS" in states:
+            return True
+        return any(has_build_test_success(child) for child in value.values())
+    if isinstance(value, list):
+        return any(has_build_test_success(child) for child in value)
+    return False
+
+
+def actions_runs(forge_json: Path) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    for path in newest_prefixed_json(forge_json, "actions-runs"):
+        loaded = load_json(path)
+        if isinstance(loaded, list):
+            runs.extend(item for item in loaded if isinstance(item, dict))
+    return runs
+
+
+def action_run_has_build_test_success(run: dict[str, Any], head_sha: str) -> bool:
+    if head_sha and str(run.get("headSha") or "") not in ("", head_sha):
+        return False
+    names = {str(run.get(key) or "") for key in ("workflowName", "displayTitle", "name", "title")}
+    return "build-test" in names and str(run.get("conclusion") or "").upper() == "SUCCESS"
+
+
+def build_test_success_for_merged_prs(prs: list[dict[str, Any]], forge_json: Path) -> bool:
+    merged = merged_prs(prs)
+    if not merged:
+        return False
+    runs = actions_runs(forge_json)
+    for pr in merged:
+        head_sha = str(pr.get("headRefOid") or "")
+        if has_build_test_success(pr.get("statusCheckRollup")):
+            continue
+        if any(action_run_has_build_test_success(run, head_sha) for run in runs):
+            continue
+        return False
+    return True
+
+
+def fresh_clone_verification_present(run_root: Path) -> bool:
+    logs = run_root / "final-verify" / "logs"
+    required_logs = {
+        "npm-ci.log": "npm ci",
+        "npm-test.log": "npm test",
+        "npm-build.log": "npm run build",
+        "npm-e2e.log": "npm run test:e2e",
+    }
+    for name, command in required_logs.items():
+        try:
+            text = (logs / name).read_text()
+        except OSError:
+            return False
+        if command not in text or "TIMEOUT" in text or " failed" in text:
+            return False
+    return True
+
+
 def automated_verdict(
-    issues: list[dict[str, Any]], prs: list[dict[str, Any]], sequencing_evidence: bool, reviewer_login: str
+    issues: list[dict[str, Any]],
+    prs: list[dict[str, Any]],
+    sequencing_evidence: bool,
+    reviewer_login: str,
+    branch_protection_evidence: bool,
+    build_test_evidence: bool,
+    fresh_clone_evidence: bool,
 ) -> str:
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    if required_issue_scenarios_done(issues) and reviewer_owned_merges(prs, reviewer_login) and reworked and sequencing_evidence:
+    reviewer_evidence = reviewer_owned_merges(prs, reviewer_login) and reviewer_approved_merges(prs, reviewer_login)
+    if (
+        required_issue_scenarios_done(issues)
+        and reviewer_evidence
+        and reworked
+        and sequencing_evidence
+        and branch_protection_evidence
+        and build_test_evidence
+        and fresh_clone_evidence
+    ):
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
 
@@ -218,9 +354,22 @@ def asset_bullets(root: Path, glob: str) -> list[str]:
 def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], prs: list[dict[str, Any]]) -> Path:
     reports = args.run_root / "reports"
     reports.mkdir(parents=True, exist_ok=True)
-    sequencing_evidence = dependency_sequencing_evidence_present(args.run_root / "forge-json", issues)
+    forge_json = args.run_root / "forge-json"
+    sequencing_evidence = dependency_sequencing_evidence_present(forge_json, issues)
     reviewer_merge_evidence = reviewer_owned_merges(prs, args.reviewer_login)
-    verdict = automated_verdict(issues, prs, sequencing_evidence, args.reviewer_login)
+    reviewer_approval_evidence = reviewer_approved_merges(prs, args.reviewer_login)
+    branch_protection_evidence = branch_protection_requires_build_test_and_review(forge_json)
+    build_test_evidence = build_test_success_for_merged_prs(prs, forge_json)
+    fresh_clone_evidence = fresh_clone_verification_present(args.run_root)
+    verdict = automated_verdict(
+        issues,
+        prs,
+        sequencing_evidence,
+        args.reviewer_login,
+        branch_protection_evidence,
+        build_test_evidence,
+        fresh_clone_evidence,
+    )
     lines = [
         "# GitHub maker + reviewer-automerge E2E Report",
         "",
@@ -253,6 +402,10 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "",
         f"Dependency sequencing evidence: {'present' if sequencing_evidence else 'missing'}",
         f"Reviewer merge identity evidence: {'matched' if reviewer_merge_evidence else 'missing'}",
+        f"Reviewer approval evidence: {'matched' if reviewer_approval_evidence else 'missing'}",
+        f"Branch protection evidence: {'present' if branch_protection_evidence else 'missing'}",
+        f"Merged PR build-test evidence: {'present' if build_test_evidence else 'missing'}",
+        f"Fresh clone verification evidence: {'present' if fresh_clone_evidence else 'missing'}",
         "",
         "Issues:",
         *issue_rows(issues),

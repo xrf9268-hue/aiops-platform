@@ -76,8 +76,12 @@ Step 1 - find the PR:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
    Stop.
 3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,reviews,statusCheckRollup`.
-4. If `state` is `MERGED` or `mergedAt` is already present, skip to Step 4 and
-   issue Done/close once.
+4. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
+   to Done. First confirm the merged PR head still has a reviewer-owned
+   `APPROVED` review for the current `headRefOid` and a successful `build-test`
+   status/check in `statusCheckRollup`; only then continue to Step 3 PASS item 5.
+   If either proof is missing, comment the missing evidence and stop without
+   changing labels.
 
 Step 2 - review the current head:
 1. Ensure the PR author is not the reviewer login.
@@ -132,5 +136,7 @@ Hard constraints:
 - Do NOT close an issue before GitHub confirms the PR is merged.
 - Do NOT approve an unreviewed new head. If the head changed after your prior
   review, run the rubric again.
+- Do NOT mark Done for an already merged PR unless the merged `headRefOid` still
+  has reviewer-owned approval and successful `build-test` evidence.
 - Do NOT use worker/orchestrator shortcuts, repository admin bypasses, or
   worker-side merge helpers.
