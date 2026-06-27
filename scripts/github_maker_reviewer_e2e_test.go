@@ -439,6 +439,7 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+	writeFakeReviewedHeadEvidence(t, runRoot, "final")
 	writeFileString(t, filepath.Join(runRoot, "screenshots", "github-issues-final.png"), "png")
 	writeFileString(t, filepath.Join(runRoot, "final-verify", "screenshots", "final-app-desktop.png"), "png")
 
@@ -500,6 +501,7 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-done.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "issue3-done")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "issue3-done")
+	writeFakeReviewedHeadEvidence(t, runRoot, "issue3-done")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command(
@@ -553,6 +555,39 @@ func TestGitHubMakerReviewerReportRequiresGovernanceEvidenceForReady(t *testing.
 		if !strings.Contains(report, want) {
 			t.Fatalf("report missing %q\n%s", want, report)
 		}
+	}
+}
+
+func TestGitHubMakerReviewerReportRequiresExplicitReviewedHeadEvidence(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeBranchProtectionEvidence(t, runRoot, "final")
+	writeFakeFinalVerifyLogs(t, runRoot)
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready without reviewed-head evidence\n%s", report)
+	}
+	if !strings.Contains(report, "Reviewer approval evidence: missing") {
+		t.Fatalf("report missing reviewed-head evidence status\n%s", report)
 	}
 }
 
@@ -918,6 +953,19 @@ func writeFakeGitHubGovernanceEvidence(t *testing.T, runRoot string, tag string)
 	t.Helper()
 	writeFakeBranchProtectionEvidence(t, runRoot, tag)
 	writeFakeFinalVerifyLogs(t, runRoot)
+}
+
+func writeFakeReviewedHeadEvidence(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	for number, head := range map[string]string{
+		"5": "1111111111111111111111111111111111111111",
+		"8": "2222222222222222222222222222222222222222",
+		"9": "3333333333333333333333333333333333333333",
+	} {
+		writeFileString(t, filepath.Join(runRoot, "forge-json", "pr-"+number+"-reviews-"+tag+".json"), `[
+  {"state":"APPROVED","user":{"login":"reviewer-bot"},"commit_id":"`+head+`"}
+]`)
+	}
 }
 
 func writeFakeBranchProtectionEvidence(t *testing.T, runRoot string, tag string) {

@@ -62,6 +62,18 @@ def issue_event_candidates(forge_json: Path, issue_number: int | str) -> list[Pa
     return preferred + [path for path in discovered if path not in preferred]
 
 
+def pr_review_candidates(forge_json: Path, pr_number: int | str) -> list[Path]:
+    number = str(pr_number)
+    if not number:
+        return []
+    preferred = [
+        forge_json / f"pr-{number}-reviews-final.json",
+        forge_json / f"final-pr-{number}-reviews.json",
+    ]
+    discovered = newest_json(list(forge_json.glob(f"pr-{number}-reviews-*.json")))
+    return preferred + [path for path in discovered if path not in preferred]
+
+
 def newest_prefixed_json(directory: Path, prefix: str) -> list[Path]:
     return newest_json(list(directory.glob(f"{prefix}-*.json")))
 
@@ -105,6 +117,24 @@ def review_commit(review: dict[str, Any]) -> str:
     if isinstance(commit, dict):
         return str(commit.get("oid") or commit.get("sha") or "")
     return str(commit or "")
+
+
+def append_review_records(records: list[dict[str, Any]], value: Any) -> None:
+    if isinstance(value, list):
+        records.extend(item for item in value if isinstance(item, dict))
+    elif isinstance(value, dict):
+        for key in ("reviews", "nodes"):
+            child = value.get(key)
+            if isinstance(child, list):
+                records.extend(item for item in child if isinstance(item, dict))
+
+
+def review_records(pr: dict[str, Any], forge_json: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    append_review_records(records, pr.get("reviews") or [])
+    for path in pr_review_candidates(forge_json, pr.get("number", "")):
+        append_review_records(records, load_json(path))
+    return records
 
 
 def issue_rows(issues: list[dict[str, Any]]) -> list[str]:
@@ -217,7 +247,7 @@ def reviewer_owned_merges(prs: list[dict[str, Any]], reviewer_login: str) -> boo
     return True
 
 
-def reviewer_approved_merges(prs: list[dict[str, Any]], reviewer_login: str) -> bool:
+def reviewer_approved_merges(prs: list[dict[str, Any]], reviewer_login: str, forge_json: Path) -> bool:
     reviewer = reviewer_login.strip()
     if not reviewer or reviewer.startswith("REPLACE_ME"):
         return False
@@ -226,12 +256,14 @@ def reviewer_approved_merges(prs: list[dict[str, Any]], reviewer_login: str) -> 
         return False
     for pr in merged:
         head_sha = str(pr.get("headRefOid") or "")
+        if not head_sha:
+            return False
         approved = False
-        for review in pr.get("reviews") or []:
+        for review in review_records(pr, forge_json):
             if not isinstance(review, dict) or str(review.get("state", "")).upper() != "APPROVED":
                 continue
             commit_sha = review_commit(review)
-            if review_author(review) == reviewer and (not commit_sha or not head_sha or commit_sha == head_sha):
+            if review_author(review) == reviewer and commit_sha and commit_sha == head_sha:
                 approved = True
                 break
         if not approved:
@@ -324,13 +356,14 @@ def automated_verdict(
     issues: list[dict[str, Any]],
     prs: list[dict[str, Any]],
     sequencing_evidence: bool,
-    reviewer_login: str,
+    reviewer_merge_evidence: bool,
+    reviewer_approval_evidence: bool,
     branch_protection_evidence: bool,
     build_test_evidence: bool,
     fresh_clone_evidence: bool,
 ) -> str:
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    reviewer_evidence = reviewer_owned_merges(prs, reviewer_login) and reviewer_approved_merges(prs, reviewer_login)
+    reviewer_evidence = reviewer_merge_evidence and reviewer_approval_evidence
     if (
         required_issue_scenarios_done(issues)
         and reviewer_evidence
@@ -357,7 +390,7 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
     forge_json = args.run_root / "forge-json"
     sequencing_evidence = dependency_sequencing_evidence_present(forge_json, issues)
     reviewer_merge_evidence = reviewer_owned_merges(prs, args.reviewer_login)
-    reviewer_approval_evidence = reviewer_approved_merges(prs, args.reviewer_login)
+    reviewer_approval_evidence = reviewer_approved_merges(prs, args.reviewer_login, forge_json)
     branch_protection_evidence = branch_protection_requires_build_test_and_review(forge_json)
     build_test_evidence = build_test_success_for_merged_prs(prs, forge_json)
     fresh_clone_evidence = fresh_clone_verification_present(args.run_root)
@@ -365,7 +398,8 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         issues,
         prs,
         sequencing_evidence,
-        args.reviewer_login,
+        reviewer_merge_evidence,
+        reviewer_approval_evidence,
         branch_protection_evidence,
         build_test_evidence,
         fresh_clone_evidence,
@@ -417,7 +451,8 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "",
         "- Required check and branch-protection JSON: `forge-json/branch-protection-*.json`.",
         "- Actions/check summaries: `forge-json/actions-runs-*.json`.",
-        "- PR review/merge actor metadata: `forge-json/prs-*.json` and `forge-json/pr-*-*.json`.",
+        "- PR review/merge actor metadata: `forge-json/prs-*.json`, `forge-json/pr-*-*.json`, and `forge-json/pr-*-reviews-*.json`.",
+        "- Reviewer approvals must include reviewed-head commit evidence matching each merged `headRefOid`.",
         "- Durable GitHub evidence is reviewer approval, required check success, reviewer merge actor, and non-empty `mergedAt`.",
         "",
         "## Rework Evidence",

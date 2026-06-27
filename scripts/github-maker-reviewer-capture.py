@@ -165,6 +165,10 @@ def capture_gh_json(args: argparse.Namespace) -> None:
                     "number,title,state,author,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,autoMergeRequest,mergedAt,mergedBy,reviewDecision,reviews,statusCheckRollup,url,body,createdAt,updatedAt",
                 ).stdout,
             )
+            write_json(
+                out_dir / f"pr-{number}-reviews-{tag}.json",
+                gh(args, "api", f"repos/{repo}/pulls/{number}/reviews?per_page=100").stdout,
+            )
 
     write_json(
         out_dir / f"actions-runs-{tag}.json",
