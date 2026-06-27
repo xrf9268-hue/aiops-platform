@@ -38,7 +38,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -184,7 +184,7 @@ jobs:
       # vulnerable 1.25.10, so the gate failed repo-wide while shipped artifacts
       # stayed on the unpatched floor. Pinning scan == ship via go.mod fixes both.
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
@@ -211,7 +211,7 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref || github.ref }}
       - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: true
