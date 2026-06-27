@@ -104,6 +104,18 @@ api_curl() {
   curl "${args[@]}" "$@"
 }
 
+worker_still_running() {
+  local stat
+  if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+    return 1
+  fi
+  stat="$(ps -o stat= -p "$worker_pid" 2>/dev/null || true)"
+  case "$stat" in
+    *Z*) return 1 ;;
+  esac
+  return 0
+}
+
 state_array_contains_issue() {
   local field="$1"
   local issue_id="$2"
@@ -258,7 +270,7 @@ worker_pid="$!"
 deadline=$(( $(date +%s) + timeout_seconds ))
 ready="false"
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  if ! kill -0 "$worker_pid" >/dev/null 2>&1; then
+  if ! worker_still_running; then
     verify_expected_draft_pr || true
     printf '\n## result\n\nFAIL worker exited before smoke completed\n\n' >>"$report"
     printf 'Worker log: `%s`\n' "$log_file" >>"$report"
@@ -268,8 +280,19 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     ready="true"
     break
   fi
-  sleep 2
+  sleep 1
 done
+
+if [ "$ready" != "true" ]; then
+  if curl -fsS "$dashboard_url/readyz" >/dev/null 2>&1; then
+    ready="true"
+  elif ! worker_still_running; then
+    verify_expected_draft_pr || true
+    printf '\n## result\n\nFAIL worker exited before smoke completed\n\n' >>"$report"
+    printf 'Worker log: `%s`\n' "$log_file" >>"$report"
+    exit 1
+  fi
+fi
 
 if [ "$ready" != "true" ]; then
   verify_expected_draft_pr || true
@@ -288,9 +311,13 @@ fi
 completed_before="0"
 selected_issue_id=""
 selected_observed="false"
-if api_curl "$dashboard_url/api/v1/state" >"$state_file"; then
-  completed_before="$(sed -n 's/.*"completed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
+if ! api_curl "$dashboard_url/api/v1/state" >"$state_file"; then
+  verify_expected_draft_pr || true
+  printf '\n## result\n\nFAIL state request failed.\n\n' >>"$report"
+  printf 'State snapshot: `%s`\nWorker log: `%s`\n' "$state_file" "$log_file" >>"$report"
+  exit 1
 fi
+completed_before="$(sed -n 's/.*"completed_total":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$state_file" | head -1)"
 completed_before="${completed_before:-0}"
 
 while [ "$(date +%s)" -lt "$deadline" ]; do
