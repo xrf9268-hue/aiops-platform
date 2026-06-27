@@ -593,6 +593,40 @@ func TestGitHubMakerReviewerReportRejectsFinalBranchProtectionFailure(t *testing
 	}
 }
 
+func TestGitHubMakerReviewerReportRejectsFailedFreshCloneExitStatus(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+	writeFakeReviewedHeadEvidence(t, runRoot, "final")
+	writeFileString(t, filepath.Join(runRoot, "final-verify", "logs", "npm-e2e.log"), "$ npm run test:e2e\nvitest ended with 1 error\nAIOPS_FINAL_VERIFY_EXIT_STATUS: 1\n")
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready with failed fresh-clone npm gate\n%s", report)
+	}
+	if !strings.Contains(report, "Fresh clone verification evidence: missing") {
+		t.Fatalf("report missing failed fresh-clone status\n%s", report)
+	}
+}
+
 func TestGitHubMakerReviewerReportRequiresExplicitReviewedHeadEvidence(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -952,6 +986,66 @@ func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 	}
 }
 
+func TestGitHubMakerReviewerFinalVerifyRecordsFailedNpmExitStatus(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	mkdirAll(t, fakeBin)
+	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForFinalVerify())
+	writeFileString(t, filepath.Join(fakeBin, "npm"), `#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  ci|test)
+    echo "ok"
+    exit 0
+    ;;
+  run)
+    case "${2:-}" in
+      build)
+        echo "ok"
+        exit 0
+        ;;
+      test:e2e)
+        echo "vitest ended with 1 error"
+        exit 7
+        ;;
+    esac
+    ;;
+esac
+
+echo "unexpected npm args: $*" >&2
+exit 42
+`)
+	for _, name := range []string{"gh", "npm"} {
+		if err := os.Chmod(filepath.Join(fakeBin, name), 0o755); err != nil {
+			t.Fatalf("chmod fake %s: %v", name, err)
+		}
+	}
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-final-verify.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--skip-screenshots",
+	)
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("final verify succeeded; want npm e2e failure\n%s", out)
+	}
+	if !strings.Contains(string(out), "npm run test:e2e failed; see") {
+		t.Fatalf("final verify output missing failed command and log path\n%s", out)
+	}
+	log := readFileString(t, filepath.Join(runRoot, "final-verify", "logs", "npm-e2e.log"))
+	if !strings.Contains(log, "AIOPS_FINAL_VERIFY_EXIT_STATUS: 7") {
+		t.Fatalf("npm log missing exit status marker\n%s", log)
+	}
+}
+
 func fakeGitHubDoneIssuesJSON() string {
 	return `[
   {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
@@ -1024,7 +1118,7 @@ func writeFakeFinalVerifyLogs(t *testing.T, runRoot string) {
 		{"npm-build.log", "npm run build"},
 		{"npm-e2e.log", "npm run test:e2e"},
 	} {
-		writeFileString(t, filepath.Join(logs, tc.name), "$ "+tc.command+"\nok\n")
+		writeFileString(t, filepath.Join(logs, tc.name), "$ "+tc.command+"\nok\nAIOPS_FINAL_VERIFY_EXIT_STATUS: 0\n")
 	}
 }
 

@@ -354,6 +354,13 @@ def build_test_success_for_merged_prs(prs: list[dict[str, Any]], forge_json: Pat
     return True
 
 
+FINAL_VERIFY_EXIT_STATUS_MARKER = "AIOPS_FINAL_VERIFY_EXIT_STATUS"
+
+
+def final_verify_log_succeeded(text: str) -> bool:
+    return any(line.strip() == f"{FINAL_VERIFY_EXIT_STATUS_MARKER}: 0" for line in text.splitlines())
+
+
 def fresh_clone_verification_present(run_root: Path) -> bool:
     logs = run_root / "final-verify" / "logs"
     required_logs = {
@@ -367,7 +374,7 @@ def fresh_clone_verification_present(run_root: Path) -> bool:
             text = (logs / name).read_text()
         except OSError:
             return False
-        if command not in text or "TIMEOUT" in text or " failed" in text:
+        if command not in text or "TIMEOUT" in text or not final_verify_log_succeeded(text):
             return False
     return True
 

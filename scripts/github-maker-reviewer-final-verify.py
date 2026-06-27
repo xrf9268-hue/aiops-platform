@@ -13,6 +13,9 @@ import urllib.request
 from pathlib import Path
 
 
+EXIT_STATUS_MARKER = "AIOPS_FINAL_VERIFY_EXIT_STATUS"
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-root", required=True, type=Path)
@@ -42,7 +45,9 @@ def run_logged(cmd: list[str], cwd: Path, log: Path, env: dict[str, str], timeou
             )
         except subprocess.TimeoutExpired as exc:
             fh.write(f"\nTIMEOUT after {timeout_seconds}s\n")
+            fh.write(f"{EXIT_STATUS_MARKER}: timeout\n")
             raise SystemExit(f"{' '.join(cmd)} timed out after {timeout_seconds}s; see {log}") from exc
+        fh.write(f"\n{EXIT_STATUS_MARKER}: {proc.returncode}\n")
     if proc.returncode != 0:
         raise SystemExit(f"{' '.join(cmd)} failed; see {log}")
 
