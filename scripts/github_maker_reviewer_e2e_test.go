@@ -558,6 +558,41 @@ func TestGitHubMakerReviewerReportRequiresGovernanceEvidenceForReady(t *testing.
 	}
 }
 
+func TestGitHubMakerReviewerReportRejectsFinalBranchProtectionFailure(t *testing.T) {
+	root := repoRoot(t)
+	runRoot := filepath.Join(t.TempDir(), "run")
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeReviewedHeadEvidence(t, runRoot, "final")
+	writeFakeBranchProtectionEvidence(t, runRoot, "initial")
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "branch-protection-final.err"), "branch protection not found\n")
+	writeFakeFinalVerifyLogs(t, runRoot)
+
+	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+	cmd := exec.Command(
+		"python3",
+		script,
+		"--run-root", runRoot,
+		"--repo", "octo-org/octo-todo",
+		"--reviewer-login", "reviewer-bot",
+		"--date", "2026-06-26",
+	)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("report failed: %v\n%s", err, out)
+	}
+	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
+		t.Fatalf("report marked ready with stale initial branch protection\n%s", report)
+	}
+	if !strings.Contains(report, "Branch protection evidence: missing") {
+		t.Fatalf("report missing final branch protection failure status\n%s", report)
+	}
+}
+
 func TestGitHubMakerReviewerReportRequiresExplicitReviewedHeadEvidence(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")

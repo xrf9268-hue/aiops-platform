@@ -78,6 +78,26 @@ def newest_prefixed_json(directory: Path, prefix: str) -> list[Path]:
     return newest_json(list(directory.glob(f"{prefix}-*.json")))
 
 
+def latest_branch_protection_artifact(forge_json: Path) -> Path | None:
+    final_err = forge_json / "branch-protection-final.err"
+    if final_err.exists():
+        return None
+    final_json = forge_json / "branch-protection-final.json"
+    if final_json.exists():
+        return final_json
+    artifacts = [
+        path
+        for path in forge_json.glob("branch-protection-*")
+        if path.suffix in (".err", ".json")
+    ]
+    for path in sorted(artifacts, key=lambda item: item.stat().st_mtime, reverse=True):
+        if path.suffix == ".err":
+            return None
+        if path.suffix == ".json":
+            return path
+    return None
+
+
 def label_names(issue: dict[str, Any]) -> list[str]:
     names: list[str] = []
     for label in issue.get("labels") or []:
@@ -272,23 +292,23 @@ def reviewer_approved_merges(prs: list[dict[str, Any]], reviewer_login: str, for
 
 
 def branch_protection_requires_build_test_and_review(forge_json: Path) -> bool:
-    for path in newest_prefixed_json(forge_json, "branch-protection"):
-        protection = load_json(path)
-        if not isinstance(protection, dict):
-            continue
-        status_checks = protection.get("required_status_checks") or {}
-        contexts = [str(item) for item in status_checks.get("contexts") or []]
-        for check in status_checks.get("checks") or []:
-            if isinstance(check, dict):
-                contexts.append(str(check.get("context") or check.get("name") or ""))
-        pull_request_reviews = protection.get("required_pull_request_reviews") or {}
-        try:
-            review_count = int(pull_request_reviews.get("required_approving_review_count") or 0)
-        except (TypeError, ValueError):
-            review_count = 0
-        if "build-test" in contexts and review_count >= 1:
-            return True
-    return False
+    path = latest_branch_protection_artifact(forge_json)
+    if not path:
+        return False
+    protection = load_json(path)
+    if not isinstance(protection, dict):
+        return False
+    status_checks = protection.get("required_status_checks") or {}
+    contexts = [str(item) for item in status_checks.get("contexts") or []]
+    for check in status_checks.get("checks") or []:
+        if isinstance(check, dict):
+            contexts.append(str(check.get("context") or check.get("name") or ""))
+    pull_request_reviews = protection.get("required_pull_request_reviews") or {}
+    try:
+        review_count = int(pull_request_reviews.get("required_approving_review_count") or 0)
+    except (TypeError, ValueError):
+        review_count = 0
+    return "build-test" in contexts and review_count >= 1
 
 
 def has_build_test_success(value: Any) -> bool:
