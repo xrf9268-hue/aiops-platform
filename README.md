@@ -546,6 +546,7 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [Trace harness proposal follow-through](docs/runbooks/trace-harness-follow-through.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
 - [GitHub local automation](docs/runbooks/github-local-automation.md)
+- [GitHub maker/reviewer auto-merge E2E](docs/runbooks/github-maker-reviewer-automerge-e2e.md)
 - [Gitea bot and branch protection](docs/runbooks/gitea-bot-and-branch-protection.md)
 - [Local Gitea Web Todo lifecycle E2E](docs/runbooks/local-gitea-webtodo-lifecycle-e2e.md)
 - [Local Gitea Crowd Runner product lifecycle E2E](docs/runbooks/local-gitea-crowdrunner-lifecycle-e2e.md)
