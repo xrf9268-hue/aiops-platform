@@ -1,6 +1,6 @@
 # aiops-platform
 
-![aiops-platform — issues in, agents working in isolated Git workspaces, pull-requests out](docs/assets/aiops-platform-hero.png)
+![aiops-platform — issues in, agents working in isolated Git workspaces, pull-requests out](docs/assets/aiops-platform-hero-v4.png)
 
 A personal-productivity AI coding orchestrator: a single Go worker that watches
 a tracker (Linear, Gitea, or GitHub), turns eligible issues into deterministic
