@@ -141,8 +141,10 @@ describe('Worker status dashboard', () => {
     expect(modelCell).toBeTruthy();
     expect(modelCell.textContent).toContain('gpt-5.3-codex-spark');
     expect(modelCell.textContent).toContain('codex-app-server'); // provider sub-line
-    // worker default provider in the title meta (the model is resolved per-run).
-    expect(screen.getByText('codex-app-server · model unknown')).toBeTruthy();
+    // worker default provider in the title meta; model is resolved per-run.
+    const titleMeta = container.querySelector('.title-meta');
+    expect(titleMeta.textContent).toContain('default agentcodex-app-server');
+    expect(titleMeta.textContent).not.toContain('model unknown');
   });
 
   it('renders a missing agent model as "unknown", never blank', async () => {
