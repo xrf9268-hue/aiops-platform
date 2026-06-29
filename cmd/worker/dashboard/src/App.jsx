@@ -305,8 +305,8 @@ const IssueLink = ({ row }) => (
 function RunningTable({ rows }) {
   if (!rows.length) return <Empty title="No active sessions" sub="The worker is polling and idle — nothing is running right now." />;
   return (
-    <div className="table-wrap">
-      <table className="sessions">
+    <div className="table-wrap running-table-wrap">
+      <table className="sessions running-sessions">
         <caption className="sr-only">Running sessions</caption>
         <thead><tr>
           <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Model</th><th scope="col">Runtime</th>
@@ -514,7 +514,7 @@ export default function App() {
   const total = (c.running || 0) + (c.retrying || 0) + (c.blocked || 0);
   const pollSec = Math.round((s.poll_interval_ms || 0) / 1000);
   // Worker default runtime/provider (agent.default). The model is resolved
-  // per-run by the agent, so the worker-level default model is unknown (#977).
+  // per-run by the agent and rendered in the Running table.
   const agentDefault = s.agent_default || 'unknown';
   const maxConc = s.max_concurrent_agents ?? '—';
   const byState = s.max_concurrent_agents_by_state;
@@ -560,7 +560,7 @@ export default function App() {
         <div className="title-meta">
           <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
           <div className="row"><span>concurrency</span><b>{maxConc} max{byStateStr}</b></div>
-          <div className="row"><span>default agent</span><b>{agentDefault} · model unknown</b></div>
+          <div className="row"><span>default agent</span><b>{agentDefault}</b></div>
         </div>
       </div>
 

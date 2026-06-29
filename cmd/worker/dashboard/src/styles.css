@@ -269,9 +269,10 @@ a { color:inherit; text-decoration:none; }
 .page-title em { font-style:italic; color:var(--accent-text); font-weight:500; }
 .page-sub { color:var(--ink-mute); font-family:var(--font-prose); font-size:14px; margin-top:6px; max-width:62ch; }
 .page-sub b { color:var(--ink-soft); font-weight:600; }
-.title-meta { text-align:right; display:flex; flex-direction:column; gap:3px; flex-shrink:0; }
-.title-meta .row { display:flex; gap:7px; justify-content:flex-end; color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.title-meta { text-align:right; display:flex; flex-direction:column; gap:3px; flex:1 1 280px; max-width:100%; }
+.title-meta .row { display:flex; flex-wrap:wrap; gap:0 7px; justify-content:flex-end; color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; }
 .title-meta b { color:var(--ink-soft); font-weight:500; }
+.title-meta, .title-meta .row, .title-meta b { min-width:0; overflow-wrap:anywhere; }
 
 /* ─── KPI strip ────────────────────────────────────────────── */
 .kpi-row { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--gap); margin-bottom:var(--gap); }
@@ -317,10 +318,10 @@ a { color:inherit; text-decoration:none; }
   box-shadow:0 1px 0 var(--edge) inset, 0 1px 2px var(--shadow);
   padding:var(--panel-pad); margin-bottom:var(--gap);
 }
-.panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; }
+.panel-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:11px; min-width:0; }
 .panel-title { display:flex; align-items:center; gap:9px; font-size:13px; font-weight:600; white-space:nowrap; }
 .accent-stroke { width:13px; height:2px; border-radius:2px; background:var(--accent); flex-shrink:0; }
-.panel-meta { color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; white-space:nowrap; }
+.panel-meta { color:var(--ink-mute); font-family:var(--font-mono); font-size:11.5px; text-align:right; min-width:0; overflow-wrap:anywhere; }
 .panel-meta b { color:var(--ink-soft); font-weight:500; }
 
 /* ─── Rate limits ──────────────────────────────────────────── */
@@ -338,7 +339,7 @@ a { color:inherit; text-decoration:none; }
 .rate-bar i.bad  { background:var(--danger); }
 .rate-meta { color:var(--ink-mute); font-size:10.5px; font-family:var(--font-mono); margin-top:6px; }
 /* raw-JSON fallback when the runner reports an unrecognized rate-limit shape */
-.rate-raw { overflow:auto; margin:0; border-radius:var(--radius-md); padding:11px 12px;
+.rate-raw { overflow:auto; overflow-x:hidden; white-space:pre-wrap; overflow-wrap:anywhere; margin:0; border-radius:var(--radius-md); padding:11px 12px;
   background:var(--inset); border:1px solid var(--hairline-2);
   font-family:var(--font-mono); font-size:11.5px; line-height:1.5; color:var(--ink-soft); }
 
@@ -353,7 +354,7 @@ table.sessions th.r, table.sessions td.r { text-align:right; }
 table.sessions td { padding:var(--row-pad); padding-left:0; padding-right:12px; border-bottom:1px solid var(--hairline-2); vertical-align:top; }
 table.sessions tr:last-child td { border-bottom:0; }
 .issue { display:flex; flex-direction:column; gap:1px; }
-.issue-id { font-family:var(--font-mono); font-size:11.5px; font-weight:500; color:var(--accent-text); }
+.issue-id { font-family:var(--font-mono); font-size:11.5px; font-weight:500; color:var(--accent-text); overflow-wrap:anywhere; }
 .issue-title { color:var(--ink-soft); font-size:12px; max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .wp { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-mute); margin-top:1px; }
 .sess-id { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); }
@@ -414,18 +415,20 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
    inset card. The window count carries the serif-numeric treatment used by the
    KPIs/meta so it reads as the value; the lifetime total stays dim. Collapses
    to flex-wrap on phones so nothing overflows the narrow viewport. */
-.rollup-grid { display:grid; grid-template-columns:auto auto 1fr; gap:8px var(--gap); }
+.rollup-grid { display:grid; grid-template-columns:auto auto minmax(0,1fr); gap:8px var(--gap); min-width:0; }
 .rollup-cell {
   display:grid; grid-template-columns:subgrid; grid-column:1 / -1; align-items:center;
   background:var(--inset); border:1px solid var(--hairline-2);
   border-radius:var(--radius-md); padding:8px 12px;
   position:relative; /* containing block for the absolutely-positioned sr-only span */
+  min-width:0;
 }
-.rollup-k { display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:600; letter-spacing:.01em; color:var(--ink-soft); white-space:nowrap; }
-.rollup-v { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); white-space:nowrap; }
+.rollup-k { display:flex; align-items:center; gap:7px; font-size:11.5px; font-weight:600; letter-spacing:.01em; color:var(--ink-soft); min-width:0; overflow-wrap:anywhere; }
+.rollup-v { font-family:var(--font-mono); font-size:11px; color:var(--ink-mute); min-width:0; overflow-wrap:anywhere; }
 .rollup-v b { font-family:var(--font-num); font-size:17px; font-weight:600; color:var(--ink); margin-right:2px; font-variant-numeric:tabular-nums; }
 .rollup-v .tot { color:var(--ink-faint); margin-left:5px; }
-.rollup-ids { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+.rollup-ids { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; min-width:0; }
+.rollup-ids .tier-badge { max-width:100%; min-width:0; white-space:normal; overflow-wrap:anywhere; }
 @media (max-width:640px) {
   .rollup-grid { display:flex; flex-direction:column; }
   .rollup-cell { display:flex; flex-wrap:wrap; gap:6px 9px; grid-column:auto; }
@@ -452,6 +455,33 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
 .body-grid table.sessions { min-width:0; }
 @media (max-width:980px) { .body-grid { grid-template-columns:1fr; } }
 
+/* Running can carry very long workflow/workspace/session identifiers while it
+   is squeezed into the wider column beside Rate limits. Use a fixed table
+   layout plus breakable diagnostic text so those identifiers wrap inside their
+   cells instead of creating an inner horizontal scrollbar. */
+@media (min-width:641px) {
+  .body-main .running-table-wrap { overflow:hidden; }
+  .body-main table.running-sessions { table-layout:fixed; width:100%; }
+  .body-main table.running-sessions th:nth-child(1) { width:37%; }
+  .body-main table.running-sessions th:nth-child(2) { width:18%; }
+  .body-main table.running-sessions th:nth-child(3) { width:13%; }
+  .body-main table.running-sessions th:nth-child(4) { width:8%; }
+  .body-main table.running-sessions th:nth-child(5) { width:14%; }
+  .body-main table.running-sessions th:nth-child(6) { width:10%; }
+  .body-main table.running-sessions .wp,
+  .body-main table.running-sessions .upd,
+  .body-main table.running-sessions .issue-id,
+  .body-main table.running-sessions .mono,
+  .body-main table.running-sessions .dim { overflow-wrap:anywhere; }
+  .body-main table.running-sessions .badge {
+    max-width:100%; height:auto; min-height:21px; line-height:1.15;
+    white-space:normal; overflow-wrap:anywhere; overflow:hidden;
+  }
+  .body-main table.running-sessions th.tok-h { white-space:normal; line-height:1.15; }
+  .body-main table.running-sessions th.tok-h .th-sub { display:block; }
+  .body-main table.running-sessions td.tok { white-space:nowrap; }
+}
+
 /* Retrying/Blocked tables in the main column: each fits its panel comfortably
    (the long error/detail cells wrap). Clip the wrap so the per-second retry
    countdown re-render can't flash a transient horizontal scrollbar. To keep
@@ -461,7 +491,19 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
    (≤640px the global card rule restores stacked layout.) */
 @media (min-width:641px) {
   .body-main .table-wrap.narrow { overflow:hidden; }
-  .body-main .table-wrap.narrow .wp, .body-main .table-wrap.narrow .upd { overflow-wrap:anywhere; }
+  .body-main .table-wrap.narrow table.sessions { table-layout:fixed; width:100%; }
+  .body-main .table-wrap.narrow table.sessions th:nth-child(1) { width:36%; }
+  .body-main .table-wrap.narrow table.sessions th:nth-child(2) { width:18%; }
+  .body-main .table-wrap.narrow table.sessions th:nth-child(3) { width:16%; }
+  .body-main .table-wrap.narrow table.sessions th:nth-child(4) { width:30%; }
+  .body-main .table-wrap.narrow .wp,
+  .body-main .table-wrap.narrow .upd,
+  .body-main .table-wrap.narrow .issue-id,
+  .body-main .table-wrap.narrow .dim { overflow-wrap:anywhere; }
+  .body-main .table-wrap.narrow .badge {
+    max-width:100%; height:auto; min-height:21px; line-height:1.15;
+    white-space:normal; overflow-wrap:anywhere; overflow:hidden;
+  }
 }
 
 /* ─── Responsive ───────────────────────────────────────────── */
@@ -501,7 +543,9 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
   table.sessions td {
     display:flex; justify-content:space-between; align-items:baseline; gap:14px;
     padding:6px 0; border-bottom:1px dashed var(--hairline-2); text-align:right;
+    min-width:0; overflow-wrap:anywhere;
   }
+  table.sessions td > * { min-width:0; overflow-wrap:anywhere; }
   table.sessions td:last-child { border-bottom:0; padding-bottom:0; }
   table.sessions td[data-label]::before {
     content:attr(data-label); flex:0 0 auto; text-align:left;
@@ -513,8 +557,10 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
     display:block; text-align:left; padding-top:0;
     border-bottom:1px solid var(--hairline); margin-bottom:3px; padding-bottom:8px;
   }
+  .issue { min-width:0; }
   .issue-title { white-space:normal; max-width:none; }
   .upd { -webkit-line-clamp:unset; max-width:none; text-align:right; }
+  .badge { height:auto; min-height:21px; line-height:1.15; white-space:normal; overflow-wrap:anywhere; }
   table.sessions td.tok { text-align:right; }
 }
 

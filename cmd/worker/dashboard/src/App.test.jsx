@@ -141,8 +141,10 @@ describe('Worker status dashboard', () => {
     expect(modelCell).toBeTruthy();
     expect(modelCell.textContent).toContain('gpt-5.3-codex-spark');
     expect(modelCell.textContent).toContain('codex-app-server'); // provider sub-line
-    // worker default provider in the title meta (the model is resolved per-run).
-    expect(screen.getByText('codex-app-server · model unknown')).toBeTruthy();
+    // worker default provider in the title meta; model is resolved per-run.
+    const titleMeta = container.querySelector('.title-meta');
+    expect(titleMeta.textContent).toContain('default agentcodex-app-server');
+    expect(titleMeta.textContent).not.toContain('model unknown');
   });
 
   it('renders a missing agent model as "unknown", never blank', async () => {
@@ -327,6 +329,17 @@ describe('Worker status dashboard', () => {
     expect(tokHeader).not.toBeNull();
     expect(tokHeader.textContent).toBe('Tokens in / out');
     expect(tokHeader.querySelector('.th-sub').textContent).toBe(' in / out');
+  });
+
+  it('marks the Running table with overflow-safe layout hooks', async () => {
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-614' });
+
+    const runningPanel = [...container.querySelectorAll('.body-main .panel')]
+      .find((panel) => panel.querySelector('.panel-title')?.textContent.includes('Running'));
+    expect(runningPanel).toBeTruthy();
+    expect(runningPanel.querySelector('.running-table-wrap')).not.toBeNull();
+    expect(runningPanel.querySelector('table.running-sessions')).not.toBeNull();
   });
 
   it('keeps reconcile-stopped details in the roll-up under the delivered KPI', async () => {
