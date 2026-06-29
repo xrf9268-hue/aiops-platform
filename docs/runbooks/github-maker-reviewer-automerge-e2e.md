@@ -3,7 +3,10 @@
 This runbook validates the production-governance shape for GitHub: a maker
 worker implements issues and opens PRs, a separate reviewer worker independently
 reviews those PRs, GitHub branch protection gates the merge, and the reviewer
-marks issues Done/closed only after GitHub reports the PR merged.
+marks issues Done/closed only after GitHub reports the PR merged. For the short
+operator setup checklist, read
+[`github-maker-reviewer-governance.md`](github-maker-reviewer-governance.md)
+first.
 
 This is a release-validation and governance test, not a CI check. It spends real
 Codex quota, needs real GitHub accounts, and should run in a disposable

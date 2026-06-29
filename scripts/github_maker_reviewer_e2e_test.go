@@ -58,6 +58,48 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 	})
 }
 
+func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testing.T) {
+	root := repoRoot(t)
+	readme := readFileString(t, filepath.Join(root, "README.md"))
+	guidePath := "docs/runbooks/github-maker-reviewer-governance.md"
+	if !strings.Contains(readme, guidePath) {
+		t.Fatalf("README does not link the GitHub maker/reviewer governance guide")
+	}
+
+	body := readFileString(t, filepath.Join(root, "docs", "runbooks", "github-maker-reviewer-governance.md"))
+	for _, want := range []string{
+		"distinct GitHub identities",
+		"distinct `GH_CONFIG_DIR`",
+		"env -u GH_TOKEN -u GITHUB_TOKEN",
+		"distinct maker and reviewer `workspace.root`",
+		"distinct maker and reviewer `AIOPS_MIRROR_ROOT`",
+		"`AIOPS_EXPECTED_GITHUB_LOGIN`",
+		"`aiops:todo`",
+		"`aiops:rework`",
+		"`aiops:human-review`",
+		"`aiops:done`",
+		"`aiops:canceled`",
+		"branch protection",
+		"required status check",
+		"required approving review",
+		"GitHub native auto-merge",
+		"Evidence checklist",
+		"Failure recovery",
+		"Worker/orchestrator boundary",
+		"do not create PRs, approve PRs, merge PRs, close issues",
+		"examples/github-maker-WORKFLOW.md",
+		"examples/github-reviewer-automerge-WORKFLOW.md",
+		"docs/runbooks/github-maker-reviewer-automerge-e2e.md",
+		"scripts/github-maker-reviewer-release-preflight.sh",
+		"scripts/github-maker-reviewer-capture.py",
+		"scripts/github-maker-reviewer-report.py",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("governance guide missing %q", want)
+		}
+	}
+}
+
 func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 	root := repoRoot(t)
 	t.Setenv("GITHUB_TOKEN", "github-token")
