@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.10...v0.1.11) (2026-06-29)
+
+
+### Bug Fixes
+
+* prevent dashboard running table overflow ([#1019](https://github.com/xrf9268-hue/aiops-platform/issues/1019)) ([039ef7d](https://github.com/xrf9268-hue/aiops-platform/commit/039ef7d7918cd3543772c64d697a8ef52b83ad6c))
+
 ## [0.1.10](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.9...v0.1.10) (2026-06-26)
 
 
