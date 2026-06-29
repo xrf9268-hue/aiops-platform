@@ -329,6 +329,17 @@ describe('Worker status dashboard', () => {
     expect(tokHeader.querySelector('.th-sub').textContent).toBe(' in / out');
   });
 
+  it('marks the Running table with overflow-safe layout hooks', async () => {
+    const { container } = render(<App />);
+    await screen.findByRole('link', { name: 'MT-614' });
+
+    const runningPanel = [...container.querySelectorAll('.body-main .panel')]
+      .find((panel) => panel.querySelector('.panel-title')?.textContent.includes('Running'));
+    expect(runningPanel).toBeTruthy();
+    expect(runningPanel.querySelector('.running-table-wrap')).not.toBeNull();
+    expect(runningPanel.querySelector('table.running-sessions')).not.toBeNull();
+  });
+
   it('keeps reconcile-stopped details in the roll-up under the delivered KPI', async () => {
     render(<App />);
     const rollup = (await screen.findByText('Reconcile roll-up')).closest('.panel');

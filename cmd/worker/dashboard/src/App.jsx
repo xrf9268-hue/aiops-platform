@@ -305,8 +305,8 @@ const IssueLink = ({ row }) => (
 function RunningTable({ rows }) {
   if (!rows.length) return <Empty title="No active sessions" sub="The worker is polling and idle — nothing is running right now." />;
   return (
-    <div className="table-wrap">
-      <table className="sessions">
+    <div className="table-wrap running-table-wrap">
+      <table className="sessions running-sessions">
         <caption className="sr-only">Running sessions</caption>
         <thead><tr>
           <th scope="col">Issue</th><th scope="col">State</th><th scope="col">Model</th><th scope="col">Runtime</th>

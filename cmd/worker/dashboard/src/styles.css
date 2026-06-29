@@ -452,6 +452,29 @@ table.sessions th.tok-h .th-sub { font-weight:400; color:var(--ink-faint); lette
 .body-grid table.sessions { min-width:0; }
 @media (max-width:980px) { .body-grid { grid-template-columns:1fr; } }
 
+/* Running can carry very long workflow/workspace/session identifiers while it
+   is squeezed into the wider column beside Rate limits. Use a fixed table
+   layout plus breakable diagnostic text so those identifiers wrap inside their
+   cells instead of creating an inner horizontal scrollbar. */
+@media (min-width:641px) {
+  .body-main .running-table-wrap { overflow:hidden; }
+  .body-main table.running-sessions { table-layout:fixed; width:100%; }
+  .body-main table.running-sessions th:nth-child(1) { width:37%; }
+  .body-main table.running-sessions th:nth-child(2) { width:18%; }
+  .body-main table.running-sessions th:nth-child(3) { width:13%; }
+  .body-main table.running-sessions th:nth-child(4) { width:8%; }
+  .body-main table.running-sessions th:nth-child(5) { width:14%; }
+  .body-main table.running-sessions th:nth-child(6) { width:10%; }
+  .body-main table.running-sessions .wp,
+  .body-main table.running-sessions .upd,
+  .body-main table.running-sessions .mono,
+  .body-main table.running-sessions .dim { overflow-wrap:anywhere; }
+  .body-main table.running-sessions .badge { max-width:100%; overflow:hidden; }
+  .body-main table.running-sessions th.tok-h { white-space:normal; line-height:1.15; }
+  .body-main table.running-sessions th.tok-h .th-sub { display:block; }
+  .body-main table.running-sessions td.tok { white-space:nowrap; }
+}
+
 /* Retrying/Blocked tables in the main column: each fits its panel comfortably
    (the long error/detail cells wrap). Clip the wrap so the per-second retry
    countdown re-render can't flash a transient horizontal scrollbar. To keep
