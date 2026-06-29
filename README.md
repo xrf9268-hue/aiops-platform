@@ -30,6 +30,61 @@ The goal is a practical loop, not a heavy enterprise platform: run `cmd/worker`
 as a Go-based, Gitea-friendly, locally customizable Symphony while the open
 items in [`DEVIATIONS.md`](DEVIATIONS.md) are closed systematically.
 
+## Choosing aiops-platform vs native agent loops
+
+`aiops-platform` is a local, tracker-first
+issue-to-workspace-to-agent-to-PR runtime. Claude Code dynamic workflows,
+Claude Code `/goal`, and Codex Goal mode are session/thread-local agent
+capabilities: useful around a current interactive run, but not substitutes for
+a daemon that polls tracker state, prepares deterministic workspaces, records
+state, and hands PR work back through repo-owned workflow prompts plus
+agent-owned tools.
+
+Sources checked: 2026-06-29:
+[Claude Code dynamic workflows](https://code.claude.com/docs/en/workflows),
+[Claude Code `/goal`](https://code.claude.com/docs/en/goal),
+[Codex Goal mode](https://developers.openai.com/codex/prompting#goal-mode),
+[Codex app `/goal`](https://developers.openai.com/codex/app/commands#set-or-manage-a-goal-with-goal),
+and
+[Codex CLI `/goal`](https://developers.openai.com/codex/cli/slash-commands#set-or-view-a-task-goal-with-goal).
+
+| Surface | Best fit | Lifetime and state | Not a replacement for |
+| --- | --- | --- | --- |
+| aiops-platform | Tracker-backed issue queues that should become isolated agent runs and PR handoffs | Local worker process, in-memory Symphony runtime state, deterministic Git workspaces, tracker polling, state API/dashboard | Session-local planning, ad hoc research fan-out, or a generic workflow engine |
+| Claude Code dynamic workflows | One-off audits, large migrations, cross-checked research, and manual decomposition where Claude writes and reruns a workflow script | Current Claude Code session and its generated workflow script | Worker plugin, runner mode, platform integration target, tracker poller, or PR lifecycle runtime |
+| Claude Code `/goal` | Keeping a current Claude session working across turns until a completion condition is met | Current Claude Code session | External tracker reconciliation, workspace allocation, state API, or issue-to-PR service |
+| Codex Goal mode | Giving a current Codex thread/task a persistent objective and completion criteria | Current Codex thread/task | Cross-issue scheduler, worker-owned queue, or platform-level approval/merge loop |
+
+Use aiops-platform when:
+
+- A Linear, Gitea, or GitHub queue should be polled continuously and each
+  eligible issue needs an isolated workspace/run.
+- The important unit is an external issue moving toward a branch/PR handoff,
+  not a single chat session's current task.
+- Operators need restart reconciliation, per-task state, and a dashboard/API
+  showing what the worker is doing.
+- The repeatable behavior belongs in repo-owned `WORKFLOW.md` prompts and
+  agent-side tools, so every issue gets the same harness.
+
+Prefer native workflow/goal mechanisms when:
+
+- You need a one-off codebase audit, research pass, migration sketch, or
+  decomposition before deciding what issues to file.
+- Claude dynamic workflows can be useful manual research and decomposition tools
+  for parallel checks inside the current Claude Code session.
+- Claude Code `/goal` or Codex Goal mode can keep the current session/thread
+  focused on one bounded objective with clear completion criteria.
+- A human wants interactive steering instead of daemonized tracker polling,
+  deterministic workspace setup, and PR handoff.
+
+Boundary: dynamic workflows can be useful manual research and decomposition
+tools, but they are not a worker plugin, runner mode, or platform integration
+target. Do not integrate Claude Code dynamic workflows into the worker. Do not
+add a custom worker-owned goal loop, goal-aware runner, or goal evaluator. Do
+not add worker-owned push, PR, merge, approval, or tracker-write operations. Do
+not add metrics taxonomy, pair-aware preflight, distributed state, or queue
+changes here.
+
 ## License
 
 aiops-platform is licensed under the [Apache License 2.0](LICENSE).
