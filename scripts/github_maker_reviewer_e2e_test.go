@@ -29,6 +29,10 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"It does **not** pass `GITHUB_TOKEN`",
 		"required job named `build-test`",
 		"required_approving_review_count",
+		"aiops:blocked",
+		"Blocked handoff commands remove the role's active label",
+		"rework cycle budget",
+		"current-head unresolved non-outdated review threads",
 		"worker --doctor --deploy=binary --mode=real",
 		"If `gh release view`, checksum, attestation",
 		"git push --dry-run",
@@ -77,8 +81,14 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"`aiops:todo`",
 		"`aiops:rework`",
 		"`aiops:human-review`",
+		"`aiops:blocked`",
+		"remove that role's active labels",
 		"`aiops:done`",
 		"`aiops:canceled`",
+		"`Rework response:`",
+		"current-head unresolved non-outdated review threads",
+		"rework cycle budget",
+		"usage-limit",
 		"branch protection",
 		"required status check",
 		"required approving review",
@@ -106,34 +116,45 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 	t.Setenv("AIOPS_GITHUB_REPO_CLONE_URL", "https://github.com/octo-org/octo-todo.git")
 
 	for _, tc := range []struct {
-		path           string
-		active         []string
-		inactive       []string
-		maxTurns       int
-		maxContTurns   int
-		mustContain    []string
-		mustNotContain []string
+		path            string
+		active          []string
+		inactive        []string
+		maxTurns        int
+		maxContTurns    int
+		maxClaimTokens  int64
+		maxClaimSeconds int64
+		mustContain     []string
+		mustNotContain  []string
 	}{
 		{
-			path:     "examples/github-maker-WORKFLOW.md",
-			active:   []string{"aiops:todo", "aiops:rework"},
-			inactive: []string{"aiops:human-review", "aiops:done", "aiops:canceled"},
-			maxTurns: 30,
+			path:            "examples/github-maker-WORKFLOW.md",
+			active:          []string{"aiops:todo", "aiops:rework"},
+			inactive:        []string{"aiops:human-review", "aiops:blocked", "aiops:done", "aiops:canceled"},
+			maxTurns:        30,
+			maxClaimTokens:  20000000,
+			maxClaimSeconds: 7200,
 			mustContain: []string{
 				"Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or",
 				"PR title and body must reference the issue with `Refs #<N>` only",
 				"open-PR claim filter scans the PR title and body",
-				"`Rework response:`",
+				"issue comment that starts with `Rework response:`",
+				"current-head unresolved non-outdated review threads",
+				"max rework cycle budget",
+				"aiops:blocked",
+				"gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked",
+				"Codex reports a usage-limit result",
 				"LAST action",
 			},
 			mustNotContain: []string{"gitea_issue_labels"},
 		},
 		{
-			path:         "examples/github-reviewer-automerge-WORKFLOW.md",
-			active:       []string{"aiops:human-review"},
-			inactive:     []string{"aiops:todo", "aiops:rework", "aiops:done", "aiops:canceled"},
-			maxTurns:     18,
-			maxContTurns: 48,
+			path:            "examples/github-reviewer-automerge-WORKFLOW.md",
+			active:          []string{"aiops:human-review"},
+			inactive:        []string{"aiops:todo", "aiops:rework", "aiops:blocked", "aiops:done", "aiops:canceled"},
+			maxTurns:        18,
+			maxContTurns:    48,
+			maxClaimTokens:  12000000,
+			maxClaimSeconds: 7200,
 			mustContain: []string{
 				"gh pr review <PR> --approve",
 				"gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>",
@@ -145,6 +166,12 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"reviewer-owned\n   `APPROVED` review",
 				"successful `build-test`",
 				"retry-safe",
+				"current-head unresolved non-outdated review threads",
+				"all current-head blocker",
+				"max rework cycle budget",
+				"aiops:blocked",
+				"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked",
+				"Codex usage-limit",
 				"Do not leave an open issue labeled",
 			},
 			mustNotContain: []string{"gitea_issue_labels", "--json merged,"},
@@ -173,6 +200,12 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		}
 		if tc.maxContTurns > 0 && cfg.Agent.MaxContinuationTurns != tc.maxContTurns {
 			t.Fatalf("%s max_continuation_turns = %d; want %d", tc.path, cfg.Agent.MaxContinuationTurns, tc.maxContTurns)
+		}
+		if cfg.Agent.MaxTokensPerClaim != tc.maxClaimTokens {
+			t.Fatalf("%s max_tokens_per_claim = %d; want %d", tc.path, cfg.Agent.MaxTokensPerClaim, tc.maxClaimTokens)
+		}
+		if cfg.Agent.MaxRuntimeSecondsPerClaim != tc.maxClaimSeconds {
+			t.Fatalf("%s max_runtime_seconds_per_claim = %d; want %d", tc.path, cfg.Agent.MaxRuntimeSecondsPerClaim, tc.maxClaimSeconds)
 		}
 		if cfg.Codex.ReadTimeoutMs != 30000 {
 			t.Fatalf("%s codex.read_timeout_ms = %d; want 30000", tc.path, cfg.Codex.ReadTimeoutMs)

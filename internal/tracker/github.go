@@ -39,6 +39,7 @@ type GitHubClient struct {
 
 	paginationCapHits atomic.Int64
 	issueNumbers      sync.Map // map[string]int — global issue ID → repo issue number, populated by listing
+	issueMetadata     sync.Map // map[string]githubIssueMetadata — global issue ID → body/node metadata for blocker hydration
 }
 
 // defaultGitHubRequestTimeout bounds a single GitHub REST request when
@@ -57,6 +58,7 @@ func (c *GitHubClient) requestTimeout() time.Duration {
 
 type githubIssue struct {
 	ID          int64              `json:"id"`
+	NodeID      string             `json:"node_id"`
 	Number      int                `json:"number"`
 	Title       string             `json:"title"`
 	Body        string             `json:"body"`
@@ -66,6 +68,12 @@ type githubIssue struct {
 	UpdatedAt   string             `json:"updated_at"`
 	Labels      []githubLabel      `json:"labels"`
 	PullRequest *githubPullRequest `json:"pull_request,omitempty"`
+}
+
+type githubIssueMetadata struct {
+	NodeID string
+	Number int
+	Body   string
 }
 
 type githubLabel struct {

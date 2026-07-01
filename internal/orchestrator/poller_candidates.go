@@ -228,10 +228,15 @@ func issueHasRequiredCandidateFields(issue tracker.Issue) bool {
 }
 
 func todoIssueBlockedByOpenDependency(issue tracker.Issue, terminalStates map[string]struct{}) bool {
-	if !strings.EqualFold(strings.TrimSpace(issue.State), "Todo") {
+	if !todoWorkflowState(issue.State) {
 		return false
 	}
 	return tracker.BlockedByNonTerminal(issue.BlockedBy, terminalStates)
+}
+
+func todoWorkflowState(state string) bool {
+	state = strings.ToLower(strings.TrimSpace(state))
+	return state == "todo" || strings.HasSuffix(state, ":todo") || strings.HasSuffix(state, "/todo")
 }
 
 func sortCandidates(issues []tracker.Issue) {

@@ -293,6 +293,8 @@ type AgentConfig struct {
 	MaxConcurrentAgentsByState map[string]int `yaml:"max_concurrent_agents_by_state" json:"max_concurrent_agents_by_state"`
 	MaxTurns                   int            `yaml:"max_turns" json:"max_turns"`
 	MaxContinuationTurns       int            `yaml:"max_continuation_turns" json:"max_continuation_turns"`
+	MaxTokensPerClaim          int64          `yaml:"max_tokens_per_claim" json:"max_tokens_per_claim"`
+	MaxRuntimeSecondsPerClaim  int64          `yaml:"max_runtime_seconds_per_claim" json:"max_runtime_seconds_per_claim"`
 	MaxRetryBackoffMs          int            `yaml:"max_retry_backoff_ms" json:"max_retry_backoff_ms"`
 	// Timeout caps a single runner invocation. When exceeded, the runner
 	// subprocess is killed and the task records a `runner_timeout` event.

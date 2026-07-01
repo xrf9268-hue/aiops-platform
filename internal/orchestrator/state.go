@@ -163,6 +163,9 @@ type RunningEntry struct {
 	LastReportedInputTokens  int64
 	LastReportedOutputTokens int64
 	LastReportedTotalTokens  int64
+	BudgetExceeded           bool
+	BudgetExceededAt         time.Time
+	BudgetExceededError      string
 
 	InputRequired       bool
 	InputRequiredAt     time.Time
@@ -209,14 +212,18 @@ type RunningEntry struct {
 // come from input-required exits; D34 also uses the same blocked substate for
 // exhausted clean-continuation budgets.
 type BlockedEntry struct {
-	Issue       tracker.Issue
-	Identifier  string
-	BlockedAt   time.Time
-	Workspace   Workspace
-	Session     LiveSession
-	LastEventAt time.Time
-	Method      string
-	Error       string
+	Issue             tracker.Issue
+	Identifier        string
+	BlockedAt         time.Time
+	Workspace         Workspace
+	Session           LiveSession
+	LastEventAt       time.Time
+	CodexInputTokens  int64
+	CodexOutputTokens int64
+	CodexTotalTokens  int64
+	RuntimeSeconds    float64
+	Method            string
+	Error             string
 }
 
 // OrchestratorState is the single authoritative in-memory state owned
@@ -237,7 +244,8 @@ type OrchestratorState struct {
 	// (`agent.default`, e.g. "codex-app-server"). It is surfaced as the
 	// top-summary worker default provider on /api/v1/state (#977); the model is
 	// resolved per-run by the agent, so there is no worker-default model.
-	AgentDefault string
+	AgentDefault     string
+	BudgetGuardrails BudgetGuardrails
 
 	Running       map[IssueID]*RunningEntry
 	Blocked       map[IssueID]*BlockedEntry
@@ -246,11 +254,10 @@ type OrchestratorState struct {
 	RetryAttempts map[IssueID]*RetryEntry
 	Completed     map[IssueID]struct{} // bookkeeping only per SPEC §4.1.8
 
-	// completedOrder pins FIFO insertion order so the cap-and-evict policy
-	// below has a deterministic "oldest" to drop and Snapshot() can publish
-	// entries in observed-order. It mirrors Completed: every id present in
-	// the set is also in the slice, and vice versa.
-	completedOrder []IssueID
+	// completedOrder pins FIFO insertion order for cap-and-evict and Snapshot.
+	// It mirrors Completed: every id present in the set is also in the slice.
+	completedOrder        []IssueID
+	completedSessionUsage []SessionUsageEntry
 
 	// MaxRecentCompleted caps how many entries the orchestrator retains in
 	// Completed for /api/v1/state publication. SPEC §4.1.8 marks Completed as
@@ -624,6 +631,7 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 	delete(s.Claimed, id)
 	delete(s.ClaimedIssues, id)
 	s.recordCompleted(id)
+	s.recordCompletedSessionUsage(id, run, elapsed, time.Now().UTC(), "completed")
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
@@ -640,6 +648,7 @@ func (s *OrchestratorState) FinishRunActiveSuccessNoHandoff(id IssueID, run *Run
 	delete(s.ClaimedIssues, id)
 	s.recordCompleted(id)
 	s.recordActiveSuccessNoHandoff(id)
+	s.recordCompletedSessionUsage(id, run, elapsed, time.Now().UTC(), "active_success_no_handoff")
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
@@ -678,14 +687,18 @@ func (s *OrchestratorState) BlockRunWithReason(id IssueID, run *RunningEntry, bl
 	s.Claimed[id] = struct{}{}
 	s.ClaimedIssues[id] = run.Issue
 	s.Blocked[id] = &BlockedEntry{
-		Issue:       run.Issue,
-		Identifier:  run.Identifier,
-		BlockedAt:   blockedAt,
-		Workspace:   run.Workspace,
-		Session:     run.Session,
-		LastEventAt: run.LastEventAt,
-		Method:      method,
-		Error:       runErr,
+		Issue:             run.Issue,
+		Identifier:        run.Identifier,
+		BlockedAt:         blockedAt,
+		Workspace:         run.Workspace,
+		Session:           run.Session,
+		LastEventAt:       run.LastEventAt,
+		CodexInputTokens:  run.CodexInputTokens,
+		CodexOutputTokens: run.CodexOutputTokens,
+		CodexTotalTokens:  run.CodexTotalTokens,
+		RuntimeSeconds:    elapsedSeconds(elapsed),
+		Method:            method,
+		Error:             runErr,
 	}
 	s.CodexTotals.AddSeconds(elapsed)
 	return true

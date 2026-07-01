@@ -17,6 +17,7 @@ tracker:
     - closed
   inactive_states:
     - aiops:human-review
+    - aiops:blocked
     - aiops:done
     - aiops:canceled
 
@@ -31,6 +32,8 @@ agent:
   default: codex-app-server
   max_concurrent_agents: 1
   max_turns: 30
+  max_tokens_per_claim: 20000000
+  max_runtime_seconds_per_claim: 7200
   timeout: 2h
 
 codex:
@@ -45,6 +48,7 @@ codex:
     - NPM_CONFIG_CACHE
     - PLAYWRIGHT_BROWSERS_PATH
     - AIOPS_EXPECTED_GITHUB_LOGIN
+    - AIOPS_MAKER_MAX_REWORK_CYCLES
 
 policy:
   mode: draft_pr
@@ -78,6 +82,11 @@ Before changing code:
 3. If this is a Rework return, read the newest reviewer comments and PR reviews
    first. Treat every unresolved reviewer finding as an acceptance criterion.
    Note the reviewed head SHA cited by the reviewer.
+4. Count prior reviewer-owned `CHANGES_REQUESTED` reviews on the PR. If the
+   count is at or above the max rework cycle budget
+   `${AIOPS_MAKER_MAX_REWORK_CYCLES:-3}`, comment the exhausted budget and move
+   the issue to `aiops:blocked` instead of reworking:
+   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
 
 Required implementation flow:
 1. Implement only this issue's acceptance criteria.
@@ -96,16 +105,26 @@ Required implementation flow:
    reviewer closes the issue only after GitHub confirms the PR merged.
 6. Comment the PR URL on the issue. The reviewer uses the newest PR URL comment
    to find your handoff.
-7. Move the issue to reviewer state as your LAST action:
+7. Before handoff, query current-head unresolved non-outdated review threads on
+   the PR. Do not move the issue to `aiops:human-review` while any blocker
+   remains on the current head; comment the blockers and keep the issue active
+   for rework.
+8. Move the issue to reviewer state as your LAST action:
    `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:human-review`.
 
 Rework convergence rules:
 - Do not re-hand-off an unchanged head. Push a new commit that addresses the
   reviewer finding.
-- Include `Rework response:` in the PR body or issue comment, naming the
-  reviewed head, the new head, and how each finding was addressed.
+- Every rework handoff MUST include an issue comment that starts with `Rework response:`,
+  naming the reviewed head, the new head, and how each
+  finding was addressed.
 - If you cannot address the finding, comment `Blocked rework:` with the blocker
-  and stop without adding `aiops:human-review`.
+  and move the issue to `aiops:blocked` instead of adding `aiops:human-review`:
+  `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
+- If Codex reports a usage-limit result, or the result is unclear after one
+  bounded clarification pass, comment the bounded result and move the issue to
+  `aiops:blocked` so an operator can decide whether to redrive it:
+  `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
 
 Hard constraints:
 - Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or

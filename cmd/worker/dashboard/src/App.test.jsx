@@ -25,7 +25,7 @@ function busyState(overrides = {}) {
         issue_id: '9f2c8a', issue_identifier: 'MT-614', state: 'In Progress',
         session_id: 'thread-7af3-turn-3', turn_count: 6, last_event: 'turn_completed',
         last_message: 'Wired counter into reconciler.',
-        started_at: iso(372000), last_event_at: iso(12000),
+        started_at: iso(372000), runtime_seconds: 372, last_event_at: iso(12000),
         workspace_path: '/tmp/aiops_workspaces/MT-614',
         tokens: { input_tokens: 286400, output_tokens: 41200, total_tokens: 327600 },
         codex_app_server_pid: 48213,
@@ -46,9 +46,21 @@ function busyState(overrides = {}) {
         issue_id: '8e9041', issue_identifier: 'MT-590', state: 'Blocked',
         blocked_at: iso(5340000), session_id: 'thread-2d51-turn-2',
         workspace_path: '/tmp/aiops_workspaces/MT-590', method: 'agent_blocked',
+        runtime_seconds: 918,
+        tokens: { input_tokens: 44000, output_tokens: 6100, total_tokens: 50100 },
         error: 'Waiting on KMS key-grant approval.',
       },
     ],
+    completed_session_usage: [
+      {
+        issue_id: 'aa0112', issue_identifier: 'MT-612', state: 'Done',
+        session_id: 'thread-done-turn-5', workflow_source: 'file', workflow_path: '/srv/maker/WORKFLOW.md',
+        agent_provider: 'codex-app-server', agent_model: 'gpt-5.3-codex-spark',
+        tokens: { input_tokens: 102000, output_tokens: 18000, total_tokens: 120000 },
+        runtime_seconds: 2400, completed_at: iso(60000), outcome: 'completed',
+      },
+    ],
+    budget_guardrails: { max_tokens_per_claim: 20000000, max_runtime_seconds_per_claim: 7200 },
     completed: ['aa0112', 'aa0245', 'aa0388'],
     reconcile_stopped_with_progress: ['bb0190'],
     agent_handoff_reconcile_stopped: ['cc0271'],
@@ -74,8 +86,9 @@ const idleState = {
     agent_handoff_reconcile_stopped: 0, agent_handoff_reconcile_stopped_total: 8,
     active_success_no_handoff: 0, active_success_no_handoff_total: 5,
   },
-  running: [], retrying: [], blocked: [],
+  running: [], retrying: [], blocked: [], completed_session_usage: [],
   completed: [], reconcile_stopped_with_progress: [], agent_handoff_reconcile_stopped: [], active_success_no_handoff: [],
+  budget_guardrails: {},
   codex_totals: { input_tokens: 2140000, output_tokens: 288900, total_tokens: 2428900, seconds_running: 4292 },
   rate_limits: null,
 };
@@ -122,9 +135,15 @@ describe('Worker status dashboard', () => {
     expect(within(delivered).getByText(/1 no handoff/)).toBeTruthy();
     expect(screen.queryByText(/^Completed$/)).toBeNull();
 
-    // codex token totals strip (5,443,400 → 5.4M) and a compacted running token cell.
+    // process token totals strip (5,443,400 → 5.4M) and a compacted running token cell.
+    expect(screen.getByText('Process total tokens')).toBeTruthy();
+    expect(screen.getByText('may include older issues')).toBeTruthy();
     expect(screen.getByText('5.4M')).toBeTruthy();
     expect(screen.getByText('286k')).toBeTruthy();
+    expect(screen.getByText('20M tokens/claim · 2h 0m/claim')).toBeTruthy();
+    expect(screen.getByText('Completed usage')).toBeTruthy();
+    expect(screen.getByText('MT-612')).toBeTruthy();
+    expect(screen.getByText('120k')).toBeTruthy();
   });
 
   it('links each issue id to its per-issue detail endpoint', async () => {
@@ -321,7 +340,7 @@ describe('Worker status dashboard', () => {
     const mainTitles = [...container.querySelectorAll('.body-main .panel-title')].map(titleText);
     expect(mainTitles).toEqual(['Running', 'Retrying', 'Blocked']);
     const sideTitles = [...container.querySelectorAll('.body-side .panel-title')].map(titleText);
-    expect(sideTitles).toEqual(['Rate limits', 'Reconcile roll-up']);
+    expect(sideTitles).toEqual(['Rate limits', 'Completed usage', 'Reconcile roll-up']);
     expect(container.querySelector('.grid-2')).toBeNull(); // the bottom row is gone
 
     // tokens header renders as one line: bold "Tokens" + dim "in / out" suffix

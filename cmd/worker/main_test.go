@@ -525,11 +525,23 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 		PollIntervalMs:      30000,
 		MaxConcurrentAgents: 2,
 		Running: []orchestrator.RunningView{{
-			IssueID:    "issue-2",
-			Identifier: "MT-650",
+			IssueID:        "issue-2",
+			Identifier:     "MT-650",
+			RuntimeSeconds: 2.5,
+			Tokens: orchestrator.TokensView{
+				InputTokens:  5,
+				OutputTokens: 7,
+				TotalTokens:  12,
+			},
 		}, {
-			IssueID:    "issue-1",
-			Identifier: "MT-649",
+			IssueID:        "issue-1",
+			Identifier:     "MT-649",
+			RuntimeSeconds: 1.25,
+			Tokens: orchestrator.TokensView{
+				InputTokens:  3,
+				OutputTokens: 4,
+				TotalTokens:  7,
+			},
 		}},
 		Retrying: []orchestrator.RetryView{{
 			IssueID:    "issue-2",
@@ -547,18 +559,53 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			},
 		}},
 		Blocked: []orchestrator.BlockedView{{
-			IssueID:    "issue-7",
-			Identifier: "MT-655",
-			State:      "In Progress",
-			Method:     "item/tool/requestUserInput",
-			Error:      "input required",
+			IssueID:        "issue-7",
+			Identifier:     "MT-655",
+			State:          "In Progress",
+			RuntimeSeconds: 14.25,
+			Tokens: orchestrator.TokensView{
+				InputTokens:  20,
+				OutputTokens: 30,
+				TotalTokens:  50,
+			},
+			Method: "item/tool/requestUserInput",
+			Error:  "input required",
 		}, {
-			IssueID:    "issue-6",
-			Identifier: "MT-654",
-			State:      "In Progress",
-			Method:     "mcpServer/elicitation/request",
-			Error:      "input required",
+			IssueID:        "issue-6",
+			Identifier:     "MT-654",
+			State:          "In Progress",
+			RuntimeSeconds: 9.5,
+			Tokens: orchestrator.TokensView{
+				InputTokens:  11,
+				OutputTokens: 13,
+				TotalTokens:  24,
+			},
+			Method: "mcpServer/elicitation/request",
+			Error:  "input required",
 		}},
+		CompletedSessionUsage: []orchestrator.SessionUsageView{{
+			IssueID:        "issue-9",
+			Identifier:     "MT-999",
+			IssueURL:       "https://tracker.example/MT-999",
+			State:          "Done",
+			SessionID:      "thread-999",
+			WorkflowSource: "file",
+			WorkflowPath:   "/tmp/maker/WORKFLOW.md",
+			AgentProvider:  "codex-app-server",
+			AgentModel:     "gpt-5.3-codex-spark",
+			Tokens: orchestrator.TokensView{
+				InputTokens:  31,
+				OutputTokens: 37,
+				TotalTokens:  68,
+			},
+			RuntimeSeconds: 42.5,
+			CompletedAt:    generatedAt,
+			Outcome:        "completed",
+		}},
+		BudgetGuardrails: orchestrator.BudgetGuardrailsView{
+			MaxTokensPerClaim:         100000,
+			MaxRuntimeSecondsPerClaim: 7200,
+		},
 		Completed:                             []orchestrator.IssueID{"issue-9", "issue-3"},
 		ActiveSuccessNoHandoff:                []orchestrator.IssueID{"issue-12"},
 		CumulativeActiveSuccessNoHandoffTotal: 6,
@@ -595,15 +642,27 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 			ActiveSuccessNoHandoffTotal int64 `json:"active_success_no_handoff_total"`
 		} `json:"counts"`
 		Running []struct {
-			IssueID         string `json:"issue_id"`
-			IssueIdentifier string `json:"issue_identifier"`
+			IssueID         string  `json:"issue_id"`
+			IssueIdentifier string  `json:"issue_identifier"`
+			RuntimeSeconds  float64 `json:"runtime_seconds"`
+			Tokens          struct {
+				InputTokens  int64 `json:"input_tokens"`
+				OutputTokens int64 `json:"output_tokens"`
+				TotalTokens  int64 `json:"total_tokens"`
+			} `json:"tokens"`
 		} `json:"running"`
 		Blocked []struct {
-			IssueID         string `json:"issue_id"`
-			IssueIdentifier string `json:"issue_identifier"`
-			State           string `json:"state"`
-			Method          string `json:"method"`
-			Error           string `json:"error"`
+			IssueID         string  `json:"issue_id"`
+			IssueIdentifier string  `json:"issue_identifier"`
+			State           string  `json:"state"`
+			RuntimeSeconds  float64 `json:"runtime_seconds"`
+			Tokens          struct {
+				InputTokens  int64 `json:"input_tokens"`
+				OutputTokens int64 `json:"output_tokens"`
+				TotalTokens  int64 `json:"total_tokens"`
+			} `json:"tokens"`
+			Method string `json:"method"`
+			Error  string `json:"error"`
 		} `json:"blocked"`
 		Retrying []struct {
 			IssueID         string `json:"issue_id"`
@@ -616,7 +675,28 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 				Error string `json:"error"`
 			} `json:"startup_failure"`
 		} `json:"retrying"`
-		Completed              []string `json:"completed"`
+		Completed             []string `json:"completed"`
+		CompletedSessionUsage []struct {
+			IssueID         string  `json:"issue_id"`
+			IssueIdentifier string  `json:"issue_identifier"`
+			IssueURL        string  `json:"issue_url"`
+			SessionID       string  `json:"session_id"`
+			WorkflowSource  string  `json:"workflow_source"`
+			WorkflowPath    string  `json:"workflow_path"`
+			AgentProvider   string  `json:"agent_provider"`
+			AgentModel      string  `json:"agent_model"`
+			RuntimeSeconds  float64 `json:"runtime_seconds"`
+			Outcome         string  `json:"outcome"`
+			Tokens          struct {
+				InputTokens  int64 `json:"input_tokens"`
+				OutputTokens int64 `json:"output_tokens"`
+				TotalTokens  int64 `json:"total_tokens"`
+			} `json:"tokens"`
+		} `json:"completed_session_usage"`
+		BudgetGuardrails struct {
+			MaxTokensPerClaim         int64 `json:"max_tokens_per_claim"`
+			MaxRuntimeSecondsPerClaim int64 `json:"max_runtime_seconds_per_claim"`
+		} `json:"budget_guardrails"`
 		ActiveSuccessNoHandoff []string `json:"active_success_no_handoff"`
 		CodexTotals            struct {
 			InputTokens    int64   `json:"input_tokens"`
@@ -650,11 +730,17 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if len(payload.Running) != 2 || payload.Running[0].IssueID != "issue-1" || payload.Running[1].IssueID != "issue-2" {
 		t.Fatalf("running = %+v, want sorted issue-1 then issue-2", payload.Running)
 	}
+	if payload.Running[0].RuntimeSeconds != 1.25 || payload.Running[0].Tokens.TotalTokens != 7 {
+		t.Fatalf("running[0] usage = runtime %.2f tokens %+v, want current-claim totals", payload.Running[0].RuntimeSeconds, payload.Running[0].Tokens)
+	}
 	if len(payload.Blocked) != 2 || payload.Blocked[0].IssueID != "issue-6" || payload.Blocked[1].IssueID != "issue-7" {
 		t.Fatalf("blocked = %+v, want sorted issue-6 then issue-7", payload.Blocked)
 	}
 	if payload.Blocked[0].IssueIdentifier != "MT-654" || payload.Blocked[0].State != "In Progress" || payload.Blocked[0].Method != "mcpServer/elicitation/request" || payload.Blocked[0].Error != "input required" {
 		t.Fatalf("blocked row = %+v, want issue metadata plus input-required method/error", payload.Blocked[0])
+	}
+	if payload.Blocked[0].RuntimeSeconds != 9.5 || payload.Blocked[0].Tokens.TotalTokens != 24 {
+		t.Fatalf("blocked[0] usage = runtime %.2f tokens %+v, want preserved claim totals", payload.Blocked[0].RuntimeSeconds, payload.Blocked[0].Tokens)
 	}
 	if len(payload.Retrying) != 2 || payload.Retrying[0].IssueID != "issue-1" || payload.Retrying[1].IssueID != "issue-2" {
 		t.Fatalf("retrying = %+v, want sorted issue-1 then issue-2", payload.Retrying)
@@ -667,6 +753,12 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	}
 	if !reflect.DeepEqual(payload.Completed, []string{"issue-3", "issue-9"}) {
 		t.Fatalf("completed = %+v, want sorted issue-3 issue-9", payload.Completed)
+	}
+	if len(payload.CompletedSessionUsage) != 1 || payload.CompletedSessionUsage[0].IssueID != "issue-9" || payload.CompletedSessionUsage[0].Tokens.TotalTokens != 68 || payload.CompletedSessionUsage[0].RuntimeSeconds != 42.5 {
+		t.Fatalf("completed_session_usage = %+v, want retained per-session usage for completed issue-9", payload.CompletedSessionUsage)
+	}
+	if payload.BudgetGuardrails.MaxTokensPerClaim != 100000 || payload.BudgetGuardrails.MaxRuntimeSecondsPerClaim != 7200 {
+		t.Fatalf("budget_guardrails = %+v, want configured local guardrails", payload.BudgetGuardrails)
 	}
 	if !reflect.DeepEqual(payload.ActiveSuccessNoHandoff, []string{"issue-12"}) {
 		t.Fatalf("active_success_no_handoff = %+v, want [issue-12]", payload.ActiveSuccessNoHandoff)
@@ -835,7 +927,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Total tokens", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress", "active_success_no_handoff"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Process total tokens", "Completed usage", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress", "active_success_no_handoff"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}

@@ -28,6 +28,7 @@ type RunningView struct {
 	LastEvent         string
 	LastMessage       string
 	StartedAt         time.Time
+	RuntimeSeconds    float64
 	LastEventAt       time.Time
 	RetryAttempt      *int
 	WorkspacePath     string
@@ -63,9 +64,32 @@ type BlockedView struct {
 	WorkspacePath     string
 	SessionID         string
 	LastEventAt       time.Time
+	RuntimeSeconds    float64
+	Tokens            TokensView
 	Method            string
 	Error             string
 	CodexAppServerPID int
+}
+
+type SessionUsageView struct {
+	IssueID        IssueID
+	Identifier     string
+	IssueURL       string
+	State          string
+	SessionID      string
+	WorkflowSource string
+	WorkflowPath   string
+	AgentProvider  string
+	AgentModel     string
+	Tokens         TokensView
+	RuntimeSeconds float64
+	CompletedAt    time.Time
+	Outcome        string
+}
+
+type BudgetGuardrailsView struct {
+	MaxTokensPerClaim         int64
+	MaxRuntimeSecondsPerClaim int64
 }
 
 // RetryView is the per-retry-entry projection in StateView. Omits the

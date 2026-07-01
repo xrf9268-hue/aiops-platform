@@ -99,6 +99,273 @@ func TestGitHubClientListIssuesByStatesMapsRepositoryIssues(t *testing.T) {
 	}
 }
 
+func TestGitHubClientListIssuesByStatesPopulatesBlockedByFromNativeAndBodyFallback(t *testing.T) {
+	var graphqlRequests int
+	var fallbackRequested bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			switch r.URL.Query().Get("page") {
+			case "1", "":
+				_ = json.NewEncoder(w).Encode([]githubIssue{
+					{
+						ID:        100,
+						NodeID:    "I_100",
+						Number:    10,
+						Title:     "native dependency",
+						Body:      "Depends on #12",
+						HTMLURL:   "https://github.com/acme/api/issues/10",
+						State:     "open",
+						CreatedAt: "2026-05-20T01:02:03Z",
+						UpdatedAt: "2026-05-20T02:03:04Z",
+						Labels:    []githubLabel{{Name: "aiops:todo"}},
+					},
+					{
+						ID:        110,
+						NodeID:    "I_110",
+						Number:    11,
+						Title:     "body dependency",
+						Body:      "Blocked by #13",
+						HTMLURL:   "https://github.com/acme/api/issues/11",
+						State:     "open",
+						CreatedAt: "2026-05-20T01:02:03Z",
+						UpdatedAt: "2026-05-20T02:03:04Z",
+						Labels:    []githubLabel{{Name: "aiops:todo"}},
+					},
+					{
+						ID:        140,
+						NodeID:    "I_140",
+						Number:    14,
+						Title:     "foreign dependency",
+						Body:      "Depends on other/service#99",
+						HTMLURL:   "https://github.com/acme/api/issues/14",
+						State:     "open",
+						CreatedAt: "2026-05-20T01:02:03Z",
+						UpdatedAt: "2026-05-20T02:03:04Z",
+						Labels:    []githubLabel{{Name: "aiops:todo"}},
+					},
+				})
+			default:
+				_ = json.NewEncoder(w).Encode([]githubIssue{})
+			}
+		case "/graphql":
+			graphqlRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id":     "I_100",
+					"number": float64(10),
+					"blockedBy": map[string]any{
+						"nodes": []any{map[string]any{
+							"id":         "I_120",
+							"databaseId": float64(120),
+							"number":     float64(12),
+							"state":      "OPEN",
+							"labels": map[string]any{"nodes": []any{
+								map[string]any{"name": "aiops:todo"},
+							}},
+						}},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+				map[string]any{
+					"id":     "I_110",
+					"number": float64(11),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+				map[string]any{
+					"id":     "I_140",
+					"number": float64(14),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+			}}})
+		case "/repos/acme/api/issues/13":
+			fallbackRequested = true
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        130,
+				NodeID:    "I_130",
+				Number:    13,
+				Title:     "done blocker",
+				State:     "closed",
+				Labels:    []githubLabel{{Name: "Done"}},
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+			})
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		ActiveStates:   []string{"aiops:todo"},
+		TerminalStates: []string{"done", "closed"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+
+	if graphqlRequests != 1 {
+		t.Fatalf("graphql requests = %d, want 1", graphqlRequests)
+	}
+	if !fallbackRequested {
+		t.Fatal("body fallback blocker #13 was not resolved")
+	}
+	if len(issues) != 3 {
+		t.Fatalf("issues = %+v, want 3", issues)
+	}
+	if got := issues[0].BlockedBy; len(got) != 1 || got[0].Identifier != "#12" || got[0].State != "aiops:todo" {
+		t.Fatalf("#10 blocked_by = %+v, want one native open blocker #12 in aiops:todo", got)
+	}
+	if got := issues[1].BlockedBy; len(got) != 1 || got[0].Identifier != "#13" || got[0].State != "done" {
+		t.Fatalf("#11 blocked_by = %+v, want one fallback terminal blocker #13 in done", got)
+	}
+	if got := issues[2].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("#14 blocked_by = %+v, want foreign repo body reference ignored", got)
+	}
+}
+
+func TestGitHubClientListIssuesByStatesFailsClosedWhenNativeBlockersAreIncomplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{{
+				ID:        100,
+				NodeID:    "I_100",
+				Number:    10,
+				Title:     "too many blockers",
+				HTMLURL:   "https://github.com/acme/api/issues/10",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+			}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id":     "I_100",
+					"number": float64(10),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": true},
+					},
+				},
+			}}})
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		ActiveStates:   []string{"aiops:todo"},
+		TerminalStates: []string{"done", "closed"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %+v, want 1", issues)
+	}
+	if got := issues[0].BlockedBy; len(got) != 1 || got[0].State != "" {
+		t.Fatalf("blocked_by = %+v, want one unknown-state blocker so Todo dispatch fails closed", got)
+	}
+}
+
+func TestGitHubClientListIssuesByStatesChunksNativeBlockerLookups(t *testing.T) {
+	var graphqlBatchSizes []int
+	issueRows := make([]githubIssue, 0, 51)
+	for number := 1; number <= 51; number++ {
+		issueRows = append(issueRows, githubIssue{
+			ID:        int64(1000 + number),
+			NodeID:    fmt.Sprintf("I_%d", number),
+			Number:    number,
+			Title:     fmt.Sprintf("issue %d", number),
+			HTMLURL:   fmt.Sprintf("https://github.com/acme/api/issues/%d", number),
+			State:     "open",
+			CreatedAt: "2026-05-20T01:02:03Z",
+			UpdatedAt: "2026-05-20T02:03:04Z",
+			Labels:    []githubLabel{{Name: "aiops:todo"}},
+		})
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode(issueRows)
+		case "/graphql":
+			var req struct {
+				Variables struct {
+					IDs []string `json:"ids"`
+				} `json:"variables"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode graphql request: %v", err)
+			}
+			graphqlBatchSizes = append(graphqlBatchSizes, len(req.Variables.IDs))
+			nodes := make([]any, 0, len(req.Variables.IDs))
+			for _, id := range req.Variables.IDs {
+				nodes = append(nodes, map[string]any{
+					"id":     id,
+					"number": float64(1),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": nodes}})
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:       "test-token",
+		ActiveStates: []string{"aiops:todo"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+
+	if got, want := graphqlBatchSizes, []int{25, 25, 1}; !slices.Equal(got, want) {
+		t.Fatalf("graphql batch sizes = %v; want %v", got, want)
+	}
+	if len(issues) != len(issueRows) {
+		t.Fatalf("issues len = %d, want %d", len(issues), len(issueRows))
+	}
+	for _, issue := range issues {
+		if issue.BlockedBy == nil || len(issue.BlockedBy) != 0 {
+			t.Fatalf("issue %s BlockedBy = %#v, want non-nil empty blockers", issue.Identifier, issue.BlockedBy)
+		}
+	}
+}
+
 func TestGitHubClientListIssuesByStatesSkipsIssuesClaimedByOpenPR(t *testing.T) {
 	var pullsRequested bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -616,6 +883,107 @@ func TestGitHubClientFetchIssueStatesByIDsEmptyInputReturnsEmptyMap(t *testing.T
 	}
 	if len(states) != 0 {
 		t.Fatalf("states = %#v, want empty map", states)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsPopulatesBlockedByAndDropsDeletedFallback(t *testing.T) {
+	var graphqlRequests int
+	var deletedFallbackRequested bool
+	var openFallbackRequested bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        200,
+				NodeID:    "I_200",
+				Number:    20,
+				Title:     "refresh blocker",
+				Body:      "Blocked by #21\nDepends on #22",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+			})
+		case "/repos/acme/api/issues/23":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        230,
+				NodeID:    "I_230",
+				Number:    23,
+				Title:     "no blockers",
+				Body:      "Depends on other/service#24",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+			})
+		case "/graphql":
+			graphqlRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id":     "I_200",
+					"number": float64(20),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+				map[string]any{
+					"id":     "I_230",
+					"number": float64(23),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+			}}})
+		case "/repos/acme/api/issues/21":
+			deletedFallbackRequested = true
+			http.NotFound(w, r)
+		case "/repos/acme/api/issues/22":
+			openFallbackRequested = true
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        220,
+				NodeID:    "I_220",
+				Number:    22,
+				Title:     "open fallback",
+				State:     "open",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+			})
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		ActiveStates:   []string{"aiops:todo"},
+		TerminalStates: []string{"closed", "done"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{
+		{ID: "200", Identifier: "#20"},
+		{ID: "230", Identifier: "#23"},
+	})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+
+	if graphqlRequests != 1 {
+		t.Fatalf("graphql requests = %d, want 1", graphqlRequests)
+	}
+	if !deletedFallbackRequested || !openFallbackRequested {
+		t.Fatalf("fallback resolution requested deleted=%t open=%t, want both", deletedFallbackRequested, openFallbackRequested)
+	}
+	if got := states["200"].BlockedBy; len(got) != 1 || got[0].Identifier != "#22" || got[0].State != "aiops:todo" {
+		t.Fatalf("FetchIssueStatesByRefs(#20).BlockedBy = %+v, want deleted #21 dropped and open #22 retained", got)
+	}
+	if got := states["230"].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("FetchIssueStatesByRefs(#23).BlockedBy = %#v, want non-nil empty slice for confirmed no blockers", got)
 	}
 }
 

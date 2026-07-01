@@ -65,6 +65,7 @@ type WorkflowSnapshot struct {
 	MaxConcurrentAgents        int
 	MaxConcurrentAgentsByState map[string]int
 	MaxContinuationTurns       int
+	BudgetGuardrails           BudgetGuardrails
 	MaxRetryBackoff            time.Duration
 	// AgentDefault is the reloaded default runner/provider (`agent.default`).
 	// It rides the snapshot so a hot WORKFLOW.md reload that changes the default
@@ -221,10 +222,14 @@ func (r *WorkflowRuntime) snapshotFromWorkflow(wf *workflow.Workflow, fingerprin
 		MaxConcurrentAgents:        wf.Config.Agent.MaxConcurrentAgents,
 		MaxConcurrentAgentsByState: copyStateConcurrencyLimits(wf.Config.Agent.MaxConcurrentAgentsByState),
 		MaxContinuationTurns:       wf.Config.Agent.MaxContinuationTurns,
-		MaxRetryBackoff:            time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
-		AgentDefault:               wf.Config.Agent.Default,
-		Reconciliation:             reconcile,
-		Fingerprint:                fingerprint,
+		BudgetGuardrails: BudgetGuardrails{
+			MaxTokensPerClaim:         wf.Config.Agent.MaxTokensPerClaim,
+			MaxRuntimeSecondsPerClaim: wf.Config.Agent.MaxRuntimeSecondsPerClaim,
+		},
+		MaxRetryBackoff: time.Duration(wf.Config.Agent.MaxRetryBackoffMs) * time.Millisecond,
+		AgentDefault:    wf.Config.Agent.Default,
+		Reconciliation:  reconcile,
+		Fingerprint:     fingerprint,
 	}
 }
 

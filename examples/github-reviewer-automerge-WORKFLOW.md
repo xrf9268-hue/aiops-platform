@@ -18,6 +18,7 @@ tracker:
   inactive_states:
     - aiops:todo
     - aiops:rework
+    - aiops:blocked
     - aiops:done
     - aiops:canceled
 
@@ -33,6 +34,8 @@ agent:
   max_concurrent_agents: 1
   max_turns: 18
   max_continuation_turns: 48
+  max_tokens_per_claim: 12000000
+  max_runtime_seconds_per_claim: 7200
   timeout: 2h
 
 codex:
@@ -44,6 +47,7 @@ codex:
     - NPM_CONFIG_CACHE
     - PLAYWRIGHT_BROWSERS_PATH
     - AIOPS_EXPECTED_GITHUB_LOGIN
+    - AIOPS_REVIEWER_MAX_REWORK_CYCLES
 
 policy:
   mode: draft_pr
@@ -101,12 +105,28 @@ Step 2 - review the current head:
 
 Step 3 - verdict:
 FAIL:
+- Before failing, gather all current-head blocker evidence: current-head unresolved non-outdated review threads,
+  failed required checks, and each issue acceptance criterion not met. Summarize
+  all current-head blocker items in one review so the maker does not fix them
+  one at a time.
 - Post a concrete review finding with file/path context where possible, the PR
   head SHA reviewed, and the exact acceptance criterion not met.
 - Use `gh pr review <PR> --request-changes --body "<findings>"` when possible.
-- Move the issue back to Rework:
+- Count reviewer-owned `CHANGES_REQUESTED` reviews. If the count is at or above
+  the max rework cycle budget `${AIOPS_REVIEWER_MAX_REWORK_CYCLES:-3}`, comment
+  the exhausted budget and move the issue to `aiops:blocked` instead of Rework:
+  `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
+- Otherwise move the issue back to Rework:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 - This is your LAST action.
+
+BLOCKED:
+- If Codex usage-limit stops the review, or your result remains unclear after
+  one bounded clarification pass, comment the bounded reason and move the issue
+  to `aiops:blocked` instead of FAIL/PASS. Do not leave an open issue labeled
+  `aiops:human-review` when the next reviewer would only repeat the same
+  unclear turn:
+  `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
 
 PASS:
 1. Post a short issue comment summarizing the passed rubric and the reviewed

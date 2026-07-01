@@ -189,11 +189,21 @@ env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" 
 Create labels:
 
 ```bash
-for label in aiops:todo aiops:rework aiops:human-review aiops:done aiops:canceled; do
+for label in aiops:todo aiops:rework aiops:human-review aiops:blocked aiops:done aiops:canceled; do
   env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
     gh label create "$label" --repo "$AIOPS_GHMR_REPO" --color 5319e7 --force
 done
 ```
+
+`aiops:blocked` is an inactive operator-triage state. The maker/reviewer
+workflow examples use it when the rework cycle budget is exhausted, when Codex
+hits a usage-limit result, or when a bounded unclear result should not loop.
+Blocked handoff commands remove the role's active label (`aiops:todo`,
+`aiops:rework`, or `aiops:human-review`) while adding `aiops:blocked`; adding
+only `aiops:blocked` leaves the issue eligible for the next worker tick.
+Maker handoff must include `Rework response:` in an issue comment for rework and
+must not hand off while current-head unresolved non-outdated review threads
+remain.
 
 Enable auto-merge and squash-only merges:
 

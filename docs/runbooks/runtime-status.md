@@ -163,6 +163,7 @@ the shape here without updating the handler — or vice versa — fails the buil
       "last_event": "turn_completed",
       "last_message": "Working on it...",
       "started_at": "2026-05-21T09:09:55Z",
+      "runtime_seconds": 5,
       "last_event_at": "2026-05-21T09:10:00Z",
       "retry_attempt": 1,
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-1",
@@ -188,6 +189,12 @@ the shape here without updating the handler — or vice versa — fails the buil
       "workspace_path": "/var/aiops/workspaces/acme/repo/issue-2",
       "session_id": "thread-1-turn-1",
       "last_event_at": "2026-05-20T06:05:30Z",
+      "runtime_seconds": 120,
+      "tokens": {
+        "input_tokens": 900,
+        "output_tokens": 100,
+        "total_tokens": 1000
+      },
       "method": "mcpServer/elicitation/request",
       "error": "input required: mcpServer/elicitation/request",
       "codex_app_server_pid": 67890
@@ -220,6 +227,31 @@ the shape here without updating the handler — or vice versa — fails the buil
       "first_suppressed_reason": "active_candidate_after_operator_terminal_stop"
     }
   ],
+  "completed_session_usage": [
+    {
+      "issue_id": "issue-5",
+      "issue_identifier": "ENG-5",
+      "issue_url": "https://tracker.example/issues/ENG-5",
+      "state": "Done",
+      "session_id": "thread-5-turn-3",
+      "workflow_source": "file",
+      "workflow_path": "/srv/maker/WORKFLOW.md",
+      "agent_provider": "codex-app-server",
+      "agent_model": "gpt-5.3-codex-spark",
+      "tokens": {
+        "input_tokens": 3000,
+        "output_tokens": 1200,
+        "total_tokens": 4200
+      },
+      "runtime_seconds": 180,
+      "completed_at": "2026-05-21T09:09:30Z",
+      "outcome": "completed"
+    }
+  ],
+  "budget_guardrails": {
+    "max_tokens_per_claim": 20000000,
+    "max_runtime_seconds_per_claim": 7200
+  },
   "codex_totals": {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -235,7 +267,7 @@ the shape here without updating the handler — or vice versa — fails the buil
 | Field             | Meaning                                                                       |
 | ----------------- | ----------------------------------------------------------------------------- |
 | `running`         | Live count of dispatched workers.                                             |
-| `blocked`         | Live count of input-blocked rows (Codex elicitation / approval pending).      |
+| `blocked`         | Live count of local blocked rows (Codex elicitation / approval pending, continuation budget, or budget guardrail exceeded). |
 | `retrying`        | Current retry-backoff queue depth.                                            |
 | `completed`       | Size of the FIFO-bounded recent-completed set published as `completed`.       |
 | `completed_total` | Monotonic counter of clean worker exits since process start (#234); active clean exits with no handoff are included here and also classified in `active_success_no_handoff_total`. |
@@ -258,6 +290,28 @@ top level publish the recent N issue IDs in those sets; for lifetime totals
 across FIFO eviction use the `_total` counters. `operator_terminal_stops`
 publishes full rows instead of only IDs so operators can see the terminal state,
 stop time, and first suppressed active-candidate evidence.
+
+### Runtime and token attribution
+
+`codex_totals` is a process-lifetime aggregate. It can include work for issues
+that are no longer running or even older issues from the same worker process.
+Use row-level `running[].tokens` / `running[].runtime_seconds`,
+`blocked[].tokens` / `blocked[].runtime_seconds`, and
+`completed_session_usage[]` when you need current-claim, blocked-claim, or
+recent completed-session attribution.
+
+`completed_session_usage` is a FIFO-bounded current-process list (same cap as
+recent `completed`) of clean session exits. It keeps the issue identifier/URL,
+workflow identity, agent model/provider, runtime seconds, token totals, and
+outcome so a completed handoff remains attributable after it leaves `running`.
+
+`budget_guardrails` surfaces optional local claim guardrails configured under
+`agent.max_tokens_per_claim` and `agent.max_runtime_seconds_per_claim`. Zero
+means disabled. When a guardrail is exceeded, the worker cancels the current
+run, records `budget_exceeded` in recent events, and parks the claim in local
+`blocked` with `method: "budget_exceeded"`. The worker does not write GitHub
+comments/labels, review PRs, merge PRs, or close issues; an operator or the
+agent workflow owns tracker handoff.
 
 ### `codex_totals.seconds_running` semantics
 
@@ -313,13 +367,16 @@ Each entry in the `running` array follows SPEC §13.7.2:
 - `last_message` — the most-recent `payload.message` string from a runtime
   event; sticky across later events that do not include one.
 - `started_at` — RFC3339 timestamp the worker spawned at.
+- `runtime_seconds` — claim runtime measured by the worker for this row. For
+  running rows this is live at snapshot time; for blocked rows it is preserved
+  from the stopped claim.
 - `last_event_at` — RFC3339 timestamp of the last observed runtime event
   (SPEC §13.7.2). Absent until the runner emits its first event.
 - `retry_attempt` — retry attempt number when the dispatch is a retry; absent
   on the first run (SPEC §4.1.5 first-run semantic).
 - `workspace_path` — absolute path of the per-issue workspace.
 - `tokens` — `{ input_tokens, output_tokens, total_tokens }` cumulative for
-  the active session.
+  the active session or preserved blocked claim.
 - `codex_app_server_pid` — OS pid of the Codex subprocess, populated from
   `session_started`; absent when the runner did not emit a pid.
 - `agent_provider` / `agent_model` — the runtime/runner (e.g.

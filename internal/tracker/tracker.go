@@ -43,7 +43,8 @@ type IssueState struct {
 	// inverse-relations query fails; Gitea derives them from the issue
 	// body's `Depends on #N` references, placeholding
 	// transiently-unresolvable references and skipping definitively-deleted
-	// blockers; GitHub has no blocker concept and always leaves this nil.
+	// blockers; GitHub prefers the native GraphQL `Issue.blockedBy` relation
+	// and supplements it with `Blocked by #N` / `Depends on #N` body references.
 	BlockedBy []BlockerRef
 }
 

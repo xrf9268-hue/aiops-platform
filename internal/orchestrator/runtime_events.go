@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -50,15 +51,23 @@ type recordRuntimeEventOp struct {
 }
 
 func (r *recordRuntimeEventOp) apply(st *OrchestratorState) func() {
+	var cancel context.CancelCauseFunc
 	if run := st.Running[r.issueID]; run != nil {
-		st.recordRuntimeEvent(run, r.event, r.now)
+		if st.recordRuntimeEvent(run, r.event, r.now) {
+			cancel = run.CancelWorker
+		}
 	}
-	return func() { close(r.done) }
+	return func() {
+		if cancel != nil {
+			cancel(nil)
+		}
+		close(r.done)
+	}
 }
 
-func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.RuntimeEvent, now time.Time) {
+func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.RuntimeEvent, now time.Time) bool {
 	if s == nil || run == nil || event.Event == "" {
-		return
+		return false
 	}
 	// workflow_resolved is a worker lifecycle event, not a SPEC §10.4 app-server
 	// runtime event: fold its profile identity but return before the general
@@ -66,7 +75,7 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 	// clock (LastEventAt) — the runner's session/turn events own those.
 	if event.Event == task.EventWorkflowResolved {
 		s.recordWorkflowFields(run, event)
-		return
+		return false
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -90,6 +99,43 @@ func (s *OrchestratorState) recordRuntimeEvent(run *RunningEntry, event task.Run
 		snap := RateLimitSnapshot(limits)
 		s.RecordRateLimits(&snap)
 	}
+	return s.markBudgetExceededIfNeeded(run, now)
+}
+
+func (s *OrchestratorState) markBudgetExceededIfNeeded(run *RunningEntry, now time.Time) bool {
+	if s == nil || run == nil || run.BudgetExceeded {
+		return false
+	}
+	message, exceeded := s.budgetExceededMessage(run, now)
+	if !exceeded {
+		return false
+	}
+	run.BudgetExceeded = true
+	run.BudgetExceededAt = now
+	run.BudgetExceededError = message
+	run.LastCodexMessage = message
+	s.RecordEvent(RuntimeEvent{
+		Kind:       RuntimeEventBudgetExceeded,
+		IssueID:    IssueID(run.Issue.ID),
+		Identifier: run.Identifier,
+		Message:    message,
+		At:         now,
+	})
+	return true
+}
+
+func (s *OrchestratorState) budgetExceededMessage(run *RunningEntry, now time.Time) (string, bool) {
+	guard := s.BudgetGuardrails
+	if guard.MaxTokensPerClaim > 0 && run.CodexTotalTokens > guard.MaxTokensPerClaim {
+		return fmt.Sprintf("claim token budget exceeded: total_tokens=%d max_tokens_per_claim=%d", run.CodexTotalTokens, guard.MaxTokensPerClaim), true
+	}
+	if guard.MaxRuntimeSecondsPerClaim > 0 {
+		runtimeSeconds := runtimeSecondsSince(now, run.StartedAt)
+		if runtimeSeconds > float64(guard.MaxRuntimeSecondsPerClaim) {
+			return fmt.Sprintf("claim runtime budget exceeded: runtime_seconds=%.0f max_runtime_seconds_per_claim=%d", runtimeSeconds, guard.MaxRuntimeSecondsPerClaim), true
+		}
+	}
+	return "", false
 }
 
 func (s *OrchestratorState) recordStartupFailureFields(run *RunningEntry, event task.RuntimeEvent) {

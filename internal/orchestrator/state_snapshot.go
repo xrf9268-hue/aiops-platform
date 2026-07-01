@@ -56,6 +56,8 @@ type StateView struct {
 	// first), capped by MaxRecentOperatorTerminalStops. For the lifetime total that
 	// survives eviction, read CumulativeOperatorTerminalStopsTotal.
 	OperatorTerminalStops                       []OperatorTerminalStopView
+	CompletedSessionUsage                       []SessionUsageView
+	BudgetGuardrails                            BudgetGuardrailsView
 	CumulativeCompletedTotal                    int64
 	CumulativeReconcileStoppedWithProgressTotal int64
 	CumulativeAgentHandoffReconcileStoppedTotal int64
@@ -78,7 +80,7 @@ type StateView struct {
 // the RetryAttempt pointer so a snapshot consumer mutating the pointee cannot
 // reach back into orchestrator state; the pointer-vs-nil distinction is the SPEC
 // §4.1.5 first-run semantic, so it cannot be flattened to an int.
-func (s *OrchestratorState) snapshotRunningViews() []RunningView {
+func (s *OrchestratorState) snapshotRunningViews(now time.Time) []RunningView {
 	rows := make([]RunningView, 0, len(s.Running))
 	for id, r := range s.Running {
 		var retryAttempt *int
@@ -87,18 +89,19 @@ func (s *OrchestratorState) snapshotRunningViews() []RunningView {
 			retryAttempt = &n
 		}
 		rows = append(rows, RunningView{
-			IssueID:       id,
-			Identifier:    r.Identifier,
-			IssueURL:      r.Issue.URL,
-			State:         r.Issue.State,
-			SessionID:     r.Session.SessionID,
-			TurnCount:     r.Session.TurnCount,
-			LastEvent:     r.LastCodexEvent,
-			LastMessage:   r.LastCodexMessage,
-			StartedAt:     r.StartedAt,
-			LastEventAt:   r.LastEventAt,
-			RetryAttempt:  retryAttempt,
-			WorkspacePath: r.Workspace.Path,
+			IssueID:        id,
+			Identifier:     r.Identifier,
+			IssueURL:       r.Issue.URL,
+			State:          r.Issue.State,
+			SessionID:      r.Session.SessionID,
+			TurnCount:      r.Session.TurnCount,
+			LastEvent:      r.LastCodexEvent,
+			LastMessage:    r.LastCodexMessage,
+			StartedAt:      r.StartedAt,
+			RuntimeSeconds: runtimeSecondsSince(now, r.StartedAt),
+			LastEventAt:    r.LastEventAt,
+			RetryAttempt:   retryAttempt,
+			WorkspacePath:  r.Workspace.Path,
 			Tokens: TokensView{
 				InputTokens:  r.CodexInputTokens,
 				OutputTokens: r.CodexOutputTokens,
@@ -118,20 +121,59 @@ func (s *OrchestratorState) snapshotBlockedViews() []BlockedView {
 	rows := make([]BlockedView, 0, len(s.Blocked))
 	for id, b := range s.Blocked {
 		rows = append(rows, BlockedView{
-			IssueID:           id,
-			Identifier:        b.Identifier,
-			IssueURL:          b.Issue.URL,
-			State:             b.Issue.State,
-			BlockedAt:         b.BlockedAt,
-			WorkspacePath:     b.Workspace.Path,
-			SessionID:         b.Session.SessionID,
-			LastEventAt:       b.LastEventAt,
+			IssueID:        id,
+			Identifier:     b.Identifier,
+			IssueURL:       b.Issue.URL,
+			State:          b.Issue.State,
+			BlockedAt:      b.BlockedAt,
+			WorkspacePath:  b.Workspace.Path,
+			SessionID:      b.Session.SessionID,
+			LastEventAt:    b.LastEventAt,
+			RuntimeSeconds: b.RuntimeSeconds,
+			Tokens: TokensView{
+				InputTokens:  b.CodexInputTokens,
+				OutputTokens: b.CodexOutputTokens,
+				TotalTokens:  b.CodexTotalTokens,
+			},
 			Method:            b.Method,
 			Error:             b.Error,
 			CodexAppServerPID: b.Session.CodexAppServerPID,
 		})
 	}
 	return rows
+}
+
+func (s *OrchestratorState) snapshotCompletedSessionUsage() []SessionUsageView {
+	rows := make([]SessionUsageView, 0, len(s.completedSessionUsage))
+	for _, usage := range s.completedSessionUsage {
+		rows = append(rows, SessionUsageView{
+			IssueID:        usage.IssueID,
+			Identifier:     usage.Identifier,
+			IssueURL:       usage.IssueURL,
+			State:          usage.State,
+			SessionID:      usage.Session.SessionID,
+			WorkflowSource: usage.Session.WorkflowSource,
+			WorkflowPath:   usage.Session.WorkflowPath,
+			AgentProvider:  usage.Session.AgentProvider,
+			AgentModel:     usage.Session.AgentModel,
+			Tokens:         usage.Tokens,
+			RuntimeSeconds: usage.RuntimeSeconds,
+			CompletedAt:    usage.CompletedAt,
+			Outcome:        usage.Outcome,
+		})
+	}
+	return rows
+}
+
+func runtimeSecondsSince(now, startedAt time.Time) float64 {
+	if startedAt.IsZero() {
+		return 0
+	}
+	elapsed := now.Sub(startedAt)
+	if elapsed <= 0 {
+		return 0
+	}
+	return elapsed.Seconds()
 }
 
 func (s *OrchestratorState) snapshotRetryViews() []RetryView {
@@ -214,7 +256,12 @@ func (s *OrchestratorState) Snapshot() StateView {
 		AgentHandoffReconcileStopped: make([]IssueID, 0, len(s.agentHandoffReconcileStoppedOrder)),
 		ActiveSuccessNoHandoff:       make([]IssueID, 0, len(s.activeSuccessNoHandoffOrder)),
 		OperatorTerminalStops:        s.snapshotOperatorTerminalStopViews(),
-		CumulativeCompletedTotal:     s.CumulativeCompletedTotal,
+		CompletedSessionUsage:        s.snapshotCompletedSessionUsage(),
+		BudgetGuardrails: BudgetGuardrailsView{
+			MaxTokensPerClaim:         s.BudgetGuardrails.MaxTokensPerClaim,
+			MaxRuntimeSecondsPerClaim: s.BudgetGuardrails.MaxRuntimeSecondsPerClaim,
+		},
+		CumulativeCompletedTotal:                    s.CumulativeCompletedTotal,
 		CumulativeReconcileStoppedWithProgressTotal: s.CumulativeReconcileStoppedWithProgressTotal,
 		CumulativeAgentHandoffReconcileStoppedTotal: s.CumulativeAgentHandoffReconcileStoppedTotal,
 		CumulativeActiveSuccessNoHandoffTotal:       s.CumulativeActiveSuccessNoHandoffTotal,
@@ -223,7 +270,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		CodexRateLimits:                             copyRateLimitSnapshot(s.CodexRateLimits),
 		RecentEvents:                                append([]RuntimeEvent(nil), s.RecentEvents...),
 	}
-	view.Running = s.snapshotRunningViews()
+	view.Running = s.snapshotRunningViews(now)
 	// Iterate the FIFO order slices, not the map. The map's iteration
 	// order is undefined in Go; using the slices preserves observed
 	// insertion order so /api/v1/state consumers see "oldest first"
