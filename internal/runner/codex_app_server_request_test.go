@@ -126,6 +126,33 @@ func TestRequest_AnswersInterleavedServerRequest(t *testing.T) {
 	}
 }
 
+// TestRequest_RoutesInterleavedToolCallThroughToolHandler pins the review P2
+// on #1046: an id-bearing item/tool/call interleaved while an RPC awaits its
+// response must go through the dynamic-tool handler (here: the unsupported-
+// tool structured failure for an empty tool set), not the approval reply
+// table, which would reject an advertised tool with "Method not found"
+// solely because the call arrived before the pending response.
+func TestRequest_RoutesInterleavedToolCallThroughToolHandler(t *testing.T) {
+	c, stdin := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":9,"method":"item/tool/call","params":{"tool":"nope","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":0,"result":{"ok":true}}`,
+	})
+	got, err := c.request(context.Background(), "turn/start", nil)
+	if err != nil {
+		t.Fatalf("request() err = %v; want nil", err)
+	}
+	if got["ok"] != true {
+		t.Errorf("request() result = %#v; want result.ok = true after answering the tool call", got)
+	}
+	wire := stdin.String()
+	if strings.Contains(wire, "Method not found") {
+		t.Errorf("stdin = %q; want the tool handler's structured reply, not a Method-not-found rejection", wire)
+	}
+	if !strings.Contains(wire, "unsupported dynamic tool") {
+		t.Errorf("stdin = %q; want the dynamic-tool handler's unsupported-tool result on the wire", wire)
+	}
+}
+
 // TestRequest_ServerRequestWithCollidingIDIsNotMistakenForResponse guards the
 // responseForID method-member check: a server->client request whose id happens
 // to equal our pending request id must be answered and skipped, not consumed

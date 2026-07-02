@@ -43,7 +43,7 @@ func (c *appServerClient) request(ctx context.Context, method string, params any
 		if result, matched, rpcErr := responseForID(msg, id); matched {
 			return result, rpcErr
 		}
-		if done, reqErr := c.dispatchInterleavedMessage(msg); done {
+		if done, reqErr := c.dispatchInterleavedMessage(ctx, msg); done {
 			return nil, reqErr
 		}
 	}
@@ -51,19 +51,30 @@ func (c *appServerClient) request(ctx context.Context, method string, params any
 
 // dispatchInterleavedMessage handles a message read while an RPC awaits its
 // response. Codex may interleave a server->client request (approval prompt,
-// tool call, elicitation — carries both id and method); it must be answered
-// through the same machinery the turn loop uses, because treating it as a
-// notification leaves codex blocked on the reply and the request loop blocked
-// on the response — a mutual deadlock surfacing as a misleading read
-// timeout/stall (#1031). True notifications keep flowing to
-// handleNotification. done=true aborts the pending RPC with reqErr (an
-// InputRequiredError or a wire-write failure).
-func (c *appServerClient) dispatchInterleavedMessage(msg map[string]any) (done bool, reqErr error) {
-	if method, ok := serverRequestMethod(msg); ok {
-		return c.handleServerRequest(msg, method)
+// dynamic tool call, user input, elicitation — carries both id and method);
+// it must be answered through the same machinery the turn loop uses, because
+// treating it as a notification leaves codex blocked on the reply and the
+// request loop blocked on the response — a mutual deadlock surfacing as a
+// misleading read timeout/stall (#1031). item/tool/call routes through the
+// dynamic-tool handler (not the approval table, which would reply "Method
+// not found" and reject an advertised linear_graphql/gitea_issue_labels call
+// solely for arriving early); everything else follows handleServerRequest.
+// True notifications keep flowing to handleNotification. done=true aborts
+// the pending RPC with reqErr (an InputRequiredError or a wire-write
+// failure).
+func (c *appServerClient) dispatchInterleavedMessage(ctx context.Context, msg map[string]any) (done bool, reqErr error) {
+	method, ok := serverRequestMethod(msg)
+	if !ok {
+		c.handleNotification(msg)
+		return false, nil
 	}
-	c.handleNotification(msg)
-	return false, nil
+	if method == "item/tool/call" {
+		if err := c.handleDynamicToolCall(ctx, msg); err != nil {
+			return true, err
+		}
+		return false, nil
+	}
+	return c.handleServerRequest(msg, method)
 }
 
 // serverRequestMethod reports whether msg is a server->client JSON-RPC request
