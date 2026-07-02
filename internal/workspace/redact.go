@@ -34,6 +34,29 @@ func redactCredentials(s string) string {
 	return credentialURLRe.ReplaceAllString(s, "$1")
 }
 
+// truncatedCredentialTailRe matches a URL authority prefix at end-of-string
+// whose terminating `@` (or path/query/fragment/whitespace boundary) never
+// arrived — the shape a byte cap produces when it cuts through `user:token@`
+// before the `@`. In a truncated string, userinfo and host are
+// indistinguishable there, so redactTruncated fails closed and drops the
+// whole partial authority.
+var truncatedCredentialTailRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#\s]*$`)
+
+// redactTruncated redacts credentials in output that may have been cut
+// mid-URL by a byte cap (cappedBuffer): after the normal whole-URL scrub, a
+// trailing scheme://authority fragment with no closing boundary is stripped
+// to the scheme, because `https://bot:tok` (cap landed before the `@`) would
+// otherwise slip past credentialURLRe and leak the token prefix (#1032 review
+// P1). Only the truncated tail is ambiguous — complete output keeps the
+// plain scrub so terminal host names are preserved.
+func redactTruncated(s string, truncated bool) string {
+	s = redactCredentials(s)
+	if truncated {
+		s = truncatedCredentialTailRe.ReplaceAllString(s, "$1")
+	}
+	return s
+}
+
 // credentialRedactingWriter forwards writes to w with basic-auth userinfo
 // stripped from any embedded URL. It buffers a trailing partial segment so a
 // clone URL split across two Write calls is still redacted before it reaches w,
