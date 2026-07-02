@@ -256,6 +256,32 @@ func cleanTurnBudgetForContinuationBudget(maxContinuationTurns, continuationTurn
 	return remaining
 }
 
+// WaitForWorkers blocks until every spawned worker goroutine has consumed its
+// dispatcher result (the worker subprocess has exited and its outcome is
+// collected) or grace elapses, and reports whether the drain completed. main
+// calls it after the poll loop returns on SIGTERM/SIGINT: without the wait the
+// process exits mid-run, racing the runner's subprocess kill and skipping
+// after_run/workspace teardown (BEAM gets the ordered child shutdown for free
+// from the supervision tree; a Go main return provides no such guarantee —
+// AGENTS.md cross-cutting checklist item 2). Workers observe the canceled run
+// context and exit on their own; grace only bounds how long shutdown waits for
+// that to happen.
+func (o *Orchestrator) WaitForWorkers(grace time.Duration) bool {
+	drained := make(chan struct{})
+	safeGo("orchestrator.worker_drain_wait", func() {
+		o.workerWG.Wait()
+		close(drained)
+	})
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-drained:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 // spawn asks the dispatcher for a worker, records the Running entry
 // through the actor, and starts the watcher goroutine that submits
 // finalizeRunOp on worker exit. The caller must already hold the
@@ -265,6 +291,11 @@ func cleanTurnBudgetForContinuationBudget(maxContinuationTurns, continuationTurn
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
 func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount, cleanTurnBudget int) {
+	// Register with the drain group before anything that can start a worker
+	// so WaitForWorkers can never observe a live subprocess it isn't
+	// tracking; every return path below either hands the slot to the fanout
+	// goroutine or releases it.
+	o.workerWG.Add(1)
 	runCtx, cancel := context.WithCancelCause(o.runCtx)
 	startedAt := time.Now()
 	workerDone := make(chan struct{})
@@ -287,6 +318,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 	})); err != nil {
 		cancel(nil)
 		close(workerDone)
+		o.workerWG.Done()
 		return
 	}
 	select {
@@ -294,28 +326,14 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 	case <-o.runCtx.Done():
 		cancel(nil)
 		close(workerDone)
+		o.workerWG.Done()
 		return
 	}
 	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt, DispatchOptions{CleanTurnBudget: cleanTurnBudget})
 	go func() {
+		defer o.workerWG.Done()
 		defer recoverPanic("orchestrator.spawn_result_fanout")
-		var res WorkerResult
-		select {
-		case r, ok := <-resultCh:
-			cancel(nil)
-			if ok {
-				res = r
-			} else {
-				// Dispatcher closed without yielding a result: treat
-				// as a cancellation, which becomes an abnormal exit
-				// and triggers a retry per SPEC §7.3.
-				res = WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
-			}
-		case <-o.runCtx.Done():
-			cancel(nil)
-			close(workerDone)
-			return
-		}
+		res := o.awaitWorkerResult(resultCh, startedAt, cancel)
 		// workerDone is closed in exactly one path: either by
 		// finalizeRunOp.apply once the actor accepts this submit, or by this
 		// goroutine when submit fails because o.runCtx was canceled before
@@ -337,4 +355,28 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 			close(workerDone)
 		}
 	}()
+}
+
+// awaitWorkerResult collects the dispatcher's single result for a spawned
+// worker. On shutdown (runCtx canceled) it cancels the worker and then keeps
+// waiting instead of abandoning it: the Dispatcher contract yields exactly one
+// result (or a close) once the worker observes the canceled context, so this
+// converges — returning early would strand the still-running subprocess for
+// WaitForWorkers and skip result collection entirely (#1030). A dispatcher
+// close without a result is a cancellation, which becomes an abnormal exit and
+// triggers a retry per SPEC §7.3.
+func (o *Orchestrator) awaitWorkerResult(resultCh <-chan WorkerResult, startedAt time.Time, cancel context.CancelCauseFunc) WorkerResult {
+	var r WorkerResult
+	ok := false
+	select {
+	case r, ok = <-resultCh:
+		cancel(nil)
+	case <-o.runCtx.Done():
+		cancel(nil)
+		r, ok = <-resultCh
+	}
+	if !ok {
+		return WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
+	}
+	return r
 }
