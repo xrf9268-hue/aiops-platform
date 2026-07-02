@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.12](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.11...v0.1.12) (2026-07-02)
+
+
+### Bug Fixes
+
+* **github:** harden unattended workflow gates ([#1028](https://github.com/xrf9268-hue/aiops-platform/issues/1028)) ([3811dc0](https://github.com/xrf9268-hue/aiops-platform/commit/3811dc0dec2d204fa94308d19ef8c4a563084777))
+
 ## [0.1.11](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.10...v0.1.11) (2026-06-29)
 
 
