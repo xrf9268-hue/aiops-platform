@@ -10,6 +10,7 @@ package runner
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,101 @@ func TestRequest_SkipsDifferentIdMessageThenReturns(t *testing.T) {
 	}
 	if c.lastMessage != "other" {
 		t.Errorf("c.lastMessage = %q; want %q (the different-id message must be handled, then skipped)", c.lastMessage, "other")
+	}
+}
+
+// TestRequest_AnswersInterleavedServerRequest pins issue #1031: codex may
+// interleave a server->client request (id + method) while initialize /
+// thread/start / turn/start awaits its response. request() must write a
+// JSON-RPC reply to stdin — treating it as a notification leaves codex
+// blocked on the reply and the harness blocked on the response, a mutual
+// deadlock that surfaces as a misleading read timeout. Removing the
+// serverRequestMethod branch in request() fails the stdin assertion below.
+func TestRequest_AnswersInterleavedServerRequest(t *testing.T) {
+	c, stdin := newTurnLoopClient(t, []string{
+		// approvalPolicy "never" auto-approves exec approvals (matching codex
+		// AskForApproval semantics), so the reply is decision=acceptForSession.
+		`{"jsonrpc":"2.0","id":41,"method":"item/commandExecution/requestApproval","params":{"command":"go test"}}`,
+		`{"jsonrpc":"2.0","id":0,"result":{"ok":true}}`,
+	})
+	got, err := c.request(context.Background(), "turn/start", nil)
+	if err != nil {
+		t.Fatalf("request() err = %v; want nil", err)
+	}
+	if got["ok"] != true {
+		t.Errorf("request() result = %#v; want result.ok = true after answering the server request", got)
+	}
+	wire := stdin.String()
+	if !strings.Contains(wire, `"id":41`) {
+		t.Errorf("stdin = %q; want a JSON-RPC reply to the interleaved server request (id 41)", wire)
+	}
+	if !strings.Contains(wire, `"decision"`) {
+		t.Errorf("stdin = %q; want an approval decision reply for item/commandExecution/requestApproval", wire)
+	}
+}
+
+// TestRequest_RoutesInterleavedToolCallThroughToolHandler pins the review P2
+// on #1046: an id-bearing item/tool/call interleaved while an RPC awaits its
+// response must go through the dynamic-tool handler (here: the unsupported-
+// tool structured failure for an empty tool set), not the approval reply
+// table, which would reject an advertised tool with "Method not found"
+// solely because the call arrived before the pending response.
+func TestRequest_RoutesInterleavedToolCallThroughToolHandler(t *testing.T) {
+	c, stdin := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":9,"method":"item/tool/call","params":{"tool":"nope","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":0,"result":{"ok":true}}`,
+	})
+	got, err := c.request(context.Background(), "turn/start", nil)
+	if err != nil {
+		t.Fatalf("request() err = %v; want nil", err)
+	}
+	if got["ok"] != true {
+		t.Errorf("request() result = %#v; want result.ok = true after answering the tool call", got)
+	}
+	wire := stdin.String()
+	if strings.Contains(wire, "Method not found") {
+		t.Errorf("stdin = %q; want the tool handler's structured reply, not a Method-not-found rejection", wire)
+	}
+	if !strings.Contains(wire, "unsupported dynamic tool") {
+		t.Errorf("stdin = %q; want the dynamic-tool handler's unsupported-tool result on the wire", wire)
+	}
+}
+
+// TestRequest_ServerRequestWithCollidingIDIsNotMistakenForResponse guards the
+// responseForID method-member check: a server->client request whose id happens
+// to equal our pending request id must be answered and skipped, not consumed
+// as the (empty) response.
+func TestRequest_ServerRequestWithCollidingIDIsNotMistakenForResponse(t *testing.T) {
+	c, stdin := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":0,"method":"item/commandExecution/requestApproval","params":{"command":"ls"}}`,
+		`{"jsonrpc":"2.0","id":0,"result":{"real":true}}`,
+	})
+	got, err := c.request(context.Background(), "thread/start", nil)
+	if err != nil {
+		t.Fatalf("request() err = %v; want nil", err)
+	}
+	if got["real"] != true {
+		t.Errorf("request() result = %#v; want the real response, not the colliding server request", got)
+	}
+	if !strings.Contains(stdin.String(), `"decision"`) {
+		t.Errorf("stdin = %q; want an approval reply for the colliding-id server request", stdin.String())
+	}
+}
+
+// TestRequest_InputRequiredServerRequestSurfacesInputRequired mirrors the turn
+// loop's SPEC §10.4 semantics on the request path: an explicit user-input
+// server request during an awaited RPC ends it with an InputRequiredError
+// (after replying on the wire) instead of silently declining and hanging on.
+func TestRequest_InputRequiredServerRequestSurfacesInputRequired(t *testing.T) {
+	c, stdin := newTurnLoopClient(t, []string{
+		`{"jsonrpc":"2.0","id":5,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q1"}]}}`,
+	})
+	_, err := c.request(context.Background(), "turn/start", nil)
+	if !IsInputRequired(err) {
+		t.Fatalf("request() err = %v; want an InputRequiredError for item/tool/requestUserInput", err)
+	}
+	if !strings.Contains(stdin.String(), `"id":5`) {
+		t.Errorf("stdin = %q; want a wire reply to the user-input request before surfacing input-required", stdin.String())
 	}
 }
 
@@ -202,6 +298,13 @@ func TestResponseForID(t *testing.T) {
 			msg:         map[string]any{"id": 1.5, "result": map[string]any{"stray": true}},
 			wantMatched: true,
 			wantErrCat:  CategoryResponseError,
+		},
+		{
+			// A response never carries a method member: a matching id plus a
+			// method is a server->client request the caller must answer (#1031).
+			name:        "server request with colliding id is not a response",
+			msg:         map[string]any{"id": float64(7), "method": "item/tool/requestUserInput"},
+			wantMatched: false,
 		},
 	}
 	for _, tt := range tests {
