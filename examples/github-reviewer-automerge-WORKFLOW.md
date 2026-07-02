@@ -78,18 +78,23 @@ Step 1 - find the PR:
    Rework with:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
    Stop.
-3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,reviews,statusCheckRollup`.
-4. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
-   to Done. First confirm the merged PR head still has a reviewer-owned
-   `APPROVED` review for the current `headRefOid` and a successful `build-test`
-   status/check in `statusCheckRollup`; only then continue to Step 3 PASS item 5.
-   If either proof is missing, comment the missing evidence and stop without
-   changing labels.
-5. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
+3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,statusCheckRollup`.
+4. Read PR review records with commit IDs:
+   `gh api "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR>/reviews?per_page=100"`.
+   Use each record's `state`, `user.login`, `commit_id`, and `submitted_at` when
+   identifying the newest reviewer-owned reviews.
+5. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
+   to Done. First confirm from the review records that the merged PR head still
+   has a reviewer-owned `APPROVED` review whose `commit_id` equals the current
+   `headRefOid`, plus a successful `build-test` status/check in
+   `statusCheckRollup`; only then continue to Step 3 PASS item 5. If either
+   proof is missing, comment the missing evidence and stop without changing
+   labels.
+6. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
    condition. That count is diagnostic only. Compare the newest reviewer-owned
-   `CHANGES_REQUESTED` review's reviewed commit with the current `headRefOid`.
-   Continue reviewing only when the current head differs from that reviewed
-   commit, or when no reviewer-owned `CHANGES_REQUESTED` review exists. A
+   `CHANGES_REQUESTED` review's `commit_id` with the current `headRefOid`.
+   Continue reviewing only when the current head differs from that `commit_id`,
+   or when no reviewer-owned `CHANGES_REQUESTED` review exists. A
    `Rework response:` comment explains the change, but does not replace a new
    PR head. If the newest reviewer-owned `CHANGES_REQUESTED` review already
    targets the current `headRefOid`, do not post a duplicate review or continue
