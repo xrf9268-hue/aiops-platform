@@ -64,6 +64,12 @@ func main() { //nolint:gocognit // baseline (#521)
 		os.Exit(doctor.Run(context.Background(), opts))
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Restore default signal disposition the moment the first signal cancels
+	// ctx: run() drains in-flight agent workers for up to
+	// workerShutdownDrainGrace before returning, and NotifyContext keeps
+	// swallowing signals until stop() — without this a second SIGTERM/SIGINT
+	// during the drain would be ignored instead of terminating immediately.
+	context.AfterFunc(ctx, stop)
 	if err := normalizeRunError(run(ctx, os.Args[1:]), ctx.Err()); err != nil {
 		stop()
 		fmt.Fprintln(os.Stderr, err)
