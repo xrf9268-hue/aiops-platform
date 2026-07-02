@@ -1,8 +1,11 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
 // TestResolveDispatchClaim_Table characterizes every branch of the dispatch
@@ -69,6 +72,81 @@ func TestResolveDispatchClaim_Table(t *testing.T) {
 				t.Fatalf("resolveDispatchClaim continuationTurnCount = %d; want %d", contTurnCount, tc.wantContTurnCount)
 			}
 		})
+	}
+}
+
+// cancelAwareDispatcher yields its worker result only after the spawn
+// context is canceled, modeling a real agent run that exits in response to
+// shutdown cancellation rather than instantly.
+type cancelAwareDispatcher struct {
+	released chan struct{} // closed when the worker goroutine has delivered its result
+}
+
+func (d *cancelAwareDispatcher) Spawn(ctx context.Context, _ tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
+	out := make(chan WorkerResult, 1)
+	go func() {
+		<-ctx.Done()
+		out <- WorkerResult{Err: context.Canceled}
+		close(out)
+		close(d.released)
+	}()
+	return out
+}
+
+// TestWaitForWorkers_DrainsInFlightWorkerOnShutdown reproduces the issue
+// #1030 SIGTERM path: the actor context is canceled while a worker is
+// mid-run. WaitForWorkers must block until the worker observes the
+// cancellation and its result is collected — deleting the workerWG handoff
+// in spawn (or restoring the old early return in the runCtx.Done fanout
+// branch) makes WaitForWorkers return before the dispatcher delivered the
+// result, failing the released-channel assertion below.
+func TestWaitForWorkers_DrainsInFlightWorkerOnShutdown(t *testing.T) {
+	disp := &cancelAwareDispatcher{released: make(chan struct{})}
+	st := NewOrchestratorState(15000, 100)
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-drain", Identifier: "ENG-drain", Title: "shutdown drain"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch(%s) = %v; want nil", iss.ID, err)
+	}
+
+	// Worker is running (blocked on ctx.Done). Simulate SIGTERM.
+	cancel()
+
+	if !o.WaitForWorkers(5 * time.Second) {
+		t.Fatalf("WaitForWorkers(5s) = false; want true (worker exits on cancel)")
+	}
+	select {
+	case <-disp.released:
+	default:
+		t.Fatalf("WaitForWorkers returned before the dispatcher delivered the worker result")
+	}
+}
+
+// TestWaitForWorkers_TimesOutOnStuckWorker pins the bounded-grace contract:
+// a worker that ignores cancellation must not wedge shutdown forever.
+func TestWaitForWorkers_TimesOutOnStuckWorker(t *testing.T) {
+	disp := &fakeDispatcher{} // never delivers a result
+	st := NewOrchestratorState(15000, 100)
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-stuck", Identifier: "ENG-stuck", Title: "stuck worker"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch(%s) = %v; want nil", iss.ID, err)
+	}
+	if o.WaitForWorkers(50 * time.Millisecond) {
+		t.Fatalf("WaitForWorkers(50ms) = true; want false (worker never exits)")
 	}
 }
 

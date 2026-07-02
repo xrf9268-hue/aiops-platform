@@ -30,6 +30,13 @@ import (
 // hence the explicit build ARG there).
 var version = "devel"
 
+// workerShutdownDrainGrace bounds how long run() waits for in-flight agent
+// workers after the poll loop exits on SIGTERM/SIGINT. It matches the
+// reconcile WorkerExitTimeout (workflow_runtime.go): workers that ignore
+// cancellation longer than this are abandoned to process exit, and a second
+// signal always terminates immediately.
+const workerShutdownDrainGrace = 30 * time.Second
+
 func resolveVersion() string { return buildinfo.Resolve(version) }
 
 func main() { //nolint:gocognit // baseline (#521)
@@ -447,7 +454,18 @@ func run(ctx context.Context, args []string) error { //nolint:gocognit,funlen //
 			log.Printf("workflow reload loop exited: %v", err)
 		}
 	}()
-	return orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
+	pollErr := orchestrator.RunPollLoopWithRuntime(ctx, poller, runtime, orchestrator.PollLoopRuntimeOptions{})
+	// SIGTERM/SIGINT lands here with in-flight agents still running. Drain
+	// them before returning from run(): a bare return exits the process,
+	// racing the runners' subprocess kill and skipping result collection
+	// (issue #1030). Workers see the canceled root context and exit on
+	// their own; the grace period only bounds the wait. A second signal
+	// still kills the process immediately (signal.NotifyContext stops
+	// relaying once canceled).
+	if !orch.WaitForWorkers(workerShutdownDrainGrace) {
+		log.Printf("event=shutdown_drain_timeout grace=%s note=%q", workerShutdownDrainGrace, "exiting with agent workers still running")
+	}
+	return pollErr
 }
 func reconciliationConfigForWorkflow(cfg workflow.Config) orchestrator.ReconciliationConfig {
 	// Single source of truth for the field list lives in
