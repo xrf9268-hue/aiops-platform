@@ -76,32 +76,37 @@ func TestResolveDispatchClaim_Table(t *testing.T) {
 }
 
 // cancelAwareDispatcher yields its worker result only after the spawn
-// context is canceled, modeling a real agent run that exits in response to
-// shutdown cancellation rather than instantly.
+// context is canceled plus a teardown delay, modeling a real agent run that
+// needs time to wind down (subprocess kill, artifact write) after shutdown
+// cancellation. released is closed strictly before the result is delivered,
+// so a drain that returned without consuming the result observes it still
+// open.
 type cancelAwareDispatcher struct {
-	released chan struct{} // closed when the worker goroutine has delivered its result
+	teardown time.Duration
+	released chan struct{}
 }
 
 func (d *cancelAwareDispatcher) Spawn(ctx context.Context, _ tracker.Issue, _ *int, _ DispatchOptions) <-chan WorkerResult {
 	out := make(chan WorkerResult, 1)
 	go func() {
 		<-ctx.Done()
+		time.Sleep(d.teardown)
+		close(d.released)
 		out <- WorkerResult{Err: context.Canceled}
 		close(out)
-		close(d.released)
 	}()
 	return out
 }
 
 // TestWaitForWorkers_DrainsInFlightWorkerOnShutdown reproduces the issue
 // #1030 SIGTERM path: the actor context is canceled while a worker is
-// mid-run. WaitForWorkers must block until the worker observes the
-// cancellation and its result is collected — deleting the workerWG handoff
-// in spawn (or restoring the old early return in the runCtx.Done fanout
-// branch) makes WaitForWorkers return before the dispatcher delivered the
-// result, failing the released-channel assertion below.
+// mid-run and the worker needs teardown time after observing the
+// cancellation. WaitForWorkers must block until the worker's result is
+// collected — deleting the workerWG handoff in spawn (or restoring the old
+// early return in the runCtx.Done fanout branch) makes WaitForWorkers return
+// during the teardown window, failing the released-channel assertion below.
 func TestWaitForWorkers_DrainsInFlightWorkerOnShutdown(t *testing.T) {
-	disp := &cancelAwareDispatcher{released: make(chan struct{})}
+	disp := &cancelAwareDispatcher{teardown: 300 * time.Millisecond, released: make(chan struct{})}
 	st := NewOrchestratorState(15000, 100)
 	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
 	ctx, cancel := context.WithCancel(context.Background())
