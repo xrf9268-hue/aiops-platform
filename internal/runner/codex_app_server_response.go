@@ -11,6 +11,13 @@ import (
 // member. A non-matching msg (matched=false) is an interleaved notification the
 // caller must dispatch and keep reading past.
 func responseForID(msg map[string]any, id int) (result map[string]any, matched bool, err error) {
+	// A JSON-RPC response never carries a method member: a message with both
+	// id and method is a server->client *request* (approval prompt, tool
+	// call, elicitation) the caller must answer — even when the server's id
+	// numerically collides with our pending request id or is not an integer.
+	if _, hasMethod := msg["method"]; hasMethod {
+		return nil, false, nil
+	}
 	gotID, ok := numberID(msg["id"])
 	if !ok {
 		// A present-but-non-integer id is a malformed response: numberID will not
