@@ -27,6 +27,24 @@ const (
 	// ("Max line size: 10 MB"). Lines exceeding this surface as bufio.ErrTooLong
 	// instead of growing the buffer unbounded and OOMing the worker.
 	maxAppServerLineBytes = 10 * 1024 * 1024
+	// maxAppServerBufferedBytes caps how many bytes of scanned-but-unconsumed
+	// stdout lines the reader pump may hold while the consumer is busy (e.g. a
+	// synchronous dynamic-tool HTTP call, bounded by its own 30s timeout). The
+	// Elixir reference gets this buffering for free — Port output queues into
+	// the process mailbox — and the pump is the explicit Go compensation
+	// (AGENTS.md cross-cutting checklist item 2); the cap keeps the
+	// compensation memory-bounded and turns a pathological flood into a typed
+	// error instead of an OOM or a stdio deadlock.
+	maxAppServerBufferedBytes = 64 << 20
+	// lineQueueItemOverheadBytes is a conservative charge for each queued stdout
+	// item in addition to payload bytes. The cap is a safety budget, not exact
+	// heap accounting; charging per item keeps blank/tiny-line floods bounded.
+	lineQueueItemOverheadBytes = 64
+	// appServerStdinWriteTimeout bounds a single write to codex stdin. The read
+	// path has read_timeout_ms; without a write bound the symmetric half of a
+	// stdio deadlock (codex blocked writing stdout, harness blocked writing
+	// stdin) hangs until the run's outer deadline instead of failing fast.
+	appServerStdinWriteTimeout = 30 * time.Second
 )
 
 func (c *appServerClient) request(ctx context.Context, method string, params any) (map[string]any, error) {
@@ -98,8 +116,24 @@ func (c *appServerClient) send(msg map[string]any) error {
 		return err
 	}
 	b = append(b, '\n')
-	_, err = c.stdin.Write(b)
-	return err
+	// Bound the write when stdin supports deadlines (the real subprocess pipe
+	// is an *os.File; test buffers are not and skip this). If codex stops
+	// draining its stdin while we still owe it a reply, the write fails with
+	// os.ErrDeadlineExceeded instead of hanging the consumer goroutine — the
+	// write-side twin of read_timeout_ms.
+	timeout := c.stdinWriteTimeout
+	if timeout <= 0 {
+		timeout = appServerStdinWriteTimeout
+	}
+	if d, ok := c.stdin.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		if derr := d.SetWriteDeadline(time.Now().Add(timeout)); derr == nil {
+			defer func() { _ = d.SetWriteDeadline(time.Time{}) }()
+		}
+	}
+	if _, err = c.stdin.Write(b); err != nil {
+		return fmt.Errorf("write codex app-server stdin: %w", err)
+	}
+	return nil
 }
 func (c *appServerClient) readMessage(ctx context.Context) (map[string]any, error) {
 	msg, raw, err := c.readProtocolMessage(ctx)
@@ -132,48 +166,170 @@ func (c *appServerClient) readProtocolMessage(ctx context.Context) (map[string]a
 	return msg, line, nil
 }
 
-// startStdoutReader launches the single long-lived stdout reader. It is the
-// source stage of https://go.dev/blog/pipelines: one goroutine owns the
-// bufio.Scanner (which is not safe for concurrent use) and continuously scans
-// lines, handing each to the request/response consumer over readCh. Its lifetime
-// is the app-server process: it exits when scanner.Scan returns false (stdout
-// EOF or error — the process closed stdout on exit), recording a sticky readErr.
+// startStdoutReader launches the long-lived stdout reader as a two-stage
+// pipeline (https://go.dev/blog/pipelines): a scan goroutine that owns the
+// bufio.Scanner (not safe for concurrent use) and keeps the OS pipe drained,
+// and a pump goroutine that queues scanned lines in memory and feeds the
+// request/response consumer over readCh.
 //
-// The reader has no separate stop signal: the consumer never abandons readCh, it
-// drains to EOF at shutdown (RunCodexAppServer drains before cmd.Wait), so the
-// reader always keeps the pipe flowing and reaches EOF rather than parking on a
-// send forever (Go Code Review Comments, "Goroutine Lifetimes"). `defer
-// close(readCh)` runs on every exit path, so a consumer waiting on readCh is
-// always released and the close is the happens-before edge that publishes
-// readErr. readCh is created here so the goroutine and its channel have one owner.
+// The pump exists because the consumer can be busy for tens of seconds — a
+// dynamic-tool HTTP call runs synchronously on the consumer goroutine — while
+// codex keeps streaming stdout without waiting for the tool reply. With a
+// direct unbuffered handoff the scan goroutine parks on the send, nobody
+// drains the OS pipe (~64 KiB), codex blocks writing stdout, and the tool
+// reply written to codex stdin can then deadlock against codex's blocked
+// write (#1033). The Elixir reference never sees this because Port output
+// queues into the process mailbox; the pump is the explicit Go compensation
+// (AGENTS.md cross-cutting checklist item 2), memory-bounded by
+// maxAppServerBufferedBytes so a pathological flood fails typed instead of
+// OOMing.
+//
+// Lifetimes: the scan goroutine exits at stdout EOF/error (the process closed
+// stdout), publishing its terminal error through scanErr (buffered 1) before
+// closing lines. The pump exits after lines closes and the queue drains — the
+// consumer never abandons readCh, it drains to EOF at shutdown
+// (RunCodexAppServer drains before cmd.Wait) — or on queue overflow, where it
+// keeps discarding scanned lines to EOF so neither the scan goroutine nor
+// codex ever blocks. Only the pump writes c.readErr, and `defer close(readCh)`
+// on its every exit path is the happens-before edge that publishes it.
 func (c *appServerClient) startStdoutReader() {
 	c.readCh = make(chan []byte)
+	lines := make(chan []byte)
+	scanErr := make(chan error, 1)
 	go func() {
-		defer close(c.readCh)
-		defer c.recoverReaderPanic()
+		defer close(lines)
+		defer c.recoverReaderPanic(scanErr)
 		for c.scanner.Scan() {
 			// Scanner.Bytes() is invalidated by the next Scan (bufio docs); copy
 			// before handing the line across the goroutine boundary.
 			line := append([]byte(nil), c.scanner.Bytes()...)
-			c.readCh <- line
+			lines <- line
 		}
-		c.readErr = scanTerminalError(c.scanner)
+		scanErr <- scanTerminalError(c.scanner)
 	}()
+	go c.pumpStdoutLines(lines, scanErr)
 }
 
-// recoverReaderPanic is the stdout reader's deferred recovery: a panic in the
-// scan loop is published as readErr (so the consumer sees an error rather than
-// hanging on a never-closed readCh) and logged with a stack, not swallowed —
-// matching the orchestrator's recoverPanicValue convention (recover.go).
-func (c *appServerClient) recoverReaderPanic() {
+// pumpStdoutLines is the buffering stage between the scan goroutine and the
+// consumer: it queues lines while the consumer is busy and forwards them in
+// order. On overflow it records the typed error and switches to discarding
+// the rest of the stream so the scan goroutine still reaches EOF (a parked
+// scan goroutine would leak and re-create the very pipe stall this stage
+// removes).
+func (c *appServerClient) pumpStdoutLines(lines <-chan []byte, scanErr <-chan error) {
+	defer close(c.readCh)
+	defer recoverPanicValue("runner.app_server_stdout_pump")
+	q := lineQueue{capBytes: c.stdoutBufferBytes}
+	if q.capBytes <= 0 {
+		q.capBytes = maxAppServerBufferedBytes
+	}
+	for lines != nil || q.len() > 0 {
+		out, head := q.sendArm(c.readCh)
+		select {
+		case line, ok := <-lines:
+			if !ok {
+				lines = nil
+			} else if !q.push(line) {
+				c.readErr = &stdoutBacklogOverflowError{capBytes: q.capBytes}
+				// Fail the consumer immediately (deferred close(readCh) runs on
+				// return) while a detached drain keeps the scan goroutine and the
+				// subprocess unblocked until stdout EOFs — the failing run tears
+				// the process down, so the drain's lifetime is bounded by it.
+				go drainLines(lines)
+				return
+			}
+		case out <- head:
+			q.pop()
+		}
+	}
+	c.readErr = <-scanErr
+}
+
+// lineQueue is the pump's in-order, byte-bounded backlog of scanned lines.
+type lineQueue struct {
+	capBytes int
+	items    [][]byte
+	// bytes tracks the cap charge, including per-item overhead, rather than
+	// only len(line); otherwise blank-line floods never hit the limit.
+	bytes int
+}
+
+func (q *lineQueue) len() int { return len(q.items) }
+
+// push appends line and reports whether the backlog is still within capBytes.
+func (q *lineQueue) push(line []byte) bool {
+	q.items = append(q.items, line)
+	q.bytes += queuedLineBytes(line)
+	return q.bytes <= q.capBytes
+}
+
+func (q *lineQueue) pop() {
+	q.bytes -= queuedLineBytes(q.items[0])
+	q.items[0] = nil
+	q.items = q.items[1:]
+}
+
+func queuedLineBytes(line []byte) int {
+	return len(line) + lineQueueItemOverheadBytes
+}
+
+// sendArm returns the select arm for forwarding the head line: a nil channel
+// (never ready) when the queue is empty, so the select blocks on receive only.
+func (q *lineQueue) sendArm(readCh chan []byte) (chan<- []byte, []byte) {
+	if len(q.items) == 0 {
+		return nil, nil
+	}
+	return readCh, q.items[0]
+}
+
+// drainLines consumes a line channel to close, discarding content, so the
+// producing goroutine can always finish its sends and exit.
+func drainLines(lines <-chan []byte) {
+	defer recoverPanicValue("runner.app_server_stdout_overflow_drain")
+	for range lines {
+	}
+}
+
+type stdoutBacklogOverflowError struct {
+	capBytes int
+}
+
+func (e *stdoutBacklogOverflowError) Error() string {
+	return fmt.Sprintf("codex app-server stdout backlog exceeded %d bytes with the consumer busy", e.capBytes)
+}
+
+func (e *stdoutBacklogOverflowError) category() RunnerErrorCategory {
+	return CategoryResponseError
+}
+
+func isStdoutBacklogOverflow(err error) bool {
+	var overflow *stdoutBacklogOverflowError
+	return errors.As(err, &overflow)
+}
+
+// recoverPanicValue logs a recovered panic with a stack instead of letting it
+// kill the worker — the runner-local twin of the orchestrator's recoverPanic
+// convention (internal/orchestrator/recover.go).
+func recoverPanicValue(site string) {
+	if r := recover(); r != nil {
+		log.Printf("event=runner_goroutine_panic site=%s panic=%v stack=%q", site, r, debug.Stack())
+	}
+}
+
+// recoverReaderPanic is the scan goroutine's deferred recovery: a panic in the
+// scan loop is published through scanErr (so the pump forwards it as readErr
+// and the consumer sees an error rather than hanging) and logged with a
+// stack, not swallowed — matching the orchestrator's recoverPanic convention
+// (recover.go).
+func (c *appServerClient) recoverReaderPanic(scanErr chan<- error) {
 	r := recover()
 	if r == nil {
 		return
 	}
 	if err, ok := r.(error); ok {
-		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %w", err)
+		scanErr <- fmt.Errorf("codex app-server stdout reader panic: %w", err)
 	} else {
-		c.readErr = fmt.Errorf("codex app-server stdout reader panic: %v", r)
+		scanErr <- fmt.Errorf("codex app-server stdout reader panic: %v", r)
 	}
 	log.Printf("event=codex_app_server_reader_panic panic=%v stack=%q", r, debug.Stack())
 }

@@ -189,6 +189,21 @@ func TestClassifyAppServerOutcome_CategorizedBeatsPortExit(t *testing.T) {
 	}
 }
 
+func TestClassifyAppServerOutcome_StdoutBacklogOverflowBeatsPortExit(t *testing.T) {
+	runErr := error(&stdoutBacklogOverflowError{capBytes: 8})
+	waitErr := errors.New("signal: killed")
+	_, err := classifyAppServerOutcome(context.Background(), Result{}, runErr, waitErr, 1000, time.Now(), time.Second)
+	if !isStdoutBacklogOverflow(err) {
+		t.Fatalf("classifyAppServerOutcome(stdout backlog overflow, waitErr) err = %v; want stdout-backlog overflow", err)
+	}
+	if cat, ok := ErrorCategory(err); !ok || cat != CategoryResponseError {
+		t.Fatalf("ErrorCategory(%v) = %q, %v; want %q, true", err, cat, ok, CategoryResponseError)
+	}
+	if errors.Is(err, waitErr) {
+		t.Fatalf("classifyAppServerOutcome(stdout backlog overflow, waitErr) err = %v; must not wrap waitErr as port exit", err)
+	}
+}
+
 // TestClassifyAppServerOutcome_TurnTimeoutUnderDeadlineIsTimeout pins the #507
 // item-3 wontfix: when the outer run deadline has fired, a coinciding
 // *TurnTimeoutError is reported as a *TimeoutError (the outer-deadline branch
