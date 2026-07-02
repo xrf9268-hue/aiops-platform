@@ -102,9 +102,10 @@ Step 1 - find the PR:
    `Rework response:` comment explains the change, but does not replace a new
    PR head. If the newest reviewer-owned `CHANGES_REQUESTED` review already
    targets the current `headRefOid`, do not post a duplicate review or continue
-   based on a `Rework response:` comment alone; move the issue back to Rework
-   and comment
+   based on a `Rework response:` comment alone. First comment
    `Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework`.
+   Then move the issue back to Rework as your LAST action and stop:
+   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 
 Step 2 - review the current head:
 1. Ensure the PR author is not the reviewer login.

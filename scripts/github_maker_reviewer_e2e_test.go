@@ -182,6 +182,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"historical `CHANGES_REQUESTED` count as a stop\n   condition",
 				"does not replace a new\n   PR head",
 				"Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework",
+				"Then move the issue back to Rework as your LAST action and stop",
 				"aiops:blocked",
 				"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked",
 				"Codex usage-limit/input-required",
