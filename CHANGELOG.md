@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.13](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.12...v0.1.13) (2026-07-02)
+
+
+### Bug Fixes
+
+* **orchestrator:** drain in-flight agent workers on shutdown ([#1044](https://github.com/xrf9268-hue/aiops-platform/issues/1044)) ([8956638](https://github.com/xrf9268-hue/aiops-platform/commit/895663811d484ad978dbddd668eaed07b36f9202))
+* **runner:** answer server-&gt;client requests interleaved with pending RPCs ([#1046](https://github.com/xrf9268-hue/aiops-platform/issues/1046)) ([9aa96e5](https://github.com/xrf9268-hue/aiops-platform/commit/9aa96e507549cd5ce8b92cf49627db5b7bdf0397))
+* **workflow:** remove rework count budget ([#1051](https://github.com/xrf9268-hue/aiops-platform/issues/1051)) ([c1dd32a](https://github.com/xrf9268-hue/aiops-platform/commit/c1dd32a6ca7a3e26353cdb229157a53789628163))
+
 ## [0.1.12](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.11...v0.1.12) (2026-07-02)
 
 
