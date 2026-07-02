@@ -458,6 +458,45 @@ func TestReconcileStalledRunsSkipsWhenTimeoutDisabled(t *testing.T) {
 	}
 }
 
+func TestReconcileBudgetExceededRunsCancelsQuietRuntimeOverBudgetClaim(t *testing.T) {
+	disp := &fakeDispatcher{}
+	o, cancel := startActor(t, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "BUDGET-RUNTIME-1", Identifier: "BUDGET-RUNTIME-1", State: "Todo"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	o.WithStateForTest(func(st *OrchestratorState) {
+		st.BudgetGuardrails = BudgetGuardrails{MaxRuntimeSecondsPerClaim: 1}
+		st.Running["BUDGET-RUNTIME-1"].StartedAt = time.Now().Add(-2 * time.Second)
+	})
+	if err := o.ReconcileBudgetExceededRuns(context.Background(), 0); err != nil {
+		t.Fatalf("ReconcileBudgetExceededRuns: %v", err)
+	}
+	select {
+	case <-disp.context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime budget exceeded worker context was not cancelled")
+	}
+
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: 2 * time.Second})
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Blocked) == 1 && len(view.Retrying) == 0
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	blocked := view.Blocked[0]
+	if blocked.Method != budgetExceededBlockMethod || !strings.Contains(blocked.Error, "max_runtime_seconds_per_claim=1") {
+		t.Fatalf("blocked row = %+v, want runtime budget_exceeded detail", blocked)
+	}
+}
+
 func TestRefreshActiveTrackerIssuesRefreshesIssueStateForCapacityCounting(t *testing.T) {
 	disp := &fakeDispatcher{}
 	st := NewOrchestratorState(15000, 10)
@@ -914,6 +953,60 @@ func TestRecordRuntimeEventUpdatesCodexTotalsAndRateLimits(t *testing.T) {
 	}
 	if got := (*view.CodexRateLimits)["primary"].(map[string]any)["remaining"]; got != 99 {
 		t.Fatalf("rate_limits.primary.remaining = %#v, want 99", got)
+	}
+}
+
+func TestRecordRuntimeEventBudgetExceededCancelsAndBlocksRun(t *testing.T) {
+	disp := &fakeDispatcher{}
+	st := NewOrchestratorState(15000, 100)
+	st.BudgetGuardrails = BudgetGuardrails{MaxTokensPerClaim: 10}
+	o := New(st, Deps{Dispatcher: disp, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	ctx, cancel := context.WithCancel(context.Background())
+	go o.Run(ctx)
+	defer cancel()
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	iss := tracker.Issue{ID: "ENG-BUDGET", Identifier: "ENG-BUDGET", State: "Todo", Title: "budget guard"}
+	if err := o.RequestDispatch(context.Background(), iss, nil); err != nil {
+		t.Fatalf("RequestDispatch: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	if err := o.RecordRuntimeEvent(context.Background(), iss.ID, task.RuntimeEvent{
+		Event:   task.EventTurnCompleted,
+		Payload: map[string]any{"usage": map[string]any{"input_tokens": 4, "output_tokens": 8, "total_tokens": 12}},
+	}); err != nil {
+		t.Fatalf("RecordRuntimeEvent: %v", err)
+	}
+	select {
+	case <-disp.context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("budget-exceeded worker context was not cancelled")
+	}
+	disp.finishAt(0, WorkerResult{Err: context.Canceled, Elapsed: 2 * time.Second})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil && len(view.Blocked) == 1 && len(view.Running) == 0 && len(view.Retrying) == 0
+	}, time.Second)
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	blocked := view.Blocked[0]
+	if blocked.Method != budgetExceededBlockMethod || !strings.Contains(blocked.Error, "max_tokens_per_claim=10") {
+		t.Fatalf("blocked row = %+v, want budget_exceeded method with token detail", blocked)
+	}
+	if blocked.Tokens.TotalTokens != 12 || blocked.RuntimeSeconds != 2 {
+		t.Fatalf("blocked usage = tokens %+v runtime %.1f, want over-budget claim totals", blocked.Tokens, blocked.RuntimeSeconds)
+	}
+	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
+		t.Fatalf("budget-blocked issue dispatch err = %v, want ErrNotDispatched", err)
+	}
+	if !recentEventKind(view.RecentEvents, IssueID(iss.ID), RuntimeEventBudgetExceeded) {
+		t.Fatalf("RecentEvents = %+v; want budget exceeded event", view.RecentEvents)
 	}
 }
 

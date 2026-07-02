@@ -924,6 +924,38 @@ func TestPollOnceFiltersTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
 	close(dispatcher.releaseCh)
 }
 
+func TestPollOnceFiltersNamespacedTodoIssuesBlockedByNonTerminalBlockers(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{
+		{ID: "blocked-github-todo", Identifier: "#10", State: "aiops:todo", BlockedBy: []tracker.BlockerRef{{ID: "12", Identifier: "#12", State: "aiops:todo"}}},
+		{ID: "unblocked-github-todo", Identifier: "#11", State: "aiops:todo", BlockedBy: []tracker.BlockerRef{{ID: "13", Identifier: "#13", State: "closed"}}},
+	}}
+	dispatcher := &recordingDispatcher{releaseCh: make(chan struct{})}
+	orch := New(NewOrchestratorState(30000, 2), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:   []string{"aiops:todo"},
+		TerminalStates: []string{"closed"},
+	})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("poll once: %v", err)
+	}
+	waitForDispatcherCount(t, dispatcher, 1)
+	if got := dispatcher.issueAt(0).ID; got != "unblocked-github-todo" {
+		t.Fatalf("dispatched issue ID = %q, want only namespaced Todo issue whose blockers are terminal", got)
+	}
+	close(dispatcher.releaseCh)
+}
+
 func TestPollOnceSkipsMalformedTrackerCandidates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1514,6 +1546,105 @@ func TestPollOnceKeepsDueContinuationRetryMissingFromActiveListing(t *testing.T)
 	}
 	if got := dispatcher.count(); got != 1 {
 		t.Fatalf("missing continuation poll spawned %d workers, want no new dispatch", got-1)
+	}
+}
+
+func TestPollOnceCancelsRuntimeBudgetExceededRunWithoutRuntimeEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dispatcher := &blockingDispatcher{}
+	st := NewOrchestratorState(30000, 1)
+	st.BudgetGuardrails = BudgetGuardrails{MaxRuntimeSecondsPerClaim: 1}
+	orch := New(st, Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+	issue := tracker.Issue{ID: "issue-budget-runtime", Identifier: "ISSUE-BUDGET-RUNTIME", Title: "Issue budget runtime", State: "Todo"}
+	poller := NewPollerWithReconciliation(&fakeIssueTracker{issues: []tracker.Issue{issue}}, orch, ReconciliationConfig{
+		ActiveStates:      []string{"Todo"},
+		WorkerExitTimeout: time.Second,
+		TerminalStates:    []string{"Done"},
+		InactiveStates:    []string{"Backlog"},
+	})
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	orch.WithStateForTest(func(st *OrchestratorState) {
+		st.Running[IssueID(issue.ID)].StartedAt = time.Now().Add(-2 * time.Second)
+	})
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("budget poll once: %v", err)
+	}
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 1 || view.Blocked[0].IssueID != IssueID(issue.ID) || view.Blocked[0].Method != budgetExceededBlockMethod {
+		t.Fatalf("blocked after budget poll = %+v, want one budget_exceeded row for %s", view.Blocked, issue.ID)
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("dispatch count after budget poll = %d, want no replacement dispatch for locally blocked issue", got)
+	}
+}
+
+func TestPollOnceCancelsRuntimeBudgetExceededRunWhenActiveListingFails(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dispatcher := &blockingDispatcher{}
+	st := NewOrchestratorState(30000, 1)
+	st.BudgetGuardrails = BudgetGuardrails{MaxRuntimeSecondsPerClaim: 1}
+	orch := New(st, Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  &sequenceScheduler{delays: []time.Duration{time.Millisecond}},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+	issue := tracker.Issue{ID: "issue-budget-listing-error", Identifier: "ISSUE-BUDGET-LISTING-ERROR", Title: "Issue budget listing error", State: "Todo"}
+	trackerErr := errors.New("tracker listing failed")
+	trackerClient := &fakeIssueTracker{issues: []tracker.Issue{issue}}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"Todo"},
+		WorkerExitTimeout: time.Second,
+		TerminalStates:    []string{"Done"},
+		InactiveStates:    []string{"Backlog"},
+	})
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitFor(t, func() bool { return dispatcher.count() == 1 }, time.Second)
+	orch.WithStateForTest(func(st *OrchestratorState) {
+		st.Running[IssueID(issue.ID)].StartedAt = time.Now().Add(-2 * time.Second)
+	})
+	trackerClient.err = trackerErr
+
+	if err := poller.PollOnce(ctx); !errors.Is(err, trackerErr) {
+		t.Fatalf("budget poll once error = %v; want tracker listing error", err)
+	}
+	waitFor(t, func() bool {
+		view, err := orch.Snapshot(ctx)
+		return err == nil && len(view.Blocked) == 1
+	}, time.Second)
+	view, err := orch.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if len(view.Blocked) != 1 || view.Blocked[0].IssueID != IssueID(issue.ID) || view.Blocked[0].Method != budgetExceededBlockMethod {
+		t.Fatalf("blocked after listing-error budget poll = %+v, want one budget_exceeded row for %s", view.Blocked, issue.ID)
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Fatalf("dispatch count after listing-error budget poll = %d, want no replacement dispatch for locally blocked issue", got)
 	}
 }
 

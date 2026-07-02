@@ -55,6 +55,8 @@ type StateResponse struct {
 	// continuation path and also remain in Completed per SPEC §16.6.
 	ActiveSuccessNoHandoff []string               `json:"active_success_no_handoff"`
 	OperatorTerminalStops  []OperatorTerminalStop `json:"operator_terminal_stops"`
+	CompletedSessionUsage  []SessionUsage         `json:"completed_session_usage"`
+	BudgetGuardrails       BudgetGuardrails       `json:"budget_guardrails"`
 	CodexTotals            CodexTotals            `json:"codex_totals"`
 	// RateLimits is the latest Codex rate-limit payload (SPEC §13.7.2). It
 	// is emitted unconditionally — `null` until a `rate_limit_updated`
@@ -125,6 +127,7 @@ type Running struct {
 	LastEvent         string        `json:"last_event"`
 	LastMessage       string        `json:"last_message"`
 	StartedAt         *time.Time    `json:"started_at,omitempty"`
+	RuntimeSeconds    float64       `json:"runtime_seconds"`
 	LastEventAt       *time.Time    `json:"last_event_at,omitempty"`
 	RetryAttempt      *int          `json:"retry_attempt,omitempty"`
 	WorkspacePath     string        `json:"workspace_path,omitempty"`
@@ -158,17 +161,40 @@ type RunningTokens struct {
 
 // Blocked mirrors SPEC §13.7.2's per-blocked-row object.
 type Blocked struct {
-	IssueID           string     `json:"issue_id"`
-	Identifier        string     `json:"issue_identifier,omitempty"`
-	IssueURL          string     `json:"issue_url,omitempty"`
-	State             string     `json:"state,omitempty"`
-	BlockedAt         *time.Time `json:"blocked_at,omitempty"`
-	WorkspacePath     string     `json:"workspace_path,omitempty"`
-	SessionID         string     `json:"session_id,omitempty"`
-	LastEventAt       *time.Time `json:"last_event_at,omitempty"`
-	Method            string     `json:"method,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	CodexAppServerPID int        `json:"codex_app_server_pid,omitempty"`
+	IssueID           string        `json:"issue_id"`
+	Identifier        string        `json:"issue_identifier,omitempty"`
+	IssueURL          string        `json:"issue_url,omitempty"`
+	State             string        `json:"state,omitempty"`
+	BlockedAt         *time.Time    `json:"blocked_at,omitempty"`
+	WorkspacePath     string        `json:"workspace_path,omitempty"`
+	SessionID         string        `json:"session_id,omitempty"`
+	LastEventAt       *time.Time    `json:"last_event_at,omitempty"`
+	RuntimeSeconds    float64       `json:"runtime_seconds,omitempty"`
+	Tokens            RunningTokens `json:"tokens"`
+	Method            string        `json:"method,omitempty"`
+	Error             string        `json:"error,omitempty"`
+	CodexAppServerPID int           `json:"codex_app_server_pid,omitempty"`
+}
+
+type SessionUsage struct {
+	IssueID        string        `json:"issue_id"`
+	Identifier     string        `json:"issue_identifier,omitempty"`
+	IssueURL       string        `json:"issue_url,omitempty"`
+	State          string        `json:"state,omitempty"`
+	SessionID      string        `json:"session_id,omitempty"`
+	WorkflowSource string        `json:"workflow_source,omitempty"`
+	WorkflowPath   string        `json:"workflow_path,omitempty"`
+	AgentProvider  string        `json:"agent_provider,omitempty"`
+	AgentModel     string        `json:"agent_model,omitempty"`
+	Tokens         RunningTokens `json:"tokens"`
+	RuntimeSeconds float64       `json:"runtime_seconds"`
+	CompletedAt    *time.Time    `json:"completed_at,omitempty"`
+	Outcome        string        `json:"outcome,omitempty"`
+}
+
+type BudgetGuardrails struct {
+	MaxTokensPerClaim         int64 `json:"max_tokens_per_claim,omitempty"`
+	MaxRuntimeSecondsPerClaim int64 `json:"max_runtime_seconds_per_claim,omitempty"`
 }
 
 // Retry mirrors SPEC §13.7.2's per-retry-row object. Kind is the wire form of

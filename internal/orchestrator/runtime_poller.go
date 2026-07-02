@@ -77,6 +77,9 @@ func (p *RuntimePoller) PollOnce(ctx context.Context) error {
 	if err := p.orchestrator.UpdateMaxContinuationTurns(ctx, snap.MaxContinuationTurns); err != nil {
 		return err
 	}
+	if err := p.orchestrator.UpdateBudgetGuardrails(ctx, snap.BudgetGuardrails); err != nil {
+		return err
+	}
 	if err := p.orchestrator.UpdatePollIntervalMs(ctx, snap.PollInterval.Milliseconds()); err != nil {
 		return err
 	}

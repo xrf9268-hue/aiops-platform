@@ -372,18 +372,19 @@ func apiRunningFromView(row orchestrator.RunningView) stateapi.Running {
 		lastEventAt = &v
 	}
 	return stateapi.Running{
-		IssueID:       string(row.IssueID),
-		Identifier:    row.Identifier,
-		IssueURL:      row.IssueURL,
-		State:         row.State,
-		SessionID:     row.SessionID,
-		TurnCount:     row.TurnCount,
-		LastEvent:     row.LastEvent,
-		LastMessage:   redactStateAPILastMessage(row.LastMessage),
-		StartedAt:     startedAt,
-		LastEventAt:   lastEventAt,
-		RetryAttempt:  copyIntPointer(row.RetryAttempt),
-		WorkspacePath: row.WorkspacePath,
+		IssueID:        string(row.IssueID),
+		Identifier:     row.Identifier,
+		IssueURL:       row.IssueURL,
+		State:          row.State,
+		SessionID:      row.SessionID,
+		TurnCount:      row.TurnCount,
+		LastEvent:      row.LastEvent,
+		LastMessage:    redactStateAPILastMessage(row.LastMessage),
+		StartedAt:      startedAt,
+		RuntimeSeconds: row.RuntimeSeconds,
+		LastEventAt:    lastEventAt,
+		RetryAttempt:   copyIntPointer(row.RetryAttempt),
+		WorkspacePath:  row.WorkspacePath,
 		Tokens: stateapi.RunningTokens{
 			InputTokens:  row.Tokens.InputTokens,
 			OutputTokens: row.Tokens.OutputTokens,
@@ -470,14 +471,20 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 			lastEventAt = &v
 		}
 		blocked = append(blocked, stateapi.Blocked{
-			IssueID:           string(row.IssueID),
-			Identifier:        row.Identifier,
-			IssueURL:          row.IssueURL,
-			State:             row.State,
-			BlockedAt:         blockedAt,
-			WorkspacePath:     row.WorkspacePath,
-			SessionID:         row.SessionID,
-			LastEventAt:       lastEventAt,
+			IssueID:        string(row.IssueID),
+			Identifier:     row.Identifier,
+			IssueURL:       row.IssueURL,
+			State:          row.State,
+			BlockedAt:      blockedAt,
+			WorkspacePath:  row.WorkspacePath,
+			SessionID:      row.SessionID,
+			LastEventAt:    lastEventAt,
+			RuntimeSeconds: row.RuntimeSeconds,
+			Tokens: stateapi.RunningTokens{
+				InputTokens:  row.Tokens.InputTokens,
+				OutputTokens: row.Tokens.OutputTokens,
+				TotalTokens:  row.Tokens.TotalTokens,
+			},
 			Method:            row.Method,
 			Error:             row.Error,
 			CodexAppServerPID: row.CodexAppServerPID,
@@ -504,6 +511,11 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 		AgentHandoffReconcileStopped: sortedIssueIDStrings(view.AgentHandoffReconcileStopped),
 		ActiveSuccessNoHandoff:       sortedIssueIDStrings(view.ActiveSuccessNoHandoff),
 		OperatorTerminalStops:        operatorStops,
+		CompletedSessionUsage:        apiSessionUsageFromView(view.CompletedSessionUsage),
+		BudgetGuardrails: stateapi.BudgetGuardrails{
+			MaxTokensPerClaim:         view.BudgetGuardrails.MaxTokensPerClaim,
+			MaxRuntimeSecondsPerClaim: view.BudgetGuardrails.MaxRuntimeSecondsPerClaim,
+		},
 		CodexTotals: stateapi.CodexTotals{
 			InputTokens:    view.CodexTotals.InputTokens,
 			OutputTokens:   view.CodexTotals.OutputTokens,
@@ -512,6 +524,37 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 		},
 		RateLimits: rateLimitsForAPI(view.CodexRateLimits),
 	}
+}
+
+func apiSessionUsageFromView(rows []orchestrator.SessionUsageView) []stateapi.SessionUsage {
+	out := make([]stateapi.SessionUsage, 0, len(rows))
+	for _, row := range rows {
+		var completedAt *time.Time
+		if !row.CompletedAt.IsZero() {
+			v := row.CompletedAt
+			completedAt = &v
+		}
+		out = append(out, stateapi.SessionUsage{
+			IssueID:        string(row.IssueID),
+			Identifier:     row.Identifier,
+			IssueURL:       row.IssueURL,
+			State:          row.State,
+			SessionID:      row.SessionID,
+			WorkflowSource: row.WorkflowSource,
+			WorkflowPath:   row.WorkflowPath,
+			AgentProvider:  row.AgentProvider,
+			AgentModel:     row.AgentModel,
+			Tokens: stateapi.RunningTokens{
+				InputTokens:  row.Tokens.InputTokens,
+				OutputTokens: row.Tokens.OutputTokens,
+				TotalTokens:  row.Tokens.TotalTokens,
+			},
+			RuntimeSeconds: row.RuntimeSeconds,
+			CompletedAt:    completedAt,
+			Outcome:        row.Outcome,
+		})
+	}
+	return out
 }
 
 // sortedIssueIDStrings converts an orchestrator IssueID slice to the wire

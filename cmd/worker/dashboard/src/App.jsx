@@ -58,6 +58,16 @@ function issueLabel(row) {
 function workflowProfile(row) {
   return row.workflow_path || row.workflow_source || 'unknown';
 }
+function rowRuntime(row) {
+  if (Number(row.runtime_seconds) > 0) return dur(row.runtime_seconds);
+  return sinceISO(row.started_at || row.blocked_at);
+}
+function budgetLabel(budget) {
+  const parts = [];
+  if (budget?.max_tokens_per_claim) parts.push(`${compact(budget.max_tokens_per_claim)} tokens/claim`);
+  if (budget?.max_runtime_seconds_per_claim) parts.push(`${dur(budget.max_runtime_seconds_per_claim)}/claim`);
+  return parts.length ? parts.join(' · ') : 'off';
+}
 function detailPath(row) {
   const id = row.issue_identifier || row.issue_id;
   return id ? `/api/v1/${encodeURIComponent(id)}` : '/api/v1/state';
@@ -331,9 +341,9 @@ function RunningTable({ rows }) {
               </td>
               <td data-label="State"><Badge kind="running">{r.state}</Badge><div className="dim">turn {r.turn_count}</div></td>
               <td data-label="Model"><span className="mono" style={{ fontSize: '11.5px' }}>{model}</span><div className="dim">{provider}</div></td>
-              <td data-label="Runtime"><span className="runtime tnum">{sinceISO(r.started_at)}</span><div className="dim">started</div></td>
+              <td data-label="Runtime"><span className="runtime tnum">{rowRuntime(r)}</span><div className="dim">current claim</div></td>
               <td data-label="Latest activity"><span className="mono" style={{ fontSize: '11.5px' }}>{r.last_event}</span><div className="dim">{sinceISO(r.last_event_at)} ago</div></td>
-              <td className="tok" data-label="Tokens in / out"><b>{compact(r.tokens?.input_tokens)}</b> / {compact(r.tokens?.output_tokens)}</td>
+              <td className="tok" data-label="Tokens in / out"><b>{compact(r.tokens?.input_tokens)}</b> / {compact(r.tokens?.output_tokens)}<div className="dim">{compact(r.tokens?.total_tokens)} total</div></td>
             </tr>
             );
           })}
@@ -399,8 +409,37 @@ function BlockedTable({ rows }) {
                 </div>
               </td>
               <td data-label="State"><Badge kind="blocked">{r.state}</Badge>{r.method ? <div className="dim">{r.method}</div> : null}</td>
-              <td data-label="Waiting"><span className="runtime tnum">{sinceISO(r.blocked_at)}</span><div className="dim">since blocked</div></td>
-              <td data-label="Detail"><div className="upd" title={r.error}>{r.error}</div></td>
+              <td data-label="Waiting"><span className="runtime tnum">{sinceISO(r.blocked_at)}</span><div className="dim">runtime {rowRuntime(r)}</div></td>
+              <td data-label="Detail"><div className="upd" title={r.error}>{r.error}</div><div className="dim">{compact(r.tokens?.total_tokens)} claim tokens</div></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CompletedUsageTable({ rows }) {
+  if (!rows.length) return <Empty title="No completed usage yet" sub="Completed-session token totals appear after clean handoffs in this process." />;
+  return (
+    <div className="table-wrap narrow">
+      <table className="sessions">
+        <caption className="sr-only">Completed session usage</caption>
+        <thead><tr>
+          <th scope="col">Issue</th><th scope="col">Outcome</th><th scope="col">Runtime</th><th scope="col" className="r">Tokens</th>
+        </tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={`${r.issue_id}-${r.session_id}-${r.completed_at || r.outcome}`}>
+              <td className="issue-cell">
+                <div className="issue">
+                  <IssueLink row={r} />
+                  <span className="wp">workflow {workflowProfile(r)}{r.session_id ? ` · ${r.session_id}` : ''}</span>
+                </div>
+              </td>
+              <td data-label="Outcome"><Badge kind="done">{r.outcome || 'completed'}</Badge><div className="dim">{r.agent_model || r.agent_provider || 'unknown'}</div></td>
+              <td data-label="Runtime"><span className="runtime tnum">{dur(r.runtime_seconds)}</span><div className="dim">{sinceISO(r.completed_at)} ago</div></td>
+              <td className="tok" data-label="Tokens"><b>{compact(r.tokens?.total_tokens)}</b><div className="dim">{compact(r.tokens?.input_tokens)} in / {compact(r.tokens?.output_tokens)} out</div></td>
             </tr>
           ))}
         </tbody>
@@ -516,6 +555,7 @@ export default function App() {
   // Worker default runtime/provider (agent.default). The model is resolved
   // per-run by the agent and rendered in the Running table.
   const agentDefault = s.agent_default || 'unknown';
+  const budget = budgetLabel(s.budget_guardrails);
   const maxConc = s.max_concurrent_agents ?? '—';
   const byState = s.max_concurrent_agents_by_state;
   const byStateStr = byState && Object.keys(byState).length
@@ -561,6 +601,7 @@ export default function App() {
           <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
           <div className="row"><span>concurrency</span><b>{maxConc} max{byStateStr}</b></div>
           <div className="row"><span>default agent</span><b>{agentDefault}</b></div>
+          <div className="row"><span>claim budget</span><b>{budget}</b></div>
         </div>
       </div>
 
@@ -578,12 +619,12 @@ export default function App() {
         />
       </div>
 
-      {/* codex totals strip (cumulative since process start) */}
+      {/* codex totals strip (process lifetime; may include earlier issues) */}
       <div className="meta-strip">
-        <div className="meta-cell"><div className="meta-k">Input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">since process start</div></div>
-        <div className="meta-cell"><div className="meta-k">Output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">generated</div></div>
-        <div className="meta-cell"><div className="meta-k">Total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">input + output</div></div>
-        <div className="meta-cell"><div className="meta-k">Runtime total</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
+        <div className="meta-cell"><div className="meta-k">Process input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">process lifetime</div></div>
+        <div className="meta-cell"><div className="meta-k">Process output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">process lifetime</div></div>
+        <div className="meta-cell"><div className="meta-k">Process total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">may include older issues</div></div>
+        <div className="meta-cell"><div className="meta-k">Process runtime</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
       </div>
 
       {/* Live work (Running → Retrying → Blocked, matching the KPI order) in
@@ -631,6 +672,14 @@ export default function App() {
               <div className="panel-meta">{rl ? <>Codex usage snapshot{rl.limit_name ? <> · <b>{rl.limit_name}</b></> : null}</> : 'no snapshot yet'}</div>
             </div>
             <RateLimits rl={rl} />
+          </div>
+
+          <div className="panel">
+            <div className="panel-head">
+              <div className="panel-title"><span className="accent-stroke" />Completed usage<Badge kind="done">{(s.completed_session_usage || []).length}</Badge></div>
+              <div className="panel-meta">current process</div>
+            </div>
+            <CompletedUsageTable rows={s.completed_session_usage || []} />
           </div>
 
           {/* Reconcile roll-up — Stopped-with-progress (#557), Agent-handoff

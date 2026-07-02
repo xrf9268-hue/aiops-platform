@@ -41,6 +41,10 @@ const (
 	// normal continuation; this is an operator-visible "no handoff yet" outcome,
 	// not a tracker write.
 	RuntimeEventActiveSuccessNoHandoff RuntimeEventKind = "active_success_no_handoff"
+	// RuntimeEventBudgetExceeded marks a local worker budget guardrail stopping
+	// a run before it can continue burning tokens/runtime. It is observability
+	// only; tracker writes and PR handoff remain agent-owned.
+	RuntimeEventBudgetExceeded RuntimeEventKind = "budget_exceeded"
 	// RuntimeEventDispatchPreflightFailed flags SPEC §8.1 step 2 failures:
 	// the per-tick dispatch preflight could not validate the workflow's
 	// tracker / agent / API-key config, so the orchestrator skipped

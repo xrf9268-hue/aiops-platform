@@ -68,8 +68,14 @@ Create and use these GitHub labels:
 | `aiops:todo` | setup/operator | Ready for the maker to claim. |
 | `aiops:rework` | reviewer | Returned to the maker after a failed review. |
 | `aiops:human-review` | maker | Maker has handed off a PR URL for reviewer work. |
+| `aiops:blocked` | maker/reviewer | Inactive budget/usage-limit/unclear-result stop for operator triage. |
 | `aiops:done` | reviewer | PR merge has been confirmed and the issue is closing. |
 | `aiops:canceled` | setup/operator | Work should stop and active runs should reconcile away. |
+
+When a maker or reviewer parks an issue in `aiops:blocked`, the command must
+also remove that role's active labels. Adding `aiops:blocked` while leaving
+`aiops:todo`, `aiops:rework`, or `aiops:human-review` in place keeps the issue
+eligible for the next worker tick.
 
 The normal flow is:
 
@@ -79,6 +85,7 @@ aiops:todo or aiops:rework
   -> aiops:human-review
   -> reviewer checks PR head
        -> aiops:rework on FAIL
+       -> aiops:blocked when the rework cycle budget or a bounded usage-limit/unclear result is exhausted
        -> reviewer approval + GitHub native auto-merge on PASS
        -> GitHub reports merged
        -> aiops:done + issue close
@@ -86,6 +93,14 @@ aiops:todo or aiops:rework
 
 For dependent issues, do not add `aiops:todo` until the prerequisite issues are
 `aiops:done` and closed.
+
+Maker rework handoff must leave an issue comment beginning with
+`Rework response:` that names the reviewed head, the new head, and the response
+to every current-head finding. Before moving to `aiops:human-review`, the maker
+must check current-head unresolved non-outdated review threads and keep the
+issue active while any blocker remains. Before FAIL, the reviewer must summarize
+all current-head blocker evidence in one review so the maker is not fed one
+finding per loop.
 
 ## Branch protection and auto-merge
 

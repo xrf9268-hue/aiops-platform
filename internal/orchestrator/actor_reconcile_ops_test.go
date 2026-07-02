@@ -1,10 +1,9 @@
 package orchestrator
 
-// actor_reconcile_ops_test.go pins the two smallest #499 reconcile ops —
-// refreshActiveTrackerIssuesOp and reconcileStalledRunsOp — at their apply
-// boundary before #499 decomposes them. Both are exercised here directly on an
-// OrchestratorState (no live actor), which pins the per-collection refresh
-// actions and the stall-timing reference the integration suite only samples.
+// actor_reconcile_ops_test.go pins the smallest reconcile ops at their apply
+// boundary. They are exercised here directly on an OrchestratorState (no live
+// actor), which pins per-collection refresh/cancel actions and timing
+// references the integration suite only samples.
 
 import (
 	"testing"
@@ -97,5 +96,35 @@ func TestReconcileStalledRunsOpTimingReference(t *testing.T) {
 					tt.last, tt.started, got, len(canceled), tt.wantCanceled)
 			}
 		})
+	}
+}
+
+func TestReconcileBudgetExceededRunsOpRetriesMarkedRunningCancel(t *testing.T) {
+	st := NewOrchestratorState(15000, 10)
+	cancelCount := 0
+	run := &RunningEntry{
+		Identifier:          "B",
+		Issue:               tracker.Issue{ID: "B", Identifier: "B", State: "Todo"},
+		BudgetExceeded:      true,
+		BudgetExceededError: "budget exceeded",
+		CancelWorker: func(error) {
+			cancelCount++
+		},
+	}
+	st.Running[IssueID("B")] = run
+
+	result := make(chan []*RunningEntry, 1)
+	op := &reconcileBudgetExceededRunsOp{now: time.Now(), result: result}
+	op.apply(st)()
+	canceled := <-result
+
+	if len(canceled) != 1 || canceled[0] != run {
+		t.Fatalf("budget exceeded canceled = %+v, want existing running entry", canceled)
+	}
+	if cancelCount != 1 {
+		t.Fatalf("cancelCount = %d, want 1", cancelCount)
+	}
+	if len(st.RecentEvents) != 0 {
+		t.Fatalf("RecentEvents = %+v, want no duplicate budget_exceeded event", st.RecentEvents)
 	}
 }

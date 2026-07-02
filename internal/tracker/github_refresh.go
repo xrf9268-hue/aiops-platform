@@ -29,12 +29,20 @@ import (
 // normalization). Otherwise the issue's open/closed state is returned. This
 // matches the GitHub convention where workflow position is encoded as labels.
 //
-// BlockedBy stays nil (#750 documented gap): this adapter models no issue
-// dependencies — its listing path never populates Issue.BlockedBy either —
-// so the refresh has no blocker knowledge to supply and consumers keep
-// their listing-time blocker verdict (which is likewise always empty here).
+// BlockedBy carries GitHub dependency data from the native GraphQL
+// Issue.blockedBy relation when available, plus the in-repo body fallback
+// ("Blocked by #N" / "Depends on #N"). A non-nil empty slice means the refresh
+// confirmed no blockers; unknown or incomplete dependency knowledge is surfaced
+// as an empty-state placeholder so the Todo blocker gate fails closed.
 func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) {
 	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
+}
+
+type githubFetchedIssueState struct {
+	issueID string
+	issue   githubIssue
+	state   string
+	labels  []string
 }
 
 func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
@@ -48,7 +56,7 @@ func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []I
 		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
 	}
 	configuredStates := githubConfiguredStates(c.Config)
-	states := make(map[string]IssueState, len(issueRefs))
+	fetched := make([]githubFetchedIssueState, 0, len(issueRefs))
 	seen := map[string]struct{}{}
 	for _, issueRef := range issueRefs {
 		issueID := strings.TrimSpace(issueRef.ID)
@@ -84,11 +92,39 @@ func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []I
 		if state == "" {
 			continue
 		}
+		fetched = append(fetched, githubFetchedIssueState{
+			issueID: issueID,
+			issue:   issue,
+			state:   state,
+			labels:  githubIssueLabels(issue),
+		})
+	}
+	states := make(map[string]IssueState, len(fetched))
+	blockersByID := c.blockersForRefreshedGitHubIssues(ctx, fetched, configuredStates)
+	for _, row := range fetched {
+		blockedBy := blockersByID[row.issueID]
+		if blockedBy == nil {
+			blockedBy = []BlockerRef{}
+		}
 		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
 		// resolved state so label removal can stop/release already-claimed work.
-		states[issueID] = IssueState{State: state, Labels: githubIssueLabels(issue)}
+		states[row.issueID] = IssueState{State: row.state, Labels: row.labels, BlockedBy: blockedBy}
 	}
 	return states, nil
+}
+
+func (c *GitHubClient) blockersForRefreshedGitHubIssues(ctx context.Context, rows []githubFetchedIssueState, configuredStates []string) map[string][]BlockerRef {
+	sources := make([]githubBlockerSource, 0, len(rows))
+	for _, row := range rows {
+		sources = append(sources, githubBlockerSource{
+			IssueID:    row.issueID,
+			Identifier: fmt.Sprintf("#%d", row.issue.Number),
+			NodeID:     row.issue.NodeID,
+			Number:     row.issue.Number,
+			Body:       row.issue.Body,
+		})
+	}
+	return c.blockersForGitHubSources(ctx, sources, configuredStates)
 }
 
 func githubFetchedIssueMatchesRef(issueID, identifier, refreshedID string, issueNumber int) bool {

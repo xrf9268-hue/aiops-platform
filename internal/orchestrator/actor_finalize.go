@@ -48,6 +48,9 @@ func (f *finalizeRunOp) apply(st *OrchestratorState) func() {
 	if f.applyInputRequiredBlock(st, elapsed) {
 		return nil
 	}
+	if f.applyBudgetExceededBlock(st, elapsed) {
+		return nil
+	}
 	if f.result.Err == nil {
 		return f.applyCleanExit(st, elapsed)
 	}
@@ -84,6 +87,24 @@ func (f *finalizeRunOp) applyInputRequiredBlock(st *OrchestratorState, elapsed t
 }
 
 const continuationBudgetBlockMethod = "continuation_budget"
+const budgetExceededBlockMethod = "budget_exceeded"
+
+func (f *finalizeRunOp) applyBudgetExceededBlock(st *OrchestratorState, elapsed time.Duration) bool {
+	if !f.entry.BudgetExceeded {
+		return false
+	}
+	blockedAt := f.entry.BudgetExceededAt
+	runErr := f.entry.BudgetExceededError
+	if strings.TrimSpace(runErr) == "" {
+		runErr = "budget exceeded"
+	}
+	if !st.BlockRunWithReason(f.id, f.entry, blockedAt, budgetExceededBlockMethod, runErr, elapsed) {
+		close(f.done)
+		return true
+	}
+	close(f.done)
+	return true
+}
 
 // applyCleanExit handles a normal (Err==nil) worker exit: a reconciled-cleanup
 // continuation, a D34 continuation-budget block, or a normal continuation

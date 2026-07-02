@@ -128,6 +128,26 @@ func (o *Orchestrator) UpdateMaxContinuationTurns(ctx context.Context, maxContin
 	}
 }
 
+// UpdateBudgetGuardrails applies reloaded local run budget guardrails through
+// the actor. Zero values disable a guardrail.
+func (o *Orchestrator) UpdateBudgetGuardrails(ctx context.Context, guardrails BudgetGuardrails) error {
+	done := make(chan struct{}, 1)
+	op := opFunc(func(st *OrchestratorState) func() {
+		st.BudgetGuardrails = guardrails
+		done <- struct{}{}
+		return nil
+	})
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // UpdateAgentDefault applies the reloaded default runner/provider through the
 // actor so the /api/v1/state top-summary provider tracks a hot WORKFLOW.md
 // reload that changes `agent.default` — dispatch already reads the live

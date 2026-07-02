@@ -130,13 +130,19 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 			return fmt.Errorf("dispatch preflight failed: %w", err)
 		}
 	}
+	var pollErr error
+	if err := p.orchestrator.ReconcileBudgetExceededRuns(ctx, p.reconcile.WorkerExitTimeout); err != nil {
+		if ctx.Err() != nil {
+			return err
+		}
+		pollErr = errors.Join(pollErr, err)
+	}
 	issues, activeErr := p.tracker.ListActiveIssues(ctx)
 	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
 	// keep the successful issues and join activeErr into pollErr below.
 	if activeErr != nil && len(issues) == 0 {
-		return activeErr
+		return errors.Join(pollErr, activeErr)
 	}
-	var pollErr error
 	if activeErr != nil {
 		pollErr = errors.Join(pollErr, activeErr)
 	}
@@ -191,12 +197,12 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
 	var fetchErr error
-	// SPEC §16.3 reconcile_running_issues order: Part A (stall reconciliation)
-	// first so any wedged worker is cancelled before Part B's tracker-state
-	// refresh would otherwise leave it claimed indefinitely. A WorkerExitTimeout
-	// on a worker that ignores cancellation surfaces as context.DeadlineExceeded;
-	// surface that as a non-fatal poll error so one stuck run cannot block Part B
-	// from reconciling unrelated inactive/terminal issues in the same tick.
+	// D37 budget reconciliation already ran before the tracker-dependent active
+	// listing, so SPEC §16.3 Part A can treat remaining quiet stale runs as
+	// ordinary stalls. A WorkerExitTimeout on a worker that ignores cancellation
+	// surfaces as context.DeadlineExceeded; surface that as a non-fatal poll
+	// error so one stuck run cannot block Part B from reconciling unrelated
+	// inactive/terminal issues in the same tick.
 	if err := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout); err != nil {
 		if ctx.Err() != nil {
 			return nil, err

@@ -1,0 +1,63 @@
+package orchestrator
+
+import "time"
+
+type BudgetGuardrails struct {
+	MaxTokensPerClaim         int64
+	MaxRuntimeSecondsPerClaim int64
+}
+
+type SessionUsageEntry struct {
+	IssueID        IssueID
+	Identifier     string
+	IssueURL       string
+	State          string
+	Session        LiveSession
+	Tokens         TokensView
+	RuntimeSeconds float64
+	CompletedAt    time.Time
+	Outcome        string
+}
+
+func (s *OrchestratorState) recordCompletedSessionUsage(id IssueID, run *RunningEntry, elapsed time.Duration, completedAt time.Time, outcome string) {
+	if s == nil || run == nil {
+		return
+	}
+	if completedAt.IsZero() {
+		completedAt = time.Now().UTC()
+	}
+	entry := SessionUsageEntry{
+		IssueID:        id,
+		Identifier:     run.Identifier,
+		IssueURL:       run.Issue.URL,
+		State:          run.Issue.State,
+		Session:        run.Session,
+		Tokens:         tokensViewFromRunningEntry(run),
+		RuntimeSeconds: elapsedSeconds(elapsed),
+		CompletedAt:    completedAt,
+		Outcome:        outcome,
+	}
+	s.completedSessionUsage = append(s.completedSessionUsage, entry)
+	if s.MaxRecentCompleted > 0 && len(s.completedSessionUsage) > s.MaxRecentCompleted {
+		copy(s.completedSessionUsage, s.completedSessionUsage[len(s.completedSessionUsage)-s.MaxRecentCompleted:])
+		s.completedSessionUsage = s.completedSessionUsage[:s.MaxRecentCompleted]
+	}
+}
+
+func tokensViewFromRunningEntry(run *RunningEntry) TokensView {
+	if run == nil {
+		return TokensView{}
+	}
+	return TokensView{
+		InputTokens:  run.CodexInputTokens,
+		OutputTokens: run.CodexOutputTokens,
+		TotalTokens:  run.CodexTotalTokens,
+	}
+}
+
+func elapsedSeconds(elapsed time.Duration) float64 {
+	if elapsed <= 0 {
+		return 0
+	}
+	return elapsed.Seconds()
+}

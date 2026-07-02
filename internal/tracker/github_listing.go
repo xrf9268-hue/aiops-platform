@@ -78,6 +78,7 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 			nil,
 		)
 	}
+	c.attachGitHubBlockersToIssues(ctx, out)
 	return out, nil
 }
 
@@ -167,6 +168,7 @@ func (c *GitHubClient) collectIssueFromBatch(issue githubIssue, mappedState stri
 		return Issue{}, false, nil
 	}
 	c.cacheIssueNumber(mapped.ID, issue.Number)
+	c.cacheIssueMetadata(mapped.ID, issue)
 	if _, ok := collectionSeen[mapped.ID]; ok {
 		return Issue{}, false, nil
 	}

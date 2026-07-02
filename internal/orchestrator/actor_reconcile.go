@@ -102,6 +102,27 @@ func (o *Orchestrator) ReconcileStalledRuns(ctx context.Context, stallTimeoutMs 
 	return waitForReconciledWorkers(ctx, canceled, wait)
 }
 
+// ReconcileBudgetExceededRuns cancels running workers whose current-claim
+// token/runtime usage has crossed a configured local budget. Unlike stall
+// reconciliation, the finalize path parks these runs in local Blocked with
+// method=budget_exceeded so they do not retry and continue burning quota.
+func (o *Orchestrator) ReconcileBudgetExceededRuns(ctx context.Context, wait time.Duration) error {
+	reply := make(chan []*RunningEntry, 1)
+	if err := o.submit(ctx, &reconcileBudgetExceededRunsOp{
+		now:    time.Now(),
+		result: reply,
+	}); err != nil {
+		return err
+	}
+	var canceled []*RunningEntry
+	select {
+	case canceled = <-reply:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return waitForReconciledWorkers(ctx, canceled, wait)
+}
+
 // RefreshActiveTrackerIssues updates stored issue metadata for in-process runs
 // and queued retries whose issues are still observed in the active set, without
 // canceling any work. Use this when the active listing may be partial (so
@@ -236,6 +257,9 @@ type reconcileStalledRunsOp struct {
 func (r *reconcileStalledRunsOp) apply(st *OrchestratorState) func() {
 	var canceled []*RunningEntry
 	for id, run := range st.Running {
+		if run.BudgetExceeded {
+			continue
+		}
 		if !r.isStalled(run) {
 			continue
 		}
@@ -270,6 +294,34 @@ func (r *reconcileStalledRunsOp) cancelStalledFollowup(canceled []*RunningEntry)
 				// A stall cancel is a genuine failure (the run is stuck), not an
 				// eligibility stop, so it carries no ErrReconcileCancel cause and
 				// keeps its existing failure classification (#543).
+				entry.CancelWorker(nil)
+			}
+		}
+		if r.result != nil {
+			r.result <- canceled
+		}
+	}
+}
+
+type reconcileBudgetExceededRunsOp struct {
+	now    time.Time
+	result chan<- []*RunningEntry
+}
+
+func (r *reconcileBudgetExceededRunsOp) apply(st *OrchestratorState) func() {
+	var canceled []*RunningEntry
+	for _, run := range st.Running {
+		if run.BudgetExceeded || st.markBudgetExceededIfNeeded(run, r.now) {
+			canceled = append(canceled, run)
+		}
+	}
+	return r.cancelBudgetExceededFollowup(canceled)
+}
+
+func (r *reconcileBudgetExceededRunsOp) cancelBudgetExceededFollowup(canceled []*RunningEntry) func() {
+	return func() {
+		for _, entry := range canceled {
+			if entry.CancelWorker != nil {
 				entry.CancelWorker(nil)
 			}
 		}
