@@ -171,6 +171,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"do not jump straight\n   to Done",
 				"reviewer-owned `APPROVED` review whose `commit_id`",
 				"pulls/<PR>/reviews?per_page=100",
+				"--paginate --slurp",
 				"`commit_id`",
 				"successful `build-test`",
 				"retry-safe",

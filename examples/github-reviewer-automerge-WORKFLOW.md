@@ -80,9 +80,10 @@ Step 1 - find the PR:
    Stop.
 3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,statusCheckRollup`.
 4. Read PR review records with commit IDs:
-   `gh api "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR>/reviews?per_page=100"`.
-   Use each record's `state`, `user.login`, `commit_id`, and `submitted_at` when
-   identifying the newest reviewer-owned reviews.
+   `gh api --paginate --slurp "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR>/reviews?per_page=100"`.
+   Flatten the returned page arrays, then use each record's `state`,
+   `user.login`, `commit_id`, and `submitted_at` when identifying the newest
+   reviewer-owned reviews.
 5. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
    to Done. First confirm from the review records that the merged PR head still
    has a reviewer-owned `APPROVED` review whose `commit_id` equals the current
