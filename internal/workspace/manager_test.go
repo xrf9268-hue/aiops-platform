@@ -51,6 +51,34 @@ func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 	}
 }
 
+// TestRunWorkspaceHookRedactsCredentialedURLInOutput pins issue #1032: hook
+// stdout/stderr flows into runtime events, worker logs, and /api/v1/state, and
+// the worktree's git config carries the credentialed clone URL — so a hook
+// printing remote info (`git remote -v`, a failed fetch) must have basic-auth
+// userinfo scrubbed before the output leaves the workspace package. Removing
+// the redactCredentials wrap at the HookResult construction fails this test.
+func TestRunWorkspaceHookRedactsCredentialedURLInOutput(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		"printf 'origin https://bot:hunter2token@git.example.com/org/repo.git (fetch)'",
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook() error = %v; want nil", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	got := results[0].Output
+	if strings.Contains(got, "hunter2token") {
+		t.Errorf("hook output leaked credential: %q", got)
+	}
+	if !strings.Contains(got, "https://git.example.com/org/repo.git") {
+		t.Errorf("hook output = %q; want credential-stripped URL preserved", got)
+	}
+}
+
 func TestRunWorkspaceHookTimeoutStopsCommand(t *testing.T) {
 	dir := t.TempDir()
 	hook := workflow.WorkspaceHook{Commands: []string{"sleep 2"}}
