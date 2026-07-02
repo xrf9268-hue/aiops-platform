@@ -333,33 +333,7 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 	go func() {
 		defer o.workerWG.Done()
 		defer recoverPanic("orchestrator.spawn_result_fanout")
-		var res WorkerResult
-		select {
-		case r, ok := <-resultCh:
-			cancel(nil)
-			if ok {
-				res = r
-			} else {
-				// Dispatcher closed without yielding a result: treat
-				// as a cancellation, which becomes an abnormal exit
-				// and triggers a retry per SPEC §7.3.
-				res = WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
-			}
-		case <-o.runCtx.Done():
-			// Shutdown: cancel the worker, then keep waiting for its
-			// result instead of abandoning it. The dispatcher contract
-			// yields exactly one result (or a close) once the worker
-			// observes the canceled context, so this converges; returning
-			// here instead would strand the still-running subprocess for
-			// WaitForWorkers and skip result collection entirely.
-			cancel(nil)
-			r, ok := <-resultCh
-			if ok {
-				res = r
-			} else {
-				res = WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
-			}
-		}
+		res := o.awaitWorkerResult(resultCh, startedAt, cancel)
 		// workerDone is closed in exactly one path: either by
 		// finalizeRunOp.apply once the actor accepts this submit, or by this
 		// goroutine when submit fails because o.runCtx was canceled before
@@ -381,4 +355,28 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 			close(workerDone)
 		}
 	}()
+}
+
+// awaitWorkerResult collects the dispatcher's single result for a spawned
+// worker. On shutdown (runCtx canceled) it cancels the worker and then keeps
+// waiting instead of abandoning it: the Dispatcher contract yields exactly one
+// result (or a close) once the worker observes the canceled context, so this
+// converges — returning early would strand the still-running subprocess for
+// WaitForWorkers and skip result collection entirely (#1030). A dispatcher
+// close without a result is a cancellation, which becomes an abnormal exit and
+// triggers a retry per SPEC §7.3.
+func (o *Orchestrator) awaitWorkerResult(resultCh <-chan WorkerResult, startedAt time.Time, cancel context.CancelCauseFunc) WorkerResult {
+	var r WorkerResult
+	ok := false
+	select {
+	case r, ok = <-resultCh:
+		cancel(nil)
+	case <-o.runCtx.Done():
+		cancel(nil)
+		r, ok = <-resultCh
+	}
+	if !ok {
+		return WorkerResult{Err: context.Canceled, Elapsed: time.Since(startedAt)}
+	}
+	return r
 }
