@@ -78,8 +78,9 @@ also remove that role's active labels. Adding `aiops:blocked` while leaving
 eligible for the next worker tick.
 
 Historical `CHANGES_REQUESTED` count is diagnostic only. Do not use it as a
-hard stop while each cycle has a new head or a new actionable blocker; prevent
-duplicate loops by refusing unchanged-head handoffs or reviews.
+hard stop while each cycle has a new head; a `Rework response:` explains the
+fix, but it does not replace a new PR head. Prevent duplicate loops by refusing
+unchanged-head handoffs or reviews.
 Explicit Codex usage-limit/input-required results count as true blockers because
 another automatic reviewer turn would repeat the same non-actionable stop.
 

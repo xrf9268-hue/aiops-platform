@@ -86,11 +86,15 @@ Step 1 - find the PR:
    If either proof is missing, comment the missing evidence and stop without
    changing labels.
 5. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
-   condition. That count is diagnostic only. Continue reviewing the current head
-   when the maker has pushed a new commit or posted a new `Rework response:`.
-   If the newest reviewer-owned `CHANGES_REQUESTED` review already targets the
-   current `headRefOid` and there is no newer maker rework evidence, do not post
-   a duplicate review; move the issue back to Rework and comment
+   condition. That count is diagnostic only. Compare the newest reviewer-owned
+   `CHANGES_REQUESTED` review's reviewed commit with the current `headRefOid`.
+   Continue reviewing only when the current head differs from that reviewed
+   commit, or when no reviewer-owned `CHANGES_REQUESTED` review exists. A
+   `Rework response:` comment explains the change, but does not replace a new
+   PR head. If the newest reviewer-owned `CHANGES_REQUESTED` review already
+   targets the current `headRefOid`, do not post a duplicate review or continue
+   based on a `Rework response:` comment alone; move the issue back to Rework
+   and comment
    `Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework`.
 
 Step 2 - review the current head:

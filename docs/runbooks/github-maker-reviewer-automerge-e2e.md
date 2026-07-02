@@ -199,9 +199,10 @@ done
 tools/auth/permissions, explicit Codex usage/input-required stops, or issue
 scope that cannot continue without an operator decision. The workflow examples
 do not use historical `CHANGES_REQUESTED` count as a stop condition; repeated
-loops are prevented by refusing unchanged-head handoffs/reviews. Blocked handoff
-commands remove the role's active label (`aiops:todo`, `aiops:rework`, or
-`aiops:human-review`) while adding `aiops:blocked`; adding only
+loops are prevented by refusing unchanged-head handoffs/reviews. A
+`Rework response:` comment alone does not replace a new PR head. Blocked
+handoff commands remove the role's active label (`aiops:todo`, `aiops:rework`,
+or `aiops:human-review`) while adding `aiops:blocked`; adding only
 `aiops:blocked` leaves the issue eligible for the next worker tick.
 Maker handoff must include `Rework response:` in an issue comment for rework and
 must not hand off while current-head unresolved non-outdated review threads
