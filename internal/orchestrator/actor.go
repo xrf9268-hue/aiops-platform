@@ -145,6 +145,14 @@ type Orchestrator struct {
 	// via the started channel close.
 	runCtx  context.Context
 	started chan struct{}
+
+	// workerWG tracks every spawn until its dispatcher result is consumed.
+	// WaitForWorkers waits on it so a SIGTERM shutdown drains in-flight
+	// agent subprocesses instead of orphaning them when main returns —
+	// the explicit Go replacement for the ordered child termination a BEAM
+	// supervision tree performs on shutdown (AGENTS.md cross-cutting
+	// checklist item 2).
+	workerWG sync.WaitGroup
 }
 
 // New constructs an Orchestrator over an existing state value. Callers
