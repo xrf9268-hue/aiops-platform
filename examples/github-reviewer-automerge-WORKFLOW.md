@@ -47,7 +47,6 @@ codex:
     - NPM_CONFIG_CACHE
     - PLAYWRIGHT_BROWSERS_PATH
     - AIOPS_EXPECTED_GITHUB_LOGIN
-    - AIOPS_REVIEWER_MAX_REWORK_CYCLES
 
 policy:
   mode: draft_pr
@@ -74,18 +73,39 @@ Step 0 - identity and issue number:
 2. Let `<N>` be the numeric issue number from `{{ issue.identifier }}`.
 
 Step 1 - find the PR:
-1. Read issue comments and take the newest PR URL commented by the maker.
+1. Read issue comments and take the newest PR URL commented by the maker as
+   `<PR_URL>`.
 2. If no PR URL exists, comment what you looked for, then move the issue back to
    Rework with:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
    Stop.
-3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,reviews,statusCheckRollup`.
-4. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
-   to Done. First confirm the merged PR head still has a reviewer-owned
-   `APPROVED` review for the current `headRefOid` and a successful `build-test`
-   status/check in `statusCheckRollup`; only then continue to Step 3 PASS item 5.
-   If either proof is missing, comment the missing evidence and stop without
-   changing labels.
+3. Read PR metadata with `gh pr view <PR_URL> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,statusCheckRollup`.
+   Let `<PR_NUMBER>` be the returned numeric `number`; use `<PR_NUMBER>` in
+   later `gh pr ...` commands and REST API paths.
+4. Read PR review records with commit IDs:
+   `gh api --paginate --slurp "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR_NUMBER>/reviews?per_page=100"`.
+   Flatten the returned page arrays, then use each record's `state`,
+   `user.login`, `commit_id`, and `submitted_at` when identifying the newest
+   reviewer-owned reviews.
+5. If `state` is `MERGED` or `mergedAt` is already present, do not jump straight
+   to Done. First confirm from the review records that the merged PR head still
+   has a reviewer-owned `APPROVED` review whose `commit_id` equals the current
+   `headRefOid`, plus a successful `build-test` status/check in
+   `statusCheckRollup`; only then continue to Step 3 PASS item 5. If either
+   proof is missing, comment the missing evidence and stop without changing
+   labels.
+6. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
+   condition. That count is diagnostic only. Compare the newest reviewer-owned
+   `CHANGES_REQUESTED` review's `commit_id` with the current `headRefOid`.
+   Continue reviewing only when the current head differs from that `commit_id`,
+   or when no reviewer-owned `CHANGES_REQUESTED` review exists. A
+   `Rework response:` comment explains the change, but does not replace a new
+   PR head. If the newest reviewer-owned `CHANGES_REQUESTED` review already
+   targets the current `headRefOid`, do not post a duplicate review or continue
+   based on a `Rework response:` comment alone. First comment
+   `Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework`.
+   Then move the issue back to Rework as your LAST action and stop:
+   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 
 Step 2 - review the current head:
 1. Ensure the PR author is not the reviewer login.
@@ -111,32 +131,28 @@ FAIL:
   one at a time.
 - Post a concrete review finding with file/path context where possible, the PR
   head SHA reviewed, and the exact acceptance criterion not met.
-- Use `gh pr review <PR> --request-changes --body "<findings>"` when possible.
-- Count reviewer-owned `CHANGES_REQUESTED` reviews. If the count is at or above
-  the max rework cycle budget `${AIOPS_REVIEWER_MAX_REWORK_CYCLES:-3}`, comment
-  the exhausted budget and move the issue to `aiops:blocked` instead of Rework:
-  `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
-- Otherwise move the issue back to Rework:
+- Use `gh pr review <PR_NUMBER> --request-changes --body "<findings>"` when possible.
+- Move the issue back to Rework:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 - This is your LAST action.
 
 BLOCKED:
-- If Codex usage-limit stops the review, or your result remains unclear after
-  one bounded clarification pass, comment the bounded reason and move the issue
-  to `aiops:blocked` instead of FAIL/PASS. Do not leave an open issue labeled
-  `aiops:human-review` when the next reviewer would only repeat the same
-  unclear turn:
+- If Codex usage-limit/input-required stops the review, or the review cannot
+  produce an actionable PASS/FAIL after one bounded clarification pass, comment
+  the bounded reason and move the issue to `aiops:blocked` instead of FAIL/PASS.
+  Do not leave an open issue labeled `aiops:human-review` when the next reviewer
+  would only repeat the same non-actionable turn:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
 
 PASS:
 1. Post a short issue comment summarizing the passed rubric and the reviewed
    head SHA.
 2. Approve the PR:
-   `gh pr review <PR> --approve --body "Rubric passed for head <sha>."`
+   `gh pr review <PR_NUMBER> --approve --body "Rubric passed for head <sha>."`
 3. Enable GitHub native CI-gated auto-merge:
-   `gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`.
+   `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <sha>`.
    Do not use `--admin`.
-4. Poll `gh pr view <PR> --json state,mergedAt,headRefOid,mergeStateStatus`
+4. Poll `gh pr view <PR_NUMBER> --json state,mergedAt,headRefOid,mergeStateStatus`
    until GitHub reports `state: MERGED` or a non-empty `mergedAt`. Poll with a
    short bounded wait, not a busy loop. If it has not merged within your turn
    budget, leave the issue in `aiops:human-review` and stop so the next reviewer
@@ -144,7 +160,7 @@ PASS:
 5. After merge confirmation only, mark Done, then close in one retry-safe block:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:done`
    then
-   `gh issue close <N> --comment "Done after PR <PR> merged at <mergedAt>."`
+   `gh issue close <N> --comment "Done after PR <PR_NUMBER> merged at <mergedAt>."`
    If close fails, immediately restore the active reviewer label with
    `gh issue edit <N> --remove-label aiops:done --add-label aiops:human-review`
    and stop with a non-zero failure. Do not leave an open issue labeled

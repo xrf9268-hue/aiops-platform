@@ -68,7 +68,7 @@ Create and use these GitHub labels:
 | `aiops:todo` | setup/operator | Ready for the maker to claim. |
 | `aiops:rework` | reviewer | Returned to the maker after a failed review. |
 | `aiops:human-review` | maker | Maker has handed off a PR URL for reviewer work. |
-| `aiops:blocked` | maker/reviewer | Inactive budget/usage-limit/unclear-result stop for operator triage. |
+| `aiops:blocked` | maker/reviewer | Inactive true-blocker stop for operator triage. |
 | `aiops:done` | reviewer | PR merge has been confirmed and the issue is closing. |
 | `aiops:canceled` | setup/operator | Work should stop and active runs should reconcile away. |
 
@@ -76,6 +76,13 @@ When a maker or reviewer parks an issue in `aiops:blocked`, the command must
 also remove that role's active labels. Adding `aiops:blocked` while leaving
 `aiops:todo`, `aiops:rework`, or `aiops:human-review` in place keeps the issue
 eligible for the next worker tick.
+
+Historical `CHANGES_REQUESTED` count is diagnostic only. Do not use it as a
+hard stop while each cycle has a new head; a `Rework response:` explains the
+fix, but it does not replace a new PR head. Prevent duplicate loops by refusing
+unchanged-head handoffs or reviews.
+Explicit Codex usage-limit/input-required results count as true blockers because
+another automatic reviewer turn would repeat the same non-actionable stop.
 
 The normal flow is:
 
@@ -85,7 +92,7 @@ aiops:todo or aiops:rework
   -> aiops:human-review
   -> reviewer checks PR head
        -> aiops:rework on FAIL
-       -> aiops:blocked when the rework cycle budget or a bounded usage-limit/unclear result is exhausted
+       -> aiops:blocked for true blockers that need operator action
        -> reviewer approval + GitHub native auto-merge on PASS
        -> GitHub reports merged
        -> aiops:done + issue close

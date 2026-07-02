@@ -195,12 +195,15 @@ for label in aiops:todo aiops:rework aiops:human-review aiops:blocked aiops:done
 done
 ```
 
-`aiops:blocked` is an inactive operator-triage state. The maker/reviewer
-workflow examples use it when the rework cycle budget is exhausted, when Codex
-hits a usage-limit result, or when a bounded unclear result should not loop.
-Blocked handoff commands remove the role's active label (`aiops:todo`,
-`aiops:rework`, or `aiops:human-review`) while adding `aiops:blocked`; adding
-only `aiops:blocked` leaves the issue eligible for the next worker tick.
+`aiops:blocked` is an inactive operator-triage state for true blockers: missing
+tools/auth/permissions, explicit Codex usage/input-required stops, or issue
+scope that cannot continue without an operator decision. The workflow examples
+do not use historical `CHANGES_REQUESTED` count as a stop condition; repeated
+loops are prevented by refusing unchanged-head handoffs/reviews. A
+`Rework response:` comment alone does not replace a new PR head. Blocked
+handoff commands remove the role's active label (`aiops:todo`, `aiops:rework`,
+or `aiops:human-review`) while adding `aiops:blocked`; adding only
+`aiops:blocked` leaves the issue eligible for the next worker tick.
 Maker handoff must include `Rework response:` in an issue comment for rework and
 must not hand off while current-head unresolved non-outdated review threads
 remain.
