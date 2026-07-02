@@ -73,14 +73,17 @@ Step 0 - identity and issue number:
 2. Let `<N>` be the numeric issue number from `{{ issue.identifier }}`.
 
 Step 1 - find the PR:
-1. Read issue comments and take the newest PR URL commented by the maker.
+1. Read issue comments and take the newest PR URL commented by the maker as
+   `<PR_URL>`.
 2. If no PR URL exists, comment what you looked for, then move the issue back to
    Rework with:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
    Stop.
-3. Read PR metadata with `gh pr view <PR> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,statusCheckRollup`.
+3. Read PR metadata with `gh pr view <PR_URL> --json number,state,author,headRefName,headRefOid,baseRefName,body,mergeStateStatus,isDraft,mergedAt,statusCheckRollup`.
+   Let `<PR_NUMBER>` be the returned numeric `number`; use `<PR_NUMBER>` in
+   later `gh pr ...` commands and REST API paths.
 4. Read PR review records with commit IDs:
-   `gh api --paginate --slurp "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR>/reviews?per_page=100"`.
+   `gh api --paginate --slurp "repos/{{ repo.owner }}/{{ repo.name }}/pulls/<PR_NUMBER>/reviews?per_page=100"`.
    Flatten the returned page arrays, then use each record's `state`,
    `user.login`, `commit_id`, and `submitted_at` when identifying the newest
    reviewer-owned reviews.
@@ -127,7 +130,7 @@ FAIL:
   one at a time.
 - Post a concrete review finding with file/path context where possible, the PR
   head SHA reviewed, and the exact acceptance criterion not met.
-- Use `gh pr review <PR> --request-changes --body "<findings>"` when possible.
+- Use `gh pr review <PR_NUMBER> --request-changes --body "<findings>"` when possible.
 - Move the issue back to Rework:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 - This is your LAST action.
@@ -144,11 +147,11 @@ PASS:
 1. Post a short issue comment summarizing the passed rubric and the reviewed
    head SHA.
 2. Approve the PR:
-   `gh pr review <PR> --approve --body "Rubric passed for head <sha>."`
+   `gh pr review <PR_NUMBER> --approve --body "Rubric passed for head <sha>."`
 3. Enable GitHub native CI-gated auto-merge:
-   `gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`.
+   `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <sha>`.
    Do not use `--admin`.
-4. Poll `gh pr view <PR> --json state,mergedAt,headRefOid,mergeStateStatus`
+4. Poll `gh pr view <PR_NUMBER> --json state,mergedAt,headRefOid,mergeStateStatus`
    until GitHub reports `state: MERGED` or a non-empty `mergedAt`. Poll with a
    short bounded wait, not a busy loop. If it has not merged within your turn
    budget, leave the issue in `aiops:human-review` and stop so the next reviewer
@@ -156,7 +159,7 @@ PASS:
 5. After merge confirmation only, mark Done, then close in one retry-safe block:
    `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:done`
    then
-   `gh issue close <N> --comment "Done after PR <PR> merged at <mergedAt>."`
+   `gh issue close <N> --comment "Done after PR <PR_NUMBER> merged at <mergedAt>."`
    If close fails, immediately restore the active reviewer label with
    `gh issue edit <N> --remove-label aiops:done --add-label aiops:human-review`
    and stop with a non-zero failure. Do not leave an open issue labeled
