@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,69 @@ func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "should-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("commands after failed hook should not run; stat err=%v", err)
+	}
+}
+
+// TestRunWorkspaceHookRedactsCredentialedURLInOutput pins issue #1032: hook
+// stdout/stderr flows into runtime events, worker logs, and /api/v1/state, and
+// the worktree's git config carries the credentialed clone URL — so a hook
+// printing remote info (`git remote -v`, a failed fetch) must have basic-auth
+// userinfo scrubbed before the output leaves the workspace package. Removing
+// the redactCredentials wrap at the HookResult construction fails this test.
+func TestRunWorkspaceHookRedactsCredentialedURLInOutput(t *testing.T) {
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		"printf 'origin https://bot:hunter2token@git.example.com/org/repo.git (fetch)'",
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook() error = %v; want nil", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	got := results[0].Output
+	if strings.Contains(got, "hunter2token") {
+		t.Errorf("hook output leaked credential: %q", got)
+	}
+	if !strings.Contains(got, "https://git.example.com/org/repo.git") {
+		t.Errorf("hook output = %q; want credential-stripped URL preserved", got)
+	}
+}
+
+// TestRunWorkspaceHookRedactsCredentialCutByOutputCap drives the #1032 review
+// P1 edge through the production wiring: the VerifyOutputCap byte cap cuts
+// through `user:token@` before the `@`, so the buffered output ends in a
+// partial credential that the whole-URL scrub cannot match. The truncated-tail
+// scrub must drop the partial authority. Replacing redactTruncated with the
+// plain redactCredentials at the HookResult seam fails this test.
+func TestRunWorkspaceHookRedactsCredentialCutByOutputCap(t *testing.T) {
+	dir := t.TempDir()
+	const url = "https://bot:hunter2tokensecret@example.com/repo.git"
+	// Fill the buffer to 20 bytes below the cap, then print the URL: the cap
+	// lands 20 bytes in ("https://bot:hunter2t"), mid-token, before the "@".
+	filler := VerifyOutputCap - 20
+	hook := workflow.WorkspaceHook{Commands: []string{
+		fmt.Sprintf("head -c %d /dev/zero | tr '\\0' x && printf %%s '%s'", filler, url),
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook() error = %v; want nil", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	res := results[0]
+	if !res.Truncated {
+		t.Fatalf("Truncated = false; want true (output must exceed VerifyOutputCap for this regression)")
+	}
+	if strings.Contains(res.Output, "hunter2") {
+		t.Errorf("hook output leaked a cap-truncated credential fragment: %q", res.Output[len(res.Output)-40:])
+	}
+	if !strings.HasSuffix(res.Output, "https://") {
+		t.Errorf("hook output tail = %q; want the partial authority stripped back to the scheme", res.Output[len(res.Output)-40:])
 	}
 }
 

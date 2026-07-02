@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/orchestrator"
+	"github.com/xrf9268-hue/aiops-platform/internal/task"
 )
 
 func TestRedactStateAPILastMessageEmptyReturnsEmpty(t *testing.T) {
@@ -86,6 +89,78 @@ func TestRedactStateAPILastMessageRedactsBeforeTruncation(t *testing.T) {
 	got := redactStateAPILastMessage(in)
 	if strings.Contains(got, "abcdef1234567890") {
 		t.Errorf("bearer token leaked across truncation boundary: %q", got)
+	}
+}
+
+// TestAPIStateFromViewScrubsErrorFields drives the production projection
+// (apiStateFromView) with retry/blocked rows whose error strings embed a
+// credentialed clone URL, pinning issue #1032: `Retry.Error`, `Blocked.Error`,
+// startup-failure errors, and runtime event messages must pass through the
+// same secret scrub as `last_message`. Deleting the redactStateAPIErrorText
+// call at any of these seams leaks the token and fails the assertion.
+func TestAPIStateFromViewScrubsErrorFields(t *testing.T) {
+	const secretErr = "clone failed: fatal: unable to access 'https://bot:hunter2token@git.example.com/org/repo.git/'"
+	view := orchestrator.StateView{
+		Retrying: []orchestrator.RetryView{{
+			IssueID:        "ENG-1",
+			Identifier:     "ENG-1",
+			Attempt:        2,
+			Error:          secretErr,
+			StartupFailure: &task.StartupFailure{Phase: "workspace", Error: secretErr},
+		}},
+		Blocked: []orchestrator.BlockedView{{
+			IssueID:    "ENG-2",
+			Identifier: "ENG-2",
+			Method:     "budget",
+			Error:      secretErr,
+		}},
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventFailed,
+			IssueID:    "ENG-1",
+			Identifier: "ENG-1",
+			Message:    secretErr,
+		}},
+	}
+	resp := apiStateFromView(view)
+	if len(resp.Retrying) != 1 || len(resp.Blocked) != 1 {
+		t.Fatalf("apiStateFromView rows = %d retrying / %d blocked; want 1 / 1", len(resp.Retrying), len(resp.Blocked))
+	}
+	assertScrubbed := func(field, got string) {
+		t.Helper()
+		if strings.Contains(got, "hunter2token") {
+			t.Errorf("%s leaked credential: %q", field, got)
+		}
+		if !strings.Contains(got, "<redacted>") {
+			t.Errorf("%s missing <redacted> marker: %q", field, got)
+		}
+	}
+	assertScrubbed("Retry.Error", resp.Retrying[0].Error)
+	if resp.Retrying[0].StartupFailure == nil {
+		t.Fatalf("Retry.StartupFailure = nil; want projected value")
+	}
+	assertScrubbed("Retry.StartupFailure.Error", resp.Retrying[0].StartupFailure.Error)
+	assertScrubbed("Blocked.Error", resp.Blocked[0].Error)
+}
+
+// TestAPIIssueFromViewScrubsLastError pins the per-issue endpoint's
+// `last_error` projection for a retrying issue (issue #1032).
+func TestAPIIssueFromViewScrubsLastError(t *testing.T) {
+	const secretErr = "push rejected: https://bot:hunter2token@git.example.com/org/repo.git"
+	view := orchestrator.StateView{
+		Retrying: []orchestrator.RetryView{{IssueID: "ENG-3", Identifier: "ENG-3", Attempt: 1, Error: secretErr}},
+	}
+	payload, ok := apiIssueFromView(view, "ENG-3")
+	if !ok {
+		t.Fatalf("apiIssueFromView(ENG-3) not found")
+	}
+	if payload.LastError == nil {
+		t.Fatalf("LastError = nil; want scrubbed error")
+	}
+	if strings.Contains(*payload.LastError, "hunter2token") {
+		t.Errorf("last_error leaked credential: %q", *payload.LastError)
+	}
+	if !strings.Contains(*payload.LastError, "<redacted>") {
+		t.Errorf("last_error missing <redacted> marker: %q", *payload.LastError)
 	}
 }
 

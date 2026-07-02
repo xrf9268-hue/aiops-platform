@@ -577,7 +577,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Start(); err != nil {
-		return HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+		return HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: redactTruncated(out.String(), out.Truncated()), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -596,7 +596,12 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 			err = fmt.Errorf("hook wait exceeded cleanup grace after timeout: %w", runCtx.Err())
 		}
 	}
-	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+	// Hook stdout/stderr is agent/operator-controlled text that flows into
+	// runtime events, worker logs, and /api/v1/state (emitHookResults). The
+	// worktree's git config carries the credentialed clone URL, so any hook
+	// that prints remote info (`git remote -v`, a failed fetch) would leak
+	// the token without this scrub (issue #1032).
+	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: redactTruncated(out.String(), out.Truncated()), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.Err = fmt.Errorf("hook timed out after %dms: %w", timeoutMs, runCtx.Err())
 		res.ExitCode = -1

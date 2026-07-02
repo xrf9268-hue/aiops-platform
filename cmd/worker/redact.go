@@ -30,16 +30,41 @@ var stateAPIRedactionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]+:[^\s/@]+@[^\s]+`),
 }
 
+// scrubStateAPISecrets pattern-scrubs common token shapes (Authorization
+// headers, bearer tokens, sk-/ghp_-prefixed API keys, embedded basic-auth
+// URLs) from s, replacing each match verbatim with "<redacted>" so the
+// surrounding prose remains readable. It is the single source of truth for
+// the SPEC §15.3 secret patterns on the /api/v1/state surface: both the
+// `last_message` projection and the error-text projections (#1032) apply it.
+func scrubStateAPISecrets(s string) string {
+	if s == "" {
+		return ""
+	}
+	for _, p := range stateAPIRedactionPatterns {
+		s = p.ReplaceAllString(s, "<redacted>")
+	}
+	return s
+}
+
+// redactStateAPIErrorText scrubs runner/tracker error strings before they are
+// projected onto /api/v1/state (`Retry.Error`, `Blocked.Error`, `last_error`,
+// startup-failure errors, runtime event messages). Error chains can embed a
+// clone URL's basic-auth userinfo or header echoes — the same shapes the
+// `last_message` guard scrubs — so leaving them raw bypassed the redaction
+// layer entirely (issue #1032). Unlike last_message, error text is not
+// truncated: worker.ErrSummary already bounds it and operators need the full
+// chain for diagnosis.
+func redactStateAPIErrorText(s string) string {
+	return scrubStateAPISecrets(s)
+}
+
 // redactStateAPILastMessage applies the SPEC §15.3 / issue #297 redaction
 // pass used when projecting orchestrator.RunningView.LastMessage onto the
 // /api/v1/state `last_message` field. The function is total: empty input
 // returns empty output; short, clean input is returned unchanged.
 //
 // Behavior:
-//  1. Pattern-scrub common token shapes (Authorization headers, bearer
-//     tokens, sk-/ghp_-prefixed API keys, embedded basic-auth URLs). Each
-//     match is replaced verbatim with "<redacted>" so the surrounding
-//     prose remains readable.
+//  1. Pattern-scrub via scrubStateAPISecrets.
 //  2. Truncate to stateAPILastMessageMaxRunes runes (not bytes — UTF-8
 //     safe) and append a U+2026 horizontal ellipsis so consumers can
 //     tell a truncated message from a naturally-short one.
@@ -47,12 +72,7 @@ var stateAPIRedactionPatterns = []*regexp.Regexp{
 // Pattern-scrubbing happens before truncation so a token straddling the
 // 256-rune boundary is still redacted.
 func redactStateAPILastMessage(s string) string {
-	if s == "" {
-		return ""
-	}
-	for _, p := range stateAPIRedactionPatterns {
-		s = p.ReplaceAllString(s, "<redacted>")
-	}
+	s = scrubStateAPISecrets(s)
 	runes := []rune(s)
 	if len(runes) > stateAPILastMessageMaxRunes {
 		return string(runes[:stateAPILastMessageMaxRunes]) + "…"
