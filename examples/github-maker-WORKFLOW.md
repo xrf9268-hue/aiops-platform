@@ -48,7 +48,6 @@ codex:
     - NPM_CONFIG_CACHE
     - PLAYWRIGHT_BROWSERS_PATH
     - AIOPS_EXPECTED_GITHUB_LOGIN
-    - AIOPS_MAKER_MAX_REWORK_CYCLES
 
 policy:
   mode: draft_pr
@@ -82,11 +81,13 @@ Before changing code:
 3. If this is a Rework return, read the newest reviewer comments and PR reviews
    first. Treat every unresolved reviewer finding as an acceptance criterion.
    Note the reviewed head SHA cited by the reviewer.
-4. Count prior reviewer-owned `CHANGES_REQUESTED` reviews on the PR. If the
-   count is at or above the max rework cycle budget
-   `${AIOPS_MAKER_MAX_REWORK_CYCLES:-3}`, comment the exhausted budget and move
-   the issue to `aiops:blocked` instead of reworking:
-   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
+4. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
+   condition. That count is diagnostic only: continue when the latest reviewer
+   finding names an actionable blocker and you can push a new commit. Stop only
+   when the blocker is not actionable after one bounded clarification pass,
+   cannot be completed within the issue scope, is blocked by missing
+   tools/auth/permissions, or would require handing off the same unchanged head
+   again.
 
 Required implementation flow:
 1. Implement only this issue's acceptance criteria.
@@ -121,9 +122,10 @@ Rework convergence rules:
 - If you cannot address the finding, comment `Blocked rework:` with the blocker
   and move the issue to `aiops:blocked` instead of adding `aiops:human-review`:
   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
-- If Codex reports a usage-limit result, or the result is unclear after one
-  bounded clarification pass, comment the bounded result and move the issue to
-  `aiops:blocked` so an operator can decide whether to redrive it:
+- If Codex reports a usage-limit/input-required result, or the latest finding is
+  still not actionable after one bounded clarification pass, comment the bounded
+  result and move the issue to `aiops:blocked` so an operator can decide whether
+  to redrive or split it:
   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
 
 Hard constraints:

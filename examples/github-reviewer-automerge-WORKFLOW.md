@@ -47,7 +47,6 @@ codex:
     - NPM_CONFIG_CACHE
     - PLAYWRIGHT_BROWSERS_PATH
     - AIOPS_EXPECTED_GITHUB_LOGIN
-    - AIOPS_REVIEWER_MAX_REWORK_CYCLES
 
 policy:
   mode: draft_pr
@@ -86,6 +85,13 @@ Step 1 - find the PR:
    status/check in `statusCheckRollup`; only then continue to Step 3 PASS item 5.
    If either proof is missing, comment the missing evidence and stop without
    changing labels.
+5. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
+   condition. That count is diagnostic only. Continue reviewing the current head
+   when the maker has pushed a new commit or posted a new `Rework response:`.
+   If the newest reviewer-owned `CHANGES_REQUESTED` review already targets the
+   current `headRefOid` and there is no newer maker rework evidence, do not post
+   a duplicate review; move the issue back to Rework and comment
+   `Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework`.
 
 Step 2 - review the current head:
 1. Ensure the PR author is not the reviewer login.
@@ -112,20 +118,16 @@ FAIL:
 - Post a concrete review finding with file/path context where possible, the PR
   head SHA reviewed, and the exact acceptance criterion not met.
 - Use `gh pr review <PR> --request-changes --body "<findings>"` when possible.
-- Count reviewer-owned `CHANGES_REQUESTED` reviews. If the count is at or above
-  the max rework cycle budget `${AIOPS_REVIEWER_MAX_REWORK_CYCLES:-3}`, comment
-  the exhausted budget and move the issue to `aiops:blocked` instead of Rework:
-  `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
-- Otherwise move the issue back to Rework:
+- Move the issue back to Rework:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
 - This is your LAST action.
 
 BLOCKED:
-- If Codex usage-limit stops the review, or your result remains unclear after
-  one bounded clarification pass, comment the bounded reason and move the issue
-  to `aiops:blocked` instead of FAIL/PASS. Do not leave an open issue labeled
-  `aiops:human-review` when the next reviewer would only repeat the same
-  unclear turn:
+- If Codex usage-limit/input-required stops the review, or the review cannot
+  produce an actionable PASS/FAIL after one bounded clarification pass, comment
+  the bounded reason and move the issue to `aiops:blocked` instead of FAIL/PASS.
+  Do not leave an open issue labeled `aiops:human-review` when the next reviewer
+  would only repeat the same non-actionable turn:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
 
 PASS:
