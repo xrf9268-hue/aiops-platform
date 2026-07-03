@@ -52,6 +52,9 @@ type TrackerClient struct {
 
 	issueNumbers sync.Map
 
+	defaultHTTPOnce sync.Once
+	defaultHTTP     *http.Client
+
 	paginationCapHits atomic.Int64
 }
 
@@ -76,7 +79,13 @@ func (c *TrackerClient) httpClient() *http.Client {
 	if c != nil && c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: c.requestTimeout()}
+	if c == nil {
+		return &http.Client{Timeout: defaultGiteaRequestTimeout}
+	}
+	c.defaultHTTPOnce.Do(func() {
+		c.defaultHTTP = &http.Client{Timeout: c.requestTimeout()}
+	})
+	return c.defaultHTTP
 }
 
 // PaginationCapHits returns how often this client observed more than
