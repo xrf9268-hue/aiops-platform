@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,84 @@ func TestRunWorkspaceHookStopsOnNonZeroAndCapturesOutput(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "should-not-exist")); !os.IsNotExist(err) {
 		t.Fatalf("commands after failed hook should not run; stat err=%v", err)
+	}
+}
+
+func TestRunWorkspaceHookRedactsCredentialedURLsFromOutput(t *testing.T) {
+	const secret = "token-1032"
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		"printf '%s' 'fetch scheme://user:" + secret + "@example.com/repo.git failed'",
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	got := results[0].Output
+	if strings.Contains(got, secret) || strings.Contains(got, "user:"+secret+"@") {
+		t.Fatalf("hook output leaked credential: %q", got)
+	}
+	if !strings.Contains(got, "scheme://example.com/repo.git") {
+		t.Fatalf("hook output = %q, want redacted URL host/path preserved", got)
+	}
+	if strings.Contains(results[0].Command, secret) || strings.Contains(results[0].Command, "user:"+secret+"@") {
+		t.Fatalf("hook command leaked credential: %q", results[0].Command)
+	}
+	if !strings.Contains(results[0].Command, "scheme://example.com/repo.git") {
+		t.Fatalf("hook command = %q, want redacted URL host/path preserved", results[0].Command)
+	}
+}
+
+func TestRunWorkspaceHookRedactsBeforeOutputCap(t *testing.T) {
+	const secret = "token-1032"
+	leakingRawPrefix := "scheme://user:" + secret
+	prefixLen := VerifyOutputCap - len(leakingRawPrefix)
+	if prefixLen <= 0 {
+		t.Fatalf("VerifyOutputCap = %d, want room for boundary test", VerifyOutputCap)
+	}
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		fmt.Sprintf("printf '%%*s' %d '' | tr ' ' A; printf '%%s' 'scheme://user:%s@example.com/repo.git'", prefixLen, secret),
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 0, nil, workflow.Config{})
+	if err != nil {
+		t.Fatalf("RunWorkspaceHook: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if !results[0].Truncated {
+		t.Fatalf("truncated = false, want true for boundary output")
+	}
+	if strings.Contains(results[0].Output, secret) || strings.Contains(results[0].Output, "user:"+secret) {
+		t.Fatalf("truncated hook output leaked credential: %q", results[0].Output[len(results[0].Output)-64:])
+	}
+}
+
+func TestRunWorkspaceHookRedactsIncompleteTimedOutOutput(t *testing.T) {
+	const secret = "token-1032"
+	dir := t.TempDir()
+	hook := workflow.WorkspaceHook{Commands: []string{
+		"printf '%s' 'scheme://user:" + secret + "'; sleep 2",
+	}}
+
+	results, err := RunWorkspaceHook(context.Background(), dir, HookBeforeRun, hook, 50, nil, workflow.Config{})
+	if err == nil {
+		t.Fatal("RunWorkspaceHook error = nil; want timeout")
+	}
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Truncated {
+		t.Fatalf("truncated = true, want false for timeout-only incomplete output")
+	}
+	if strings.Contains(results[0].Output, secret) || strings.Contains(results[0].Output, "user:"+secret) {
+		t.Fatalf("timed-out hook output leaked credential: %q", results[0].Output)
 	}
 }
 

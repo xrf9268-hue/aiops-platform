@@ -27,7 +27,11 @@ var stateAPIRedactionPatterns = []*regexp.Regexp{
 	// without the surrounding header context).
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._\-+/=]+`),
 	regexp.MustCompile(`\b(?:sk|ghp|ghu|ghs|gho|github_pat|glpat|xoxb|xoxp)[_-][A-Za-z0-9_\-]{16,}`),
-	regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9+.\-]*://[^\s/@]+:[^\s/@]+@[^\s]+`),
+	// Any URL carrying userinfo — with or without a password. The bare
+	// `https://token@host` clone URL shape is still a credential, and the
+	// userinfo class is greedy up to the last @ before the authority ends so
+	// a password containing @ does not leak its tail.
+	regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9+.\-]*://[^/?#\s]*@[^\s]+`),
 }
 
 // redactStateAPILastMessage applies the SPEC §15.3 / issue #297 redaction
@@ -50,12 +54,20 @@ func redactStateAPILastMessage(s string) string {
 	if s == "" {
 		return ""
 	}
-	for _, p := range stateAPIRedactionPatterns {
-		s = p.ReplaceAllString(s, "<redacted>")
-	}
+	s = redactStateAPISecretText(s)
 	runes := []rune(s)
 	if len(runes) > stateAPILastMessageMaxRunes {
 		return string(runes[:stateAPILastMessageMaxRunes]) + "…"
+	}
+	return s
+}
+
+func redactStateAPISecretText(s string) string {
+	if s == "" {
+		return ""
+	}
+	for _, p := range stateAPIRedactionPatterns {
+		s = p.ReplaceAllString(s, "<redacted>")
 	}
 	return s
 }

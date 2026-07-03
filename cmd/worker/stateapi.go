@@ -251,7 +251,7 @@ func apiIssueFromView(view orchestrator.StateView, identifier string) (apiIssueR
 		payload.Attempts.CurrentRetryAttempt = &retry.Attempt
 		payload.Attempts.RestartCount = restartCountFromRetryAttempt(&retry.Attempt)
 		payload.Retry = &retry
-		payload.LastError = stringPointerIfNotEmpty(row.Error)
+		payload.LastError = redactedStringPointerIfNotEmpty(row.Error)
 		return payload, true
 	}
 	if payload, ok := apiTerminalIssueFromView(view, want); ok {
@@ -290,7 +290,7 @@ func apiTerminalIssueFromView(view orchestrator.StateView, normalizedWant string
 		payload := base(ev.IssueID, ev.Identifier, string(ev.Kind))
 		payload.RecentEvents = []map[string]any{apiRuntimeEventFromView(ev)}
 		if ev.Kind == orchestrator.RuntimeEventFailed {
-			payload.LastError = stringPointerIfNotEmpty(ev.Message)
+			payload.LastError = redactedStringPointerIfNotEmpty(ev.Message)
 		}
 		return payload, true
 	}
@@ -327,7 +327,7 @@ func apiRuntimeEventFromView(ev orchestrator.RuntimeEvent) map[string]any {
 		"kind":       ev.Kind,
 		"issue_id":   ev.IssueID,
 		"identifier": ev.Identifier,
-		"message":    ev.Message,
+		"message":    redactStateAPISecretText(ev.Message),
 		"at":         ev.At,
 	}
 	if ev.Branch != "" {
@@ -409,7 +409,7 @@ func apiRetryFromView(row orchestrator.RetryView) stateapi.Retry {
 		IssueURL:       row.IssueURL,
 		Attempt:        row.Attempt,
 		DueAt:          dueAt,
-		Error:          row.Error,
+		Error:          redactStateAPISecretText(row.Error),
 		Kind:           string(retryKindOrFailure(row.Kind)),
 		StartupFailure: apiStartupFailure(row.StartupFailure),
 	}
@@ -421,7 +421,7 @@ func apiStartupFailure(in *task.StartupFailure) *stateapi.StartupFailure {
 	}
 	return &stateapi.StartupFailure{
 		Phase: in.Phase,
-		Error: in.Error,
+		Error: redactStateAPISecretText(in.Error),
 	}
 }
 func retryKindOrFailure(kind orchestrator.RetryKind) orchestrator.RetryKind {
@@ -437,11 +437,12 @@ func copyIntPointer(in *int) *int {
 	out := *in
 	return &out
 }
-func stringPointerIfNotEmpty(value string) *string {
+func redactedStringPointerIfNotEmpty(value string) *string {
 	if value == "" {
 		return nil
 	}
-	return &value
+	redacted := redactStateAPISecretText(value)
+	return &redacted
 }
 func apiErrorCode(err error) string {
 	if category, ok := workflow.ErrorCategory(err); ok {
@@ -486,7 +487,7 @@ func apiStateFromView(view orchestrator.StateView) stateapi.StateResponse {
 				TotalTokens:  row.Tokens.TotalTokens,
 			},
 			Method:            row.Method,
-			Error:             row.Error,
+			Error:             redactStateAPISecretText(row.Error),
 			CodexAppServerPID: row.CodexAppServerPID,
 		})
 	}

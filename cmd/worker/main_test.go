@@ -883,6 +883,70 @@ func TestApiRetryFromViewAlwaysEmitsKind(t *testing.T) {
 	}
 }
 
+func TestStateAPIProjectionRedactsCredentialedErrorFields(t *testing.T) {
+	const secret = "token-1032"
+	secretURL := "scheme://user:" + secret + "@example.com/repo.git"
+	state := apiStateFromView(orchestrator.StateView{
+		Retrying: []orchestrator.RetryView{{
+			IssueID:    "issue-1",
+			Identifier: "SEC-1",
+			Attempt:    1,
+			Error:      "retry failed: " + secretURL,
+			StartupFailure: &task.StartupFailure{
+				Phase: "thread/start",
+				Error: "startup failed: " + secretURL,
+			},
+		}},
+		Blocked: []orchestrator.BlockedView{{
+			IssueID:    "issue-2",
+			Identifier: "SEC-2",
+			Error:      "blocked: " + secretURL,
+		}},
+	})
+	assertStateAPISecretRedacted(t, "retry.error", state.Retrying[0].Error)
+	if state.Retrying[0].StartupFailure == nil {
+		t.Fatal("retry startup_failure = nil; want redacted startup failure")
+	}
+	assertStateAPISecretRedacted(t, "retry.startup_failure.error", state.Retrying[0].StartupFailure.Error)
+	assertStateAPISecretRedacted(t, "blocked.error", state.Blocked[0].Error)
+
+	retryIssue, ok := apiIssueFromView(orchestrator.StateView{
+		Retrying: []orchestrator.RetryView{{
+			IssueID:    "issue-3",
+			Identifier: "SEC-3",
+			Attempt:    2,
+			Error:      "retry issue failed: " + secretURL,
+		}},
+	}, "SEC-3")
+	if !ok || retryIssue.LastError == nil {
+		t.Fatalf("retry issue lookup = (%+v, %t), want last_error", retryIssue, ok)
+	}
+	assertStateAPISecretRedacted(t, "retry issue last_error", *retryIssue.LastError)
+
+	failedIssue, ok := apiIssueFromView(orchestrator.StateView{
+		RecentEvents: []orchestrator.RuntimeEvent{{
+			Kind:       orchestrator.RuntimeEventFailed,
+			IssueID:    "issue-4",
+			Identifier: "SEC-4",
+			Message:    "terminal failed: " + secretURL,
+		}},
+	}, "SEC-4")
+	if !ok || failedIssue.LastError == nil {
+		t.Fatalf("failed issue lookup = (%+v, %t), want last_error", failedIssue, ok)
+	}
+	assertStateAPISecretRedacted(t, "failed issue last_error", *failedIssue.LastError)
+}
+
+func assertStateAPISecretRedacted(t *testing.T, name, got string) {
+	t.Helper()
+	if strings.Contains(got, "token-1032") || strings.Contains(got, "user:token-1032@") {
+		t.Fatalf("%s leaked credential in %q", name, got)
+	}
+	if !strings.Contains(got, "<redacted>") {
+		t.Fatalf("%s = %q, want <redacted> marker", name, got)
+	}
+}
+
 func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 	server := newStateHTTPServer("127.0.0.1", 0, func(context.Context) (orchestrator.StateView, error) {
 		return orchestrator.StateView{}, nil
