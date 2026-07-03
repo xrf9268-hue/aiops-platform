@@ -637,6 +637,23 @@ func TestRetryEntry_IsDue(t *testing.T) {
 	}
 }
 
+func TestRetryEntryQuotaBackoffDelayOverride(t *testing.T) {
+	now := time.Now()
+	entry := &RetryEntry{Kind: RetryKindQuotaBackoff, QuotaBackoffDueAt: now.Add(time.Hour)}
+	if got := entry.quotaBackoffDelayOverride(now); got != time.Hour {
+		t.Fatalf("quotaBackoffDelayOverride(future) = %s; want 1h", got)
+	}
+	entry.QuotaBackoffDueAt = now.Add(-time.Second)
+	if got := entry.quotaBackoffDelayOverride(now); got != 0 {
+		t.Fatalf("quotaBackoffDelayOverride(elapsed) = %s; want 0", got)
+	}
+	entry.Kind = RetryKindFailure
+	entry.QuotaBackoffDueAt = now.Add(time.Hour)
+	if got := entry.quotaBackoffDelayOverride(now); got != 0 {
+		t.Fatalf("quotaBackoffDelayOverride(non-quota) = %s; want 0", got)
+	}
+}
+
 // TestFinishRunSucceeded_CapsCompletedAndCountsCumulative pins the
 // #234 contract: the Completed map and completedOrder slice are
 // bounded by MaxRecentCompleted, evicting the oldest entry on

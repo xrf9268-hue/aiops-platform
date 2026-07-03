@@ -3785,6 +3785,55 @@ func TestRetryFire_GlobalCapacityFullReschedulesViaBackoff(t *testing.T) {
 	}
 }
 
+func TestRetryFire_QuotaBackoffCapacityDeferPreservesRemainingRetryAfter(t *testing.T) {
+	disp := &fakeDispatcher{}
+	scheduler := &recordingScheduler{delay: 10 * time.Second}
+	st := NewOrchestratorState(15000, 1)
+	o := New(st, Deps{
+		Dispatcher: disp,
+		Scheduler:  scheduler,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go o.Run(ctx)
+	if err := o.WaitStarted(context.Background()); err != nil {
+		t.Fatalf("WaitStarted: %v", err)
+	}
+
+	blocker := tracker.Issue{ID: "BLOCKER", Identifier: "BLOCKER", Title: "blocker"}
+	if err := o.RequestDispatch(context.Background(), blocker, nil); err != nil {
+		t.Fatalf("dispatch blocker: %v", err)
+	}
+	waitFor(t, func() bool { return disp.count() == 1 }, time.Second)
+
+	retryIssue := tracker.Issue{ID: "RETRY-QUOTA", Identifier: "RETRY-QUOTA", Title: "quota retry"}
+	const retryAfter = time.Hour
+	if err := o.scheduleQuotaBackoffRetry(context.Background(), retryIssue, retryIssue.Identifier, 0, "quota backoff", retryAfter, Workspace{}); err != nil {
+		t.Fatalf("scheduleQuotaBackoffRetry: %v", err)
+	}
+	waitFor(t, func() bool { return len(scheduler.snapshotRequests()) == 1 }, time.Second)
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(retryIssue.ID),
+		issue:   retryIssue,
+		attempt: 0,
+		kind:    RetryKindQuotaBackoff,
+	}); err != nil {
+		t.Fatalf("submit quota retry fire: %v", err)
+	}
+	waitFor(t, func() bool { return len(scheduler.snapshotRequests()) >= 2 }, 2*time.Second)
+
+	requests := scheduler.snapshotRequests()
+	got := requests[len(requests)-1]
+	if got.Kind != RetryKindQuotaBackoff {
+		t.Fatalf("reschedule kind = %q, want %q", got.Kind, RetryKindQuotaBackoff)
+	}
+	if got.DelayOverride <= 55*time.Minute || got.DelayOverride > retryAfter {
+		t.Fatalf("reschedule DelayOverride = %s, want remaining quota RetryAfter within (55m, 1h]", got.DelayOverride)
+	}
+}
+
 // TestRetryFire_PerStateCapacityFullReschedulesViaBackoff is the symmetric
 // per-state version of the global-capacity test above: with
 // max_concurrent_agents_by_state[Rework]=1 and one running Rework issue,
@@ -4579,6 +4628,45 @@ func TestRetryFire_QuotaBackoffFetchFailureReschedulesWithoutOrphaningClaim(t *t
 	}
 	if !strings.Contains(got.Error, "tracker unavailable") {
 		t.Fatalf("rescheduled error = %q, want tracker failure reason", got.Error)
+	}
+}
+
+func TestRetryFire_QuotaBackoffFetchFailurePreservesRemainingRetryAfter(t *testing.T) {
+	disp := &fakeDispatcher{}
+	lister := &fakeCandidateLister{err: errors.New("tracker unavailable")}
+	scheduler := &recordingScheduler{delay: 10 * time.Second}
+	o, cancel := startActor(t, Deps{
+		Dispatcher:      disp,
+		Scheduler:       scheduler,
+		CandidateLister: lister,
+	})
+	defer cancel()
+
+	iss := tracker.Issue{ID: "ENG-QUOTA-POLL-WINDOW", Identifier: "ENG-QUOTA-POLL-WINDOW", Title: "quota poll", State: "Todo"}
+	const retryAfter = time.Hour
+	if err := o.scheduleQuotaBackoffRetry(context.Background(), iss, iss.Identifier, 0, "quota backoff", retryAfter, Workspace{}); err != nil {
+		t.Fatalf("scheduleQuotaBackoffRetry: %v", err)
+	}
+	waitFor(t, func() bool { return len(scheduler.snapshotRequests()) == 1 }, time.Second)
+
+	if err := o.submit(context.Background(), &retryFireOp{
+		o:       o,
+		id:      IssueID(iss.ID),
+		issue:   iss,
+		attempt: 0,
+		kind:    RetryKindQuotaBackoff,
+	}); err != nil {
+		t.Fatalf("submit quota retry fire: %v", err)
+	}
+	waitFor(t, func() bool { return len(scheduler.snapshotRequests()) >= 2 }, 2*time.Second)
+
+	requests := scheduler.snapshotRequests()
+	got := requests[len(requests)-1]
+	if got.Kind != RetryKindQuotaBackoff {
+		t.Fatalf("reschedule kind = %q, want %q", got.Kind, RetryKindQuotaBackoff)
+	}
+	if got.DelayOverride <= 55*time.Minute || got.DelayOverride > retryAfter {
+		t.Fatalf("reschedule DelayOverride = %s, want remaining quota RetryAfter within (55m, 1h]", got.DelayOverride)
 	}
 }
 

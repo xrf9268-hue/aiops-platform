@@ -212,6 +212,11 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 	attempt := s.attempt
 	kind := s.kind
 	delay := o.currentScheduler().NextDelay(s.req)
+	dueAt := time.Now().Add(delay)
+	var quotaBackoffDueAt time.Time
+	if kind == RetryKindQuotaBackoff && s.req.DelayOverride > 0 {
+		quotaBackoffDueAt = dueAt
+	}
 	// time.AfterFunc schedules immediately and is cheap (no goroutine
 	// until fire), so we can safely create the timer on the actor
 	// without blocking. ScheduleRetry needs the Timer set on the entry
@@ -221,9 +226,10 @@ func (s *scheduleRetryOp) apply(st *OrchestratorState) func() {
 		IssueID:               id,
 		Identifier:            s.identifier,
 		Attempt:               attempt,
-		DueAt:                 time.Now().Add(delay),
+		DueAt:                 dueAt,
 		Error:                 s.runErr,
 		Kind:                  s.kind,
+		QuotaBackoffDueAt:     quotaBackoffDueAt,
 		StartupFailure:        task.CopyStartupFailure(s.startupFailure),
 		ContinuationTurnCount: s.continuationTurnCount,
 		Workspace:             s.workspace,
@@ -419,7 +425,6 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 	// state, and both the per-state capacity gate and the spawned worker
 	// must see the live state.
 	issue := entry.Issue
-	identifier := entry.Identifier
 	if suppressRetryFireAfterOperatorStop(st, entry, id) {
 		return nil
 	}
@@ -429,12 +434,12 @@ func retryFireDispatchTail(st *OrchestratorState, entry *RetryEntry, id IssueID,
 		// reschedule through the configured backoff with attempt+1 and a
 		// typed "no available orchestrator slots" error instead of arming a
 		// short 100ms re-fire timer.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, entry.StartupFailure, o)
+		return capacityDeferRetry(st, id, entry, attempt, o)
 	}
 	if st.StateCapacityFull(issue.State) {
 		// Retry timers must also obey per-state capacity gates. Same
 		// upstream-aligned reschedule shape as the global-cap branch.
-		return capacityDeferRetry(st, id, issue, identifier, attempt, entry.Kind, entry.Workspace, entry.StartupFailure, o)
+		return capacityDeferRetry(st, id, entry, attempt, o)
 	}
 	// Consume the retry entry but keep Claimed: the re-dispatch
 	// immediately re-adds Running, and dropping Claimed in between
@@ -476,7 +481,7 @@ func suppressRetryFireAfterOperatorStop(st *OrchestratorState, entry *RetryEntry
 // 100ms re-fire loop bypassed the backoff formula, left the attempt
 // counter frozen across thousands of re-fires, and produced no runtime
 // event for the cap-pressure case.
-func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, identifier string, attempt int, kind RetryKind, workspace Workspace, startupFailure *task.StartupFailure, o *Orchestrator) func() {
+func capacityDeferRetry(st *OrchestratorState, id IssueID, entry *RetryEntry, attempt int, o *Orchestrator) func() {
 	if o.runCtx.Err() != nil {
 		// Mirror retryPollFailedOp's shutdown guard (actor.go above):
 		// the followup's ScheduleRetry would fail submit anyway, so
@@ -484,12 +489,17 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 		// leak a misleading line into shutdown logs.
 		return nil
 	}
+	issue := entry.Issue
+	identifier := entry.Identifier
+	kind := entry.Kind
+	workspace := entry.Workspace
 	const runErr = "no available orchestrator slots"
 	nextAttempt := attempt + 1
 	if kind == RetryKindQuotaBackoff {
 		nextAttempt = attempt
 	}
-	startupFailure = task.CopyStartupFailure(startupFailure)
+	startupFailure := task.CopyStartupFailure(entry.StartupFailure)
+	quotaRetryAfter := entry.quotaBackoffDelayOverride(time.Now())
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventFailed,
 		IssueID:    id,
@@ -500,7 +510,7 @@ func capacityDeferRetry(st *OrchestratorState, id IssueID, issue tracker.Issue, 
 		// Carry the workspace across the reschedule so the §18.1 terminal
 		// cleanup gate still has a path on a later attempt (#341).
 		if kind == RetryKindQuotaBackoff {
-			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), id, identifier)
+			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, quotaRetryAfter, workspace), id, identifier)
 			return
 		}
 		o.logRescheduleErr(o.scheduleFailureRetryWithStartupFailure(o.runCtx, issue, identifier, nextAttempt, runErr, workspace, startupFailure), id, identifier)
@@ -551,6 +561,7 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	// gate still has a path on a later attempt (#341).
 	workspace := entry.Workspace
 	startupFailure := task.CopyStartupFailure(entry.StartupFailure)
+	quotaRetryAfter := entry.quotaBackoffDelayOverride(time.Now())
 	nextAttempt := r.attempt + 1
 	if r.kind == RetryKindQuotaBackoff {
 		nextAttempt = r.attempt
@@ -567,7 +578,7 @@ func (r *retryPollFailedOp) apply(st *OrchestratorState) func() {
 	})
 	return func() {
 		if r.kind == RetryKindQuotaBackoff {
-			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, 0, workspace), r.id, identifier)
+			o.logRescheduleErr(o.scheduleQuotaBackoffRetry(o.runCtx, issue, identifier, nextAttempt, runErr, quotaRetryAfter, workspace), r.id, identifier)
 			return
 		}
 		o.logRescheduleErr(o.scheduleFailureRetryWithStartupFailure(o.runCtx, issue, identifier, nextAttempt, runErr, workspace, startupFailure), r.id, identifier)
