@@ -49,7 +49,7 @@ agent:
   max_turns: 30
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   # workspace-write lets the agent build/test before pushing. networkAccess:true
   # is required for `git push` and the Gitea PR API (typed policies default to
   # networkAccess:false, which would block both).

@@ -120,7 +120,7 @@ Use when:
 agent:
   default: codex-app-server
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
 ```
 
 The agent's sandbox/approval posture is set by `codex.thread_sandbox` (per-session) and `codex.turn_sandbox_policy` (per-turn; derived from `thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on shared hosts and `danger-full-access` only on already-isolated workers (container, dedicated VM).

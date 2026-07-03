@@ -187,7 +187,7 @@ govern *how* we evaluate components inside the SPEC-aligned envelope.
 
 ## Cross-cutting checklist when porting from the Elixir reference
 
-The SPEC-alignment rules above govern *protocol contract*. Three
+The SPEC-alignment rules above govern *protocol contract*. Four
 classes of failure have shown up in shipped PRs anyway, because the
 SPEC text does not surface them. Use this checklist in addition to
 reading SPEC and the reference module — every item is tied to a
@@ -250,7 +250,22 @@ specific observed failure per the "Earned rules" principle.
    export strips — a non-experimental bundle silently drops them and falsely
    flags a working field as removed. ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
-4. **Run an adversarial pass on your own diff before asking a human
+4. **Preserve local Codex environment inheritance for binary deployments.**
+   The upstream Elixir app-server starts `codex.command` from the issue
+   workspace and naturally inherits the user environment of the running
+   orchestrator. A local aiops-platform binary should preserve that expectation:
+   when the worker and `codex app-server` run as the same user, Codex may reuse
+   the same `HOME` / `CODEX_HOME`, repo/user/admin/system skills, MCP config,
+   operator-enabled Apps/connectors, plugin-provided capability, and shell-tool
+   environment according to Codex's own discovery/config rules. Do not disable
+   host-local skills/MCP/Apps/connectors by default or drop `CODEX_HOME` from the
+   agent subprocess baseline. Repo-owned required skill/MCP declarations are
+   portability and diagnostics hardening for containers, remote hosts, or
+   explicitly declared dependencies — not a replacement for the local binary's
+   inherited Codex environment.
+   ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
+
+5. **Run an adversarial pass on your own diff before asking a human
    to look.** `@codex review` reads SPEC + the Elixir reference +
    this file, and surfaces precisely the gaps that human review
    tends to miss. Trigger it on the head commit before marking the

@@ -50,7 +50,7 @@ agent:
   max_continuation_turns: 36
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   # workspace-write so the reviewer can fetch the head branch and run build/test.
   # networkAccess:true is REQUIRED — git fetch + Gitea API + the auto-merge call
   # all need network; typed policies default it to false.

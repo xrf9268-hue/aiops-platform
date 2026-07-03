@@ -52,7 +52,7 @@ agent:
   max_turns: 8
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   # Two tiers (pick one); BOTH need networkAccess: true — the typed sandbox
   # policies derive networkAccess: false by default, which blocks the
   # git fetch / Gitea API calls the review depends on. The verdict label

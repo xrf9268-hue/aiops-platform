@@ -37,7 +37,7 @@ agent:
   timeout: 2h
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   thread_sandbox: danger-full-access
   # Real codex app-server startup can exceed the default 5s read timeout on
   # release-validation machines. Keep this in the template so doctor exercises

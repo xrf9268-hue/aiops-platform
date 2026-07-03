@@ -68,8 +68,9 @@ Edit `.aiops/WORKFLOW.md`:
 - set `tracker.project_slug` to the Linear project slug;
 - keep `agent.default: mock` for the first smoke;
 - switch to `agent.default: codex-app-server` only for the real Codex smoke;
-- in Docker real mode, set `codex.command: codex app-server` and make the
-  sandbox choice explicit.
+- in Docker real mode, use a real-Codex workflow template whose `codex.command`
+  adds `--config shell_environment_policy.inherit=all`, or set an explicit
+  equivalent, and make the sandbox choice explicit.
 
 ## 2. Configure Compose
 

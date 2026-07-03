@@ -41,7 +41,7 @@ agent:
 
 codex:
   # The SPEC §10 runner is the long-running `codex app-server` JSON-RPC session.
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   # thread_sandbox: danger-full-access is intended for a trusted local Mac or an
   # already-isolated Docker worker. Use workspace-write on shared hosts.
   thread_sandbox: danger-full-access

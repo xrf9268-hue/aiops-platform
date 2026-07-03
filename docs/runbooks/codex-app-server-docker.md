@@ -129,6 +129,9 @@ Two modes are supported. Pick one per deployment; do not mix them.
    workflow opts in: add `OPENAI_API_KEY` to `codex.env_passthrough` in
    `WORKFLOW.md`. Source the value from a Docker secret / secret file and let the
    entrypoint export it; never put it on a command line or in a git-tracked file.
+   If the workflow command uses `shell_environment_policy.inherit=all`,
+   Codex-launched shell tools also see intentionally passed model-runtime
+   credentials.
    Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`, …) stay denied from
    passthrough by policy — only the model key is opt-in.
 
@@ -155,9 +158,8 @@ CODEX_HOME=/home/aiops/.codex
 ```
 
 Codex resolves its home from `CODEX_HOME` if set, otherwise `$HOME/.codex`. The
-worker passes `HOME` to the agent subprocess but **not** `CODEX_HOME`; if you
-point `CODEX_HOME` somewhere other than `$HOME/.codex`, also add `CODEX_HOME` to
-`codex.env_passthrough` so the agent sees the same home the preflight checked.
+worker passes both `HOME` and `CODEX_HOME` to the agent subprocess by default so
+the app-server sees the same Codex home the preflight checked.
 
 ### Declarative model configuration
 

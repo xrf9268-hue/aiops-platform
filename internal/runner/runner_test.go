@@ -441,6 +441,7 @@ func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 	lookupValues := map[string]string{
 		"PATH":                       "/worker/path",
 		"HOME":                       "/home/agent",
+		"CODEX_HOME":                 "/home/agent/.codex-alt",
 		"USER":                       "agent-user",
 		"AIOPS_ALLOWED":              "allowed-value",
 		"AIOPS_DUPLICATE":            "duplicate-value",
@@ -479,6 +480,7 @@ func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 	}{
 		{name: "PATH", wantValue: "/login/path"},
 		{name: "HOME", wantValue: "/home/agent"},
+		{name: "CODEX_HOME", wantValue: "/home/agent/.codex-alt"},
 		{name: "USER", wantValue: "agent-user"},
 		{name: "AIOPS_ALLOWED", wantValue: "allowed-value"},
 		{name: "AIOPS_DUPLICATE", wantValue: "duplicate-value"},

@@ -129,7 +129,7 @@ func codexAppServerEnvStubScript(t *testing.T, body string) string {
 	header := `#!/usr/bin/env python3
 import os, sys
 with open("env.txt", "w") as f:
-    for name in ("LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "PATH"):
+    for name in ("LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "PATH", "CODEX_HOME"):
         if name in os.environ:
             f.write(f"{name}={os.environ[name]}\n")
 `
@@ -278,42 +278,14 @@ for line in sys.stdin:
 	}
 }
 
-func TestBuildThreadStartParamsDisablesInheritedCodexAppTools(t *testing.T) {
-	in := appServerInput(codexWorkdir(t, "disable app tools"))
+func TestBuildThreadStartParamsPreservesInheritedCodexAppConfig(t *testing.T) {
+	in := appServerInput(codexWorkdir(t, "preserve app config"))
 	in.Workflow.Config.Tracker.Kind = "linear"
 	in.Workflow.Config.Tracker.APIKey = "linear-secret"
 	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
-	config, ok := payload["config"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread/start config = %#v; want object disabling inherited app tools", payload["config"])
-	}
-	apps, ok := config["apps"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread/start config.apps = %#v; want object", config["apps"])
-	}
-	features, ok := config["features"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread/start config.features = %#v; want object", config["features"])
-	}
-	if features["apps"] != false {
-		t.Fatalf("thread/start config.features.apps = %#v; want false", features["apps"])
-	}
-	if features["connectors"] != false {
-		t.Fatalf("thread/start config.features.connectors = %#v; want false", features["connectors"])
-	}
-	defaultApp, ok := apps["_default"].(map[string]any)
-	if !ok {
-		t.Fatalf("thread/start config.apps._default = %#v; want object", apps["_default"])
-	}
-	if defaultApp["enabled"] != false {
-		t.Fatalf("thread/start config.apps._default.enabled = %#v; want false", defaultApp["enabled"])
-	}
-	if defaultApp["open_world_enabled"] != false {
-		t.Fatalf("thread/start config.apps._default.open_world_enabled = %#v; want false", defaultApp["open_world_enabled"])
-	}
-	if defaultApp["destructive_enabled"] != false {
-		t.Fatalf("thread/start config.apps._default.destructive_enabled = %#v; want false", defaultApp["destructive_enabled"])
+	if _, ok := payload["config"]; ok {
+		t.Fatalf("thread/start config = %#v; want absent so Codex uses inherited host config", payload["config"])
 	}
 	if tools, _ := payload["dynamicTools"].([]map[string]any); len(tools) == 0 {
 		t.Fatalf("thread/start dynamicTools = %#v; want explicit runner tools still advertised", payload["dynamicTools"])
@@ -350,6 +322,7 @@ for line in sys.stdin:
 	t.Setenv("LINEAR_API_KEY", "linear-secret")
 	t.Setenv("GITEA_TOKEN", "gitea-secret")
 	t.Setenv("GITHUB_TOKEN", "github-secret")
+	t.Setenv("CODEX_HOME", filepath.Join(wd, "codex-home"))
 
 	if _, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd)); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -366,6 +339,9 @@ for line in sys.stdin:
 	}
 	if !strings.Contains(string(body), "PATH=") {
 		t.Fatalf("codex app-server env lost baseline PATH:\n%s", body)
+	}
+	if !strings.Contains(string(body), "CODEX_HOME="+filepath.Join(wd, "codex-home")) {
+		t.Fatalf("codex app-server env lost baseline CODEX_HOME:\n%s", body)
 	}
 }
 
