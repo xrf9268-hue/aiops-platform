@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +97,135 @@ func (d *cancelAwareDispatcher) Spawn(ctx context.Context, _ tracker.Issue, _ *i
 		close(out)
 	}()
 	return out
+}
+
+type panicDispatcher struct{}
+
+func (panicDispatcher) Spawn(context.Context, tracker.Issue, *int, DispatchOptions) <-chan WorkerResult {
+	panic("spawn boom")
+}
+
+func TestRequestDispatchReturnsWhenSpawnPanics(t *testing.T) {
+	o, cancel := startActor(t, Deps{Dispatcher: panicDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	ctx, cancelReq := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelReq()
+	issue := tracker.Issue{ID: "ENG-PANIC", Identifier: "ENG-PANIC", State: "Todo"}
+	if err := o.RequestDispatch(ctx, issue, nil); err != nil {
+		t.Fatalf("RequestDispatch(%s) with spawn panic = %v; want nil", issue.ID, err)
+	}
+	if !o.WaitForWorkers(time.Second) {
+		t.Fatalf("WaitForWorkers(1s) = false after %s spawn panic; want true", issue.ID)
+	}
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		if err != nil {
+			return false
+		}
+		if len(view.Running) != 0 || len(view.Retrying) != 1 {
+			return false
+		}
+		retry := view.Retrying[0]
+		return retry.IssueID == IssueID(issue.ID) &&
+			retry.Kind == RetryKindFailure &&
+			strings.Contains(retry.Error, "orchestrator spawn panic")
+	}, time.Second)
+}
+
+func TestDispatchFollowupRepliesWhenSpawnRecoversBeforeDispatcher(t *testing.T) {
+	st := NewOrchestratorState(15000, 1)
+	result := make(chan error, 1)
+	op := &dispatchOp{
+		o:      &Orchestrator{},
+		issue:  tracker.Issue{ID: "ENG-PANIC-EARLY", Identifier: "ENG-PANIC-EARLY"},
+		result: result,
+	}
+	followup := op.apply(st)
+	if followup == nil {
+		t.Fatal("dispatchOp.apply returned nil followup; want spawn followup")
+	}
+	followup()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("dispatch followup reply after spawn panic = %v; want nil", err)
+		}
+	default:
+		t.Fatal("dispatch followup did not reply after spawn panic")
+	}
+}
+
+func TestSpawnPanicBeforeFanoutReleasesWorkerWait(t *testing.T) {
+	o := &Orchestrator{}
+	o.spawn("ENG-PANIC-WG", tracker.Issue{ID: "ENG-PANIC-WG", Identifier: "ENG-PANIC-WG"}, nil, 0, 0, 0, Workspace{})
+	if !o.WaitForWorkers(time.Second) {
+		t.Fatal("WaitForWorkers(1s) = false after pre-fanout spawn panic; want true")
+	}
+}
+
+func TestRecoverSpawnPanicSchedulesFailureRetryWithoutRunning(t *testing.T) {
+	o, cancel := startActor(t, Deps{Dispatcher: &fakeDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-RECOVER-CLAIM", Identifier: "ENG-RECOVER-CLAIM", State: "Todo"}
+	id := IssueID(issue.ID)
+	if err := o.submit(context.Background(), opFunc(func(st *OrchestratorState) func() {
+		st.Claimed[id] = struct{}{}
+		st.ClaimedIssues[id] = issue
+		return nil
+	})); err != nil {
+		t.Fatalf("seed claim: %v", err)
+	}
+	o.recoverSpawnPanic(context.Background(), id, issue, nil, "orchestrator spawn panic: boom", Workspace{})
+
+	waitFor(t, func() bool {
+		view, err := o.Snapshot(context.Background())
+		return err == nil &&
+			len(view.Running) == 0 &&
+			len(view.Retrying) == 1 &&
+			view.Retrying[0].IssueID == id &&
+			view.Retrying[0].Kind == RetryKindFailure &&
+			strings.Contains(view.Retrying[0].Error, "orchestrator spawn panic")
+	}, time.Second)
+}
+
+func TestRetryDispatchSpawnPanicPreservesWorkspace(t *testing.T) {
+	scheduler := &sequenceScheduler{delays: []time.Duration{time.Millisecond, time.Minute}}
+	o, cancel := startActor(t, Deps{Dispatcher: panicDispatcher{}, Scheduler: scheduler})
+	defer cancel()
+
+	issue := tracker.Issue{ID: "ENG-RETRY-WORKSPACE", Identifier: "ENG-RETRY-WORKSPACE", State: "Todo"}
+	id := IssueID(issue.ID)
+	workspace := Workspace{Path: "/tmp/aiops/workspaces/ENG-RETRY-WORKSPACE", Root: "/tmp/aiops/workspaces"}
+	if err := o.scheduleFailureRetry(context.Background(), issue, issue.Identifier, 1, "transient", workspace); err != nil {
+		t.Fatalf("scheduleFailureRetry: %v", err)
+	}
+	waitFor(t, func() bool {
+		path, attempt := retryWorkspace(t, o, id)
+		return attempt == 2 && path == workspace.Path
+	}, time.Second)
+}
+
+func retryWorkspace(t *testing.T, o *Orchestrator, id IssueID) (string, int) {
+	t.Helper()
+	type retryWorkspaceResult struct {
+		path    string
+		attempt int
+	}
+	reply := make(chan retryWorkspaceResult, 1)
+	if err := o.submit(context.Background(), opFunc(func(st *OrchestratorState) func() {
+		if retry := st.RetryAttempts[id]; retry != nil {
+			reply <- retryWorkspaceResult{path: retry.Workspace.Path, attempt: retry.Attempt}
+			return nil
+		}
+		reply <- retryWorkspaceResult{}
+		return nil
+	})); err != nil {
+		t.Fatalf("read retry workspace: %v", err)
+	}
+	got := <-reply
+	return got.path, got.attempt
 }
 
 // TestWaitForWorkers_DrainsInFlightWorkerOnShutdown reproduces the issue
