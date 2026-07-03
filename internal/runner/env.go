@@ -11,6 +11,7 @@ import (
 var baselineAgentEnvAllowlist = []string{
 	"PATH",
 	"HOME",
+	"CODEX_HOME",
 	"USER",
 	"LANG",
 	"LC_ALL",

@@ -44,7 +44,7 @@ agent:
   max_turns: 6
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
 
 claude:
   command: claude

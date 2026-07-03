@@ -187,7 +187,8 @@ AIOPS_MIRROR_ROOT="$AIOPS_WEBTODO_REVIEWER_MIRROR_ROOT" \
 
 For a local desktop binary run, `CODEX_HOME` normally stays unset so Codex uses
 the operator's usual `~/.codex`. For a reproducible production-style run, set a
-dedicated `CODEX_HOME` and include it in `codex.env_passthrough`.
+dedicated `CODEX_HOME`; the worker passes it through to `codex app-server` by
+default.
 
 ## 4. Run Maker and Reviewer
 

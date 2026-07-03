@@ -99,13 +99,6 @@ func TestCodexAppServerThreadStartPayloadMatchesSchema(t *testing.T) {
 	}
 }
 
-func TestCodexAppServerThreadConfigMatchesSchema(t *testing.T) {
-	sch := compileCodexDef(t, codexSchemaCompiler(t), "Config")
-	if err := validateWire(t, sch, appServerThreadConfig()); err != nil {
-		t.Errorf("appServerThreadConfig() failed Config schema: %v", err)
-	}
-}
-
 func TestCodexAppServerTurnStartPayloadMatchesSchema(t *testing.T) {
 	in := codexSchemaTestInput(t)
 	approval := in.Workflow.Config.Codex.ApprovalPolicy

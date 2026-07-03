@@ -47,7 +47,7 @@ agent:
 codex:
   # The SPEC §10 runner is `codex app-server` — a long-running JSON-RPC 2.0
   # session over stdio. Set agent.default: codex-app-server to use it.
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   # linear_graphql narrows the agent-visible Linear GraphQL tool to the
   # operator-chosen surface (SPEC §15.5 harness hardening / #298). The
   # zero value (omit the block) keeps the safest posture: queries are

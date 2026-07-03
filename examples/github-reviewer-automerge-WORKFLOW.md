@@ -39,7 +39,7 @@ agent:
   timeout: 2h
 
 codex:
-  command: codex app-server
+  command: codex app-server --config shell_environment_policy.inherit=all
   thread_sandbox: danger-full-access
   read_timeout_ms: 30000
   env_passthrough:

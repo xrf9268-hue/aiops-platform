@@ -137,7 +137,30 @@ non-`--experimental` regen made `dynamicTools` look removed in 0.136 when the
 upstream `ThreadStartParams` struct was byte-identical and merely
 experimental-gated.
 
-### Item 4 — run an adversarial pass on your own diff before a human looks
+### Item 4 — preserve local Codex environment inheritance for binary deployments
+The upstream Elixir app-server launches `codex.command` from the issue workspace
+with `bash -lc` or SSH command execution and does not sanitize away the
+orchestrator user's environment; its README also says operators may copy
+repository-local skills and that agents can use either Linear MCP or the
+injected `linear_graphql` tool. Codex itself discovers skills and MCP
+configuration through `HOME` / `CODEX_HOME`, repository skills, user skills,
+admin/system skills, and `config.toml`; Codex's `shell_environment_policy`
+controls what its own shell tools inherit after app-server startup.
+
+**Earned by:** #1049 initially framed repo-owned skill dependencies as a fix
+that should avoid inheriting the operator's current desktop/session skills. That
+wording is reasonable for portable/containerized contracts but too broad for
+local binary deployments: a direct binary worker running under the same user as
+`codex app-server` should preserve the upstream behavior and naturally reuse the
+same Codex home. The portability hardening is to validate explicit repo-owned
+or workflow-declared dependencies when they are declared, not to amputate
+host-local skills/MCP/Apps/connectors/plugin capability from the local binary
+path. The same audit found two sibling regressions: the runner baseline omitted
+`CODEX_HOME`, breaking non-default Codex homes, and the default workflow command
+lacked upstream's `shell_environment_policy.inherit=all`, narrowing the
+environment seen by Codex-launched shell tools.
+
+### Item 5 — run an adversarial pass on your own diff before a human looks
 `@codex review` reads SPEC + the Elixir reference + `AGENTS.md`, and surfaces
 precisely the gaps that human review tends to miss. Trigger it on the head commit
 before marking the PR ready, and for each finding either fix it or document in

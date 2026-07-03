@@ -524,32 +524,10 @@ func buildInitializeParams() map[string]any {
 func buildThreadStartParams(in RunInput, approvalPolicy any) map[string]any {
 	return map[string]any{
 		"approvalPolicy": approvalPolicy,
-		"config":         appServerThreadConfig(),
 		"sandbox":        in.Workflow.Config.Codex.ThreadSandbox,
 		"cwd":            in.Workdir,
 		"dynamicTools":   appServerDynamicToolSpecs(in.Workflow.Config),
 		"multiAgentMode": "none",
-	}
-}
-
-func appServerThreadConfig() map[string]any {
-	return map[string]any{
-		"apps": map[string]any{
-			"_default": map[string]any{
-				// Unattended worker sessions own PR/tracker handoff through
-				// WORKFLOW-prescribed CLI commands plus explicit dynamicTools.
-				"enabled":             false,
-				"open_world_enabled":  false,
-				"destructive_enabled": false,
-			},
-		},
-		"features": map[string]any{
-			// The app default does not override host config that explicitly
-			// enables a connector, so disable the app feature for the session.
-			// Codex also accepts `connectors` as the legacy alias for Apps.
-			"apps":       false,
-			"connectors": false,
-		},
 	}
 }
 

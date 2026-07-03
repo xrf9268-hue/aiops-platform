@@ -396,6 +396,8 @@ type VerifyConfig struct {
 	Commands []string `yaml:"commands" json:"commands"`
 }
 
+const DefaultCodexCommand = "codex app-server"
+
 func DefaultConfig() Config {
 	return Config{
 		Server: ServerConfig{Host: "127.0.0.1", Port: 4000},
@@ -426,7 +428,7 @@ func DefaultConfig() Config {
 			Timeout:              30 * time.Minute,
 		},
 		Codex: CommandConfig{
-			Command: "codex app-server",
+			Command: DefaultCodexCommand,
 			// See loader.go for why this is `granular:` with all flags
 			// false instead of the obsolete `reject:` shape (#329).
 			ApprovalPolicy: map[string]any{"granular": map[string]any{

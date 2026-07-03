@@ -111,8 +111,8 @@ over stdio).
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
-| `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess | `$VAR`; a `codex exec` argv is rejected (#541) |
-| `codex.env_passthrough` | string list | `[]` | Env vars the agent subprocess inherits beyond the runner baseline — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
+| `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; a `codex exec` argv is rejected (#541) |
+| `codex.env_passthrough` | string list | `[]` | Env vars the agent subprocess inherits beyond the runner baseline (`PATH`, `HOME`, `CODEX_HOME`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
 | `codex.turn_sandbox_policy` | typed map | derived from `thread_sandbox` | Explicit per-turn `sandboxPolicy` override; `type` is required (`dangerFullAccess`, `readOnly`, `externalSandbox`, `workspaceWrite`), with per-type required fields (`writableRoots`, `networkAccess`, …) | strict per-type field checking; legacy `mode:`-style shapes rejected |

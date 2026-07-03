@@ -31,7 +31,7 @@ func buildCodexAppServerCmd(ctx context.Context, in RunInput, env []string) (*ex
 func NewCodexAppServerCommand(ctx context.Context, cfg workflow.Config, env []string) (*exec.Cmd, bool, error) {
 	command := strings.TrimSpace(cfg.Codex.Command)
 	if command == "" {
-		command = "codex app-server"
+		command = workflow.DefaultCodexCommand
 	}
 	// A codex-prefixed command with no shell syntax execs the codex binary
 	// directly. This keeps the common case (including args like
