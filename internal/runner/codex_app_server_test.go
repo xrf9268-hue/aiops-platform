@@ -292,12 +292,17 @@ func TestBuildThreadStartParamsPreservesInheritedCodexAppConfig(t *testing.T) {
 	}
 }
 
-func TestBuildThreadStartParamsPinsMultiAgentMode(t *testing.T) {
+func TestBuildThreadStartParamsPinsMultiAgentModeWithoutSuppressingDynamicTools(t *testing.T) {
 	in := appServerInput(codexWorkdir(t, "pin multi-agent mode"))
+	in.Workflow.Config.Tracker.Kind = "linear"
+	in.Workflow.Config.Tracker.APIKey = "linear-secret"
 	payload := buildThreadStartParams(in, in.Workflow.Config.Codex.ApprovalPolicy)
 
 	if got := payload["multiAgentMode"]; got != "none" {
 		t.Fatalf("thread/start multiAgentMode = %#v; want none to preserve WORKFLOW-only instructions", got)
+	}
+	if tools, _ := payload["dynamicTools"].([]map[string]any); len(tools) == 0 {
+		t.Fatalf("thread/start dynamicTools = %#v; want tools still advertised because multiAgentMode is not a capability gate", payload["dynamicTools"])
 	}
 }
 

@@ -520,7 +520,9 @@ func buildInitializeParams() map[string]any {
 // buildThreadStartParams is the thread/start payload. dynamicTools is an
 // experimental field gated by the experimentalApi capability set in
 // buildInitializeParams; it advertises the SPEC §10.5 client-side tool surface
-// (e.g. linear_graphql) to the agent.
+// (e.g. linear_graphql) to the agent. multiAgentMode is intentionally separate:
+// Codex 0.142.0 used it to control delegation instruction injection, not host
+// config, MCP, skills, Apps/connectors, plugins, or dynamic tool availability.
 func buildThreadStartParams(in RunInput, approvalPolicy any) map[string]any {
 	return map[string]any{
 		"approvalPolicy": approvalPolicy,
