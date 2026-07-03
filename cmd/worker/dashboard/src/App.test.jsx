@@ -233,6 +233,21 @@ describe('Worker status dashboard', () => {
     expect(rateValues.some((t) => t.includes('12'))).toBe(true);
   });
 
+  it('labels observed Codex window_duration_mins windows with human-scale units', async () => {
+    current = busyState({
+      rate_limits: {
+        limit_name: 'codex', plan_type: 'pro',
+        primary: { used_percent: 31, window_duration_mins: 300, resets_at: unixIn(41) },
+        secondary: { used_percent: 12, window_duration_mins: 10080, resets_at: unixIn(1800) },
+      },
+    });
+    render(<App />);
+    await screen.findByText('Primary window');
+
+    expect(screen.getByText(/5-hour window/)).toBeTruthy();
+    expect(screen.getByText(/7-day window/)).toBeTruthy();
+  });
+
   it('falls back to a raw JSON dump for an unrecognized rate-limit shape', async () => {
     // No used_percent windows → keep the data visible rather than mis-rendering it.
     current = busyState({ rate_limits: { limit_name: 'codex', primary: { remaining: 450, limit: 500 } } });
