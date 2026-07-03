@@ -277,8 +277,13 @@ type appServerClient struct {
 	// consumer. readCh carries lines and is closed only by the reader; readErr is
 	// the sticky terminal scan error, published before close(readCh) so the close
 	// is the happens-before edge that lets the consumer read it race-free.
-	readCh            chan []byte
-	readErr           error
+	readCh  chan []byte
+	readErr error
+	// stdoutBufferBytes / stdinWriteTimeout override the transport's stdio
+	// bounds (maxAppServerBufferedBytes / appServerStdinWriteTimeout) in
+	// tests; zero means the production default.
+	stdoutBufferBytes int
+	stdinWriteTimeout time.Duration
 	out               io.Writer
 	nextID            int
 	codexAppServerPID int

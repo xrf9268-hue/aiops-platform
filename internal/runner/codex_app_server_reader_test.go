@@ -10,9 +10,12 @@ package runner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -130,6 +133,164 @@ func TestStdoutReader_HoldsLineAcrossTimeoutThenDelivers(t *testing.T) {
 	}
 	if got, want := string(line), "late-line"; got != want {
 		t.Fatalf("second readLine() = %q; want %q (a line held across the first read's timeout must be delivered intact)", got, want)
+	}
+}
+
+// TestStdoutReader_DrainsFloodWhileConsumerBusy pins the #1033 deadlock
+// scenario: codex keeps streaming stdout while the consumer is parked in a
+// synchronous dynamic-tool call and reads nothing. Every producer write must
+// still complete (the pump queues in memory, keeping the pipe drained); with
+// a direct scan→consumer handoff the scan goroutine parks on the second line
+// and the producer stalls — exactly the OS-pipe backpressure that deadlocks
+// the real subprocess. Order must survive the queueing.
+func TestStdoutReader_DrainsFloodWhileConsumerBusy(t *testing.T) {
+	c, pw := newPipeReaderClient(t)
+	const n = 200
+	wrote := make(chan error, 1)
+	go func() {
+		for i := 0; i < n; i++ {
+			if _, err := fmt.Fprintf(pw, "line-%d\n", i); err != nil {
+				wrote <- err
+				return
+			}
+		}
+		wrote <- nil
+	}()
+	// The consumer stays busy: nothing reads readCh until the flood is fully
+	// written.
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatalf("producer write err = %v; want all %d lines written with no consumer", err, n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("producer blocked with the consumer busy — stdout is not being drained (#1033)")
+	}
+	for i := 0; i < n; i++ {
+		line, err := c.readLine(context.Background())
+		if err != nil {
+			t.Fatalf("readLine(%d) err = %v; want buffered line", i, err)
+		}
+		if got, want := string(line), fmt.Sprintf("line-%d", i); got != want {
+			t.Fatalf("readLine(%d) = %q; want %q (queueing must preserve order)", i, got, want)
+		}
+	}
+}
+
+// TestStdoutReader_BacklogOverflowFailsTypedNotOOM pins the pump's memory
+// bound: when the scanned-but-unconsumed backlog exceeds the cap, the
+// consumer observes a typed backlog error through the closed readCh instead
+// of the worker growing without bound, and the producer still completes (the
+// pump keeps discarding to EOF so neither the scan goroutine nor the
+// subprocess blocks).
+func TestStdoutReader_BacklogOverflowFailsTypedNotOOM(t *testing.T) {
+	c, pw := newPipeReaderClient(t, func(c *appServerClient) { c.stdoutBufferBytes = 256 })
+	wrote := make(chan error, 1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			if _, err := fmt.Fprintf(pw, "%064d\n", i); err != nil {
+				wrote <- err
+				return
+			}
+		}
+		wrote <- nil
+	}()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatalf("producer write err = %v; want the overflow path to keep draining the pipe", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer blocked after backlog overflow — pump must discard to EOF")
+	}
+	_, err := c.readLine(context.Background())
+	if !isStdoutBacklogOverflow(err) {
+		t.Fatalf("readLine() err = %v; want the typed stdout-backlog overflow error", err)
+	}
+	if cat, ok := ErrorCategory(err); !ok || cat != CategoryResponseError {
+		t.Fatalf("ErrorCategory(%v) = %q, %v; want %q, true", err, cat, ok, CategoryResponseError)
+	}
+}
+
+// TestStdoutReader_BacklogOverflowCountsEmptyLines pins the second half of the
+// backlog cap: each queued message must carry a per-item charge, not just
+// len(line), so blank-line floods cannot grow q.items forever while q.bytes
+// stays at zero.
+func TestStdoutReader_BacklogOverflowCountsEmptyLines(t *testing.T) {
+	c, pw := newPipeReaderClient(t, func(c *appServerClient) { c.stdoutBufferBytes = 1 })
+	wrote := make(chan error, 1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			if _, err := fmt.Fprintln(pw); err != nil {
+				wrote <- err
+				return
+			}
+		}
+		if err := pw.Close(); err != nil {
+			wrote <- err
+			return
+		}
+		wrote <- nil
+	}()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatalf("producer write err = %v; want empty-line overflow path to keep draining the pipe", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("producer blocked after empty-line backlog overflow — pump must count items and keep draining")
+	}
+	_, err := c.readLine(context.Background())
+	if !isStdoutBacklogOverflow(err) {
+		t.Fatalf("readLine() err = %v; want stdout-backlog overflow for queued empty lines", err)
+	}
+}
+
+// TestSend_StdinWriteTimeoutFailsInsteadOfHanging pins the write half of the
+// #1033 stdio deadlock over a real OS pipe (the production stdin is an
+// *os.File from cmd.StdinPipe): once the pipe's kernel buffer is full and the
+// reader side stops draining — codex blocked mid-write on its own stdout —
+// send must fail with os.ErrDeadlineExceeded after the write timeout instead
+// of parking the consumer goroutine until the run's outer deadline.
+func TestSend_StdinWriteTimeoutFailsInsteadOfHanging(t *testing.T) {
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() err = %v", err)
+	}
+	defer func() { _ = pr.Close() }()
+	defer func() { _ = pw.Close() }()
+
+	// Fill the kernel buffer with bounded writes until one times out; nobody
+	// reads pr, modeling a codex that stopped draining stdin.
+	junk := bytes.Repeat([]byte("x"), 32<<10)
+	for {
+		if err := pw.SetWriteDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+			t.Skipf("pipe write deadlines unsupported on this platform: %v", err)
+		}
+		if _, err := pw.Write(junk); err != nil {
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatalf("filling pipe: write err = %v; want os.ErrDeadlineExceeded", err)
+			}
+			break
+		}
+	}
+
+	// Clear the fill loop's leftover deadline: send must arm its own, or a
+	// stale expired deadline would mask a send() that sets none.
+	if err := pw.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear write deadline: %v", err)
+	}
+
+	c := &appServerClient{stdin: pw, out: io.Discard, stdinWriteTimeout: 100 * time.Millisecond}
+	sent := make(chan error, 1)
+	go func() { sent <- c.send(map[string]any{"jsonrpc": "2.0", "method": "turn/start"}) }()
+	select {
+	case err := <-sent:
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("send() on a full undrained stdin pipe err = %v; want os.ErrDeadlineExceeded", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("send() still blocked after 5s — the stdin write timeout must bound it (#1033)")
 	}
 }
 
