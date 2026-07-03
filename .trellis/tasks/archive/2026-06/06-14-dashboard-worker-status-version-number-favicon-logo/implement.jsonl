@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Go quality bar: function/file size budgets, one-source-of-truth, mutation-tested wiring seams — favicon digest + version threading must follow these."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "favicon route + HTML templating error paths (missing embed, read failure) must be wrapped/handled per house style, not silently swallowed."}
-{"file": ".trellis/tasks/06-14-dashboard-worker-status-version-number-favicon-logo/research/design-pull/Worker-Status-v2.html", "reason": "Target topbar markup/CSS: .brand-ver, .brand-mark .gm + .caret, favicon <link> shape."}
-{"file": ".trellis/tasks/06-14-dashboard-worker-status-version-number-favicon-logo/research/design-pull/favicon-source.html", "reason": "Rasterization recipe + exact tokens behind the committed favicon.png (sha256[:12]=61f833fd0705)."}

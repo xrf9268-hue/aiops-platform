@@ -550,7 +550,7 @@ all changes; PRs should not merge while it is red. It runs four jobs:
 - **`go`** — format and lint gates (`gofmt`, the blocking golangci-lint gate),
   repo hygiene (`go mod tidy`, Dockerfile/`go.mod` Go-version drift, the Go
   file-size budget), the test suite (`go test -race`, a short fuzz smoke, and the
-  dashboard / Trellis / GitHub-script tests), and the build (dashboard bundle
+  dashboard and GitHub-script tests), and the build (dashboard bundle
   plus the `worker` and `tui` binaries, uploaded as artifacts).
 - **`security`** — supply-chain checks: standalone `go vet ./...` plus
   `govulncheck ./...` built against the `go.mod` toolchain floor.

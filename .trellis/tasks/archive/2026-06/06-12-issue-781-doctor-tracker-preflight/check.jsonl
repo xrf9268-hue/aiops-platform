@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "质量门禁约定"}
-{"file": ".trellis/tasks/06-12-issue-781-doctor-tracker-preflight/prd.md", "reason": "验收标准核对"}
-{"file": ".trellis/tasks/06-12-issue-781-doctor-tracker-preflight/research/doctor-tracker-preflight-facts.md", "reason": "检查实现是否镜像 worker 解析链与 drain class"}

@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify size budgets, one-source-of-truth for the digest, and mutation-verified wiring (favicon route + version into Topbar)."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "Confirm favicon/HTML error paths are wrapped/classified, not silently swallowed."}
-{"file": ".trellis/tasks/06-14-dashboard-worker-status-version-number-favicon-logo/research/design-pull/Worker-Status-v2.html", "reason": "Check ported topbar (version + v3 mark + favicon link) matches the design intent."}

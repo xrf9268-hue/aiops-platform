@@ -1,4 +1,0 @@
-{"file":".trellis/spec/backend/agent-workflow-guidelines.md","reason":"Check that implementation follows the repository issue workflow and does not duplicate runbook rules"}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated CI/checker logic and missed consumers"}
-{"file":"docs/runbooks/pr-review-merge-protocol.md","reason":"Check pre-push review, PR body, and follow-through requirements"}
-{"file":".claude/skills/handle-issue/SKILL.md","reason":"Check issue #839 acceptance criteria and handoff protocol"}

@@ -168,7 +168,6 @@ Reusable artifacts committed with this report:
 - `scripts/e2e-crowdrunner-report.py`
 - `scripts/crowdrunner_lifecycle_e2e_test.go`
 - `docs/runbooks/local-gitea-crowdrunner-lifecycle-e2e.md`
-- `.trellis/tasks/06-24-e2e-codex-real-vite-threejs-exercise/`
 
 Do not commit raw run roots, `env.local`, Codex auth files, downloaded release
 archives, cache directories, workspace clones, or full Codex session JSONL.

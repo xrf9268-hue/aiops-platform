@@ -276,7 +276,7 @@ shipped.
   commit subject release-please parses; titles using freeform `area:` prefixes
   (`maintainability:`, `cmd:`, `stateapi:`, `dashboard:`, …) are dropped silently
   by release-please — no changelog entry, no version bump — while `chore` was
-  configured visible, flooding the changelog with Trellis bookkeeping. The fix
+  configured visible, flooding the changelog with housekeeping commits. The fix
   removes the `changelog-sections` override (chore/refactor inherit the
   upstream-default hidden state) and adds the
   `Validate PR title (Conventional Commits)` required check

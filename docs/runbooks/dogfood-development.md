@@ -30,18 +30,16 @@ work against the `aiops-platform` repository itself. It is not a new scheduler
 mode. The same tracker, workflow config, deterministic workspace, agent prompt,
 verification, PR body, review, and merge gates still apply.
 
-Trellis and `grill-with-docs` sit before execution:
+Planning and `grill-with-docs` sit before execution:
 
-1. Create or update a Trellis task for the work.
-2. Write the intended plan, scope, acceptance criteria, dependency class, and
-   verification.
-3. Use `grill-with-docs` to test the plan against `CONTEXT.md`, ADRs, and the
+1. Write the intended plan, scope, acceptance criteria, dependency class, and
+   verification in the tracker issue or a short local planning note.
+2. Use `grill-with-docs` to test the plan against `CONTEXT.md`, ADRs, and the
    relevant runbooks.
-4. Only then move the tracker issue through the ready gate.
+3. Only then move the tracker issue through the ready gate.
 
 Runtime truth comes from `/api/v1/state`, worker logs, live tracker state, and
-live PR/review-thread state. Trellis notes are planning memory, not dispatch
-authority.
+live PR/review-thread state. Planning notes are memory, not dispatch authority.
 
 ## Rollout stages
 
@@ -123,7 +121,7 @@ as the dependency backlog; it is local worker state.
 
 Use external worker mode. The target repository owns its `WORKFLOW.md`, issue
 readiness rules, prompt contract, and verification commands. It does not need
-to install Trellis or copy this repository's `.claude/skills`.
+to copy this repository's `.claude/skills`.
 
 Follow [`agentic-project-template.md`](agentic-project-template.md) before
 running a real agent against another project.
@@ -148,7 +146,8 @@ Tracker rules:
 - GitHub: do not apply `aiops:ready` to dependent issues until blockers are
   terminal.
 
-The Trellis parent task should record:
+For issue batches, keep a lightweight ledger in the tracker issue, PR body, or
+batch runbook:
 
 ```text
 issue -> depends_on -> dependency_type -> ready_gate -> branch/worktree -> PR -> head -> state -> next action
