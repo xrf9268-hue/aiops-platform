@@ -7,6 +7,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
@@ -116,6 +117,10 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 		d.result <- ErrCapacityFull
 		return nil
 	}
+	workspace := Workspace{}
+	if consumedContinuation != nil {
+		workspace = consumedContinuation.Workspace
+	}
 	consumeContinuationRetry(st, id, consumedContinuation)
 	st.RecordEvent(RuntimeEvent{
 		Kind:       RuntimeEventCandidate,
@@ -133,8 +138,8 @@ func (d *dispatchOp) apply(st *OrchestratorState) func() {
 	attempt := d.attempt
 	result := d.result
 	return func() {
-		o.spawn(id, issue, attempt, continuationAttempt, continuationTurnCount, cleanTurnBudget)
-		result <- nil
+		defer func() { result <- nil }()
+		o.spawn(id, issue, attempt, continuationAttempt, continuationTurnCount, cleanTurnBudget, workspace)
 	}
 }
 
@@ -290,22 +295,47 @@ func (o *Orchestrator) WaitForWorkers(grace time.Duration) bool {
 //
 // spawn is invoked from a followup goroutine, never from inside an
 // apply method, so its calls into o.submit are safe.
-func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount, cleanTurnBudget int) {
+func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, continuationAttempt, continuationTurnCount, cleanTurnBudget int, workspace Workspace) {
+	workerTracked := false
+	fanoutStarted := false
+	runningRegistered := false
+	var cancel context.CancelCauseFunc
+	var startedAt time.Time
+	var workerDone chan struct{}
+	var entry *RunningEntry
+	recovery := spawnPanicRecovery{
+		o:                 o,
+		id:                id,
+		issue:             issue,
+		attempt:           attempt,
+		workspace:         workspace,
+		workerTracked:     &workerTracked,
+		fanoutStarted:     &fanoutStarted,
+		runningRegistered: &runningRegistered,
+		cancel:            &cancel,
+		startedAt:         &startedAt,
+		workerDone:        &workerDone,
+		entry:             &entry,
+	}
+	defer recovery.recover()
 	// Register with the drain group before anything that can start a worker
 	// so WaitForWorkers can never observe a live subprocess it isn't
 	// tracking; every return path below either hands the slot to the fanout
 	// goroutine or releases it.
 	o.workerWG.Add(1)
-	runCtx, cancel := context.WithCancelCause(o.runCtx)
-	startedAt := time.Now()
-	workerDone := make(chan struct{})
-	entry := &RunningEntry{
+	workerTracked = true
+	runCtx, runCancel := context.WithCancelCause(o.runCtx)
+	cancel = runCancel
+	startedAt = time.Now()
+	workerDone = make(chan struct{})
+	entry = &RunningEntry{
 		Issue:                 issue,
 		Identifier:            issue.Identifier,
 		StartedAt:             startedAt,
 		RetryAttempt:          attempt,
 		ContinuationAttempt:   continuationAttempt,
 		ContinuationTurnCount: continuationTurnCount,
+		Workspace:             workspace,
 		CancelWorker:          cancel,
 		Done:                  workerDone,
 	}
@@ -319,17 +349,26 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 		cancel(nil)
 		close(workerDone)
 		o.workerWG.Done()
+		workerTracked = false
 		return
 	}
 	select {
 	case <-registered:
+		runningRegistered = true
 	case <-o.runCtx.Done():
 		cancel(nil)
 		close(workerDone)
 		o.workerWG.Done()
+		workerTracked = false
 		return
 	}
 	resultCh := o.dispatcher.Spawn(runCtx, issue, attempt, DispatchOptions{CleanTurnBudget: cleanTurnBudget})
+	o.watchWorkerResult(id, issue, attempt, resultCh, startedAt, cancel, entry, workerDone)
+	fanoutStarted = true
+	workerTracked = false
+}
+
+func (o *Orchestrator) watchWorkerResult(id IssueID, issue tracker.Issue, attempt *int, resultCh <-chan WorkerResult, startedAt time.Time, cancel context.CancelCauseFunc, entry *RunningEntry, workerDone chan struct{}) {
 	go func() {
 		defer o.workerWG.Done()
 		defer recoverPanic("orchestrator.spawn_result_fanout")
@@ -355,6 +394,85 @@ func (o *Orchestrator) spawn(id IssueID, issue tracker.Issue, attempt *int, cont
 			close(workerDone)
 		}
 	}()
+}
+
+type spawnPanicRecovery struct {
+	o                 *Orchestrator
+	id                IssueID
+	issue             tracker.Issue
+	attempt           *int
+	workspace         Workspace
+	workerTracked     *bool
+	fanoutStarted     *bool
+	runningRegistered *bool
+	cancel            *context.CancelCauseFunc
+	startedAt         *time.Time
+	workerDone        *chan struct{}
+	entry             **RunningEntry
+}
+
+func (r spawnPanicRecovery) recover() {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	spawnErr := fmt.Errorf("orchestrator spawn panic: %v", recovered)
+	recoverPanicValue("orchestrator.spawn", recovered)
+	if r.cancel != nil && *r.cancel != nil {
+		(*r.cancel)(spawnErr)
+	}
+	if r.fanoutStarted != nil && *r.fanoutStarted {
+		return
+	}
+	if r.canFinalizeRunning() {
+		resultCh := syntheticWorkerResult(WorkerResult{Err: spawnErr, Elapsed: time.Since(*r.startedAt)})
+		r.o.watchWorkerResult(r.id, r.issue, r.attempt, resultCh, *r.startedAt, *r.cancel, *r.entry, *r.workerDone)
+		return
+	}
+	if r.workerTracked != nil && *r.workerTracked {
+		r.o.workerWG.Done()
+		*r.workerTracked = false
+	}
+	r.o.recoverSpawnPanic(r.o.runCtx, r.id, r.issue, r.attempt, spawnErr.Error(), r.workspace)
+}
+
+func (r spawnPanicRecovery) canFinalizeRunning() bool {
+	return r.runningRegistered != nil &&
+		*r.runningRegistered &&
+		r.entry != nil &&
+		*r.entry != nil &&
+		r.workerDone != nil &&
+		*r.workerDone != nil &&
+		r.cancel != nil &&
+		*r.cancel != nil
+}
+
+func syntheticWorkerResult(result WorkerResult) <-chan WorkerResult {
+	ch := make(chan WorkerResult, 1)
+	ch <- result
+	close(ch)
+	return ch
+}
+
+func (o *Orchestrator) recoverSpawnPanic(ctx context.Context, id IssueID, issue tracker.Issue, attempt *int, runErr string, workspace Workspace) {
+	if ctx == nil {
+		return
+	}
+	identifier := issue.Identifier
+	if identifier == "" {
+		identifier = issue.ID
+	}
+	submitErr := o.submit(ctx, opFunc(func(st *OrchestratorState) func() {
+		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: id, Identifier: identifier, Message: runErr})
+		nextAttempt := 1
+		if attempt != nil {
+			nextAttempt = *attempt + 1
+		}
+		return func() {
+			o.logRescheduleErr(o.scheduleFailureRetry(ctx, issue, identifier, nextAttempt, runErr, workspace), id, identifier)
+		}
+	}))
+	o.logRescheduleErr(submitErr, id, identifier)
 }
 
 // awaitWorkerResult collects the dispatcher's single result for a spawned
