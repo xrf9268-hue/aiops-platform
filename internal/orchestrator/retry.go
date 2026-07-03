@@ -37,6 +37,11 @@ type RetryEntry struct {
 	Timer      *time.Timer
 	Error      string
 	Kind       RetryKind
+	// QuotaBackoffDueAt preserves the provider-requested quiet window for
+	// RetryKindQuotaBackoff. If a quota retry is requeued before this point
+	// because capacity is full or candidate fetch fails, the reschedule reuses
+	// the remaining window instead of falling through to failure backoff.
+	QuotaBackoffDueAt time.Time
 	// StartupFailure is observability-only detail for a failure retry caused by
 	// a runner startup phase. The retry policy is still owned by Kind/Attempt.
 	StartupFailure *task.StartupFailure
@@ -64,4 +69,15 @@ func (r *RetryEntry) IsDue(now time.Time) bool {
 		return false
 	}
 	return !now.Before(r.DueAt)
+}
+
+func (r *RetryEntry) quotaBackoffDelayOverride(now time.Time) time.Duration {
+	if r == nil || r.Kind != RetryKindQuotaBackoff || r.QuotaBackoffDueAt.IsZero() {
+		return 0
+	}
+	remaining := r.QuotaBackoffDueAt.Sub(now)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
 }
