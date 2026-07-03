@@ -36,6 +36,15 @@ function dur(sec) {
   return `${s}s`;
 }
 
+function windowDurationLabel(minutes) {
+  if (minutes == null) return 'window';
+  const total = Number(minutes);
+  if (!Number.isFinite(total) || total <= 0) return 'window';
+  if (total % 1440 === 0) return `${total / 1440}-day window`;
+  if (total % 60 === 0) return `${total / 60}-hour window`;
+  return `${total}-minute window`;
+}
+
 // Relative-time helpers tolerate missing / malformed timestamps (the API marks
 // started_at / last_event_at / blocked_at / due_at omitempty) — the prototype
 // assumed every field was present; real snapshots don't guarantee it.
@@ -220,12 +229,13 @@ function Kpi({ label, value, sub, flag, status }) {
 
 // ── rate-limit window cell ─────────────────────────────────────────────────
 // Modern Codex token_count rate-limit window: { used_percent (0-100 float),
-// window_minutes (int|null), resets_at (unix seconds) | resets_in_seconds }.
+// window_duration_mins | window_minutes (int|null),
+// resets_at (unix seconds) | resets_in_seconds }.
 // Percent-of-window — never a per-category quota.
 function RateWindow({ label, win }) {
   const pct = Math.max(0, Math.min(100, Number(win.used_percent) || 0));
   const cls = pct >= 85 ? 'bad' : pct >= 60 ? 'warn' : 'ok';
-  const winLabel = win.window_minutes != null ? `${win.window_minutes}-minute window` : 'window';
+  const winLabel = windowDurationLabel(win.window_duration_mins ?? win.window_minutes);
   let resetSecs = null;
   if (win.resets_at != null) resetSecs = Number(win.resets_at) - Math.floor(Date.now() / 1000);
   else if (win.resets_in_seconds != null) resetSecs = Number(win.resets_in_seconds);
