@@ -156,16 +156,17 @@ type RunningEntry struct {
 	// parsing raw output or runner error text.
 	LastStartupFailure *task.StartupFailure
 
-	CodexInputTokens  int64
-	CodexOutputTokens int64
-	CodexTotalTokens  int64
-
+	CodexInputTokens         int64
+	CodexOutputTokens        int64
+	CodexTotalTokens         int64
 	LastReportedInputTokens  int64
 	LastReportedOutputTokens int64
 	LastReportedTotalTokens  int64
-	BudgetExceeded           bool
-	BudgetExceededAt         time.Time
-	BudgetExceededError      string
+	// StallCanceled suppresses duplicate stall reconcile work before finalize.
+	StallCanceled       bool
+	BudgetExceeded      bool
+	BudgetExceededAt    time.Time
+	BudgetExceededError string
 
 	InputRequired       bool
 	InputRequiredAt     time.Time

@@ -99,6 +99,49 @@ func TestReconcileStalledRunsOpTimingReference(t *testing.T) {
 	}
 }
 
+func TestReconcileStalledRunsOpCancelsStalledRunOnceUntilFinalize(t *testing.T) {
+	now := time.Now()
+	st := NewOrchestratorState(15000, 10)
+	cancelCount := 0
+	run := &RunningEntry{
+		Identifier:  "S",
+		LastEventAt: now.Add(-time.Hour),
+		StartedAt:   now.Add(-2 * time.Hour),
+		CancelWorker: func(error) {
+			cancelCount++
+		},
+	}
+	st.Running[IssueID("S")] = run
+
+	firstResult := make(chan []*RunningEntry, 1)
+	first := &reconcileStalledRunsOp{timeout: time.Minute, now: now, result: firstResult}
+	first.apply(st)()
+	firstCanceled := <-firstResult
+	if len(firstCanceled) != 1 || firstCanceled[0] != run {
+		t.Fatalf("first stalled reconcile canceled = %+v, want the running entry", firstCanceled)
+	}
+
+	secondResult := make(chan []*RunningEntry, 1)
+	second := &reconcileStalledRunsOp{timeout: time.Minute, now: now.Add(time.Second), result: secondResult}
+	second.apply(st)()
+	secondCanceled := <-secondResult
+	if len(secondCanceled) != 0 {
+		t.Fatalf("second stalled reconcile canceled = %+v, want no duplicate cancel before finalize", secondCanceled)
+	}
+	if cancelCount != 1 {
+		t.Fatalf("cancelCount = %d, want 1", cancelCount)
+	}
+	failed := 0
+	for _, ev := range st.RecentEvents {
+		if ev.Kind == RuntimeEventFailed && ev.IssueID == IssueID("S") && ev.Message == "stalled" {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("stalled failed events = %d, want 1 (events=%+v)", failed, st.RecentEvents)
+	}
+}
+
 func TestReconcileBudgetExceededRunsOpRetriesMarkedRunningCancel(t *testing.T) {
 	st := NewOrchestratorState(15000, 10)
 	cancelCount := 0

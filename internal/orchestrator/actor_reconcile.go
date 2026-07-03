@@ -257,12 +257,13 @@ type reconcileStalledRunsOp struct {
 func (r *reconcileStalledRunsOp) apply(st *OrchestratorState) func() {
 	var canceled []*RunningEntry
 	for id, run := range st.Running {
-		if run.BudgetExceeded {
+		if run.BudgetExceeded || run.StallCanceled {
 			continue
 		}
 		if !r.isStalled(run) {
 			continue
 		}
+		run.StallCanceled = true
 		canceled = append(canceled, run)
 		st.RecordEvent(RuntimeEvent{Kind: RuntimeEventFailed, IssueID: id, Identifier: run.Identifier, Message: "stalled"})
 	}
