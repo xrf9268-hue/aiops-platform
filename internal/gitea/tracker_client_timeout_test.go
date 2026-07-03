@@ -38,6 +38,33 @@ func TestTrackerClientFallbackHTTPClientUsesRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestTrackerClientDefaultHTTPClientIsReused(t *testing.T) {
+	c := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "https://gitea.example", "owner", "repo")
+
+	first := c.httpClient()
+	second := c.httpClient()
+
+	if first == nil || second == nil {
+		t.Fatalf("default HTTP clients = %p, %p; want non-nil", first, second)
+	}
+	if first != second {
+		t.Fatalf("default HTTP client pointers = %p, %p; want reuse", first, second)
+	}
+	if got := first.Timeout; got != defaultGiteaRequestTimeout {
+		t.Fatalf("default HTTP.Timeout = %v, want %v", got, defaultGiteaRequestTimeout)
+	}
+}
+
+func TestTrackerClientInjectedHTTPClientWins(t *testing.T) {
+	injected := &http.Client{Timeout: 750 * time.Millisecond}
+	c := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "https://gitea.example", "owner", "repo")
+	c.HTTP = injected
+
+	if got := c.httpClient(); got != injected {
+		t.Fatalf("httpClient() = %p, want injected %p", got, injected)
+	}
+}
+
 func TestTrackerClientListIssuesAbortsHungServer(t *testing.T) {
 	srv := hungGiteaServer(t)
 	client := NewTrackerClient(workflow.TrackerConfig{
