@@ -375,7 +375,7 @@ key with type, default, behavior, and validation rule) is
 | `agent.max_continuation_turns` | `agent.max_turns` (default `20`) issue-level clean-turn budget across fresh and continuation dispatches. Each dispatch receives the remaining clean-turn budget, capped again by `agent.max_turns`; reaching the budget parks the issue in local `blocked` state (`continuation_budget`) instead of looping forever. Raising the value later does not automatically redrive existing blocked claims. | implementation (accepted deviation D34 / #621) |
 | `agent.timeout` | `30m` | implementation (#215) |
 | `codex.command` | `codex app-server` | SPEC §6.4; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell environment inheritance |
-| `codex.env_passthrough` / `claude.env_passthrough` | none beyond runner baseline (`PATH`, `HOME`, `CODEX_HOME`, `USER`, locale, `TZ`, `TERM`); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384, #1049) |
+| `codex.env_passthrough` / `claude.env_passthrough` | none beyond the selected runner baseline (`PATH`, `HOME`, `USER`, locale, `TZ`, `TERM`; Codex app-server also receives `CODEX_HOME`); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384, #1049, #1062) |
 | `server.port` | `4000` (`-1` disables the HTTP state server + dashboard) | implementation |
 | `policy.mode` | `draft_pr` (or `analysis_only`) | implementation |
 | `tracker.kind` | none — REQUIRED per SPEC §6.4; the loader rejects an empty value with an error that names the field and the allowed set (`gitea`, `github`, `linear`) | SPEC §6.4 |

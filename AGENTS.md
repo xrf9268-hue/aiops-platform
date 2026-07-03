@@ -259,10 +259,10 @@ specific observed failure per the "Earned rules" principle.
    operator-enabled Apps/connectors, plugin-provided capability, and shell-tool
    environment according to Codex's own discovery/config rules. Do not disable
    host-local skills/MCP/Apps/connectors by default or drop `CODEX_HOME` from the
-   agent subprocess baseline. Repo-owned required skill/MCP declarations are
-   portability and diagnostics hardening for containers, remote hosts, or
-   explicitly declared dependencies — not a replacement for the local binary's
-   inherited Codex environment.
+   Codex app-server subprocess environment. Repo-owned required skill/MCP
+   declarations are portability and diagnostics hardening for containers, remote
+   hosts, or explicitly declared dependencies — not a replacement for the local
+   binary's inherited Codex environment.
    ([provenance](docs/engineering-rules-rationale.md#cross-cutting-checklist))
 
 5. **Run an adversarial pass on your own diff before asking a human

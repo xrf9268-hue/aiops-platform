@@ -155,10 +155,10 @@ local binary deployments: a direct binary worker running under the same user as
 same Codex home. The portability hardening is to validate explicit repo-owned
 or workflow-declared dependencies when they are declared, not to amputate
 host-local skills/MCP/Apps/connectors/plugin capability from the local binary
-path. The same audit found two sibling regressions: the runner baseline omitted
-`CODEX_HOME`, breaking non-default Codex homes, and the default workflow command
-lacked upstream's `shell_environment_policy.inherit=all`, narrowing the
-environment seen by Codex-launched shell tools.
+path. The same audit found two sibling regressions: the Codex app-server
+environment omitted `CODEX_HOME`, breaking non-default Codex homes, and the
+default workflow command lacked upstream's `shell_environment_policy.inherit=all`,
+narrowing the environment seen by Codex-launched shell tools.
 
 ### Item 5 — run an adversarial pass on your own diff before a human looks
 `@codex review` reads SPEC + the Elixir reference + `AGENTS.md`, and surfaces

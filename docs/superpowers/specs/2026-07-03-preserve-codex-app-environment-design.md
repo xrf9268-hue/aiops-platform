@@ -47,8 +47,8 @@ discovery.
 
 Preserve Codex home inheritance explicitly. `CODEX_HOME` is part of Codex's
 documented environment surface and points at config, auth, logs, sessions,
-skills, and standalone package metadata; the runner baseline should pass it to
-the app-server when the worker has it set.
+skills, and standalone package metadata; the Codex app-server environment should
+pass it to the app-server when the worker has it set.
 
 Preserve Codex shell-tool environment inheritance in real-Codex workflow
 templates. The core `codex.command` default remains the SPEC §6.4 value
@@ -68,7 +68,7 @@ tracker-specific workflow actions.
 - Remove the default `thread/start.config` payload that forces
   `features.apps=false`, `features.connectors=false`, and
   `apps._default.enabled=false`.
-- Add `CODEX_HOME` to the agent subprocess baseline environment.
+- Add `CODEX_HOME` to the Codex app-server subprocess environment.
 - Update workflow examples and runbooks that explicitly pin
   `command: codex app-server` so real-Codex templates use the upstream-style
   inherited shell environment when real Codex is intended.
@@ -119,10 +119,12 @@ continue validating the actual payload. The standalone `Config` schema test for
 `appServerThreadConfig` should be removed because the runner no longer builds a
 thread config by default.
 
-`agentEnv` should include `CODEX_HOME` in its baseline next to `HOME`. Existing
-tracker-token deny logic still applies to both baseline and passthrough names, so
-this does not expose `GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, or the
-configured tracker token value.
+The Codex app-server environment should include `CODEX_HOME` next to `HOME`.
+Existing tracker-token deny logic still applies to both baseline and passthrough
+names, so this does not expose `GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`,
+or the configured tracker token value. Non-Codex runners should keep
+`CODEX_HOME` out of their default baseline unless a workflow explicitly opts in
+through that runner's `env_passthrough`.
 
 Real-Codex workflow templates should use the upstream-style command:
 
@@ -147,8 +149,8 @@ active; it does not need a shell wrapper.
   rollback.
 - Remove `TestCodexAppServerThreadConfigMatchesSchema`; the config helper should
   no longer exist.
-- Add/adjust tests proving `CODEX_HOME` is part of the runner baseline and the
-  app-server subprocess environment.
+- Add/adjust tests proving `CODEX_HOME` is part of the app-server subprocess
+  environment and absent from non-Codex runner defaults.
 - Keep SPEC-default tests for `codex app-server`; use template/doc checks for
   the explicit real-Codex workflow command posture.
 - Run:
@@ -180,7 +182,7 @@ git diff --check
 Treat these as inheritance regressions and handle them in this rollback:
 
 - Default `thread/start.config` disabled Apps/connectors.
-- Agent subprocess baseline omitted `CODEX_HOME`.
+- Codex app-server environment omitted `CODEX_HOME`.
 - Real-Codex workflow templates pinned the narrower `codex app-server` command
   instead of the upstream-style
   `codex app-server --config shell_environment_policy.inherit=all`.

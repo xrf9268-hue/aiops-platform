@@ -130,17 +130,19 @@ The current Go implementation provides these safety controls:
   retries silently;
 - allow-listed environment for agent and hook subprocesses: by
   default these children run with only a small POSIX baseline env (`PATH`,
-  `HOME`, `CODEX_HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`).
-  Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`, `GITEA_TOKEN`) and any
-  other secret in the worker's `.env` are excluded — a malicious or buggy
-  WORKFLOW.md cannot `env > /tmp/dump` and exfiltrate them. Operators opt
-  non-tracker vars back in per workflow with `codex.env_passthrough`,
-  `claude.env_passthrough`, or `hooks.env_passthrough`; real-Codex workflow
-  templates that set `shell_environment_policy.inherit=all` also make those
-  intentionally passed variables visible to Codex-launched shell tools. Agent
-  and hook passthrough reject tracker/repo API token names, the configured
-  `tracker.api_key` env-var name, and env vars whose current value equals the
-  configured `tracker.api_key`, so those credentials stay behind
+  `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`); the Codex
+  app-server runner additionally receives `CODEX_HOME` so Codex can resolve its
+  configured home without giving that credential directory to non-Codex agents
+  by default. Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`,
+  `GITEA_TOKEN`) and any other secret in the worker's `.env` are excluded — a
+  malicious or buggy WORKFLOW.md cannot `env > /tmp/dump` and exfiltrate them.
+  Operators opt non-tracker vars back in per workflow with
+  `codex.env_passthrough`, `claude.env_passthrough`, or `hooks.env_passthrough`;
+  real-Codex workflow templates that set `shell_environment_policy.inherit=all`
+  also make those intentionally passed variables visible to Codex-launched shell
+  tools. Agent and hook passthrough reject tracker/repo API token names, the
+  configured `tracker.api_key` env-var name, and env vars whose current value
+  equals the configured `tracker.api_key`, so those credentials stay behind
   orchestrator-owned tools. See
   [`docs/design/hook-verify-env-allowlist.md`](design/hook-verify-env-allowlist.md);
 - allow-listed redaction of Codex `turn/failed`, `turn/cancelled`, and failed
