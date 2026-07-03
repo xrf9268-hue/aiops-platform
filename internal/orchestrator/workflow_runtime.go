@@ -365,10 +365,12 @@ func RunWorkflowReloadLoop(ctx context.Context, runtime *WorkflowRuntime, opts W
 }
 
 func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(d):
+	case <-timer.C:
 		return nil
 	}
 }
