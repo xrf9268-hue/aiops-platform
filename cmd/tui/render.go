@@ -320,7 +320,7 @@ func formatRateLimits(rl map[string]interface{}) string {
 	// limit_id is the one free-form API string on this line; sanitize it so an
 	// embedded newline/control byte can't split or corrupt the row (#466). The
 	// numeric bucket/credit fields are formatted from typed values below.
-	limitID := sanitize(strMapGet(rl, "limit_id", "limit_name", ""))
+	limitID := sanitize(strMapGet(rl, "limit_id", "limit_name", "limitId", "limitName", ""))
 	if limitID == "" {
 		limitID = "unknown"
 	}
@@ -345,6 +345,9 @@ func formatRateLimitBucket(v interface{}) string {
 	if !ok {
 		return sanitize(fmt.Sprintf("%v", v))
 	}
+	if used, ok := firstNumericVal(m, "used_percent", "usedPercent"); ok {
+		return formatPercentRateLimitBucket(m, used)
+	}
 	remaining := intVal(m, "remaining")
 	limit := intVal(m, "limit")
 
@@ -360,13 +363,96 @@ func formatRateLimitBucket(v interface{}) string {
 		return "n/a"
 	}
 
-	// format_reset_value/1: integers are rendered with an "s" suffix.
-	for _, k := range []string{"reset_in_seconds", "resetInSeconds", "reset_at", "resetAt", "resets_at"} {
-		if rv, ok := m[k]; ok && rv != nil {
-			return base + " reset " + formatResetValue(rv)
-		}
+	if reset, ok := rateLimitResetText(m); ok {
+		return base + " " + reset
 	}
 	return base
+}
+
+var rateLimitNow = time.Now
+
+func formatPercentRateLimitBucket(m map[string]interface{}, used float64) string {
+	parts := []string{strconv.FormatFloat(used, 'f', -1, 64) + "% used"}
+	if mins := firstIntVal(m, "window_duration_mins", "windowDurationMins", "window_minutes", "windowMinutes"); mins != nil {
+		if window := formatRateLimitWindow(*mins); window != "" {
+			parts = append(parts, window)
+		}
+	}
+	if reset, ok := rateLimitResetText(m); ok {
+		parts = append(parts, reset)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatRateLimitWindow(minutes int64) string {
+	if minutes <= 0 {
+		return ""
+	}
+	if minutes%1440 == 0 {
+		return strconv.FormatInt(minutes/1440, 10) + "d window"
+	}
+	if minutes%60 == 0 {
+		return strconv.FormatInt(minutes/60, 10) + "h window"
+	}
+	return strconv.FormatInt(minutes, 10) + "m window"
+}
+
+func rateLimitResetText(m map[string]interface{}) (string, bool) {
+	for _, k := range []string{"reset_in_seconds", "resetInSeconds", "resets_in_seconds", "resetsInSeconds"} {
+		if rv, ok := m[k]; ok && rv != nil {
+			return "reset " + formatResetValue(rv), true
+		}
+	}
+	for _, k := range []string{"reset_at", "resetAt", "resets_at", "resetsAt"} {
+		if rv, ok := m[k]; ok && rv != nil {
+			return formatResetAtValue(rv), true
+		}
+	}
+	return "", false
+}
+
+func formatResetAtValue(v interface{}) string {
+	switch x := v.(type) {
+	case float64:
+		return "resets in " + formatRateLimitDuration(int64(x)-rateLimitNow().Unix())
+	case int64:
+		return "resets in " + formatRateLimitDuration(x-rateLimitNow().Unix())
+	case int:
+		return "resets in " + formatRateLimitDuration(int64(x)-rateLimitNow().Unix())
+	case string:
+		return "reset " + sanitize(x)
+	default:
+		return "reset " + sanitize(fmt.Sprintf("%v", v))
+	}
+}
+
+func formatRateLimitDuration(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	days := seconds / 86400
+	hours := (seconds % 86400) / 3600
+	mins := (seconds % 3600) / 60
+	secs := seconds % 60
+	if days > 0 {
+		if hours > 0 {
+			return fmt.Sprintf("%dd %dh", days, hours)
+		}
+		return fmt.Sprintf("%dd", days)
+	}
+	if hours > 0 {
+		if mins > 0 {
+			return fmt.Sprintf("%dh %dm", hours, mins)
+		}
+		return fmt.Sprintf("%dh", hours)
+	}
+	if mins > 0 {
+		if secs > 0 {
+			return fmt.Sprintf("%dm %ds", mins, secs)
+		}
+		return fmt.Sprintf("%dm", mins)
+	}
+	return fmt.Sprintf("%ds", secs)
 }
 
 func formatCredits(v interface{}) string {
@@ -581,6 +667,40 @@ func intVal(m map[string]interface{}, key string) *int64 {
 		return &n
 	}
 	return nil
+}
+
+func firstIntVal(m map[string]interface{}, keys ...string) *int64 {
+	for _, key := range keys {
+		if v := intVal(m, key); v != nil {
+			return v
+		}
+	}
+	return nil
+}
+
+func numericVal(m map[string]interface{}, key string) (float64, bool) {
+	v, ok := m[key]
+	if !ok || v == nil {
+		return 0, false
+	}
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case int64:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	}
+	return 0, false
+}
+
+func firstNumericVal(m map[string]interface{}, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if v, ok := numericVal(m, key); ok {
+			return v, true
+		}
+	}
+	return 0, false
 }
 
 func toFloat(v interface{}) float64 {

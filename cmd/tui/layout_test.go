@@ -363,6 +363,62 @@ func TestFormatRateLimits_SanitizesUntrustedValues(t *testing.T) {
 	}
 }
 
+func TestFormatRateLimits_RendersCodexPercentWindows(t *testing.T) {
+	oldNow := rateLimitNow
+	rateLimitNow = func() time.Time { return time.Unix(1_780_000_000, 0) }
+	defer func() { rateLimitNow = oldNow }()
+
+	resetAt := rateLimitNow().Add(90 * time.Minute).Unix()
+	rl := map[string]interface{}{
+		"limitName": "codex",
+		"primary": map[string]interface{}{
+			"usedPercent":        float64(14),
+			"windowDurationMins": float64(300),
+			"resetsAt":           float64(resetAt),
+		},
+		"secondary": map[string]interface{}{
+			"used_percent":         float64(92.5),
+			"window_duration_mins": float64(10080),
+			"resets_in_seconds":    float64(30),
+		},
+	}
+	got := visibleString(formatRateLimits(rl))
+
+	for _, want := range []string{
+		"codex",
+		"primary 14% used · 5h window · resets in 1h 30m",
+		"secondary 92.5% used · 7d window · reset 30s",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatRateLimits(percent windows) = %q, want substring %q", got, want)
+		}
+	}
+	if rawEpoch := strconv.FormatInt(resetAt, 10) + "s"; strings.Contains(got, rawEpoch) {
+		t.Errorf("formatRateLimits(percent windows) rendered resets_at as relative seconds: %q", got)
+	}
+}
+
+func TestFormatRateLimits_RendersLegacyBuckets(t *testing.T) {
+	rl := map[string]interface{}{
+		"limit_id":  "legacy",
+		"primary":   map[string]interface{}{"remaining": float64(42), "limit": float64(100), "reset_in_seconds": float64(30)},
+		"secondary": map[string]interface{}{"limit": float64(200)},
+		"credits":   map[string]interface{}{"has_credits": true, "balance": float64(12.5)},
+	}
+	got := visibleString(formatRateLimits(rl))
+
+	for _, want := range []string{
+		"legacy",
+		"primary 42/100 reset 30s",
+		"secondary limit 200",
+		"credits 12.50",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("formatRateLimits(legacy buckets) = %q, want substring %q", got, want)
+		}
+	}
+}
+
 // ── ansiSeqLen bounds (no OOB on truncated/lone escapes) ────────────────────
 
 func TestAnsiSeqLen_Bounds(t *testing.T) {
