@@ -215,7 +215,7 @@ jobs:
               > "aiops-platform_${RELEASE_TAG}_SHA256SUMS" )
 
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           subject-path: dist/*
 
@@ -352,14 +352,14 @@ jobs:
             ${{ steps.latest.outputs.is_newest == 'true' && format('ghcr.io/{0}-codex-worker:latest', github.repository) || '' }}
 
       - name: Attest worker image
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           subject-name: ghcr.io/${{ github.repository }}-worker
           subject-digest: ${{ steps.worker.outputs.digest }}
           push-to-registry: true
 
       - name: Attest codex-worker image
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           subject-name: ghcr.io/${{ github.repository }}-codex-worker
           subject-digest: ${{ steps.codex-worker.outputs.digest }}
