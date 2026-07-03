@@ -248,6 +248,26 @@ describe('Worker status dashboard', () => {
     expect(screen.getByText(/7-day window/)).toBeTruthy();
   });
 
+  it('formats long rate-limit reset countdowns with day units', async () => {
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 0, 2, 3, 4, 5));
+    try {
+      current = busyState({
+        rate_limits: {
+          limit_name: 'codex', plan_type: 'pro',
+          primary: { used_percent: 31, window_minutes: 300, resets_at: unixIn(3 * 3600 + 51 * 60) },
+          secondary: { used_percent: 12, window_minutes: 10080, resets_at: unixIn(49 * 3600 + 10 * 60) },
+        },
+      });
+      render(<App />);
+      await screen.findByText('Primary window');
+
+      expect(screen.getByText(/5-hour window · resets in 3h 51m/)).toBeTruthy();
+      expect(screen.getByText(/7-day window · resets in 2d 1h/)).toBeTruthy();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it('falls back to a raw JSON dump for an unrecognized rate-limit shape', async () => {
     // No used_percent windows → keep the data visible rather than mis-rendering it.
     current = busyState({ rate_limits: { limit_name: 'codex', primary: { remaining: 450, limit: 500 } } });
