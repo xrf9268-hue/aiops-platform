@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -345,7 +344,7 @@ func (p linearGraphQLProxy) lookupWorkflowStateIDs(ctx context.Context, stateNam
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("linear workflowStates lookup failed: %s", resp.Status)
 	}
-	return decodeWorkflowStateIDs(resp.Body, stateName)
+	return decodeWorkflowStateIDs(resp, stateName)
 }
 
 func (p linearGraphQLProxy) workflowStateLookupRequest(ctx context.Context, body []byte) (*http.Request, error) {
@@ -376,7 +375,7 @@ func workflowStateLookupQuery(stateName, teamKey string) (string, map[string]any
 }`, vars
 }
 
-func decodeWorkflowStateIDs(r io.Reader, stateName string) ([]string, error) {
+func decodeWorkflowStateIDs(resp *http.Response, stateName string) ([]string, error) {
 	var out struct {
 		Data struct {
 			WorkflowStates struct {
@@ -387,7 +386,7 @@ func decodeWorkflowStateIDs(r io.Reader, stateName string) ([]string, error) {
 		} `json:"data"`
 		Errors []map[string]any `json:"errors"`
 	}
-	if err := json.NewDecoder(r).Decode(&out); err != nil {
+	if err := tracker.DecodeJSONResponse(resp, &out); err != nil {
 		return nil, fmt.Errorf("decode Linear workflowStates lookup: %w", err)
 	}
 	if len(out.Errors) > 0 {

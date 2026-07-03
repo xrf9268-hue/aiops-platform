@@ -52,9 +52,10 @@ func (b *drainRecordingBody) Close() error {
 // staticResponseTransport serves one canned response so per-status drain
 // coverage does not need a live server.
 type staticResponseTransport struct {
-	status int
-	header http.Header
-	body   *drainRecordingBody
+	status        int
+	header        http.Header
+	body          *drainRecordingBody
+	contentLength int64
 }
 
 func (t *staticResponseTransport) RoundTrip(*http.Request) (*http.Response, error) {
@@ -62,7 +63,7 @@ func (t *staticResponseTransport) RoundTrip(*http.Request) (*http.Response, erro
 	if header == nil {
 		header = http.Header{}
 	}
-	return &http.Response{StatusCode: t.status, Header: header, Body: t.body}, nil
+	return &http.Response{StatusCode: t.status, Header: header, Body: t.body, ContentLength: t.contentLength}, nil
 }
 
 func TestDrainAndCloseBoundsHugeBody(t *testing.T) {
@@ -76,6 +77,103 @@ func TestDrainAndCloseBoundsHugeBody(t *testing.T) {
 	}
 	if !body.closed {
 		t.Fatalf("DrainAndClose closed = %t; want true", body.closed)
+	}
+}
+
+func TestLinearGraphQLRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
+	client := NewLinearClient(workflow.TrackerConfig{APIKey: "test-key"})
+	client.BaseURL = "http://linear.invalid/graphql"
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	var out map[string]any
+	err := client.graphql(context.Background(), "query Probe { viewer { id } }", nil, &out)
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("graphql() oversized success error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestGitHubListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, _, err := client.listIssuesPage(context.Background(), "open", "", 1)
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("listIssuesPage oversized success error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestGitHubListOpenPullRequestsPageRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, _, err := client.listOpenPullRequestsPage(context.Background(), 1)
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("listOpenPullRequestsPage oversized success error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestGitHubGetIssueByNumberRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, _, err := client.getIssueByNumber(context.Background(), 7)
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("getIssueByNumber oversized success error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestGitHubBlockersRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token"}, "http://github.invalid", "acme", "api")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, err := client.fetchNativeGitHubBlockers(context.Background(), []string{"I_kwDOExample"})
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("fetchNativeGitHubBlockers oversized success error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestDecodeJSONResponseBoundsStreamingBodyWithoutContentLength(t *testing.T) {
+	source := &infiniteReader{}
+	resp := &http.Response{Body: io.NopCloser(source), ContentLength: -1}
+
+	var out map[string]any
+	err := DecodeJSONResponse(resp, &out)
+
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("DecodeJSONResponse streaming error = %v; want errors.Is(err, ErrJSONResponseTooLarge)", err)
+	}
+	if source.read != maxJSONResponseBytes+1 {
+		t.Fatalf("DecodeJSONResponse read %d bytes; want %d", source.read, int64(maxJSONResponseBytes+1))
 	}
 }
 

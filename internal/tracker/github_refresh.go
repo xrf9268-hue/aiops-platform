@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -248,8 +247,8 @@ func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (g
 		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: status %d", issueNumber, resp.StatusCode)
 	}
 	var issue githubIssue
-	if err := json.NewDecoder(resp.Body).Decode(&issue); err != nil {
-		return githubIssue{}, false, err
+	if err := DecodeJSONResponse(resp, &issue); err != nil {
+		return githubIssue{}, false, fmt.Errorf("decode GitHub issue response: %w", err)
 	}
 	return issue, true, nil
 }

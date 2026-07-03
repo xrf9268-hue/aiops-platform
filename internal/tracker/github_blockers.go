@@ -261,8 +261,8 @@ func (c *GitHubClient) fetchNativeGitHubBlockers(ctx context.Context, nodeIDs []
 		return githubGraphQLBlockersResponse{}, fmt.Errorf("fetch GitHub issue blockers failed: status %d", resp.StatusCode)
 	}
 	var decoded githubGraphQLBlockersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return githubGraphQLBlockersResponse{}, err
+	if err := DecodeJSONResponse(resp, &decoded); err != nil {
+		return githubGraphQLBlockersResponse{}, fmt.Errorf("decode GitHub blockers response: %w", err)
 	}
 	if len(decoded.Errors) > 0 {
 		return githubGraphQLBlockersResponse{}, fmt.Errorf("fetch GitHub issue blockers failed: %s", decoded.Errors[0].Message)

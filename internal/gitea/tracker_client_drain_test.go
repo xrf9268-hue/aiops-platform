@@ -36,12 +36,13 @@ func (b *drainRecordingBody) Close() error {
 // staticResponseTransport serves one canned response so per-status drain
 // coverage does not need a live server.
 type staticResponseTransport struct {
-	status int
-	body   *drainRecordingBody
+	status        int
+	body          *drainRecordingBody
+	contentLength int64
 }
 
 func (t *staticResponseTransport) RoundTrip(*http.Request) (*http.Response, error) {
-	return &http.Response{StatusCode: t.status, Header: http.Header{}, Body: t.body}, nil
+	return &http.Response{StatusCode: t.status, Header: http.Header{}, Body: t.body, ContentLength: t.contentLength}, nil
 }
 
 func newDrainTestTrackerClient(status int, body *drainRecordingBody) *TrackerClient {
@@ -92,5 +93,37 @@ func TestTrackerClientListIssuesPageDrainsErrorBody(t *testing.T) {
 	}
 	if !body.sawEOF || !body.closed {
 		t.Fatalf("body sawEOF = %t, closed = %t; want true, true (undrained bodies break connection reuse)", body.sawEOF, body.closed)
+	}
+}
+
+func TestTrackerClientListIssuesPageRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`[]`)}
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "http://gitea.invalid", "owner", "repo")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, _, err := client.listIssuesPage(context.Background(), "", "open", 1)
+
+	if !errors.Is(err, tracker.ErrJSONResponseTooLarge) {
+		t.Fatalf("listIssuesPage oversized success error = %v; want errors.Is(err, tracker.ErrJSONResponseTooLarge)", err)
+	}
+}
+
+func TestTrackerClientGetIssueByNumberRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{}`)}
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, "http://gitea.invalid", "owner", "repo")
+	client.HTTP = &http.Client{Transport: &staticResponseTransport{
+		status:        http.StatusOK,
+		body:          body,
+		contentLength: 1 << 62,
+	}}
+
+	_, _, err := client.getIssueByNumber(context.Background(), 7)
+
+	if !errors.Is(err, tracker.ErrJSONResponseTooLarge) {
+		t.Fatalf("getIssueByNumber oversized success error = %v; want errors.Is(err, tracker.ErrJSONResponseTooLarge)", err)
 	}
 }

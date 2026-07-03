@@ -297,8 +297,8 @@ func decodeLinearProjectProbe(resp *http.Response, out any) error {
 	// Preflight mirrors the consumer: the poller decodes this response
 	// immediately, so name the non-JSON body (a login proxy answering 200
 	// HTML) instead of surfacing a bare json.SyntaxError.
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("linear returned %s with a body that is not JSON: %w", resp.Status, err)
+	if err := tracker.DecodeJSONResponse(resp, out); err != nil {
+		return fmt.Errorf("linear returned %s with a body that is not JSON or exceeded maximum size: %w", resp.Status, err)
 	}
 	return nil
 }
