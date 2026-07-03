@@ -553,6 +553,7 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	}
 	defer cancel()
 	waitDelay := workspaceHookWaitDelay(timeoutMs)
+	maskedCommand := redactCredentials(command)
 
 	// Hook commands run under `sh -c` (not `-lc`) so the user's login
 	// profile is not re-sourced per command. The PATH that a login shell
@@ -577,7 +578,9 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 	cmd.Stdout = &out
 	cmd.Stderr = &out
 	if err := cmd.Start(); err != nil {
-		return HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+		truncated := out.Truncated()
+		incomplete := truncated || runCtx.Err() != nil
+		return HookResult{Name: name, Command: maskedCommand, ExitCode: exitCode(err), Output: redactHookOutput(out.String(), incomplete), Truncated: truncated, Duration: time.Since(start), Err: err}
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -596,7 +599,9 @@ func runWorkspaceHookCommand(ctx context.Context, workdir string, name HookName,
 			err = fmt.Errorf("hook wait exceeded cleanup grace after timeout: %w", runCtx.Err())
 		}
 	}
-	res := HookResult{Name: name, Command: command, ExitCode: exitCode(err), Output: out.String(), Truncated: out.Truncated(), Duration: time.Since(start), Err: err}
+	truncated := out.Truncated()
+	incomplete := truncated || runCtx.Err() != nil
+	res := HookResult{Name: name, Command: maskedCommand, ExitCode: exitCode(err), Output: redactHookOutput(out.String(), incomplete), Truncated: truncated, Duration: time.Since(start), Err: err}
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.Err = fmt.Errorf("hook timed out after %dms: %w", timeoutMs, runCtx.Err())
 		res.ExitCode = -1

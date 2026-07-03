@@ -64,6 +64,42 @@ func TestRedactStateAPILastMessageScrubsBasicAuthURL(t *testing.T) {
 	}
 }
 
+func TestRedactStateAPISecretTextScrubsBareUserinfoURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		wantLeak string
+		wantKept string
+	}{
+		{
+			name:     "bare userinfo token is scrubbed",
+			in:       "fatal: unable to access 'https://oauth2supersecret@git.example.com/org/repo.git/'",
+			wantLeak: "oauth2supersecret",
+		},
+		{
+			name:     "plain URL without userinfo is preserved",
+			in:       "see https://example.com/docs for details",
+			wantKept: "https://example.com/docs",
+		},
+		{
+			name:     "email after a URL is not treated as userinfo",
+			in:       "docs at https://example.com then mail ops@example.com",
+			wantKept: "ops@example.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := redactStateAPISecretText(tt.in)
+			if tt.wantLeak != "" && strings.Contains(got, tt.wantLeak) {
+				t.Errorf("redactStateAPISecretText(%q) = %q; leaked %q", tt.in, got, tt.wantLeak)
+			}
+			if tt.wantKept != "" && !strings.Contains(got, tt.wantKept) {
+				t.Errorf("redactStateAPISecretText(%q) = %q; want %q preserved", tt.in, got, tt.wantKept)
+			}
+		})
+	}
+}
+
 func TestRedactStateAPILastMessageTruncatesLongInput(t *testing.T) {
 	in := strings.Repeat("x", stateAPILastMessageMaxRunes+50)
 	got := redactStateAPILastMessage(in)

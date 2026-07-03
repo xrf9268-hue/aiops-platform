@@ -27,11 +27,25 @@ import (
 // boundary, so a malformed-userinfo tail is simply outside the matched URL.
 var credentialURLRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#\s]*@`)
 
+// truncatedCredentialURLTailRe is a fail-closed companion for incomplete
+// free-text output. If a cap or timeout cuts `scheme://user:token@host` before
+// the `@host`, the full URL regex above cannot see userinfo; strip a trailing
+// `scheme://authority` tail only on outputs known to be incomplete.
+var truncatedCredentialURLTailRe = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/?#\s]*$`)
+
 // redactCredentials strips basic-auth userinfo from every URL embedded in s so a
 // clone_url's `user:token@` (the agent's push credential) never reaches a log
 // or error string — AGENTS.md secret-masking convention, #595.
 func redactCredentials(s string) string {
 	return credentialURLRe.ReplaceAllString(s, "$1")
+}
+
+func redactHookOutput(s string, incomplete bool) string {
+	s = redactCredentials(s)
+	if incomplete {
+		s = truncatedCredentialURLTailRe.ReplaceAllString(s, "$1")
+	}
+	return s
 }
 
 // credentialRedactingWriter forwards writes to w with basic-auth userinfo

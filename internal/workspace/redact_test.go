@@ -13,6 +13,47 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+func TestRedactHookOutputTruncated(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		truncated bool
+		want      string
+	}{
+		{
+			name:      "cap cut before the at-sign drops the partial authority",
+			in:        "origin https://bot:hunter2tok",
+			truncated: true,
+			want:      "origin https://",
+		},
+		{
+			name:      "cap cut inside the host after scrub drops the partial host",
+			in:        "origin https://bot:tok@git.exa",
+			truncated: true,
+			want:      "origin https://",
+		},
+		{
+			name:      "truncated tail inside a path is preserved",
+			in:        "fetch https://example.com/some/pa",
+			truncated: true,
+			want:      "fetch https://example.com/some/pa",
+		},
+		{
+			name:      "complete output keeps terminal host names",
+			in:        "origin https://bot:tok@example.com/r.git and https://example.com",
+			truncated: false,
+			want:      "origin https://example.com/r.git and https://example.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactHookOutput(tt.in, tt.truncated); got != tt.want {
+				t.Errorf("redactHookOutput(%q, %v) = %q; want %q", tt.in, tt.truncated, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedactCredentials(t *testing.T) {
 	tests := []struct {
 		name string
