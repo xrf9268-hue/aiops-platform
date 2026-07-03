@@ -720,7 +720,7 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 	if out == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := DecodeJSONResponse(resp, out); err != nil {
 		return NewError(CategoryLinearUnknownPayload, "decode Linear GraphQL response", err)
 	}
 	return nil

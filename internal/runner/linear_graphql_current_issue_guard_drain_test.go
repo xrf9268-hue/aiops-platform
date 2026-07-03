@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
 // drainRecordingBody records whether the response body was read to EOF (the
@@ -35,16 +37,18 @@ func (b *drainRecordingBody) Close() error {
 // staticResponseTransport serves one canned response so per-status drain
 // coverage does not need a live server.
 type staticResponseTransport struct {
-	status int
-	body   *drainRecordingBody
+	status        int
+	body          *drainRecordingBody
+	contentLength int64
 }
 
 func (t *staticResponseTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return &http.Response{
-		Status:     fmt.Sprintf("%d %s", t.status, http.StatusText(t.status)),
-		StatusCode: t.status,
-		Header:     http.Header{},
-		Body:       t.body,
+		Status:        fmt.Sprintf("%d %s", t.status, http.StatusText(t.status)),
+		StatusCode:    t.status,
+		Header:        http.Header{},
+		Body:          t.body,
+		ContentLength: t.contentLength,
 	}, nil
 }
 
@@ -97,5 +101,24 @@ func TestLookupWorkflowStateIDsDrainsResponseBodies(t *testing.T) {
 				t.Fatalf("status %d body sawEOF = %t, closed = %t; want true, true (undrained bodies break connection reuse)", tc.status, body.sawEOF, body.closed)
 			}
 		})
+	}
+}
+
+func TestLookupWorkflowStateIDsRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{"data":{"workflowStates":{"nodes":[]}}}`)}
+	proxy := linearGraphQLProxy{
+		apiKey:  "test-key",
+		baseURL: "http://linear.invalid",
+		http: &http.Client{Transport: &staticResponseTransport{
+			status:        http.StatusOK,
+			body:          body,
+			contentLength: 1 << 62,
+		}},
+	}
+
+	ids, err := proxy.lookupWorkflowStateIDs(context.Background(), "Done", "")
+
+	if ids != nil || !errors.Is(err, tracker.ErrJSONResponseTooLarge) {
+		t.Fatalf("lookupWorkflowStateIDs(Done) oversized success = (%v, %v); want nil, errors.Is(err, tracker.ErrJSONResponseTooLarge)", ids, err)
 	}
 }

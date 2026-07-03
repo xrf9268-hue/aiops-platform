@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 )
 
 // drainRecordingBody records whether the response body was read to EOF (the
@@ -86,6 +88,31 @@ func TestDecodeLinearProjectProbeDrainsResponseBodies(t *testing.T) {
 				t.Fatalf("status %d body sawEOF = %t, closed = %t; want true, true (undrained bodies break connection reuse)", tc.status, body.sawEOF, body.closed)
 			}
 		})
+	}
+}
+
+func TestDecodeLinearProjectProbeRejectsOversizedSuccessBody(t *testing.T) {
+	body := &drainRecordingBody{reader: strings.NewReader(`{"data":{"projects":{"nodes":[]}}}`)}
+	resp := &http.Response{
+		Status:        "200 OK",
+		StatusCode:    http.StatusOK,
+		Body:          body,
+		ContentLength: 1 << 62,
+	}
+	var out struct {
+		Data struct {
+			Projects struct {
+				Nodes []struct {
+					ID string `json:"id"`
+				} `json:"nodes"`
+			} `json:"projects"`
+		} `json:"data"`
+	}
+
+	err := decodeLinearProjectProbe(resp, &out)
+
+	if !errors.Is(err, tracker.ErrJSONResponseTooLarge) {
+		t.Fatalf("decodeLinearProjectProbe() oversized success error = %v; want errors.Is(err, tracker.ErrJSONResponseTooLarge)", err)
 	}
 }
 

@@ -2,7 +2,6 @@ package gitea
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -250,8 +249,8 @@ func (c *TrackerClient) listIssuesPage(ctx context.Context, labelName string, is
 		return nil, false, fmt.Errorf("list Gitea issues failed: status %d", resp.StatusCode)
 	}
 	var issues []Issue
-	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
-		return nil, false, err
+	if err := tracker.DecodeJSONResponse(resp, &issues); err != nil {
+		return nil, false, fmt.Errorf("decode Gitea issues response: %w", err)
 	}
 	return issues, hasNextPage(resp.Header.Values("Link")), nil
 }

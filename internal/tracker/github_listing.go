@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -218,8 +217,8 @@ func (c *GitHubClient) listIssuesPage(ctx context.Context, issueState, label str
 		return nil, false, fmt.Errorf("list GitHub issues failed: status %d", resp.StatusCode)
 	}
 	var issues []githubIssue
-	if err := json.NewDecoder(resp.Body).Decode(&issues); err != nil {
-		return nil, false, err
+	if err := DecodeJSONResponse(resp, &issues); err != nil {
+		return nil, false, fmt.Errorf("decode GitHub issues response: %w", err)
 	}
 	return issues, githubHasNextPage(resp.Header.Values("Link")), nil
 }
@@ -291,8 +290,8 @@ func (c *GitHubClient) listOpenPullRequestsPage(ctx context.Context, page int) (
 		return nil, false, fmt.Errorf("list GitHub pull requests failed: status %d", resp.StatusCode)
 	}
 	var pulls []githubPullRequestSummary
-	if err := json.NewDecoder(resp.Body).Decode(&pulls); err != nil {
-		return nil, false, err
+	if err := DecodeJSONResponse(resp, &pulls); err != nil {
+		return nil, false, fmt.Errorf("decode GitHub pull requests response: %w", err)
 	}
 	return pulls, githubHasNextPage(resp.Header.Values("Link")), nil
 }
