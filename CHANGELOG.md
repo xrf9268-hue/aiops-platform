@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.14](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.13...v0.1.14) (2026-07-03)
+
+
+### Bug Fixes
+
+* **github:** do not synthesize blocker lookup failures ([#1060](https://github.com/xrf9268-hue/aiops-platform/issues/1060)) ([e67858a](https://github.com/xrf9268-hue/aiops-platform/commit/e67858a80aa3849b63da31f9760deaed88488d35))
+* **linear:** fail closed when listing blocker lookup fails ([#1065](https://github.com/xrf9268-hue/aiops-platform/issues/1065)) ([5f7590e](https://github.com/xrf9268-hue/aiops-platform/commit/5f7590ed2fd9e81ad81c3bfef3c95f28445c5c26))
+* **orchestrator:** preserve quota retry-after on reschedule ([#1066](https://github.com/xrf9268-hue/aiops-platform/issues/1066)) ([92fc8a2](https://github.com/xrf9268-hue/aiops-platform/commit/92fc8a2f8ff6ce82457bb03f270aebf19fabb9b6))
+* **runner:** decouple codex stdout draining from the busy consumer and bound stdin writes ([da44b9f](https://github.com/xrf9268-hue/aiops-platform/commit/da44b9f6cd1ea5c85f3d8798686a5a43499c2f91)), closes [#1033](https://github.com/xrf9268-hue/aiops-platform/issues/1033)
+* **runner:** preserve inherited codex environment ([#1058](https://github.com/xrf9268-hue/aiops-platform/issues/1058)) ([39b63e8](https://github.com/xrf9268-hue/aiops-platform/commit/39b63e858c6cacef07e3b1cf1ca7a0eab6c2b886))
+* **runner:** scope CODEX_HOME to codex app-server ([03012ed](https://github.com/xrf9268-hue/aiops-platform/commit/03012ed36f12ee6f96a65ada6682df5de5db714f)), closes [#1062](https://github.com/xrf9268-hue/aiops-platform/issues/1062)
+* **security:** redact state error credentials ([5a4003b](https://github.com/xrf9268-hue/aiops-platform/commit/5a4003b9fa91d8758dc2b90e600a2ce59eb8f36f))
+* **worker:** scrub secrets from hook output and state API error fields ([#1045](https://github.com/xrf9268-hue/aiops-platform/issues/1045)) ([5a4003b](https://github.com/xrf9268-hue/aiops-platform/commit/5a4003b9fa91d8758dc2b90e600a2ce59eb8f36f))
+* **workflow:** keep transient review gates out of blocked ([#1061](https://github.com/xrf9268-hue/aiops-platform/issues/1061)) ([4a39185](https://github.com/xrf9268-hue/aiops-platform/commit/4a39185dc23cea6538041d837d4bde3210eaeee5))
+
 ## [0.1.13](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.12...v0.1.13) (2026-07-02)
 
 
