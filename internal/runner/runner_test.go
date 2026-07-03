@@ -251,6 +251,7 @@ func TestShellRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 	t.Setenv("LINEAR_API_KEY", "linear-secret")
 	t.Setenv("GITEA_TOKEN", "gitea-secret")
 	t.Setenv("GITHUB_TOKEN", "github-secret")
+	t.Setenv("CODEX_HOME", filepath.Join(workdir, "codex-home"))
 
 	wf := workflow.Workflow{Config: workflow.Config{
 		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
@@ -275,6 +276,9 @@ func TestShellRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 		if strings.Contains(string(body), secretName+"=") {
 			t.Fatalf("runner env leaked %s:\n%s", secretName, body)
 		}
+	}
+	if strings.Contains(string(body), "CODEX_HOME=") {
+		t.Fatalf("shell runner inherited Codex credential home by default:\n%s", body)
 	}
 	if !strings.Contains(string(body), "PATH=") {
 		t.Fatalf("runner env lost baseline PATH:\n%s", body)
@@ -434,6 +438,27 @@ func TestAgentEnvUsesLoginShellPATHSnapshot(t *testing.T) {
 	}
 }
 
+func TestAgentEnvForPreflightScopesCodexHomeToCodexAppServer(t *testing.T) {
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+
+	cfg := workflow.Config{}
+	codexEnv := strings.Join(AgentEnvForPreflight(NameCodexAppServer, cfg), "\n")
+	if !strings.Contains(codexEnv, "CODEX_HOME="+codexHome) {
+		t.Fatalf("codex preflight env missing CODEX_HOME=%q:\n%s", codexHome, codexEnv)
+	}
+
+	claudeEnv := strings.Join(AgentEnvForPreflight("claude", cfg), "\n")
+	if strings.Contains(claudeEnv, "CODEX_HOME=") {
+		t.Fatalf("claude preflight env inherited Codex credential home:\n%s", claudeEnv)
+	}
+
+	genericEnv := strings.Join(AgentEnvForPreflight("mock", cfg), "\n")
+	if strings.Contains(genericEnv, "CODEX_HOME=") {
+		t.Fatalf("generic preflight env inherited Codex credential home:\n%s", genericEnv)
+	}
+}
+
 func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 	cfg := workflow.Config{
 		Tracker: workflow.TrackerConfig{APIKey: "configured-tracker-secret"},
@@ -480,7 +505,6 @@ func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 	}{
 		{name: "PATH", wantValue: "/login/path"},
 		{name: "HOME", wantValue: "/home/agent"},
-		{name: "CODEX_HOME", wantValue: "/home/agent/.codex-alt"},
 		{name: "USER", wantValue: "agent-user"},
 		{name: "AIOPS_ALLOWED", wantValue: "allowed-value"},
 		{name: "AIOPS_DUPLICATE", wantValue: "duplicate-value"},
@@ -492,6 +516,9 @@ func TestAgentEnvWithLookupBoundaryTable(t *testing.T) {
 		if counts[tc.name] != 1 {
 			t.Fatalf("%s appeared %d times, want 1 in env %#v", tc.name, counts[tc.name], env)
 		}
+	}
+	if counts["CODEX_HOME"] != 0 {
+		t.Fatalf("generic agent env included CODEX_HOME %d times; want 0 in env %#v", counts["CODEX_HOME"], env)
 	}
 	for _, denied := range []string{"LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "AIOPS_CONFIGURED_TRACKER", "BAD"} {
 		if counts[denied] != 0 {

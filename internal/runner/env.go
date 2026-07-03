@@ -11,7 +11,6 @@ import (
 var baselineAgentEnvAllowlist = []string{
 	"PATH",
 	"HOME",
-	"CODEX_HOME",
 	"USER",
 	"LANG",
 	"LC_ALL",
@@ -20,10 +19,16 @@ var baselineAgentEnvAllowlist = []string{
 	"TERM",
 }
 
+var codexAppServerEnvAllowlist = append(append([]string{}, baselineAgentEnvAllowlist...), "CODEX_HOME")
+
 var agentLoginPATH = workspace.LoginPATH
 
 func agentEnv(passthrough []string, cfg workflow.Config) []string {
 	return agentEnvWithLookup(passthrough, cfg, os.LookupEnv, agentLoginPATH)
+}
+
+func codexAppServerEnv(passthrough []string, cfg workflow.Config) []string {
+	return codexAppServerEnvWithLookup(passthrough, cfg, os.LookupEnv, agentLoginPATH)
 }
 
 // AgentEnvForPreflight returns the same sanitized environment used by the
@@ -32,7 +37,7 @@ func agentEnv(passthrough []string, cfg workflow.Config) []string {
 func AgentEnvForPreflight(agent string, cfg workflow.Config) []string {
 	switch agent {
 	case NameCodexAppServer:
-		return agentEnv(cfg.Codex.EnvPassthrough, cfg)
+		return codexAppServerEnv(cfg.Codex.EnvPassthrough, cfg)
 	case "claude":
 		return agentEnv(cfg.Claude.EnvPassthrough, cfg)
 	default:
@@ -42,4 +47,8 @@ func AgentEnvForPreflight(agent string, cfg workflow.Config) []string {
 
 func agentEnvWithLookup(passthrough []string, cfg workflow.Config, lookup func(string) (string, bool), loginPath func() string) []string {
 	return envpolicy.BuildSanitizedEnv(baselineAgentEnvAllowlist, passthrough, cfg, lookup, loginPath)
+}
+
+func codexAppServerEnvWithLookup(passthrough []string, cfg workflow.Config, lookup func(string) (string, bool), loginPath func() string) []string {
+	return envpolicy.BuildSanitizedEnv(codexAppServerEnvAllowlist, passthrough, cfg, lookup, loginPath)
 }
