@@ -33,7 +33,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"true blockers",
 		"Blocked\nhandoff commands remove the role's active label",
 		"historical `CHANGES_REQUESTED` count",
-		"unchanged-head handoffs/reviews",
+		"unchanged-head\nhandoffs/reviews",
 		"comment alone does not replace a new PR head",
 		"current-head unresolved non-outdated review threads",
 		"worker --doctor --deploy=binary --mode=real",
@@ -93,7 +93,7 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"diagnostic only",
 		"unchanged-head",
 		"does not replace a new PR head",
-		"usage-limit/input-required",
+		"Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending\nstay in `aiops:human-review`",
 		"branch protection",
 		"required status check",
 		"required approving review",
@@ -148,10 +148,12 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"would require handing off the same unchanged head\n   again",
 				"aiops:blocked",
 				"gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked",
-				"Codex reports a usage-limit/input-required result",
+				"Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending",
+				"leave the issue in its current maker-active label",
+				"true external/operator-owned blocker",
 				"LAST action",
 			},
-			mustNotContain: []string{"gitea_issue_labels", "AIOPS_MAKER_MAX_REWORK_CYCLES", "max rework cycle budget"},
+			mustNotContain: []string{"gitea_issue_labels", "AIOPS_MAKER_MAX_REWORK_CYCLES", "max rework cycle budget", "Codex reports a usage-limit/input-required result"},
 		},
 		{
 			path:            "examples/github-reviewer-automerge-WORKFLOW.md",
@@ -184,11 +186,11 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				"Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework",
 				"Then move the issue back to Rework as your LAST action and stop",
 				"aiops:blocked",
-				"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked",
-				"Codex usage-limit/input-required",
-				"Do not leave an open issue labeled",
+				"Codex NOT-CONFIRMED, no-signal, usage-limit, CI pending",
+				"leave the issue in `aiops:human-review`",
+				"true external/operator-owned blocker",
 			},
-			mustNotContain: []string{"gitea_issue_labels", "--json merged,", "AIOPS_REVIEWER_MAX_REWORK_CYCLES", "max rework cycle budget"},
+			mustNotContain: []string{"gitea_issue_labels", "--json merged,", "AIOPS_REVIEWER_MAX_REWORK_CYCLES", "max rework cycle budget", "Codex usage-limit/input-required stops the review"},
 		},
 	} {
 		full := filepath.Join(root, tc.path)
@@ -244,6 +246,63 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestGitHubMakerReviewerWorkflowPromptsKeepTransientReviewGatesOutOfBlocked(t *testing.T) {
+	root := repoRoot(t)
+	makerPaths := []string{
+		"examples/github-maker-WORKFLOW.md",
+	}
+	reviewerPaths := []string{
+		"examples/github-reviewer-automerge-WORKFLOW.md",
+	}
+	for _, path := range append(append([]string{}, makerPaths...), reviewerPaths...) {
+		body := readFileString(t, filepath.Join(root, path))
+		bodyText := normalizedWorkflowText(body)
+		for _, forbidden := range []string{
+			"Codex reports a usage-limit result",
+			"Codex reports a usage-limit/input-required result",
+			"Codex usage-limit stops the review",
+			"Codex usage-limit/input-required stops the review",
+			"GitHub Codex review not confirmed for head <sha>` and move\n   the issue to `aiops:blocked`",
+			"Do not leave an open issue labeled `aiops:human-review` when the next reviewer would only repeat",
+		} {
+			if strings.Contains(bodyText, normalizedWorkflowText(forbidden)) {
+				t.Fatalf("%s still routes transient Codex review state to blocked via %q", path, forbidden)
+			}
+		}
+	}
+	for _, path := range makerPaths {
+		body := readFileString(t, filepath.Join(root, path))
+		bodyText := normalizedWorkflowText(body)
+		for _, want := range []string{
+			"Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending are not `aiops:blocked` reasons",
+			"leave the issue in its current maker-active label",
+			"true external/operator-owned blocker",
+		} {
+			if !strings.Contains(bodyText, normalizedWorkflowText(want)) {
+				t.Fatalf("%s missing maker transient-review guidance %q", path, want)
+			}
+		}
+	}
+	for _, path := range reviewerPaths {
+		body := readFileString(t, filepath.Join(root, path))
+		bodyText := normalizedWorkflowText(body)
+		for _, want := range []string{
+			"Codex NOT-CONFIRMED, no-signal, usage-limit, CI pending, and auto-merge pending are not `aiops:blocked` reasons",
+			"leave the issue in `aiops:human-review`",
+			"unresolved non-outdated current-head review threads",
+			"move the issue back to Rework",
+		} {
+			if !strings.Contains(bodyText, normalizedWorkflowText(want)) {
+				t.Fatalf("%s missing reviewer transient-review guidance %q", path, want)
+			}
+		}
+	}
+}
+
+func normalizedWorkflowText(text string) string {
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func TestGitHubMakerReviewerBootstrapPreparesRunRoot(t *testing.T) {

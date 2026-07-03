@@ -196,10 +196,13 @@ done
 ```
 
 `aiops:blocked` is an inactive operator-triage state for true blockers: missing
-tools/auth/permissions, explicit Codex usage/input-required stops, or issue
-scope that cannot continue without an operator decision. The workflow examples
-do not use historical `CHANGES_REQUESTED` count as a stop condition; repeated
-loops are prevented by refusing unchanged-head handoffs/reviews. A
+tools/auth/permissions or issue scope that cannot continue without an operator
+decision. Codex review no-signal, NOT-CONFIRMED, usage-limit, CI pending, and
+auto-merge pending stay in `aiops:human-review`; current-head unresolved review
+threads are reviewer FAIL evidence that moves the issue to `aiops:rework`. The
+workflow examples do not use historical `CHANGES_REQUESTED` count as a stop
+condition; repeated loops are prevented by refusing unchanged-head
+handoffs/reviews. A
 `Rework response:` comment alone does not replace a new PR head. Blocked
 handoff commands remove the role's active label (`aiops:todo`, `aiops:rework`,
 or `aiops:human-review`) while adding `aiops:blocked`; adding only

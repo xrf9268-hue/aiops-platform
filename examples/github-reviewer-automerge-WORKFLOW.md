@@ -137,11 +137,13 @@ FAIL:
 - This is your LAST action.
 
 BLOCKED:
-- If Codex usage-limit/input-required stops the review, or the review cannot
-  produce an actionable PASS/FAIL after one bounded clarification pass, comment
-  the bounded reason and move the issue to `aiops:blocked` instead of FAIL/PASS.
-  Do not leave an open issue labeled `aiops:human-review` when the next reviewer
-  would only repeat the same non-actionable turn:
+- Codex NOT-CONFIRMED, no-signal, usage-limit, CI pending, and auto-merge
+  pending are not `aiops:blocked` reasons. Comment the evidence, leave the issue
+  in `aiops:human-review`, and stop so a later reviewer poll can re-check.
+- unresolved non-outdated current-head review threads are FAIL inputs, not
+  blockers; collect them in the review body and move the issue back to Rework.
+- Use `aiops:blocked` only for a true external/operator-owned blocker that
+  prevents reviewer progress outside the normal review/retry loop:
   `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:blocked`.
 
 PASS:

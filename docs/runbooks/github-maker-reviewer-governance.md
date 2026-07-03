@@ -81,8 +81,10 @@ Historical `CHANGES_REQUESTED` count is diagnostic only. Do not use it as a
 hard stop while each cycle has a new head; a `Rework response:` explains the
 fix, but it does not replace a new PR head. Prevent duplicate loops by refusing
 unchanged-head handoffs or reviews.
-Explicit Codex usage-limit/input-required results count as true blockers because
-another automatic reviewer turn would repeat the same non-actionable stop.
+Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
+stay in `aiops:human-review`; they are not `aiops:blocked` reasons. A later
+reviewer poll can re-check the same head. Current-head unresolved review threads
+are normal FAIL evidence and move the issue to `aiops:rework`.
 
 The normal flow is:
 
@@ -179,6 +181,9 @@ Treat governance failures as blockers, not reasons to collapse roles:
   `Rework response:`.
 - CI still running after approval: leave the issue in `aiops:human-review` so a
   later reviewer continuation can re-check the same PR before marking Done.
+- Codex review no-signal, NOT-CONFIRMED, usage-limit, or asynchronous review
+  delay: comment the evidence, leave the issue in `aiops:human-review`, and let
+  a later reviewer poll re-check. Do not move it to `aiops:blocked`.
 - PR already merged but approval/check evidence is missing for the merged head:
   stop and collect the missing evidence or escalate to an operator. Do not jump
   straight to Done.
