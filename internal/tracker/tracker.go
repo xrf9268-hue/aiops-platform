@@ -36,15 +36,17 @@ type IssueState struct {
 	// (#750). nil means the adapter supplied no blocker knowledge for this
 	// issue and the consumer must keep its listing-time verdict; a non-nil
 	// empty slice is a positive "no blockers" answer. Unresolvable blocker
-	// knowledge fails closed as an empty-state placeholder the gate treats
+	// knowledge may fail closed as an empty-state placeholder the gate treats
 	// as open — never as nil, which would read as "safe". Linear resolves
 	// blockers only for refreshed Todo-state issues (the only state the gate
 	// applies to), placeholding the whole Todo batch when the
 	// inverse-relations query fails; Gitea derives them from the issue
 	// body's `Depends on #N` references, placeholding
 	// transiently-unresolvable references and skipping definitively-deleted
-	// blockers; GitHub prefers the native GraphQL `Issue.blockedBy` relation
-	// and supplements it with `Blocked by #N` / `Depends on #N` body references.
+	// blockers; GitHub hydrates Todo-like states from the native GraphQL
+	// `Issue.blockedBy` relation, returns a tracker error when that
+	// authoritative lookup fails, and treats `Blocked by #N` / `Depends on #N`
+	// body references as best-effort fallback.
 	BlockedBy []BlockerRef
 }
 

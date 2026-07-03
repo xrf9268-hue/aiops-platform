@@ -30,12 +30,22 @@ import (
 // matches the GitHub convention where workflow position is encoded as labels.
 //
 // BlockedBy carries GitHub dependency data from the native GraphQL
-// Issue.blockedBy relation when available, plus the in-repo body fallback
-// ("Blocked by #N" / "Depends on #N"). A non-nil empty slice means the refresh
-// confirmed no blockers; unknown or incomplete dependency knowledge is surfaced
-// as an empty-state placeholder so the Todo blocker gate fails closed.
+// Issue.blockedBy relation for Todo-like states when available, plus the
+// in-repo body fallback ("Blocked by #N" / "Depends on #N"). A non-nil empty
+// slice means the refresh confirmed no blockers or the state does not need
+// blocker hydration; native lookup failure aborts Todo-like refresh so dispatch
+// skips this tick, while incomplete native pagination is surfaced as an
+// empty-state placeholder so the Todo blocker gate fails closed.
 func (c *GitHubClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) {
 	return c.FetchIssueStatesByRefs(ctx, IssueRefsFromIDs(issueIDs))
+}
+
+// FetchIssueStatesWithoutBlockersByRefs fetches the state/labels needed by the
+// runner's per-turn current-issue gate without optional dependency hydration.
+// Dispatch-time revalidation still uses FetchIssueStatesByRefs so Todo blocker
+// checks remain authoritative before starting new work.
+func (c *GitHubClient) FetchIssueStatesWithoutBlockersByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) {
+	return c.fetchIssueStatesByRefs(ctx, issueRefs, false)
 }
 
 type githubFetchedIssueState struct {
@@ -46,6 +56,10 @@ type githubFetchedIssueState struct {
 }
 
 func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
+	return c.fetchIssueStatesByRefs(ctx, issueRefs, true)
+}
+
+func (c *GitHubClient) fetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef, includeBlockers bool) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
 	if strings.TrimSpace(c.Token) == "" {
 		return nil, fmt.Errorf("GitHub tracker api_key is required")
 	}
@@ -100,25 +114,42 @@ func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []I
 		})
 	}
 	states := make(map[string]IssueState, len(fetched))
-	blockersByID := c.blockersForRefreshedGitHubIssues(ctx, fetched, configuredStates)
+	blockersByID, err := c.blockerRefsForFetchedGitHubIssueStates(ctx, fetched, configuredStates, includeBlockers)
+	if err != nil {
+		return nil, err
+	}
 	for _, row := range fetched {
-		blockedBy := blockersByID[row.issueID]
-		if blockedBy == nil {
-			blockedBy = []BlockerRef{}
-		}
 		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
 		// resolved state so label removal can stop/release already-claimed work.
-		states[row.issueID] = IssueState{State: row.state, Labels: row.labels, BlockedBy: blockedBy}
+		states[row.issueID] = IssueState{State: row.state, Labels: row.labels, BlockedBy: githubIssueStateBlockers(blockersByID, row.issueID, includeBlockers)}
 	}
 	return states, nil
 }
 
-func (c *GitHubClient) blockersForRefreshedGitHubIssues(ctx context.Context, rows []githubFetchedIssueState, configuredStates []string) map[string][]BlockerRef {
+func (c *GitHubClient) blockerRefsForFetchedGitHubIssueStates(ctx context.Context, fetched []githubFetchedIssueState, configuredStates []string, includeBlockers bool) (map[string][]BlockerRef, error) {
+	if !includeBlockers {
+		return nil, nil
+	}
+	return c.blockersForRefreshedGitHubIssues(ctx, fetched, configuredStates)
+}
+
+func githubIssueStateBlockers(blockersByID map[string][]BlockerRef, issueID string, includeBlockers bool) []BlockerRef {
+	if !includeBlockers {
+		return nil
+	}
+	if blockedBy := blockersByID[issueID]; blockedBy != nil {
+		return blockedBy
+	}
+	return []BlockerRef{}
+}
+
+func (c *GitHubClient) blockersForRefreshedGitHubIssues(ctx context.Context, rows []githubFetchedIssueState, configuredStates []string) (map[string][]BlockerRef, error) {
 	sources := make([]githubBlockerSource, 0, len(rows))
 	for _, row := range rows {
 		sources = append(sources, githubBlockerSource{
 			IssueID:    row.issueID,
 			Identifier: fmt.Sprintf("#%d", row.issue.Number),
+			State:      row.state,
 			NodeID:     row.issue.NodeID,
 			Number:     row.issue.Number,
 			Body:       row.issue.Body,

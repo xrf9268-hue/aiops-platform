@@ -323,7 +323,7 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 				if stopped, ok := d.operatorTerminalStopSnapshot(ctx, issueID); ok {
 					return stopped, nil
 				}
-				statesByID, err := fetchIssueStates(ctx, refresher, []tracker.IssueRef{issueRef})
+				statesByID, err := fetchIssueStatesWithoutBlockers(ctx, refresher, []tracker.IssueRef{issueRef})
 				if err != nil {
 					return runner.IssueStateSnapshot{}, err
 				}

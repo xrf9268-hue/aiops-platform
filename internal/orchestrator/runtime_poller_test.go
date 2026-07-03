@@ -56,6 +56,32 @@ func (s *stubRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs [
 	return out, nil
 }
 
+type stubNoBlockerRefAwareRefresher struct {
+	blockerRefs   [][]tracker.IssueRef
+	noBlockerRefs [][]tracker.IssueRef
+	states        map[string]string
+}
+
+func (s *stubNoBlockerRefAwareRefresher) FetchIssueStatesByIDs(context.Context, []string) (map[string]tracker.IssueState, error) {
+	return nil, errors.New("legacy ID-only refresh should not be used")
+}
+
+func (s *stubNoBlockerRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	s.blockerRefs = append(s.blockerRefs, append([]tracker.IssueRef(nil), refs...))
+	return nil, errors.New("blocker-aware refresh should not be used for runner current-issue state")
+}
+
+func (s *stubNoBlockerRefAwareRefresher) FetchIssueStatesWithoutBlockersByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	s.noBlockerRefs = append(s.noBlockerRefs, append([]tracker.IssueRef(nil), refs...))
+	out := map[string]tracker.IssueState{}
+	for _, ref := range refs {
+		if state, ok := s.states[ref.ID]; ok {
+			out[ref.ID] = tracker.IssueState{State: state}
+		}
+	}
+	return out, nil
+}
+
 // TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure pins the
 // SPEC §16.5 wiring: when SetIssueStateRefresher is set, the worker.Config
 // returned for a snapshot carries a factory that the worker uses to build
@@ -133,6 +159,38 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 			t.Fatalf("err = %v, want wrapped tracker boom", err)
 		}
 	})
+}
+
+func TestRuntimeDispatcherIssueStateRefresherUsesNoBlockerRefreshWhenAvailable(t *testing.T) {
+	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
+	stub := &stubNoBlockerRefAwareRefresher{states: map[string]string{"global-101": "In Progress"}}
+	d.SetIssueStateRefresher(stub)
+
+	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
+		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}},
+	}}}
+	cfg := d.configForSnapshot(snap)
+	fn := cfg.IssueStateRefresher(task.Task{
+		ID:          "global-101",
+		IssueRender: map[string]any{"identifier": "#7"},
+	}, snap.Workflow.Config)
+
+	snapshot, err := fn(context.Background())
+	if err != nil {
+		t.Fatalf("refresher err = %v; want nil from no-blocker current-issue refresh", err)
+	}
+	if !snapshot.Active || !snapshot.Found || snapshot.State != "In Progress" {
+		t.Fatalf("snapshot = %+v, want found active In Progress", snapshot)
+	}
+	if len(stub.blockerRefs) != 0 {
+		t.Fatalf("blocker-aware refresh calls = %#v; want none for runner current-issue state", stub.blockerRefs)
+	}
+	if len(stub.noBlockerRefs) != 1 || len(stub.noBlockerRefs[0]) != 1 {
+		t.Fatalf("no-blocker refresh calls = %#v; want one issue ref", stub.noBlockerRefs)
+	}
+	if got := stub.noBlockerRefs[0][0]; got.ID != "global-101" || got.Identifier != "#7" {
+		t.Fatalf("no-blocker refresh ref = %+v; want ID global-101 identifier #7", got)
+	}
 }
 
 // TestRuntimeDispatcherContinueGateAppliesRequiredLabels pins the SPEC §6.4
