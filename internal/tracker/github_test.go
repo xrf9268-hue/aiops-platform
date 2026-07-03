@@ -15,6 +15,23 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
+type githubPathErrorTransport struct {
+	base http.RoundTripper
+	path string
+	err  error
+}
+
+func (t githubPathErrorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == t.path {
+		return nil, t.err
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
 func TestGitHubClientListIssuesByStatesMapsRepositoryIssues(t *testing.T) {
 	var requestedPath string
 	var requestedQuery string
@@ -288,6 +305,160 @@ func TestGitHubClientListIssuesByStatesFailsClosedWhenNativeBlockersAreIncomplet
 	}
 	if got := issues[0].BlockedBy; len(got) != 1 || got[0].State != "" {
 		t.Fatalf("blocked_by = %+v, want one unknown-state blocker so Todo dispatch fails closed", got)
+	}
+}
+
+func TestGitHubClientListIssuesByStatesSkipsBlockerLookupForNonTodoStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{{
+				ID:        100,
+				NodeID:    "I_100",
+				Number:    10,
+				Title:     "terminal issue",
+				Body:      "Blocked by #13",
+				HTMLURL:   "https://github.com/acme/api/issues/10",
+				State:     "closed",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "done"}},
+			}})
+		case "/graphql", "/repos/acme/api/issues/13":
+			t.Fatalf("ListIssuesByStates(done) must not hydrate blockers via %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		TerminalStates: []string{"done"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"done"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates(done): %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %+v, want 1", issues)
+	}
+	if got := issues[0].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("done issue BlockedBy = %#v; want non-nil empty blockers without lookup", got)
+	}
+}
+
+func TestGitHubClientListIssuesByStatesReturnsErrorWhenNativeBlockerLookupIsRateLimited(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{{
+				ID:        100,
+				NodeID:    "I_100",
+				Number:    10,
+				Title:     "unknown native dependency state",
+				HTMLURL:   "https://github.com/acme/api/issues/10",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+			}})
+		case "/graphql":
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"message":"rate limited"}`)
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:       "test-token",
+		ActiveStates: []string{"aiops:todo"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("ListActiveIssues error = %v; want errors.Is ErrRateLimited from native blockedBy lookup", err)
+	}
+	if issues != nil {
+		t.Fatalf("ListActiveIssues issues = %#v; want nil when native blockedBy lookup is not authoritative", issues)
+	}
+}
+
+func TestGitHubClientListIssuesByStatesOmitsBodyFallbackWhenLookupTransportFails(t *testing.T) {
+	var fallbackRequested bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/pulls":
+			_ = json.NewEncoder(w).Encode([]map[string]any{})
+		case "/repos/acme/api/issues":
+			_ = json.NewEncoder(w).Encode([]githubIssue{{
+				ID:        100,
+				NodeID:    "I_100",
+				Number:    10,
+				Title:     "best effort body dependency",
+				Body:      "Blocked by #13",
+				HTMLURL:   "https://github.com/acme/api/issues/10",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}},
+			}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id":     "I_100",
+					"number": float64(10),
+					"blockedBy": map[string]any{
+						"nodes":    []any{},
+						"pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+			}}})
+		case "/repos/acme/api/issues/13":
+			fallbackRequested = true
+			t.Fatalf("transport should fail before handler receives %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:       "test-token",
+		ActiveStates: []string{"aiops:todo"},
+	}, srv.URL, "acme", "api")
+	base := srv.Client().Transport
+	client.HTTP = &http.Client{Transport: githubPathErrorTransport{
+		base: base,
+		path: "/repos/acme/api/issues/13",
+		err:  errors.New("body fallback transport failed"),
+	}}
+
+	issues, err := client.ListActiveIssues(context.Background())
+	if err != nil {
+		t.Fatalf("ListActiveIssues: %v", err)
+	}
+	if fallbackRequested {
+		t.Fatal("body fallback handler was reached; want injected transport failure")
+	}
+	if len(issues) != 1 {
+		t.Fatalf("issues = %+v, want 1", issues)
+	}
+	if got := issues[0].BlockedBy; got == nil || len(got) != 0 {
+		t.Fatalf("blocked_by = %+v, want no synthetic body fallback blocker after transport failure", got)
 	}
 }
 
@@ -984,6 +1155,102 @@ func TestGitHubClientFetchIssueStatesByRefsPopulatesBlockedByAndDropsDeletedFall
 	}
 	if got := states["230"].BlockedBy; got == nil || len(got) != 0 {
 		t.Fatalf("FetchIssueStatesByRefs(#23).BlockedBy = %#v, want non-nil empty slice for confirmed no blockers", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesWithoutBlockersByRefsSkipsBlockerHydration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        200,
+				NodeID:    "I_200",
+				Number:    20,
+				Title:     "runner refresh",
+				Body:      "Blocked by #21",
+				State:     "open",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "aiops:todo"}, {Name: "backend"}},
+			})
+		case "/graphql":
+			t.Fatal("FetchIssueStatesWithoutBlockersByRefs must not hydrate GitHub blockers")
+		default:
+			t.Fatalf("unexpected request path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:       "test-token",
+		ActiveStates: []string{"aiops:todo"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesWithoutBlockersByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesWithoutBlockersByRefs: %v", err)
+	}
+	got, ok := states["200"]
+	if !ok {
+		t.Fatalf("states = %#v; want row 200", states)
+	}
+	if got.State != "aiops:todo" {
+		t.Fatalf("states[200].State = %q; want aiops:todo", got.State)
+	}
+	if len(got.Labels) != 2 || got.Labels[0] != "aiops:todo" || got.Labels[1] != "backend" {
+		t.Fatalf("states[200].Labels = %#v; want aiops:todo/backend", got.Labels)
+	}
+	if got.BlockedBy != nil {
+		t.Fatalf("states[200].BlockedBy = %#v; want nil no-blocker knowledge for runner current-issue refresh", got.BlockedBy)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsSkipsBlockerLookupForNonTodoStates(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:        200,
+				NodeID:    "I_200",
+				Number:    20,
+				Title:     "done issue",
+				Body:      "Depends on #21",
+				HTMLURL:   "https://github.com/acme/api/issues/20",
+				State:     "closed",
+				CreatedAt: "2026-05-20T01:02:03Z",
+				UpdatedAt: "2026-05-20T02:03:04Z",
+				Labels:    []githubLabel{{Name: "done"}},
+			})
+		case "/graphql", "/repos/acme/api/issues/21":
+			t.Fatalf("FetchIssueStatesByRefs(done) must not hydrate blockers via %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewGitHubClient(workflow.TrackerConfig{
+		APIKey:         "test-token",
+		TerminalStates: []string{"done"},
+	}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+	}
+	got, ok := states["200"]
+	if !ok {
+		t.Fatalf("FetchIssueStatesByRefs missing issue 200: %+v", states)
+	}
+	if got.State != "done" {
+		t.Fatalf("FetchIssueStatesByRefs state = %q, want done", got.State)
+	}
+	if got.BlockedBy == nil || len(got.BlockedBy) != 0 {
+		t.Fatalf("FetchIssueStatesByRefs BlockedBy = %#v; want non-nil empty blockers without lookup", got.BlockedBy)
 	}
 }
 

@@ -39,6 +39,10 @@ type issueStateRefresherByRefs interface {
 	FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]tracker.IssueState, error)
 }
 
+type issueStateRefresherWithoutBlockersByRefs interface {
+	FetchIssueStatesWithoutBlockersByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]tracker.IssueState, error)
+}
+
 func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
 	if refresher == nil || len(refs) == 0 {
 		return map[string]tracker.IssueState{}, nil
@@ -51,6 +55,16 @@ func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs [
 		issueIDs = append(issueIDs, ref.ID)
 	}
 	return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+}
+
+func fetchIssueStatesWithoutBlockers(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	if refresher == nil || len(refs) == 0 {
+		return map[string]tracker.IssueState{}, nil
+	}
+	if noBlockers, ok := refresher.(issueStateRefresherWithoutBlockersByRefs); ok {
+		return noBlockers.FetchIssueStatesWithoutBlockersByRefs(ctx, refs)
+	}
+	return fetchIssueStates(ctx, refresher, refs)
 }
 
 // ReconciliationConfig names the workflow states the poller uses to decide

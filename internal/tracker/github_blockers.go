@@ -21,6 +21,7 @@ var githubBlockedByIssueRE = regexp.MustCompile(`(?i)\b(?:blocked by|depends on)
 type githubBlockerSource struct {
 	IssueID    string
 	Identifier string
+	State      string
 	NodeID     string
 	Number     int
 	Body       string
@@ -70,9 +71,9 @@ type githubBodyBlockerResolution struct {
 	Found bool
 }
 
-func (c *GitHubClient) attachGitHubBlockersToIssues(ctx context.Context, issues []Issue) {
+func (c *GitHubClient) attachGitHubBlockersToIssues(ctx context.Context, issues []Issue) error {
 	if len(issues) == 0 {
-		return
+		return nil
 	}
 	sources := make([]githubBlockerSource, 0, len(issues))
 	for i := range issues {
@@ -84,12 +85,16 @@ func (c *GitHubClient) attachGitHubBlockersToIssues(ctx context.Context, issues 
 		sources = append(sources, githubBlockerSource{
 			IssueID:    issues[i].ID,
 			Identifier: issues[i].Identifier,
+			State:      issues[i].State,
 			NodeID:     meta.NodeID,
 			Number:     meta.Number,
 			Body:       meta.Body,
 		})
 	}
-	blockers := c.blockersForGitHubSources(ctx, sources, githubConfiguredStates(c.Config))
+	blockers, err := c.blockersForGitHubSources(ctx, sources, githubConfiguredStates(c.Config))
+	if err != nil {
+		return err
+	}
 	for i := range issues {
 		if blockedBy, ok := blockers[issues[i].ID]; ok {
 			issues[i].BlockedBy = blockedBy
@@ -99,43 +104,78 @@ func (c *GitHubClient) attachGitHubBlockersToIssues(ctx context.Context, issues 
 			issues[i].BlockedBy = []BlockerRef{}
 		}
 	}
+	return nil
 }
 
-func (c *GitHubClient) blockersForGitHubSources(ctx context.Context, sources []githubBlockerSource, configuredStates []string) map[string][]BlockerRef {
+func (c *GitHubClient) blockersForGitHubSources(ctx context.Context, sources []githubBlockerSource, configuredStates []string) (map[string][]BlockerRef, error) {
 	out := make(map[string][]BlockerRef, len(sources))
-	native, nativeErr := c.nativeGitHubBlockers(ctx, sources, configuredStates)
-	for _, source := range sources {
-		blockedBy := nativeGitHubBlockersForSource(source, native, nativeErr)
-		for _, blocker := range c.bodyGitHubBlockers(ctx, source.Body, configuredStates, githubBlockerNumbers(blockedBy)) {
-			blockedBy = appendGitHubBlocker(blockedBy, blocker)
+	hydrationSources := githubBlockerHydrationSources(sources)
+	native, nativeErr := c.nativeGitHubBlockers(ctx, hydrationSources, configuredStates)
+	if nativeErr != nil {
+		if c.Logf != nil {
+			c.Logf("github blockedBy lookup failed; skipping unverified blocker state for this tick: %v", nativeErr)
 		}
-		if blockedBy == nil {
-			blockedBy = []BlockerRef{}
+		return nil, nativeErr
+	}
+	for _, source := range sources {
+		blockedBy, err := c.blockersForGitHubSource(ctx, source, native, configuredStates)
+		if err != nil {
+			return nil, err
 		}
 		out[source.IssueID] = blockedBy
 	}
-	if nativeErr != nil && c.Logf != nil {
-		c.Logf("github blockedBy lookup failed; failing closed for issues with native node IDs: %v", nativeErr)
-	}
-	return out
+	return out, nil
 }
 
-func nativeGitHubBlockersForSource(source githubBlockerSource, native map[string]githubNativeBlockers, nativeErr error) []BlockerRef {
-	if source.NodeID == "" {
-		return []BlockerRef{}
+func (c *GitHubClient) blockersForGitHubSource(ctx context.Context, source githubBlockerSource, native map[string]githubNativeBlockers, configuredStates []string) ([]BlockerRef, error) {
+	if !githubBlockerSourceNeedsHydration(source) {
+		return []BlockerRef{}, nil
 	}
-	if nativeErr != nil {
-		return []BlockerRef{unknownGitHubBlocker(source, "native lookup failed")}
+	blockedBy, err := nativeGitHubBlockersForSource(source, native)
+	if err != nil {
+		return nil, err
+	}
+	for _, blocker := range c.bodyGitHubBlockers(ctx, source.Body, configuredStates, githubBlockerNumbers(blockedBy)) {
+		blockedBy = appendGitHubBlocker(blockedBy, blocker)
+	}
+	if blockedBy == nil {
+		return []BlockerRef{}, nil
+	}
+	return blockedBy, nil
+}
+
+func githubBlockerHydrationSources(sources []githubBlockerSource) []githubBlockerSource {
+	hydrationSources := make([]githubBlockerSource, 0, len(sources))
+	for _, source := range sources {
+		if githubBlockerSourceNeedsHydration(source) {
+			hydrationSources = append(hydrationSources, source)
+		}
+	}
+	return hydrationSources
+}
+
+func githubBlockerSourceNeedsHydration(source githubBlockerSource) bool {
+	return githubTodoWorkflowState(source.State)
+}
+
+func githubTodoWorkflowState(state string) bool {
+	state = strings.ToLower(strings.TrimSpace(state))
+	return state == "todo" || strings.HasSuffix(state, ":todo") || strings.HasSuffix(state, "/todo")
+}
+
+func nativeGitHubBlockersForSource(source githubBlockerSource, native map[string]githubNativeBlockers) ([]BlockerRef, error) {
+	if source.NodeID == "" {
+		return []BlockerRef{}, nil
 	}
 	got, ok := native[source.NodeID]
 	if !ok {
-		return []BlockerRef{unknownGitHubBlocker(source, "native lookup missing issue")}
+		return nil, fmt.Errorf("github blockedBy lookup missing issue node %q for %s", source.NodeID, source.Identifier)
 	}
 	blockedBy := append([]BlockerRef(nil), got.Blockers...)
 	if got.Incomplete {
 		blockedBy = appendGitHubBlocker(blockedBy, unknownGitHubBlocker(source, "native blocker pagination incomplete"))
 	}
-	return blockedBy
+	return blockedBy, nil
 }
 
 func (c *GitHubClient) nativeGitHubBlockers(ctx context.Context, sources []githubBlockerSource, configuredStates []string) (map[string]githubNativeBlockers, error) {
@@ -282,9 +322,9 @@ func (c *GitHubClient) resolveBodyGitHubBlocker(ctx context.Context, issueNumber
 	issue, found, err := c.getIssueByNumber(ctx, issueNumber)
 	if err != nil {
 		if c.Logf != nil {
-			c.Logf("github body blocker lookup for #%d failed; failing closed: %v", issueNumber, err)
+			c.Logf("github body blocker lookup for #%d failed; omitting unverified fallback blocker this tick: %v", issueNumber, err)
 		}
-		return githubBodyBlockerResolution{Ref: BlockerRef{Identifier: fmt.Sprintf("#%d", issueNumber)}, Found: true}
+		return githubBodyBlockerResolution{}
 	}
 	if !found {
 		return githubBodyBlockerResolution{}

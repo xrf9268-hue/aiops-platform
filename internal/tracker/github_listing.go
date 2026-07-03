@@ -78,7 +78,9 @@ func (c *GitHubClient) ListIssuesByStates(ctx context.Context, states []string) 
 			nil,
 		)
 	}
-	c.attachGitHubBlockersToIssues(ctx, out)
+	if err := c.attachGitHubBlockersToIssues(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
