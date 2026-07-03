@@ -283,7 +283,10 @@ principle that correctness/coverage/safety take precedence over LOC compliance
 — is canonical in [`AGENTS.md`](../../AGENTS.md) (the size-gate bullet).
 Classify every PR into exactly one state and
 disclose it in the body; never delete meaningful tests or weaken coverage to
-fit the budget.
+fit the budget. Never compress formatting, merge unrelated responsibilities, or
+make the code harder to read just to preserve `within budget` status; when the
+smallest readable change plus necessary tests needs more space, classify it as
+`size-gated: justified overage` and collect the required human sign-off.
 
 Merge-flow application of those states:
 

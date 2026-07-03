@@ -391,7 +391,10 @@ These rules apply to every PR. Each is earned by a specific observed failure —
    the baseline/ratchet to burn down debt — new oversized files fail; a reduction
    must lower/remove the baseline in the same PR. Decompose oversized files by
    responsibility first; introduce `internal` helper packages only when a cohesive
-   boundary exists, and don't add public API solely to satisfy the budget.
+   boundary exists, and don't add public API solely to satisfy the budget. Do not
+   satisfy the budget by collapsing formatting, merging unrelated responsibilities,
+   or otherwise making code harder to read; line reductions must come from real
+   simplification or decomposition.
    ([provenance](docs/engineering-rules-rationale.md#clean-code))
 8. **Errors are wrapped and classified, not string-matched.** Wrap with `%w`,
    classify with `errors.Is`/`errors.As`, keep sentinels in the owning package;
@@ -434,8 +437,12 @@ These rules apply to every PR. Each is earned by a specific observed failure —
   production LOC is a review guideline, not an LOC-reduction mandate.** Test
   files and generated code are excluded from the count, so test coverage never
   by itself pushes a PR into overage. Never delete meaningful tests or safety
-  checks to fit the budget. Classify every PR into exactly one state in the PR
-  body:
+  checks to fit the budget, and never use readability-hostile compression
+  (collapsed formatting, merged responsibilities, denser-but-worse structure) to
+  preserve `within budget` status. If the smallest readable implementation plus
+  necessary tests exceeds the guideline, classify it as `size-gated: justified
+  overage` and get the required human sign-off. Classify every PR into exactly
+  one state in the PR body:
   - `within budget` — production diff fits the ~12-file / ~300-LOC guideline.
   - `size-gated: justified overage` — over budget for correctness / regression /
     race-safety coverage that can't be split without losing atomicity. **Needs

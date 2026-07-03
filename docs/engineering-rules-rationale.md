@@ -276,13 +276,19 @@ shipped.
   - `size-gated: split recommended` — over the budget because of scope creep, unrelated cleanup, or genuinely separable concerns. Stop and split into smaller PRs instead of asking for sign-off.
 
   Only reduce LOC when the code is genuinely redundant, over-abstracted,
-  duplicated without purpose, or outside scope. Never delete meaningful tests or
-  safety checks solely to satisfy the budget. **Earned by:** PR #455 exceeded the
-  default 300 LOC after multiple valid Codex review findings required additional
-  race/state-machine coverage; the prevailing workflow language nudged the agent
-  toward compressing tests to fit the threshold, which is backwards when the extra
-  lines are paying for correctness. Counting production LOC only (tests/generated
-  excluded) removes that pressure at the source.
+  duplicated without purpose, or outside scope. Never delete meaningful tests,
+  collapse normal formatting, merge unrelated responsibilities, or otherwise make
+  code less readable solely to satisfy the budget. **Earned by:** PR #455 exceeded
+  the default 300 LOC after multiple valid Codex review findings required
+  additional race/state-machine coverage; the prevailing workflow language nudged
+  the agent toward compressing tests to fit the threshold, which is backwards when
+  the extra lines are paying for correctness. #938 / PR #942 exposed the same
+  incentive on readability: a trace-harness report script was briefly compressed
+  by removing normal blank lines between functions solely to stay under a physical
+  line-count target. Counting production LOC only (tests/generated excluded)
+  removes the test pressure at the source; explicit #943 guidance removes the
+  remaining incentive to game physical line count with readability-hostile
+  compression.
 - **SPEC deviations are gated at author time.** The `PR Metadata`
   workflow (`.github/workflows/pr-metadata.yml` +
   `.github/scripts/validate-pr-metadata.mjs`) blocks a PR that changes a

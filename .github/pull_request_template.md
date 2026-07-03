@@ -27,6 +27,11 @@ PR size-gate is human-signed, not CI-blocked):
 - [ ] `size-gated: justified overage` — production diff over budget for correctness / regression / race-safety coverage that cannot be split without losing atomicity. **Needs human size-gate sign-off.**
 - [ ] `size-gated: split recommended` — over budget for scope creep / separable concerns. Split instead.
 
+Do not collapse formatting, merge responsibilities, delete useful tests, or
+reduce readability solely to check `within budget`; choose
+`size-gated: justified overage` when the smallest readable change plus necessary
+tests needs the space.
+
 ## Testing
 - [ ] `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
 - [ ] `go vet ./...`
