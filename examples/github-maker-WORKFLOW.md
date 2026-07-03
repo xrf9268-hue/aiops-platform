@@ -119,13 +119,18 @@ Rework convergence rules:
 - Every rework handoff MUST include an issue comment that starts with `Rework response:`,
   naming the reviewed head, the new head, and how each
   finding was addressed.
-- If you cannot address the finding, comment `Blocked rework:` with the blocker
-  and move the issue to `aiops:blocked` instead of adding `aiops:human-review`:
+- If you cannot address a concrete reviewer finding because progress is blocked
+  by a true external/operator-owned dependency, comment `Blocked rework:` with
+  the blocker and move the issue to `aiops:blocked` instead of adding
+  `aiops:human-review`:
   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
-- If Codex reports a usage-limit/input-required result, or the latest finding is
-  still not actionable after one bounded clarification pass, comment the bounded
-  result and move the issue to `aiops:blocked` so an operator can decide whether
-  to redrive or split it:
+- Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending,
+  and auto-merge pending are not `aiops:blocked` reasons. If the latest
+  reviewer/Codex signal is only transient or non-actionable, comment the
+  evidence, leave the issue in its current maker-active label
+  (`aiops:todo` or `aiops:rework`), and stop without adding
+  `aiops:human-review`; the next maker poll can re-check.
+- The blocked command for that true external/operator-owned blocker is:
   `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
 
 Hard constraints:
