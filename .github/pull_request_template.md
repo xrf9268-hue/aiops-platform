@@ -28,7 +28,6 @@ PR size-gate is human-signed, not CI-blocked):
 - [ ] `size-gated: split recommended` — over budget for scope creep / separable concerns. Split instead.
 
 ## Testing
-- [ ] `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'`
 - [ ] `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
 - [ ] `go vet ./...`
 - [ ] `go test -race -covermode=atomic ./...`

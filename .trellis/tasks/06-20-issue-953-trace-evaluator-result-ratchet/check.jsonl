@@ -1,3 +1,0 @@
-{"file":"docs/research/SPEC.md","reason":"Verify no worker/orchestrator tracker-write or gate boundary violation."}
-{"file":"docs/design/trace-driven-harness-improvement.md","reason":"Verify recurrence handling preserves redaction and advisory-only design constraints."}
-{"file":"docs/runbooks/pr-review-merge-protocol.md","reason":"Verify PR checklist, local gates, mutation verification, size gate, and review flow."}

@@ -6,18 +6,17 @@ The defaults below match `examples/WORKFLOW.md` and the active state list in `in
 
 ## Daily entrypoint
 
-Use Trellis as the planning ledger before moving tracker work into the worker's
-active set:
+Use the tracker issue as the planning ledger before moving work into the
+worker's active set:
 
-1. Create or update a Trellis task for the planned work. Use a parent task for a
-   batch and one child task per tracker issue.
-2. Write the goal, scope, acceptance criteria, dependency class, and verification
-   in the Trellis task or tracker issue.
-3. Review the plan with `grill-with-docs` against `CONTEXT.md`, ADRs, and the
+1. Write the goal, scope, acceptance criteria, dependency class, and verification
+   in the tracker issue. For a batch, keep a short parent issue or local note
+   that maps each child issue to its readiness and PR state.
+2. Review the plan with `grill-with-docs` against `CONTEXT.md`, ADRs, and the
    relevant runbook.
-4. Move only ready work through the tracker ready gate.
+3. Move only ready work through the tracker ready gate.
 
-Trellis does not dispatch work and does not replace tracker state. The worker
+Local notes do not dispatch work and do not replace tracker state. The worker
 only sees the configured tracker states or labels in `WORKFLOW.md`.
 
 ## Linear states

@@ -120,20 +120,6 @@ func TestGitHubLocalWorkflowPromptPointsToCanonicalReviewerProtocol(t *testing.T
 	}
 }
 
-func TestTrellisGuidancePointsToCanonicalReviewerProtocol(t *testing.T) {
-	body := readReviewerDoc(t, "../.trellis/spec/backend/agent-workflow-guidelines.md")
-
-	for _, want := range []string{
-		"pr-review-merge-protocol.md",
-		"single source of truth",
-		"Do not restate reviewer-routing mechanics",
-	} {
-		if !containsReviewerDocText(body, want) {
-			t.Fatalf("agent-workflow-guidelines.md missing %q", want)
-		}
-	}
-}
-
 func TestConcreteReviewerRoutingMechanicsStayInProtocol(t *testing.T) {
 	nonCanonicalDocs := []string{
 		"../.claude/skills/handle-issue/SKILL.md",
@@ -141,7 +127,6 @@ func TestConcreteReviewerRoutingMechanicsStayInProtocol(t *testing.T) {
 		"../docs/runbooks/dogfood-development.md",
 		"../docs/runbooks/github-local-automation.md",
 		"../examples/github-local-WORKFLOW.md",
-		"../.trellis/spec/backend/agent-workflow-guidelines.md",
 	}
 	for _, path := range nonCanonicalDocs {
 		body := reviewerMechanicsSearchText(t, path)

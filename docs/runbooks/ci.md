@@ -29,8 +29,6 @@ Checks:
 - blocking `golangci-lint` gate for all enabled linters in one pass:
   `contextcheck`, `errcheck`, `errorlint`, `funlen`, `gocognit`, `gocritic`,
   `govet`, `ineffassign`, `revive`, `staticcheck`, `unparam`, and `unused`
-- Trellis script regression tests:
-  `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'`
 - `go mod tidy` check
 - uncached production Go file-size baseline check:
   `go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts`
@@ -212,7 +210,6 @@ go mod tidy
 gofmt -w cmd internal
 go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'
 cd cmd/worker/dashboard && npm ci && npm test && npm run build && cd -
 go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
 go test ./...

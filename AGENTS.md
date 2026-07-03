@@ -319,7 +319,6 @@ gofmt -l $(git ls-files '*.go')         # must be empty
 go mod tidy && git diff --exit-code -- go.mod go.sum
 go vet ./...
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --config=.golangci.yml --issues-exit-code=0
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=.trellis/scripts python3 -m unittest discover -s .trellis/scripts/tests -p 'test_*.py'
 go test -run '^TestProductionGoFilesStayWithinSizeBudget$' -count=1 ./scripts
 go test -race -covermode=atomic ./...
 go build ./cmd/worker ./cmd/tui
@@ -469,7 +468,7 @@ These rules apply to every PR. Each is earned by a specific observed failure —
   | `test` | tests only | hidden |
   | `build` | build system / release packaging / build deps | hidden |
   | `ci` | CI, workflows, governance rulesets | hidden |
-  | `chore` | housekeeping (Trellis task archival, version bumps) | hidden |
+  | `chore` | housekeeping and version bumps | hidden |
 
   Only `feat`/`fix`/breaking move the version (`feat`→minor, `fix`→patch,
   breaking→major; pre-1.0 the `bump-*-pre-major` flags downshift these to
@@ -513,25 +512,3 @@ searched or reported as normal shadow sources.
 - Keep first-time real runs on `agent.default: mock` until the loop is trusted on the target repo.
 - Use low-privilege bot accounts for Gitea / Linear / GitHub tokens.
 - When in doubt about scope, prefer a narrower change and a clear PR description over speculative refactors.
-
-<!-- TRELLIS:START -->
-# Trellis Instructions
-
-These instructions are for AI assistants working in this project.
-
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
-
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->

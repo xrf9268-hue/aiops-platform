@@ -1,4 +1,0 @@
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"任务是跨层回归：workflow 配置+运行器行为+observability采集。”}
-{"file":"docs/runbooks/first-run-docker-linear-codex.md","reason":"真实 Codex 跑法、auth/预检与 runner 配置的权威流程。”}
-{"file":"docs/runbooks/workflow-frontmatter-reference.md","reason":"确保 WORKFLOW 字段与执行参数正确，避免配置错配。”}
-{"file":"docs/runbooks/personal-daily-workflow.md","reason":"确认 agent.default 与 runner 行为/选择依据。”}

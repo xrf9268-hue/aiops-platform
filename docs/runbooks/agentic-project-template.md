@@ -31,7 +31,7 @@ Optional but useful:
 - `CONTEXT.md` for project-specific domain language.
 - `docs/adr/` for durable architecture decisions.
 - A short project runbook for local gates and release-specific caveats.
-- Trellis tasks for planning memory and batch ledgers.
+- A lightweight planning note or tracker parent issue for batch ledgers.
 
 ## Ready gates by tracker
 
@@ -111,8 +111,7 @@ Each agent-created PR should include:
 
 - Do not copy `aiops-platform`'s `.claude/skills` unless the target repository
   has the same SPEC-alignment workflow.
-- Do not require Trellis in the target repository. Use it when it helps planning
-  memory; otherwise keep the contract in `WORKFLOW.md`, issues, PRs, and
-  runbooks.
+- Keep the contract in `WORKFLOW.md`, issues, PRs, and runbooks; do not require
+  project-local planning tooling for a worker target.
 - Do not use `open` issues as an unattended queue.
 - Do not enable standing auto-merge.
