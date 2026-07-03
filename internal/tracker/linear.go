@@ -313,7 +313,17 @@ func (c *LinearClient) fetchLinearIssuesPage(ctx context.Context, vars map[strin
 		issues = append(issues, iss)
 	}
 	if err := c.attachLinearBlockers(ctx, issues); err != nil {
-		return nil, linearPageInfo{}, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, linearPageInfo{}, errors.Join(err, ctxErr)
+		}
+		if errors.Is(err, ErrRateLimited) {
+			return nil, linearPageInfo{}, err
+		}
+		// Blocker data only gates Todo candidate dispatch. If the auxiliary
+		// inverse-relations query fails, keep the primary page and fail Todo
+		// candidates closed for this tick; non-Todo consumers ignore BlockedBy.
+		log.Printf("event=linear_blocker_listing_failed error=%q detail=\"listing Todo issues fail closed with a placeholder blocker this page\"", err.Error())
+		failClosedTodoIssueBlockers(issues)
 	}
 	pageInfo := linearPageInfo{
 		HasNextPage: out.Data.Issues.PageInfo.HasNextPage,
@@ -450,6 +460,14 @@ func failClosedTodoBlockers(states map[string]IssueState) {
 		}
 		state.BlockedBy = []BlockerRef{{}}
 		states[id] = state
+	}
+}
+
+func failClosedTodoIssueBlockers(issues []Issue) {
+	for i := range issues {
+		if isTodoState(issues[i].State) {
+			issues[i].BlockedBy = []BlockerRef{{}}
+		}
 	}
 }
 

@@ -535,6 +535,110 @@ func TestListIssuesByStatesPaginatesLinearInverseRelationsBeforeMappingBlockers(
 	}
 }
 
+// A failed listing-time blocker resolution must not fail the whole poll page:
+// blocker data only gates Todo dispatch. Todo issues fail closed with the same
+// empty-state placeholder used by FetchIssueStatesByIDs, while non-Todo issues
+// remain usable for state/reconcile consumers.
+func TestListIssuesByStatesSurvivesBlockerResolutionFailure(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[`+
+			`{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}},`+
+			`{"id":"issue-2","identifier":"LIN-2","title":"Two","description":"","url":"https://linear.app/acme/issue/LIN-2","priority":2,"createdAt":"2026-05-15T00:01:00Z","updatedAt":"2026-05-16T00:01:00Z","state":{"name":"In Progress"}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo", "In Progress"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates = error %v; want success despite blocker resolution failure", err)
+	}
+	if got := len(issues); got != 2 {
+		t.Fatalf("issues = %d, want 2", got)
+	}
+	if got := issues[0].BlockedBy; len(got) != 1 || got[0].State != "" {
+		t.Fatalf("Todo issue BlockedBy = %#v; want one empty-state placeholder after blocker resolution failure", got)
+	}
+	if got := issues[1].BlockedBy; got != nil {
+		t.Fatalf("non-Todo issue BlockedBy = %#v; want nil after blocker resolution failure", got)
+	}
+}
+
+func TestListIssuesByStatesPropagatesCallerTimeoutDuringBlockerResolution(t *testing.T) {
+	blockerStarted := make(chan struct{})
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			close(blockerStarted)
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[`+
+			`{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	client.RequestTimeout = time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	issues, err := client.ListIssuesByStates(ctx, []string{"Todo"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ListIssuesByStates caller-timeout err = %v, issues = %#v; want context.DeadlineExceeded", err, issues)
+	}
+	select {
+	case <-blockerStarted:
+	default:
+		t.Fatal("blocker resolution request was not attempted")
+	}
+}
+
+func TestListIssuesByStatesPropagatesRateLimitDuringBlockerResolution(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[`+
+			`{"id":"issue-1","identifier":"LIN-1","title":"One","description":"","url":"https://linear.app/acme/issue/LIN-1","priority":1,"createdAt":"2026-05-15T00:00:00Z","updatedAt":"2026-05-16T00:00:00Z","state":{"name":"Todo"}}`+
+			`],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("ListIssuesByStates rate-limit err = %v, issues = %#v; want errors.Is ErrRateLimited", err, issues)
+	}
+	var rateLimited *RateLimitedError
+	if !errors.As(err, &rateLimited) || rateLimited.RetryAfter != 30*time.Second {
+		t.Fatalf("rate limit details = %#v; want RetryAfter 30s (err = %v)", rateLimited, err)
+	}
+}
+
 // TestListIssuesByStatesBatchesBlockerLookupsForManyTodoIssues pins #672: three
 // Todo issues on one page resolve their blockers in a single batched query
 // (2 requests total) rather than one query per issue (the prior N+1 = 4
@@ -721,7 +825,7 @@ func TestListIssuesByStatesUsesConfiguredPaginationMaxPages(t *testing.T) {
 	}
 }
 
-func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.T) {
+func TestListIssuesByStatesFailsClosedWhenInverseRelationMaxPagesExceeded(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
@@ -743,13 +847,16 @@ func TestListIssuesByStatesErrorsWhenInverseRelationMaxPagesExceeded(t *testing.
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
 
-	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
-	if !errors.Is(err, ErrIssueListingCapped) {
-		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped from inverse relation cap", err)
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates = error %v; want success with Todo fail-closed after inverse relation cap", err)
+	}
+	if got := issues[0].BlockedBy; len(got) != 1 || got[0].State != "" {
+		t.Fatalf("Todo issue BlockedBy = %#v; want one empty-state placeholder after inverse relation cap", got)
 	}
 }
 
-func TestListIssuesByStatesUsesConfiguredInverseRelationPaginationMaxPages(t *testing.T) {
+func TestListIssuesByStatesConfiguredInverseRelationPaginationCapFailsClosed(t *testing.T) {
 	var perIssueRelationRequests atomic.Int32
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -774,9 +881,12 @@ func TestListIssuesByStatesUsesConfiguredInverseRelationPaginationMaxPages(t *te
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops", PaginationMaxPages: 1})
 
-	_, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
-	if !errors.Is(err, ErrIssueListingCapped) {
-		t.Fatalf("ListIssuesByStates error = %v, want ErrIssueListingCapped after configured inverse-relation cap", err)
+	issues, err := client.ListIssuesByStates(context.Background(), []string{"Todo"})
+	if err != nil {
+		t.Fatalf("ListIssuesByStates = error %v; want success with Todo fail-closed after configured inverse-relation cap", err)
+	}
+	if got := issues[0].BlockedBy; len(got) != 1 || got[0].State != "" {
+		t.Fatalf("Todo issue BlockedBy = %#v; want one empty-state placeholder after configured inverse-relation cap", got)
 	}
 	if got := perIssueRelationRequests.Load(); got != 0 {
 		t.Fatalf("per-issue inverse relation requests = %d, want 0 because the batched relation page counts toward pagination_max_pages", got)
