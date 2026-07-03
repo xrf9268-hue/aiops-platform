@@ -194,6 +194,46 @@ func TestFormatRetryRowIncludesStartupPhase(t *testing.T) {
 	}
 }
 
+func TestFormatRetryRowUsesHumanScaleForLongWaits(t *testing.T) {
+	cases := []struct {
+		name      string
+		wait      time.Duration
+		want      string
+		rawPrefix string
+	}{
+		{name: "minutes", wait: 90*time.Second + 500*time.Millisecond, want: "1m", rawPrefix: "90."},
+		{name: "hours", wait: time.Hour + 500*time.Millisecond, want: "1h", rawPrefix: "3600."},
+	}
+	for _, c := range cases {
+		due := time.Now().Add(c.wait)
+		got := formatRetryRow(stateapi.Retry{
+			IssueID:    "issue-1",
+			Identifier: "ENG-1",
+			Attempt:    1,
+			DueAt:      &due,
+		})
+		if !strings.Contains(got, " in ") || !strings.Contains(got, c.want) {
+			t.Fatalf("%s: formatRetryRow = %q; want human-scale due time containing %q", c.name, got, c.want)
+		}
+		if strings.Contains(got, c.rawPrefix) {
+			t.Fatalf("%s: formatRetryRow = %q; want no raw large second count", c.name, got)
+		}
+	}
+}
+
+func TestFormatRetryRowKeepsShortWaitPrecision(t *testing.T) {
+	due := time.Now().Add(1500 * time.Millisecond)
+	got := formatRetryRow(stateapi.Retry{
+		IssueID:    "issue-1",
+		Identifier: "ENG-1",
+		Attempt:    1,
+		DueAt:      &due,
+	})
+	if !strings.Contains(got, "1.") || !strings.Contains(got, "s") {
+		t.Fatalf("formatRetryRow = %q; want sub-minute second precision", got)
+	}
+}
+
 // ── formatRuntimeSecs ─────────────────────────────────────────────────────────
 
 func TestFormatRuntimeSecs(t *testing.T) {
@@ -201,10 +241,13 @@ func TestFormatRuntimeSecs(t *testing.T) {
 		secs float64
 		want string
 	}{
-		{0, "0m 0s"},
-		{59, "0m 59s"},
+		{0, "0s"},
+		{59, "59s"},
 		{60, "1m 0s"},
-		{3661, "61m 1s"},
+		{90, "1m 30s"},
+		{3600, "1h 0m"},
+		{3661, "1h 1m"},
+		{90000, "1d 1h"},
 	}
 	for _, c := range cases {
 		if got := formatRuntimeSecs(c.secs); got != c.want {

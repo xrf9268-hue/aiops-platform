@@ -278,13 +278,7 @@ func formatRetryRow(r stateapi.Retry) string {
 
 	dueIn := "n/a"
 	if r.DueAt != nil {
-		d := time.Until(*r.DueAt)
-		if d < 0 {
-			d = 0
-		}
-		secs := int(d.Seconds())
-		millis := int(d.Milliseconds()) % 1000
-		dueIn = fmt.Sprintf("%d.%03ds", secs, millis)
+		dueIn = formatRetryDueIn(time.Until(*r.DueAt))
 	}
 
 	errorPart := ""
@@ -427,32 +421,7 @@ func formatResetAtValue(v interface{}) string {
 }
 
 func formatRateLimitDuration(seconds int64) string {
-	if seconds < 0 {
-		seconds = 0
-	}
-	days := seconds / 86400
-	hours := (seconds % 86400) / 3600
-	mins := (seconds % 3600) / 60
-	secs := seconds % 60
-	if days > 0 {
-		if hours > 0 {
-			return fmt.Sprintf("%dd %dh", days, hours)
-		}
-		return fmt.Sprintf("%dd", days)
-	}
-	if hours > 0 {
-		if mins > 0 {
-			return fmt.Sprintf("%dh %dm", hours, mins)
-		}
-		return fmt.Sprintf("%dh", hours)
-	}
-	if mins > 0 {
-		if secs > 0 {
-			return fmt.Sprintf("%dm %ds", mins, secs)
-		}
-		return fmt.Sprintf("%dm", mins)
-	}
-	return fmt.Sprintf("%ds", secs)
+	return formatHumanDurationSeconds(seconds)
 }
 
 func formatCredits(v interface{}) string {
@@ -550,12 +519,40 @@ func formatTPS(tps float64) string {
 	return groupThousands(strconv.FormatInt(int64(math.Round(tps)), 10))
 }
 
-// formatRuntimeSecs mirrors format_runtime_seconds/1.
+func formatRetryDueIn(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		secs := int(d.Seconds())
+		millis := int(d.Milliseconds()) % 1000
+		return fmt.Sprintf("%d.%03ds", secs, millis)
+	}
+	return formatHumanDurationSeconds(int64(d.Seconds()))
+}
+
 func formatRuntimeSecs(seconds float64) string {
-	total := int(math.Max(0, math.Floor(seconds)))
-	mins := total / 60
-	secs := total % 60
-	return fmt.Sprintf("%dm %ds", mins, secs)
+	return formatHumanDurationSeconds(int64(math.Max(0, math.Floor(seconds))))
+}
+
+func formatHumanDurationSeconds(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	days := seconds / 86400
+	hours := (seconds % 86400) / 3600
+	mins := (seconds % 3600) / 60
+	secs := seconds % 60
+	if days > 0 {
+		return fmt.Sprintf("%dd %dh", days, hours)
+	}
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	if mins > 0 {
+		return fmt.Sprintf("%dm %ds", mins, secs)
+	}
+	return fmt.Sprintf("%ds", secs)
 }
 
 // formatRuntimeAndTurns mirrors format_runtime_and_turns/2.
