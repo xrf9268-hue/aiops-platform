@@ -42,12 +42,24 @@ func TestCIGolangCILintHasBlockingCorrectnessGate(t *testing.T) {
 	}
 
 	text := string(body)
-	blockingStep := regexp.MustCompile(`(?s)- name: Run golangci-lint blocking gate.*?(?:\n\n|$)`).FindString(text)
-	if blockingStep == "" {
-		t.Fatal("CI workflow missing blocking golangci-lint gate")
+	lintSteps := regexp.MustCompile(
+		`(?s)- name: Run golangci-lint blocking gate(?: \(e2e build tag\))?.*?(?:\n\n|$)`,
+	).FindAllString(text, -1)
+	if got, want := len(lintSteps), 2; got != want {
+		t.Fatalf("golangci-lint blocking gate count = %d; want %d", got, want)
 	}
+	actionPattern := regexp.MustCompile(`golangci/golangci-lint-action@[0-9a-f]{40}`)
+	actionRef := actionPattern.FindString(lintSteps[0])
+	if actionRef == "" {
+		t.Fatalf("blocking golangci-lint step action is not pinned to a commit SHA:\n%s", lintSteps[0])
+	}
+	for i, step := range lintSteps[1:] {
+		if got := actionPattern.FindString(step); got != actionRef {
+			t.Fatalf("golangci-lint gate %d action = %q; want %q", i+2, got, actionRef)
+		}
+	}
+	blockingStep := lintSteps[0]
 	for _, want := range []string{
-		"golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee",
 		"version: v2.12.2",
 		// funlen+gocognit are part of the single blocking gate (#504); the
 		// baseline is grandfathered in-line via //nolint, not report-only.
