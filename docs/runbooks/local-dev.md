@@ -33,7 +33,7 @@ needs Postgres, it is stale — file an issue.
 
 ## Prerequisites
 
-- Go 1.25.11 or newer (the exact patch floor pinned in `go.mod` and the
+- Go 1.25.12 or newer (the exact patch floor pinned in `go.mod` and the
   Dockerfile).
 - `git` and `curl`.
 - Tracker credentials matching the workflow you're running:
@@ -69,8 +69,8 @@ container runtime.
 
 Keep `GOTOOLCHAIN=auto` enabled unless you have already installed the pinned Go
 toolchain locally. With `GOTOOLCHAIN=auto`, modern Go can download the required
-toolchain when the checkout asks for Go 1.25.11. If the machine is offline or
-the download is blocked, install Go 1.25.11 first (or pre-seed the toolchain)
+toolchain when the checkout asks for Go 1.25.12. If the machine is offline or
+the download is blocked, install Go 1.25.12 first (or pre-seed the toolchain)
 and re-run `./scripts/dev-test.sh`.
 
 ## 1. Configure the workflow and environment

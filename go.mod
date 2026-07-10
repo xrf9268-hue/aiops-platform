@@ -1,6 +1,6 @@
 module github.com/xrf9268-hue/aiops-platform
 
-go 1.25.11
+go 1.25.12
 
 require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
