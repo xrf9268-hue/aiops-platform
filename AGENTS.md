@@ -111,6 +111,14 @@ calibrating harness-engineering decisions):
   — Addy Osmani's harness-engineering thread. Provides the
   vocabulary and principles for evaluating components (see "Harness
   engineering principles" below).
+- [`docs/research/2026-07-03-addy-osmani-agentic-autonomy-levels.md`](docs/research/2026-07-03-addy-osmani-agentic-autonomy-levels.md)
+  — separates a single agent's latitude from multi-agent coordination; useful
+  for locating this project as a high-orchestration scheduler/runner without
+  turning the worker into the owner of every delegated decision.
+- [`docs/research/2026-07-08-addy-osmani-own-the-outer-loop.md`](docs/research/2026-07-08-addy-osmani-own-the-outer-loop.md)
+  — frames quality evidence, production verdicts, and answerability; reinforces
+  agent-owned preventive verification and human/repository ownership at the
+  production boundary.
 - [`docs/research/2026-06-16-langchain-art-of-loop-engineering.md`](docs/research/2026-06-16-langchain-art-of-loop-engineering.md)
   — LangChain's four-level loop-engineering frame. Useful for naming
   aiops-platform's supported agent, verification, and event-driven loops,
