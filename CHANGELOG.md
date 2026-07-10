@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.15](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.14...v0.1.15) (2026-07-03)
+
+
+### Bug Fixes
+
+* **dashboard:** label codex window durations ([3f37806](https://github.com/xrf9268-hue/aiops-platform/commit/3f37806f7bcd2a6cad9661753aaefb9d5c8a7c69))
+* **dashboard:** show days for long resets ([b3322c0](https://github.com/xrf9268-hue/aiops-platform/commit/b3322c0584205d3ce2e8275e247a79d5bb8a8551))
+* **gitea:** reuse default tracker HTTP client ([#1082](https://github.com/xrf9268-hue/aiops-platform/issues/1082)) ([feb0d56](https://github.com/xrf9268-hue/aiops-platform/commit/feb0d560d9bf2e6fd7e142a8b2e327651f8811fb))
+* **orchestrator:** avoid dispatch panic hangs ([8edca8c](https://github.com/xrf9268-hue/aiops-platform/commit/8edca8cf35745ee607e7abd6bdb7ad9c2f628460))
+* **orchestrator:** avoid duplicate stall cancels ([16de87b](https://github.com/xrf9268-hue/aiops-platform/commit/16de87b0ab686707273ff07112923f6a2b7ac5ea))
+* **orchestrator:** recover dispatch spawn panics ([#1081](https://github.com/xrf9268-hue/aiops-platform/issues/1081)) ([8edca8c](https://github.com/xrf9268-hue/aiops-platform/commit/8edca8cf35745ee607e7abd6bdb7ad9c2f628460))
+* **tracker:** cap success JSON decoding ([f1103f5](https://github.com/xrf9268-hue/aiops-platform/commit/f1103f50c8a7293fab8124fb3d7d5177eb0bd0b3))
+* **tui:** render codex percent rate windows ([b14dff2](https://github.com/xrf9268-hue/aiops-platform/commit/b14dff255bb3fc1727f2e807f9b31f2537ef0dc1))
+* **tui:** show human-scale durations ([ede11f3](https://github.com/xrf9268-hue/aiops-platform/commit/ede11f3f7e44da78b4fd0e7babae2ae0e9ec4224))
+
 ## [0.1.14](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.13...v0.1.14) (2026-07-03)
 
 
