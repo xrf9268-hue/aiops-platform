@@ -136,6 +136,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		maxClaimTokens  int64
 		maxClaimSeconds int64
 		verifyCommands  []string
+		promptCommands  []string
 	}{
 		{
 			role:            "maker",
@@ -156,7 +157,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			maxContTurns:    48,
 			maxClaimTokens:  12000000,
 			maxClaimSeconds: 7200,
-			verifyCommands:  []string{"npm ci", "npm test", "npm run build", "npm run test:e2e"},
+			promptCommands:  []string{"npm ci", "npm test", "npm run build", "npm run test:e2e"},
 		},
 	} {
 		full := filepath.Join(root, tc.path)
@@ -205,14 +206,14 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		}
 		assertGitHubRolePromptContract(t, tc.role, loaded.PromptTemplate)
 		if tc.role == "reviewer" {
-			assertReviewerEffectiveVerifyContract(t, loaded.PromptTemplate, cfg.Verify.Commands)
+			assertReviewerEffectiveVerifyContract(t, loaded.PromptTemplate, cfg.Verify.Commands, tc.promptCommands)
 		}
 	}
 }
 
-func assertReviewerEffectiveVerifyContract(t *testing.T, prompt string, commands []string) {
+func assertReviewerEffectiveVerifyContract(t *testing.T, prompt string, configured, expected []string) {
 	t.Helper()
-	effective := worker.AppendVerifyDirective(prompt, commands)
+	effective := worker.AppendVerifyDirective(prompt, configured)
 	const marker = "**Verification (you own this):**"
 	if strings.Count(effective, marker) != 1 {
 		t.Fatalf("reviewer effective prompt marker count = %d; want 1", strings.Count(effective, marker))
@@ -220,7 +221,7 @@ func assertReviewerEffectiveVerifyContract(t *testing.T, prompt string, commands
 	if strings.Contains(effective, "before you hand off — i.e. before opening a PR") {
 		t.Fatalf("reviewer effective prompt contains unconditional worker verify directive")
 	}
-	for _, command := range commands {
+	for _, command := range expected {
 		if !strings.Contains(effective, "`"+command+"`") {
 			t.Fatalf("reviewer effective prompt missing scoped command %q", command)
 		}

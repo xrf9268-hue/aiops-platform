@@ -17,8 +17,8 @@
   },
   "workflow_runbook_lines": {
     "baseline": 1015,
-    "current": 989,
-    "net": -26
+    "current": 982,
+    "net": -33
   },
   "worker_observed": {
     "maker_tokens": 1804337,

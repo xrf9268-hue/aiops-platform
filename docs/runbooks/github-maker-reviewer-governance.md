@@ -97,9 +97,9 @@ a new approval; a post-approval tuple guard revokes a raced approval before
 auto-merge is re-enabled. Branch protection's stale approval dismissal covers
 later merge-base changes.
 
-The reviewer body owns the `Verification (you own this)` marker so configured
-commands apply only to unseen tuples; this suppresses the worker's generic
-unconditional verify directive on same-tuple retries.
+Conditional reviewer verification commands live only in the reviewer body.
+Its `verify.commands` stays empty so the worker cannot append a generic,
+unconditional directive to same-tuple retries.
 
 Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
 stay in `aiops:human-review`; absence of a reliable Codex signal is never clean.

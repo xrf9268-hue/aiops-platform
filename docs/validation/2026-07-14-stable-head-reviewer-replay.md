@@ -38,7 +38,7 @@ Prompt bytes exclude YAML front matter.
 | Reviewer | 6,892 | 6,224 | -9.7% |
 | Combined | 11,233 | 8,663 | -22.9% |
 
-The two workflows and two governance/E2E runbooks contain 989 lines, down from
+The two workflows and two governance/E2E runbooks contain 982 lines, down from
 1,015. Tests are excluded from that net-negative count.
 
 ## Replay result

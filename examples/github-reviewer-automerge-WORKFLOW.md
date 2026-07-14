@@ -48,13 +48,6 @@ codex:
 
 policy:
   mode: draft_pr
-
-verify:
-  commands:
-    - npm ci
-    - npm test
-    - npm run build
-    - npm run test:e2e
 ---
 You are the independent GitHub REVIEWER. You do not edit, commit, or push code.
 Approve and enable native auto-merge only after PASS; close the issue only
