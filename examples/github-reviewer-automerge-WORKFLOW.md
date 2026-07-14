@@ -57,6 +57,9 @@ the checkpoint and handoff yourself in this turn so the lifecycle advances.
 
 Issue: {{ issue.identifier }} — {{ task.title }} ({{ issue.url }})
 Repository: {{ repo.owner }}/{{ repo.name }}; base: {{ repo.branch }}.
+Whenever this workflow says return/move to `aiops:rework`, make this the LAST
+action: `gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework`.
+Never leave both active labels on the issue.
 
 ## Identity, PR, and one snapshot
 

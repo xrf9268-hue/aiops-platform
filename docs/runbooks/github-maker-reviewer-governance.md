@@ -77,6 +77,9 @@ When a maker or reviewer parks an issue in `aiops:blocked`, the command must
 also remove that role's active labels. Adding `aiops:blocked` while leaving
 `aiops:todo`, `aiops:rework`, or `aiops:human-review` in place keeps the issue
 eligible for the next worker tick.
+Likewise, a reviewer return to `aiops:rework` must remove
+`aiops:human-review` in the same `gh issue edit`; dual active labels can
+dispatch both roles.
 
 Historical `CHANGES_REQUESTED` count is diagnostic; Rework always needs a new
 head and a `Rework response:`. For each unseen

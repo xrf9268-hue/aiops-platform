@@ -259,6 +259,7 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
 			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
+			"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework",
 			"Do not use `--admin`", "mergedAt", "restore `aiops:human-review`", "aiops:blocked",
 		}
 	default:
@@ -270,6 +271,10 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 		}
 	}
 	if role == "reviewer" {
+		const reworkCommand = "gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework"
+		if strings.Count(text, normalizedWorkflowText(reworkCommand)) != 1 {
+			t.Fatalf("reviewer rework command count = %d; want 1", strings.Count(text, normalizedWorkflowText(reworkCommand)))
+		}
 		assertWorkflowInvariantOrder(t, text,
 			"Pagination is one bounded snapshot", "Before any trigger, verdict, checkpoint, or approval write",
 			"## Exact-tuple checkpoint", "event `COMMENT`", "at most one `@codex review`",
