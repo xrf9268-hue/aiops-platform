@@ -111,8 +111,10 @@ Hard requirements:
   `blocking_findings` list from either local reviewer as blocking. Fix findings
   with tests before push.
 - Before marking the PR ready or mergeable, update the PR body with final
-  verification and local review evidence so the follow-through gate has a fresh
-  ledger for the current head.
-- Do not post ad hoc `@codex review` comments yourself. Leave the PR for the
-  follow-through automation, which posts or reuses a current-head-bound GitHub
-  Codex review trigger and merges only after CI and review gates are clean.
+  verification and local review evidence so an authorized human or agent can
+  audit the current head.
+- Follow the canonical PR protocol for the current-head `@codex review` gate and
+  any explicitly authorized merge: trigger at most once per head, re-read live
+  checks and review threads immediately before merging, and close the issue only
+  after GitHub confirms the merge. Without a reliable review signal or merge
+  permission, leave the PR open for review; do not hand it to another daemon.

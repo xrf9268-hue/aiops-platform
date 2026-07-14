@@ -365,11 +365,8 @@ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.aiops-platform.wor
 SSH keys on macOS need no special placement — `ProtectHome` does not
 exist, so a standard `~/.ssh/id_ed25519` for the running user works.
 
-> The existing [`scripts/install-local-launchagents.sh`](../../scripts/install-local-launchagents.sh)
-> is a different, higher-level macOS flow that bundles a GitHub worker
-> wrapper and a PR follow-through agent
-> (see [`github-local-automation.md`](github-local-automation.md)); use
-> the plist above when you just want the bare worker binary as a service.
+Use the plist above as the supported local launchd path for the regular worker
+binary.
 
 ## Common failure modes
 

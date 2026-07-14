@@ -197,22 +197,20 @@ Run it **on every pushed head**, not once per PR.
    back, do not mirror the PR to a fork (earlier "fork doesn't bypass it"
    evidence was confounded by always commenting as `xrf9268-hue`). Keep
    `xrf9268-hue` as the active `gh` account; pass the bytevane token per
-   command via `GH_TOKEN`. `scripts/local-pr-follow-through.sh` applies the
-   same rule via `AIOPS_CODEX_TRIGGER_USER` (default `bytevane`).
+   command via `GH_TOKEN`.
 2. **Detect completion by the canonical predicates — not a reaction/login
    string.** Codex review is not a check run and reactions have no
    watch/subscribe API, so polling is the only option, but poll for the *right*
-   object and identify the bot by *stable identity*. These are the single source
-   of truth (the script + helper implement them; agents must not re-derive
-   fragile filters):
+   object and identify the bot by *stable identity*. These predicates are the
+   agent workflow's single source of truth; do not re-derive fragile filters in
+   parallel helpers:
    - **Identity — one constant.** Codex is `id == 199175422`
      (`login == "chatgpt-codex-connector[bot]"`, `type == "Bot"`). Match by the
      numeric `id`; the `[bot]`-suffixed login is easy to drop and differs across
      endpoints, so a bare-login filter silently matches nothing (the #870 trap).
      Fail closed on conflicts: `type != Bot` or the login present over a
      wrong/absent id (possible spoof) → reject; an `id`-match with a drifted
-     login (App reinstall) is the only "proceed, log". Pinned once in
-     `scripts/codex_review_signal.py`.
+     login (App reinstall) is the only "proceed, log".
    - **Findings (reliable, head-bound).** The only structured signal tied to a
      specific head is a Codex **review object** with `commit_id == <head>` and
      `submitted_at` ≥ the trigger. That is the completion + attribution signal
@@ -232,10 +230,9 @@ Run it **on every pushed head**, not once per PR.
      ~⅓ of the time (matching its verdict prose is the banned NL path). So
      unattended automation **cannot** assert "clean" and must not auto-merge on
      `+1`/eyes/comment. Absence of a review object within the window is
-     **NOT-CONFIRMED** (clean-or-not-reviewed, indistinguishable to the script);
-     it hands to a human, never auto-merges. A human (or an explicitly-authorized
-     agent) may audit the clean `+1`/comment and merge — that audited artifact is
-     not an unattended-script trigger.
+     **NOT-CONFIRMED** (clean-or-not-reviewed, indistinguishable to automation),
+     so it requires a human or explicitly-authorized agent to audit the clean
+     `+1`/comment and live thread state; it never licenses unattended merge.
 
    **Poll-loop implementation constraints** (earned: the PR #774 second-round
    watch stalled silently for 16+ rounds, 2026-06-12). The interactive shell
@@ -355,17 +352,11 @@ Include a size-gate checklist (exactly one box checked):
   enabling auto-merge; any new push re-opens them (re-confirm before
   re-enabling).
 
-  Gate 2 distinguishes **who** is merging:
-  - A **human or explicitly-authorized agent** may establish "clean" by auditing
-    Codex's clean `+1`/comment for the current head (§4) — natural-language
-    judgment is allowed for *this* actor.
-  - The **unattended script** (`local-pr-follow-through.sh`) may merge **only on
-    positive structured confirmation**: a head-bound Codex review object (§4)
-    whose threads — and all threads — are resolved. It has no reliable clean
-    signal, so a NOT-CONFIRMED (clean-or-not-reviewed) result and a human-audited
-    clean artifact **never** trigger a script merge; the script hands those to a
-    human (non-zero "human action required" exit). This is the only unattended
-    merge path, and in practice it retires unattended auto-merge-on-clean.
+  Gate 2 requires a **human or explicitly-authorized agent** to establish
+  "clean" by auditing Codex's clean `+1`/comment for the current head (§4) and
+  the live review-thread state. Natural-language judgment is allowed only for
+  that authorized actor; no unattended daemon may infer clean or merge from a
+  PR-level reaction or comment.
 
   **Hard stops — always require human sign-off even under an auto-merge grant:**
   force-pushing/merging into `main` out of band or any history rewrite; editing

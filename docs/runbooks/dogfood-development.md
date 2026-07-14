@@ -8,8 +8,6 @@ Use this together with:
 
 - [`personal-daily-workflow.md`](personal-daily-workflow.md) for the ordinary
   operator loop.
-- [`github-local-automation.md`](github-local-automation.md) for the local
-  GitHub worker and PR follow-through services.
 - [`binary-deployment.md`](binary-deployment.md) for the plain binary and
   launchd path.
 - [`batch-issue-processing.md`](batch-issue-processing.md) for issue batches.
@@ -82,9 +80,8 @@ Do not proceed to current-repo dogfood until this smoke passes.
 
 ### 2. Binary service on this repository
 
-Install the binary path from [`binary-deployment.md`](binary-deployment.md) or
-the local GitHub LaunchAgent path from
-[`github-local-automation.md`](github-local-automation.md).
+Install the regular worker binary through the platform-specific service path in
+[`binary-deployment.md`](binary-deployment.md).
 
 For dogfood, the GitHub workflow must use:
 
@@ -97,8 +94,9 @@ tracker:
 Do not include `open` in `active_states`. Priority labels such as
 `priority:p1` are triage metadata only; they do not make an issue runnable.
 
-Start with `AIOPS_AUTO_MERGE=0` for PR follow-through. Enable auto-merge only
-for a named scope and only for small PRs.
+Keep merge authority agent-owned and scope-bounded under
+[`pr-review-merge-protocol.md`](pr-review-merge-protocol.md); the worker does
+not review or merge PRs.
 
 ### 3. Current-repo unattended dogfood
 
