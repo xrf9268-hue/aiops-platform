@@ -122,13 +122,13 @@ calibrating harness-engineering decisions):
 - [`docs/research/2026-06-16-langchain-art-of-loop-engineering.md`](docs/research/2026-06-16-langchain-art-of-loop-engineering.md)
   — LangChain's four-level loop-engineering frame. Useful for naming
   aiops-platform's supported agent, verification, and event-driven loops,
-  and for keeping the trace-driven hill-climbing loop as an explicit
-  follow-up rather than an implied worker-side verifier.
+  while keeping harness improvements as ordinary reviewed changes rather than
+  an implied worker-side verifier or automated outer loop.
 - [`docs/research/2026-06-16-zach-lloyd-self-improving-skills.md`](docs/research/2026-06-16-zach-lloyd-self-improving-skills.md)
   — Zach Lloyd's Warp/Oz practitioner account for self-improving
-  file-based Skills. Useful for shaping the planned outer improvement loop:
-  run evidence plus feedback should produce ordinary Skill/workflow/rubric
-  diffs, not worker-owned post-turn mutation.
+  file-based Skills. Useful for treating run evidence plus feedback as inputs
+  to ordinary reviewed Skill/workflow/rubric diffs, not worker-owned post-turn
+  mutation.
 
 The project is **pre-release** — there are no users to migrate, so the cost of
 aligning with SPEC and the reference is at its minimum **right now**. Treat
