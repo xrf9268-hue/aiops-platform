@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "description": "Exact sampled /api/v1/state responses captured every two seconds at selected lifecycle boundaries. Files are unmodified full API responses.",
+  "responses": [
+    {
+      "file": "raw-state/high-maker/completion.json",
+      "sha256": "55ec4f6018f0874103d0ef6bcd026b3ab40f9b389c66c2a255eb83b8ef7ece53",
+      "generated_at": "2026-07-14T05:22:36.552782Z"
+    },
+    {
+      "file": "raw-state/high-maker/issue-1-claim.json",
+      "sha256": "9422f31c402b19ca19bad816fa264662c8a413614d03c5686a65d084b83ee5b7",
+      "generated_at": "2026-07-14T05:19:08.94483Z"
+    },
+    {
+      "file": "raw-state/high-maker/start.json",
+      "sha256": "34da1dabb924c00bcf67074ab4963a75c65787474b3cac65c253d58c370038b2",
+      "generated_at": "2026-07-14T05:18:34.307941Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/abort.json",
+      "sha256": "2eee8592a2f7ab145caed29fe105e293e7a3ec1692201fce13dca1e98f8f9ad8",
+      "generated_at": "2026-07-14T05:35:12.757717Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/continuation-1.json",
+      "sha256": "3c3f0bfd3624d5c0f60d968bc7886090dc721ff1a328c65f459c98432212394e",
+      "generated_at": "2026-07-14T05:24:44.446326Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/continuation-2.json",
+      "sha256": "d915140a6f8eef3bc59fc65618d2a9fa98eeef7e17630703c6d5e964ff0e5f14",
+      "generated_at": "2026-07-14T05:32:07.585365Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/issue-1-claim.json",
+      "sha256": "6aac1e110a0b2e6268d3fa3e0f7471a353559ec019d433ddb9f9c960c56460a1",
+      "generated_at": "2026-07-14T05:22:36.552833Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/no-handoff-1.json",
+      "sha256": "12d5caf60bed6d6bef000516821211f3b7b5239a13a16474ed80f7e0e7e0ab37",
+      "generated_at": "2026-07-14T05:24:38.357182Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/no-handoff-2.json",
+      "sha256": "bb92a4c0f27dc757e0e7284051083b620534586ef8ac1d93222492356521ad5a",
+      "generated_at": "2026-07-14T05:32:03.522022Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/no-handoff-3.json",
+      "sha256": "f489f095351f3738407a983e56d2d45e7d158986ae61c196fbd7b35c4f0f461d",
+      "generated_at": "2026-07-14T05:34:38.143099Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/retry-4.json",
+      "sha256": "1ae9c6df1edc61a1d979e2cf1ae58015215a0662f11df2129cb5fb7362f2d055",
+      "generated_at": "2026-07-14T05:34:44.229461Z"
+    },
+    {
+      "file": "raw-state/high-reviewer/start.json",
+      "sha256": "b708875e56789fff3dfd137b64e8d331bc6b5d45c2abfb7328c15c0f18357a9b",
+      "generated_at": "2026-07-14T05:18:34.307941Z"
+    },
+    {
+      "file": "raw-state/lean/completion.json",
+      "sha256": "f031d0550d534bf2486d1e484d4ce2887bdae5d426457429ccf923d18d9da6c8",
+      "generated_at": "2026-07-14T04:28:02.858187Z"
+    },
+    {
+      "file": "raw-state/lean/issue-1-claim.json",
+      "sha256": "c507e5d552c1f30b500bba2b1f185536b105ac9eb6e73c99a82d88a44a13e8a5",
+      "generated_at": "2026-07-14T04:12:48.301038Z"
+    },
+    {
+      "file": "raw-state/lean/issue-1-completion.json",
+      "sha256": "b1e8e4391241297ff409ac3948927b45fcad2f541b3dec1870352cdb13d6c1ef",
+      "generated_at": "2026-07-14T04:17:51.36956Z"
+    },
+    {
+      "file": "raw-state/lean/issue-2-claim.json",
+      "sha256": "140f3368684f436a33b71d76d4b58f5043304d86b2bedabfb6e981e5758e8cd4",
+      "generated_at": "2026-07-14T04:18:19.89616Z"
+    },
+    {
+      "file": "raw-state/lean/issue-2-continuation.json",
+      "sha256": "a3b1d6993e5c492be8d04e72dc2193ff47027fc2b5c0db18ea3c33e58e16ddd0",
+      "generated_at": "2026-07-14T04:22:11.74819Z"
+    },
+    {
+      "file": "raw-state/lean/issue-2-no-handoff.json",
+      "sha256": "0d6fe78b58c2f513abb263b4829d9e0642c343f9e8cf39c2c5d2aee9d2e97e15",
+      "generated_at": "2026-07-14T04:22:05.655353Z"
+    },
+    {
+      "file": "raw-state/lean/start.json",
+      "sha256": "af073366cc8e03254e556eca4e5cacaafe112291f2e16ea6565cdb5fbca8a2ee",
+      "generated_at": "2026-07-14T04:12:19.798461Z"
+    },
+    {
+      "file": "raw-state/standard-maker/completion.json",
+      "sha256": "8076b7c8fa8bbbb6aeea909eeb8eb118531ce3f6873a28792d8b39939953fcca",
+      "generated_at": "2026-07-14T04:45:54.87893Z"
+    },
+    {
+      "file": "raw-state/standard-maker/issue-1-claim.json",
+      "sha256": "b2437addd8842cd8a2d39f75130ee43b3f25421bc27d148a3684cdd0918bb235",
+      "generated_at": "2026-07-14T04:29:31.025749Z"
+    },
+    {
+      "file": "raw-state/standard-maker/issue-1-handoff.json",
+      "sha256": "ca1f33059980689966b8ec500e9968b26a6384cc746c69f72df05754d5e9a979",
+      "generated_at": "2026-07-14T04:33:06.588707Z"
+    },
+    {
+      "file": "raw-state/standard-maker/issue-2-claim.json",
+      "sha256": "100d804316fc6c1a471bd43b329ab23b5f15371a64199646659a5d8689f68f0d",
+      "generated_at": "2026-07-14T04:40:33.480953Z"
+    },
+    {
+      "file": "raw-state/standard-maker/start.json",
+      "sha256": "84523695502b0e300b5ee2a62bdf65d7f29bf667b0eca0459a76f308e44fbe10",
+      "generated_at": "2026-07-14T04:29:00.513881Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/completion.json",
+      "sha256": "6347b62183ac6be19240d32afd40160e49a24800d3b27510f9e5fc61b460c5e5",
+      "generated_at": "2026-07-14T04:49:00.110786Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/issue-1-claim.json",
+      "sha256": "bb1c8f4a81f1ea90dc8f7a84dc7267a51b4b5aff4d2ca7c05986a74819166f86",
+      "generated_at": "2026-07-14T04:33:41.425008Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/issue-1-completion.json",
+      "sha256": "8571835bf903b5ff4fce636bdfa2fc464f15b04d9343f0c0dc07578f5bffd048",
+      "generated_at": "2026-07-14T04:39:36.564162Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/issue-1-continuation.json",
+      "sha256": "e8635235fd9d9c93bcb15c06e567dd3abd652946ed4f64a8db8a660aa102dca6",
+      "generated_at": "2026-07-14T04:36:19.680723Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/issue-1-no-handoff.json",
+      "sha256": "607f02da9ef9fb2d1836ca494500ea9a2bd6890365861752f2f8c016a9b6b1e8",
+      "generated_at": "2026-07-14T04:36:15.629709Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/issue-2-claim.json",
+      "sha256": "fd8ceb94a9a88bf705f020db009585dced2a159109dd33d99954d16004a877d2",
+      "generated_at": "2026-07-14T04:45:58.946826Z"
+    },
+    {
+      "file": "raw-state/standard-reviewer/start.json",
+      "sha256": "ef7d3ffd0eefe9bf1f004482e9be7dc0e7e2a83f127c1edc86309fb665bbb402",
+      "generated_at": "2026-07-14T04:29:04.974221Z"
+    }
+  ]
+}

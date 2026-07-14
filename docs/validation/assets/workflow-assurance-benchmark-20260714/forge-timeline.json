@@ -1,0 +1,87 @@
+{
+  "captured_at": "2026-07-14T05:39:48Z",
+  "source": "live GitHub API reread",
+  "arms": [
+    {
+      "profile": "lean",
+      "repository": "zjlgdx/aiops-workflow-bench-lean-20260714-1089-v3",
+      "pull_requests": [
+        {
+          "number": 3,
+          "created_at": "2026-07-14T04:16:32Z",
+          "head_sha": "b17af3f0a4563de50fe26be8c7f57ada9af4b961",
+          "check_started_at": "2026-07-14T04:16:36Z",
+          "check_completed_at": "2026-07-14T04:16:55Z",
+          "check_conclusion": "SUCCESS",
+          "merged_at": "2026-07-14T04:17:36Z",
+          "issue_closed_at": "2026-07-14T04:17:37Z",
+          "reviews": []
+        },
+        {
+          "number": 4,
+          "created_at": "2026-07-14T04:26:43Z",
+          "head_sha": "c56353b01db45fc94897274e63e91e259968f325",
+          "check_started_at": "2026-07-14T04:26:48Z",
+          "check_completed_at": "2026-07-14T04:27:11Z",
+          "check_conclusion": "SUCCESS",
+          "merged_at": "2026-07-14T04:27:50Z",
+          "issue_closed_at": "2026-07-14T04:27:51Z",
+          "reviews": []
+        }
+      ]
+    },
+    {
+      "profile": "standard",
+      "repository": "zjlgdx/aiops-workflow-bench-standard-20260714-1089-v5",
+      "pull_requests": [
+        {
+          "number": 3,
+          "created_at": "2026-07-14T04:32:26Z",
+          "head_sha": "39ee0806fc6013ff41ca6391bec6db0c51ce692f",
+          "check_started_at": "2026-07-14T04:32:30Z",
+          "check_completed_at": "2026-07-14T04:32:50Z",
+          "check_conclusion": "SUCCESS",
+          "review_submitted_at": "2026-07-14T04:38:42Z",
+          "review_state": "APPROVED",
+          "merged_at": "2026-07-14T04:38:50Z",
+          "issue_closed_at": "2026-07-14T04:39:16Z"
+        },
+        {
+          "number": 4,
+          "created_at": "2026-07-14T04:44:58Z",
+          "head_sha": "1fdae6ee5445aa4a617d17c93dfdea17bf211c94",
+          "check_started_at": "2026-07-14T04:45:04Z",
+          "check_completed_at": "2026-07-14T04:45:26Z",
+          "check_conclusion": "SUCCESS",
+          "review_submitted_at": "2026-07-14T04:48:28Z",
+          "review_state": "APPROVED",
+          "merged_at": "2026-07-14T04:48:36Z",
+          "issue_closed_at": "2026-07-14T04:48:57Z"
+        }
+      ]
+    },
+    {
+      "profile": "high",
+      "repository": "zjlgdx/aiops-workflow-bench-high-20260714-1089-v8",
+      "pull_requests": [
+        {
+          "number": 3,
+          "created_at": "2026-07-14T05:21:47Z",
+          "head_sha": "2510d3385e90a430fa826f0a015c466f3adabfb3",
+          "check_started_at": "2026-07-14T05:21:52Z",
+          "check_completed_at": "2026-07-14T05:22:09Z",
+          "check_conclusion": "SUCCESS",
+          "external_codex_invoked_at": "2026-07-14T05:29:17Z",
+          "external_codex_review_submitted_at": "2026-07-14T05:32:08Z",
+          "external_codex_elapsed_seconds": 171,
+          "external_codex_inline_suggestions": 1,
+          "external_codex_in_scope_confirmed_findings": 0,
+          "state": "OPEN",
+          "merged_at": null,
+          "issue_state": "aiops:human-review",
+          "issue_2_activated": false
+        }
+      ]
+    }
+  ]
+}

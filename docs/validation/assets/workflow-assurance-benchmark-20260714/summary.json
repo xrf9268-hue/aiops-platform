@@ -1,0 +1,190 @@
+{
+  "schema_version": 2,
+  "date": "2026-07-14",
+  "issue": 1089,
+  "seed_sha": "5e6264cdcfd2decb53491e37de4f825878339487",
+  "pins": {
+    "worker_version": "v0.1.15",
+    "codex_cli_version": "0.144.3",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "sandbox": "danger-full-access",
+    "max_concurrent_agents": 1,
+    "required_check": "build-test"
+  },
+  "arms": [
+    {
+      "profile": "lean",
+      "repository": "zjlgdx/aiops-workflow-bench-lean-20260714-1089-v3",
+      "result": "pass",
+      "accepted_issues": 2,
+      "attempted_issues": 2,
+      "merged_prs": 2,
+      "holdout": "pass",
+      "worker_observed": {
+        "input_tokens": 4068382,
+        "output_tokens": 41260,
+        "total_tokens": 4108322,
+        "runtime_seconds": 880.392200458,
+        "input_plus_output_tokens": 4109642,
+        "component_sum_minus_reported_total": 1320
+      },
+      "wall_seconds": 904,
+      "rework_cycles": 0,
+      "review_findings": 0,
+      "active_success_no_handoff": 1,
+      "normalized_per_accepted_issue": {
+        "total_tokens": 2054161,
+        "runtime_seconds": 440.196100229,
+        "wall_seconds": 452
+      },
+      "issues": [
+        {
+          "number": 1,
+          "result": "accepted",
+          "total_tokens": 1433182,
+          "runtime_seconds": 303.878632541,
+          "pr": 3,
+          "head_sha": "b17af3f0a4563de50fe26be8c7f57ada9af4b961",
+          "merged_at": "2026-07-14T04:17:36Z",
+          "closed_at": "2026-07-14T04:17:37Z",
+          "ci_runs_on_pr_heads": 1,
+          "review_cycles": 0
+        },
+        {
+          "number": 2,
+          "result": "accepted",
+          "total_tokens": 2675140,
+          "runtime_seconds": 576.513567917,
+          "pr": 4,
+          "head_sha": "c56353b01db45fc94897274e63e91e259968f325",
+          "merged_at": "2026-07-14T04:27:50Z",
+          "closed_at": "2026-07-14T04:27:51Z",
+          "ci_runs_on_pr_heads": 1,
+          "review_cycles": 0
+        }
+      ]
+    },
+    {
+      "profile": "standard",
+      "repository": "zjlgdx/aiops-workflow-bench-standard-20260714-1089-v5",
+      "result": "pass",
+      "accepted_issues": 2,
+      "attempted_issues": 2,
+      "merged_prs": 2,
+      "holdout": "pass",
+      "worker_observed": {
+        "input_tokens": 4165532,
+        "output_tokens": 41216,
+        "total_tokens": 4206604,
+        "runtime_seconds": 1058.739628,
+        "input_plus_output_tokens": 4206748,
+        "component_sum_minus_reported_total": 144
+      },
+      "wall_seconds": 1166,
+      "rework_cycles": 0,
+      "review_findings": 0,
+      "active_success_no_handoff": 1,
+      "normalized_per_accepted_issue": {
+        "total_tokens": 2103302,
+        "runtime_seconds": 529.369814,
+        "wall_seconds": 583
+      },
+      "issues": [
+        {
+          "number": 1,
+          "result": "accepted",
+          "maker_tokens": 1106837,
+          "reviewer_tokens": 1193075,
+          "runtime_seconds": 558.892844292,
+          "pr": 3,
+          "head_sha": "39ee0806fc6013ff41ca6391bec6db0c51ce692f",
+          "merged_at": "2026-07-14T04:38:50Z",
+          "closed_at": "2026-07-14T04:39:16Z",
+          "ci_runs_on_pr_heads": 1,
+          "review_cycles": 1
+        },
+        {
+          "number": 2,
+          "result": "accepted",
+          "maker_tokens": 1160869,
+          "reviewer_tokens": 745823,
+          "runtime_seconds": 499.846783708,
+          "pr": 4,
+          "head_sha": "1fdae6ee5445aa4a617d17c93dfdea17bf211c94",
+          "merged_at": "2026-07-14T04:48:36Z",
+          "closed_at": "2026-07-14T04:48:57Z",
+          "ci_runs_on_pr_heads": 1,
+          "review_cycles": 1
+        }
+      ]
+    },
+    {
+      "profile": "high",
+      "repository": "zjlgdx/aiops-workflow-bench-high-20260714-1089-v8",
+      "result": "operational_failure",
+      "accepted_issues": 0,
+      "attempted_issues": 1,
+      "merged_prs": 0,
+      "holdout": "fail_incomplete_backlog",
+      "worker_observed_lower_bound": true,
+      "unmeasured_token_sources": [
+        "nested_codex_review",
+        "review_subagents",
+        "external_at_codex_review"
+      ],
+      "worker_observed": {
+        "input_tokens": 4150949,
+        "output_tokens": 33768,
+        "total_tokens": 4184711,
+        "runtime_seconds": 939.538133916,
+        "input_plus_output_tokens": 4184717,
+        "component_sum_minus_reported_total": 6
+      },
+      "wall_seconds_to_abort": 965.152,
+      "rework_cycles": 0,
+      "review_findings": 1,
+      "active_success_no_handoff": 3,
+      "fixed_head_retry_in_progress_at_abort": 1,
+      "external_codex_review": {
+        "invocations": 1,
+        "invoked_at": "2026-07-14T05:29:17Z",
+        "review_submitted_at": "2026-07-14T05:32:08Z",
+        "elapsed_seconds": 171,
+        "tokens": "unmeasured",
+        "inline_suggestions": 1,
+        "in_scope_confirmed_findings": 0,
+        "excluded_suggestion": "filtering completed records belonged to unactivated issue 2"
+      },
+      "normalized_per_accepted_issue": null,
+      "issues": [
+        {
+          "number": 1,
+          "result": "open_after_review_failure",
+          "pr": 3,
+          "head_sha": "2510d3385e90a430fa826f0a015c466f3adabfb3",
+          "ci_runs_on_pr_heads": 1,
+          "review_cycles_completed_without_handoff": 3,
+          "findings": [
+            "embedded newline or tab breaks one-line three-field output"
+          ],
+          "final_state": "aiops:human-review"
+        },
+        {
+          "number": 2,
+          "result": "not_activated"
+        }
+      ]
+    }
+  ],
+  "relative_to_lean": {
+    "standard_total_tokens_percent": 2.392266,
+    "standard_runtime_percent": 20.257725,
+    "standard_wall_percent": 28.982301
+  },
+  "recommendation": {
+    "default": "lean",
+    "separation_of_duties": "standard",
+    "high_risk": "retain targeted negative checks but simplify the high reviewer before retrial"
+  }
+}
