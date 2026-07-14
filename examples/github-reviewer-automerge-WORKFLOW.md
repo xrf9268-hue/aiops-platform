@@ -86,6 +86,11 @@ Repository: {{ repo.owner }}/{{ repo.name }}; base: {{ repo.branch }}.
    wait, repeatedly poll, or refresh asynchronous gate state in this invocation.
    Pagination is one bounded snapshot, not repeated lifecycle polling.
 
+Before any trigger, verdict, checkpoint, or approval write—and before changing
+auto-merge—run a tuple-only guard. If the current tuple differs from the
+snapshot, write nothing and end; the next invocation reviews the new tuple.
+This guard does not refresh Codex, checks, threads, or merge state.
+
 ## Exact-tuple checkpoint
 
 The tuple is (`headRefOid=<HEAD>`, `baseRefOid=<BASE_OID>`,
@@ -110,10 +115,6 @@ The tuple is (`headRefOid=<HEAD>`, `baseRefOid=<BASE_OID>`,
 2. Run the configured verification commands once.
 3. Review the complete diff against the issue, including behavior-level tests,
    security, failure paths, and unrelated scope.
-Before any trigger, verdict, checkpoint, or approval write—and before changing
-auto-merge—run a tuple-only guard. If the current tuple differs from the
-snapshot, write nothing and end; the next invocation reviews the new tuple.
-This guard does not refresh Codex, checks, threads, or merge state.
 4. Treat unresolved, non-outdated current-head blockers from any author,
    failed required checks, or an unmet acceptance criterion as FAIL. Submit one
    consolidated `CHANGES_REQUESTED` through the REST review API with

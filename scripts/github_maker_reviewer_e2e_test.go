@@ -247,7 +247,8 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 	}
 	if role == "reviewer" {
 		assertWorkflowInvariantOrder(t, text,
-			"tuple-only guard", "event `COMMENT`", "at most one `@codex review`",
+			"Pagination is one bounded snapshot", "Before any trigger, verdict, checkpoint, or approval write",
+			"## Exact-tuple checkpoint", "event `COMMENT`", "at most one `@codex review`",
 			"disable auto-merge and confirm it is absent before approval", "event `APPROVE`",
 			"post-approval tuple guard",
 			"dismiss that approval", "--match-head-commit <HEAD>")
