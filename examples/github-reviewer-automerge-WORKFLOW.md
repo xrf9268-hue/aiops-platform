@@ -110,6 +110,10 @@ The tuple is (`headRefOid=<HEAD>`, `baseRefOid=<BASE_OID>`,
 2. Run the configured verification commands once.
 3. Review the complete diff against the issue, including behavior-level tests,
    security, failure paths, and unrelated scope.
+Before any trigger, verdict, checkpoint, or approval write—and before changing
+auto-merge—run a tuple-only guard. If the current tuple differs from the
+snapshot, write nothing and end; the next invocation reviews the new tuple.
+This guard does not refresh Codex, checks, threads, or merge state.
 4. Treat unresolved, non-outdated current-head blockers from any author,
    failed required checks, or an unmet acceptance criterion as FAIL. Submit one
    consolidated `CHANGES_REQUESTED` through the REST review API with
@@ -130,11 +134,6 @@ evidence; no-signal, usage-limit, and pending results leave
 
 Using only this invocation's snapshot:
 
-Before any verdict/checkpoint/approval write, perform one tuple-only guard. If
-the current `(headRefOid, baseRefOid, baseRefName)` differs from the snapshot,
-write no review or checkpoint and end; the next invocation reviews the new
-tuple. This guard does not refresh Codex, checks, threads, or merge state.
-
 1. If the PR is merged, require a reviewer-owned `APPROVED` review with
    `commit_id=<HEAD>` and a successful required check on `<HEAD>`. Then mark
    `aiops:done` and close. If close fails, restore `aiops:human-review`
@@ -142,7 +141,9 @@ tuple. This guard does not refresh Codex, checks, threads, or merge state.
 2. If required Codex or checks are pending, leave `aiops:human-review`
    unchanged and end promptly.
 3. When local and external gates are clean, require stale approval dismissal.
-   Approve only if exact-head approval is absent, using the REST review API with
+   If exact-head approval is absent, disable auto-merge and confirm it is absent
+   before approval; if that fails, leave `aiops:human-review` and end. Run the
+   tuple-only guard, then approve through the REST review API with
    `commit_id=<HEAD>` and event `APPROVE`; retain its review ID. Immediately run
    a post-approval tuple guard. If the tuple changed, dismiss that approval (or
    replace it with commit-pinned `REQUEST_CHANGES` if dismissal is unavailable),

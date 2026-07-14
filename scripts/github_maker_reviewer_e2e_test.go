@@ -230,6 +230,8 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"`--paginate --slurp`", "`pageInfo`", "`hasNextPage`", "tuple-only guard",
 			"detached checkout of `<HEAD>`", "`commit_id=<HEAD>`", "stale approval dismissal",
 			"post-approval tuple guard", "dismiss that approval", "do not enable auto-merge",
+			"Before any trigger, verdict, checkpoint, or approval write",
+			"disable auto-merge and confirm it is absent before approval",
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
 			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
@@ -245,7 +247,9 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 	}
 	if role == "reviewer" {
 		assertWorkflowInvariantOrder(t, text,
-			"tuple-only guard", "event `APPROVE`", "post-approval tuple guard",
+			"tuple-only guard", "event `COMMENT`", "at most one `@codex review`",
+			"disable auto-merge and confirm it is absent before approval", "event `APPROVE`",
+			"post-approval tuple guard",
 			"dismiss that approval", "--match-head-commit <HEAD>")
 	}
 }

@@ -10,15 +10,15 @@
     "baseline_maker": 4341,
     "current_maker": 2439,
     "baseline_reviewer": 6892,
-    "current_reviewer": 5823,
+    "current_reviewer": 5960,
     "baseline_combined": 11233,
-    "current_combined": 8262,
-    "combined_reduction_percent": 26.448856
+    "current_combined": 8399,
+    "combined_reduction_percent": 25.229235
   },
   "workflow_runbook_lines": {
     "baseline": 1015,
-    "current": 979,
-    "net": -36
+    "current": 981,
+    "net": -34
   },
   "worker_observed": {
     "maker_tokens": 1804337,

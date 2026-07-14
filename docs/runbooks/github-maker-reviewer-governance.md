@@ -89,13 +89,13 @@ review, post a second exact-tuple Codex trigger, or wait/poll in the turn. A hea
 or base change invalidates the checkpoint. REST collections and GraphQL review
 threads are paginated to exhaustion inside that one bounded snapshot.
 
-Local review uses a detached checkout of the captured head. Before any review
-write, a tuple-only guard rejects a changed head/base without refreshing the
-asynchronous gates. Reviews use the REST API with `commit_id` pinned to the
-captured head. A post-approval tuple guard revokes a just-created approval and
-suppresses auto-merge if the tuple raced; after that guard, branch protection's
-stale approval dismissal prevents a later merge-base change from landing on
-the earlier approval.
+Local review uses a detached checkout of the captured head. Before any trigger,
+review, or auto-merge write, a tuple-only guard rejects a changed head/base
+without refreshing the asynchronous gates. Reviews use the REST API with
+`commit_id` pinned to the captured head. Existing auto-merge is disabled before
+a new approval; a post-approval tuple guard revokes a raced approval before
+auto-merge is re-enabled. Branch protection's stale approval dismissal covers
+later merge-base changes.
 
 Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
 stay in `aiops:human-review`; absence of a reliable Codex signal is never clean.
