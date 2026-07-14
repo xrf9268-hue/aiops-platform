@@ -9,8 +9,8 @@ reference.
 ## Worker/orchestrator boundary
 
 The worker/orchestrator schedules, prepares workspaces, runs agents, polls
-GitHub, observes state, and reconciles active runs. It does not own PR
-operations. In this topology, workers do not create PRs, approve PRs, merge PRs, close issues, or mark issues done on their own.
+GitHub, observes state, and reconciles active runs. Workers do not create PRs,
+approve PRs, merge PRs, close issues, or otherwise write tracker state.
 
 Those operations belong to the agents and GitHub:
 
@@ -19,8 +19,8 @@ Those operations belong to the agents and GitHub:
   `aiops:human-review`.
 - The reviewer agent independently reviews each unseen head/base tuple once.
   Later invocations sample external state once, without repeating local review
-  or waiting inside the model turn. After GitHub reports the PR merged, the
-  reviewer marks the issue `aiops:done` and closes it.
+  or waiting inside the model turn. Its squash commit body closes the issue when
+  the commit lands; manual close remains a merged-but-open fallback.
 - GitHub branch protection and Actions decide whether the approved PR can land.
 
 Do not add a worker/orchestrator phase, gate, config key, artifact, merge
@@ -34,10 +34,9 @@ Use distinct GitHub identities for every role:
 
 - setup/operator: creates or configures the repository, labels, Actions, branch
   protection, and evidence capture.
-- maker: writes branches and PRs, but never reviews, approves, merges, closes,
-  or adds `aiops:done`.
-- reviewer: reviews PRs, enables auto-merge on passed heads, confirms merge,
-  then closes issues, but never edits, commits, or pushes code.
+- maker: writes branches and PRs, but never reviews, approves, merges, or closes.
+- reviewer: reviews PRs, enables auto-merge, and uses manual close only for a
+  merged-but-open issue; it never edits, commits, or pushes code.
 
 Use distinct credential homes and runtime roots:
 
@@ -70,7 +69,6 @@ Create and use these GitHub labels:
 | `aiops:rework` | reviewer | Returned to the maker after a failed review. |
 | `aiops:human-review` | maker | Maker has handed off a PR URL for reviewer work. |
 | `aiops:blocked` | maker/reviewer | Inactive true-blocker stop for operator triage. |
-| `aiops:done` | reviewer | PR merge has been confirmed and the issue is closing. |
 | `aiops:canceled` | setup/operator | Work should stop and active runs should reconcile away. |
 
 When a maker or reviewer parks an issue in `aiops:blocked`, the command must
@@ -118,13 +116,11 @@ aiops:todo or aiops:rework
   -> reviewer checks PR head
        -> aiops:rework on FAIL
        -> aiops:blocked for true blockers that need operator action
-       -> reviewer approval + GitHub native auto-merge on PASS
-       -> GitHub reports merged
-       -> aiops:done + issue close
+       -> reviewer approval + native auto-merge with Closes #N on PASS
+       -> squash commit lands -> issue closed
 ```
 
-For dependent issues, do not add `aiops:todo` until the prerequisite issues are
-`aiops:done` and closed.
+For dependent issues, do not add `aiops:todo` until prerequisites are closed.
 
 Maker rework handoff must leave an issue comment beginning with
 `Rework response:` that names the reviewed head, the new head, and the response
@@ -151,11 +147,11 @@ The reviewer should enable auto-merge with the reviewed head pinned, for
 example:
 
 ```bash
-gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>
+gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha> --body "Closes #<N>"
 ```
 
-Do not use `--admin` and do not mark the issue Done until GitHub reports
-`state: MERGED` or a non-empty `mergedAt` for that PR.
+Run this only when auto-merge is absent; never rewrite an existing request. Do
+not use `--admin`, or manually close before non-empty `mergedAt`.
 
 ## Evidence checklist
 
@@ -175,7 +171,7 @@ rerunning the long validation every time:
 - reviewer approval or Rework review tied to the reviewed head SHA;
 - reviewer-owned `COMMENTED` checkpoint tied to the exact head/base tuple;
 - at most one reviewer-authored Codex trigger for that tuple when configured;
-- Done/close comment after merge confirmation.
+- closed issue state and its merged squash commit.
 
 For release validation or a disposable proof run, use the helper scripts from
 the E2E runbook:
@@ -210,8 +206,7 @@ Treat governance failures as blockers, not reasons to collapse roles:
   delay: leave `aiops:human-review` unchanged. Do not trigger the same tuple
   again or move it to `aiops:blocked`.
 - PR already merged but approval/check evidence is missing for the merged head:
-  stop and collect the missing evidence or escalate to an operator. Do not jump
-  straight to Done.
+  stop and collect the missing evidence or escalate; do not manually close.
 
 The safe fallback for any unclear failure is to leave the issue in an active,
 reviewable state (`aiops:human-review` or `aiops:rework`) with a precise comment.

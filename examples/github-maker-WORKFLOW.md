@@ -17,7 +17,6 @@ tracker:
   inactive_states:
     - aiops:human-review
     - aiops:blocked
-    - aiops:done
     - aiops:canceled
 
 polling:
@@ -81,7 +80,7 @@ Delivery:
 3. Commit and push the worker branch.
 4. Open or update its PR against `{{ repo.branch }}`. Reference only
    `Refs #<N>`; do not use `Issue`, `Closes`, `Fixes`, or `Resolves #<N>`,
-   because the reviewer closes the issue after merge.
+   so the open PR remains visible to the reviewer before landing.
 5. Comment the PR URL on the issue.
 6. Query current-head unresolved, non-outdated GraphQL `reviewThreads`; any
    blocker prevents handoff and remains maker work.
@@ -99,5 +98,5 @@ Stop rules:
   blockers. Leave the current maker-active label unchanged and stop promptly.
 - Do not use historical review counts as a stop condition. A current actionable
   finding permits rework; a new head is required for the next handoff.
-- Do not use `gh pr review`, `gh pr merge`, `gh issue close`, or add
-  `aiops:done`. Do not change repository settings unless this issue requires it.
+- Do not use `gh pr review`, `gh pr merge`, or `gh issue close`. Do not change
+  repository settings unless this issue requires it.

@@ -17,7 +17,6 @@ tracker:
     - aiops:todo
     - aiops:rework
     - aiops:blocked
-    - aiops:done
     - aiops:canceled
 
 polling:
@@ -50,8 +49,8 @@ policy:
   mode: draft_pr
 ---
 You are the independent GitHub REVIEWER. You do not edit, commit, or push code.
-Approve and enable native auto-merge only after PASS; close the issue only
-after GitHub confirms the PR merged.
+Approve and enable native auto-merge only after PASS. Manually close only as a
+merged-but-open fallback.
 Do not start a separate review skill or delegate. Complete the checkpoint and
 handoff yourself this turn.
 
@@ -133,10 +132,9 @@ usage-limit, or pending leaves `aiops:human-review` unchanged and ends promptly.
 
 Using only this invocation's snapshot:
 
-1. If the PR is merged, require a reviewer-owned `APPROVED` review with
-   `commit_id=<HEAD>` and a successful required check on `<HEAD>`. Then mark
-   `aiops:done` and close. If close fails, restore `aiops:human-review`
-   immediately and fail non-zero.
+1. If the PR is merged but the issue remains open, require reviewer-owned
+   `APPROVED` at `commit_id=<HEAD>` and a successful required check on `<HEAD>`.
+   Run `gh issue close <N>` once; on failure keep `aiops:human-review` and fail non-zero.
 2. If required Codex or checks are pending, leave `aiops:human-review`
    unchanged and end promptly.
 3. When local and external gates are clean, require stale approval dismissal.
@@ -147,9 +145,9 @@ Using only this invocation's snapshot:
    a post-approval tuple guard. If the tuple changed, dismiss that approval (or
    replace it with commit-pinned `REQUEST_CHANGES` if dismissal is unavailable),
    require successful revocation, do not enable auto-merge, and end. With an
-   exact-head approval already present, whether from this or a prior invocation,
-   run the tuple-only guard; if auto-merge is absent and the tuple matches, run
-   `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <HEAD>`.
+   exact-head approval already present, run the tuple-only guard; if auto-merge
+   is absent and the tuple matches, run
+   `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <HEAD> --body "Closes #<N>"`.
    Do not use `--admin`. GitHub stale approval dismissal protects a base change
    after the post-approval guard; a later invocation must review its new tuple.
    If approval and auto-merge already exist but merge is pending, make no
@@ -158,4 +156,4 @@ Using only this invocation's snapshot:
 
 Use `aiops:blocked` only for a true external/operator-owned blocker. Never use
 it for Codex, CI, approval, auto-merge, merge, or review-thread state. Never
-close before non-empty `mergedAt`, and never approve an unreviewed tuple.
+manually close before non-empty `mergedAt`, and never approve an unreviewed tuple.

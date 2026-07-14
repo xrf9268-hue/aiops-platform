@@ -124,7 +124,7 @@ write_issue 01 happy-path-filters "Happy path: persistent filter tabs" \
 
 Governance:
 - Maker opens a PR with a non-closing issue reference.
-- Reviewer approves, enables CI-gated auto-merge, confirms merged, then marks Done and closes."
+- Reviewer approves and enables CI-gated auto-merge with a closing squash body."
 
 write_issue 02 rework-candidate-offline-delete "Rework candidate: stale offline delete guard" \
 "Depends on #1
@@ -150,7 +150,7 @@ Acceptance:
 - Add tests proving completed todos are not included in the bulk action.
 
 Sequencing check:
-- Do not add aiops:todo until #1 and #2 are Done/closed."
+- Do not add aiops:todo until #1 and #2 are closed."
 
 write_issue 04 rework-control-forced-proof "Control Rework: forced stale delete proof" \
 "Control scenario for deterministic Rework if issue #2 passes first review.
@@ -221,10 +221,10 @@ Repository: \`$repo\`
    one approving review, stale review dismissal, last-push approval, enforced
    admins, squash merge only, and repository auto-merge enabled.
 6. Create labels \`aiops:todo\`, \`aiops:rework\`, \`aiops:human-review\`,
-   \`aiops:done\`, and \`aiops:canceled\`.
+   \`aiops:blocked\`, and \`aiops:canceled\`.
 7. Create issues from \`issues/*.md\` without ready labels. Activate #1 first by
    adding \`aiops:todo\`; activate downstream issues only after dependencies are
-   Done/closed.
+   closed.
 8. Run \`tools/release-preflight.sh --run-root "\$AIOPS_GHMR_RUN_ROOT"\`.
    This resolves the latest release, downloads worker/tui/SHA/SBOM, verifies
    checksum and attestation, records versions, checks role auth, runs the maker

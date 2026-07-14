@@ -192,24 +192,24 @@ def pr_rows(prs: list[dict[str, Any]]) -> list[str]:
     return rows
 
 
-def done_issue_titles(issues: list[dict[str, Any]]) -> list[str]:
+def closed_issue_titles(issues: list[dict[str, Any]]) -> list[str]:
     titles: list[str] = []
     for issue in issues:
-        if "aiops:done" in label_names(issue) and str(issue.get("state", "")).lower() == "closed":
+        if str(issue.get("state", "")).lower() == "closed":
             titles.append(str(issue.get("title", "")).lower())
     return titles
 
 
-def required_issue_scenarios_done(issues: list[dict[str, Any]]) -> bool:
-    titles = done_issue_titles(issues)
+def required_issue_scenarios_closed(issues: list[dict[str, Any]]) -> bool:
+    titles = closed_issue_titles(issues)
     required = ("happy path", "rework candidate", "dependency:")
     return all(any(marker in title for title in titles) for marker in required)
 
 
-def done_issue_by_title(issues: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
+def closed_issue_by_title(issues: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
     for issue in issues:
         title = str(issue.get("title", "")).lower()
-        if marker in title and "aiops:done" in label_names(issue) and str(issue.get("state", "")).lower() == "closed":
+        if marker in title and str(issue.get("state", "")).lower() == "closed":
             return issue
     return None
 
@@ -226,9 +226,9 @@ def event_created_at(event: dict[str, Any]) -> str:
 
 
 def dependency_sequencing_evidence_present(forge_json: Path, issues: list[dict[str, Any]]) -> bool:
-    happy = done_issue_by_title(issues, "happy path")
-    rework = done_issue_by_title(issues, "rework candidate")
-    dependency = done_issue_by_title(issues, "dependency:")
+    happy = closed_issue_by_title(issues, "happy path")
+    rework = closed_issue_by_title(issues, "rework candidate")
+    dependency = closed_issue_by_title(issues, "dependency:")
     if not happy or not rework or not dependency:
         return False
     prerequisite_closed_at = max(str(happy.get("closedAt") or ""), str(rework.get("closedAt") or ""))
@@ -392,7 +392,7 @@ def automated_verdict(
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
     reviewer_evidence = reviewer_merge_evidence and reviewer_approval_evidence
     if (
-        required_issue_scenarios_done(issues)
+        required_issue_scenarios_closed(issues)
         and reviewer_evidence
         and reworked
         and sequencing_evidence
@@ -451,12 +451,12 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "- [ ] Latest release binary downloaded, checksum verified, SBOM captured, and attestation verified.",
         "- [ ] `worker --doctor --deploy=binary --mode=real` passed for maker and reviewer workflows.",
         "- [ ] Maker and reviewer used distinct GitHub identities and distinct workspace roots.",
-        "- [ ] Maker opened PRs and handed issues to `aiops:human-review` without review, merge, Done, or close writes.",
+        "- [ ] Maker opened PRs with non-closing `Refs #N` and handed issues to `aiops:human-review` without review, merge, or close writes.",
         "- [ ] Reviewer did not edit, commit, or push code.",
         "- [ ] At least one PR received reviewer Rework before a new maker head passed.",
         "- [ ] GitHub branch protection required the `build-test` check and an approving review.",
-        "- [ ] Reviewer confirmed `mergedAt`/merged state before adding `aiops:done` and closing issues.",
-        "- [ ] Dependency issue was activated only after prerequisite issues were Done/closed.",
+        "- [ ] Closed issues have merged PR, exact-head reviewer approval, and required-check evidence.",
+        "- [ ] Dependency issue was activated only after prerequisite issues were closed.",
         "- [ ] Fresh clone verification passed `npm ci`, `npm test`, `npm run build`, and `npm run test:e2e`.",
         "",
         "## Issue / PR Table",
@@ -536,7 +536,7 @@ def write_retro(args: argparse.Namespace) -> Path:
         "| Pattern | What it optimizes | Governance strength | Finding |",
         "|---|---|---|---|",
         "| Single-agent agent-side merge | Speed and simplicity | Weak | One agent can implement, judge, and merge its own work. |",
-        "| Maker + reviewer-automerge | Separation of duties | Strong | Maker writes and opens PRs; reviewer independently approves, enables CI-gated auto-merge, confirms merged, then closes. |",
+        "| Maker + reviewer-automerge | Separation of duties | Strong | Maker opens a non-closing PR; reviewer approval enables a squash commit that closes the issue. |",
         "| Worker/orchestrator merge | Centralized automation | Not recommended | It crosses the aiops-platform boundary; the worker must not become PR writer, merger, or terminal tracker writer. |",
         "",
         "## GitHub Lessons",
@@ -544,8 +544,8 @@ def write_retro(args: argparse.Namespace) -> Path:
         "- Use distinct bot accounts or users with distinct `GH_CONFIG_DIR` homes.",
         "- Do not pass `GITHUB_TOKEN` to the agent; the worker uses it for tracker reads and denies it from env passthrough.",
         "- Require `build-test` and one approval on `main`, enable repository auto-merge, and use squash-only merges for clean evidence.",
-        "- `gh pr merge --auto --squash --delete-branch --match-head-commit <sha>` protects against approving one head and merging another.",
-        "- Auto-merge enablement can be transient if checks are already green; durable evidence is reviewer approval, required check success, merge actor, `mergedAt`, and Done-after-merged issue comment.",
+        "- `gh pr merge --auto --squash --delete-branch --match-head-commit <sha> --body \"Closes #<N>\"` pins the head and closes the issue when the squash commit lands.",
+        "- Durable evidence is closed issue state, exact-head reviewer approval, required check success, merge actor, and `mergedAt`.",
         "",
         "## Reusable Assets",
         "",

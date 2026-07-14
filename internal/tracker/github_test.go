@@ -550,7 +550,7 @@ func TestGitHubClientListIssuesByStatesSkipsIssuesClaimedByOpenPR(t *testing.T) 
 			_ = json.NewEncoder(w).Encode([]map[string]any{{
 				"number":   200,
 				"title":    "Fix duplicate dispatch",
-				"body":     "Issue #159\n\nSee also #161.",
+				"body":     "Issue #159\n\nRefs #161.",
 				"state":    "open",
 				"html_url": "https://github.com/acme/api/pull/200",
 			}})
@@ -628,7 +628,7 @@ func TestGitHubClaimedIssueNumbersMatchesPRContract(t *testing.T) {
 			t.Fatalf("claimed issue numbers = %#v, want %#v", got, want)
 		}
 	}
-	for _, text := range []string{"See also #10", "Related to #11", "Not a claim"} {
+	for _, text := range []string{"Refs #10", "See also #10", "Related to #11", "Not a claim"} {
 		if got := githubClaimedIssueNumbers(text); len(got) != 0 {
 			t.Fatalf("claimed issue numbers = %#v, want none", got)
 		}

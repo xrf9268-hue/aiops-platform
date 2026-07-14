@@ -3,8 +3,8 @@
 This runbook validates the production-governance shape for GitHub: a maker
 worker implements issues and opens PRs, a separate reviewer worker independently
 reviews those PRs, GitHub branch protection gates the merge, and the reviewer
-marks issues Done/closed only after GitHub reports the PR merged. For the short
-operator setup checklist, read
+puts `Closes #N` in the approved squash commit so GitHub closes each issue. For
+the short operator setup checklist, read
 [`github-maker-reviewer-governance.md`](github-maker-reviewer-governance.md)
 first.
 
@@ -27,9 +27,9 @@ repository.
   PASS; same-tuple retries reuse it and take one live external-state snapshot.
 - The reviewer approves and enables GitHub native CI-gated auto-merge only after
   review passes.
-- The reviewer confirms `state: MERGED` or non-empty `mergedAt` before adding
-  `aiops:done` and closing the issue.
-- A dependency issue is not activated until its prerequisite issue is Done/closed.
+- The approved squash commit closes the issue; merged-but-open is the only
+  manual-close fallback.
+- A dependency issue is not activated until its prerequisite issue is closed.
 
 If any preflight below fails, report **BLOCKED**. Do not switch to a
 single-agent merge or a worker-side merge.
@@ -104,7 +104,7 @@ Use three credentials:
 
 - setup/operator: repository creation, branch protection, and capture
 - maker: code/branch/PR author
-- reviewer: PR reviewer, auto-merge enabler, and issue closer
+- reviewer: PR reviewer, auto-merge enabler, and merged-but-open fallback closer
 
 Each role must use a distinct file-backed `GH_CONFIG_DIR`:
 
@@ -191,7 +191,7 @@ env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" 
 Create labels:
 
 ```bash
-for label in aiops:todo aiops:rework aiops:human-review aiops:blocked aiops:done aiops:canceled; do
+for label in aiops:todo aiops:rework aiops:human-review aiops:blocked aiops:canceled; do
   env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
     gh label create "$label" --repo "$AIOPS_GHMR_REPO" --color 5319e7 --force
 done
@@ -284,7 +284,7 @@ env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" 
 ```
 
 For dependency/sequencing proof, keep issue #3 without `aiops:todo` until the
-prerequisite issues are `aiops:done` and closed.
+prerequisite issues are closed.
 
 ## 6. Preflight Binary and Doctor
 
@@ -394,7 +394,7 @@ Required screenshot anchors:
 - reviewer approval / auto-merge / merge evidence
 - first Rework rejection
 - Rework fix handoff and second pass
-- final Done/closed issues
+- final closed issues
 - final Actions summary
 - final app desktop and mobile screenshots
 
@@ -422,12 +422,11 @@ control Rework issue from `issues/04-*.md` to force deterministic proof:
   missing
 - issue moves from `aiops:human-review` to `aiops:rework`
 - maker pushes a new commit and includes `Rework response:`
-- reviewer reviews the new head, approves, enables auto-merge, confirms merged,
-  then marks Done/closed
-- reviewer uses `gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`
+- reviewer reviews the new head, approves, and enables auto-merge
+- reviewer uses `gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha> --body "Closes #<N>"`
   and never `--admin`
 
-Activate the dependency issue only after prerequisite issues are Done/closed:
+Activate the dependency issue only after prerequisite issues are closed:
 
 ```bash
 env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$AIOPS_GHMR_SETUP_GH_CONFIG_DIR" \
@@ -485,17 +484,17 @@ PASS requires all of the following:
 - Latest formal release binary is used, not a local source build.
 - Checksum, attestation, SBOM capture, version capture, and doctor pass.
 - At least three feature issues exist.
-- Happy path reaches maker PR, reviewer approval, CI-gated merge, Done/close.
+- Happy path reaches maker PR, reviewer approval, CI-gated merge, and native close.
 - Rework path has at least one reviewer `CHANGES_REQUESTED` or equivalent
   Rework finding, then a new maker head, then reviewer approval and merge.
-- Dependency issue is not activated before prerequisite Done/closed evidence.
-- Maker does not approve, auto-merge, merge, close, or add `aiops:done`.
+- Dependency issue is not activated before prerequisite closed evidence.
+- Maker does not approve, auto-merge, merge, or close.
 - Reviewer does not edit, commit, or push code.
 - Same-tuple reviewer retry reuses its checkpoint, samples external state once,
   and does not repeat verification or the semantic/security rubric.
 - Worker/orchestrator does not create PRs, merge PRs, or directly set terminal
   tracker state.
-- Issue closure occurs only after reviewer confirms GitHub merged state.
+- Issue closure comes from the squash commit, or manually only after merged evidence.
 - Fresh clone verification passes all npm gates.
 - Final report includes verdict, timeline or event sequence, issue/PR table,
   maker/reviewer boundary evidence, auto-merge evidence, Rework evidence,
