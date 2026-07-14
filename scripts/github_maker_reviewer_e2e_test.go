@@ -1,6 +1,7 @@
 package scripts_test
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -298,6 +299,44 @@ func TestGitHubMakerReviewerPromptBudgetsAndNetNegativeDocs(t *testing.T) {
 	}
 	if lines >= 1015 {
 		t.Fatalf("tracked workflow/runbook lines = %d; want < 1015", lines)
+	}
+}
+
+func TestGitHubMakerReviewerReplaySummaryMatchesTrackedArtifacts(t *testing.T) {
+	root := repoRoot(t)
+	var summary struct {
+		PromptBytes struct {
+			Maker    int `json:"current_maker"`
+			Reviewer int `json:"current_reviewer"`
+			Combined int `json:"current_combined"`
+		} `json:"prompt_bytes"`
+		TrackedLines struct {
+			Current int `json:"current"`
+		} `json:"workflow_runbook_lines"`
+	}
+	path := filepath.Join(root, "docs/validation/assets/stable-head-reviewer-replay-20260714/summary.json")
+	if err := json.Unmarshal([]byte(readFileString(t, path)), &summary); err != nil {
+		t.Fatalf("parse replay summary: %v", err)
+	}
+
+	maker := len(githubWorkflowPromptBody(t, "maker", readFileString(t, filepath.Join(root, "examples/github-maker-WORKFLOW.md"))))
+	reviewer := len(githubWorkflowPromptBody(t, "reviewer", readFileString(t, filepath.Join(root, "examples/github-reviewer-automerge-WORKFLOW.md"))))
+	if summary.PromptBytes.Maker != maker || summary.PromptBytes.Reviewer != reviewer || summary.PromptBytes.Combined != maker+reviewer {
+		t.Fatalf("summary prompt bytes = %d/%d/%d; want %d/%d/%d", summary.PromptBytes.Maker, summary.PromptBytes.Reviewer, summary.PromptBytes.Combined, maker, reviewer, maker+reviewer)
+	}
+
+	tracked := []string{
+		"examples/github-maker-WORKFLOW.md",
+		"examples/github-reviewer-automerge-WORKFLOW.md",
+		"docs/runbooks/github-maker-reviewer-governance.md",
+		"docs/runbooks/github-maker-reviewer-automerge-e2e.md",
+	}
+	lines := 0
+	for _, trackedPath := range tracked {
+		lines += strings.Count(readFileString(t, filepath.Join(root, trackedPath)), "\n")
+	}
+	if summary.TrackedLines.Current != lines {
+		t.Fatalf("summary tracked lines = %d; want %d", summary.TrackedLines.Current, lines)
 	}
 }
 
