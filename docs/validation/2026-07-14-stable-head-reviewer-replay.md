@@ -35,8 +35,8 @@ Prompt bytes exclude YAML front matter.
 | Prompt | #1089 baseline | #1090 | Change |
 | --- | ---: | ---: | ---: |
 | Maker | 4,341 | 2,439 | -43.8% |
-| Reviewer | 6,892 | 6,435 | -6.6% |
-| Combined | 11,233 | 8,874 | -21.0% |
+| Reviewer | 6,892 | 6,406 | -7.1% |
+| Combined | 11,233 | 8,845 | -21.3% |
 
 The two workflows and two governance/E2E runbooks contain 988 lines, down from
 1,015. Tests are excluded from that net-negative count.

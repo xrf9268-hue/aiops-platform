@@ -10,10 +10,10 @@
     "baseline_maker": 4341,
     "current_maker": 2439,
     "baseline_reviewer": 6892,
-    "current_reviewer": 6435,
+    "current_reviewer": 6406,
     "baseline_combined": 11233,
-    "current_combined": 8874,
-    "combined_reduction_percent": 21.000623
+    "current_combined": 8845,
+    "combined_reduction_percent": 21.258791
   },
   "workflow_runbook_lines": {
     "baseline": 1015,

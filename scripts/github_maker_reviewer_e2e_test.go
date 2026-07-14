@@ -257,9 +257,11 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"disable auto-merge and confirm it is absent before approval",
 			"With an exact-head approval already present",
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
+			"use the `aiops:rework` transition above as the LAST action",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
 			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
 			"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework",
+			"Re-read labels", "Repair and recheck before exit", "fail non-zero if it cannot converge",
 			"Do not use `--admin`", "mergedAt", "restore `aiops:human-review`", "aiops:blocked",
 		}
 	default:
@@ -276,8 +278,11 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			t.Fatalf("reviewer rework command count = %d; want 1", strings.Count(text, normalizedWorkflowText(reworkCommand)))
 		}
 		assertWorkflowInvariantOrder(t, text,
+			"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework",
+			"Re-read labels", "Repair and recheck before exit",
 			"Pagination is one bounded snapshot", "Before any trigger, verdict, checkpoint, or approval write",
 			"## Exact-tuple checkpoint", "event `COMMENT`", "at most one `@codex review`",
+			"Findings join the FAIL evidence", "use the `aiops:rework` transition above",
 			"disable auto-merge and confirm it is absent before approval", "event `APPROVE`",
 			"post-approval tuple guard",
 			"dismiss that approval", "With an exact-head approval already present",
@@ -423,7 +428,7 @@ func TestGitHubMakerReviewerWorkflowPromptsKeepTransientReviewGatesOutOfBlocked(
 		body := readFileString(t, filepath.Join(root, path))
 		bodyText := normalizedWorkflowText(body)
 		for _, want := range []string{
-			"no-signal, usage-limit, and pending results leave `aiops:human-review` unchanged",
+			"No-signal", "usage-limit", "pending leaves `aiops:human-review` unchanged",
 			"current-head blockers from any author",
 			"move to `aiops:rework`",
 		} {
