@@ -224,10 +224,12 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 		}
 	case "reviewer":
 		required = []string{
+			"Do not start a separate review skill", "Complete the checkpoint and handoff yourself",
 			"headRefOid", "baseRefOid", "baseRefName", "reviewer-owned `COMMENTED`",
 			"local-rubric=PASS", "same exact tuple", "skip checkout", "one live snapshot",
 			"`--paginate --slurp`", "`pageInfo`", "`hasNextPage`", "tuple-only guard",
 			"detached checkout of `<HEAD>`", "`commit_id=<HEAD>`", "stale approval dismissal",
+			"post-approval tuple guard", "dismiss that approval", "do not enable auto-merge",
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
 			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
@@ -240,6 +242,23 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 		if !strings.Contains(text, normalizedWorkflowText(want)) {
 			t.Fatalf("%s prompt missing invariant %q", role, want)
 		}
+	}
+	if role == "reviewer" {
+		assertWorkflowInvariantOrder(t, text,
+			"tuple-only guard", "event `APPROVE`", "post-approval tuple guard",
+			"dismiss that approval", "--match-head-commit <HEAD>")
+	}
+}
+
+func assertWorkflowInvariantOrder(t *testing.T, text string, ordered ...string) {
+	t.Helper()
+	last := -1
+	for _, marker := range ordered {
+		at := strings.Index(text, normalizedWorkflowText(marker))
+		if at <= last {
+			t.Fatalf("workflow invariant %q appears at %d after %d", marker, at, last)
+		}
+		last = at
 	}
 }
 

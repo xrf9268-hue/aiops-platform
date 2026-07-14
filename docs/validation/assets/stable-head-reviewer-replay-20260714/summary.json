@@ -1,74 +1,78 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "date": "2026-07-14",
   "issue": 1090,
-  "repository": "zjlgdx/aiops-workflow-bench-standard-20260714-1090-v1",
+  "repository": "zjlgdx/aiops-workflow-bench-standard-20260714-1090-v2",
   "seed_sha": "5e6264cdcfd2decb53491e37de4f825878339487",
-  "final_main_sha": "7e56f3e34132042f8d812b6acb45677153c74d1a",
+  "final_main_sha": "9b1ae3e979ca386acec6bab2ab76e236af06f935",
   "holdout": "pass",
   "prompt_bytes": {
     "baseline_maker": 4341,
     "current_maker": 2439,
     "baseline_reviewer": 6892,
-    "current_reviewer": 5344,
+    "current_reviewer": 5823,
     "baseline_combined": 11233,
-    "current_combined": 7783,
-    "combined_reduction_percent": 30.713078
+    "current_combined": 8262,
+    "combined_reduction_percent": 26.448856
   },
   "workflow_runbook_lines": {
     "baseline": 1015,
-    "current": 970,
-    "net": -45
+    "current": 979,
+    "net": -36
   },
   "worker_observed": {
-    "maker_tokens": 2967013,
-    "maker_runtime_seconds": 740.799404667,
-    "reviewer_tokens": 2667510,
-    "reviewer_runtime_seconds": 764.95159425,
-    "total_tokens": 5634523,
-    "total_runtime_seconds": 1505.750998917,
-    "wall_seconds": 1605,
-    "rework_cycles": 1,
-    "review_findings": 2
+    "maker_tokens": 1804337,
+    "maker_runtime_seconds": 409.492057875,
+    "reviewer_tokens": 2456281,
+    "reviewer_runtime_seconds": 884.145493666,
+    "total_tokens": 4260618,
+    "total_runtime_seconds": 1293.637551541,
+    "wall_seconds": 1394,
+    "rework_cycles": 0,
+    "review_findings": 0,
+    "pre_final_prompt_no_handoff_sessions": 1
   },
   "stable_tuple_comparison": {
-    "full_review_tokens": 1432268,
-    "full_review_runtime_seconds": 390.988322458,
-    "merge_confirmation_tokens": 702083,
-    "merge_confirmation_runtime_seconds": 199.231928167,
-    "token_reduction_percent": 50.981031,
-    "runtime_reduction_percent": 49.044021
+    "full_review_tokens": 1248550,
+    "full_review_runtime_seconds": 442.719735083,
+    "merge_confirmation_tokens": 706560,
+    "merge_confirmation_runtime_seconds": 267.423159083,
+    "token_reduction_percent": 43.409555,
+    "runtime_reduction_percent": 39.595383
   },
   "relative_to_1089_standard": {
     "baseline_tokens": 4206604,
     "baseline_runtime_seconds": 1058.739628,
     "baseline_wall_seconds": 1166,
     "baseline_rework_cycles": 0,
-    "tokens_change_percent": 33.944697,
-    "runtime_change_percent": 42.221086,
-    "wall_change_percent": 37.650086
+    "tokens_change_percent": 1.284029,
+    "runtime_change_percent": 22.186562,
+    "wall_change_percent": 19.554031
   },
   "issues": [
     {
       "number": 1,
       "pr": 3,
-      "initial_head_sha": "afc18f9986d290934d1879468374a50aa3c01254",
-      "final_head_sha": "f14a70fd8151b38eccca720aafb6e9ddb145a2aa",
-      "merged_at": "2026-07-14T06:16:21Z",
-      "closed_at": "2026-07-14T06:18:10Z",
-      "rework_cycles": 1,
-      "review_findings": 2,
+      "final_head_sha": "6567e95d4f549402973090d7c5d13e1f8bafdc99",
+      "base_sha": "5e6264cdcfd2decb53491e37de4f825878339487",
+      "merged_at": "2026-07-14T06:57:57Z",
+      "closed_at": "2026-07-14T07:00:37Z",
+      "rework_cycles": 0,
+      "review_findings": 0,
+      "pre_final_prompt_no_handoff_sessions": 1,
       "checkpoint_reviews": 1,
       "approvals": 1
     },
     {
       "number": 2,
       "pr": 4,
-      "final_head_sha": "56fa3e45d1c2fdb9300862cc0554c66054708f53",
-      "merged_at": "2026-07-14T06:26:33Z",
-      "closed_at": "2026-07-14T06:28:29Z",
+      "final_head_sha": "2b75db6667cabc432a9e61946ef6633d29d8393c",
+      "base_sha": "7bca40af87c8631c3fdc7d30d8d18453ec5eb22a",
+      "merged_at": "2026-07-14T07:09:17Z",
+      "closed_at": "2026-07-14T07:11:32Z",
       "rework_cycles": 0,
       "review_findings": 0,
+      "pre_final_prompt_no_handoff_sessions": 0,
       "checkpoint_reviews": 1,
       "approvals": 1
     }

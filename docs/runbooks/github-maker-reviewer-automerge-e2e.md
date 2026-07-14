@@ -208,10 +208,10 @@ skips local gates/rubric, reuses any exact-tuple Codex trigger, and takes one
 live snapshot. It never posts a second trigger or waits/polls for external
 state. REST records and GraphQL threads are paginated inside the snapshot. A
 changed head/base requires full review. Review commands use a detached captured
-head, a pre-write tuple-only guard, and REST `commit_id` pinning. Branch
-protection's stale approval dismissal prevents a later merge-base change from
-using the prior approval. Blocked handoffs remove active labels while adding
-`aiops:blocked`.
+head, a pre-write tuple-only guard, REST `commit_id` pinning, and a
+post-approval guard that revokes a raced approval before auto-merge. Branch
+protection's stale approval dismissal covers later merge-base changes. Blocked
+handoffs remove active labels while adding `aiops:blocked`.
 
 Enable auto-merge and squash-only merges:
 

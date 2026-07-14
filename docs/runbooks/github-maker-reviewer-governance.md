@@ -92,8 +92,10 @@ threads are paginated to exhaustion inside that one bounded snapshot.
 Local review uses a detached checkout of the captured head. Before any review
 write, a tuple-only guard rejects a changed head/base without refreshing the
 asynchronous gates. Reviews use the REST API with `commit_id` pinned to the
-captured head. Branch protection must provide stale approval dismissal so a
-later merge-base change cannot land on the earlier approval.
+captured head. A post-approval tuple guard revokes a just-created approval and
+suppresses auto-merge if the tuple raced; after that guard, branch protection's
+stale approval dismissal prevents a later merge-base change from landing on
+the earlier approval.
 
 Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
 stay in `aiops:human-review`; absence of a reliable Codex signal is never clean.
