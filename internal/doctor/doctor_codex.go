@@ -449,7 +449,7 @@ func usesDefaultCodexCLI(cfg workflow.Config) bool {
 }
 
 // codexVersionFromOutput extracts the first exact `major.minor.patch` token from
-// `codex --version` output (e.g. "codex-cli 0.142.0"), reusing parseGoVersion's
+// `codex --version` output (e.g. "codex-cli 1.2.3"), reusing parseGoVersion's
 // generic numeric parse.
 func codexVersionFromOutput(output string) (goVersion, bool) {
 	for _, field := range strings.Fields(output) {

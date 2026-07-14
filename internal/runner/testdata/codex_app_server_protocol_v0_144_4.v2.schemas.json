@@ -22,7 +22,6 @@
           "type": "string",
           "enum": [
             "untrusted",
-            "on-failure",
             "on-request",
             "never"
           ]
@@ -82,6 +81,7 @@
               "type": "string"
             },
             "path": {
+              "description": "Absolute path for the root in the selected environment.",
               "type": "string"
             },
             "type": {
@@ -197,12 +197,28 @@
       "type": "string"
     },
     "MultiAgentMode": {
-      "description": "Controls whether the model receives multi-agent delegation instructions and, when it does, whether it should only spawn sub-agents after an explicit user request or may delegate proactively when doing so would help. `none` leaves the multi-agent tools available without injecting delegation instructions.",
-      "type": "string",
-      "enum": [
-        "none",
-        "explicitRequestOnly",
-        "proactive"
+      "description": "Controls the effective multi-agent delegation instructions for a turn. `custom` means the configured mode hint defines the policy instead of a built-in policy.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "explicitRequestOnly",
+            "proactive"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "custom"
+          ],
+          "properties": {
+            "custom": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false,
+          "title": "CustomMultiAgentMode"
+        }
       ]
     },
     "Personality": {
@@ -243,6 +259,13 @@
         }
       }
     },
+    "ThreadHistoryMode": {
+      "type": "string",
+      "enum": [
+        "legacy",
+        "paginated"
+      ]
+    },
     "ThreadSource": {
       "type": "string"
     },
@@ -273,6 +296,10 @@
       "title": "ThreadStartParams",
       "type": "object",
       "properties": {
+        "allowProviderModelFallback": {
+          "description": "Allow a provider with an authoritative static model catalog to replace an unavailable requested model with its default.",
+          "type": "boolean"
+        },
         "approvalPolicy": {
           "anyOf": [
             {
@@ -349,6 +376,17 @@
           "description": "If true, opt into emitting raw Responses API items on the event stream. This is for internal use only (e.g. Codex Cloud).",
           "type": "boolean"
         },
+        "historyMode": {
+          "description": "Persisted thread history contract to use for this new thread.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadHistoryMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "mockExperimentalField": {
           "description": "Test-only experimental field used to validate experimental gating and schema filtering behavior in a stable way.",
           "type": [
@@ -369,7 +407,7 @@
           ]
         },
         "multiAgentMode": {
-          "description": "Set the initial multi-agent mode for this thread. `none` leaves the multi-agent tools available without injecting mode instructions. Omitted defaults to `explicitRequestOnly`.",
+          "description": "@deprecated Ignored. Use Ultra reasoning effort for proactive multi-agent behavior.",
           "anyOf": [
             {
               "$ref": "#/definitions/MultiAgentMode"
@@ -1218,6 +1256,12 @@
             "name": {
               "type": "string"
             },
+            "namespace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "status": {
               "type": [
                 "string",
@@ -1467,16 +1511,6 @@
             "type"
           ],
           "properties": {
-            "internal_chat_message_metadata_passthrough": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/InternalChatMessageMetadataPassthrough"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "type": "string",
               "enum": [
@@ -1922,6 +1956,13 @@
         "excludeTurns": {
           "description": "When true, return only thread metadata and live fork state without populating `thread.turns`. This is useful when the client plans to call `thread/turns/list` immediately after forking.",
           "type": "boolean"
+        },
+        "lastTurnId": {
+          "description": "Optional last turn id to fork through, inclusive.\n\nWhen specified, turns after `last_turn_id` are omitted from the fork. The referenced turn cannot be in progress.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model": {
           "description": "Configuration overrides for the forked thread, if any.",
@@ -2452,7 +2493,7 @@
           ]
         },
         "multiAgentMode": {
-          "description": "Select the multi-agent mode for subsequent turns.",
+          "description": "@deprecated Ignored. Use `effort: \"ultra\"` for proactive multi-agent behavior.",
           "anyOf": [
             {
               "$ref": "#/definitions/MultiAgentMode"
@@ -2661,6 +2702,7 @@
     "ThreadRollbackParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "ThreadRollbackParams",
+      "description": "DEPRECATED: `thread/rollback` will be removed soon.",
       "type": "object",
       "required": [
         "numTurns",
@@ -2719,6 +2761,13 @@
       "title": "ThreadListParams",
       "type": "object",
       "properties": {
+        "ancestorThreadId": {
+          "description": "Optional ancestor thread filter. Returns spawned descendants at any depth, excluding the ancestor itself. Mutually exclusive with `parentThreadId`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "archived": {
           "description": "Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned.",
           "type": [
@@ -2764,7 +2813,7 @@
           }
         },
         "parentThreadId": {
-          "description": "Optional direct parent thread filter.",
+          "description": "Optional direct parent thread filter. Mutually exclusive with `ancestorThreadId`.",
           "type": [
             "string",
             "null"
@@ -2975,13 +3024,12 @@
         }
       }
     },
-    "ThreadTurnsItemsListParams": {
+    "ThreadItemsListParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ThreadTurnsItemsListParams",
+      "title": "ThreadItemsListParams",
       "type": "object",
       "required": [
-        "threadId",
-        "turnId"
+        "threadId"
       ],
       "properties": {
         "cursor": {
@@ -3015,7 +3063,11 @@
           "type": "string"
         },
         "turnId": {
-          "type": "string"
+          "description": "Optional turn id to filter by. When omitted, returns items across the thread.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -4021,7 +4073,7 @@
           ]
         },
         "multiAgentMode": {
-          "description": "Controls multi-agent v2 delegation instructions. `none` leaves the multi-agent tools available without injecting mode instructions. Omitted keeps the loaded session's current mode.",
+          "description": "@deprecated Ignored. Use `effort: \"ultra\"` for proactive multi-agent behavior.",
           "anyOf": [
             {
               "$ref": "#/definitions/MultiAgentMode"
@@ -4287,6 +4339,13 @@
         },
         "codexResponsesAsItems": {
           "description": "Sends automatic Codex responses as realtime conversation items instead of handoff appends.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "flushTranscriptTailOnSessionEnd": {
+          "description": "Routes any transcript tail remaining at session end through Codex. Defaults to false. TODO: Remove this rollout knob once transcript-tail flushing is always enabled.",
           "type": [
             "boolean",
             "null"
@@ -4905,6 +4964,19 @@
         }
       }
     },
+    "EnvironmentInfoParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "EnvironmentInfoParams",
+      "type": "object",
+      "required": [
+        "environmentId"
+      ],
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        }
+      }
+    },
     "McpServerOauthLoginParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "McpServerOauthLoginParams",
@@ -4924,6 +4996,12 @@
           "items": {
             "type": "string"
           }
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "timeoutSecs": {
           "type": [
@@ -5057,6 +5135,13 @@
         }
       }
     },
+    "LoginAppBrand": {
+      "type": "string",
+      "enum": [
+        "codex",
+        "chatgpt"
+      ]
+    },
     "LoginAccountParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "LoginAccountParams",
@@ -5087,6 +5172,17 @@
             "type"
           ],
           "properties": {
+            "appBrand": {
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LoginAppBrand"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "codexStreamlinedLogin": {
               "type": "boolean"
             },
@@ -5096,6 +5192,9 @@
                 "chatgpt"
               ],
               "title": "Chatgptv2::LoginAccountParamsType"
+            },
+            "useHostedLoginSuccessPage": {
+              "type": "boolean"
             }
           },
           "title": "Chatgptv2::LoginAccountParams"
@@ -5173,6 +5272,13 @@
         "idempotencyKey"
       ],
       "properties": {
+        "creditId": {
+          "description": "Opaque reset-credit identifier to redeem. When omitted, the backend selects the next available credit.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "idempotencyKey": {
           "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
           "type": "string"
@@ -5770,6 +5876,13 @@
             "$ref": "#/definitions/SessionMigration"
           }
         },
+        "skills": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SkillMigration"
+          }
+        },
         "subagents": {
           "default": [],
           "type": "array",
@@ -5815,6 +5928,17 @@
             "string",
             "null"
           ]
+        }
+      }
+    },
+    "SkillMigration": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
         }
       }
     },
@@ -5982,6 +6106,7 @@
           "type": "string",
           "enum": [
             "contextWindowExceeded",
+            "sessionBudgetExceeded",
             "usageLimitExceeded",
             "serverOverloaded",
             "cyberPolicy",
@@ -6402,6 +6527,18 @@
         "connectorId"
       ],
       "properties": {
+        "actionName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "connectorId": {
           "type": "string"
         },
@@ -6412,6 +6549,12 @@
           ]
         },
         "resourceUri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "templateId": {
           "type": [
             "string",
             "null"
@@ -6750,6 +6893,17 @@
           "description": "Whether the thread is ephemeral and should not be materialized on disk.",
           "type": "boolean"
         },
+        "extra": {
+          "description": "Optional implementation-specific thread data.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadExtra"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "forkedFromId": {
           "description": "Source thread id when this thread was created by forking another thread.",
           "type": [
@@ -6768,7 +6922,17 @@
             }
           ]
         },
+        "historyMode": {
+          "description": "Persisted thread history contract selected when this thread was created.",
+          "default": "legacy",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadHistoryMode"
+            }
+          ]
+        },
         "id": {
+          "description": "Identifier for this thread. Codex-generated thread IDs are UUIDv7.",
           "type": "string"
         },
         "modelProvider": {
@@ -6859,6 +7023,10 @@
         "waitingOnApproval",
         "waitingOnUserInput"
       ]
+    },
+    "ThreadExtra": {
+      "description": "Extra app-server data for a thread.",
+      "type": "object"
     },
     "ThreadId": {
       "type": "string"
@@ -7452,7 +7620,7 @@
               "type": "string"
             },
             "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
+              "$ref": "#/definitions/LegacyAppPathString"
             },
             "type": {
               "type": "string",
@@ -7715,6 +7883,7 @@
           ]
         },
         "id": {
+          "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",
           "type": "string"
         },
         "items": {
@@ -7939,7 +8108,7 @@
           "type": "string"
         },
         "multiAgentMode": {
-          "description": "Current multi-agent mode for this thread.",
+          "description": "@deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.",
           "default": "explicitRequestOnly",
           "allOf": [
             {
@@ -8077,7 +8246,7 @@
           "type": "string"
         },
         "multiAgentMode": {
-          "description": "Current multi-agent mode for this thread.",
+          "description": "@deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.",
           "default": "explicitRequestOnly",
           "allOf": [
             {
@@ -8177,7 +8346,7 @@
           "type": "string"
         },
         "multiAgentMode": {
-          "description": "Current multi-agent mode for this thread.",
+          "description": "@deprecated Always `explicitRequestOnly`. Use `reasoningEffort` for Ultra behavior.",
           "default": "explicitRequestOnly",
           "allOf": [
             {
@@ -8266,8 +8435,7 @@
         "count": {
           "description": "Current out-of-band elicitation count after the increment.",
           "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "format": "int64"
         },
         "paused": {
           "description": "Whether timeout accounting is paused after applying the increment.",
@@ -8288,8 +8456,7 @@
         "count": {
           "description": "Current out-of-band elicitation count after the decrement.",
           "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
+          "format": "int64"
         },
         "paused": {
           "description": "Whether timeout accounting remains paused after applying the decrement.",
@@ -8694,9 +8861,9 @@
         }
       }
     },
-    "ThreadTurnsItemsListResponse": {
+    "ThreadItemsListResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "ThreadTurnsItemsListResponse",
+      "title": "ThreadItemsListResponse",
       "type": "object",
       "required": [
         "data"
@@ -9291,6 +9458,13 @@
         "INSTALLED_BY_DEFAULT"
       ]
     },
+    "PluginInstallPolicySource": {
+      "type": "string",
+      "enum": [
+        "WORKSPACE_SETTING",
+        "IMPLICIT_CANONICAL_APP"
+      ]
+    },
     "PluginInterface": {
       "type": "object",
       "required": [
@@ -9368,8 +9542,26 @@
             }
           ]
         },
+        "logoDark": {
+          "description": "Local dark-mode logo path, resolved from the installed plugin package.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "logoUrl": {
           "description": "Remote logo URL from the plugin catalog.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "description": "Remote dark-mode logo URL from the plugin catalog.",
           "type": [
             "string",
             "null"
@@ -9608,6 +9800,40 @@
           "title": "GitPluginSource"
         },
         {
+          "type": "object",
+          "required": [
+            "package",
+            "type"
+          ],
+          "properties": {
+            "package": {
+              "type": "string"
+            },
+            "registry": {
+              "description": "Optional HTTPS registry URL. Authentication stays in the user's npm config.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "npm"
+              ],
+              "title": "NpmPluginSourceType"
+            },
+            "version": {
+              "description": "Optional npm version or version range.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "title": "NpmPluginSource"
+        },
+        {
           "description": "The plugin is available in the remote catalog. Download metadata is kept server-side and is not exposed through the app-server API.",
           "type": "object",
           "required": [
@@ -9658,6 +9884,16 @@
         },
         "installPolicy": {
           "$ref": "#/definitions/PluginInstallPolicy"
+        },
+        "installPolicySource": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PluginInstallPolicySource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "installed": {
           "type": "boolean"
@@ -9710,6 +9946,14 @@
         },
         "source": {
           "$ref": "#/definitions/PluginSource"
+        },
+        "version": {
+          "description": "Version advertised by the remote marketplace backend when available.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -10226,6 +10470,24 @@
             "string",
             "null"
           ]
+        },
+        "iconAssets": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "iconDarkAssets": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "id": {
           "type": "string"
@@ -11441,6 +11703,50 @@
       "title": "EnvironmentAddResponse",
       "type": "object"
     },
+    "EnvironmentShellInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "path"
+      ],
+      "properties": {
+        "name": {
+          "description": "Stable shell name, for example `zsh`, `bash`, `powershell`, `sh`, or `cmd`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Target-native shell executable path or command name.",
+          "type": "string"
+        }
+      }
+    },
+    "PathUri": {
+      "type": "string"
+    },
+    "EnvironmentInfoResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "EnvironmentInfoResponse",
+      "type": "object",
+      "required": [
+        "shell"
+      ],
+      "properties": {
+        "cwd": {
+          "description": "Default working directory reported by the environment, as a canonical file URI.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PathUri"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shell": {
+          "$ref": "#/definitions/EnvironmentShellInfo"
+        }
+      }
+    },
     "McpServerOauthLoginResponse": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "McpServerOauthLoginResponse",
@@ -11988,6 +12294,63 @@
         "workspace_member_usage_limit_reached"
       ]
     },
+    "RateLimitResetCredit": {
+      "type": "object",
+      "required": [
+        "grantedAt",
+        "id",
+        "resetType",
+        "status"
+      ],
+      "properties": {
+        "description": {
+          "description": "Backend-provided display description for this credit, or `null` when unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expiresAt": {
+          "description": "Unix timestamp in seconds when the credit expires, or `null` if it does not expire.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "grantedAt": {
+          "description": "Unix timestamp in seconds when the credit was granted.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "description": "Opaque backend identifier for this reset credit.",
+          "type": "string"
+        },
+        "resetType": {
+          "$ref": "#/definitions/RateLimitResetType"
+        },
+        "status": {
+          "$ref": "#/definitions/RateLimitResetCreditStatus"
+        },
+        "title": {
+          "description": "Backend-provided display title for this credit, or `null` when unavailable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "RateLimitResetCreditStatus": {
+      "type": "string",
+      "enum": [
+        "available",
+        "redeeming",
+        "redeemed",
+        "unknown"
+      ]
+    },
     "RateLimitResetCreditsSummary": {
       "type": "object",
       "required": [
@@ -11997,8 +12360,25 @@
         "availableCount": {
           "type": "integer",
           "format": "int64"
+        },
+        "credits": {
+          "description": "Detail rows for available reset credits, when the backend provides them.\n\n`null` means only `availableCount` is known, while an empty array means details were fetched and no available credits were returned. The backend may cap this list, so its length can be less than `availableCount`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/RateLimitResetCredit"
+          }
         }
       }
+    },
+    "RateLimitResetType": {
+      "type": "string",
+      "enum": [
+        "codexRateLimits",
+        "unknown"
+      ]
     },
     "RateLimitSnapshot": {
       "type": "object",
@@ -12529,6 +12909,7 @@
       "enum": [
         "auto",
         "prompt",
+        "writes",
         "approve"
       ]
     },
@@ -13579,6 +13960,16 @@
             }
           ]
         },
+        "models": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModelsRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "network": {
           "anyOf": [
             {
@@ -13780,6 +14171,21 @@
         }
       }
     },
+    "ModelsRequirements": {
+      "type": "object",
+      "properties": {
+        "newThread": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NewThreadModelDefaults"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "NetworkDomainPermission": {
       "type": "string",
       "enum": [
@@ -13901,6 +14307,33 @@
         "allow",
         "deny"
       ]
+    },
+    "NewThreadModelDefaults": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modelReasoningEffort": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "serviceTier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "ResidencyRequirement": {
       "type": "string",
@@ -14246,7 +14679,7 @@
           "type": "string"
         },
         "multiAgentMode": {
-          "description": "Current multi-agent mode for this thread.",
+          "description": "@deprecated Always `explicitRequestOnly`. Use `effort` for Ultra behavior.",
           "default": "explicitRequestOnly",
           "allOf": [
             {
@@ -15776,8 +16209,20 @@
         },
         "success": {
           "type": "boolean"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
+    },
+    "McpServerStartupFailureReason": {
+      "type": "string",
+      "enum": [
+        "reauthenticationRequired"
+      ]
     },
     "McpServerStartupState": {
       "type": "string",
@@ -15801,6 +16246,16 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "failureReason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerStartupFailureReason"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "name": {
@@ -15839,6 +16294,13 @@
           "type": "string",
           "enum": [
             "chatgptAuthTokens"
+          ]
+        },
+        {
+          "description": "Backend auth supplied as request headers.",
+          "type": "string",
+          "enum": [
+            "headers"
           ]
         },
         {
@@ -16233,11 +16695,18 @@
       "required": [
         "model",
         "reasons",
+        "showBufferingUi",
         "threadId",
         "turnId",
         "useCases"
       ],
       "properties": {
+        "fasterModel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "type": "string"
         },
@@ -16246,6 +16715,9 @@
           "items": {
             "type": "string"
           }
+        },
+        "showBufferingUi": {
+          "type": "boolean"
         },
         "threadId": {
           "type": "string"
@@ -16631,27 +17103,96 @@
         }
       }
     },
-    "FuzzyFileSearchSessionUpdatedNotification": {
+    "FuzzyFileSearchParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "title": "FuzzyFileSearchParams",
       "type": "object",
       "required": [
-        "files",
+        "query",
+        "roots"
+      ],
+      "properties": {
+        "cancellationToken": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query": {
+          "type": "string"
+        },
+        "roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "FuzzyFileSearchSessionUpdateParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionUpdateParams",
+      "type": "object",
+      "required": [
         "query",
         "sessionId"
       ],
       "properties": {
-        "files": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/FuzzyFileSearchResult"
-          }
-        },
         "query": {
           "type": "string"
         },
         "sessionId": {
           "type": "string"
+        }
+      }
+    },
+    "FuzzyFileSearchMatchType": {
+      "type": "string",
+      "enum": [
+        "file",
+        "directory"
+      ]
+    },
+    "FuzzyFileSearchSessionStopParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionStopParams",
+      "type": "object",
+      "required": [
+        "sessionId"
+      ],
+      "properties": {
+        "sessionId": {
+          "type": "string"
+        }
+      }
+    },
+    "InitializeCapabilities": {
+      "description": "Client-declared capabilities negotiated during initialize.",
+      "type": "object",
+      "properties": {
+        "experimentalApi": {
+          "description": "Opt into receiving experimental API methods and fields.",
+          "default": false,
+          "type": "boolean"
+        },
+        "mcpServerOpenaiFormElicitation": {
+          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
+          "type": "boolean"
+        },
+        "optOutNotificationMethods": {
+          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "requestAttestation": {
+          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
+          "default": false,
+          "type": "boolean"
         }
       }
     },
@@ -16696,86 +17237,20 @@
         }
       }
     },
-    "InitializeCapabilities": {
-      "description": "Client-declared capabilities negotiated during initialize.",
-      "type": "object",
-      "properties": {
-        "experimentalApi": {
-          "description": "Opt into receiving experimental API methods and fields.",
-          "default": false,
-          "type": "boolean"
-        },
-        "mcpServerOpenaiFormElicitation": {
-          "description": "Allow downstream MCP servers to request OpenAI extended form elicitations.",
-          "type": "boolean"
-        },
-        "optOutNotificationMethods": {
-          "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "requestAttestation": {
-          "description": "Opt into `attestation/generate` requests for upstream `x-oai-attestation`.",
-          "default": false,
-          "type": "boolean"
-        }
-      }
-    },
-    "FuzzyFileSearchParams": {
+    "FuzzyFileSearchSessionStartParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchParams",
+      "title": "FuzzyFileSearchSessionStartParams",
       "type": "object",
       "required": [
-        "query",
-        "roots"
+        "roots",
+        "sessionId"
       ],
       "properties": {
-        "cancellationToken": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "query": {
-          "type": "string"
-        },
         "roots": {
           "type": "array",
           "items": {
             "type": "string"
           }
-        }
-      }
-    },
-    "FuzzyFileSearchSessionStopParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStopParams",
-      "type": "object",
-      "required": [
-        "sessionId"
-      ],
-      "properties": {
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "FuzzyFileSearchSessionUpdateParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionUpdateParams",
-      "type": "object",
-      "required": [
-        "query",
-        "sessionId"
-      ],
-      "properties": {
-        "query": {
-          "type": "string"
         },
         "sessionId": {
           "type": "string"
@@ -16816,33 +17291,6 @@
         }
       }
     },
-    "FuzzyFileSearchSessionStartParams": {
-      "$schema": "http://json-schema.org/draft-07/schema#",
-      "title": "FuzzyFileSearchSessionStartParams",
-      "type": "object",
-      "required": [
-        "roots",
-        "sessionId"
-      ],
-      "properties": {
-        "roots": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "sessionId": {
-          "type": "string"
-        }
-      }
-    },
-    "FuzzyFileSearchMatchType": {
-      "type": "string",
-      "enum": [
-        "file",
-        "directory"
-      ]
-    },
     "InitializeParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "title": "InitializeParams",
@@ -16863,6 +17311,30 @@
         },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
+        }
+      }
+    },
+    "FuzzyFileSearchSessionUpdatedNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "FuzzyFileSearchSessionUpdatedNotification",
+      "type": "object",
+      "required": [
+        "files",
+        "query",
+        "sessionId"
+      ],
+      "properties": {
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/FuzzyFileSearchResult"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "sessionId": {
+          "type": "string"
         }
       }
     },
@@ -17607,15 +18079,15 @@
             "method": {
               "type": "string",
               "enum": [
-                "thread/turns/items/list"
+                "thread/items/list"
               ],
-              "title": "Thread/turns/items/listRequestMethod"
+              "title": "Thread/items/listRequestMethod"
             },
             "params": {
-              "$ref": "#/definitions/ThreadTurnsItemsListParams"
+              "$ref": "#/definitions/ThreadItemsListParams"
             }
           },
-          "title": "Thread/turns/items/listRequest"
+          "title": "Thread/items/listRequest"
         },
         {
           "description": "Append raw Responses API items to the thread history without starting a user turn.",
@@ -18927,6 +19399,31 @@
             }
           },
           "title": "Environment/addRequest"
+        },
+        {
+          "description": "Reads information from a configured execution environment.",
+          "type": "object",
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "type": "string",
+              "enum": [
+                "environment/info"
+              ],
+              "title": "Environment/infoRequestMethod"
+            },
+            "params": {
+              "$ref": "#/definitions/EnvironmentInfoParams"
+            }
+          },
+          "title": "Environment/infoRequest"
         },
         {
           "type": "object",
