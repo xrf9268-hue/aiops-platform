@@ -51,7 +51,6 @@ func TestReviewerProtocolDocumentsSubagentDiscoveryBeforeCLIFallback(t *testing.
 func TestReviewerProtocolRejectsStaleCodexInlineAuthorizationWording(t *testing.T) {
 	for _, path := range []string{
 		"../docs/runbooks/pr-review-merge-protocol.md",
-		"../docs/runbooks/github-local-automation.md",
 		"../.claude/skills/handle-issue/SKILL.md",
 		"../.claude/skills/handle-pr/SKILL.md",
 	} {
@@ -125,7 +124,6 @@ func TestConcreteReviewerRoutingMechanicsStayInProtocol(t *testing.T) {
 		"../.claude/skills/handle-issue/SKILL.md",
 		"../.claude/skills/handle-pr/SKILL.md",
 		"../docs/runbooks/dogfood-development.md",
-		"../docs/runbooks/github-local-automation.md",
 		"../examples/github-local-WORKFLOW.md",
 	}
 	for _, path := range nonCanonicalDocs {
@@ -146,31 +144,6 @@ func TestConcreteReviewerRoutingMechanicsStayInProtocol(t *testing.T) {
 			if strings.Contains(body, forbidden) {
 				t.Fatalf("%s duplicates protocol-only reviewer mechanic %q", path, forbidden)
 			}
-		}
-	}
-}
-
-func TestLocalPRFollowThroughCodexReviewerUsesStructuredExec(t *testing.T) {
-	body := readReviewerDoc(t, "local-pr-follow-through.sh")
-	fn := shellFunctionBody(t, body, "run_codex_review")
-
-	for _, want := range []string{
-		`run_with_timeout "$review_timeout" codex exec`,
-		"--output-schema \"$schema_file\"",
-		`-o "$review_file"`,
-		"--sandbox read-only",
-		"--ephemeral",
-	} {
-		if !strings.Contains(fn, want) {
-			t.Fatalf("run_codex_review missing %q", want)
-		}
-	}
-	for _, forbidden := range []string{
-		"codex exec review",
-		"review --base",
-	} {
-		if strings.Contains(fn, forbidden) {
-			t.Fatalf("run_codex_review uses forbidden Codex review path %q", forbidden)
 		}
 	}
 }
@@ -204,22 +177,6 @@ func workflowPromptBody(t *testing.T, path, body string) string {
 		t.Fatalf("%s front matter is not terminated", path)
 	}
 	return rest[end+len("\n---\n"):]
-}
-
-func shellFunctionBody(t *testing.T, body, name string) string {
-	t.Helper()
-	startMarker := name + "() {\n"
-	start := strings.Index(body, startMarker)
-	if start < 0 {
-		t.Fatalf("shell function %s not found", name)
-	}
-	body = body[start+len(startMarker):]
-	endMarker := "\n}\n\n"
-	end := strings.Index(body, endMarker)
-	if end < 0 {
-		t.Fatalf("shell function %s end not found", name)
-	}
-	return body[:end]
 }
 
 func containsReviewerDocText(body, want string) bool {

@@ -597,7 +597,6 @@ add a bridge that imports `AGENTS.md` rather than duplicating content.
 - [CI/CD runbook](docs/runbooks/ci.md)
 - [Runtime debugging API](docs/runbooks/task-api.md)
 - [Workspace cache and cleanup](docs/runbooks/workspace-cache.md)
-- [GitHub local automation](docs/runbooks/github-local-automation.md)
 - [GitHub maker/reviewer governance](docs/runbooks/github-maker-reviewer-governance.md)
 - [GitHub maker/reviewer auto-merge E2E](docs/runbooks/github-maker-reviewer-automerge-e2e.md)
 - [Gitea bot and branch protection](docs/runbooks/gitea-bot-and-branch-protection.md)
