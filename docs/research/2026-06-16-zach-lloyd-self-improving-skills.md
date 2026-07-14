@@ -17,10 +17,9 @@ Published: 2026-06-16
 
 **Advisory practitioner account.** This is not authoritative on Symphony SPEC
 behavior and must not override the scheduler/runner boundary. It is useful
-evidence for the product direction tracked in
-[#931](https://github.com/xrf9268-hue/aiops-platform/issues/931): a
-trace/eval/feedback-driven outer loop that proposes ordinary repo changes to
-skills, workflow prompts, rubrics, hooks, tests, CI, or documentation.
+evidence that feedback can inform ordinary, reviewed repo changes to skills,
+workflow prompts, rubrics, hooks, tests, CI, or documentation without becoming
+an automatic platform subsystem.
 
 ## What the article describes
 
@@ -50,19 +49,19 @@ Two follow-up replies narrow the implied product shape:
 | Zach/Warp concept | aiops-platform surface | Current status |
 | --- | --- | --- |
 | Inner task-triggered agent loop | tracker polling, deterministic workspace prep, runner dispatch, agent-owned PR/tracker handoff | Supported |
-| Durable records of each run | task events, runner item streams, PR comments, reviewer findings, CI output, and tracker state/history | Partially present; not yet normalized as L4 input |
+| Durable records of each run | task events, runner item streams, PR comments, reviewer findings, CI output, and tracker state/history | Available to operators and reviewers; no L4 normalization contract |
 | Human or automated feedback | `Human Review`, `Rework`, reviewer-worker verdicts, PR review, CI failures | Supported as workflow/review surfaces |
-| Scheduled outer improvement agent | issue/PR-producing harness improvement workflow that edits repo-owned surfaces | Follow-up, tracked in #931 |
+| Scheduled outer improvement agent | issue/PR-producing harness improvement workflow that edits repo-owned surfaces | Not part of the maintained product |
 | File-based Skill updates | `WORKFLOW.md`, reviewer rubrics, `LEARNINGS.md`, skills, hooks, tests, CI, docs | Supported as ordinary repo changes, not automatic hill-climbing |
 
 ## Design implication
 
-This article reinforces the same placement as LangChain L4: the outer loop
-should analyze evidence and create a normal issue or PR against repo-owned
-harness files. It should not become a worker-side post-turn verifier, automatic
-PR mutator, tracker writer, or merge gate. The worker remains the
-SPEC-aligned scheduler/runner/tracker reader; the improvement diff remains
-agent/human-reviewed repo cargo.
+This article reinforces the same review boundary as LangChain L4: evidence may
+inform a normal, explicitly initiated issue or PR against repo-owned harness
+files. It does not justify a scheduled outer agent, worker-side post-turn
+verifier, automatic PR mutator, tracker writer, or merge gate. The worker
+remains the SPEC-aligned scheduler/runner/tracker reader; any improvement diff
+remains agent/human-reviewed repo cargo.
 
 This keeps the self-improvement loop compatible with the project's earned-rule
 discipline: an observed failure produces evidence, a proposed harness change,
