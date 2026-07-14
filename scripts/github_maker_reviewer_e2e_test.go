@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
 
@@ -203,6 +204,26 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			}
 		}
 		assertGitHubRolePromptContract(t, tc.role, loaded.PromptTemplate)
+		if tc.role == "reviewer" {
+			assertReviewerEffectiveVerifyContract(t, loaded.PromptTemplate, cfg.Verify.Commands)
+		}
+	}
+}
+
+func assertReviewerEffectiveVerifyContract(t *testing.T, prompt string, commands []string) {
+	t.Helper()
+	effective := worker.AppendVerifyDirective(prompt, commands)
+	const marker = "**Verification (you own this):**"
+	if strings.Count(effective, marker) != 1 {
+		t.Fatalf("reviewer effective prompt marker count = %d; want 1", strings.Count(effective, marker))
+	}
+	if strings.Contains(effective, "before you hand off — i.e. before opening a PR") {
+		t.Fatalf("reviewer effective prompt contains unconditional worker verify directive")
+	}
+	for _, command := range commands {
+		if !strings.Contains(effective, "`"+command+"`") {
+			t.Fatalf("reviewer effective prompt missing scoped command %q", command)
+		}
 	}
 }
 
@@ -233,6 +254,7 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"post-approval tuple guard", "dismiss that approval", "do not enable auto-merge",
 			"Before any trigger, verdict, checkpoint, or approval write",
 			"disable auto-merge and confirm it is absent before approval",
+			"With an exact-head approval already present",
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
 			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
@@ -252,7 +274,8 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"## Exact-tuple checkpoint", "event `COMMENT`", "at most one `@codex review`",
 			"disable auto-merge and confirm it is absent before approval", "event `APPROVE`",
 			"post-approval tuple guard",
-			"dismiss that approval", "--match-head-commit <HEAD>")
+			"dismiss that approval", "With an exact-head approval already present",
+			"--match-head-commit <HEAD>")
 	}
 }
 

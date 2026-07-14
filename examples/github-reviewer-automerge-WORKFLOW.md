@@ -112,7 +112,9 @@ The tuple is (`headRefOid=<HEAD>`, `baseRefOid=<BASE_OID>`,
 1. Confirm the maker and reviewer identities differ. Fetch, then use a detached
    checkout of `<HEAD>` for every inspection and configured command; do not
    review a moving branch name or edit files.
-2. Run the configured verification commands once.
+2. **Verification (you own this):** only for an unseen tuple, run the configured
+   commands once: `npm ci`; `npm test`; `npm run build`; `npm run test:e2e`.
+   The same-tuple checkpoint path skips them.
 3. Review the complete diff against the issue, including behavior-level tests,
    security, failure paths, and unrelated scope.
 4. Treat unresolved, non-outdated current-head blockers from any author,
@@ -148,8 +150,9 @@ Using only this invocation's snapshot:
    `commit_id=<HEAD>` and event `APPROVE`; retain its review ID. Immediately run
    a post-approval tuple guard. If the tuple changed, dismiss that approval (or
    replace it with commit-pinned `REQUEST_CHANGES` if dismissal is unavailable),
-   require successful revocation, do not enable auto-merge, and end. If the
-   tuple still matches and auto-merge is absent, run
+   require successful revocation, do not enable auto-merge, and end. With an
+   exact-head approval already present, whether from this or a prior invocation,
+   run the tuple-only guard; if auto-merge is absent and the tuple matches, run
    `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <HEAD>`.
    Do not use `--admin`. GitHub stale approval dismissal protects a base change
    after the post-approval guard; a later invocation must review its new tuple.

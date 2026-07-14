@@ -35,10 +35,10 @@ Prompt bytes exclude YAML front matter.
 | Prompt | #1089 baseline | #1090 | Change |
 | --- | ---: | ---: | ---: |
 | Maker | 4,341 | 2,439 | -43.8% |
-| Reviewer | 6,892 | 5,961 | -13.5% |
-| Combined | 11,233 | 8,400 | -25.2% |
+| Reviewer | 6,892 | 6,224 | -9.7% |
+| Combined | 11,233 | 8,663 | -22.9% |
 
-The two workflows and two governance/E2E runbooks contain 982 lines, down from
+The two workflows and two governance/E2E runbooks contain 989 lines, down from
 1,015. Tests are excluded from that net-negative count.
 
 ## Replay result
@@ -56,8 +56,14 @@ flow and returned its clean result without writing a checkpoint. The worker
 correctly retried the unchanged tuple, but that retry had to repeat the full
 review. The prompt was then tightened with an earned rule requiring the
 reviewer to complete the checkpoint and handoff itself. Issue 2, run with that
-final prompt from its first reviewer claim, completed the full review and
+then-current prompt from its first reviewer claim, completed the full review and
 handoff without the extra no-handoff outcome.
+
+Fixed-base and exact-head review after the replay further hardened shared tuple
+guards, conditional verification, and approval/auto-merge recovery. Those
+changes are contract-tested and included in the current prompt-byte totals;
+the replay cost is evidence for the stable-tuple behavior, not a claim that the
+post-review wording itself was replayed.
 
 Every passing tuple received one reviewer-owned `COMMENTED` checkpoint with
 the exact `(headRefOid, baseRefOid, baseRefName)` and `local-rubric=PASS`, plus
