@@ -1326,7 +1326,7 @@ func TestRecordRuntimeEventTracksLastEventAndMessage(t *testing.T) {
 	}
 }
 
-func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
+func TestRecordRuntimeEventTreatsTurnCompletedUsageAsAbsolute(t *testing.T) {
 	o, issueID, cancel := startRuntimeEventActor(t, "ENG-USAGE")
 	defer cancel()
 
@@ -1342,8 +1342,8 @@ func TestRecordRuntimeEventTreatsGenericUsageAsEventDelta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if view.CodexTotals.TotalTokens != 10 {
-		t.Fatalf("CodexTotals.TotalTokens = %d, want generic usage counted as per-event delta", view.CodexTotals.TotalTokens)
+	if view.CodexTotals.TotalTokens != 5 {
+		t.Fatalf("CodexTotals.TotalTokens = %d, want repeated absolute turn usage folded once", view.CodexTotals.TotalTokens)
 	}
 }
 
