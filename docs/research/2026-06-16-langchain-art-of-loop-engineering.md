@@ -15,10 +15,11 @@ Published: 2026-06-16
 
 **Advisory practitioner/framework account.** This is not authoritative on
 Symphony SPEC behavior, but it is useful vocabulary for describing
-aiops-platform's current loop shape and for naming the next self-improvement
-frontier. Treat it like the other practitioner accounts in this directory: it
-can calibrate harness-engineering decisions, but concrete platform changes still
-need to land on the correct side of the SPEC scheduler/runner boundary.
+aiops-platform's current loop shape and for distinguishing ordinary reviewed
+harness changes from platform automation. Treat it like the other practitioner
+accounts in this directory: it can calibrate harness-engineering decisions, but
+concrete platform changes still need to land on the correct side of the SPEC
+scheduler/runner boundary.
 
 ## Four loop levels
 
@@ -45,7 +46,7 @@ returns.
 | L1 Agent loop | `cmd/worker` prepares a deterministic workspace and runs Codex, Claude, or mock agents through the runner abstraction | Supported |
 | L2 Verification loop | `reviewer-worker.md`, `examples/reviewer-WORKFLOW.md`, in-run grader sub-agent, rubric checks, and `Rework` redispatch | Supported by configuration and prompt |
 | L3 Event-driven loop | tracker polling, active/inactive/terminal states, Gitea labels, reconciliation, retry, and continuation budget | Supported by the worker |
-| L4 Hill-climbing loop | `LEARNINGS.md`, reviewer findings, runtime events, CI failures, and PR review feedback can become harness changes | Partially supported as operator workflow; trace-driven harness improvement is a follow-up |
+| L4 Hill-climbing loop | `LEARNINGS.md`, reviewer findings, runtime events, CI failures, and PR review feedback can inform harness changes | Operator-reviewed changes only; no automatic trace-driven subsystem |
 
 ## Design implication
 
@@ -62,9 +63,9 @@ the project's #76/#557/#561 boundary lessons, the right shape is:
    documentation.
 4. Let human or reviewer-agent review decide whether the harness change ships.
 
-This keeps the worker a scheduler/runner/tracker reader while still allowing the
-harness to improve over time. The trace-driven L4 follow-up is tracked in
-[#931](https://github.com/xrf9268-hue/aiops-platform/issues/931).
+This keeps the worker a scheduler/runner/tracker reader while allowing evidence
+to inform ordinary, explicitly reviewed harness changes without maintaining a
+separate trace-driven subsystem or roadmap.
 
 Related local docs:
 

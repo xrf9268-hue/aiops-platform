@@ -29,12 +29,12 @@ expressed inside the SPEC state machine.
 LangChain's four-level loop-engineering frame names this runbook as the
 verification loop (L2): a checker grades the maker's output and sends failures
 back through `Rework`. The worker's tracker poll/reconcile cycle is the
-event-driven loop (L3). Trace-driven harness improvement (L4) is a separate
-follow-up: reviewer findings can become inputs to `WORKFLOW.md`, rubric,
-`LEARNINGS.md`, skill, hook, or CI changes, but this runbook does not add a
-worker-side post-turn verifier. Zach Lloyd's self-improving Skills account is
-the same outer-loop shape expressed through file-based Skills: past runs plus
-human or grader feedback produce a reviewed harness diff.
+event-driven loop (L3). Recurring reviewer findings can inform ordinary,
+reviewed changes to `WORKFLOW.md`, rubrics, `LEARNINGS.md`, skills, hooks, or
+CI, but this runbook does not add an automatic outer loop or worker-side
+post-turn verifier. Zach Lloyd's self-improving Skills account uses the same
+review boundary: past runs plus human or grader feedback produce a reviewed
+harness diff.
 
 ## Topology
 
@@ -255,7 +255,7 @@ and should be re-verified after a codex CLI upgrade
   and #72 (one workflow source *per process*).
 - The reviewer is an ordinary SPEC worker; its "verdict" is an agent-side
   tracker write through the existing tool surface (SPEC §1, #76).
-- The pattern satisfies LangChain L2 without over-claiming L4: recurring
-  reviewer findings can inform future harness PRs, but automatic trace-driven
-  harness rewriting is intentionally tracked as follow-up work.
+- The pattern satisfies LangChain L2 without adding an automatic L4 loop:
+  recurring reviewer findings may inform ordinary harness PRs, which remain
+  subject to the repository's normal review process.
 - No `DEVIATIONS.md` entry needed; no SPEC-sensitive paths touched.

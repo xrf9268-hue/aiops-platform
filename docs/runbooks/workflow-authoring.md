@@ -23,15 +23,13 @@ repo's own AGENTS.md earned-rules + provenance discipline is the same chain
 applied to engineering rules; the convention below packages it for any repo
 your worker runs against.
 
-In LangChain's four-level loop-engineering vocabulary, `LEARNINGS.md` is the
-memory surface that lets L4-style improvements become durable repo cargo after
-review. It is not itself an automatic hill-climbing trace analyzer: today the
-agent or reviewer must verify a durable fact, update the file in a PR, and let
-normal review prune or accept the rule. A future trace-driven harness
-improvement loop can target this same file without adding a new worker config
-surface. Zach Lloyd's self-improving Skills account lands in the same place:
-file-based harness changes are easy for coding agents to propose, but they
-still ship as reviewed diffs.
+In LangChain's four-level loop-engineering vocabulary, `LEARNINGS.md` is a
+memory surface for making reviewed harness improvements durable repo cargo. It
+is not an automatic hill-climbing trace analyzer: an agent or reviewer must
+verify a durable fact, update the file in a PR, and let normal review prune or
+accept the rule. Zach Lloyd's self-improving Skills account lands in the same
+place: file-based harness changes are easy for coding agents to propose, but
+they still ship as reviewed diffs.
 
 ## The prompt section (drop-in)
 
@@ -109,7 +107,7 @@ repo's review flow.
 | L1 Agent loop | worker + runner + deterministic workspace | Built into the core worker path. |
 | L2 Verification loop | reviewer worker, in-run grader sub-agent, `Rework` | Configured through `WORKFLOW.md` and tracker states. |
 | L3 Event-driven loop | tracker polling, labels/states, reconcile cancel | Built into scheduler behavior. |
-| L4 Hill-climbing loop | `LEARNINGS.md`, rubric edits, prompt/tool/CI/hook changes | Operator workflow today; trace-driven automation is a follow-up. |
+| L4 Hill-climbing loop | `LEARNINGS.md`, rubric edits, prompt/tool/CI/hook changes | Operator-reviewed changes; no automatic trace-driven loop. |
 
 ## Cost and growth
 
