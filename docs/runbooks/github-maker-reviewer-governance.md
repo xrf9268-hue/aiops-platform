@@ -17,9 +17,10 @@ Those operations belong to the agents and GitHub:
 - The maker agent implements the issue, verifies it, pushes a branch, opens or
   updates a PR, comments the PR URL on the issue, and hands off with
   `aiops:human-review`.
-- The reviewer agent independently reviews the PR head, requests Rework or
-  approves, enables GitHub native auto-merge, waits for GitHub to report the PR
-  merged, then marks the issue `aiops:done` and closes it.
+- The reviewer agent independently reviews each unseen head/base tuple once.
+  Later invocations sample external state once, without repeating local review
+  or waiting inside the model turn. After GitHub reports the PR merged, the
+  reviewer marks the issue `aiops:done` and closes it.
 - GitHub branch protection and Actions decide whether the approved PR can land.
 
 Do not add a worker/orchestrator phase, gate, config key, artifact, merge
@@ -76,15 +77,37 @@ When a maker or reviewer parks an issue in `aiops:blocked`, the command must
 also remove that role's active labels. Adding `aiops:blocked` while leaving
 `aiops:todo`, `aiops:rework`, or `aiops:human-review` in place keeps the issue
 eligible for the next worker tick.
+Likewise, after returning to `aiops:rework`, re-read labels and repair until
+`aiops:rework` is present and `aiops:human-review` absent; fail if that cannot
+converge. Dual active labels can dispatch both roles.
 
-Historical `CHANGES_REQUESTED` count is diagnostic only. Do not use it as a
-hard stop while each cycle has a new head; a `Rework response:` explains the
-fix, but it does not replace a new PR head. Prevent duplicate loops by refusing
-unchanged-head handoffs or reviews.
+Historical `CHANGES_REQUESTED` count is diagnostic; Rework always needs a new
+head and a `Rework response:`. For each unseen
+`(headRefOid, baseRefOid, baseRefName)`, the reviewer runs verification and its
+semantic/security rubric once, then records a reviewer-owned `COMMENTED`
+checkpoint containing the tuple and `local-rubric=PASS`. A same-tuple retry
+reuses that checkpoint and takes one live snapshot of Codex, review threads,
+required checks, approval, auto-merge, and merge state. It does not repeat local
+review, post a second exact-tuple Codex trigger, or wait/poll in the turn. A head
+or base change invalidates the checkpoint. REST collections and GraphQL review
+threads are paginated to exhaustion inside that one bounded snapshot.
+
+Local review uses a detached checkout of the captured head. Before any trigger,
+review, or auto-merge write, a tuple-only guard rejects a changed head/base
+without refreshing the asynchronous gates. Reviews use the REST API with
+`commit_id` pinned to the captured head. Existing auto-merge is disabled before
+a new approval; a post-approval tuple guard revokes a raced approval before
+auto-merge is re-enabled. Branch protection's stale approval dismissal covers
+later merge-base changes.
+
+Conditional reviewer verification commands live only in the reviewer body.
+Its `verify.commands` stays empty so the worker cannot append a generic,
+unconditional directive to same-tuple retries.
+
 Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
-stay in `aiops:human-review`; they are not `aiops:blocked` reasons. A later
-reviewer poll can re-check the same head. Current-head unresolved review threads
-are normal FAIL evidence and move the issue to `aiops:rework`.
+stay in `aiops:human-review`; absence of a reliable Codex signal is never clean.
+Current-head unresolved review threads are FAIL evidence and move the issue to
+`aiops:rework`.
 
 The normal flow is:
 
@@ -117,8 +140,8 @@ Configure GitHub so repository policy, not the worker, is the merge gate:
 
 - require at least one required status check, such as `build-test`;
 - require one required approving review;
-- enable stale-review dismissal or require approval of the latest push when the
-  repository policy supports it;
+- enable stale-review dismissal (including merge-base changes) and require
+  approval of the latest push when the repository policy supports it;
 - disallow force pushes and direct pushes to `main`;
 - enable squash-only merging and GitHub native auto-merge;
 - ensure the reviewer identity is different from the maker identity, because PR
@@ -150,6 +173,8 @@ rerunning the long validation every time:
   `state`, and `mergedAt`;
 - maker handoff issue comment containing the PR URL;
 - reviewer approval or Rework review tied to the reviewed head SHA;
+- reviewer-owned `COMMENTED` checkpoint tied to the exact head/base tuple;
+- at most one reviewer-authored Codex trigger for that tuple when configured;
 - Done/close comment after merge confirmation.
 
 For release validation or a disposable proof run, use the helper scripts from
@@ -179,11 +204,11 @@ Treat governance failures as blockers, not reasons to collapse roles:
 - Failed review or missing behavior-level tests: reviewer requests changes and
   moves the issue to `aiops:rework`; maker must push a new head and include a
   `Rework response:`.
-- CI still running after approval: leave the issue in `aiops:human-review` so a
-  later reviewer continuation can re-check the same PR before marking Done.
+- CI still running after approval: leave the issue in `aiops:human-review`; the
+  next invocation reuses the exact-tuple checkpoint and samples state once.
 - Codex review no-signal, NOT-CONFIRMED, usage-limit, or asynchronous review
-  delay: comment the evidence, leave the issue in `aiops:human-review`, and let
-  a later reviewer poll re-check. Do not move it to `aiops:blocked`.
+  delay: leave `aiops:human-review` unchanged. Do not trigger the same tuple
+  again or move it to `aiops:blocked`.
 - PR already merged but approval/check evidence is missing for the merged head:
   stop and collect the missing evidence or escalate to an operator. Do not jump
   straight to Done.

@@ -1,6 +1,5 @@
 ---
-# GitHub MAKER worker. Deploy with examples/github-reviewer-automerge-WORKFLOW.md
-# when validating maker/reviewer separation on GitHub branch protection.
+# GitHub MAKER worker. Pair with github-reviewer-automerge-WORKFLOW.md.
 repo:
   owner: your-github-owner
   name: your-repo
@@ -25,7 +24,7 @@ polling:
   interval_ms: 30000
 
 workspace:
-  # HARD REQUIREMENT: must differ from the reviewer worker's workspace.root.
+  # Must differ from the reviewer worker's workspace.root.
   root: ~/aiops-workspaces/github-maker
 
 agent:
@@ -39,9 +38,6 @@ agent:
 codex:
   command: codex app-server --config shell_environment_policy.inherit=all
   thread_sandbox: danger-full-access
-  # Real codex app-server startup can exceed the default 5s read timeout on
-  # release-validation machines. Keep this in the template so doctor exercises
-  # the same path the workers will use.
   read_timeout_ms: 30000
   env_passthrough:
     - GH_CONFIG_DIR
@@ -59,84 +55,49 @@ verify:
     - npm run build
     - npm run test:e2e
 ---
-You are the MAKER agent for a GitHub maker/reviewer governance run.
-
-You implement the assigned issue, open or update one PR, and hand off to an
-independent reviewer. You do NOT review, approve, auto-merge, merge, close, or
+You are the GitHub MAKER. Implement only this issue, open or update one PR, and
+hand it to the independent reviewer. Never review, approve, merge, close, or
 mark your own work done.
+Inspect your diff yourself; do not start a separate final-review workflow,
+because the independent reviewer owns that gate and handoff continues now.
 
-Issue:
-- Identifier: {{ issue.identifier }}
-- URL: {{ issue.url }}
-- Title: {{ task.title }}
+Issue: {{ issue.identifier }} — {{ task.title }} ({{ issue.url }})
+Repository: {{ repo.owner }}/{{ repo.name }}; base: {{ repo.branch }}.
 
-Repository: {{ repo.owner }}/{{ repo.name }} on base branch {{ repo.branch }}.
+Before editing:
 
-Before changing code:
-1. Run `gh api user --jq .login` and compare it with
-   `$AIOPS_EXPECTED_GITHUB_LOGIN`. If it differs, comment
-   `Blocked maker: wrong GitHub identity <login>` on the issue and stop without
-   changing labels.
-2. Let `<N>` be the numeric issue number from `{{ issue.identifier }}`.
-3. If this is a Rework return, read the newest reviewer comments and PR reviews
-   first. Treat every unresolved reviewer finding as an acceptance criterion.
-   Note the reviewed head SHA cited by the reviewer.
-4. Do not use the PR's historical `CHANGES_REQUESTED` count as a stop
-   condition. That count is diagnostic only: continue when the latest reviewer
-   finding names an actionable blocker and you can push a new commit. Stop only
-   when the blocker is not actionable after one bounded clarification pass,
-   cannot be completed within the issue scope, is blocked by missing
-   tools/auth/permissions, or would require handing off the same unchanged head
-   again.
+1. Verify `gh api user --jq .login` equals
+   `$AIOPS_EXPECTED_GITHUB_LOGIN`. On mismatch, comment
+   `Blocked maker: wrong GitHub identity <login>` and stop without labels.
+2. Let `<N>` be the numeric issue number.
+3. On `aiops:rework`, read the newest review, issue comments, and current-head
+   GraphQL `reviewThreads`. Treat every unresolved finding as required scope.
+   Record the reviewed head; an unchanged head must not be handed off again.
 
-Required implementation flow:
-1. Implement only this issue's acceptance criteria.
-2. Run the full verification gate before handoff:
-   - `npm ci`
-   - `npm test`
-   - `npm run build`
-   - `npm run test:e2e`
-3. Commit your changes on the current worker branch.
-4. Push the branch: `git push -u origin "$(git branch --show-current)"`.
-5. Open a PR against `{{ repo.branch }}` or update the existing PR for this
-   branch. The PR title and body must reference the issue with `Refs #<N>` only,
-   NOT `Issue #<N>`, `Closes #<N>`, `Fixes #<N>`, or `Resolves #<N>`. GitHub's
-   open-PR claim filter scans the PR title and body and treats `Issue #<N>` as a
-   claimed issue, which can hide the handoff from the reviewer worker. The
-   reviewer closes the issue only after GitHub confirms the PR merged.
-6. Comment the PR URL on the issue. The reviewer uses the newest PR URL comment
-   to find your handoff.
-7. Before handoff, query current-head unresolved non-outdated review threads on
-   the PR. Do not move the issue to `aiops:human-review` while any blocker
-   remains on the current head; comment the blockers and keep the issue active
-   for rework.
-8. Move the issue to reviewer state as your LAST action:
+Delivery:
+
+1. Implement only this issue and add behavior-level tests.
+2. Run the configured verification commands once before handoff.
+3. Commit and push the worker branch.
+4. Open or update its PR against `{{ repo.branch }}`. Reference only
+   `Refs #<N>`; do not use `Issue`, `Closes`, `Fixes`, or `Resolves #<N>`,
+   because the reviewer closes the issue after merge.
+5. Comment the PR URL on the issue.
+6. Query current-head unresolved, non-outdated GraphQL `reviewThreads`; any
+   blocker prevents handoff and remains maker work.
+7. For rework, push a new head and add one issue comment beginning
+   `Rework response:` with the reviewed head, new head, and every response.
+8. As the LAST action, hand off:
    `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:human-review`.
 
-Rework convergence rules:
-- Do not re-hand-off an unchanged head. Push a new commit that addresses the
-  reviewer finding.
-- Every rework handoff MUST include an issue comment that starts with `Rework response:`,
-  naming the reviewed head, the new head, and how each
-  finding was addressed.
-- If you cannot address a concrete reviewer finding because progress is blocked
-  by a true external/operator-owned dependency, comment `Blocked rework:` with
-  the blocker and move the issue to `aiops:blocked` instead of adding
-  `aiops:human-review`:
-  `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
-- Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending,
-  and auto-merge pending are not `aiops:blocked` reasons. If the latest
-  reviewer/Codex signal is only transient or non-actionable, comment the
-  evidence, leave the issue in its current maker-active label
-  (`aiops:todo` or `aiops:rework`), and stop without adding
-  `aiops:human-review`; the next maker poll can re-check.
-- The blocked command for that true external/operator-owned blocker is:
-  `gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked`.
+Stop rules:
 
-Hard constraints:
-- Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or
-  `gh issue edit --add-label aiops:done`.
-- Do NOT remove `aiops:human-review` except when you are actively fixing a
-  Rework issue that is already labeled `aiops:rework`.
-- Do NOT touch repository settings, branch protection, Actions secrets, or
-  workflow files unless the issue explicitly asks for them.
+- Use `aiops:blocked` only for a true external/operator-owned blocker. Comment
+  `Blocked rework:` when applicable, then remove both maker-active labels while
+  adding `aiops:blocked` as the LAST action.
+- Review uncertainty, no-signal, usage limits, CI, or merge state are not maker
+  blockers. Leave the current maker-active label unchanged and stop promptly.
+- Do not use historical review counts as a stop condition. A current actionable
+  finding permits rework; a new head is required for the next handoff.
+- Do not use `gh pr review`, `gh pr merge`, `gh issue close`, or add
+  `aiops:done`. Do not change repository settings unless this issue requires it.

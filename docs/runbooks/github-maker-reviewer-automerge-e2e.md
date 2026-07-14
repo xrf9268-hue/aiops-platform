@@ -23,6 +23,8 @@ repository.
   and different agent context.
 - The reviewer requests Rework on a failing head, and the maker responds with a
   new head before handing off again.
+- The reviewer records one exact head/base `COMMENTED` checkpoint after local
+  PASS; same-tuple retries reuse it and take one live external-state snapshot.
 - The reviewer approves and enables GitHub native CI-gated auto-merge only after
   review passes.
 - The reviewer confirms `state: MERGED` or non-empty `mergedAt` before adding
@@ -195,21 +197,22 @@ for label in aiops:todo aiops:rework aiops:human-review aiops:blocked aiops:done
 done
 ```
 
-`aiops:blocked` is an inactive operator-triage state for true blockers: missing
-tools/auth/permissions or issue scope that cannot continue without an operator
-decision. Codex review no-signal, NOT-CONFIRMED, usage-limit, CI pending, and
-auto-merge pending stay in `aiops:human-review`; current-head unresolved review
-threads are reviewer FAIL evidence that moves the issue to `aiops:rework`. The
-workflow examples do not use historical `CHANGES_REQUESTED` count as a stop
-condition; repeated loops are prevented by refusing unchanged-head
-handoffs/reviews. A
-`Rework response:` comment alone does not replace a new PR head. Blocked
-handoff commands remove the role's active label (`aiops:todo`, `aiops:rework`,
-or `aiops:human-review`) while adding `aiops:blocked`; adding only
-`aiops:blocked` leaves the issue eligible for the next worker tick.
-Maker handoff must include `Rework response:` in an issue comment for rework and
-must not hand off while current-head unresolved non-outdated review threads
-remain.
+`aiops:blocked` is only for true operator-owned blockers. Codex, CI, approval,
+auto-merge, and merge pending stay in `aiops:human-review`; current-head review
+threads are FAIL evidence for `aiops:rework`. Rework needs a new head plus a
+`Rework response:`; historical review counts are diagnostic only.
+
+After local PASS on an unseen `(headRefOid, baseRefOid, baseRefName)`, the
+reviewer writes one reviewer-owned `COMMENTED` checkpoint. A same-tuple retry
+skips local gates/rubric, reuses any exact-tuple Codex trigger, and takes one
+live snapshot. It never posts a second trigger or waits/polls for external
+state. REST records and GraphQL threads are paginated inside the snapshot. A
+changed head/base requires full review. Trigger, review, and auto-merge writes
+use a tuple-only guard; review commands also use a detached captured head and
+REST `commit_id` pinning. Existing auto-merge is disabled before a new approval,
+and a post-approval guard revokes a raced approval before it is re-enabled.
+Branch protection's stale approval dismissal covers later merge-base changes.
+Blocked handoffs remove active labels while adding `aiops:blocked`.
 
 Enable auto-merge and squash-only merges:
 
@@ -400,6 +403,7 @@ Required machine evidence:
 - worker doctor logs
 - maker and reviewer worker logs
 - `/api/v1/state` snapshots
+- reviewer checkpoint and exact-tuple trigger evidence
 - GitHub issue JSON
 - GitHub PR JSON
 - GitHub Actions/check JSON
@@ -487,6 +491,8 @@ PASS requires all of the following:
 - Dependency issue is not activated before prerequisite Done/closed evidence.
 - Maker does not approve, auto-merge, merge, close, or add `aiops:done`.
 - Reviewer does not edit, commit, or push code.
+- Same-tuple reviewer retry reuses its checkpoint, samples external state once,
+  and does not repeat verification or the semantic/security rubric.
 - Worker/orchestrator does not create PRs, merge PRs, or directly set terminal
   tracker state.
 - Issue closure occurs only after reviewer confirms GitHub merged state.
