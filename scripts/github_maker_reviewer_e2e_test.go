@@ -30,12 +30,14 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"required job named `build-test`",
 		"required_approving_review_count",
 		"aiops:blocked",
-		"true blockers",
-		"Blocked\nhandoff commands remove the role's active label",
-		"historical `CHANGES_REQUESTED` count",
-		"unchanged-head\nhandoffs/reviews",
-		"comment alone does not replace a new PR head",
-		"current-head unresolved non-outdated review threads",
+		"true operator-owned blockers",
+		"Rework response:",
+		"(headRefOid, baseRefOid, baseRefName)",
+		"reviewer-owned `COMMENTED` checkpoint",
+		"same-tuple retry",
+		"one live snapshot",
+		"never posts a second trigger",
+		"changed head/base requires full review",
 		"worker --doctor --deploy=binary --mode=real",
 		"If `gh release view`, checksum, attestation",
 		"git push --dry-run",
@@ -46,7 +48,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"Do not downgrade the scenario into\nsingle-agent merge",
 		"`gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(normalizedWorkflowText(body), normalizedWorkflowText(want)) {
 			t.Fatalf("runbook missing %q", want)
 		}
 	}
@@ -89,11 +91,13 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"`aiops:done`",
 		"`aiops:canceled`",
 		"`Rework response:`",
-		"current-head unresolved non-outdated review threads",
-		"diagnostic only",
-		"unchanged-head",
-		"does not replace a new PR head",
-		"Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending\nstay in `aiops:human-review`",
+		"(headRefOid, baseRefOid, baseRefName)",
+		"reviewer-owned `COMMENTED` checkpoint",
+		"same-tuple retry",
+		"one live snapshot",
+		"does not repeat local review",
+		"A head or base change invalidates the checkpoint",
+		"absence of a reliable Codex signal is never clean",
 		"branch protection",
 		"required status check",
 		"required approving review",
@@ -109,7 +113,7 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"scripts/github-maker-reviewer-capture.py",
 		"scripts/github-maker-reviewer-report.py",
 	} {
-		if !strings.Contains(body, want) {
+		if !strings.Contains(normalizedWorkflowText(body), normalizedWorkflowText(want)) {
 			t.Fatalf("governance guide missing %q", want)
 		}
 	}
@@ -121,6 +125,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 	t.Setenv("AIOPS_GITHUB_REPO_CLONE_URL", "https://github.com/octo-org/octo-todo.git")
 
 	for _, tc := range []struct {
+		role            string
 		path            string
 		active          []string
 		inactive        []string
@@ -128,34 +133,20 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		maxContTurns    int
 		maxClaimTokens  int64
 		maxClaimSeconds int64
-		mustContain     []string
-		mustNotContain  []string
+		verifyCommands  []string
 	}{
 		{
+			role:            "maker",
 			path:            "examples/github-maker-WORKFLOW.md",
 			active:          []string{"aiops:todo", "aiops:rework"},
 			inactive:        []string{"aiops:human-review", "aiops:blocked", "aiops:done", "aiops:canceled"},
 			maxTurns:        30,
 			maxClaimTokens:  20000000,
 			maxClaimSeconds: 7200,
-			mustContain: []string{
-				"Do NOT use `gh pr review`, `gh pr merge`, `gh issue close`, or",
-				"PR title and body must reference the issue with `Refs #<N>` only",
-				"open-PR claim filter scans the PR title and body",
-				"issue comment that starts with `Rework response:`",
-				"current-head unresolved non-outdated review threads",
-				"historical `CHANGES_REQUESTED` count as a stop\n   condition",
-				"would require handing off the same unchanged head\n   again",
-				"aiops:blocked",
-				"gh issue edit <N> --remove-label aiops:todo --remove-label aiops:rework --add-label aiops:blocked",
-				"Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending",
-				"leave the issue in its current maker-active label",
-				"true external/operator-owned blocker",
-				"LAST action",
-			},
-			mustNotContain: []string{"gitea_issue_labels", "AIOPS_MAKER_MAX_REWORK_CYCLES", "max rework cycle budget", "Codex reports a usage-limit/input-required result"},
+			verifyCommands:  []string{"npm ci", "npm test", "npm run build", "npm run test:e2e"},
 		},
 		{
+			role:            "reviewer",
 			path:            "examples/github-reviewer-automerge-WORKFLOW.md",
 			active:          []string{"aiops:human-review"},
 			inactive:        []string{"aiops:todo", "aiops:rework", "aiops:blocked", "aiops:done", "aiops:canceled"},
@@ -163,34 +154,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			maxContTurns:    48,
 			maxClaimTokens:  12000000,
 			maxClaimSeconds: 7200,
-			mustContain: []string{
-				"gh pr review <PR_NUMBER> --approve",
-				"gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <sha>",
-				"gh pr view <PR_URL>",
-				"gh pr view <PR_NUMBER> --json state,mergedAt,headRefOid,mergeStateStatus",
-				"<PR_NUMBER>",
-				"Do not use `--admin`",
-				"Do NOT close an issue before GitHub confirms the PR is merged",
-				"Do NOT edit, commit, or push code",
-				"do not jump straight\n   to Done",
-				"reviewer-owned `APPROVED` review whose `commit_id`",
-				"pulls/<PR_NUMBER>/reviews?per_page=100",
-				"--paginate --slurp",
-				"`commit_id`",
-				"successful `build-test`",
-				"retry-safe",
-				"current-head unresolved non-outdated review threads",
-				"all current-head blocker",
-				"historical `CHANGES_REQUESTED` count as a stop\n   condition",
-				"does not replace a new\n   PR head",
-				"Reviewer re-queued unchanged head <headRefOid>; waiting for maker rework",
-				"Then move the issue back to Rework as your LAST action and stop",
-				"aiops:blocked",
-				"Codex NOT-CONFIRMED, no-signal, usage-limit, CI pending",
-				"leave the issue in `aiops:human-review`",
-				"true external/operator-owned blocker",
-			},
-			mustNotContain: []string{"gitea_issue_labels", "--json merged,", "AIOPS_REVIEWER_MAX_REWORK_CYCLES", "max rework cycle budget", "Codex usage-limit/input-required stops the review"},
+			verifyCommands:  []string{"npm ci", "npm test", "npm run build", "npm run test:e2e"},
 		},
 	} {
 		full := filepath.Join(root, tc.path)
@@ -223,6 +187,9 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		if cfg.Agent.MaxRuntimeSecondsPerClaim != tc.maxClaimSeconds {
 			t.Fatalf("%s max_runtime_seconds_per_claim = %d; want %d", tc.path, cfg.Agent.MaxRuntimeSecondsPerClaim, tc.maxClaimSeconds)
 		}
+		if strings.Join(cfg.Verify.Commands, "\n") != strings.Join(tc.verifyCommands, "\n") {
+			t.Fatalf("%s verify.commands = %v; want %v", tc.path, cfg.Verify.Commands, tc.verifyCommands)
+		}
 		if cfg.Codex.ReadTimeoutMs != 30000 {
 			t.Fatalf("%s codex.read_timeout_ms = %d; want 30000", tc.path, cfg.Codex.ReadTimeoutMs)
 		}
@@ -234,18 +201,91 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 				t.Fatalf("%s env_passthrough missing %q: %v", tc.path, want, cfg.Codex.EnvPassthrough)
 			}
 		}
-		text := readFileString(t, full)
-		for _, want := range tc.mustContain {
-			if !strings.Contains(text, want) {
-				t.Fatalf("%s missing %q", tc.path, want)
-			}
-		}
-		for _, forbidden := range tc.mustNotContain {
-			if strings.Contains(text, forbidden) {
-				t.Fatalf("%s contains forbidden %q", tc.path, forbidden)
-			}
+		assertGitHubRolePromptContract(t, tc.role, loaded.PromptTemplate)
+	}
+}
+
+func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
+	t.Helper()
+	text := normalizedWorkflowText(prompt)
+	commonForbidden := []string{"gitea_issue_labels", "--watch", "sleep "}
+	for _, forbidden := range commonForbidden {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("%s prompt contains forbidden %q", role, forbidden)
 		}
 	}
+	var required []string
+	switch role {
+	case "maker":
+		required = []string{
+			"Implement only this issue", "configured verification", "Refs #<N>",
+			"Rework response:", "new head", "reviewThreads", "aiops:human-review",
+			"true external/operator-owned blocker", "aiops:blocked", "LAST action",
+		}
+	case "reviewer":
+		required = []string{
+			"headRefOid", "baseRefOid", "baseRefName", "reviewer-owned `COMMENTED`",
+			"local-rubric=PASS", "same exact tuple", "skip checkout", "one live snapshot",
+			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
+			"head or base changes", "reviewThreads", "current-head blockers from any author",
+			"gh pr review <PR_NUMBER> --approve", "--match-head-commit <HEAD>",
+			"Do not use `--admin`", "mergedAt", "restore `aiops:human-review`", "aiops:blocked",
+		}
+	default:
+		t.Fatalf("unknown role %q", role)
+	}
+	for _, want := range required {
+		if !strings.Contains(text, normalizedWorkflowText(want)) {
+			t.Fatalf("%s prompt missing invariant %q", role, want)
+		}
+	}
+}
+
+func TestGitHubMakerReviewerPromptBudgetsAndNetNegativeDocs(t *testing.T) {
+	root := repoRoot(t)
+	paths := []string{
+		"examples/github-maker-WORKFLOW.md",
+		"examples/github-reviewer-automerge-WORKFLOW.md",
+	}
+	wantMax := []int{4341, 6892}
+	total := 0
+	for i, path := range paths {
+		body := readFileString(t, filepath.Join(root, path))
+		size := len([]byte(githubWorkflowPromptBody(t, path, body)))
+		if size > wantMax[i] {
+			t.Fatalf("%s prompt bytes = %d; want <= %d", path, size, wantMax[i])
+		}
+		total += size
+	}
+	if total > 8986 {
+		t.Fatalf("combined prompt bytes = %d; want <= 8986", total)
+	}
+
+	tracked := []string{
+		paths[0], paths[1],
+		"docs/runbooks/github-maker-reviewer-governance.md",
+		"docs/runbooks/github-maker-reviewer-automerge-e2e.md",
+	}
+	lines := 0
+	for _, path := range tracked {
+		lines += strings.Count(readFileString(t, filepath.Join(root, path)), "\n")
+	}
+	if lines >= 1015 {
+		t.Fatalf("tracked workflow/runbook lines = %d; want < 1015", lines)
+	}
+}
+
+func githubWorkflowPromptBody(t *testing.T, path, body string) string {
+	t.Helper()
+	if !strings.HasPrefix(body, "---\n") {
+		return body
+	}
+	rest := body[len("---\n"):]
+	end := strings.Index(rest, "\n---\n")
+	if end < 0 {
+		t.Fatalf("%s front matter is not terminated", path)
+	}
+	return rest[end+len("\n---\n"):]
 }
 
 func TestGitHubMakerReviewerWorkflowPromptsKeepTransientReviewGatesOutOfBlocked(t *testing.T) {
@@ -276,8 +316,8 @@ func TestGitHubMakerReviewerWorkflowPromptsKeepTransientReviewGatesOutOfBlocked(
 		body := readFileString(t, filepath.Join(root, path))
 		bodyText := normalizedWorkflowText(body)
 		for _, want := range []string{
-			"Codex review uncertainty, no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending are not `aiops:blocked` reasons",
-			"leave the issue in its current maker-active label",
+			"Review uncertainty, no-signal, usage limits, CI, or merge state are not maker blockers",
+			"Leave the current maker-active label unchanged",
 			"true external/operator-owned blocker",
 		} {
 			if !strings.Contains(bodyText, normalizedWorkflowText(want)) {
@@ -289,10 +329,9 @@ func TestGitHubMakerReviewerWorkflowPromptsKeepTransientReviewGatesOutOfBlocked(
 		body := readFileString(t, filepath.Join(root, path))
 		bodyText := normalizedWorkflowText(body)
 		for _, want := range []string{
-			"Codex NOT-CONFIRMED, no-signal, usage-limit, CI pending, and auto-merge pending are not `aiops:blocked` reasons",
-			"leave the issue in `aiops:human-review`",
-			"unresolved non-outdated current-head review threads",
-			"move the issue back to Rework",
+			"no-signal, usage-limit, and pending results leave `aiops:human-review` unchanged",
+			"current-head blockers from any author",
+			"move to `aiops:rework`",
 		} {
 			if !strings.Contains(bodyText, normalizedWorkflowText(want)) {
 				t.Fatalf("%s missing reviewer transient-review guidance %q", path, want)

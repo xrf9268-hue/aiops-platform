@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-14",
+  "issue": 1090,
+  "repository": "zjlgdx/aiops-workflow-bench-standard-20260714-1090-v1",
+  "seed_sha": "5e6264cdcfd2decb53491e37de4f825878339487",
+  "final_main_sha": "7e56f3e34132042f8d812b6acb45677153c74d1a",
+  "holdout": "pass",
+  "prompt_bytes": {
+    "baseline_maker": 4341,
+    "current_maker": 2439,
+    "baseline_reviewer": 6892,
+    "current_reviewer": 4472,
+    "baseline_combined": 11233,
+    "current_combined": 6911,
+    "combined_reduction_percent": 38.475919
+  },
+  "workflow_runbook_lines": {
+    "baseline": 1015,
+    "current": 948,
+    "net": -67
+  },
+  "worker_observed": {
+    "maker_tokens": 2967013,
+    "maker_runtime_seconds": 740.799404667,
+    "reviewer_tokens": 2667510,
+    "reviewer_runtime_seconds": 764.95159425,
+    "total_tokens": 5634523,
+    "total_runtime_seconds": 1505.750998917,
+    "wall_seconds": 1605,
+    "rework_cycles": 1,
+    "review_findings": 2
+  },
+  "stable_tuple_comparison": {
+    "full_review_tokens": 1432268,
+    "full_review_runtime_seconds": 390.988322458,
+    "merge_confirmation_tokens": 702083,
+    "merge_confirmation_runtime_seconds": 199.231928167,
+    "token_reduction_percent": 50.981031,
+    "runtime_reduction_percent": 49.044021
+  },
+  "relative_to_1089_standard": {
+    "baseline_tokens": 4206604,
+    "baseline_runtime_seconds": 1058.739628,
+    "baseline_wall_seconds": 1166,
+    "baseline_rework_cycles": 0,
+    "tokens_change_percent": 33.944697,
+    "runtime_change_percent": 42.221086,
+    "wall_change_percent": 37.650086
+  },
+  "issues": [
+    {
+      "number": 1,
+      "pr": 3,
+      "initial_head_sha": "afc18f9986d290934d1879468374a50aa3c01254",
+      "final_head_sha": "f14a70fd8151b38eccca720aafb6e9ddb145a2aa",
+      "merged_at": "2026-07-14T06:16:21Z",
+      "closed_at": "2026-07-14T06:18:10Z",
+      "rework_cycles": 1,
+      "review_findings": 2,
+      "checkpoint_reviews": 1,
+      "approvals": 1
+    },
+    {
+      "number": 2,
+      "pr": 4,
+      "final_head_sha": "56fa3e45d1c2fdb9300862cc0554c66054708f53",
+      "merged_at": "2026-07-14T06:26:33Z",
+      "closed_at": "2026-07-14T06:28:29Z",
+      "rework_cycles": 0,
+      "review_findings": 0,
+      "checkpoint_reviews": 1,
+      "approvals": 1
+    }
+  ]
+}
