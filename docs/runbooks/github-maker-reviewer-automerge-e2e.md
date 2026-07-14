@@ -206,8 +206,12 @@ After local PASS on an unseen `(headRefOid, baseRefOid, baseRefName)`, the
 reviewer writes one reviewer-owned `COMMENTED` checkpoint. A same-tuple retry
 skips local gates/rubric, reuses any exact-tuple Codex trigger, and takes one
 live snapshot. It never posts a second trigger or waits/polls for external
-state. A changed head/base requires full review. Blocked handoffs remove the
-role's active labels while adding `aiops:blocked`.
+state. REST records and GraphQL threads are paginated inside the snapshot. A
+changed head/base requires full review. Review commands use a detached captured
+head, a pre-write tuple-only guard, and REST `commit_id` pinning. Branch
+protection's stale approval dismissal prevents a later merge-base change from
+using the prior approval. Blocked handoffs remove active labels while adding
+`aiops:blocked`.
 
 Enable auto-merge and squash-only merges:
 

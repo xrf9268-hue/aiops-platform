@@ -74,11 +74,15 @@ Repository: {{ repo.owner }}/{{ repo.name }}; base: {{ repo.branch }}.
 3. Take one live snapshot for this invocation:
    - PR metadata including number, state, author, `headRefOid`, `baseRefOid`,
      `baseRefName`, `mergedAt`, checks, merge state, and auto-merge state;
-   - REST review records and PR comments, preserving author, state, body,
-     `commit_id`, and time;
-   - GraphQL `reviewThreads(first:100)` with resolution and outdated state.
+   - all REST review records and PR comments via `--paginate --slurp`, flattened
+     while preserving author, state, body, `commit_id`, and time;
+   - all GraphQL `reviewThreads` by following `pageInfo` / `endCursor` while
+     `hasNextPage`; preserve resolution and outdated state;
+   - branch-protection proof that approvals become stale when head or merge
+     base changes.
    Set `<PR_NUMBER>`, `<HEAD>`, `<BASE_OID>`, and `<BASE_NAME>` from it. Do not
-   wait, repeatedly poll, or refresh any external state in this invocation.
+   wait, repeatedly poll, or refresh asynchronous gate state in this invocation.
+   Pagination is one bounded snapshot, not repeated lifecycle polling.
 
 ## Exact-tuple checkpoint
 
@@ -98,17 +102,19 @@ The tuple is (`headRefOid=<HEAD>`, `baseRefOid=<BASE_OID>`,
 
 ## Full review for an unseen tuple
 
-1. Confirm the maker and reviewer identities differ. Fetch and inspect the PR
-   head without editing it.
+1. Confirm the maker and reviewer identities differ. Fetch, then use a detached
+   checkout of `<HEAD>` for every inspection and configured command; do not
+   review a moving branch name or edit files.
 2. Run the configured verification commands once.
 3. Review the complete diff against the issue, including behavior-level tests,
    security, failure paths, and unrelated scope.
 4. Treat unresolved, non-outdated current-head blockers from any author,
    failed required checks, or an unmet acceptance criterion as FAIL. Submit one
-   consolidated `CHANGES_REQUESTED` review tied to `<HEAD>`, then move to
-   `aiops:rework` as the LAST action.
+   consolidated `CHANGES_REQUESTED` through the REST review API with
+   `commit_id=<HEAD>`, then move to `aiops:rework` as the LAST action.
 5. On local PASS, post the exact reviewer-owned `COMMENTED` checkpoint once.
-   It records local evidence and is not approval.
+   Use the REST review API with `commit_id=<HEAD>` and event `COMMENT`; it
+   records local evidence and is not approval.
 
 ## External gates and landing
 
@@ -122,20 +128,25 @@ evidence; no-signal, usage-limit, and pending results leave
 
 Using only this invocation's snapshot:
 
+Before any verdict/checkpoint/approval write, perform one tuple-only guard. If
+the current `(headRefOid, baseRefOid, baseRefName)` differs from the snapshot,
+write no review or checkpoint and end; the next invocation reviews the new
+tuple. This guard does not refresh Codex, checks, threads, or merge state.
+
 1. If the PR is merged, require a reviewer-owned `APPROVED` review with
    `commit_id=<HEAD>` and a successful required check on `<HEAD>`. Then mark
    `aiops:done` and close. If close fails, restore `aiops:human-review`
    immediately and fail non-zero.
 2. If required Codex or checks are pending, leave `aiops:human-review`
    unchanged and end promptly.
-3. When local and external gates are clean, use the snapshot to approve only if
-   exact-head approval is absent, and enable auto-merge only if it is absent:
-   `gh pr review <PR_NUMBER> --approve --body "Rubric passed for head <HEAD>."`
-   then
+3. When local and external gates are clean, require stale approval dismissal.
+   Approve only if exact-head approval is absent, using the REST review API with
+   `commit_id=<HEAD>` and event `APPROVE`; then, if auto-merge is absent, run
    `gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <HEAD>`.
-   Do not use `--admin`. If approval and auto-merge already exist but merge is
-   pending, make no duplicate write. Do not re-read state afterward; a later
-   invocation confirms merge from its one snapshot.
+   Do not use `--admin`. GitHub stale approval dismissal protects a base change
+   after the guard; a later invocation must review its new tuple. If approval
+   and auto-merge already exist but merge is pending, make no duplicate write.
+   Do not re-read state afterward; a later invocation confirms merge.
 
 Use `aiops:blocked` only for a true external/operator-owned blocker. Never use
 it for Codex, CI, approval, auto-merge, merge, or review-thread state. Never

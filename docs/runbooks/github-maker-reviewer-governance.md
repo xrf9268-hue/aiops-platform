@@ -86,7 +86,14 @@ checkpoint containing the tuple and `local-rubric=PASS`. A same-tuple retry
 reuses that checkpoint and takes one live snapshot of Codex, review threads,
 required checks, approval, auto-merge, and merge state. It does not repeat local
 review, post a second exact-tuple Codex trigger, or wait/poll in the turn. A head
-or base change invalidates the checkpoint.
+or base change invalidates the checkpoint. REST collections and GraphQL review
+threads are paginated to exhaustion inside that one bounded snapshot.
+
+Local review uses a detached checkout of the captured head. Before any review
+write, a tuple-only guard rejects a changed head/base without refreshing the
+asynchronous gates. Reviews use the REST API with `commit_id` pinned to the
+captured head. Branch protection must provide stale approval dismissal so a
+later merge-base change cannot land on the earlier approval.
 
 Codex no-signal, NOT-CONFIRMED, usage-limit, CI pending, and auto-merge pending
 stay in `aiops:human-review`; absence of a reliable Codex signal is never clean.
@@ -124,8 +131,8 @@ Configure GitHub so repository policy, not the worker, is the merge gate:
 
 - require at least one required status check, such as `build-test`;
 - require one required approving review;
-- enable stale-review dismissal or require approval of the latest push when the
-  repository policy supports it;
+- enable stale-review dismissal (including merge-base changes) and require
+  approval of the latest push when the repository policy supports it;
 - disallow force pushes and direct pushes to `main`;
 - enable squash-only merging and GitHub native auto-merge;
 - ensure the reviewer identity is different from the maker identity, because PR
