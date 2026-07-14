@@ -19,7 +19,7 @@ type SessionUsageEntry struct {
 	Outcome        string
 }
 
-func (s *OrchestratorState) recordCompletedSessionUsage(id IssueID, run *RunningEntry, elapsed time.Duration, completedAt time.Time, outcome string) {
+func (s *OrchestratorState) recordEndedSessionUsage(id IssueID, run *RunningEntry, elapsed time.Duration, completedAt time.Time, outcome string) {
 	if s == nil || run == nil {
 		return
 	}
@@ -37,10 +37,10 @@ func (s *OrchestratorState) recordCompletedSessionUsage(id IssueID, run *Running
 		CompletedAt:    completedAt,
 		Outcome:        outcome,
 	}
-	s.completedSessionUsage = append(s.completedSessionUsage, entry)
-	if s.MaxRecentCompleted > 0 && len(s.completedSessionUsage) > s.MaxRecentCompleted {
-		copy(s.completedSessionUsage, s.completedSessionUsage[len(s.completedSessionUsage)-s.MaxRecentCompleted:])
-		s.completedSessionUsage = s.completedSessionUsage[:s.MaxRecentCompleted]
+	s.endedSessionUsage = append(s.endedSessionUsage, entry)
+	if s.MaxRecentCompleted > 0 && len(s.endedSessionUsage) > s.MaxRecentCompleted {
+		copy(s.endedSessionUsage, s.endedSessionUsage[len(s.endedSessionUsage)-s.MaxRecentCompleted:])
+		s.endedSessionUsage = s.endedSessionUsage[:s.MaxRecentCompleted]
 	}
 }
 

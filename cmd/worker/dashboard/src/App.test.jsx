@@ -59,6 +59,20 @@ function busyState(overrides = {}) {
         tokens: { input_tokens: 102000, output_tokens: 18000, total_tokens: 120000 },
         runtime_seconds: 2400, completed_at: iso(60000), outcome: 'completed',
       },
+      {
+        issue_id: 'aa0113', issue_identifier: 'MT-613F', state: 'In Progress',
+        session_id: 'thread-failed-turn-2', workflow_source: 'file', workflow_path: '/srv/maker/WORKFLOW.md',
+        agent_provider: 'codex-app-server', agent_model: 'gpt-5.6-sol',
+        tokens: { input_tokens: 21000, output_tokens: 3000, total_tokens: 25000 },
+        runtime_seconds: 120, completed_at: iso(30000), outcome: 'failed',
+      },
+      {
+        issue_id: 'aa0114', issue_identifier: 'MT-614R', state: 'In Review',
+        session_id: 'thread-reconcile-turn-1', workflow_source: 'file', workflow_path: '/srv/reviewer/WORKFLOW.md',
+        agent_provider: 'codex-app-server', agent_model: 'gpt-5.6-sol',
+        tokens: { input_tokens: 11000, output_tokens: 1000, total_tokens: 12000 },
+        runtime_seconds: 60, completed_at: iso(15000), outcome: 'reconcile_ineligible',
+      },
     ],
     budget_guardrails: { max_tokens_per_claim: 20000000, max_runtime_seconds_per_claim: 7200 },
     completed: ['aa0112', 'aa0245', 'aa0388'],
@@ -141,9 +155,11 @@ describe('Worker status dashboard', () => {
     expect(screen.getByText('5.4M')).toBeTruthy();
     expect(screen.getByText('286k')).toBeTruthy();
     expect(screen.getByText('20M tokens/claim · 2h 0m/claim')).toBeTruthy();
-    expect(screen.getByText('Completed usage')).toBeTruthy();
+    expect(screen.getByText('Ended usage')).toBeTruthy();
     expect(screen.getByText('MT-612')).toBeTruthy();
     expect(screen.getByText('120k')).toBeTruthy();
+    expect(screen.getByText('failed').classList.contains('failed')).toBe(true);
+    expect(screen.getByText('reconcile_ineligible').classList.contains('blocked')).toBe(true);
   });
 
   it('links each issue id to its per-issue detail endpoint', async () => {
@@ -361,6 +377,13 @@ describe('Worker status dashboard', () => {
     expect(container.querySelector('pre.rate-raw')).toBeNull();
   });
 
+  it('explains that ended usage includes every terminal run path', async () => {
+    current = idleState;
+    render(<App />);
+    expect(await screen.findByText('No ended usage yet')).toBeTruthy();
+    expect(screen.getByText('Session token totals appear after completed, failed, or reconcile-cancelled runs in this process.')).toBeTruthy();
+  });
+
   it('groups all live-work panels in the main column in KPI order (Worker Status v2)', async () => {
     const { container } = render(<App />);
     await screen.findByRole('heading', { name: /Worker status/i });
@@ -375,7 +398,7 @@ describe('Worker status dashboard', () => {
     const mainTitles = [...container.querySelectorAll('.body-main .panel-title')].map(titleText);
     expect(mainTitles).toEqual(['Running', 'Retrying', 'Blocked']);
     const sideTitles = [...container.querySelectorAll('.body-side .panel-title')].map(titleText);
-    expect(sideTitles).toEqual(['Rate limits', 'Completed usage', 'Reconcile roll-up']);
+    expect(sideTitles).toEqual(['Rate limits', 'Ended usage', 'Reconcile roll-up']);
     expect(container.querySelector('.grid-2')).toBeNull(); // the bottom row is gone
 
     // tokens header renders as one line: bold "Tokens" + dim "in / out" suffix

@@ -55,7 +55,9 @@ type StateView struct {
 	// OperatorTerminalStops is the FIFO-bounded recent set of D35 latches (oldest
 	// first), capped by MaxRecentOperatorTerminalStops. For the lifetime total that
 	// survives eviction, read CumulativeOperatorTerminalStopsTotal.
-	OperatorTerminalStops                       []OperatorTerminalStopView
+	OperatorTerminalStops []OperatorTerminalStopView
+	// CompletedSessionUsage keeps the established API field name for clean,
+	// failed, and reconcile-ineligible run outcomes. Blocked claims stay in Blocked.
 	CompletedSessionUsage                       []SessionUsageView
 	BudgetGuardrails                            BudgetGuardrailsView
 	CumulativeCompletedTotal                    int64
@@ -143,9 +145,9 @@ func (s *OrchestratorState) snapshotBlockedViews() []BlockedView {
 	return rows
 }
 
-func (s *OrchestratorState) snapshotCompletedSessionUsage() []SessionUsageView {
-	rows := make([]SessionUsageView, 0, len(s.completedSessionUsage))
-	for _, usage := range s.completedSessionUsage {
+func (s *OrchestratorState) snapshotEndedSessionUsage() []SessionUsageView {
+	rows := make([]SessionUsageView, 0, len(s.endedSessionUsage))
+	for _, usage := range s.endedSessionUsage {
 		rows = append(rows, SessionUsageView{
 			IssueID:        usage.IssueID,
 			Identifier:     usage.Identifier,
@@ -256,7 +258,7 @@ func (s *OrchestratorState) Snapshot() StateView {
 		AgentHandoffReconcileStopped: make([]IssueID, 0, len(s.agentHandoffReconcileStoppedOrder)),
 		ActiveSuccessNoHandoff:       make([]IssueID, 0, len(s.activeSuccessNoHandoffOrder)),
 		OperatorTerminalStops:        s.snapshotOperatorTerminalStopViews(),
-		CompletedSessionUsage:        s.snapshotCompletedSessionUsage(),
+		CompletedSessionUsage:        s.snapshotEndedSessionUsage(),
 		BudgetGuardrails: BudgetGuardrailsView{
 			MaxTokensPerClaim:         s.BudgetGuardrails.MaxTokensPerClaim,
 			MaxRuntimeSecondsPerClaim: s.BudgetGuardrails.MaxRuntimeSecondsPerClaim,

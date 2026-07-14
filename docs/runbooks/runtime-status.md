@@ -298,12 +298,19 @@ that are no longer running or even older issues from the same worker process.
 Use row-level `running[].tokens` / `running[].runtime_seconds`,
 `blocked[].tokens` / `blocked[].runtime_seconds`, and
 `completed_session_usage[]` when you need current-claim, blocked-claim, or
-recent completed-session attribution.
+recent ended-session attribution.
 
 `completed_session_usage` is a FIFO-bounded current-process list (same cap as
-recent `completed`) of clean session exits. It keeps the issue identifier/URL,
-workflow identity, agent model/provider, runtime seconds, token totals, and
-outcome so a completed handoff remains attributable after it leaves `running`.
+recent `completed`) of finalized clean, failed, and reconcile-cancelled
+sessions. The established wire name is retained, but rows cover clean exits (`completed` and
+`active_success_no_handoff`), abnormal exits (`failed`), and tracker-driven
+cancellation (`reconcile_ineligible`). Each row keeps the issue identifier/URL,
+last observed tracker state, workflow identity, agent model/provider, runtime
+seconds, token totals, end timestamp, and outcome. Blocked claims remain in
+`blocked[]` and are not duplicated here. Failed runs still appear in
+`retrying`; reconcile cancellations still do not become `completed` or imply an
+agent handoff. The list is attribution only and does not change lifecycle
+transitions.
 
 `budget_guardrails` surfaces optional local claim guardrails configured under
 `agent.max_tokens_per_claim` and `agent.max_runtime_seconds_per_claim`. Zero
