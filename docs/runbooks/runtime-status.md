@@ -98,7 +98,8 @@ The effective port is resolved in this order, per SPEC §13.7:
 
 - `GET /api/v1/state` returns the process-wide runtime snapshot: running rows,
   retry rows, completed issue IDs, operator terminal stops, aggregate
-  token/runtime totals, and the current poll/concurrency metadata.
+  worker-observed token totals, worker-measured runtime totals, and the current
+  poll/concurrency metadata.
 - `GET /api/v1/<issue_identifier>` returns one issue's current runtime row.
   Lookup is case-insensitive and matches either the tracker issue identifier or
   issue ID. Unknown issues return
@@ -293,9 +294,17 @@ stop time, and first suppressed active-candidate evidence.
 
 ### Runtime and token attribution
 
-`codex_totals` is a process-lifetime aggregate. It can include work for issues
-that are no longer running or even older issues from the same worker process.
-Use row-level `running[].tokens` / `running[].runtime_seconds`,
+Every token field on this surface is worker-observed, runner-reported Codex
+usage. External GitHub `@codex review` usage, other reviewers outside the worker
+session, and otherwise unreported nested or subagent usage are unmeasured, not
+zero; they are absent from row, session, and process totals and do not consume
+`agent.max_tokens_per_claim`. Treat the token fields as a lower bound, not an
+end-to-end workflow cost or billing total.
+
+`codex_totals` is a process-lifetime aggregate of that reported usage. It can
+include work for issues that are no longer running or even older issues from
+the same worker process. Use row-level `running[].tokens` /
+`running[].runtime_seconds`,
 `blocked[].tokens` / `blocked[].runtime_seconds`, and
 `completed_session_usage[]` when you need current-claim, blocked-claim, or
 recent ended-session attribution.
@@ -315,11 +324,13 @@ transitions.
 
 `budget_guardrails` surfaces optional local claim guardrails configured under
 `agent.max_tokens_per_claim` and `agent.max_runtime_seconds_per_claim`. Zero
-means disabled. When a guardrail is exceeded, the worker cancels the current
-run, records `budget_exceeded` in recent events, and parks the claim in local
-`blocked` with `method: "budget_exceeded"`. The worker does not write GitHub
-comments/labels, review PRs, merge PRs, or close issues; an operator or the
-agent workflow owns tracker handoff.
+means disabled. The token guard compares only the current claim's
+worker-observed, runner-reported Codex total described above; the runtime guard
+uses worker-measured claim runtime. When either guardrail is exceeded, the
+worker cancels the current run, records `budget_exceeded` in recent events, and
+parks the claim in local `blocked` with `method: "budget_exceeded"`. The worker
+does not write GitHub comments/labels, review PRs, merge PRs, or close issues;
+an operator or the agent workflow owns tracker handoff.
 
 ### `codex_totals.seconds_running` semantics
 
@@ -383,8 +394,10 @@ Each entry in the `running` array follows SPEC §13.7.2:
 - `retry_attempt` — retry attempt number when the dispatch is a retry; absent
   on the first run (SPEC §4.1.5 first-run semantic).
 - `workspace_path` — absolute path of the per-issue workspace.
-- `tokens` — `{ input_tokens, output_tokens, total_tokens }` cumulative for
-  the active session or preserved blocked claim.
+- `tokens` — worker-observed, runner-reported Codex
+  `{ input_tokens, output_tokens, total_tokens }` cumulative for the active
+  session or preserved blocked claim; it has the exclusions described in
+  [Runtime and token attribution](#runtime-and-token-attribution).
 - `codex_app_server_pid` — OS pid of the Codex subprocess, populated from
   `session_started`; absent when the runner did not emit a pid.
 - `agent_provider` / `agent_model` — the runtime/runner (e.g.

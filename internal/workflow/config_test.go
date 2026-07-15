@@ -750,6 +750,29 @@ prompt body
 	}
 }
 
+func TestLoadExplainsClaimTokenBudgetObservationScope(t *testing.T) {
+	body := `---
+repo:
+  owner: o
+  name: r
+  clone_url: git@example.com:o/r.git
+agent:
+  max_tokens_per_claim: -1
+tracker:
+  kind: gitea
+---
+prompt body
+`
+	_, err := Load(writeTempWorkflow(t, body))
+	if err == nil {
+		t.Fatal("Load succeeded with agent.max_tokens_per_claim=-1, want validation error")
+	}
+	want := "agent.max_tokens_per_claim must be non-negative (counts only worker-observed, runner-reported Codex usage; external GitHub @codex review, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are excluded)"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("Load error = %q; want substring %q", err, want)
+	}
+}
+
 func TestLoadRejectsRemovedRetryCapKeys(t *testing.T) {
 	for _, key := range []string{"max_retry_attempts", "max_timeout_retries"} {
 		t.Run(key, func(t *testing.T) {

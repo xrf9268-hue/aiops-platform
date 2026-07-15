@@ -105,6 +105,11 @@ func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, t
 			colorize("out "+formatCount(state.CodexTotals.OutputTokens), ansiYellow) +
 			colorize(" | ", ansiGray) +
 			colorize("total "+formatCount(state.CodexTotals.TotalTokens), ansiYellow),
+		colorize("│ Claim budget: ", ansiBold) + colorize(formatClaimBudget(state.BudgetGuardrails), ansiYellow),
+		colorize("│ Token scope: ", ansiBold) + colorize("worker-observed, runner-reported Codex usage only", ansiGray),
+		colorize("│ Unmeasured: ", ansiBold) + colorize("external GitHub @codex review usage", ansiGray),
+		colorize("│ Unmeasured: ", ansiBold) + colorize("other reviewers outside the worker session", ansiGray),
+		colorize("│ Unmeasured: ", ansiBold) + colorize("otherwise unreported nested or subagent usage", ansiGray),
 		colorize("│ Rate Limits: ", ansiBold) + formatRateLimits(state.RateLimits),
 		colorize("│ Dashboard:   ", ansiBold) + colorize(baseURL+"/", ansiCyan),
 		colorize("│ Next refresh: ", ansiBold) + colorize(strconv.Itoa(int(interval.Seconds()))+"s", ansiCyan),
@@ -506,6 +511,20 @@ func formatCount(n int64) string {
 		return "-" + groupThousands(strconv.FormatInt(-n, 10))
 	}
 	return groupThousands(strconv.FormatInt(n, 10))
+}
+
+func formatClaimBudget(budget stateapi.BudgetGuardrails) string {
+	var parts []string
+	if budget.MaxTokensPerClaim > 0 {
+		parts = append(parts, formatCount(budget.MaxTokensPerClaim)+" worker-observed Codex tokens")
+	}
+	if budget.MaxRuntimeSecondsPerClaim > 0 {
+		parts = append(parts, formatHumanDurationSeconds(budget.MaxRuntimeSecondsPerClaim)+" runtime")
+	}
+	if len(parts) == 0 {
+		return "off"
+	}
+	return strings.Join(parts, " | ")
 }
 
 func groupThousands(s string) string {

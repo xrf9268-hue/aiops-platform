@@ -996,8 +996,9 @@ func TestRecordRuntimeEventBudgetExceededCancelsAndBlocksRun(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	blocked := view.Blocked[0]
-	if blocked.Method != budgetExceededBlockMethod || !strings.Contains(blocked.Error, "max_tokens_per_claim=10") {
-		t.Fatalf("blocked row = %+v, want budget_exceeded method with token detail", blocked)
+	wantBudgetError := "worker-observed, runner-reported Codex claim token budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10; external GitHub @codex review, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are excluded"
+	if blocked.Method != budgetExceededBlockMethod || blocked.Error != wantBudgetError {
+		t.Fatalf("blocked row = %+v, want budget_exceeded method with error %q", blocked, wantBudgetError)
 	}
 	if blocked.Tokens.TotalTokens != 12 || blocked.RuntimeSeconds != 2 {
 		t.Fatalf("blocked usage = tokens %+v runtime %.1f, want over-budget claim totals", blocked.Tokens, blocked.RuntimeSeconds)
@@ -1005,8 +1006,15 @@ func TestRecordRuntimeEventBudgetExceededCancelsAndBlocksRun(t *testing.T) {
 	if err := o.RequestDispatch(context.Background(), iss, nil); !errors.Is(err, ErrNotDispatched) {
 		t.Fatalf("budget-blocked issue dispatch err = %v, want ErrNotDispatched", err)
 	}
-	if !recentEventKind(view.RecentEvents, IssueID(iss.ID), RuntimeEventBudgetExceeded) {
-		t.Fatalf("RecentEvents = %+v; want budget exceeded event", view.RecentEvents)
+	var budgetEventMessage string
+	for _, event := range view.RecentEvents {
+		if event.IssueID == IssueID(iss.ID) && event.Kind == RuntimeEventBudgetExceeded {
+			budgetEventMessage = event.Message
+			break
+		}
+	}
+	if budgetEventMessage != wantBudgetError {
+		t.Fatalf("budget exceeded event message = %q; want %q; events=%+v", budgetEventMessage, wantBudgetError, view.RecentEvents)
 	}
 }
 
@@ -1658,7 +1666,8 @@ func TestFinalize_ContinuationBudgetDoesNotBlockSelfStopCleanExit(t *testing.T) 
 
 	waitFor(t, func() bool {
 		view, err := o.Snapshot(context.Background())
-		return err == nil && len(view.Retrying) == 1 && len(view.Blocked) == 0 && len(view.Running) == 0
+		return err == nil && len(view.Retrying) == 1 && !view.Retrying[0].DueAt.After(time.Now()) &&
+			len(view.Blocked) == 0 && len(view.Running) == 0
 	}, time.Second)
 	view, err := o.Snapshot(context.Background())
 	if err != nil {
