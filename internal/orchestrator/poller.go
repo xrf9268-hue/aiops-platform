@@ -143,16 +143,10 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 		}
 		pollErr = errors.Join(pollErr, err)
 	}
-	issues, activeErr := p.tracker.ListActiveIssues(ctx)
-	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
-	// keep the successful issues and join activeErr into pollErr below.
-	if activeErr != nil {
-		pollErr = errors.Join(pollErr, activeErr)
-	}
-	var reconciledInactive map[string]tracker.Issue
+	var reconciliation tickReconciliation
 	if p.reconcileKnown {
 		var err error
-		reconciledInactive, err = p.reconcileTick(ctx, issues)
+		reconciliation, err = p.reconcileClaimedTick(ctx, nil)
 		if err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
@@ -163,12 +157,23 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 			return errors.Join(pollErr, preflightErr, p.orchestrator.recordPreflightFailed(ctx, err))
 		}
 	}
+	issues, activeErr := p.tracker.ListActiveIssues(ctx)
+	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
+	// keep the successful issues and join activeErr into pollErr below.
+	if activeErr != nil {
+		pollErr = errors.Join(pollErr, activeErr)
+	}
+	if p.reconcileKnown && len(issues) > 0 {
+		if err := p.refreshListedActiveIssues(ctx, issues, reconciliation.refreshed); err != nil {
+			pollErr = errors.Join(pollErr, err)
+		}
+	}
 	if activeErr != nil && len(issues) == 0 {
 		return pollErr
 	}
 	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates, p.reconcile.RequiredLabels)
-	if len(reconciledInactive) > 0 {
-		candidates = filterIssuesNotInMap(candidates, reconciledInactive)
+	if len(reconciliation.inactive) > 0 {
+		candidates = filterIssuesNotInMap(candidates, reconciliation.inactive)
 	}
 	sortCandidates(candidates)
 	p.overflow = nil
@@ -204,9 +209,20 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 	return l.tracker.ListIssuesByStates(ctx, l.states)
 }
 
+type tickReconciliation struct {
+	inactive  map[string]tracker.Issue
+	refreshed map[string]tracker.Issue
+}
+
 func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
+	result, err := p.reconcileClaimedTick(ctx, activeIssues)
+	return result.inactive, err
+}
+
+func (p *Poller) reconcileClaimedTick(ctx context.Context, activeIssues []tracker.Issue) (tickReconciliation, error) {
+	var result tickReconciliation
 	if p.stateTracker == nil {
-		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
+		return result, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
 	var fetchErr error
 	// D37 budget reconciliation already ran before the tracker-dependent active
@@ -217,15 +233,23 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	// inactive/terminal issues in the same tick.
 	if err := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout); err != nil {
 		if ctx.Err() != nil {
-			return nil, err
+			return result, err
 		}
 		fetchErr = errors.Join(fetchErr, err)
 	}
+	issueRefs := p.orchestrator.RunningRetryingAndBlockedIssueRefs(ctx)
+	if len(issueRefs) == 0 {
+		return result, fetchErr
+	}
 	activeIssuesByID := issueMap(activeIssues)
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
-	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID)
+	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID, issueRefs)
 	if err != nil {
 		fetchErr = errors.Join(fetchErr, err)
+	}
+	result.refreshed = refreshedIssuesByID
+	if err := p.orchestrator.PatchActiveClaimedTrackerIssueStates(ctx, refreshedIssuesByID, activeStateKeys); err != nil {
+		return result, errors.Join(fetchErr, err)
 	}
 	mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID, activeStateKeys)
 	// The active listing may be partial (pagination caps), so absence from it
@@ -234,13 +258,29 @@ func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue
 	// state) and leave cancellation to the terminal/inactive pass below, which
 	// acts only on explicit terminal/inactive observations (SPEC §11.2 narrow
 	// refresh + §16.3) rather than treating an unlisted issue as gone.
-	if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
-		return nil, err
+	if len(activeIssuesByID) > 0 {
+		if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
+			return result, errors.Join(fetchErr, err)
+		}
 	}
-	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys)
+	activeEvidenceByID := issueMap(activeIssues)
+	for id, issue := range refreshedIssuesByID {
+		if isActiveTrackerState(issue.State, activeStateKeys) {
+			activeEvidenceByID[id] = issue
+		}
+	}
+	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeEvidenceByID, refreshedIssuesByID, activeStateKeys)
+	result.inactive = inactiveByID
 	fetchErr = errors.Join(fetchErr, deriveErr)
 	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
-	return inactiveByID, errors.Join(reconcileErr, fetchErr)
+	return result, errors.Join(reconcileErr, fetchErr)
+}
+
+func (p *Poller) refreshListedActiveIssues(ctx context.Context, issues []tracker.Issue, refreshed map[string]tracker.Issue) error {
+	issuesByID := issueMap(issues)
+	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
+	mergeRefreshedActiveStates(issuesByID, refreshed, activeStateKeys)
+	return p.orchestrator.RefreshActiveTrackerIssues(ctx, issuesByID, activeStateKeys)
 }
 
 // mergeRefreshedActiveStates folds the narrow per-issue state refresh back into
@@ -252,8 +292,7 @@ func mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID map[string
 	for id, issue := range refreshedIssuesByID {
 		if isActiveTrackerState(issue.State, activeStateKeys) {
 			if existing, ok := activeIssuesByID[id]; ok {
-				existing.State = issue.State
-				activeIssuesByID[id] = existing
+				activeIssuesByID[id] = patchTrackerIssueState(existing, issue)
 			}
 		} else {
 			delete(activeIssuesByID, id)
@@ -331,13 +370,9 @@ func addInactiveListedIssues(inactiveByID map[string]tracker.Issue, activeByID m
 	}
 }
 
-func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue) (map[string]tracker.Issue, error) {
+func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue, issueRefs []tracker.IssueRef) (map[string]tracker.Issue, error) {
 	refresher, ok := p.stateTracker.(IssueStateRefresher)
 	if !ok {
-		return nil, nil
-	}
-	issueRefs := p.orchestrator.RunningRetryingAndBlockedIssueRefs(ctx)
-	if len(issueRefs) == 0 {
 		return nil, nil
 	}
 	statesByID, err := fetchIssueStates(ctx, refresher, issueRefs)
@@ -362,6 +397,7 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		// not). Only rows the tracker actually returned with a non-empty state
 		// reach here, so absence stays "no information" (never a mass-cancel).
 		issue.Labels = st.Labels
+		issue.BlockedBy = st.BlockedBy
 		refreshed[id] = issue
 	}
 	if err == nil {

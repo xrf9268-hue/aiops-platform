@@ -375,7 +375,9 @@ func TestReconcileTickSkipsEmptyIDIssueFromStateGroupFanOut(t *testing.T) {
 		},
 	}
 	dispatcher := &cancellationDispatcher{}
-	orch := New(NewOrchestratorState(30000, 1), Deps{
+	st := NewOrchestratorState(30000, 1)
+	st.Blocked[IssueID("claimed-1")] = &BlockedEntry{Identifier: "LIN-1", Issue: tracker.Issue{ID: "claimed-1", Identifier: "LIN-1", State: "In Progress"}}
+	orch := New(st, Deps{
 		Dispatcher: dispatcher,
 		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
 	})

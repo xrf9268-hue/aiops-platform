@@ -141,6 +141,23 @@ func (o *Orchestrator) RefreshActiveTrackerIssues(ctx context.Context, issuesByI
 	}
 }
 
+// PatchActiveClaimedTrackerIssueStates applies positive narrow-refresh facts to
+// claimed entries without replacing the full tracker issue stored at dispatch.
+// State and labels are authoritative when returned; BlockedBy is authoritative
+// only when non-nil because nil means the adapter supplied no blocker knowledge.
+func (o *Orchestrator) PatchActiveClaimedTrackerIssueStates(ctx context.Context, issuesByID map[string]tracker.Issue, activeStates map[string]struct{}) error {
+	done := make(chan struct{}, 1)
+	if err := o.submit(ctx, &patchActiveClaimedTrackerIssueStatesOp{issuesByID: issuesByID, activeStates: activeStates, done: done}); err != nil {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func waitForReconciledWorkers(ctx context.Context, canceled []*RunningEntry, wait time.Duration) error {
 	if wait <= 0 {
 		return nil
@@ -194,6 +211,67 @@ type refreshActiveTrackerIssuesOp struct {
 	issuesByID   map[string]tracker.Issue
 	activeStates map[string]struct{}
 	done         chan<- struct{}
+}
+
+type patchActiveClaimedTrackerIssueStatesOp struct {
+	issuesByID   map[string]tracker.Issue
+	activeStates map[string]struct{}
+	done         chan<- struct{}
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) apply(st *OrchestratorState) func() {
+	for id, run := range st.Running {
+		if narrow, ok := p.activeNarrow(id); ok {
+			refreshRunningIssue(run, patchTrackerIssueState(run.Issue, narrow))
+			p.patchClaimedIssue(st, id, narrow, run.Issue)
+		}
+	}
+	for id, retry := range st.RetryAttempts {
+		if narrow, ok := p.activeNarrow(id); ok {
+			retry.Issue = patchTrackerIssueState(retry.Issue, narrow)
+			p.patchClaimedIssue(st, id, narrow, retry.Issue)
+		}
+	}
+	for id, blocked := range st.Blocked {
+		if narrow, ok := p.activeNarrow(id); ok {
+			blocked.Issue = patchTrackerIssueState(blocked.Issue, narrow)
+			p.patchClaimedIssue(st, id, narrow, blocked.Issue)
+		}
+	}
+	return func() {
+		if p.done != nil {
+			close(p.done)
+		}
+	}
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) activeNarrow(id IssueID) (tracker.Issue, bool) {
+	issue, ok := p.issuesByID[string(id)]
+	return issue, ok && isActiveTrackerState(issue.State, p.activeStates)
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) patchClaimedIssue(st *OrchestratorState, id IssueID, narrow, fallback tracker.Issue) {
+	if claimed, ok := st.ClaimedIssues[id]; ok {
+		st.ClaimedIssues[id] = patchTrackerIssueState(claimed, narrow)
+		return
+	}
+	st.ClaimedIssues[id] = fallback
+}
+
+func patchTrackerIssueState(issue, narrow tracker.Issue) tracker.Issue {
+	if issue.ID == "" {
+		issue.ID = narrow.ID
+	}
+	if issue.Identifier == "" {
+		issue.Identifier = narrow.Identifier
+	}
+	issue.State = narrow.State
+	issue.Labels = append([]string(nil), narrow.Labels...)
+	if narrow.BlockedBy != nil {
+		issue.BlockedBy = make([]tracker.BlockerRef, len(narrow.BlockedBy))
+		copy(issue.BlockedBy, narrow.BlockedBy)
+	}
+	return issue
 }
 
 func (r *refreshActiveTrackerIssuesOp) apply(st *OrchestratorState) func() {
