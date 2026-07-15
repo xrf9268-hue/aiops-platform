@@ -220,27 +220,39 @@ type patchActiveClaimedTrackerIssueStatesOp struct {
 }
 
 func (p *patchActiveClaimedTrackerIssueStatesOp) apply(st *OrchestratorState) func() {
+	p.patchRunning(st)
+	p.patchRetries(st)
+	p.patchBlocked(st)
+	return func() {
+		if p.done != nil {
+			close(p.done)
+		}
+	}
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) patchRunning(st *OrchestratorState) {
 	for id, run := range st.Running {
 		if narrow, ok := p.activeNarrow(id); ok {
 			refreshRunningIssue(run, patchTrackerIssueState(run.Issue, narrow))
 			p.patchClaimedIssue(st, id, narrow, run.Issue)
 		}
 	}
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) patchRetries(st *OrchestratorState) {
 	for id, retry := range st.RetryAttempts {
 		if narrow, ok := p.activeNarrow(id); ok {
 			retry.Issue = patchTrackerIssueState(retry.Issue, narrow)
 			p.patchClaimedIssue(st, id, narrow, retry.Issue)
 		}
 	}
+}
+
+func (p *patchActiveClaimedTrackerIssueStatesOp) patchBlocked(st *OrchestratorState) {
 	for id, blocked := range st.Blocked {
 		if narrow, ok := p.activeNarrow(id); ok {
 			blocked.Issue = patchTrackerIssueState(blocked.Issue, narrow)
 			p.patchClaimedIssue(st, id, narrow, blocked.Issue)
-		}
-	}
-	return func() {
-		if p.done != nil {
-			close(p.done)
 		}
 	}
 }

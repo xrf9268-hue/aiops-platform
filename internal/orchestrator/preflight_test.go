@@ -125,7 +125,7 @@ func TestPollOncePreflightFailureSkipsDispatchAndEmitsRuntimeEvent(t *testing.T)
 	if err == nil {
 		t.Fatalf("expected preflight failure error")
 	}
-	if !strings.Contains(err.Error(), "dispatch preflight failed") {
+	if !errors.Is(err, errDispatchPreflight) {
 		t.Errorf("unexpected error shape: %v", err)
 	}
 	if dispatcher.count() != 0 {
@@ -193,7 +193,7 @@ func TestPollOncePreflightFailureStillReconcilesRunningIssue(t *testing.T) {
 	preflightCfg.Tracker.APIKey = ""
 
 	err := poller.PollOnce(ctx)
-	if err == nil || !strings.Contains(err.Error(), "dispatch preflight failed") {
+	if err == nil || !errors.Is(err, errDispatchPreflight) {
 		t.Fatalf("preflight poll error = %v, want dispatch preflight failure", err)
 	}
 	if errors.Is(err, listingErr) || !errors.Is(err, refreshErr) {
@@ -279,7 +279,7 @@ func TestPollOncePreflightFailurePatchesClaimedActiveStateWithoutWipingMetadata(
 	}
 	poller.preflight = &preflightCfg
 
-	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "dispatch preflight failed") {
+	if err := poller.PollOnce(ctx); err == nil || !errors.Is(err, errDispatchPreflight) {
 		t.Fatalf("preflight poll error = %v, want dispatch preflight failure", err)
 	}
 	if got := candidateLister.count(); got != 0 {
@@ -354,7 +354,7 @@ func TestPollOncePreflightSuccessProceedsToFetch(t *testing.T) {
 	if err := poller.PollOnce(ctx); err != nil && !errors.Is(err, ErrNotDispatched) {
 		// Best-effort: dispatch may or may not occur depending on test
 		// fakes; the assertion that matters is no preflight error.
-		if strings.Contains(err.Error(), "dispatch preflight failed") {
+		if errors.Is(err, errDispatchPreflight) {
 			t.Fatalf("preflight should have passed: %v", err)
 		}
 	}
