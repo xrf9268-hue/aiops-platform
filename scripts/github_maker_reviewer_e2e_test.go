@@ -1302,11 +1302,12 @@ func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
 }
 
 func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
+	const timeoutSeconds = "3"
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	fakeBin := filepath.Join(t.TempDir(), "fakebin")
 	mkdirAll(t, fakeBin)
-	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForFinalVerify())
+	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForFinalVerifyWithCloneDelay())
 	writeFileString(t, filepath.Join(fakeBin, "npm"), "#!/usr/bin/env bash\nsleep 5\n")
 	for _, name := range []string{"gh", "npm"} {
 		if err := os.Chmod(filepath.Join(fakeBin, name), 0o755); err != nil {
@@ -1321,7 +1322,7 @@ func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 		"--run-root", runRoot,
 		"--repo", "octo-org/octo-todo",
 		"--skip-screenshots",
-		"--command-timeout-seconds", "1",
+		"--command-timeout-seconds", timeoutSeconds,
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
@@ -1333,12 +1334,23 @@ func TestGitHubMakerReviewerFinalVerifyTimesOutStalledCommands(t *testing.T) {
 	if err == nil {
 		t.Fatalf("final verify succeeded; want npm timeout\n%s", out)
 	}
-	if !strings.Contains(string(out), "npm ci timed out after 1s; see") {
-		t.Fatalf("final verify output missing timeout and log path\n%s", out)
+	wantDiagnostic := "npm ci timed out after " + timeoutSeconds + "s; see"
+	if got := strings.Contains(string(out), wantDiagnostic); !got {
+		t.Fatalf("strings.Contains(output, %q) = %v; want true\noutput:\n%s", wantDiagnostic, got, out)
+	}
+	cloneLog := readFileString(t, filepath.Join(runRoot, "final-verify", "logs", "gh-clone.log"))
+	wantCloneMarker := "AIOPS_FINAL_VERIFY_EXIT_STATUS: 0"
+	if got := strings.Contains(cloneLog, wantCloneMarker); !got {
+		t.Fatalf("strings.Contains(cloneLog, %q) = %v; want true\ncloneLog:\n%s", wantCloneMarker, got, cloneLog)
 	}
 	log := readFileString(t, filepath.Join(runRoot, "final-verify", "logs", "npm-ci.log"))
-	if !strings.Contains(log, "TIMEOUT after 1s") {
-		t.Fatalf("npm log missing timeout marker\n%s", log)
+	for _, want := range []string{
+		"TIMEOUT after " + timeoutSeconds + "s",
+		"AIOPS_FINAL_VERIFY_EXIT_STATUS: timeout",
+	} {
+		if got := strings.Contains(log, want); !got {
+			t.Fatalf("strings.Contains(npmLog, %q) = %v; want true\nnpmLog:\n%s", want, got, log)
+		}
 	}
 }
 
@@ -1828,4 +1840,8 @@ fi
 echo "unexpected gh args: $*" >&2
 exit 42
 `
+}
+
+func fakeGhForFinalVerifyWithCloneDelay() string {
+	return strings.Replace(fakeGhForFinalVerify(), `  mkdir -p "$dest"`, "  sleep 1.5\n  mkdir -p \"$dest\"", 1)
 }
