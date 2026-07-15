@@ -64,13 +64,21 @@ Supported enforcement today:
 - `bubblewrap` or `firejail` wraps the agent process when configured;
 - the agent working directory must remain under `workspace.root` before the
   sandbox wrapper is applied;
-- the child process environment is reduced to `sandbox.env_allowlist`;
-- the agent executable must live under a path the sandbox backend exposes
-  (for example `/usr` or `/bin` with the current bubblewrap/firejail profile);
+- the child process environment is reduced to `sandbox.env_allowlist` plus the
+  worker-injected `GOCACHE` / `GOMODCACHE` paths required for sandboxed Go
+  commands; operator-supplied cache paths do not receive this exception;
+- bubblewrap exposes only its explicit mounts: system paths such as `/usr`,
+  `/bin`, and `/lib` are read-only, `/tmp` is ephemeral, and the complete issue
+  workspace is read-write;
+- firejail makes the issue workdir the private home and supplies a private
+  `/tmp`, but other host paths accessible to the worker OS user may remain
+  visible with their ordinary OS permissions; do not treat it as bubblewrap's
+  explicit-mount boundary;
+- the agent executable must live under a path the selected backend exposes;
 - explicitly listed credential files are checked for readability and bound into
   the sandbox read-only;
-- the full issue workspace is exposed read-write as one unit; host paths outside
-  the sandbox profile are not exposed by that workspace mount;
+- the full issue workspace is exposed read-write as one unit; the wrapper does
+  not make selected repository subpaths read-only;
 - `network: none` disables network access for supported backends;
 - `network: allowlist` is supported through `firejail --netfilter` and CIDR
   allowlist rules.
@@ -241,7 +249,9 @@ repository:
    WORKFLOW prompt (PR handoff is agent-side per SPEC §1, #76) until several runs
    have been reviewed cleanly.
 4. Start with `agent.default: mock`. Only switch to a real coding agent after the
-   mock loop has proven clone, branch, PR, label, and policy behavior.
+   mock loop has proven tracker discovery, eligibility, clone, workspace setup,
+   prompt rendering, and runner lifecycle. Mock does not author code, create a
+   PR, apply labels, or prove that a coding agent will honor advisory scope.
 5. Do not pass shared production secrets, broad cloud credentials, personal
    tokens, SSH agents, or customer data into the worker environment or workspace.
 6. Keep `.env`, `.env.*`, private keys, and service-account files outside the

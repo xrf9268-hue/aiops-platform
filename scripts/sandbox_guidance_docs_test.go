@@ -48,16 +48,18 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 	security := normalizeSandboxGuidance(securityBody)
 	for _, want := range []string{"prompt path rules are advisory", "not a security boundary", "untrusted issue authors", "untrusted repositories"} {
 		if !strings.Contains(security, want) {
-			t.Errorf("security-posture.md normalized text missing %q", want)
+			t.Errorf("strings.Contains(security-posture.md, %q) = false; want true", want)
 		}
 	}
 	frontmatter := normalizeSandboxGuidance(readFileString(t, filepath.Join(root, "docs", "runbooks", "workflow-frontmatter-reference.md")))
 	for _, want := range []string{
 		"the worker process sandbox and codex turn sandbox are separate layers",
 		"neither layer accepts repository-relative allow or deny paths",
+		"worker-injected `gocache` and `gomodcache`",
+		"firejail may still expose host paths accessible to the worker os user",
 	} {
 		if !strings.Contains(frontmatter, want) {
-			t.Errorf("workflow-frontmatter-reference.md normalized text missing %q", want)
+			t.Errorf("strings.Contains(workflow-frontmatter-reference.md, %q) = false; want true", want)
 		}
 	}
 }
@@ -70,8 +72,8 @@ func scanUnsupportedSandboxClaims(root string) ([]string, error) {
 	}
 	forbidden := []string{
 		"hard path prevention belongs to",
-		"for hard path prevention",
-		"for hard prevention",
+		"use sandbox write restrictions for hard path prevention",
+		"use `sandbox:` write restrictions for hard prevention",
 		"restrict writes via the `sandbox:` block",
 		"`sandbox:` write restrictions keep changes out",
 		"keep the `sandbox:` write restrictions",
@@ -125,6 +127,6 @@ func findSandboxBoundaryRow(t *testing.T, body, layer string) []string {
 			return cells
 		}
 	}
-	t.Fatalf("security-posture.md missing sandbox boundary row for %q", layer)
+	t.Fatalf("findSandboxBoundaryRow(layer=%q) found no matching 3-cell row; want one", layer)
 	return nil
 }

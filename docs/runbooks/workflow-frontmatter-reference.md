@@ -153,10 +153,13 @@ default; Symphony mandates no universal sandbox posture).
 
 The worker process sandbox and Codex turn sandbox are separate layers. The
 worker wrapper exposes the complete issue workspace read-write while constraining
-the agent process, environment, credential mounts, network, and visibility of
-host paths. Neither layer accepts repository-relative allow or deny paths; use
-prompt scope as advisory guidance and repository permissions, branch protection,
-review, and CI for enforced controls over sensitive paths.
+the agent process, environment, credential mounts, and network. Host filesystem
+visibility is backend-specific: bubblewrap exposes only explicit mounts, while
+firejail may still expose host paths accessible to the worker OS user outside
+its private home/workdir with their ordinary permissions. Neither layer accepts
+repository-relative allow or deny paths; use prompt scope as advisory guidance
+and repository permissions, branch protection, review, and CI for enforced
+controls over sensitive paths.
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
@@ -165,7 +168,7 @@ review, and CI for enforced controls over sensitive paths.
 | `sandbox.network` | string | `none` | Sandbox network mode | `none` or `allowlist` |
 | `sandbox.network_allowlist_cidrs` | string list | `[]` | IPv4 CIDRs reachable from the sandbox when `network: allowlist` | required for `allowlist`; IPv4 CIDRs only |
 | `sandbox.network_interface` | string | — | Host interface Firejail attaches `--netfilter` to | required for `network: allowlist` (which also requires `backend: firejail`) |
-| `sandbox.env_allowlist` | string list | `[]` | Exact env vars the sandboxed child keeps; same tracker-token deny-list as `env_passthrough` | required when `enabled: true` |
+| `sandbox.env_allowlist` | string list | `[]` | Operator-selected env vars the sandboxed child keeps; the worker-injected `GOCACHE` and `GOMODCACHE` paths are carried separately, while operator-supplied cache paths do not receive that exception and tracker-token names remain denied | required when `enabled: true` |
 | `sandbox.credential_files` | string list | `[]` | Files bind-mounted into the sandbox for model-CLI credentials | `$VAR`; `~/` expansion |
 
 ## `verify`
