@@ -66,6 +66,38 @@ func TestRecordRuntimeEventAbsoluteUsageAddsOnlyMonotonicIncrease(t *testing.T) 
 	}
 }
 
+func TestRecordRuntimeEventDoesNotDeriveMissingProviderTotal(t *testing.T) {
+	o, issueID, cancel := startRuntimeEventActor(t, "ENG-EXPLICIT-TOTAL")
+	defer cancel()
+
+	events := []task.RuntimeEvent{
+		absoluteUsageEvent(100, 20, 120),
+		{
+			Event: task.EventNotification,
+			Payload: map[string]any{"token_usage": map[string]any{
+				"total": map[string]any{"input_tokens": 110, "output_tokens": 30},
+			}},
+		},
+	}
+	for _, event := range events {
+		if err := o.RecordRuntimeEvent(context.Background(), issueID, event); err != nil {
+			t.Fatalf("RecordRuntimeEvent(%q) = %v; want nil", event.Event, err)
+		}
+	}
+
+	view, err := o.Snapshot(context.Background())
+	if err != nil {
+		t.Fatalf("Snapshot() = %v; want nil", err)
+	}
+	want := TokensView{InputTokens: 110, OutputTokens: 30, TotalTokens: 120}
+	if got := view.Running[0].Tokens; got != want {
+		t.Fatalf("Running tokens = %+v; want explicit provider totals %+v", got, want)
+	}
+	if got := view.CodexTotals; got.InputTokens != 110 || got.OutputTokens != 30 || got.TotalTokens != 120 {
+		t.Fatalf("CodexTotals = %+v; want input=110 output=30 explicit total=120", got)
+	}
+}
+
 func TestRecordRuntimeEventIgnoresLastTokenUsage(t *testing.T) {
 	o, issueID, cancel := startRuntimeEventActor(t, "ENG-LAST-USAGE")
 	defer cancel()

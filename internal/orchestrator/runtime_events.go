@@ -304,9 +304,6 @@ func tokenUsageFromMap(m map[string]any) (tokenUsage, bool) {
 	if v, ok := numberField(m, "total_tokens", "total", "totalTokens"); ok {
 		usage.total, usage.hasTotal = v, true
 	}
-	if !usage.hasTotal && (usage.hasInput || usage.hasOutput) {
-		usage.total, usage.hasTotal = usage.input+usage.output, true
-	}
 	return usage, usage.hasInput || usage.hasOutput || usage.hasTotal
 }
 
@@ -325,9 +322,6 @@ func applyTokenUsage(run *RunningEntry, usage tokenUsage) (inputDelta, outputDel
 		totalDelta = positiveDelta(usage.total, run.LastReportedTotalTokens)
 		run.LastReportedTotalTokens = max(run.LastReportedTotalTokens, usage.total)
 		run.CodexTotalTokens = run.LastReportedTotalTokens
-	} else {
-		totalDelta = inputDelta + outputDelta
-		run.CodexTotalTokens += totalDelta
 	}
 	return inputDelta, outputDelta, totalDelta
 }
