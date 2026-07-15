@@ -138,9 +138,13 @@ workspace. Use an explicit `workspaceWrite` turn policy with both temporary-root
 exclusion flags set to `true` when those default write roots are unnecessary.
 By default, the runner injects `GOCACHE` and `GOMODCACHE` below the worker's
 temporary directory. Go workflows should normally leave the applicable
-temporary root writable. If either cache variable is overridden through
-`codex.env_passthrough`, each override path must be writable and visible to both
-sandbox layers; when `sandbox:` is enabled, also add each overridden name to
+temporary root writable. With the worker wrapper enabled, the worker's
+temporary directory must also be visible to both sandbox layers. Bubblewrap
+mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path outside
+`/tmp` and the issue workspace requires cache overrides to paths both layers
+expose. If either cache variable is overridden through `codex.env_passthrough`,
+each override path must be writable and visible to both sandbox layers; when
+`sandbox:` is enabled, also add each overridden name to
 `sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
 `writableRoots`, so an external cache root cannot rely on that inner Codex
 setting alone. Otherwise Go commands can fail

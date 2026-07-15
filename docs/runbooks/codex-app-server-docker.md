@@ -355,7 +355,11 @@ sandbox policy:
   `excludeSlashTmp: true` when those temporary write roots are unnecessary. The
   runner injects `GOCACHE` and `GOMODCACHE` below the worker's temporary
   directory by default. Go workflows should normally leave the applicable
-  temporary root writable. If either cache variable is overridden through
+  temporary root writable. With the worker wrapper enabled, the worker's
+  temporary directory must also be visible to both sandbox layers. Bubblewrap
+  mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path outside
+  `/tmp` and the issue workspace requires cache overrides to paths both layers
+  expose. If either cache variable is overridden through
   `codex.env_passthrough`, each override path must be writable and visible to
   both sandbox layers; when `sandbox:` is enabled, also add each overridden name
   to `sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
