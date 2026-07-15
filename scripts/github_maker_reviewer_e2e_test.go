@@ -1,7 +1,6 @@
 package scripts_test
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,7 +47,7 @@ func TestGitHubMakerReviewerRunbookDocumentsReusableHarness(t *testing.T) {
 		"--browser-storage-state",
 		"--tag final",
 		"Do not downgrade the scenario into\nsingle-agent merge",
-		"`gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha>`",
+		"`gh pr merge <PR> --auto --squash --delete-branch --match-head-commit <sha> --body \"Closes #<N>\"`",
 	} {
 		if !strings.Contains(normalizedWorkflowText(body), normalizedWorkflowText(want)) {
 			t.Fatalf("runbook missing %q", want)
@@ -90,7 +89,6 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"`aiops:human-review`",
 		"`aiops:blocked`",
 		"remove that role's active labels",
-		"`aiops:done`",
 		"`aiops:canceled`",
 		"`Rework response:`",
 		"(headRefOid, baseRefOid, baseRefName)",
@@ -104,6 +102,7 @@ func TestGitHubMakerReviewerGovernanceGuideDocumentsProductionTopology(t *testin
 		"required status check",
 		"required approving review",
 		"GitHub native auto-merge",
+		"--body \"Closes #<N>\"",
 		"Evidence checklist",
 		"Failure recovery",
 		"Worker/orchestrator boundary",
@@ -142,7 +141,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			role:            "maker",
 			path:            "examples/github-maker-WORKFLOW.md",
 			active:          []string{"aiops:todo", "aiops:rework"},
-			inactive:        []string{"aiops:human-review", "aiops:blocked", "aiops:done", "aiops:canceled"},
+			inactive:        []string{"aiops:human-review", "aiops:blocked", "aiops:canceled"},
 			maxTurns:        30,
 			maxClaimTokens:  20000000,
 			maxClaimSeconds: 7200,
@@ -152,7 +151,7 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 			role:            "reviewer",
 			path:            "examples/github-reviewer-automerge-WORKFLOW.md",
 			active:          []string{"aiops:human-review"},
-			inactive:        []string{"aiops:todo", "aiops:rework", "aiops:blocked", "aiops:done", "aiops:canceled"},
+			inactive:        []string{"aiops:todo", "aiops:rework", "aiops:blocked", "aiops:canceled"},
 			maxTurns:        18,
 			maxContTurns:    48,
 			maxClaimTokens:  12000000,
@@ -174,6 +173,9 @@ func TestGitHubMakerReviewerWorkflowExamplesLoadAndPinBoundaries(t *testing.T) {
 		}
 		if strings.Join(cfg.Tracker.InactiveStates, ",") != strings.Join(tc.inactive, ",") {
 			t.Fatalf("%s inactive states = %v; want %v", tc.path, cfg.Tracker.InactiveStates, tc.inactive)
+		}
+		if strings.Join(cfg.Tracker.TerminalStates, ",") != "closed" {
+			t.Fatalf("%s terminal states = %v; want [closed]", tc.path, cfg.Tracker.TerminalStates)
 		}
 		if cfg.Agent.Default != "codex-app-server" {
 			t.Fatalf("%s agent.default = %q; want codex-app-server", tc.path, cfg.Agent.Default)
@@ -259,10 +261,12 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"at most one `@codex review`", "absence of a reliable Codex signal is not clean",
 			"use the `aiops:rework` transition above as the LAST action",
 			"head or base changes", "reviewThreads", "current-head blockers from any author",
-			"REST review API", "event `APPROVE`", "--match-head-commit <HEAD>",
+			"REST review API", "event `APPROVE`",
+			`gh pr merge <PR_NUMBER> --auto --squash --delete-branch --match-head-commit <HEAD> --body "Closes #<N>"`,
 			"gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework",
 			"Re-read labels", "Repair and recheck before exit", "fail non-zero if it cannot converge",
-			"Do not use `--admin`", "mergedAt", "restore `aiops:human-review`", "aiops:blocked",
+			"Do not use `--admin`", "mergedAt", "PR is merged but the issue remains open",
+			"gh issue close <N>", "approval and auto-merge already exist", "make no duplicate write", "aiops:blocked",
 		}
 	default:
 		t.Fatalf("unknown role %q", role)
@@ -272,7 +276,16 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			t.Fatalf("%s prompt missing invariant %q", role, want)
 		}
 	}
+	const closingMergeBody = `--body "Closes #<N>"`
+	if role == "maker" {
+		if got := strings.Count(text, closingMergeBody); got != 0 {
+			t.Fatalf("maker merge closing body count = %d; want 0", got)
+		}
+	}
 	if role == "reviewer" {
+		if got := strings.Count(text, closingMergeBody); got != 1 {
+			t.Fatalf("reviewer merge closing body count = %d; want 1", got)
+		}
 		const reworkCommand = "gh issue edit <N> --remove-label aiops:human-review --add-label aiops:rework"
 		if strings.Count(text, normalizedWorkflowText(reworkCommand)) != 1 {
 			t.Fatalf("reviewer rework command count = %d; want 1", strings.Count(text, normalizedWorkflowText(reworkCommand)))
@@ -286,7 +299,7 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 			"disable auto-merge and confirm it is absent before approval", "event `APPROVE`",
 			"post-approval tuple guard",
 			"dismiss that approval", "With an exact-head approval already present",
-			"--match-head-commit <HEAD>")
+			`--match-head-commit <HEAD> --body "Closes #<N>"`)
 	}
 }
 
@@ -308,7 +321,7 @@ func TestGitHubMakerReviewerPromptBudgetsAndNetNegativeDocs(t *testing.T) {
 		"examples/github-maker-WORKFLOW.md",
 		"examples/github-reviewer-automerge-WORKFLOW.md",
 	}
-	wantMax := []int{4341, 6892}
+	wantMax := []int{2439, 6406}
 	total := 0
 	for i, path := range paths {
 		body := readFileString(t, filepath.Join(root, path))
@@ -318,8 +331,8 @@ func TestGitHubMakerReviewerPromptBudgetsAndNetNegativeDocs(t *testing.T) {
 		}
 		total += size
 	}
-	if total > 8986 {
-		t.Fatalf("combined prompt bytes = %d; want <= 8986", total)
+	if total > 8845 {
+		t.Fatalf("combined prompt bytes = %d; want <= 8845", total)
 	}
 
 	tracked := []string{
@@ -331,46 +344,26 @@ func TestGitHubMakerReviewerPromptBudgetsAndNetNegativeDocs(t *testing.T) {
 	for _, path := range tracked {
 		lines += strings.Count(readFileString(t, filepath.Join(root, path)), "\n")
 	}
-	if lines >= 1015 {
-		t.Fatalf("tracked workflow/runbook lines = %d; want < 1015", lines)
+	if lines >= 988 {
+		t.Fatalf("tracked workflow/runbook lines = %d; want < 988", lines)
 	}
 }
 
-func TestGitHubMakerReviewerReplaySummaryMatchesTrackedArtifacts(t *testing.T) {
+func TestGitHubMakerReviewerTopologyRetiresDoneLabel(t *testing.T) {
 	root := repoRoot(t)
-	var summary struct {
-		PromptBytes struct {
-			Maker    int `json:"current_maker"`
-			Reviewer int `json:"current_reviewer"`
-			Combined int `json:"current_combined"`
-		} `json:"prompt_bytes"`
-		TrackedLines struct {
-			Current int `json:"current"`
-		} `json:"workflow_runbook_lines"`
-	}
-	path := filepath.Join(root, "docs/validation/assets/stable-head-reviewer-replay-20260714/summary.json")
-	if err := json.Unmarshal([]byte(readFileString(t, path)), &summary); err != nil {
-		t.Fatalf("parse replay summary: %v", err)
-	}
-
-	maker := len(githubWorkflowPromptBody(t, "maker", readFileString(t, filepath.Join(root, "examples/github-maker-WORKFLOW.md"))))
-	reviewer := len(githubWorkflowPromptBody(t, "reviewer", readFileString(t, filepath.Join(root, "examples/github-reviewer-automerge-WORKFLOW.md"))))
-	if summary.PromptBytes.Maker != maker || summary.PromptBytes.Reviewer != reviewer || summary.PromptBytes.Combined != maker+reviewer {
-		t.Fatalf("summary prompt bytes = %d/%d/%d; want %d/%d/%d", summary.PromptBytes.Maker, summary.PromptBytes.Reviewer, summary.PromptBytes.Combined, maker, reviewer, maker+reviewer)
-	}
-
-	tracked := []string{
+	legacyDone := "aiops:" + "done"
+	for _, path := range []string{
 		"examples/github-maker-WORKFLOW.md",
 		"examples/github-reviewer-automerge-WORKFLOW.md",
+		"scripts/github-maker-reviewer-e2e-bootstrap.sh",
+		"scripts/github-maker-reviewer-report.py",
+		"scripts/github_maker_reviewer_e2e_test.go",
 		"docs/runbooks/github-maker-reviewer-governance.md",
 		"docs/runbooks/github-maker-reviewer-automerge-e2e.md",
-	}
-	lines := 0
-	for _, trackedPath := range tracked {
-		lines += strings.Count(readFileString(t, filepath.Join(root, trackedPath)), "\n")
-	}
-	if summary.TrackedLines.Current != lines {
-		t.Fatalf("summary tracked lines = %d; want %d", summary.TrackedLines.Current, lines)
+	} {
+		if got := strings.Count(readFileString(t, filepath.Join(root, path)), legacyDone); got != 0 {
+			t.Fatalf("%s retired terminal label count = %d; want 0", path, got)
+		}
 	}
 }
 
@@ -721,9 +714,10 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		filepath.Join(runRoot, "final-verify", "logs"),
 		filepath.Join(runRoot, "final-verify", "screenshots"),
 	)
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesWithControlJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithControlJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubControlClosureEvent(t, runRoot, "final")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
 	writeFakeReviewedHeadEvidence(t, runRoot, "final")
 	writeFileString(t, filepath.Join(runRoot, "screenshots", "github-issues-final.png"), "png")
@@ -760,9 +754,10 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		"Merged PR build-test evidence: present",
 		"Reviewer approval evidence: matched",
 		"Fresh clone verification evidence: present",
+		"Issue closure provenance evidence: matched",
 	} {
-		if !strings.Contains(report, want) {
-			t.Fatalf("report missing %q\n%s", want, report)
+		if got := strings.Contains(report, want); !got {
+			t.Fatalf("strings.Contains(report, %q) = %v; want true\nreport:\n%s", want, got, report)
 		}
 	}
 
@@ -783,11 +778,11 @@ func TestGitHubMakerReviewerReportUsesCapturedPluralJson(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "issues-issue3-done.json"), fakeGitHubDoneIssuesJSON())
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-done.json"), fakeGitHubMergedPRsJSON())
-	writeFakeGitHubDependencySequencingEvents(t, runRoot, "issue3-done")
-	writeFakeGitHubGovernanceEvidence(t, runRoot, "issue3-done")
-	writeFakeReviewedHeadEvidence(t, runRoot, "issue3-done")
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issues-issue3-closed.json"), fakeGitHubClosedIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "prs-issue3-closed.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "issue3-closed")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "issue3-closed")
+	writeFakeReviewedHeadEvidence(t, runRoot, "issue3-closed")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command(
@@ -813,7 +808,7 @@ func TestGitHubMakerReviewerReportRequiresGovernanceEvidenceForReady(t *testing.
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithoutStatusJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeFinalVerifyLogs(t, runRoot)
@@ -848,7 +843,7 @@ func TestGitHubMakerReviewerReportRejectsFinalBranchProtectionFailure(t *testing
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeReviewedHeadEvidence(t, runRoot, "final")
@@ -883,7 +878,7 @@ func TestGitHubMakerReviewerReportRejectsFailedFreshCloneExitStatus(t *testing.T
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
@@ -917,7 +912,7 @@ func TestGitHubMakerReviewerReportRequiresExplicitReviewedHeadEvidence(t *testin
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeBranchProtectionEvidence(t, runRoot, "final")
@@ -950,7 +945,7 @@ func TestGitHubMakerReviewerReportRequiresReviewerApprovalAndFreshCloneEvidence(
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithMakerApprovalJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeBranchProtectionEvidence(t, runRoot, "final")
@@ -985,7 +980,7 @@ func TestGitHubMakerReviewerReportRejectsStaleReviewerApproval(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithStaleApprovalJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
@@ -1017,7 +1012,7 @@ func TestGitHubMakerReviewerReportRequiresDependencySequencingEvidence(t *testin
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
@@ -1047,7 +1042,7 @@ func TestGitHubMakerReviewerReportRejectsEarlyDependencyActivation(t *testing.T)
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
 	writeFakeGitHubEarlyDependencySequencingEvents(t, runRoot, "final")
 
@@ -1074,12 +1069,15 @@ func TestGitHubMakerReviewerReportRejectsEarlyDependencyActivation(t *testing.T)
 	}
 }
 
-func TestGitHubMakerReviewerReportRequiresDependencyScenario(t *testing.T) {
+func TestGitHubMakerReviewerReportRequiresClosedDependencyScenario(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
-	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubControlWithoutDependencyIssuesJSON())
+	mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubOpenDependencyIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+	writeFakeReviewedHeadEvidence(t, runRoot, "final")
 
 	script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
 	cmd := exec.Command(
@@ -1096,11 +1094,63 @@ func TestGitHubMakerReviewerReportRequiresDependencyScenario(t *testing.T) {
 		t.Fatalf("report failed: %v\n%s", err, out)
 	}
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
-	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
-		t.Fatalf("report marked ready without dependency issue evidence\n%s", report)
+	const readyVerdict = "READY FOR OPERATOR PASS REVIEW"
+	if got := strings.Contains(report, readyVerdict); got {
+		t.Fatalf("strings.Contains(report, %q) = %v; want false\nreport:\n%s", readyVerdict, got, report)
 	}
 	if !strings.Contains(report, "INCOMPLETE - review the evidence before claiming PASS") {
 		t.Fatalf("report missing incomplete verdict\n%s", report)
+	}
+}
+
+func TestGitHubMakerReviewerReportRejectsUnprovenIssueClosures(t *testing.T) {
+	root := repoRoot(t)
+	for _, tc := range []struct {
+		name         string
+		issuesJSON   string
+		prsJSON      string
+		issue1Events string
+	}{
+		{name: "operator manual close", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:20:00Z","actor":{"login":"setup-bot"},"commit_id":null}]`},
+		{name: "reviewer close before merge", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:19:00Z","actor":{"login":"reviewer-bot"},"commit_id":null}]`},
+		{name: "mismatched native commit", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}]`},
+		{name: "wrong refs linkage", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `Refs #1.`, `Refs #10.`, 1)},
+		{name: "maker closing reference", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[]`, `"closingIssuesReferences":[{"number":1}]`, 1)},
+		{name: "missing closing reference evidence", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[],`, "", 1)},
+		{name: "unproven extra closed issue", issuesJSON: fakeGitHubClosedIssuesWithControlJSON(), prsJSON: fakeGitHubMergedPRsJSON()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runRoot := filepath.Join(t.TempDir(), "run")
+			mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+			issuesJSON := tc.issuesJSON
+			if issuesJSON == "" {
+				issuesJSON = fakeGitHubClosedIssuesJSON()
+			}
+			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), issuesJSON)
+			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), tc.prsJSON)
+			writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+			writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+			writeFakeReviewedHeadEvidence(t, runRoot, "final")
+			if tc.issue1Events != "" {
+				writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-1-events-final.json"), tc.issue1Events)
+			}
+			script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+			cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--reviewer-login", "reviewer-bot", "--date", "2026-06-26")
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("report failed: %v\n%s", err, out)
+			}
+			report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+			for value, want := range map[string]bool{
+				"READY FOR OPERATOR PASS REVIEW":             false,
+				"Issue closure provenance evidence: missing": true,
+			} {
+				if got := strings.Contains(report, value); got != want {
+					t.Fatalf("strings.Contains(report, %q) = %v; want %v\nreport:\n%s", value, got, want, report)
+				}
+			}
+		})
 	}
 }
 
@@ -1108,7 +1158,7 @@ func TestGitHubMakerReviewerReportRequiresReviewerOwnedMerges(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
 	mkdirAll(t, filepath.Join(runRoot, "forge-json"))
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubDoneIssuesJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMakerMergedPRsJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 
@@ -1203,6 +1253,7 @@ func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
 	runRoot := filepath.Join(t.TempDir(), "run")
 	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
 	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	argsLog := filepath.Join(t.TempDir(), "gh-args.log")
 	mkdirAll(t, setupDir, fakeBin)
 	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForCaptureTokenCheck())
 	if err := os.Chmod(filepath.Join(fakeBin, "gh"), 0o755); err != nil {
@@ -1222,12 +1273,31 @@ func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AIOPS_FAKE_GH_ARGS_LOG="+argsLog,
 		"GH_TOKEN=tracker-token",
 		"GITHUB_TOKEN=tracker-token",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("capture failed: %v\n%s", err, out)
+	}
+	commands := strings.Split(readFileString(t, argsLog), "\n")
+	for _, prefix := range []string{"pr list ", "pr view "} {
+		var command string
+		for _, line := range commands {
+			if strings.HasPrefix(line, prefix) {
+				command = line
+				break
+			}
+		}
+		if command == "" {
+			t.Fatalf("captured command with prefix %q = %q; want non-empty", prefix, command)
+		}
+		for _, field := range []string{"mergeCommit", "closingIssuesReferences"} {
+			if got := strings.Contains(command, field); !got {
+				t.Fatalf("strings.Contains(%q, %q) = %v; want true", command, field, got)
+			}
+		}
 	}
 }
 
@@ -1332,35 +1402,62 @@ exit 42
 	}
 }
 
-func fakeGitHubDoneIssuesJSON() string {
+func fakeGitHubClosedIssuesJSON() string {
 	return `[
-  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
-  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
-  {"number":3,"title":"Dependency: bulk complete active todos","state":"closed","closedAt":"2026-06-26T08:27:22Z","labels":[{"name":"aiops:done"}]}
+  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:human-review"}]},
+  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:human-review"}]},
+  {"number":3,"title":"Dependency: bulk complete active todos","state":"closed","closedAt":"2026-06-26T08:27:22Z","labels":[{"name":"aiops:human-review"}]}
 ]`
 }
 
-func fakeGitHubControlWithoutDependencyIssuesJSON() string {
+func fakeGitHubClosedIssuesWithControlJSON() string {
+	return strings.Replace(fakeGitHubClosedIssuesJSON(), "\n]", `,
+  {"number":4,"title":"Control Rework: forced stale delete proof","state":"closed","closedAt":"2026-06-26T09:01:00Z","labels":[{"name":"aiops:human-review"}]}
+]`, 1)
+}
+
+func fakeGitHubOpenDependencyIssuesJSON() string {
 	return `[
-  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:done"}]},
-  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:done"}]},
-  {"number":4,"title":"Control Rework: forced stale delete proof","state":"closed","closedAt":"2026-06-26T08:20:01Z","labels":[{"name":"aiops:done"}]}
+  {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:human-review"}]},
+  {"number":2,"title":"Rework candidate: stale offline delete guard","state":"closed","closedAt":"2026-06-26T08:11:26Z","labels":[{"name":"aiops:human-review"}]},
+  {"number":3,"title":"Dependency: bulk complete active todos","state":"open","closedAt":null,"labels":[{"name":"aiops:human-review"}]}
 ]`
 }
 
 func writeFakeGitHubDependencySequencingEvents(t *testing.T, runRoot string, tag string) {
 	t.Helper()
+	writeFakeGitHubRequiredClosureEvents(t, runRoot, tag)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
-  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}}
+  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}},
+  {"event":"closed","created_at":"2026-06-26T08:27:22Z","actor":{"login":"reviewer-bot"},"commit_id":"cccccccccccccccccccccccccccccccccccccccc"}
+]`)
+}
+
+func writeFakeGitHubControlClosureEvent(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-4-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T09:01:00Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}
 ]`)
 }
 
 func writeFakeGitHubEarlyDependencySequencingEvents(t *testing.T, runRoot string, tag string) {
 	t.Helper()
+	writeFakeGitHubRequiredClosureEvents(t, runRoot, tag)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
   {"event":"labeled","created_at":"2026-06-26T08:00:00Z","label":{"name":"aiops:todo"}},
   {"event":"unlabeled","created_at":"2026-06-26T08:05:00Z","label":{"name":"aiops:todo"}},
-  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}}
+  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}},
+  {"event":"closed","created_at":"2026-06-26T08:27:22Z","actor":{"login":"reviewer-bot"},"commit_id":"cccccccccccccccccccccccccccccccccccccccc"}
+]`)
+}
+
+func writeFakeGitHubRequiredClosureEvents(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-1-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+]`)
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-2-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T08:11:26Z","actor":{"login":"reviewer-bot"},"commit_id":null}
 ]`)
 }
 
@@ -1373,9 +1470,10 @@ func writeFakeGitHubGovernanceEvidence(t *testing.T, runRoot string, tag string)
 func writeFakeReviewedHeadEvidence(t *testing.T, runRoot string, tag string) {
 	t.Helper()
 	for number, head := range map[string]string{
-		"5": "1111111111111111111111111111111111111111",
-		"8": "2222222222222222222222222222222222222222",
-		"9": "3333333333333333333333333333333333333333",
+		"5":  "1111111111111111111111111111111111111111",
+		"8":  "2222222222222222222222222222222222222222",
+		"9":  "3333333333333333333333333333333333333333",
+		"10": "4444444444444444444444444444444444444444",
 	} {
 		writeFileString(t, filepath.Join(runRoot, "forge-json", "pr-"+number+"-reviews-"+tag+".json"), `[
   {"state":"APPROVED","user":{"login":"reviewer-bot"},"commit_id":"`+head+`"}
@@ -1410,41 +1508,47 @@ func writeFakeFinalVerifyLogs(t *testing.T, runRoot string) {
 
 func fakeGitHubMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Implemented the requested filter.\n\nRefs #1.","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
+}
+
+func fakeGitHubMergedPRsWithControlJSON() string {
+	return strings.Replace(fakeGitHubMergedPRsJSON(), "\n]", `,
+  {"number":10,"title":"test: forced rework proof","body":"Refs #4","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"4444444444444444444444444444444444444444","mergedAt":"2026-06-26T09:00:00Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"dddddddddddddddddddddddddddddddddddddddd"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+]`, 1)
 }
 
 func fakeGitHubMergedPRsWithoutStatusJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]}
 ]`
 }
 
 func fakeGitHubMergedPRsWithMakerApprovalJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMergedPRsWithStaleApprovalJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"1111111111111111111111111111111111111111"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"old2222222222222222222222222222222222222"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"3333333333333333333333333333333333333333"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"1111111111111111111111111111111111111111"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"old2222222222222222222222222222222222222"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"3333333333333333333333333333333333333333"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMakerMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
@@ -1679,11 +1783,19 @@ if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
   exit 43
 fi
 
-case "${1:-}" in
-  issue|pr|run)
+printf '%s\n' "$*" >> "$AIOPS_FAKE_GH_ARGS_LOG"
+
+case "${1:-}:${2:-}" in
+  issue:list|run:list)
     echo '[]'
     ;;
-  api)
+  pr:list)
+    echo '[{"number":5}]'
+    ;;
+  pr:view)
+    echo '{"number":5}'
+    ;;
+  api:*)
     echo '{}'
     ;;
   *)
