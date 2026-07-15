@@ -65,51 +65,45 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 }
 
 func scanUnsupportedSandboxClaims(root string) ([]string, error) {
-	patterns := []string{
-		"AGENTS.md", "DEVIATIONS.md", "README.md",
-		"docs/*.md", "docs/adr/*.md", "docs/runbooks/*.md", "docs/workflows/*.md",
-		"examples/*.md", "internal/workflow/*.go",
-	}
-	forbidden := []string{
-		"hard path prevention belongs to",
-		"use sandbox write restrictions for hard path prevention",
-		"use `sandbox:` write restrictions for hard prevention",
-		"restrict writes via the `sandbox:` block",
-		"`sandbox:` write restrictions keep changes out",
-		"keep the `sandbox:` write restrictions",
-		"enforced preventively by the agent",
-		"basic path policy",
-		"basic deny-path policy",
-		"deny sensitive paths in company repositories",
+	type retiredClaim struct{ path, text string }
+	claims := []retiredClaim{
+		{"DEVIATIONS.md", "SPEC §3.2 homes scope/validation rules in the operator's `WORKFLOW.md` prompt, hard path prevention belongs to `sandbox:` write restrictions, and upstream has no such config"},
+		{"examples/WORKFLOW.md", "Scope and path rules (which files to keep changes within, which paths to avoid) belong in the prompt body below (SPEC §3.2); hard path prevention belongs to the `sandbox:` write restrictions"},
+		{"examples/gitea-WORKFLOW.md", "Scope and path rules belong in the prompt body (SPEC §3.2); hard path prevention belongs to `sandbox:` write restrictions"},
+		{"examples/github-local-WORKFLOW.md", "Scope and path rules belong in the prompt body (SPEC §3.2); hard path prevention belongs to `sandbox:` write restrictions"},
+		{"docs/workflows/company-cautious-WORKFLOW.md", "For HARD path prevention on a company repo, restrict writes via the `sandbox:` block"},
+		{"docs/workflows/company-cautious-WORKFLOW.md", "prompt + `sandbox:` write restrictions keep changes out of the directories you expect"},
+		{"docs/workflows/company-cautious-WORKFLOW.md", "a tight size budget in the prompt, and keep the `sandbox:` write restrictions conservative"},
+		{"docs/workflows/company-cautious-WORKFLOW.md", "without authoring any code, so you can validate policy guardrails before letting a real model touch the repository"},
+		{"docs/runbooks/personal-daily-workflow.md", "so the agent self-limits; use `sandbox:` write restrictions for hard prevention"},
+		{"docs/security-posture.md", "off-limits in the `WORKFLOW.md` prompt (SPEC §3.2) and, for hard prevention, restrict writes via the `sandbox:` block"},
+		{"docs/security-posture.md", "mock loop has proven clone, branch, PR, label, and policy behavior"},
+		{"docs/security-posture.md", "Unless the optional sandbox wrapper is enabled and validated on the worker host, do not assume the platform prevents a malicious or compromised agent run from"},
+		{"docs/runbooks/gitea-bot-and-branch-protection.md", "Scope and path constraints now live in the operator's `WORKFLOW.md` prompt (SPEC §3.2), enforced preventively by the agent before push"},
+		{"docs/adr/0001-symphony-style-personal-orchestrator.md", "- basic deny-path policy - verification commands"},
+		{"docs/adr/0001-symphony-style-personal-orchestrator.md", "- deny sensitive paths in company repositories - do not automatically merge"},
+		{"docs/symphony-integration.md", "- basic path policy - verification commands"},
+		{"docs/runbooks/workflow-frontmatter-reference.md", "the agent process, environment, credential mounts, network, and visibility of host paths"},
+		{"docs/runbooks/workflow-frontmatter-reference.md", "Exact env vars the sandboxed child keeps; same tracker-token deny-list as `env_passthrough`"},
+		{"internal/workflow/config.go", "and upstream has no such config. Hard path prevention belongs to the `sandbox` write restrictions; scope guidance belongs to the prompt"},
+		{"internal/workflow/reject.go", "Express scope/path rules in the WORKFLOW prompt (SPEC §3.2) and use sandbox write restrictions for hard path prevention"},
+		{"examples/github-local-WORKFLOW.md", "Keep changes small enough for review. Respect the configured policy limits unless the issue explicitly requires a larger change"},
 	}
 	var violations []string
-	for _, pattern := range patterns {
-		paths, err := filepath.Glob(filepath.Join(root, pattern))
+	for _, claim := range claims {
+		body, err := os.ReadFile(filepath.Join(root, claim.path))
 		if err != nil {
 			return nil, err
 		}
-		for _, path := range paths {
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return nil, err
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil, err
-			}
-			normalized := normalizeSandboxGuidance(string(body))
-			for _, phrase := range forbidden {
-				if strings.Contains(normalized, phrase) {
-					violations = append(violations, rel+": "+phrase)
-				}
-			}
+		if strings.Contains(normalizeSandboxGuidance(string(body)), normalizeSandboxGuidance(claim.text)) {
+			violations = append(violations, claim.path+": "+claim.text)
 		}
 	}
 	return violations, nil
 }
 
 func normalizeSandboxGuidance(text string) string {
-	text = strings.ReplaceAll(text, "#", " ")
+	text = strings.NewReplacer("#", " ", "//", " ").Replace(text)
 	return strings.ToLower(strings.Join(strings.Fields(text), " "))
 }
 

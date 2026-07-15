@@ -33,8 +33,9 @@ workspace:
 agent:
   # Start with the mock runner. It exercises the worker pipeline (clone,
   # branch, workspace prep, runner loop) without authoring
-  # any code, so you can validate policy guardrails before letting a
-  # real model touch the repository. PR creation, labels, and comments are
+  # any code, so you can validate tracker eligibility, workspace and prompt
+  # plumbing, and runner lifecycle before letting a real model touch the
+  # repository. PR creation, labels, and comments are
   # the agent's responsibility per SPEC §1, not the worker's. Only the runners registered in
   # `internal/runner/runner.go` (`mock`, `codex-app-server`, `claude`) can
   # execute; any other name fails the task with `unknown runner`. Switch to

@@ -209,8 +209,12 @@ credentials its runtime exposes. Prompt scope helps guide a well-behaved agent,
 but repository permissions, branch protection, review, and CI are the enforced
 landing controls.
 
-Unless the optional sandbox wrapper is enabled and validated on the worker host,
-do not assume the platform prevents a malicious or compromised agent run from:
+Do not assume the platform prevents a malicious or compromised run from the
+following actions, even when the optional wrapper is enabled. The wrapper can
+narrow selected filesystem, environment, credential, and network risks for the
+agent process it wraps, according to the chosen backend; it does not wrap
+workspace hooks, remove agent-side tool or credential authority, or make
+Firejail hide every host path accessible to the worker OS user:
 
 - reading host files that are accessible to the worker OS user;
 - reading credentials present in the process environment or filesystem;
