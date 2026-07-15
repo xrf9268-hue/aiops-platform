@@ -270,10 +270,10 @@ def issue_closure_provenance_present(
     if not reviewer or reviewer.startswith("REPLACE_ME"):
         return False
     merged = merged_prs(prs)
-    for marker in ("happy path", "rework candidate", "dependency:"):
-        issue = closed_issue_by_title(issues, marker)
-        if not issue:
-            return False
+    closed = [issue for issue in issues if str(issue.get("state", "")).lower() == "closed"]
+    if not closed:
+        return False
+    for issue in closed:
         linked = [
             pr
             for pr in merged

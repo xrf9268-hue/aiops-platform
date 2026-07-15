@@ -714,9 +714,10 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		filepath.Join(runRoot, "final-verify", "logs"),
 		filepath.Join(runRoot, "final-verify", "screenshots"),
 	)
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
-	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesWithControlJSON())
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), fakeGitHubMergedPRsWithControlJSON())
 	writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+	writeFakeGitHubControlClosureEvent(t, runRoot, "final")
 	writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
 	writeFakeReviewedHeadEvidence(t, runRoot, "final")
 	writeFileString(t, filepath.Join(runRoot, "screenshots", "github-issues-final.png"), "png")
@@ -1106,20 +1107,26 @@ func TestGitHubMakerReviewerReportRejectsUnprovenIssueClosures(t *testing.T) {
 	root := repoRoot(t)
 	for _, tc := range []struct {
 		name         string
+		issuesJSON   string
 		prsJSON      string
 		issue1Events string
 	}{
-		{"operator manual close", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:20:00Z","actor":{"login":"setup-bot"},"commit_id":null}]`},
-		{"reviewer close before merge", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:00Z","actor":{"login":"reviewer-bot"},"commit_id":null}]`},
-		{"mismatched native commit", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}]`},
-		{"wrong refs linkage", strings.Replace(fakeGitHubMergedPRsJSON(), `Refs #1.`, `Refs #10.`, 1), ""},
-		{"maker closing reference", strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[]`, `"closingIssuesReferences":[{"number":1}]`, 1), ""},
-		{"missing closing reference evidence", strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[],`, "", 1), ""},
+		{name: "operator manual close", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:20:00Z","actor":{"login":"setup-bot"},"commit_id":null}]`},
+		{name: "reviewer close before merge", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:19:00Z","actor":{"login":"reviewer-bot"},"commit_id":null}]`},
+		{name: "mismatched native commit", prsJSON: fakeGitHubMergedPRsJSON(), issue1Events: `[{"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}]`},
+		{name: "wrong refs linkage", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `Refs #1.`, `Refs #10.`, 1)},
+		{name: "maker closing reference", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[]`, `"closingIssuesReferences":[{"number":1}]`, 1)},
+		{name: "missing closing reference evidence", prsJSON: strings.Replace(fakeGitHubMergedPRsJSON(), `"closingIssuesReferences":[],`, "", 1)},
+		{name: "unproven extra closed issue", issuesJSON: fakeGitHubClosedIssuesWithControlJSON(), prsJSON: fakeGitHubMergedPRsJSON()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runRoot := filepath.Join(t.TempDir(), "run")
 			mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
-			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
+			issuesJSON := tc.issuesJSON
+			if issuesJSON == "" {
+				issuesJSON = fakeGitHubClosedIssuesJSON()
+			}
+			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), issuesJSON)
 			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), tc.prsJSON)
 			writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
 			writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
@@ -1403,6 +1410,12 @@ func fakeGitHubClosedIssuesJSON() string {
 ]`
 }
 
+func fakeGitHubClosedIssuesWithControlJSON() string {
+	return strings.Replace(fakeGitHubClosedIssuesJSON(), "\n]", `,
+  {"number":4,"title":"Control Rework: forced stale delete proof","state":"closed","closedAt":"2026-06-26T09:01:00Z","labels":[{"name":"aiops:human-review"}]}
+]`, 1)
+}
+
 func fakeGitHubOpenDependencyIssuesJSON() string {
 	return `[
   {"number":1,"title":"Happy path: persistent filter tabs","state":"closed","closedAt":"2026-06-26T07:19:58Z","labels":[{"name":"aiops:human-review"}]},
@@ -1417,6 +1430,13 @@ func writeFakeGitHubDependencySequencingEvents(t *testing.T, runRoot string, tag
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
   {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}},
   {"event":"closed","created_at":"2026-06-26T08:27:22Z","actor":{"login":"reviewer-bot"},"commit_id":"cccccccccccccccccccccccccccccccccccccccc"}
+]`)
+}
+
+func writeFakeGitHubControlClosureEvent(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-4-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T09:01:00Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}
 ]`)
 }
 
@@ -1450,9 +1470,10 @@ func writeFakeGitHubGovernanceEvidence(t *testing.T, runRoot string, tag string)
 func writeFakeReviewedHeadEvidence(t *testing.T, runRoot string, tag string) {
 	t.Helper()
 	for number, head := range map[string]string{
-		"5": "1111111111111111111111111111111111111111",
-		"8": "2222222222222222222222222222222222222222",
-		"9": "3333333333333333333333333333333333333333",
+		"5":  "1111111111111111111111111111111111111111",
+		"8":  "2222222222222222222222222222222222222222",
+		"9":  "3333333333333333333333333333333333333333",
+		"10": "4444444444444444444444444444444444444444",
 	} {
 		writeFileString(t, filepath.Join(runRoot, "forge-json", "pr-"+number+"-reviews-"+tag+".json"), `[
   {"state":"APPROVED","user":{"login":"reviewer-bot"},"commit_id":"`+head+`"}
@@ -1491,6 +1512,12 @@ func fakeGitHubMergedPRsJSON() string {
   {"number":8,"title":"fix: stale delete","body":"Refs #2","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
   {"number":9,"title":"feat: bulk complete","body":"Refs #3","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
+}
+
+func fakeGitHubMergedPRsWithControlJSON() string {
+	return strings.Replace(fakeGitHubMergedPRsJSON(), "\n]", `,
+  {"number":10,"title":"test: forced rework proof","body":"Refs #4","closingIssuesReferences":[],"state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"4444444444444444444444444444444444444444","mergedAt":"2026-06-26T09:00:00Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"dddddddddddddddddddddddddddddddddddddddd"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+]`, 1)
 }
 
 func fakeGitHubMergedPRsWithoutStatusJSON() string {
