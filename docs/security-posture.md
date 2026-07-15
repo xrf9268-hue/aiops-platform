@@ -10,19 +10,22 @@ harness hardening as part of the core safety model, not as an optional add-on.
 `aiops-platform` has two separate sandbox layers. They compose when both are
 enabled, but they enforce different boundaries.
 
-| Layer | Writable project unit | Configurable repository-subpath allow/deny |
+| Layer | Writable paths | Configurable repository-subpath allow/deny |
 |---|---|---|
-| Codex `workspaceWrite` | Issue workspace plus any added `writableRoots`; fixed Codex metadata protections still apply | None |
-| Worker `sandbox:` | Whole issue workspace read-write | None |
+| Codex `workspaceWrite` | Issue workspace, `$TMPDIR`, `/tmp`, plus any added `writableRoots`; fixed Codex metadata protections still apply | None |
+| Worker `sandbox:` | Whole issue workspace read-write plus backend-private `/tmp` | None |
 
 ### Coding-agent sandbox
 
 The selected coding agent owns its sandbox and approval behavior. For Codex
 runs, `codex.thread_sandbox` and `codex.turn_sandbox_policy` select the
 app-server sandbox. `workspaceWrite` treats the issue workspace as its writable
-project boundary; `writableRoots` adds writable roots outside it. Codex also
-protects a small fixed set of metadata paths such as `.git`, `.agents`, and
-`.codex`, but those built-in protections are not an operator-configurable
+project boundary, and `writableRoots` adds writable roots outside it. The
+current defaults leave `$TMPDIR` and `/tmp` writable too. Set both
+`excludeTmpdirEnvVar: true` and `excludeSlashTmp: true` in an explicit
+`workspaceWrite` policy to remove those default temporary write roots. Codex
+also protects a small fixed set of metadata paths such as `.git`, `.agents`,
+and `.codex`, but those built-in protections are not an operator-configurable
 repository path policy. See the official Codex documentation for
 [sandbox modes](https://learn.chatgpt.com/docs/agent-approvals-security#sandbox-and-approvals)
 and [protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).

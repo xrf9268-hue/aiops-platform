@@ -618,11 +618,13 @@ container/VM isolation layer.
 - Do not use this platform against untrusted issue authors, untrusted
   repositories, or shared production secrets until external sandboxing and
   per-run credential scoping are enabled and validated for your worker host.
-- The worker wrapper exposes the issue workspace as one write unit, and Codex
-  `workspaceWrite` does the same for project files (while retaining Codex's fixed
-  metadata protections). Neither offers an operator-configurable repository-
-  subpath denylist. Treat prompt scope as advisory and use repository permissions,
-  branch protection, review, and CI to enforce what may land.
+- The worker wrapper exposes the issue workspace as one write unit. For project
+  files, Codex `workspaceWrite` uses that same unit while retaining Codex's fixed
+  metadata protections, but its current defaults leave `$TMPDIR` and `/tmp`
+  writable too, and `writableRoots` can add more write roots. Neither sandbox
+  layer offers an operator-configurable repository-subpath denylist. Treat prompt
+  scope as advisory and use repository permissions, branch protection, review,
+  and CI to enforce what may land.
 - Keep branch protection enabled.
 - The agent opens PRs through its workflow/tool surface; the worker does not
   push, open, or merge PRs.

@@ -122,10 +122,13 @@ over stdio).
 | `codex.linear_graphql.allow_mutations` | bool | `false` | With the default, every GraphQL mutation through the agent-visible `linear_graphql` tool is rejected before any request leaves the process; reads are unrestricted | — |
 | `codex.linear_graphql.allowed_mutations` | string list | `[]` (= all, once mutations are allowed) | Per-operation allow-list of top-level Mutation field names (e.g. `issueUpdate`, `commentCreate`) | valid GraphQL names, unique; requires `allow_mutations: true` |
 
-For `workspaceWrite`, the issue workspace is the writable project unit and
-`writableRoots` only adds other writable roots. Codex's fixed protected metadata
-locations are documented upstream, but this configuration does not accept an
-operator-defined repository-subpath denylist.
+For `workspaceWrite`, the issue workspace is the writable project unit, while
+`writableRoots` adds other writable roots. The current defaults leave `$TMPDIR`
+and `/tmp` writable too. Set both `excludeTmpdirEnvVar: true` and
+`excludeSlashTmp: true` in an explicit `workspaceWrite` policy to remove those
+default temporary write roots. Codex's fixed protected metadata locations are
+documented upstream, but this configuration does not accept an operator-defined
+repository-subpath denylist.
 
 ## `claude`
 

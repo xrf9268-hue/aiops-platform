@@ -131,9 +131,11 @@ The agent's sandbox/approval posture is set by `codex.thread_sandbox`
 (per-session) and `codex.turn_sandbox_policy` (per-turn; derived from
 `thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on
 shared hosts and `danger-full-access` only on already-isolated workers
-(container, dedicated VM). `workspace-write` constrains writes to the workspace;
-it does not enforce operator-selected off-limits subdirectories inside that
-workspace.
+(container, dedicated VM). `workspace-write` constrains project-file writes to
+the workspace, but the current defaults leave `$TMPDIR` and `/tmp` writable too;
+it does not enforce operator-selected off-limits subdirectories inside the
+workspace. Use an explicit `workspaceWrite` turn policy with both temporary-root
+exclusion flags set to `true` when those default write roots are unnecessary.
 
 > The earlier non-SPEC `codex` (one-shot `codex exec`) runner was removed under [#541](https://github.com/xrf9268-hue/aiops-platform/issues/541); it drove the same agent as `codex app-server` in a strictly worse mode (no in-session `max_turns`).
 

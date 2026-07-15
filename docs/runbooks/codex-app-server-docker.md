@@ -350,6 +350,10 @@ sandbox policy:
       excludeSlashTmp: false
   ```
 
+  With both exclusion fields set to `false`, the current defaults leave
+  `$TMPDIR` and `/tmp` writable too. Set `excludeTmpdirEnvVar: true` and
+  `excludeSlashTmp: true` when those temporary write roots are unnecessary.
+
   A `read-only` workflow likewise blocks network by default; if it only needs to
   *fetch* (not install), opt in on its **own** `type: readOnly` policy
   (`type: readOnly` + `networkAccess: true`) — do not switch it to

@@ -26,15 +26,17 @@ func assertSandboxBoundaryContract(t *testing.T, root string) {
 	t.Helper()
 	securityBody := readFileString(t, filepath.Join(root, "docs", "security-posture.md"))
 	for _, tc := range []struct {
-		layer         string
-		writableScope string
+		layer          string
+		writableScopes []string
 	}{
-		{layer: "codex `workspacewrite`", writableScope: "issue workspace"},
-		{layer: "worker `sandbox:`", writableScope: "whole issue workspace"},
+		{layer: "codex `workspacewrite`", writableScopes: []string{"issue workspace", "`$tmpdir`", "`/tmp`"}},
+		{layer: "worker `sandbox:`", writableScopes: []string{"whole issue workspace"}},
 	} {
 		row := findSandboxBoundaryRow(t, securityBody, tc.layer)
-		if !strings.Contains(strings.ToLower(row[1]), tc.writableScope) {
-			t.Errorf("%s writable scope = %q; want substring %q", tc.layer, row[1], tc.writableScope)
+		for _, want := range tc.writableScopes {
+			if !strings.Contains(strings.ToLower(row[1]), want) {
+				t.Errorf("%s writable scope = %q; want substring %q", tc.layer, row[1], want)
+			}
 		}
 		if got, want := strings.ToLower(strings.TrimSpace(row[2])), "none"; got != want {
 			t.Errorf("%s repository-subpath policy = %q; want %q", tc.layer, got, want)
@@ -62,6 +64,28 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			t.Errorf("strings.Contains(workflow-frontmatter-reference.md, %q) = false; want true", want)
 		}
 	}
+	for _, tc := range []struct {
+		path  string
+		wants []string
+	}{
+		{path: "docs/security-posture.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable", "`excludetmpdirenvvar: true` and `excludeslashtmp: true`"}},
+		{path: "docs/runbooks/workflow-frontmatter-reference.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable", "`excludetmpdirenvvar: true` and `excludeslashtmp: true`"}},
+		{path: "README.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable"}},
+		{path: "docs/runbooks/personal-daily-workflow.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable"}},
+		{path: "docs/runbooks/codex-app-server-docker.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable"}},
+	} {
+		assertSandboxDocumentContains(t, root, tc.path, tc.wants)
+	}
+}
+
+func assertSandboxDocumentContains(t *testing.T, root, path string, wants []string) {
+	t.Helper()
+	body := normalizeSandboxGuidance(readFileString(t, filepath.Join(root, filepath.FromSlash(path))))
+	for _, want := range wants {
+		if !strings.Contains(body, want) {
+			t.Errorf("strings.Contains(%s, %q) = false; want true", path, want)
+		}
+	}
 }
 
 func scanUnsupportedSandboxClaims(root string) ([]string, error) {
@@ -87,6 +111,10 @@ func scanUnsupportedSandboxClaims(root string) ([]string, error) {
 		{"docs/symphony-integration.md", "- basic path policy - verification commands"},
 		{"docs/runbooks/workflow-frontmatter-reference.md", "the agent process, environment, credential mounts, network, and visibility of host paths"},
 		{"docs/runbooks/workflow-frontmatter-reference.md", "Exact env vars the sandboxed child keeps; same tracker-token deny-list as `env_passthrough`"},
+		{"docs/runbooks/workflow-frontmatter-reference.md", "For `workspaceWrite`, the issue workspace is the writable project unit and `writableRoots` only adds other writable roots."},
+		{"docs/runbooks/personal-daily-workflow.md", "`workspace-write` constrains writes to the workspace; it does not enforce operator-selected off-limits subdirectories inside that workspace."},
+		{"docs/security-posture.md", "`workspaceWrite` treats the issue workspace as its writable project boundary; `writableRoots` adds writable roots outside it."},
+		{"README.md", "The worker wrapper exposes the issue workspace as one write unit, and Codex `workspaceWrite` does the same for project files (while retaining Codex's fixed metadata protections)."},
 		{"internal/workflow/config.go", "and upstream has no such config. Hard path prevention belongs to the `sandbox` write restrictions; scope guidance belongs to the prompt"},
 		{"internal/workflow/reject.go", "Express scope/path rules in the WORKFLOW prompt (SPEC §3.2) and use sandbox write restrictions for hard path prevention"},
 		{"examples/github-local-WORKFLOW.md", "Keep changes small enough for review. Respect the configured policy limits unless the issue explicitly requires a larger change"},
