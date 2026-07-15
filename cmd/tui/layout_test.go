@@ -176,7 +176,8 @@ func TestRenderFrameExplainsClaimTokenBudgetObservationScope(t *testing.T) {
 	for _, want := range []string{
 		"Claim budget: 20,000,000 worker-observed Codex tokens | 2h 0m runtime",
 		"Token scope: worker-observed, runner-reported Codex usage only",
-		"Unmeasured: external review and unreported nested or subagent usage",
+		"Unmeasured: external GitHub @codex review usage",
+		"Unmeasured: otherwise unreported nested or subagent usage",
 	} {
 		if !strings.Contains(frame, want) {
 			t.Errorf("renderFrame missing %q:\n%s", want, frame)

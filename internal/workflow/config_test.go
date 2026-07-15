@@ -767,7 +767,7 @@ prompt body
 	if err == nil {
 		t.Fatal("Load succeeded with agent.max_tokens_per_claim=-1, want validation error")
 	}
-	want := "agent.max_tokens_per_claim must be non-negative (counts only worker-observed, runner-reported Codex usage; external review and otherwise unreported nested or subagent usage are excluded)"
+	want := "agent.max_tokens_per_claim must be non-negative (counts only worker-observed, runner-reported Codex usage; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded)"
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("Load error = %q; want substring %q", err, want)
 	}

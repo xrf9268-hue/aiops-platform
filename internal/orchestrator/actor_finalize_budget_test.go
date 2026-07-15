@@ -9,11 +9,13 @@ import (
 
 func TestApplyBudgetExceededBlockFallbackNamesObservedScope(t *testing.T) {
 	st := NewOrchestratorState(15000, 100)
+	st.BudgetGuardrails = BudgetGuardrails{MaxTokensPerClaim: 10, MaxRuntimeSecondsPerClaim: 7200}
 	id := IssueID("ENG-BUDGET-FALLBACK")
 	entry := &RunningEntry{
-		BudgetExceeded: true,
-		Issue:          tracker.Issue{ID: string(id), Identifier: string(id)},
-		Identifier:     string(id),
+		BudgetExceeded:   true,
+		CodexTotalTokens: 12,
+		Issue:            tracker.Issue{ID: string(id), Identifier: string(id)},
+		Identifier:       string(id),
 	}
 	st.Running[id] = entry
 	done := make(chan struct{})
@@ -22,7 +24,7 @@ func TestApplyBudgetExceededBlockFallbackNamesObservedScope(t *testing.T) {
 	if !op.applyBudgetExceededBlock(st, time.Second) {
 		t.Fatal("applyBudgetExceededBlock() = false; want true")
 	}
-	want := "worker-observed, runner-reported Codex claim budget exceeded; observed total and configured limit unavailable; external review and otherwise unreported nested or subagent usage are excluded"
+	want := "worker-observed, runner-reported Codex claim budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10 current_claim_runtime_seconds=1 max_runtime_seconds_per_claim=7200; recorded exceedance reason missing; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded from token totals"
 	if got := st.Blocked[id].Error; got != want {
 		t.Fatalf("blocked fallback error = %q; want %q", got, want)
 	}

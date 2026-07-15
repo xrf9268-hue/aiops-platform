@@ -196,7 +196,7 @@ func validateAgentLimits(path string, cfg Config) error {
 	if cfg.Agent.MaxTokensPerClaim < 0 {
 		return fmt.Errorf(
 			"%s: agent.max_tokens_per_claim must be non-negative "+
-				"(counts only worker-observed, runner-reported Codex usage; external review and otherwise unreported nested or subagent usage are excluded)",
+				"(counts only worker-observed, runner-reported Codex usage; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded)",
 			path,
 		)
 	}

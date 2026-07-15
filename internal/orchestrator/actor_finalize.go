@@ -96,7 +96,14 @@ func (f *finalizeRunOp) applyBudgetExceededBlock(st *OrchestratorState, elapsed 
 	blockedAt := f.entry.BudgetExceededAt
 	runErr := f.entry.BudgetExceededError
 	if strings.TrimSpace(runErr) == "" {
-		runErr = "worker-observed, runner-reported Codex claim budget exceeded; observed total and configured limit unavailable; external review and otherwise unreported nested or subagent usage are excluded"
+		guard := st.BudgetGuardrails
+		runErr = fmt.Sprintf(
+			"worker-observed, runner-reported Codex claim budget exceeded: "+
+				"current_claim_total_tokens=%d max_tokens_per_claim=%d "+
+				"current_claim_runtime_seconds=%.0f max_runtime_seconds_per_claim=%d; "+
+				"recorded exceedance reason missing; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded from token totals",
+			f.entry.CodexTotalTokens, guard.MaxTokensPerClaim, elapsedSeconds(elapsed), guard.MaxRuntimeSecondsPerClaim,
+		)
 	}
 	if !st.BlockRunWithReason(f.id, f.entry, blockedAt, budgetExceededBlockMethod, runErr, elapsed) {
 		close(f.done)

@@ -129,7 +129,7 @@ func (s *OrchestratorState) budgetExceededMessage(run *RunningEntry, now time.Ti
 	if guard.MaxTokensPerClaim > 0 && run.CodexTotalTokens > guard.MaxTokensPerClaim {
 		return fmt.Sprintf(
 			"worker-observed, runner-reported Codex claim token budget exceeded: "+
-				"current_claim_total_tokens=%d max_tokens_per_claim=%d; external review and otherwise unreported nested or subagent usage are excluded",
+				"current_claim_total_tokens=%d max_tokens_per_claim=%d; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded",
 			run.CodexTotalTokens,
 			guard.MaxTokensPerClaim,
 		), true

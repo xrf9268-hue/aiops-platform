@@ -617,7 +617,7 @@ export default function App() {
               ? <>Read-only view of <b>{total}</b> {total === 1 ? 'claim' : 'claims'} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
               : <>The worker is healthy and <b>idle</b> — polling with nothing in flight.</>}
             <br />
-            <span>Token totals and token guardrails cover worker-observed, runner-reported Codex usage only; external review and otherwise unreported nested or subagent usage are excluded, not counted as zero.</span>
+            <span>Token totals and token guardrails cover worker-observed, runner-reported Codex usage only; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded, not counted as zero.</span>
           </p>
         </div>
         <div className="title-meta">
@@ -646,7 +646,7 @@ export default function App() {
       <div className="meta-strip">
         <div className="meta-cell"><div className="meta-k">Worker-observed input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">runner-reported · process lifetime</div></div>
         <div className="meta-cell"><div className="meta-k">Worker-observed output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">runner-reported · process lifetime</div></div>
-        <div className="meta-cell"><div className="meta-k">Worker-observed total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">runner-reported · process lifetime · may include older issues</div><div className="meta-sub">excludes external and unreported usage</div></div>
+        <div className="meta-cell"><div className="meta-k">Worker-observed total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">runner-reported · process lifetime · may include older issues</div><div className="meta-sub">excludes GitHub @codex review and unreported nested/subagent usage</div></div>
         <div className="meta-cell"><div className="meta-k">Process runtime</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
       </div>
 
