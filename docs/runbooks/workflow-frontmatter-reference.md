@@ -122,6 +122,11 @@ over stdio).
 | `codex.linear_graphql.allow_mutations` | bool | `false` | With the default, every GraphQL mutation through the agent-visible `linear_graphql` tool is rejected before any request leaves the process; reads are unrestricted | — |
 | `codex.linear_graphql.allowed_mutations` | string list | `[]` (= all, once mutations are allowed) | Per-operation allow-list of top-level Mutation field names (e.g. `issueUpdate`, `commentCreate`) | valid GraphQL names, unique; requires `allow_mutations: true` |
 
+For `workspaceWrite`, the issue workspace is the writable project unit and
+`writableRoots` only adds other writable roots. Codex's fixed protected metadata
+locations are documented upstream, but this configuration does not accept an
+operator-defined repository-subpath denylist.
+
 ## `claude`
 
 | Key | Type | Default | Behavior | Validation |
@@ -145,6 +150,13 @@ keys) are only consumed by the codex app-server runner, and
 
 Optional worker-side process hardening around agent invocation (off by
 default; Symphony mandates no universal sandbox posture).
+
+The worker process sandbox and Codex turn sandbox are separate layers. The
+worker wrapper exposes the complete issue workspace read-write while constraining
+the agent process, environment, credential mounts, network, and visibility of
+host paths. Neither layer accepts repository-relative allow or deny paths; use
+prompt scope as advisory guidance and repository permissions, branch protection,
+review, and CI for enforced controls over sensitive paths.
 
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|

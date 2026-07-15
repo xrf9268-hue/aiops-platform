@@ -55,10 +55,11 @@ policy:
   # for company repositories.
   mode: draft_pr
   # Path/scope rules (e.g. "do not touch infra/**, deploy/**, secrets/**,
-  # .github/**; keep the diff small") belong in the prompt body below (SPEC
-  # §3.2). For HARD path prevention on a company repo, restrict writes via the
-  # `sandbox:` block. The worker path/diffstat gate was removed in #561 —
-  # `deny_paths` / `max_changed_*` are no longer accepted here.
+  # .github/**; keep the diff small") belong in the prompt body below as
+  # advisory guidance (SPEC §3.2). Neither sandbox layer exposes a configurable
+  # repository-subpath denylist; use repository permissions, branch protection,
+  # review, and CI for enforced landing controls. The worker gate was removed in
+  # #561, so `deny_paths` / `max_changed_*` are no longer accepted here.
 
 # The cautious safety envelope (allowed networks/paths/commands, forbidden
 # actions) is expressed in the prompt body below (SPEC §3.2) — see the Process
@@ -116,8 +117,8 @@ Process:
 5. Open the PR as a draft, label it `ai-generated`, `needs-review`, and
    `cautious-mode`, and request review from your-company-reviewer. Summarize what
    you changed, why, and how you verified it in the pull request description.
-6. Stop and explain the blocker if the task is ambiguous, exceeds
-   policy limits, or touches a denied path.
+6. Stop and explain the blocker if the task is ambiguous, exceeds the requested
+   review budget, or touches a path the prompt marks off-limits.
 
 Rules:
 - Never modify infrastructure, deploy manifests, secrets, auth code,
@@ -137,25 +138,26 @@ the following stages, and only move forward after the previous stage
 has produced a clean audit trail:
 
 1. **Mock runner end-to-end** (`mock`).
-   Use this to validate that the repository, tracker, and policy
-   guardrails behave correctly. The mock runner produces deterministic
+   Use this to validate that the repository, tracker, eligibility gate, and
+   prompt rendering behave correctly. The mock runner produces deterministic
    workspace artifacts and never authors code; PR creation, labels, and
    review handoff are the agent's responsibility per SPEC §1, not the
    worker's. Stay here until you have reviewed several runs and confirmed the
-   prompt + `sandbox:` write restrictions keep changes out of the directories
-   you expect.
+   worker starts only the intended issues with the intended prompt and
+   workspace. Mock runs cannot prove how a coding agent will honor advisory
+   subpath scope.
 
 2. **Claude with draft PRs** (`claude`).
    When you are ready to let a model author code, switch
    `agent.default` to `claude` while keeping `policy.mode: draft_pr` and a
    prompt that tells the agent to open draft PRs. State the off-limits paths and
-   a tight size budget in the prompt, and keep the `sandbox:` write restrictions
-   conservative.
+   a tight review budget in the prompt, and keep the worker sandbox's process,
+   environment, credential, and network controls conservative.
 
 3. **Codex with draft PRs** (`codex-app-server`).
    Once the Claude loop looks healthy, swap `agent.default` to `codex-app-server`
-   under the same guardrails. Raise the size caps only after several
-   PRs have been reviewed and merged cleanly.
+   under the same guardrails. Relax the prompt's review budget only after
+   several PRs have been reviewed and merged cleanly.
 
 Do not switch off `mock` if any of the following is still true:
 

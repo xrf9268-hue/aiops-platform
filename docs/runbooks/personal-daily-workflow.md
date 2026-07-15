@@ -62,7 +62,11 @@ Checklist before moving an issue to `Todo`:
 - One clear outcome. Not "improve logging" but "log tracker issue id in worker poll dispatch output".
 - Concrete file or package hints. Mention paths like `internal/runner/shell.go` so the agent does not wander.
 - Acceptance criteria as a bullet list. The verification section in `WORKFLOW.md` runs `go test ./...`, but tests do not catch design intent.
-- Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt so the agent self-limits; use `sandbox:` write restrictions for hard prevention.
+- Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`,
+  `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt
+  so the agent self-limits. This is advisory: neither sandbox layer supplies a
+  repository-subpath denylist. Use repository permissions, branch protection,
+  required review, and CI path checks when those paths need enforced controls.
 - Size budget: keep the change small (aim for ≤12 files / ≤300 LOC as a review guideline). If a task realistically needs more, split it.
 - Link to the relevant ADR or research doc when the task involves architecture decisions.
 - Dependency class: mark the issue as a `hard dependency`, `soft overlap`, or
@@ -123,7 +127,13 @@ codex:
   command: codex app-server --config shell_environment_policy.inherit=all
 ```
 
-The agent's sandbox/approval posture is set by `codex.thread_sandbox` (per-session) and `codex.turn_sandbox_policy` (per-turn; derived from `thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on shared hosts and `danger-full-access` only on already-isolated workers (container, dedicated VM).
+The agent's sandbox/approval posture is set by `codex.thread_sandbox`
+(per-session) and `codex.turn_sandbox_policy` (per-turn; derived from
+`thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on
+shared hosts and `danger-full-access` only on already-isolated workers
+(container, dedicated VM). `workspace-write` constrains writes to the workspace;
+it does not enforce operator-selected off-limits subdirectories inside that
+workspace.
 
 > The earlier non-SPEC `codex` (one-shot `codex exec`) runner was removed under [#541](https://github.com/xrf9268-hue/aiops-platform/issues/541); it drove the same agent as `codex app-server` in a strictly worse mode (no in-session `max_turns`).
 

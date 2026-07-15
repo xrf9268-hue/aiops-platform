@@ -61,7 +61,7 @@ Implemented:
 - repo-owned `WORKFLOW.md` in the service/repository root (single canonical path; see `DEVIATIONS.md` D4 closure)
 - mock, codex-app-server, and claude runner abstraction
 - deterministic local workspace keyed by sanitized source issue identifier (`source_type` + `source_event_id`), so reruns for the same issue reuse the same path while receiving a fresh checkout
-- basic path policy
+- prompt-scoped path guidance (advisory; repository controls enforce what lands)
 - verification commands
 - `linear_graphql` dynamic tool advertisement and invocation for Codex app-server sessions, proxying Linear GraphQL through orchestrator-held auth without exposing the Linear token to the agent process
 
