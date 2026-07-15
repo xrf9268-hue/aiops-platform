@@ -96,7 +96,7 @@ func (f *finalizeRunOp) applyBudgetExceededBlock(st *OrchestratorState, elapsed 
 	blockedAt := f.entry.BudgetExceededAt
 	runErr := f.entry.BudgetExceededError
 	if strings.TrimSpace(runErr) == "" {
-		runErr = "budget exceeded"
+		runErr = "worker-observed, runner-reported Codex claim budget exceeded; observed total and configured limit unavailable; external review and otherwise unreported nested or subagent usage are excluded"
 	}
 	if !st.BlockRunWithReason(f.id, f.entry, blockedAt, budgetExceededBlockMethod, runErr, elapsed) {
 		close(f.done)

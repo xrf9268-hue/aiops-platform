@@ -30,6 +30,10 @@ agent:
   default: codex-app-server
   max_concurrent_agents: 1
   max_turns: 30
+  # This limit counts only worker-observed, runner-reported Codex usage.
+  # External GitHub @codex review usage is excluded.
+  # Otherwise unreported nested or subagent usage is unmeasured, not zero, and
+  # does not consume the limit.
   max_tokens_per_claim: 20000000
   max_runtime_seconds_per_claim: 7200
   timeout: 2h

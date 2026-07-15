@@ -194,7 +194,11 @@ func validateAgentLimits(path string, cfg Config) error {
 		return fmt.Errorf("%s: agent.max_continuation_turns must be positive", path)
 	}
 	if cfg.Agent.MaxTokensPerClaim < 0 {
-		return fmt.Errorf("%s: agent.max_tokens_per_claim must be non-negative", path)
+		return fmt.Errorf(
+			"%s: agent.max_tokens_per_claim must be non-negative "+
+				"(counts only worker-observed, runner-reported Codex usage; external review and otherwise unreported nested or subagent usage are excluded)",
+			path,
+		)
 	}
 	if cfg.Agent.MaxRuntimeSecondsPerClaim < 0 {
 		return fmt.Errorf("%s: agent.max_runtime_seconds_per_claim must be non-negative", path)

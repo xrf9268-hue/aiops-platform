@@ -760,6 +760,18 @@ func TestStateHTTPHandlerReturnsRuntimeStateSnapshot(t *testing.T) {
 	if payload.BudgetGuardrails.MaxTokensPerClaim != 100000 || payload.BudgetGuardrails.MaxRuntimeSecondsPerClaim != 7200 {
 		t.Fatalf("budget_guardrails = %+v, want configured local guardrails", payload.BudgetGuardrails)
 	}
+	rawGuardrails, ok := raw["budget_guardrails"].(map[string]any)
+	if !ok {
+		t.Fatalf("budget_guardrails raw shape = %#v; want object", raw["budget_guardrails"])
+	}
+	if len(rawGuardrails) != 2 {
+		t.Fatalf("budget_guardrails raw keys = %#v; want only max_tokens_per_claim and max_runtime_seconds_per_claim", rawGuardrails)
+	}
+	for _, key := range []string{"max_tokens_per_claim", "max_runtime_seconds_per_claim"} {
+		if _, ok := rawGuardrails[key]; !ok {
+			t.Errorf("budget_guardrails missing established key %q: %#v", key, rawGuardrails)
+		}
+	}
 	if !reflect.DeepEqual(payload.ActiveSuccessNoHandoff, []string{"issue-12"}) {
 		t.Fatalf("active_success_no_handoff = %+v, want [issue-12]", payload.ActiveSuccessNoHandoff)
 	}
@@ -991,7 +1003,7 @@ func TestRootDashboardServesStateDepictingReactApp(t *testing.T) {
 			t.Fatalf("asset %s status code = %d, want %d; body=%s", assetPath, assetW.Code, http.StatusOK, assetW.Body.String())
 		}
 		asset := assetW.Body.String()
-		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Process total tokens", "Ended usage", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress", "active_success_no_handoff"} {
+		for _, want := range []string{"/api/v1/state", "Running sessions", "Retrying sessions", "Blocked claims", "Worker-observed total tokens", "external review and otherwise unreported nested or subagent usage are excluded", "Ended usage", "Rate limits", "Delivered", "agent_handoff_reconcile_stopped", "reconcile_stopped_with_progress", "active_success_no_handoff"} {
 			if !strings.Contains(asset, want) {
 				t.Fatalf("dashboard asset missing state surface label %q", want)
 			}

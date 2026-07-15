@@ -352,6 +352,12 @@ When the worker requires state API auth (for example the Docker dashboard
 overlay), set `AIOPS_STATE_API_TOKEN` in the TUI environment; the client sends
 it as a bearer token.
 
+The dashboard and TUI treat `agent.max_tokens_per_claim` as a lower-bound
+safety stop, not an end-to-end cost or billing ceiling. It counts only
+worker-observed, runner-reported Codex usage. External GitHub `@codex review`
+usage and otherwise unreported nested or subagent usage are unmeasured, not
+zero, and do not consume this worker guardrail.
+
 ## WORKFLOW.md configuration
 
 The worker resolves one canonical workflow source: `WORKFLOW.md` in the
@@ -373,6 +379,8 @@ key with type, default, behavior, and validation rule) is
 | `agent.max_concurrent_agents` | `10` | SPEC §6.4 |
 | `agent.max_turns` | `20` per-session turn budget — the codex app-server runner's in-session loop (SPEC §5.3.5) | SPEC §6.4 |
 | `agent.max_continuation_turns` | `agent.max_turns` (default `20`) issue-level clean-turn budget across fresh and continuation dispatches. Each dispatch receives the remaining clean-turn budget, capped again by `agent.max_turns`; reaching the budget parks the issue in local `blocked` state (`continuation_budget`) instead of looping forever. Raising the value later does not automatically redrive existing blocked claims. | implementation (accepted deviation D34 / #621) |
+| `agent.max_tokens_per_claim` | `0` (disabled); caps only the worker-observed, runner-reported Codex total for the current claim | implementation (accepted deviation D37 / #1027) |
+| `agent.max_runtime_seconds_per_claim` | `0` (disabled); caps worker-measured runtime for the current claim | implementation (accepted deviation D37 / #1027) |
 | `agent.timeout` | `30m` | implementation (#215) |
 | `codex.command` | `codex app-server` | SPEC §6.4; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell environment inheritance |
 | `codex.env_passthrough` / `claude.env_passthrough` | none beyond the selected runner baseline (`PATH`, `HOME`, `USER`, locale, `TZ`, `TERM`; Codex app-server also receives `CODEX_HOME` and `TMPDIR` when set); use for model CLI auth/proxy/CA vars, not tracker/repo API tokens | implementation (#384, #1049, #1062) |

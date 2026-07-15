@@ -150,11 +150,14 @@ describe('Worker status dashboard', () => {
     expect(screen.queryByText(/^Completed$/)).toBeNull();
 
     // process token totals strip (5,443,400 → 5.4M) and a compacted running token cell.
-    expect(screen.getByText('Process total tokens')).toBeTruthy();
-    expect(screen.getByText('may include older issues')).toBeTruthy();
+    expect(screen.getByText('Worker-observed total tokens')).toBeTruthy();
+    expect(screen.getByText('runner-reported · process lifetime · may include older issues')).toBeTruthy();
+    expect(screen.getByText('excludes external and unreported usage')).toBeTruthy();
     expect(screen.getByText('5.4M')).toBeTruthy();
     expect(screen.getByText('286k')).toBeTruthy();
-    expect(screen.getByText('20M tokens/claim · 2h 0m/claim')).toBeTruthy();
+    expect(screen.getByText('20M worker-observed Codex tokens/claim · 2h 0m runtime/claim')).toBeTruthy();
+    expect(screen.getByText('Token totals and token guardrails cover worker-observed, runner-reported Codex usage only; external review and otherwise unreported nested or subagent usage are excluded, not counted as zero.')).toBeTruthy();
+    expect(screen.getByText('50k worker-observed claim tokens')).toBeTruthy();
     expect(screen.getByText('Ended usage')).toBeTruthy();
     expect(screen.getByText('MT-612')).toBeTruthy();
     expect(screen.getByText('120k')).toBeTruthy();

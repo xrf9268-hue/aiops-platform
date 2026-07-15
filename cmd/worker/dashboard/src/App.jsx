@@ -78,8 +78,8 @@ function rowRuntime(row) {
 }
 function budgetLabel(budget) {
   const parts = [];
-  if (budget?.max_tokens_per_claim) parts.push(`${compact(budget.max_tokens_per_claim)} tokens/claim`);
-  if (budget?.max_runtime_seconds_per_claim) parts.push(`${dur(budget.max_runtime_seconds_per_claim)}/claim`);
+  if (budget?.max_tokens_per_claim) parts.push(`${compact(budget.max_tokens_per_claim)} worker-observed Codex tokens/claim`);
+  if (budget?.max_runtime_seconds_per_claim) parts.push(`${dur(budget.max_runtime_seconds_per_claim)} runtime/claim`);
   return parts.length ? parts.join(' · ') : 'off';
 }
 function detailPath(row) {
@@ -425,7 +425,7 @@ function BlockedTable({ rows }) {
               </td>
               <td data-label="State"><Badge kind="blocked">{r.state}</Badge>{r.method ? <div className="dim">{r.method}</div> : null}</td>
               <td data-label="Waiting"><span className="runtime tnum">{sinceISO(r.blocked_at)}</span><div className="dim">runtime {rowRuntime(r)}</div></td>
-              <td data-label="Detail"><div className="upd" title={r.error}>{r.error}</div><div className="dim">{compact(r.tokens?.total_tokens)} claim tokens</div></td>
+              <td data-label="Detail"><div className="upd" title={r.error}>{r.error}</div><div className="dim">{compact(r.tokens?.total_tokens)} worker-observed claim tokens</div></td>
             </tr>
           ))}
         </tbody>
@@ -616,13 +616,15 @@ export default function App() {
             {total > 0
               ? <>Read-only view of <b>{total}</b> {total === 1 ? 'claim' : 'claims'} in flight — {c.running} running, {c.retrying} retrying, {c.blocked} blocked.</>
               : <>The worker is healthy and <b>idle</b> — polling with nothing in flight.</>}
+            <br />
+            <span>Token totals and token guardrails cover worker-observed, runner-reported Codex usage only; external review and otherwise unreported nested or subagent usage are excluded, not counted as zero.</span>
           </p>
         </div>
         <div className="title-meta">
           <div className="row"><span>poll</span><b>every {pollSec}s</b></div>
           <div className="row"><span>concurrency</span><b>{maxConc} max{byStateStr}</b></div>
           <div className="row"><span>default agent</span><b>{agentDefault}</b></div>
-          <div className="row"><span>claim budget</span><b>{budget}</b></div>
+          <div className="row"><span>worker-observed claim budget</span><b>{budget}</b></div>
         </div>
       </div>
 
@@ -642,9 +644,9 @@ export default function App() {
 
       {/* codex totals strip (process lifetime; may include earlier issues) */}
       <div className="meta-strip">
-        <div className="meta-cell"><div className="meta-k">Process input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">process lifetime</div></div>
-        <div className="meta-cell"><div className="meta-k">Process output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">process lifetime</div></div>
-        <div className="meta-cell"><div className="meta-k">Process total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">may include older issues</div></div>
+        <div className="meta-cell"><div className="meta-k">Worker-observed input tokens</div><div className="meta-v tnum">{compact(ct.input_tokens)}</div><div className="meta-sub">runner-reported · process lifetime</div></div>
+        <div className="meta-cell"><div className="meta-k">Worker-observed output tokens</div><div className="meta-v tnum">{compact(ct.output_tokens)}</div><div className="meta-sub">runner-reported · process lifetime</div></div>
+        <div className="meta-cell"><div className="meta-k">Worker-observed total tokens</div><div className="meta-v tnum">{compact(ct.total_tokens)}</div><div className="meta-sub">runner-reported · process lifetime · may include older issues</div><div className="meta-sub">excludes external and unreported usage</div></div>
         <div className="meta-cell"><div className="meta-k">Process runtime</div><div className="meta-v tnum">{dur(ct.seconds_running)}</div><div className="meta-sub">cumulative agent time</div></div>
       </div>
 

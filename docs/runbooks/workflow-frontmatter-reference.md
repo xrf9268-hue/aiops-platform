@@ -101,8 +101,16 @@ value may be a single shell-script string, a list of command strings, or a
 | `agent.max_concurrent_agents_by_state` | map[string]int | — | Per-state concurrency caps layered under the global cap. Keys are normalized (trim, lowercase, space→`_`) | each limit > 0; no empty state keys; no duplicates after normalization — violations are load errors |
 | `agent.max_turns` | int | `20` | Per-session turn budget for the codex app-server in-session loop (SPEC §5.3.5) | > 0 |
 | `agent.max_continuation_turns` | int | = `agent.max_turns` | Issue-level clean-turn budget across fresh + continuation dispatches (accepted deviation D34/#621); exhaustion parks the issue `blocked` (`continuation_budget`) | > 0 |
+| `agent.max_tokens_per_claim` | int64 | `0` (disabled) | Cancels and locally blocks a claim after its worker-observed, runner-reported Codex token total exceeds the limit (accepted deviation D37/#1027) | ≥ 0 |
+| `agent.max_runtime_seconds_per_claim` | int64 | `0` (disabled) | Cancels and locally blocks a claim after worker-measured runtime exceeds the limit (accepted deviation D37/#1027) | ≥ 0 |
 | `agent.max_retry_backoff_ms` | int | `300000` | Ceiling for the exponential retry backoff (SPEC §8.4; retries are unbounded — move the issue out of active states to stop them) | > 0 |
 | `agent.timeout` | duration | `30m` | Wall-clock cap for a single runner invocation (e.g. `timeout: 2h`); exceeding it kills the subprocess and records `runner_timeout` | — |
+
+`agent.max_tokens_per_claim` is a lower-bound safety stop, not an end-to-end
+cost or billing ceiling. It counts only worker-observed, runner-reported Codex
+usage. External GitHub `@codex review` usage and otherwise unreported nested or
+subagent usage are unmeasured, not zero, and do not consume the configured
+limit.
 
 ## `codex`
 
