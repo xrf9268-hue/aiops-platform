@@ -221,6 +221,58 @@ type pollOrderSpy struct {
 	calls []string
 }
 
+type blockingReconcileTracker struct {
+	mu            sync.Mutex
+	blockFetch    bool
+	blockListings bool
+	fetchCalls    int
+	listCalls     int
+	fetchDeadline []bool
+	listDeadlines []bool
+}
+
+func (b *blockingReconcileTracker) ListIssuesByStates(ctx context.Context, _ []string) ([]tracker.Issue, error) {
+	_, hasDeadline := ctx.Deadline()
+	b.mu.Lock()
+	b.listCalls++
+	b.listDeadlines = append(b.listDeadlines, hasDeadline)
+	block := b.blockListings
+	b.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return nil, nil
+}
+
+func (b *blockingReconcileTracker) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
+	return b.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(ids))
+}
+
+func (b *blockingReconcileTracker) FetchIssueStatesByRefs(ctx context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	_, hasDeadline := ctx.Deadline()
+	b.mu.Lock()
+	b.fetchCalls++
+	b.fetchDeadline = append(b.fetchDeadline, hasDeadline)
+	block := b.blockFetch
+	b.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	states := make(map[string]tracker.IssueState, len(refs))
+	for _, ref := range refs {
+		states[ref.ID] = tracker.IssueState{State: "In Progress"}
+	}
+	return states, nil
+}
+
+func (b *blockingReconcileTracker) callSnapshot() (int, int, []bool, []bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fetchCalls, b.listCalls, append([]bool(nil), b.fetchDeadline...), append([]bool(nil), b.listDeadlines...)
+}
+
 func (s *pollOrderSpy) record(call string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

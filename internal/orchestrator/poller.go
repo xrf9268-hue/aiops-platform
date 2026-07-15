@@ -17,6 +17,12 @@ import (
 
 var errDispatchPreflight = errors.New("dispatch preflight failed")
 
+// reconciliationTrackerRequestTimeout caps each tracker read in the
+// reconcile-before-dispatch phase. PollOnce's ctx normally lives for the
+// worker process, so passing it through directly would let one unresponsive
+// tracker pin every later poll tick indefinitely.
+var reconciliationTrackerRequestTimeout = 45 * time.Second
+
 // ActiveIssueLister is the tracker reader required by the SPEC poll tick.
 type ActiveIssueLister interface {
 	ListActiveIssues(ctx context.Context) ([]tracker.Issue, error)
@@ -368,7 +374,9 @@ func (p *Poller) refreshedIssueIsInactive(issue tracker.Issue, activeStateKeys m
 func (p *Poller) appendInactiveFromStateGroups(ctx context.Context, inactiveByID map[string]tracker.Issue, activeByID map[string]struct{}) error {
 	var groupErr error
 	for _, states := range p.reconcileInactiveStateGroups() {
-		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
+		listCtx, cancel := context.WithTimeout(ctx, reconciliationTrackerRequestTimeout)
+		issues, err := p.stateTracker.ListIssuesByStates(listCtx, states)
+		cancel()
 		if err != nil {
 			groupErr = errors.Join(groupErr, err)
 			continue
@@ -398,7 +406,9 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 	if !ok {
 		return nil, nil
 	}
-	statesByID, err := fetchIssueStates(ctx, refresher, issueRefs)
+	fetchCtx, cancel := context.WithTimeout(ctx, reconciliationTrackerRequestTimeout)
+	statesByID, err := fetchIssueStates(fetchCtx, refresher, issueRefs)
+	cancel()
 	refsByID := make(map[string]tracker.IssueRef, len(issueRefs))
 	for _, ref := range issueRefs {
 		refsByID[ref.ID] = ref

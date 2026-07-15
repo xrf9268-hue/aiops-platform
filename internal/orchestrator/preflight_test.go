@@ -226,6 +226,76 @@ func TestPollOncePreflightFailureStillReconcilesRunningIssue(t *testing.T) {
 	t.Fatalf("RecentEvents = %+v, want %s", view.RecentEvents, RuntimeEventDispatchPreflightFailed)
 }
 
+func TestPollOncePreflightFailureBoundsReconciliationTrackerCalls(t *testing.T) {
+	previousTimeout := reconciliationTrackerRequestTimeout
+	reconciliationTrackerRequestTimeout = 25 * time.Millisecond
+	defer func() { reconciliationTrackerRequestTimeout = previousTimeout }()
+
+	tests := []struct {
+		name             string
+		blockFetch       bool
+		blockListings    bool
+		wantFetchCalls   int
+		wantListingCalls int
+	}{
+		{name: "narrow refresh", blockFetch: true, wantFetchCalls: 1, wantListingCalls: 2},
+		{name: "each inactive state group", blockListings: true, wantFetchCalls: 1, wantListingCalls: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}
+			state := NewOrchestratorState(30000, 1)
+			state.Blocked[IssueID(issue.ID)] = &BlockedEntry{Issue: issue, Identifier: issue.Identifier}
+			state.Claimed[IssueID(issue.ID)] = struct{}{}
+			state.ClaimedIssues[IssueID(issue.ID)] = issue
+			trackerClient := &blockingReconcileTracker{blockFetch: tt.blockFetch, blockListings: tt.blockListings}
+			orch := New(state, Deps{Dispatcher: &cancellationDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+			go orch.Run(ctx)
+			if err := orch.WaitStarted(ctx); err != nil {
+				t.Fatalf("wait for orchestrator: %v", err)
+			}
+
+			poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+				ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, InactiveStates: []string{"Backlog"},
+			})
+			candidateLister := &fixedActiveIssueLister{}
+			poller.tracker = candidateLister
+			preflightCfg := workflow.Config{
+				Tracker: workflow.TrackerConfig{Kind: "linear", ProjectSlug: "team-x"},
+				Codex:   workflow.CommandConfig{Command: "codex app-server"},
+			}
+			poller.preflight = &preflightCfg
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- poller.PollOnce(ctx) }()
+			var err error
+			select {
+			case err = <-errCh:
+			case <-time.After(time.Second):
+				t.Fatal("PollOnce did not return after reconciliation tracker request timeout")
+			}
+			if !errors.Is(err, context.DeadlineExceeded) || !errors.Is(err, errDispatchPreflight) {
+				t.Fatalf("PollOnce error = %v, want reconciliation deadline and preflight failure", err)
+			}
+			if got := candidateLister.count(); got != 0 {
+				t.Errorf("candidate ListActiveIssues calls = %d, want 0", got)
+			}
+			fetchCalls, listCalls, fetchDeadlines, listDeadlines := trackerClient.callSnapshot()
+			if fetchCalls != tt.wantFetchCalls || listCalls != tt.wantListingCalls {
+				t.Errorf("tracker calls = fetch:%d list:%d, want fetch:%d list:%d", fetchCalls, listCalls, tt.wantFetchCalls, tt.wantListingCalls)
+			}
+			for i, hasDeadline := range append(fetchDeadlines, listDeadlines...) {
+				if !hasDeadline {
+					t.Errorf("reconciliation tracker request %d had no deadline", i+1)
+				}
+			}
+		})
+	}
+}
+
 func TestPollOncePreflightFailurePatchesClaimedActiveStateWithoutWipingMetadata(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
