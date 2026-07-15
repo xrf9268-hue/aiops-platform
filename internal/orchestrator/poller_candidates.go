@@ -36,9 +36,9 @@ var dispatchRevalidationTimeout = 45 * time.Second
 // the same trim upstream gets from should_dispatch_issue? running before
 // revalidate_issue_for_dispatch — so the refresh cost stays proportional to
 // what can spawn, not to the active listing. A refreshed candidate is dropped
-// when the refresh omits it (upstream {:skip, :missing}; the Gitea adapter
-// also omits issues whose aiops/* state labels were stripped), when its
-// refreshed state left the configured active set, or when its refreshed
+// unless the adapter returned an authoritative Current row (missing, Unknown,
+// and confirmed Absent all skip), when its refreshed state left the configured
+// active set, or when its refreshed
 // labels no longer satisfy the SPEC §6.4 required-labels gate, or when it is
 // a Todo issue whose refreshed blockers are not all terminal (upstream
 // retry_candidate_issue?'s !todo_issue_blocked_by_non_terminal?,
@@ -94,11 +94,10 @@ func (p *Poller) claimableDispatchRefs(ctx context.Context, candidates []tracker
 
 // filterRevalidatedCandidates keeps the claimable candidates whose refreshed
 // tracker row still passes the dispatch gates, carrying the refreshed state
-// and labels onto each survivor. Dropping is skip-only: a dropped candidate's
-// queued continuation (if any) is released by the reconcile pass's
-// vanished-continuation sweep when the row is missing, or by the inactive
-// reconcile when the row is present but ineligible — never here, so the
-// release stays single-sourced.
+// and labels onto each survivor. Dropping is skip-only: the claimed reconcile
+// path owns releases for explicit Absent or inactive observations, while
+// missing and Unknown rows preserve claim ownership. This pre-dispatch filter
+// never mutates claim state.
 func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimable map[IssueID]struct{}, statesByID map[string]tracker.IssueState) []tracker.Issue {
 	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
 	terminalStateKeys := normalizedStates(p.reconcile.TerminalStates)
@@ -114,11 +113,11 @@ func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimab
 	return kept
 }
 
-// revalidatedCandidate applies the per-issue revalidation verdict: missing
-// from the refresh (upstream {:skip, :missing}), refreshed out of the active
-// set, refreshed past the SPEC §6.4 required-labels gate, or a refreshed Todo
-// issue whose blockers reopened all drop the candidate; otherwise the
-// refreshed state, labels, and blocker data are carried onto it. The blocker
+// revalidatedCandidate applies the per-issue revalidation verdict: only a
+// Current refresh row may dispatch. Missing, Unknown, and Absent rows skip;
+// Current rows outside the active set, past the SPEC §6.4 required-labels gate,
+// or carrying a reopened Todo blocker also skip. Otherwise the refreshed
+// state, labels, and blocker data are carried onto the candidate. The blocker
 // recheck matches upstream retry_candidate_issue?'s
 // !todo_issue_blocked_by_non_terminal? on the refreshed issue
 // (orchestrator.ex:1602-1604, #750); when the refresh supplies no blocker
@@ -127,8 +126,24 @@ func (p *Poller) filterRevalidatedCandidates(candidates []tracker.Issue, claimab
 // passed, so it cannot newly drop the candidate.
 func revalidatedCandidate(issue tracker.Issue, statesByID map[string]tracker.IssueState, activeStateKeys, terminalStateKeys map[string]struct{}, requiredLabels []string) (tracker.Issue, bool) {
 	refreshed, ok := statesByID[issue.ID]
-	if !ok || strings.TrimSpace(refreshed.State) == "" {
+	if !ok {
 		logStaleDispatchSkipped(issue, "", "missing_from_refresh")
+		return tracker.Issue{}, false
+	}
+	switch refreshed.Outcome {
+	case tracker.IssueStateOutcomeUnknown:
+		logStaleDispatchSkipped(issue, "", "refresh_unknown")
+		return tracker.Issue{}, false
+	case tracker.IssueStateOutcomeAbsent:
+		logStaleDispatchSkipped(issue, "", "confirmed_absent")
+		return tracker.Issue{}, false
+	case tracker.IssueStateOutcomeCurrent:
+	default:
+		logStaleDispatchSkipped(issue, "", "invalid_refresh_outcome")
+		return tracker.Issue{}, false
+	}
+	if strings.TrimSpace(refreshed.State) == "" {
+		logStaleDispatchSkipped(issue, "", "current_state_missing")
 		return tracker.Issue{}, false
 	}
 	issue.State = refreshed.State

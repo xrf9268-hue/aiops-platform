@@ -328,13 +328,14 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 					return runner.IssueStateSnapshot{}, err
 				}
 				state, ok := statesByID[issueID]
-				if !ok || strings.TrimSpace(state.State) == "" {
+				if !ok || state.Outcome != tracker.IssueStateOutcomeCurrent || strings.TrimSpace(state.State) == "" {
 					// SPEC §16.5 "issue = refreshed_issue[0] or
-					// issue": no row means we treat the issue as
-					// still in its prior (active) state rather
-					// than aborting on a benign absence. Leave this
-					// branch label-blind so a transient empty refresh
-					// never self-stops a healthy run.
+					// issue": only an authoritative Current row may
+					// replace the prior snapshot. Missing, Unknown, and
+					// Absent therefore keep this per-turn check active;
+					// reconciliation owns confirmed-absence cancellation.
+					// Leave this branch label-blind so an inconclusive
+					// refresh never self-stops a healthy run.
 					return runner.IssueStateSnapshot{Found: false, Active: true}, nil
 				}
 				normalized := strings.ToLower(strings.TrimSpace(state.State))
@@ -343,7 +344,8 @@ func (d *RuntimeDispatcher) configForSnapshot(snap WorkflowSnapshot) worker.Conf
 				// SPEC §6.4 "continue" gate: an issue still in an active state
 				// but no longer carrying every required label is not routable,
 				// so the runner must self-stop (it stops on !Active). Applied
-				// only on a present row, so absence stays no-information above.
+				// only on an authoritative Current row; every other outcome
+				// stays no-information for this per-turn check above.
 				routable := active && labelsSatisfyRequired(state.Labels, requiredLabels)
 				return runner.IssueStateSnapshot{Found: true, State: state.State, Active: routable, Terminal: terminal}, nil
 			}

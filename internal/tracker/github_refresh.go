@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,11 +18,11 @@ import (
 // `GET /repos/{owner}/{repo}/issues/{number}` per ID using the repo issue
 // number cached during prior list calls. Ref-aware callers can also provide
 // the human identifier (`#123`) so a rebuilt tracker client can query by repo
-// issue number before any list call repopulates the cache. Per-ID 404/410
-// responses are treated as "issue removed" and silently skipped so a single
-// deleted issue does not abort reconciliation for the rest of the running set.
-// Other HTTP errors abort the whole call so a transient outage cannot silently
-// degrade per-tick state refresh.
+// issue number before any list call repopulates the cache. A 404/410 confirms
+// absence only when this client previously cached the ID-to-number mapping for
+// the current repository; fallback-only not-found responses remain unknown.
+// Ambiguous references and failed reads remain unknown, while independent
+// current/absent rows survive a partial batch error.
 //
 // State derivation: if any label on the issue matches a state configured in
 // active_states / terminal_states / inactive_states (case-insensitive), the
@@ -54,75 +56,136 @@ type githubFetchedIssueState struct {
 	labels  []string
 }
 
-func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
+type githubIssueStateLookup struct {
+	outcome IssueStateOutcome
+	fetched githubFetchedIssueState
+}
+
+type githubIssueStateLookupBatch struct {
+	fetched []githubFetchedIssueState
+	absent  []string
+	errs    []error
+	halted  bool
+}
+
+func (c *GitHubClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef) (map[string]IssueState, error) {
 	return c.fetchIssueStatesByRefs(ctx, issueRefs, true)
 }
 
-func (c *GitHubClient) fetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef, includeBlockers bool) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
+func (c *GitHubClient) fetchIssueStatesByRefs(ctx context.Context, issueRefs []IssueRef, includeBlockers bool) (map[string]IssueState, error) {
+	states, refs := UnknownIssueStatesByRefs(issueRefs)
 	if strings.TrimSpace(c.Token) == "" {
-		return nil, fmt.Errorf("GitHub tracker api_key is required")
+		return states, fmt.Errorf("GitHub tracker api_key is required")
 	}
-	if len(issueRefs) == 0 {
-		return map[string]IssueState{}, nil
+	if len(refs) == 0 {
+		return states, nil
 	}
 	if strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Repo) == "" {
-		return nil, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
+		return states, fmt.Errorf("repo.owner and repo.name are required for GitHub tracker polling")
 	}
 	configuredStates := githubConfiguredStates(c.Config)
-	fetched := make([]githubFetchedIssueState, 0, len(issueRefs))
-	seen := map[string]struct{}{}
-	for _, issueRef := range issueRefs {
-		issueID := strings.TrimSpace(issueRef.ID)
-		if issueID == "" {
-			continue
-		}
-		if _, ok := seen[issueID]; ok {
-			continue
-		}
-		seen[issueID] = struct{}{}
-		issueNumber, ok := c.issueNumberForStateRefresh(issueRef)
-		if !ok {
-			c.logStateRefreshCacheMiss(issueRef)
-			continue
-		}
-		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
+	batch := c.lookupGitHubIssueStates(ctx, refs, configuredStates, includeBlockers)
+	for _, issueID := range batch.absent {
+		states[issueID] = IssueState{Outcome: IssueStateOutcomeAbsent}
+	}
+	var blockersByID map[string][]BlockerRef
+	var blockerErr error
+	if !batch.halted {
+		blockersByID, blockerErr = c.blockerRefsForFetchedGitHubIssueStates(ctx, batch.fetched, configuredStates, includeBlockers)
+	}
+	if blockerErr != nil {
+		batch.errs = append(batch.errs, blockerErr)
+	}
+	applyCurrentGitHubIssueStates(states, batch.fetched, blockersByID, includeBlockers, batch.halted || blockerErr != nil)
+	return states, errors.Join(batch.errs...)
+}
+
+func (c *GitHubClient) lookupGitHubIssueStates(ctx context.Context, refs []IssueRef, configuredStates []string, includeBlockers bool) githubIssueStateLookupBatch {
+	batch := githubIssueStateLookupBatch{fetched: make([]githubFetchedIssueState, 0, len(refs))}
+	for _, issueRef := range refs {
+		lookup, err := c.lookupGitHubIssueState(ctx, issueRef, configuredStates, includeBlockers)
 		if err != nil {
-			return nil, err
-		}
-		if !found {
+			batch.errs = append(batch.errs, err)
+			if ShouldStopIssueStateRefresh(ctx, err) {
+				batch.halted = true
+				break
+			}
 			continue
 		}
-		refreshedID := strconv.FormatInt(issue.ID, 10)
-		if !githubFetchedIssueMatchesRef(issueID, issueRef.Identifier, refreshedID, issue.Number) {
-			c.cacheIssueNumber(refreshedID, issue.Number)
+		switch lookup.outcome {
+		case IssueStateOutcomeAbsent:
+			batch.absent = append(batch.absent, issueRef.ID)
+		case IssueStateOutcomeCurrent:
+			batch.fetched = append(batch.fetched, lookup.fetched)
+		}
+	}
+	return batch
+}
+
+func applyCurrentGitHubIssueStates(states map[string]IssueState, fetched []githubFetchedIssueState, blockersByID map[string][]BlockerRef, includeBlockers, todoBlockersUnavailable bool) {
+	for _, row := range fetched {
+		if includeBlockers && githubTodoWorkflowState(row.state) && todoBlockersUnavailable {
 			continue
 		}
-		c.cacheIssueNumber(refreshedID, issue.Number)
-		if issueNumberID := githubIssueNumberID(issue.Number); issueID == issueNumberID {
-			c.cacheIssueNumber(issueID, issue.Number)
+		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
+		// resolved state so label removal can stop/release already-claimed work.
+		states[row.issueID] = IssueState{Outcome: IssueStateOutcomeCurrent, State: row.state, Labels: row.labels, BlockedBy: githubIssueStateBlockers(blockersByID, row.issueID, includeBlockers)}
+	}
+}
+
+func (c *GitHubClient) lookupGitHubIssueState(ctx context.Context, issueRef IssueRef, configuredStates []string, includeBlockers bool) (githubIssueStateLookup, error) {
+	issueNumber, ok, cached := c.issueNumberForStateRefresh(issueRef)
+	if !ok {
+		c.logStateRefreshCacheMiss(issueRef)
+		return githubIssueStateLookup{}, nil
+	}
+	if !githubIssueRefMatchesNumber(issueRef, issueNumber) {
+		return githubIssueStateLookup{}, nil
+	}
+	issue, found, bodyPresent, err := c.getIssueByNumberWithBodyPresence(ctx, issueNumber)
+	if err != nil {
+		return githubIssueStateLookup{}, err
+	}
+	if !found {
+		if cached {
+			return githubIssueStateLookup{outcome: IssueStateOutcomeAbsent}, nil
 		}
-		state := githubResolveState(issue, configuredStates)
-		if state == "" {
-			continue
-		}
-		fetched = append(fetched, githubFetchedIssueState{
-			issueID: issueID,
+		return githubIssueStateLookup{}, nil
+	}
+	return c.classifyFetchedGitHubIssueState(issueRef, issueNumber, issue, bodyPresent, configuredStates, includeBlockers)
+}
+
+func (c *GitHubClient) classifyFetchedGitHubIssueState(issueRef IssueRef, issueNumber int, issue githubIssue, bodyPresent bool, configuredStates []string, includeBlockers bool) (githubIssueStateLookup, error) {
+	if issue.Number != issueNumber {
+		return githubIssueStateLookup{}, nil
+	}
+	refreshedID := strconv.FormatInt(issue.ID, 10)
+	if !githubFetchedIssueMatchesRef(issueRef.ID, issueRef.Identifier, refreshedID, issue.Number) {
+		return githubIssueStateLookup{}, nil
+	}
+	c.cacheIssueNumber(refreshedID, issue.Number)
+	if issueNumberID := githubIssueNumberID(issue.Number); issueRef.ID == issueNumberID {
+		c.cacheIssueNumber(issueRef.ID, issue.Number)
+	}
+	state := githubResolveState(issue, configuredStates)
+	if state == "" {
+		return githubIssueStateLookup{}, nil
+	}
+	if includeBlockers && githubTodoWorkflowState(state) && !bodyPresent {
+		return githubIssueStateLookup{}, fmt.Errorf("%w: GitHub Todo issue response missing body", ErrIssueStateRefreshIncomplete)
+	}
+	if includeBlockers && githubTodoWorkflowState(state) && strings.TrimSpace(issue.NodeID) == "" {
+		return githubIssueStateLookup{}, fmt.Errorf("%w: GitHub Todo issue response missing node_id", ErrIssueStateRefreshIncomplete)
+	}
+	return githubIssueStateLookup{
+		outcome: IssueStateOutcomeCurrent,
+		fetched: githubFetchedIssueState{
+			issueID: issueRef.ID,
 			issue:   issue,
 			state:   state,
 			labels:  githubIssueLabels(issue),
-		})
-	}
-	states := make(map[string]IssueState, len(fetched))
-	blockersByID, err := c.blockerRefsForFetchedGitHubIssueStates(ctx, fetched, configuredStates, includeBlockers)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range fetched {
-		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
-		// resolved state so label removal can stop/release already-claimed work.
-		states[row.issueID] = IssueState{State: row.state, Labels: row.labels, BlockedBy: githubIssueStateBlockers(blockersByID, row.issueID, includeBlockers)}
-	}
-	return states, nil
+		},
+	}, nil
 }
 
 func (c *GitHubClient) blockerRefsForFetchedGitHubIssueStates(ctx context.Context, fetched []githubFetchedIssueState, configuredStates []string, includeBlockers bool) (map[string][]BlockerRef, error) {
@@ -154,21 +217,37 @@ func (c *GitHubClient) blockersForRefreshedGitHubIssues(ctx context.Context, row
 			Body:       row.issue.Body,
 		})
 	}
-	return c.blockersForGitHubSources(ctx, sources, configuredStates)
+	return c.blockersForGitHubSources(ctx, sources, configuredStates, githubBodyBlockerRefresh)
 }
 
 func githubFetchedIssueMatchesRef(issueID, identifier, refreshedID string, issueNumber int) bool {
 	issueID = strings.TrimSpace(issueID)
-	if issueID == refreshedID {
-		return true
-	}
 	if !githubIdentifierMatchesIssueNumber(identifier, issueNumber) {
 		return false
+	}
+	if issueID == refreshedID {
+		return true
 	}
 	if strings.HasPrefix(issueID, "#") {
 		return issueID == fmt.Sprintf("#%d", issueNumber)
 	}
 	return issueID == githubIssueNumberID(issueNumber)
+}
+
+func githubIssueRefMatchesNumber(ref IssueRef, issueNumber int) bool {
+	identifier := strings.TrimSpace(ref.Identifier)
+	if identifier != "" {
+		got, ok := githubIssueNumberFromIdentifier(identifier)
+		if !ok || got != issueNumber {
+			return false
+		}
+	}
+	id := strings.TrimSpace(ref.ID)
+	if !strings.HasPrefix(id, "#") {
+		return true
+	}
+	got, ok := githubIssueNumberFromIdentifier(id)
+	return ok && got == issueNumber
 }
 
 func githubIdentifierMatchesIssueNumber(identifier string, issueNumber int) bool {
@@ -185,17 +264,18 @@ func githubIssueNumberID(issueNumber int) string {
 	return strconv.Itoa(issueNumber)
 }
 
-func (c *GitHubClient) issueNumberForStateRefresh(ref IssueRef) (int, bool) {
+func (c *GitHubClient) issueNumberForStateRefresh(ref IssueRef) (int, bool, bool) {
 	if issueNumber, ok := c.cachedIssueNumber(ref.ID); ok {
-		return issueNumber, true
+		return issueNumber, true, true
 	}
 	if issueNumber, ok := githubIssueNumberFromIdentifier(ref.Identifier); ok {
-		return issueNumber, true
+		return issueNumber, true, false
 	}
 	if strings.HasPrefix(strings.TrimSpace(ref.ID), "#") {
-		return githubIssueNumberFromIdentifier(ref.ID)
+		issueNumber, ok := githubIssueNumberFromIdentifier(ref.ID)
+		return issueNumber, ok, false
 	}
-	return 0, false
+	return 0, false, false
 }
 
 func (c *GitHubClient) logStateRefreshCacheMiss(ref IssueRef) {
@@ -218,12 +298,17 @@ func githubIssueNumberFromIdentifier(identifier string) (int, bool) {
 }
 
 func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (githubIssue, bool, error) {
+	issue, found, _, err := c.getIssueByNumberWithBodyPresence(ctx, issueNumber)
+	return issue, found, err
+}
+
+func (c *GitHubClient) getIssueByNumberWithBodyPresence(ctx context.Context, issueNumber int) (githubIssue, bool, bool, error) {
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
 	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return githubIssue{}, false, err
+		return githubIssue{}, false, false, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
@@ -234,23 +319,56 @@ func (c *GitHubClient) getIssueByNumber(ctx context.Context, issueNumber int) (g
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return githubIssue{}, false, err
+		return githubIssue{}, false, false, err
 	}
 	defer DrainAndClose(resp)
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
-		return githubIssue{}, false, nil
+		return githubIssue{}, false, false, nil
 	}
 	if githubRateLimited(resp) {
-		return githubIssue{}, false, NewRateLimitedError(fmt.Sprintf("get GitHub issue #%d", issueNumber), resp.StatusCode, resp.Header)
+		return githubIssue{}, false, false, NewRateLimitedError(fmt.Sprintf("get GitHub issue #%d", issueNumber), resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return githubIssue{}, false, fmt.Errorf("get GitHub issue #%d failed: status %d", issueNumber, resp.StatusCode)
+		return githubIssue{}, false, false, fmt.Errorf("get GitHub issue #%d failed: status %d", issueNumber, resp.StatusCode)
 	}
-	var issue githubIssue
-	if err := DecodeJSONResponse(resp, &issue); err != nil {
+	issue, bodyPresent, err := decodeGitHubIssueStateResponse(resp)
+	if err != nil {
+		return githubIssue{}, false, false, err
+	}
+	return issue, true, bodyPresent, nil
+}
+
+func decodeGitHubIssueStateResponse(resp *http.Response) (githubIssue, bool, error) {
+	var raw json.RawMessage
+	if err := DecodeJSONResponse(resp, &raw); err != nil {
 		return githubIssue{}, false, fmt.Errorf("decode GitHub issue response: %w", err)
 	}
-	return issue, true, nil
+	var presence struct {
+		ID     *int64          `json:"id"`
+		Number *int            `json:"number"`
+		State  *string         `json:"state"`
+		Body   json.RawMessage `json:"body"`
+		Labels *[]struct {
+			Name *string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(raw, &presence); err != nil {
+		return githubIssue{}, false, fmt.Errorf("decode GitHub issue response: %w", err)
+	}
+	if presence.ID == nil || *presence.ID <= 0 || presence.Number == nil || *presence.Number <= 0 ||
+		presence.State == nil || strings.TrimSpace(*presence.State) == "" || presence.Labels == nil {
+		return githubIssue{}, false, fmt.Errorf("%w: GitHub issue response has incomplete id, number, state, or labels", ErrIssueStateRefreshIncomplete)
+	}
+	for _, label := range *presence.Labels {
+		if label.Name == nil || strings.TrimSpace(*label.Name) == "" {
+			return githubIssue{}, false, fmt.Errorf("%w: GitHub issue label missing non-empty name", ErrIssueStateRefreshIncomplete)
+		}
+	}
+	var issue githubIssue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return githubIssue{}, false, fmt.Errorf("decode GitHub issue response: %w", err)
+	}
+	return issue, len(presence.Body) > 0, nil
 }
 
 func (c *GitHubClient) cacheIssueNumber(issueID string, issueNumber int) {

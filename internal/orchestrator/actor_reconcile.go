@@ -202,6 +202,29 @@ func (o *Orchestrator) ReconcileInactiveTrackerIssuesAndWait(ctx context.Context
 	return waitForReconciledWorkers(ctx, canceled, workerExitTimeout)
 }
 
+// ReconcileAbsentTrackerIssuesAndWait releases claims only for issue refs the
+// narrow tracker refresh explicitly classified Absent. Absence is not a
+// terminal observation: running work is canceled without workspace cleanup,
+// blocked work is released, and only continuation retries are released here.
+// Failure and quota retries remain owned by their SPEC section 8.4 timers.
+func (o *Orchestrator) ReconcileAbsentTrackerIssuesAndWait(ctx context.Context, absentIDs map[string]struct{}, workerExitTimeout time.Duration) error {
+	if len(absentIDs) == 0 {
+		return nil
+	}
+	reply := make(chan []*RunningEntry, 1)
+	op := &reconcileAbsentTrackerIssuesOp{o: o, absentIDs: absentIDs, result: reply}
+	if err := o.submit(ctx, op); err != nil {
+		return err
+	}
+	var canceled []*RunningEntry
+	select {
+	case canceled = <-reply:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return waitForReconciledWorkers(ctx, canceled, workerExitTimeout)
+}
+
 // refreshActiveTrackerIssuesOp refreshes RunningEntry.Issue and the matching
 // ClaimedIssues snapshot for every in-process issue observed in the active set,
 // without canceling anything. It is safe to call when the active listing may be
@@ -429,6 +452,38 @@ type reconcileInactiveTrackerIssuesOp struct {
 	result         chan<- []*RunningEntry
 }
 
+type reconcileAbsentTrackerIssuesOp struct {
+	o         *Orchestrator
+	absentIDs map[string]struct{}
+	result    chan<- []*RunningEntry
+}
+
+func (r *reconcileAbsentTrackerIssuesOp) apply(st *OrchestratorState) func() {
+	var canceled []*RunningEntry
+	for id, run := range st.Running {
+		if _, absent := r.absentIDs[string(id)]; !absent {
+			continue
+		}
+		st.ReleaseClaim(id)
+		run.ReconcileCancel = true
+		run.ReconcileCleanupWorkspace = false
+		run.AgentCurrentIssueHandoff = false
+		clearAgentCurrentIssueTerminalHandoff(run)
+		canceled = append(canceled, run)
+	}
+	for id := range st.Blocked {
+		if _, absent := r.absentIDs[string(id)]; absent {
+			st.ReleaseClaim(id)
+		}
+	}
+	for id, retry := range st.RetryAttempts {
+		if _, absent := r.absentIDs[string(id)]; absent && retry.Kind == RetryKindContinuation {
+			st.ReleaseClaim(id)
+		}
+	}
+	return r.o.reconcileCancelFollowup(canceled, nil, r.result)
+}
+
 // apply releases every in-process entry whose issue is observed in the inactive
 // listing, gating SPEC §18.1 workspace cleanup on a terminal transition. Each
 // per-collection helper returns what to collect: running entries are cancelled
@@ -608,47 +663,4 @@ func refreshRunningIssue(run *RunningEntry, issue tracker.Issue) {
 	// not settle; a later inactive observation must prove a fresh handoff.
 	run.AgentCurrentIssueHandoff = false
 	clearAgentCurrentIssueTerminalHandoff(run)
-}
-
-// ReleaseVanishedContinuations drops queued continuation retries whose issue a
-// clean narrow refresh was asked about but did not return (deleted, or a Gitea
-// issue whose aiops/* state labels were stripped so no state can be derived).
-// Such an issue is invisible to every listing and refresh from then on — the
-// no-information-on-absence invariant keeps the reconcile cancel paths away
-// from it by design — so without this release the continuation sits in
-// RetryAttempts/Claimed forever and the issue wedges in retrying (#740
-// review). Release-only, mirroring retryFireAfterFetchOp's absence branch
-// (#341): absence is not a terminal observation, so no workspace action.
-// Failure/quota retries are deliberately not touched — their fire path runs
-// its own candidate fetch and releases on absence — and running/blocked
-// issues are not in RetryAttempts, so a vanished ref for them is a no-op
-// here; the destructive paths keep requiring positive observations.
-func (o *Orchestrator) ReleaseVanishedContinuations(ctx context.Context, refs []tracker.IssueRef) error {
-	return o.submit(ctx, &releaseVanishedContinuationsOp{refs: refs})
-}
-
-type releaseVanishedContinuationsOp struct {
-	refs []tracker.IssueRef
-}
-
-func (r *releaseVanishedContinuationsOp) apply(st *OrchestratorState) func() {
-	for _, ref := range r.refs {
-		id := IssueID(ref.ID)
-		entry, ok := st.RetryAttempts[id]
-		if !ok || entry.Kind != RetryKindContinuation {
-			continue
-		}
-		identifier := entry.Identifier
-		if identifier == "" {
-			identifier = ref.Identifier
-		}
-		st.ReleaseClaim(id)
-		st.RecordEvent(RuntimeEvent{
-			Kind:       RuntimeEventFailed,
-			IssueID:    id,
-			Identifier: identifier,
-			Message:    "continuation released: issue vanished from tracker refresh",
-		})
-	}
-	return nil
 }

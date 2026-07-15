@@ -52,27 +52,44 @@ type issueStateRefresherWithoutBlockersByRefs interface {
 }
 
 func fetchIssueStates(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
-	if refresher == nil || len(refs) == 0 {
-		return map[string]tracker.IssueState{}, nil
+	states, normalizedRefs := tracker.UnknownIssueStatesByRefs(refs)
+	if refresher == nil || len(normalizedRefs) == 0 {
+		return states, nil
 	}
+	var fetched map[string]tracker.IssueState
+	var err error
 	if refRefresher, ok := refresher.(issueStateRefresherByRefs); ok {
-		return refRefresher.FetchIssueStatesByRefs(ctx, refs)
+		fetched, err = refRefresher.FetchIssueStatesByRefs(ctx, normalizedRefs)
+	} else {
+		issueIDs := make([]string, 0, len(normalizedRefs))
+		for _, ref := range normalizedRefs {
+			issueIDs = append(issueIDs, ref.ID)
+		}
+		fetched, err = refresher.FetchIssueStatesByIDs(ctx, issueIDs)
 	}
-	issueIDs := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		issueIDs = append(issueIDs, ref.ID)
-	}
-	return refresher.FetchIssueStatesByIDs(ctx, issueIDs)
+	mergeRequestedIssueStates(states, fetched)
+	return states, err
 }
 
 func fetchIssueStatesWithoutBlockers(ctx context.Context, refresher IssueStateRefresher, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
-	if refresher == nil || len(refs) == 0 {
-		return map[string]tracker.IssueState{}, nil
+	states, normalizedRefs := tracker.UnknownIssueStatesByRefs(refs)
+	if refresher == nil || len(normalizedRefs) == 0 {
+		return states, nil
 	}
 	if noBlockers, ok := refresher.(issueStateRefresherWithoutBlockersByRefs); ok {
-		return noBlockers.FetchIssueStatesWithoutBlockersByRefs(ctx, refs)
+		fetched, err := noBlockers.FetchIssueStatesWithoutBlockersByRefs(ctx, normalizedRefs)
+		mergeRequestedIssueStates(states, fetched)
+		return states, err
 	}
-	return fetchIssueStates(ctx, refresher, refs)
+	return fetchIssueStates(ctx, refresher, normalizedRefs)
+}
+
+func mergeRequestedIssueStates(states, fetched map[string]tracker.IssueState) {
+	for id, state := range fetched {
+		if _, requested := states[id]; requested {
+			states[id] = state
+		}
+	}
 }
 
 // ReconciliationConfig names the workflow states the poller uses to decide
@@ -226,6 +243,7 @@ type claimedNarrowRefresh struct {
 	activeIssuesByID    map[string]tracker.Issue
 	activeStateKeys     map[string]struct{}
 	refreshedIssuesByID map[string]tracker.Issue
+	absentIssueIDs      map[string]struct{}
 }
 
 type claimedInactiveResult struct {
@@ -276,13 +294,16 @@ func (p *Poller) refreshClaimedNarrowPhase(ctx context.Context, activeIssues []t
 		activeStateKeys:  normalizedStates(p.reconcile.ActiveStates),
 	}
 	var err error
-	refresh.refreshedIssuesByID, err = p.refreshRunningIssueStates(ctx, refresh.activeIssuesByID, issueRefs)
+	refresh.refreshedIssuesByID, refresh.absentIssueIDs, err = p.refreshRunningIssueStates(ctx, refresh.activeIssuesByID, issueRefs)
 	return refresh, err
 }
 
 func (p *Poller) applyClaimedNarrowPhase(ctx context.Context, refresh claimedNarrowRefresh) error {
 	if err := p.orchestrator.PatchActiveClaimedTrackerIssueStates(ctx, refresh.refreshedIssuesByID, refresh.activeStateKeys); err != nil {
 		return err
+	}
+	for id := range refresh.absentIssueIDs {
+		delete(refresh.activeIssuesByID, id)
 	}
 	mergeRefreshedActiveStates(refresh.activeIssuesByID, refresh.refreshedIssuesByID, refresh.activeStateKeys)
 	// The active listing may be partial, so absence is "no information." Only
@@ -301,7 +322,12 @@ func (p *Poller) reconcileClaimedInactivePhase(ctx context.Context, activeIssues
 		}
 	}
 	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeEvidenceByID, refresh.refreshedIssuesByID, refresh.activeStateKeys)
+	for id := range refresh.absentIssueIDs {
+		delete(inactiveByID, id)
+	}
 	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
+	absentErr := p.orchestrator.ReconcileAbsentTrackerIssuesAndWait(ctx, refresh.absentIssueIDs, p.reconcile.WorkerExitTimeout)
+	reconcileErr = errors.Join(reconcileErr, absentErr)
 	return claimedInactiveResult{issues: inactiveByID, deriveErr: deriveErr, reconcileErr: reconcileErr}
 }
 
@@ -401,65 +427,46 @@ func addInactiveListedIssues(inactiveByID map[string]tracker.Issue, activeByID m
 	}
 }
 
-func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue, issueRefs []tracker.IssueRef) (map[string]tracker.Issue, error) {
+func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue, issueRefs []tracker.IssueRef) (map[string]tracker.Issue, map[string]struct{}, error) {
 	refresher, ok := p.stateTracker.(IssueStateRefresher)
 	if !ok {
-		return nil, nil
+		return nil, nil, nil
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, reconciliationTrackerRequestTimeout)
 	statesByID, err := fetchIssueStates(fetchCtx, refresher, issueRefs)
 	cancel()
-	refsByID := make(map[string]tracker.IssueRef, len(issueRefs))
-	for _, ref := range issueRefs {
-		refsByID[ref.ID] = ref
-	}
 	refreshed := make(map[string]tracker.Issue, len(statesByID))
-	for id, st := range statesByID {
-		if strings.TrimSpace(id) == "" || strings.TrimSpace(st.State) == "" {
-			continue
-		}
-		issue, ok := activeIssuesByID[id]
-		if !ok {
-			issue = tracker.Issue{ID: id, Identifier: refsByID[id].Identifier}
-		}
-		issue.ID = id
-		issue.State = st.State
-		// Carry refreshed labels so deriveInactiveIssues can observe SPEC §6.4
-		// label removal on in-flight issues that sit beyond the active-listing
-		// page (the narrow refresh queries them by claimed ref, the listing may
-		// not). Only rows the tracker actually returned with a non-empty state
-		// reach here, so absence stays "no information" (never a mass-cancel).
-		issue.Labels = st.Labels
-		issue.BlockedBy = st.BlockedBy
-		refreshed[id] = issue
+	absent := make(map[string]struct{})
+	for _, ref := range issueRefs {
+		collectClaimedRefreshOutcome(ref, statesByID[strings.TrimSpace(ref.ID)], activeIssuesByID, refreshed, absent)
 	}
-	if err == nil {
-		err = p.releaseVanishedContinuations(ctx, issueRefs, statesByID)
-	}
-	return refreshed, err
+	return refreshed, absent, err
 }
 
-// releaseVanishedContinuations releases queued continuation entries whose
-// issue a CLEAN narrow refresh was asked about but did not return with a
-// usable state (deleted, or a Gitea issue whose aiops/* state labels were
-// stripped). Reconcile's cancel paths deliberately treat absence as
-// no-information, so without this sweep such a continuation wedges in
-// RetryAttempts/Claimed forever — the poll loop never lists the issue again
-// and nothing else releases it (#740 review). Gated on err == nil: with a
-// failed fetch a missing row is indistinguishable from tracker downtime.
-// Kind filtering (continuations only, release-only) happens actor-side in
-// ReleaseVanishedContinuations.
-func (p *Poller) releaseVanishedContinuations(ctx context.Context, queried []tracker.IssueRef, statesByID map[string]tracker.IssueState) error {
-	vanished := make([]tracker.IssueRef, 0, len(queried))
-	for _, ref := range queried {
-		if st, ok := statesByID[ref.ID]; !ok || strings.TrimSpace(st.State) == "" {
-			vanished = append(vanished, ref)
-		}
+func collectClaimedRefreshOutcome(ref tracker.IssueRef, state tracker.IssueState, activeIssuesByID, refreshed map[string]tracker.Issue, absent map[string]struct{}) {
+	id := strings.TrimSpace(ref.ID)
+	if id == "" {
+		return
 	}
-	if len(vanished) == 0 {
-		return nil
+	if state.Outcome == tracker.IssueStateOutcomeAbsent {
+		absent[id] = struct{}{}
+		return
 	}
-	return p.orchestrator.ReleaseVanishedContinuations(ctx, vanished)
+	if state.Outcome != tracker.IssueStateOutcomeCurrent || strings.TrimSpace(state.State) == "" {
+		return
+	}
+	issue, ok := activeIssuesByID[id]
+	if !ok {
+		issue = tracker.Issue{ID: id, Identifier: ref.Identifier}
+	}
+	issue.ID = id
+	issue.State = state.State
+	// Labels and blockers are authoritative only on Current rows. Carrying
+	// them here lets out-of-page claimed issues re-run the required-label and
+	// Todo blocker gates without treating Unknown as fresh evidence.
+	issue.Labels = state.Labels
+	issue.BlockedBy = state.BlockedBy
+	refreshed[id] = issue
 }
 
 func (p *Poller) reconcileInactiveStateGroups() [][]string {

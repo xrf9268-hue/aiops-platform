@@ -176,7 +176,7 @@ func (o *Orchestrator) runReconciledWorkspaceCleanup(w ReconciledWorkspace, cont
 
 // runReconciledWorkspaceCleanupAttempt is one pass of the deletion-time recheck.
 // attempt is 0 for the initial pass and N for the Nth backed-off retry after a
-// failed or absent tracker state refresh; on an unknown refresh it schedules the
+// failed or unknown tracker state refresh; on an unknown refresh it schedules the
 // next attempt through retryReconciledWorkspaceCleanup (exponential backoff +
 // give-up bound) instead of re-probing on a fixed interval forever (#675).
 func (o *Orchestrator) runReconciledWorkspaceCleanupAttempt(w ReconciledWorkspace, continuation *continuationAfterSkippedCleanup, attempt int) {
@@ -192,16 +192,22 @@ func (o *Orchestrator) runReconciledWorkspaceCleanupAttempt(w ReconciledWorkspac
 		return
 	}
 	defer o.endReconcileWorkspaceCleanup(w.IssueID)
-	currentState, terminal, known := o.verifyReconciledWorkspaceStillTerminal(w)
-	if !known {
+	currentState, verdict := o.verifyReconciledWorkspaceStillTerminal(w)
+	switch verdict {
+	case reconciledWorkspaceStateUnknown:
 		o.retryReconciledWorkspaceCleanup(w, continuation, attempt+1)
 		return
-	}
-	if !terminal {
+	case reconciledWorkspaceStateAbsent:
+		return
+	case reconciledWorkspaceStateCurrentNonTerminal:
 		if o.hasOperatorTerminalStop(w.IssueID) {
 			return
 		}
 		o.continueAfterSkippedTerminalCleanup(continuation)
+		return
+	case reconciledWorkspaceStateCurrentTerminal:
+	default:
+		o.retryReconciledWorkspaceCleanup(w, continuation, attempt+1)
 		return
 	}
 	if strings.TrimSpace(currentState) != "" {
@@ -229,7 +235,7 @@ func (o *Orchestrator) continueAfterSkippedTerminalCleanup(continuation *continu
 }
 
 // retryReconciledWorkspaceCleanup reschedules the deletion-time state recheck
-// after a failed or absent tracker refresh. It uses the same exponential
+// after a failed or unknown tracker refresh. It uses the same exponential
 // backoff as the failure-retry path (RetryScheduler.NextDelay with
 // RetryKindFailure) so a persistently unavailable tracker is probed on a growing
 // interval rather than every fixed second, and it gives up after
@@ -266,26 +272,52 @@ func (o *Orchestrator) retryReconciledWorkspaceCleanup(w ReconciledWorkspace, co
 		}
 	})
 }
-func (o *Orchestrator) verifyReconciledWorkspaceStillTerminal(w ReconciledWorkspace) (string, bool, bool) {
+
+type reconciledWorkspaceStateVerdict uint8
+
+const (
+	reconciledWorkspaceStateUnknown reconciledWorkspaceStateVerdict = iota
+	reconciledWorkspaceStateCurrentTerminal
+	reconciledWorkspaceStateCurrentNonTerminal
+	reconciledWorkspaceStateAbsent
+)
+
+func (o *Orchestrator) verifyReconciledWorkspaceStillTerminal(w ReconciledWorkspace) (string, reconciledWorkspaceStateVerdict) {
 	resolver, terminalStates := o.currentRetryTerminalResolver()
 	if resolver == nil || len(terminalStates) == 0 {
-		return w.State, true, true
+		return w.State, reconciledWorkspaceStateCurrentTerminal
 	}
 	ctx, cancel := context.WithTimeout(o.runCtx, terminalCleanupStateFetchTimeout)
 	defer cancel()
 	states, err := fetchIssueStates(ctx, resolver, []tracker.IssueRef{{ID: string(w.IssueID), Identifier: w.Identifier}})
 	if err != nil {
 		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_refresh_failed error=%q", w.IssueID, w.Identifier, err.Error())
-		return "", false, false
+		return "", reconciledWorkspaceStateUnknown
 	}
 	st, ok := states[string(w.IssueID)]
 	if !ok {
 		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_missing", w.IssueID, w.Identifier)
-		return "", false, false
+		return "", reconciledWorkspaceStateUnknown
+	}
+	switch st.Outcome {
+	case tracker.IssueStateOutcomeUnknown:
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_unknown", w.IssueID, w.Identifier)
+		return "", reconciledWorkspaceStateUnknown
+	case tracker.IssueStateOutcomeAbsent:
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=issue_absent", w.IssueID, w.Identifier)
+		return "", reconciledWorkspaceStateAbsent
+	case tracker.IssueStateOutcomeCurrent:
+	default:
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_outcome_invalid outcome=%d", w.IssueID, w.Identifier, st.Outcome)
+		return "", reconciledWorkspaceStateUnknown
+	}
+	if strings.TrimSpace(st.State) == "" {
+		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_missing", w.IssueID, w.Identifier)
+		return "", reconciledWorkspaceStateUnknown
 	}
 	if !isTerminalTrackerState(st.State, terminalStates) {
 		log.Printf("event=reconcile_workspace_skip issue_id=%s issue_identifier=%s reason=state_not_terminal state=%q", w.IssueID, w.Identifier, st.State)
-		return st.State, false, true
+		return st.State, reconciledWorkspaceStateCurrentNonTerminal
 	}
-	return st.State, true, true
+	return st.State, reconciledWorkspaceStateCurrentTerminal
 }

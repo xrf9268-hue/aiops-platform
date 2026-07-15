@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -16,6 +17,19 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
 )
+
+type giteaPathErrorTransport struct {
+	base http.RoundTripper
+	path string
+	err  error
+}
+
+func (t giteaPathErrorTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == t.path {
+		return nil, t.err
+	}
+	return t.base.RoundTrip(req)
+}
 
 func TestTrackerClientSatisfiesIssueStateRefresher(t *testing.T) {
 	var _ tracker.IssueStateRefresher = (*TrackerClient)(nil)
@@ -143,14 +157,320 @@ func TestTrackerClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) 
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
-	if got, want := states, map[string]string{"101": "Done"}; len(got) != len(want) || got["101"].State != want["101"] {
-		t.Fatalf("states = %#v, want %#v", got, want)
+	if len(states) != 2 || states["101"].Outcome != tracker.IssueStateOutcomeCurrent || states["101"].State != "Done" || states["202"].Outcome != tracker.IssueStateOutcomeAbsent {
+		t.Fatalf("states = %#v; want current 101 and absent 202", states)
 	}
 	if got, want := states["101"].Labels, []string{"aiops/done", "aiops-ready"}; !slices.Equal(got, want) {
 		t.Fatalf("FetchIssueStatesByIDs(101).Labels = %v; want %v", got, want)
 	}
 	if got, want := strings.Join(requestedPaths, ","), "/api/v1/repos/owner/repo/issues,/api/v1/repos/owner/repo/issues/1,/api/v1/repos/owner/repo/issues/2"; got != want {
 		t.Fatalf("requested paths = %s, want %s", got, want)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesByRefsOutcomeMatrixAndPartialError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/1":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 101, Number: 1, Labels: []Label{{Name: "aiops/done"}}})
+		case "/api/v1/repos/owner/repo/issues/2":
+			http.NotFound(w, r)
+		case "/api/v1/repos/owner/repo/issues/3":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 999, Number: 3, Labels: []Label{{Name: "aiops/todo"}}})
+		case "/api/v1/repos/owner/repo/issues/4":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 404, Number: 4, Labels: []Label{{Name: "ready"}}})
+		case "/api/v1/repos/owner/repo/issues/5":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case "/api/v1/repos/owner/repo/issues/6":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 606, Number: 6, Labels: []Label{{Name: "aiops/done"}}})
+		case "/api/v1/repos/owner/repo/issues/7":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("request path = %q; want one of issue endpoints #1 through #7", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	client.issueNumbers.Store("202", 2)
+	refs := []tracker.IssueRef{
+		{ID: "101", Identifier: "#1"},
+		{ID: "202", Identifier: "#2"},
+		{ID: "opaque"},
+		{ID: "#bad"},
+		{ID: "303", Identifier: "#3"},
+		{ID: "404", Identifier: "#4"},
+		{ID: "505", Identifier: "#5"},
+		{ID: "606", Identifier: "#6"},
+		{ID: "707", Identifier: "#7"},
+		{ID: "101", Identifier: "#1"},
+		{},
+	}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), refs)
+	if err == nil {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want HTTP 500", err)
+	}
+	want := map[string]tracker.IssueStateOutcome{
+		"101":    tracker.IssueStateOutcomeCurrent,
+		"202":    tracker.IssueStateOutcomeAbsent,
+		"opaque": tracker.IssueStateOutcomeUnknown,
+		"#bad":   tracker.IssueStateOutcomeUnknown,
+		"303":    tracker.IssueStateOutcomeUnknown,
+		"404":    tracker.IssueStateOutcomeAbsent,
+		"505":    tracker.IssueStateOutcomeUnknown,
+		"606":    tracker.IssueStateOutcomeCurrent,
+		"707":    tracker.IssueStateOutcomeUnknown,
+	}
+	if len(states) != len(want) {
+		t.Fatalf("states len = %d; want %d: %#v", len(states), len(want), states)
+	}
+	for id, outcome := range want {
+		if got := states[id].Outcome; got != outcome {
+			t.Fatalf("states[%q].Outcome = %v; want %v (row=%#v)", id, got, outcome, states[id])
+		}
+	}
+}
+
+func TestTrackerClientFetchIssueStatesPayloadNumberMismatchStaysUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Issue{ID: 101, Number: 2, Labels: []Label{{Name: "aiops/done"}}})
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	client.issueNumbers.Store("101", 1)
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	if got := states["101"].Outcome; got != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want unknown for payload number mismatch", got)
+	}
+	if number, ok := client.cachedIssueNumber("101"); !ok || number != 1 {
+		t.Fatalf("cached issue number = %d, %v; want original 1 preserved", number, ok)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesPartialPayloadAndEmptyLabels(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     string
+		wantOutcome tracker.IssueStateOutcome
+		wantErr     bool
+	}{
+		{name: "missing id", payload: `{"number":1,"body":"","labels":[]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "zero id", payload: `{"id":0,"number":1,"body":"","labels":[]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "missing number", payload: `{"id":101,"body":"","labels":[]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "zero number", payload: `{"id":101,"number":0,"body":"","labels":[]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "missing labels", payload: `{"id":101,"number":1,"body":""}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "null labels", payload: `{"id":101,"number":1,"body":"","labels":null}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label missing name", payload: `{"id":101,"number":1,"body":"","labels":[{}]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label null name", payload: `{"id":101,"number":1,"body":"","labels":[{"name":null}]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label empty name", payload: `{"id":101,"number":1,"body":"","labels":[{"name":"  "}]}`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "empty labels", payload: `{"id":101,"number":1,"body":"","labels":[]}`, wantOutcome: tracker.IssueStateOutcomeAbsent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.payload)
+			}))
+			defer server.Close()
+			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client.HTTP = server.Client()
+			client.issueNumbers.Store("101", 1)
+
+			states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"101"})
+			if tc.wantErr && !errors.Is(err, tracker.ErrIssueStateRefreshIncomplete) {
+				t.Fatalf("FetchIssueStatesByIDs error = %v; want typed incomplete response", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("FetchIssueStatesByIDs() error = %v; want nil", err)
+			}
+			if got := states["101"].Outcome; got != tc.wantOutcome {
+				t.Fatalf("outcome = %v; want %v", got, tc.wantOutcome)
+			}
+		})
+	}
+}
+
+func TestTrackerClientFetchIssueStatesTodoRequiresBodyKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		body        string
+		wantOutcome tracker.IssueStateOutcome
+		wantErr     bool
+	}{
+		{name: "missing body", body: ``, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "null body", body: `,"body":null`, wantOutcome: tracker.IssueStateOutcomeUnknown, wantErr: true},
+		{name: "empty body", body: `,"body":""`, wantOutcome: tracker.IssueStateOutcomeCurrent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":101,"number":1,"labels":[{"name":"aiops/todo"}]`+tc.body+`}`)
+			}))
+			defer server.Close()
+			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client.HTTP = server.Client()
+
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}})
+			if tc.wantErr && !errors.Is(err, tracker.ErrIssueStateRefreshIncomplete) {
+				t.Fatalf("FetchIssueStatesByRefs error = %v; want typed incomplete body", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+			}
+			if got := states["101"].Outcome; got != tc.wantOutcome {
+				t.Fatalf("outcome = %v; want %v", got, tc.wantOutcome)
+			}
+		})
+	}
+}
+
+func TestTrackerClientFetchIssueStatesIncompletePayloadPreservesLaterCurrent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/1":
+			_, _ = io.WriteString(w, `{"id":101,"number":1}`)
+		case "/api/v1/repos/owner/repo/issues/2":
+			_, _ = io.WriteString(w, `{"id":202,"number":2,"labels":[{"name":"aiops/done"}]}`)
+		default:
+			t.Fatalf("request path = %q; want issue endpoint #1 or #2", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, tracker.ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed incomplete response", err)
+	}
+	if states["101"].Outcome != tracker.IssueStateOutcomeUnknown || states["202"].Outcome != tracker.IssueStateOutcomeCurrent {
+		t.Fatalf("states = %#v; want incomplete row unknown and later clean row current", states)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesRateLimitStopsLaterRefs(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, tracker.ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed rate limit", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d; want stop after first rate limit", requests)
+	}
+	if states["101"].Outcome != tracker.IssueStateOutcomeUnknown || states["202"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want both refs unknown", states)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesRequestDeadlineStopsLaterRefs(t *testing.T) {
+	serverRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverRequests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":202,"number":2,"labels":[{"name":"aiops/done"}]}`)
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
+		base: server.Client().Transport,
+		path: "/api/v1/repos/owner/repo/issues/1",
+		err:  context.DeadlineExceeded,
+	}}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want request deadline", err)
+	}
+	if serverRequests != 0 {
+		t.Fatalf("server requests = %d; want no second lookup after request deadline", serverRequests)
+	}
+	if states["101"].Outcome != tracker.IssueStateOutcomeUnknown || states["202"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want both refs unknown", states)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesUnknownForUnknownAiopsLabel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/repos/owner/repo/issues/8" {
+			t.Fatalf("request path = %q; want issue 8", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(Issue{ID: 808, Number: 8, Labels: []Label{{Name: "aiops/future-state"}}})
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "808", Identifier: "#8"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	if got := states["808"].Outcome; got != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want unknown for unrecognized aiops/* workflow label", got)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesUnknownForInconsistentCachedRefOutcome(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+	tests := []struct {
+		name string
+		ref  tracker.IssueRef
+	}{
+		{name: "conflicting identifier", ref: tracker.IssueRef{ID: "101", Identifier: "#2"}},
+		{name: "malformed identifier", ref: tracker.IssueRef{ID: "101", Identifier: "not-a-number"}},
+		{name: "number id conflicts with identifier", ref: tracker.IssueRef{ID: "#1", Identifier: "#2"}},
+		{name: "number id conflicts with cache", ref: tracker.IssueRef{ID: "#2"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client.issueNumbers.Store(tc.ref.ID, 1)
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{tc.ref})
+			if err != nil {
+				t.Fatalf("FetchIssueStatesByRefs(%+v) error = %v; want nil", tc.ref, err)
+			}
+			if got := states[tc.ref.ID].Outcome; got != tracker.IssueStateOutcomeUnknown {
+				t.Fatalf("outcome = %v; want unknown for inconsistent cached ref", got)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d; want inconsistent refs rejected before network lookup", requests)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesUnknownOnConfigurationFailure(t *testing.T) {
+	client := NewTrackerClient(workflow.TrackerConfig{}, "", "", "")
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1", "2", "1", ""})
+	if err == nil {
+		t.Fatal("FetchIssueStatesByIDs error = nil; want configuration error")
+	}
+	if len(states) != 2 || states["1"].Outcome != tracker.IssueStateOutcomeUnknown || states["2"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want explicit unknown rows for configuration failure", states)
 	}
 }
 
@@ -213,8 +533,8 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs wrong ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched issue id = %#v, want empty", states)
+	if len(states) != 1 || states["other-global-id"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched issue id = %#v; want explicit unknown", states)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "#7"}})
 	if err != nil {
@@ -227,8 +547,8 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs mismatched #number ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched #number ID = %#v, want empty", states)
+	if len(states) != 1 || states["#8"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched #number ID = %#v; want explicit unknown", states)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "7", Identifier: "#7"}})
 	if err != nil {
@@ -241,24 +561,24 @@ func TestTrackerClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs mismatched numeric fallback ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched numeric fallback ID = %#v, want empty", states)
+	if len(states) != 1 || states["5"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched numeric fallback ID = %#v; want explicit unknown", states)
 	}
 	client.cacheIssueNumber(Issue{ID: 5, Number: 5})
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "5", Identifier: "#7"}})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs cached mismatched numeric fallback ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for cached mismatched numeric fallback ID = %#v, want empty", states)
+	if len(states) != 1 || states["5"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states for cached mismatched numeric fallback ID = %#v; want explicit unknown", states)
 	}
 	client.cacheIssueNumber(Issue{ID: 555, Number: 5})
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{{ID: "555", Identifier: "#7"}})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs cached global ID with stale identifier: %v", err)
 	}
-	if got := states["555"].State; got != "Done" {
-		t.Fatalf("cached global ID state = %q, want Done", got)
+	if got := states["555"].Outcome; got != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("cached global ID outcome = %v; want unknown for stale identifier", got)
 	}
 	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
 	if err != nil {
@@ -937,11 +1257,14 @@ func TestCachedIssueByNumberNilCacheFallsBackToDirectFetch(t *testing.T) {
 	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
 	client.HTTP = server.Client()
 
-	issue, found, resolved := client.cachedIssueByNumber(context.Background(), nil, 3)
+	issue, found, resolved, err := client.cachedIssueByNumber(context.Background(), nil, 3)
+	if err != nil {
+		t.Fatalf("cachedIssueByNumber(nil cache, 3) error = %v; want nil", err)
+	}
 	if !found || !resolved || issue.Number != 3 {
 		t.Fatalf("cachedIssueByNumber(nil cache, 3) = (%#v, %v, %v); want issue #3, true, true", issue, found, resolved)
 	}
-	if _, found, _ = client.cachedIssueByNumber(context.Background(), nil, 3); !found {
+	if _, found, _, err = client.cachedIssueByNumber(context.Background(), nil, 3); err != nil || !found {
 		t.Fatalf("cachedIssueByNumber(nil cache, 3) second call found = false; want true")
 	}
 	if blockerFetches != 2 {
@@ -999,6 +1322,59 @@ func TestTrackerClientListIssuesByStatesRetriesBlockerAfterTransientError(t *tes
 	}
 	if placeholders != 1 || resolved != 1 {
 		t.Fatalf("blocker #3 carried as placeholder=%d resolved=%d; want 1 fail-closed placeholder (errored source) and 1 resolved (retried source)", placeholders, resolved)
+	}
+}
+
+func TestTrackerClientListActiveIssuesKeepsIssueOnBlockerGlobalFailure(t *testing.T) {
+	tests := []struct {
+		name           string
+		blockerStatus  int
+		blockerRequest error
+	}{
+		{name: "rate limit", blockerStatus: http.StatusTooManyRequests},
+		{name: "request deadline", blockerRequest: context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/repos/owner/repo/issues":
+					_ = json.NewEncoder(w).Encode([]Issue{{
+						ID: 101, Number: 1, Title: "blocked todo", Body: "Depends on #9",
+						HTMLURL: "https://gitea.local/owner/repo/issues/1",
+						Labels:  []Label{{Name: "aiops/todo"}},
+					}})
+				case "/api/v1/repos/owner/repo/issues/9":
+					w.WriteHeader(tc.blockerStatus)
+				default:
+					t.Fatalf("request path for %q = %q; want listing or blocker endpoint", tc.name, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+
+			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret", ActiveStates: []string{"Todo"}}, server.URL, "owner", "repo")
+			client.HTTP = server.Client()
+			if tc.blockerRequest != nil {
+				client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
+					base: server.Client().Transport,
+					path: "/api/v1/repos/owner/repo/issues/9",
+					err:  tc.blockerRequest,
+				}}
+			}
+
+			issues, err := client.ListActiveIssues(context.Background())
+			if err != nil {
+				t.Fatalf("ListActiveIssues(%q) error = %v; want nil", tc.name, err)
+			}
+			if len(issues) != 1 {
+				t.Fatalf("ListActiveIssues(%q) issue count = %d; want 1", tc.name, len(issues))
+			}
+			want := []tracker.BlockerRef{{Identifier: "#9"}}
+			if !slices.Equal(issues[0].BlockedBy, want) {
+				t.Fatalf("ListActiveIssues(%q) BlockedBy = %#v; want %#v", tc.name, issues[0].BlockedBy, want)
+			}
+		})
 	}
 }
 
@@ -1072,7 +1448,7 @@ func TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers(t *testing.
 		{ID: "444", Identifier: "#4"},
 	})
 	if err != nil {
-		t.Fatalf("FetchIssueStatesByRefs: %v", err)
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
 	}
 	blocked := states["555"].BlockedBy
 	if len(blocked) != 1 || blocked[0].ID != "999" || blocked[0].Identifier != "#9" || blocked[0].State != "In Progress" {
@@ -1102,6 +1478,116 @@ func TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers(t *testing.
 	terminalMixed := states["444"].BlockedBy
 	if len(terminalMixed) != 2 || terminalMixed[0].Identifier != "#10" || terminalMixed[0].State != "Done" || terminalMixed[1].Identifier != "#99" || terminalMixed[1].State != "" {
 		t.Fatalf("FetchIssueStatesByRefs(444).BlockedBy = %#v; want resolved #10 (Done) plus the #99 placeholder", terminalMixed)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesBlockerRateLimitStopsLaterRefs(t *testing.T) {
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 555, Number: 5, Body: "Depends on #9", Labels: []Label{{Name: "aiops/todo"}}})
+		case "/api/v1/repos/owner/repo/issues/9":
+			w.WriteHeader(http.StatusTooManyRequests)
+		case "/api/v1/repos/owner/repo/issues/6":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 666, Number: 6, Labels: []Label{{Name: "aiops/done"}}})
+		default:
+			t.Fatalf("request path = %q; want issue endpoint #5, #6, or blocker #9", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
+		{ID: "555", Identifier: "#5"},
+		{ID: "666", Identifier: "#6"},
+	})
+	if !errors.Is(err, tracker.ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want blocker rate limit", err)
+	}
+	if slices.Contains(requestedPaths, "/api/v1/repos/owner/repo/issues/6") {
+		t.Fatalf("requested paths = %v; want later source #6 skipped after blocker rate limit", requestedPaths)
+	}
+	if states["555"].Outcome != tracker.IssueStateOutcomeUnknown || states["666"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want current and later refs unknown after blocker rate limit", states)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesBlockerDeadlineStopsLaterRefs(t *testing.T) {
+	var requestedPaths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 555, Number: 5, Body: "Depends on #9", Labels: []Label{{Name: "aiops/todo"}}})
+		case "/api/v1/repos/owner/repo/issues/6":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 666, Number: 6, Labels: []Label{{Name: "aiops/done"}}})
+		default:
+			t.Fatalf("request path = %q; want source issue endpoint #5 or #6", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
+		base: server.Client().Transport,
+		path: "/api/v1/repos/owner/repo/issues/9",
+		err:  context.DeadlineExceeded,
+	}}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
+		{ID: "555", Identifier: "#5"},
+		{ID: "666", Identifier: "#6"},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want blocker request deadline", err)
+	}
+	if len(requestedPaths) != 1 || requestedPaths[0] != "/api/v1/repos/owner/repo/issues/5" {
+		t.Fatalf("requested paths = %v; want only source #5 before blocker deadline", requestedPaths)
+	}
+	if states["555"].Outcome != tracker.IssueStateOutcomeUnknown || states["666"].Outcome != tracker.IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want current and later refs unknown after blocker deadline", states)
+	}
+}
+
+func TestTrackerClientFetchIssueStatesBlockerNumberMismatchFailsClosedWithoutCaching(t *testing.T) {
+	blockerFetches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/repos/owner/repo/issues/5":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 555, Number: 5, Body: "Depends on #9", Labels: []Label{{Name: "aiops/todo"}}})
+		case "/api/v1/repos/owner/repo/issues/6":
+			_ = json.NewEncoder(w).Encode(Issue{ID: 666, Number: 6, Body: "Depends on #9", Labels: []Label{{Name: "aiops/todo"}}})
+		case "/api/v1/repos/owner/repo/issues/9":
+			blockerFetches++
+			_ = json.NewEncoder(w).Encode(Issue{ID: 999, Number: 99, Labels: []Label{{Name: "aiops/done"}}})
+		default:
+			t.Fatalf("request path = %q; want issue endpoint #5, #6, or blocker #9", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+	client.HTTP = server.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
+		{ID: "555", Identifier: "#5"},
+		{ID: "666", Identifier: "#6"},
+	})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	if blockerFetches != 2 {
+		t.Fatalf("blocker #9 fetches = %d; want 2 because mismatched #99 payload must not be cached", blockerFetches)
+	}
+	for _, id := range []string{"555", "666"} {
+		got := states[id]
+		if got.Outcome != tracker.IssueStateOutcomeCurrent || len(got.BlockedBy) != 1 || got.BlockedBy[0].Identifier != "#9" || got.BlockedBy[0].State != "" {
+			t.Fatalf("states[%s] = %#v; want current Todo with fail-closed #9 placeholder", id, got)
+		}
 	}
 }
 
