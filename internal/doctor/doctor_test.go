@@ -1210,6 +1210,7 @@ func TestCodexVersionFromOutput(t *testing.T) {
 		{"codex-cli line", "codex-cli 0.136.0\n", goVersion{major: 0, minor: 136, patch: 0, patchSet: true}, true},
 		{"bare version", "0.135.2", goVersion{major: 0, minor: 135, patch: 2, patchSet: true}, true},
 		{"v-prefixed", "codex v0.137.0", goVersion{major: 0, minor: 137, patch: 0, patchSet: true}, true},
+		{"missing patch", "codex-cli 0.142", goVersion{}, false},
 		{"no version token", "codex-cli unknown", goVersion{}, false},
 	}
 	for _, tc := range cases {
@@ -1228,13 +1229,13 @@ func TestCodexVersionMatches(t *testing.T) {
 		match     bool
 	}{
 		{"equal", v(0, 136, 0), v(0, 136, 0), true},
-		{"older minor warns", v(0, 135, 9), v(0, 136, 0), false},
-		// A newer codex than the vendored schema must also warn: it can add
+		{"older minor mismatches", v(0, 135, 9), v(0, 136, 0), false},
+		// A newer codex than the vendored schema must also mismatch: it can add
 		// required fields the pinned contract test cannot see (#629 P2).
-		{"newer minor warns", v(0, 137, 0), v(0, 136, 0), false},
-		{"older patch warns", v(0, 136, 0), v(0, 136, 1), false},
-		{"newer patch warns", v(0, 136, 2), v(0, 136, 1), false},
-		{"newer major warns", v(1, 0, 0), v(0, 136, 0), false},
+		{"newer minor mismatches", v(0, 137, 0), v(0, 136, 0), false},
+		{"older patch mismatches", v(0, 136, 0), v(0, 136, 1), false},
+		{"newer patch mismatches", v(0, 136, 2), v(0, 136, 1), false},
+		{"newer major mismatches", v(1, 0, 0), v(0, 136, 0), false},
 	}
 	for _, tc := range cases {
 		if got := codexVersionMatches(tc.got, tc.want); got != tc.match {
