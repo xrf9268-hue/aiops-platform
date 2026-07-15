@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -551,10 +552,12 @@ func TestCrowdRunnerFreezeRedactsFailureSecrets(t *testing.T) {
 	const token = "freeze-secret-token"
 	const proxySecret = "proxy-secret"
 
+	var authMu sync.Mutex
+	var authorization string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "token "+token {
-			t.Fatalf("Authorization = %q; want token %s", got, token)
-		}
+		authMu.Lock()
+		authorization = r.Header.Get("Authorization")
+		authMu.Unlock()
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("echoed " + token + " and https://bot:" + proxySecret + "@gitea.example.test/path"))
 	}))
@@ -562,10 +565,35 @@ func TestCrowdRunnerFreezeRedactsFailureSecrets(t *testing.T) {
 
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
+	script := filepath.Join(root, "scripts", "e2e-crowdrunner-freeze.py")
+	redactCmd := exec.Command(
+		"python3", "-c",
+		"import argparse, runpy, sys; module = runpy.run_path(sys.argv[1]); print(module['redact_text'](argparse.Namespace(token=sys.argv[2]), sys.argv[3]))",
+		script,
+		token,
+		"GET http://bot:"+proxySecret+"@gitea.example.test failed with "+token,
+	)
+	redactCmd.Dir = root
+	userinfoOut, err := redactCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("exercise freeze redaction: %v\n%s", err, userinfoOut)
+	}
+	userinfoText := string(userinfoOut)
+	for _, forbidden := range []string{token, proxySecret} {
+		if got := strings.Contains(userinfoText, forbidden); got {
+			t.Fatalf("strings.Contains(%q, %q) = %v; want false", userinfoText, forbidden, got)
+		}
+	}
+	for _, want := range []string{"[redacted-token]", "http://[redacted]@"} {
+		if got := strings.Contains(userinfoText, want); !got {
+			t.Fatalf("strings.Contains(%q, %q) = %v; want true", userinfoText, want, got)
+		}
+	}
+
 	run := func(giteaURL string) string {
 		cmd := exec.Command(
 			"python3",
-			filepath.Join(root, "scripts", "e2e-crowdrunner-freeze.py"),
+			script,
 			"--run-root", runRoot,
 			"--gitea-url", giteaURL,
 			"--repo-owner", "aiops-bot",
@@ -583,20 +611,22 @@ func TestCrowdRunnerFreezeRedactsFailureSecrets(t *testing.T) {
 		return string(out)
 	}
 
-	userinfoOut := run(strings.Replace(srv.URL, "http://", "http://bot:"+proxySecret+"@", 1))
-	if strings.Contains(userinfoOut, proxySecret) || !strings.Contains(userinfoOut, "http://[redacted]@") {
-		t.Fatalf("freeze helper did not redact URL userinfo:\n%s", userinfoOut)
+	bodyOut := run(srv.URL)
+	authMu.Lock()
+	gotAuthorization := authorization
+	authMu.Unlock()
+	if gotAuthorization != "token "+token {
+		t.Fatalf("Authorization = %q; want token %s", gotAuthorization, token)
 	}
 
-	bodyOut := run(srv.URL)
 	for _, forbidden := range []string{token, proxySecret} {
-		if strings.Contains(bodyOut, forbidden) {
-			t.Fatalf("freeze helper leaked secret %q:\n%s", forbidden, bodyOut)
+		if got := strings.Contains(bodyOut, forbidden); got {
+			t.Fatalf("strings.Contains(%q, %q) = %v; want false", bodyOut, forbidden, got)
 		}
 	}
 	for _, want := range []string{"[redacted-token]", "https://[redacted]@"} {
-		if !strings.Contains(bodyOut, want) {
-			t.Fatalf("freeze helper output missing redaction marker %q:\n%s", want, bodyOut)
+		if got := strings.Contains(bodyOut, want); !got {
+			t.Fatalf("strings.Contains(%q, %q) = %v; want true", bodyOut, want, got)
 		}
 	}
 }
