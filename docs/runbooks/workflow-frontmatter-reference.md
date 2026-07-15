@@ -127,10 +127,13 @@ For `workspaceWrite`, the issue workspace is the writable project unit, while
 and `/tmp` writable too. Set both `excludeTmpdirEnvVar: true` and
 `excludeSlashTmp: true` in an explicit `workspaceWrite` policy to remove those
 automatic grants. By default, the runner injects `GOCACHE` and `GOMODCACHE`
-below the worker's temporary directory. Go workflows must leave the applicable
-temporary root writable or override both variables through
-`codex.env_passthrough` to the issue workspace or paths listed in
-`writableRoots`; otherwise Go commands can fail
+below the worker's temporary directory. Go workflows should normally leave the
+applicable temporary root writable. If both variables are overridden through
+`codex.env_passthrough`, their paths must be writable and visible to both
+sandbox layers; when `sandbox:` is enabled, also add both names to
+`sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
+`writableRoots`, so an external cache root cannot rely on that inner Codex
+setting alone. Otherwise Go commands can fail
 ([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)). Codex's fixed
 protected metadata locations are documented upstream, but this configuration
 does not accept an operator-defined repository-subpath denylist.

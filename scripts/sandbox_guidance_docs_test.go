@@ -25,8 +25,10 @@ func TestSandboxGuidanceDoesNotPromiseRepositorySubpathEnforcement(t *testing.T)
 func assertSandboxBoundaryContract(t *testing.T, root string) {
 	t.Helper()
 	securityBody := readFileString(t, filepath.Join(root, "docs", "security-posture.md"))
-	if got := normalizeSandboxGuidance(securityBody); !strings.Contains(got, "| layer | writable project unit | configurable repository-subpath allow/deny |") {
-		t.Errorf("security-posture.md sandbox table header does not describe a project unit; want project-scoped table")
+	const tableHeader = "| layer | writable project unit | configurable repository-subpath allow/deny |"
+	headerFound := strings.Contains(normalizeSandboxGuidance(securityBody), tableHeader)
+	if !headerFound {
+		t.Errorf("strings.Contains(security-posture.md, %q) = %v; want true", tableHeader, headerFound)
 	}
 	for _, tc := range []struct {
 		layer         string
@@ -75,6 +77,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"`excludetmpdirenvvar: true` and `excludeslashtmp: true`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
+				"when `sandbox:` is enabled, also add both names to `sandbox.env_allowlist`",
+				"bubblewrap does not mount arbitrary codex `writableroots`",
 			},
 		},
 		{
@@ -83,6 +87,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"`excludetmpdirenvvar: true` and `excludeslashtmp: true`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
+				"when `sandbox:` is enabled, also add both names to `sandbox.env_allowlist`",
+				"bubblewrap does not mount arbitrary codex `writableroots`",
 			},
 		},
 		{path: "README.md", wants: []string{"current defaults leave `$tmpdir` and `/tmp` writable"}},
@@ -91,6 +97,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
+				"when `sandbox:` is enabled, also add both names to `sandbox.env_allowlist`",
+				"bubblewrap does not mount arbitrary codex `writableroots`",
 			},
 		},
 		{
@@ -98,6 +106,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
+				"when `sandbox:` is enabled, also add both names to `sandbox.env_allowlist`",
+				"bubblewrap does not mount arbitrary codex `writableroots`",
 			},
 		},
 	} {
