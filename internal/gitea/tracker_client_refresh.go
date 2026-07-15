@@ -70,7 +70,7 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 		c.cacheIssueNumber(issue)
 		state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
 		c.logDiagnostics(issue, diagnostics)
-		if strings.EqualFold(strings.TrimSpace(state), "Todo") && !bodyPresent {
+		if giteaTodoWorkflowState(state) && !bodyPresent {
 			refreshErrs = append(refreshErrs, fmt.Errorf("%w: Gitea Todo issue response missing body", tracker.ErrIssueStateRefreshIncomplete))
 			continue
 		}
@@ -96,12 +96,21 @@ func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []
 	return states, errors.Join(refreshErrs...)
 }
 
-// buildRefreshedIssueState carries the full normalized label set and refreshed
-// blockers onto an authoritative Current row. The issue body is authoritative
-// for this adapter, so no `Depends on #N` references becomes a positive non-nil
-// "no blockers" result; transient resolution failures become open placeholders
-// inside buildBlockedBy.
+// buildRefreshedIssueState carries the full normalized label set onto an
+// authoritative Current row. Only Todo needs blocker knowledge for the dispatch
+// gate; other states avoid irrelevant dependency I/O and keep BlockedBy nil.
+// For Todo, the issue body is authoritative, so no `Depends on #N` references
+// becomes a positive non-nil "no blockers" result; transient resolution
+// failures become open placeholders inside buildBlockedBy.
 func (c *TrackerClient) buildRefreshedIssueState(ctx context.Context, issue Issue, state string) (tracker.IssueState, error) {
+	refreshed := tracker.IssueState{
+		Outcome: tracker.IssueStateOutcomeCurrent,
+		State:   state,
+		Labels:  extractGiteaLabels(issue.Labels),
+	}
+	if !giteaTodoWorkflowState(state) {
+		return refreshed, nil
+	}
 	blockedBy, err := c.buildBlockedBy(ctx, issue.Body, blockerLookupHaltRefresh)
 	if err != nil {
 		return tracker.IssueState{}, err
@@ -109,12 +118,12 @@ func (c *TrackerClient) buildRefreshedIssueState(ctx context.Context, issue Issu
 	if blockedBy == nil {
 		blockedBy = []tracker.BlockerRef{}
 	}
-	return tracker.IssueState{
-		Outcome:   tracker.IssueStateOutcomeCurrent,
-		State:     state,
-		Labels:    extractGiteaLabels(issue.Labels),
-		BlockedBy: blockedBy,
-	}, nil
+	refreshed.BlockedBy = blockedBy
+	return refreshed, nil
+}
+
+func giteaTodoWorkflowState(state string) bool {
+	return strings.EqualFold(strings.TrimSpace(state), "Todo")
 }
 
 func stateDiagnosticsContain(diagnostics []StateDiagnostic, code string) bool {

@@ -1481,6 +1481,63 @@ func TestTrackerClientFetchIssueStatesByRefsCarriesRefreshedBlockers(t *testing.
 	}
 }
 
+func TestTrackerClientFetchIssueStatesNonTodoSkipsBlockerLookupFailure(t *testing.T) {
+	tests := []struct {
+		name           string
+		blockerStatus  int
+		blockerRequest error
+	}{
+		{name: "rate limit", blockerStatus: http.StatusTooManyRequests},
+		{name: "request deadline", blockerRequest: context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requestedPaths []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestedPaths = append(requestedPaths, r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/repos/owner/repo/issues/5":
+					_ = json.NewEncoder(w).Encode(Issue{ID: 555, Number: 5, Body: "Depends on #9", Labels: []Label{{Name: "aiops/in-progress"}}})
+				case "/api/v1/repos/owner/repo/issues/9":
+					w.WriteHeader(tc.blockerStatus)
+				case "/api/v1/repos/owner/repo/issues/6":
+					_ = json.NewEncoder(w).Encode(Issue{ID: 666, Number: 6, Labels: []Label{{Name: "aiops/done"}}})
+				default:
+					t.Fatalf("request path = %q; want source issue #5/#6 or blocker #9", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			client := NewTrackerClient(workflow.TrackerConfig{APIKey: "secret"}, server.URL, "owner", "repo")
+			client.HTTP = server.Client()
+			if tc.blockerRequest != nil {
+				client.HTTP = &http.Client{Transport: giteaPathErrorTransport{
+					base: server.Client().Transport,
+					path: "/api/v1/repos/owner/repo/issues/9",
+					err:  tc.blockerRequest,
+				}}
+			}
+
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []tracker.IssueRef{
+				{ID: "555", Identifier: "#5"},
+				{ID: "666", Identifier: "#6"},
+			})
+			if err != nil {
+				t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil without non-Todo blocker lookup", err)
+			}
+			if slices.Contains(requestedPaths, "/api/v1/repos/owner/repo/issues/9") {
+				t.Fatalf("requested paths = %v; want no blocker lookup for non-Todo source", requestedPaths)
+			}
+			if got := states["555"]; got.Outcome != tracker.IssueStateOutcomeCurrent || got.State != "In Progress" || got.BlockedBy != nil {
+				t.Fatalf("states[555] = %#v; want current In Progress with nil blocker knowledge", got)
+			}
+			if got := states["666"]; got.Outcome != tracker.IssueStateOutcomeCurrent || got.State != "Done" {
+				t.Fatalf("states[666] = %#v; want later Done row current", got)
+			}
+		})
+	}
+}
+
 func TestTrackerClientFetchIssueStatesBlockerRateLimitStopsLaterRefs(t *testing.T) {
 	var requestedPaths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
