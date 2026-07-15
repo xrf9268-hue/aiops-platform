@@ -270,7 +270,7 @@ func TestPollOncePreflightFailureBoundsReconciliationTrackerCalls(t *testing.T) 
 			poller.preflight = &preflightCfg
 
 			errCh := make(chan error, 1)
-			go func() { errCh <- poller.PollOnce(ctx) }()
+			safeGo("test.poll_once_reconciliation_timeout", func() { errCh <- poller.PollOnce(ctx) })
 			var err error
 			select {
 			case err = <-errCh:
