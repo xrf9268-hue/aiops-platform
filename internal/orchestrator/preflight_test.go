@@ -148,6 +148,74 @@ func TestPollOncePreflightFailureSkipsDispatchAndEmitsRuntimeEvent(t *testing.T)
 	}
 }
 
+func TestPollOncePreflightFailureStillReconcilesRunningIssue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{
+		Dispatcher: dispatcher,
+		Scheduler:  RetryScheduler{MaxBackoff: time.Hour},
+	})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates:      []string{"In Progress"},
+		TerminalStates:    []string{"Cancelled", "Done"},
+		WorkerExitTimeout: time.Second,
+	})
+	preflightCfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+	}
+	poller.preflight = &preflightCfg
+
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher)
+
+	listingErr := errors.New("active listing failed during preflight tick")
+	refreshErr := errors.New("narrow refresh partially failed")
+	poller.tracker = &fixedActiveIssueLister{err: listingErr}
+	trackerClient.setIssues(nil)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done"})
+	trackerClient.setFetchIDErr(refreshErr)
+	preflightCfg.Tracker.APIKey = ""
+
+	err := poller.PollOnce(ctx)
+	if err == nil || !strings.Contains(err.Error(), "dispatch preflight failed") {
+		t.Fatalf("preflight poll error = %v, want dispatch preflight failure", err)
+	}
+	if !errors.Is(err, listingErr) || !errors.Is(err, refreshErr) {
+		t.Errorf("preflight poll error = %v, want joined listing and reconciliation errors", err)
+	}
+	if got := trackerClient.fetchIssueStatesByRefsCalls(); len(got) != 1 {
+		t.Errorf("FetchIssueStatesByRefs calls = %d, want 1", len(got))
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Errorf("dispatcher count = %d, want 1 (no replacement dispatch)", got)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch)
+
+	view, snapErr := orch.Snapshot(ctx)
+	if snapErr != nil {
+		t.Fatalf("snapshot: %v", snapErr)
+	}
+	for _, event := range view.RecentEvents {
+		if event.Kind == RuntimeEventDispatchPreflightFailed {
+			return
+		}
+	}
+	t.Fatalf("RecentEvents = %+v, want %s", view.RecentEvents, RuntimeEventDispatchPreflightFailed)
+}
+
 func TestPollOncePreflightSuccessProceedsToFetch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

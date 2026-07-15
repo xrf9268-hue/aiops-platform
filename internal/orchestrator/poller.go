@@ -136,14 +136,6 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 	if p.orchestrator == nil {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
-	if p.preflight != nil {
-		if err := validateDispatchPreflight(*p.preflight); err != nil {
-			if recErr := p.orchestrator.recordPreflightFailed(ctx, err); recErr != nil {
-				return errors.Join(fmt.Errorf("dispatch preflight failed: %w", err), recErr)
-			}
-			return fmt.Errorf("dispatch preflight failed: %w", err)
-		}
-	}
 	var pollErr error
 	if err := p.orchestrator.ReconcileBudgetExceededRuns(ctx, p.reconcile.WorkerExitTimeout); err != nil {
 		if ctx.Err() != nil {
@@ -154,19 +146,25 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 	issues, activeErr := p.tracker.ListActiveIssues(ctx)
 	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
 	// keep the successful issues and join activeErr into pollErr below.
-	if activeErr != nil && len(issues) == 0 {
-		return errors.Join(pollErr, activeErr)
-	}
 	if activeErr != nil {
 		pollErr = errors.Join(pollErr, activeErr)
 	}
 	var reconciledInactive map[string]tracker.Issue
-	if p.reconcileKnown && activeErr == nil {
+	if p.reconcileKnown {
 		var err error
 		reconciledInactive, err = p.reconcileTick(ctx, issues)
 		if err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
+	}
+	if p.preflight != nil {
+		if err := validateDispatchPreflight(*p.preflight); err != nil {
+			preflightErr := fmt.Errorf("dispatch preflight failed: %w", err)
+			return errors.Join(pollErr, preflightErr, p.orchestrator.recordPreflightFailed(ctx, err))
+		}
+	}
+	if activeErr != nil && len(issues) == 0 {
+		return pollErr
 	}
 	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates, p.reconcile.RequiredLabels)
 	if len(reconciledInactive) > 0 {

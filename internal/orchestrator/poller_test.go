@@ -190,6 +190,15 @@ type fakeIssueStateTrackerByCall struct {
 	calls     int
 }
 
+type fixedActiveIssueLister struct {
+	issues []tracker.Issue
+	err    error
+}
+
+func (f *fixedActiveIssueLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	return defaultTrackerIssueTitles(f.issues), f.err
+}
+
 func (f *fakeIssueStateTracker) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
 	return f.ListIssuesByStates(ctx, nil)
 }
@@ -342,6 +351,12 @@ func (d *cancellationDispatcher) contextAt(i int) context.Context {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.contexts[i]
+}
+
+func (d *cancellationDispatcher) issueAt(i int) tracker.Issue {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.issues[i]
 }
 
 // stuckCancellationDispatcher behaves like cancellationDispatcher but its
@@ -540,6 +555,99 @@ func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
 	case <-dispatcher.contextAt(0).Done():
 		t.Fatalf("running issue context was canceled after tracker error")
 	default:
+	}
+}
+
+func TestPollOnceZeroResultListingErrorStillReconcilesRunningIssue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
+	})
+	preflightCfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+	}
+	poller.preflight = &preflightCfg
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher)
+
+	listingErr := errors.New("active listing failed")
+	poller.tracker = &fixedActiveIssueLister{err: listingErr}
+	trackerClient.setIssues(nil)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done"})
+
+	err := poller.PollOnce(ctx)
+	if !errors.Is(err, listingErr) {
+		t.Fatalf("listing-error poll error = %v, want %v", err, listingErr)
+	}
+	if got := trackerClient.fetchIssueStatesByRefsCalls(); len(got) != 1 {
+		t.Errorf("FetchIssueStatesByRefs calls = %d, want 1", len(got))
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Errorf("dispatcher count = %d, want 1 (no new dispatch)", got)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch)
+}
+
+func TestPollOncePartialListingErrorStillReconcilesAndDispatchesReturnedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 2), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
+	})
+	preflightCfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+	}
+	poller.preflight = &preflightCfg
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher)
+
+	listingErr := errors.New("one tracker failed")
+	poller.tracker = &fixedActiveIssueLister{
+		issues: []tracker.Issue{{ID: "issue-2", Identifier: "LIN-2", State: "In Progress"}},
+		err:    listingErr,
+	}
+	trackerClient.setIssues(nil)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done", "issue-2": "In Progress"})
+
+	err := poller.PollOnce(ctx)
+	if !errors.Is(err, listingErr) {
+		t.Fatalf("partial-listing poll error = %v, want %v", err, listingErr)
+	}
+	calls := trackerClient.fetchIssueStatesByRefsCalls()
+	if len(calls) != 2 {
+		t.Errorf("FetchIssueStatesByRefs calls = %d, want 2 (reconcile then revalidate)", len(calls))
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch)
+	waitFor(t, func() bool { return dispatcher.count() == 2 }, time.Second)
+	if got := dispatcher.issueAt(1).ID; got != "issue-2" {
+		t.Fatalf("second dispatched issue ID = %q, want issue-2", got)
 	}
 }
 
