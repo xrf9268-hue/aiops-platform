@@ -24,7 +24,7 @@ func TestApplyBudgetExceededBlockFallbackNamesObservedScope(t *testing.T) {
 	if !op.applyBudgetExceededBlock(st, time.Second) {
 		t.Fatal("applyBudgetExceededBlock() = false; want true")
 	}
-	want := "worker-observed, runner-reported Codex claim budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10 current_claim_runtime_seconds=1 max_runtime_seconds_per_claim=7200; recorded exceedance reason missing; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded from token totals"
+	want := "worker-observed, runner-reported Codex claim budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10 current_claim_runtime_seconds=1 max_runtime_seconds_per_claim=7200; recorded exceedance reason missing; external GitHub @codex review, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are excluded from token totals"
 	if got := st.Blocked[id].Error; got != want {
 		t.Fatalf("blocked fallback error = %q; want %q", got, want)
 	}

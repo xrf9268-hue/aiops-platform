@@ -996,7 +996,7 @@ func TestRecordRuntimeEventBudgetExceededCancelsAndBlocksRun(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	blocked := view.Blocked[0]
-	wantBudgetError := "worker-observed, runner-reported Codex claim token budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded"
+	wantBudgetError := "worker-observed, runner-reported Codex claim token budget exceeded: current_claim_total_tokens=12 max_tokens_per_claim=10; external GitHub @codex review, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are excluded"
 	if blocked.Method != budgetExceededBlockMethod || blocked.Error != wantBudgetError {
 		t.Fatalf("blocked row = %+v, want budget_exceeded method with error %q", blocked, wantBudgetError)
 	}

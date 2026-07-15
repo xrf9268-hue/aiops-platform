@@ -295,10 +295,11 @@ stop time, and first suppressed active-candidate evidence.
 ### Runtime and token attribution
 
 Every token field on this surface is worker-observed, runner-reported Codex
-usage. External GitHub `@codex review` usage and otherwise unreported nested or
-subagent usage are unmeasured, not zero; they are absent from row, session, and
-process totals and do not consume `agent.max_tokens_per_claim`. Treat the token
-fields as a lower bound, not an end-to-end workflow cost or billing total.
+usage. External GitHub `@codex review` usage, other reviewers outside the worker
+session, and otherwise unreported nested or subagent usage are unmeasured, not
+zero; they are absent from row, session, and process totals and do not consume
+`agent.max_tokens_per_claim`. Treat the token fields as a lower bound, not an
+end-to-end workflow cost or billing total.
 
 `codex_totals` is a process-lifetime aggregate of that reported usage. It can
 include work for issues that are no longer running or even older issues from

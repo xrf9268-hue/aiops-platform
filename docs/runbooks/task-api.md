@@ -19,9 +19,10 @@ Returns the process-wide runtime snapshot: running rows, blocked rows, retry
 rows, completed issue IDs, aggregate token/runtime totals, and the current
 poll/concurrency metadata. Token totals and `agent.max_tokens_per_claim` cover
 only worker-observed, runner-reported Codex usage. External GitHub
-`@codex review` usage and otherwise unreported nested or subagent usage are
-unmeasured, not zero, and are absent from this snapshot and guardrail. See
-`docs/runbooks/runtime-status.md` for the full JSON shape.
+`@codex review` usage, other reviewers outside the worker session, and otherwise
+unreported nested or subagent usage are unmeasured, not zero, and are absent
+from this snapshot and guardrail. See `docs/runbooks/runtime-status.md` for the
+full JSON shape.
 
 ## Issue Snapshot
 

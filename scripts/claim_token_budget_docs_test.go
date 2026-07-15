@@ -22,6 +22,7 @@ func TestClaimTokenBudgetDocsNameObservableScope(t *testing.T) {
 		"runner-reported codex",
 		"external github",
 		"@codex review",
+		"other reviewers outside the worker session",
 		"unreported nested or subagent usage",
 		"unmeasured, not zero",
 		"max_tokens_per_claim",

@@ -101,7 +101,7 @@ func (f *finalizeRunOp) applyBudgetExceededBlock(st *OrchestratorState, elapsed 
 			"worker-observed, runner-reported Codex claim budget exceeded: "+
 				"current_claim_total_tokens=%d max_tokens_per_claim=%d "+
 				"current_claim_runtime_seconds=%.0f max_runtime_seconds_per_claim=%d; "+
-				"recorded exceedance reason missing; external GitHub @codex review and otherwise unreported nested or subagent usage are excluded from token totals",
+				"recorded exceedance reason missing; external GitHub @codex review, other reviewers outside the worker session, and otherwise unreported nested or subagent usage are excluded from token totals",
 			f.entry.CodexTotalTokens, guard.MaxTokensPerClaim, elapsedSeconds(elapsed), guard.MaxRuntimeSecondsPerClaim,
 		)
 	}

@@ -355,8 +355,9 @@ it as a bearer token.
 The dashboard and TUI treat `agent.max_tokens_per_claim` as a lower-bound
 safety stop, not an end-to-end cost or billing ceiling. It counts only
 worker-observed, runner-reported Codex usage. External GitHub `@codex review`
-usage and otherwise unreported nested or subagent usage are unmeasured, not
-zero, and do not consume this worker guardrail.
+usage, other reviewers outside the worker session, and otherwise unreported
+nested or subagent usage are unmeasured, not zero, and do not consume this
+worker guardrail.
 
 ## WORKFLOW.md configuration
 

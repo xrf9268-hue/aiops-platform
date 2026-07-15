@@ -108,9 +108,9 @@ value may be a single shell-script string, a list of command strings, or a
 
 `agent.max_tokens_per_claim` is a lower-bound safety stop, not an end-to-end
 cost or billing ceiling. It counts only worker-observed, runner-reported Codex
-usage. External GitHub `@codex review` usage and otherwise unreported nested or
-subagent usage are unmeasured, not zero, and do not consume the configured
-limit.
+usage. External GitHub `@codex review` usage, other reviewers outside the worker
+session, and otherwise unreported nested or subagent usage are unmeasured, not
+zero, and do not consume the configured limit.
 
 ## `codex`
 

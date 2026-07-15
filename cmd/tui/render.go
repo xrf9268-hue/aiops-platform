@@ -108,6 +108,7 @@ func renderFrame(state *stateapi.StateResponse, fetchErr error, now time.Time, t
 		colorize("│ Claim budget: ", ansiBold) + colorize(formatClaimBudget(state.BudgetGuardrails), ansiYellow),
 		colorize("│ Token scope: ", ansiBold) + colorize("worker-observed, runner-reported Codex usage only", ansiGray),
 		colorize("│ Unmeasured: ", ansiBold) + colorize("external GitHub @codex review usage", ansiGray),
+		colorize("│ Unmeasured: ", ansiBold) + colorize("other reviewers outside the worker session", ansiGray),
 		colorize("│ Unmeasured: ", ansiBold) + colorize("otherwise unreported nested or subagent usage", ansiGray),
 		colorize("│ Rate Limits: ", ansiBold) + formatRateLimits(state.RateLimits),
 		colorize("│ Dashboard:   ", ansiBold) + colorize(baseURL+"/", ansiCyan),
