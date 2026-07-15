@@ -516,6 +516,91 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     if process.poll() is None:
                         process.kill()
 
+    def test_run_issue_checks_limit_before_persisting_nonbreach_state(self):
+        above = [
+            state(total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]),
+            state(total=2_500_001, running=[row(1, tokens={"total_tokens": 2_500_001})]),
+        ]
+
+        class LoopSupervisor(supervisor.Supervisor):
+            def __init__(self):
+                self.args = types.SimpleNamespace(
+                    repo="example/repo",
+                    state_poll_seconds=0.01,
+                    forge_poll_seconds=0.01,
+                    forge_request_timeout_seconds=0.25,
+                )
+                self.operator = object()
+                self.breach = None
+
+            def activate_issue(self, _issue_number, _states):
+                return [0, 0], time.monotonic()
+
+            def states(self):
+                return above
+
+            def ensure_workflows_unchanged(self):
+                return None
+
+            def observe_workflow_bindings(self, _states, _issue_number):
+                return None
+
+            def record_state_change(self, _states, _signature):
+                time.sleep(1)
+                return "too-late"
+
+            def abort(self, _issue_number, breach, _states, _extra):
+                self.breach = breach
+
+        loop = LoopSupervisor()
+        started = time.monotonic()
+        completed, _states = loop.run_issue(1, [state(), state()])
+
+        self.assertFalse(completed)
+        self.assertEqual(loop.breach.reason, "worker_tokens_exceeded")
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_run_issue_wires_issue_token_reconciliation(self):
+        mismatch = [
+            state(total=100, running=[row(1, tokens={"total_tokens": 99})]),
+            state(),
+        ]
+
+        class LoopSupervisor(supervisor.Supervisor):
+            def __init__(self):
+                self.args = types.SimpleNamespace(
+                    repo="example/repo",
+                    state_poll_seconds=0.01,
+                    forge_poll_seconds=0.01,
+                    forge_request_timeout_seconds=0.25,
+                )
+                self.operator = object()
+                self.breach = None
+
+            def activate_issue(self, _issue_number, _states):
+                return [0, 0], time.monotonic()
+
+            def states(self):
+                return mismatch
+
+            def ensure_workflows_unchanged(self):
+                return None
+
+            def observe_workflow_bindings(self, _states, _issue_number):
+                return None
+
+            def record_state_change(self, _states, _signature):
+                return "stable"
+
+            def abort(self, _issue_number, breach, _states, _extra):
+                self.breach = breach
+
+        loop = LoopSupervisor()
+        completed, _states = loop.run_issue(1, [state(), state()])
+
+        self.assertFalse(completed)
+        self.assertEqual(loop.breach.reason, "token_accounting_failed")
+
     def test_closed_issue_without_exact_tuple_external_review_aborts(self):
         class LoopSupervisor(supervisor.Supervisor):
             def __init__(self, root):

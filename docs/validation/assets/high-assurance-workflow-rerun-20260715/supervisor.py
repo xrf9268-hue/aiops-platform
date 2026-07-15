@@ -1020,7 +1020,6 @@ class Supervisor:
                 self.ensure_workflows_unchanged()
                 validate_active_rows(states, issue_number)
                 self.observe_workflow_bindings(states, issue_number)
-                state_signature = self.record_state_change(states, state_signature)
             except Exception as exc:
                 breach = LimitBreach("state_observation_failed", 1, 0)
                 self.abort(issue_number, breach, states, {"error": str(exc)})
@@ -1064,6 +1063,13 @@ class Supervisor:
                     states,
                     {"forge": forge, "last_below_states": last_below_states},
                 )
+                return False, states
+
+            try:
+                state_signature = self.record_state_change(states, state_signature)
+            except Exception as exc:
+                breach = LimitBreach("state_persistence_failed", 1, 0)
+                self.abort(issue_number, breach, states, {"error": str(exc)})
                 return False, states
 
             try:
