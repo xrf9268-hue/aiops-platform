@@ -136,6 +136,11 @@ the workspace, but the current defaults leave `$TMPDIR` and `/tmp` writable too;
 it does not enforce operator-selected off-limits subdirectories inside the
 workspace. Use an explicit `workspaceWrite` turn policy with both temporary-root
 exclusion flags set to `true` when those default write roots are unnecessary.
+By default, the runner injects `GOCACHE` and `GOMODCACHE` below the worker's
+temporary directory. Go workflows must leave the applicable temporary root
+writable or override both variables through `codex.env_passthrough` to the issue
+workspace or paths listed in `writableRoots`; otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
 
 > The earlier non-SPEC `codex` (one-shot `codex exec`) runner was removed under [#541](https://github.com/xrf9268-hue/aiops-platform/issues/541); it drove the same agent as `codex app-server` in a strictly worse mode (no in-session `max_turns`).
 

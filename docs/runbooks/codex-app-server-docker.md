@@ -352,7 +352,13 @@ sandbox policy:
 
   With both exclusion fields set to `false`, the current defaults leave
   `$TMPDIR` and `/tmp` writable too. Set `excludeTmpdirEnvVar: true` and
-  `excludeSlashTmp: true` when those temporary write roots are unnecessary.
+  `excludeSlashTmp: true` when those temporary write roots are unnecessary. The
+  runner injects `GOCACHE` and `GOMODCACHE` below the worker's temporary
+  directory by default. Go workflows must leave the applicable temporary root
+  writable or override both variables through `codex.env_passthrough` to the
+  issue workspace or paths listed in `writableRoots`; otherwise Go commands can
+  fail
+  ([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
 
   A `read-only` workflow likewise blocks network by default; if it only needs to
   *fetch* (not install), opt in on its **own** `type: readOnly` policy

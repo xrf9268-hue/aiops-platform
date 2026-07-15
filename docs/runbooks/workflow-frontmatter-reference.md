@@ -126,9 +126,14 @@ For `workspaceWrite`, the issue workspace is the writable project unit, while
 `writableRoots` adds other writable roots. The current defaults leave `$TMPDIR`
 and `/tmp` writable too. Set both `excludeTmpdirEnvVar: true` and
 `excludeSlashTmp: true` in an explicit `workspaceWrite` policy to remove those
-default temporary write roots. Codex's fixed protected metadata locations are
-documented upstream, but this configuration does not accept an operator-defined
-repository-subpath denylist.
+automatic grants. By default, the runner injects `GOCACHE` and `GOMODCACHE`
+below the worker's temporary directory. Go workflows must leave the applicable
+temporary root writable or override both variables through
+`codex.env_passthrough` to the issue workspace or paths listed in
+`writableRoots`; otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)). Codex's fixed
+protected metadata locations are documented upstream, but this configuration
+does not accept an operator-defined repository-subpath denylist.
 
 ## `claude`
 

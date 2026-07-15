@@ -165,7 +165,8 @@ Use the system for low-risk company tasks.
 Success condition:
 
 - draft PR only
-- deny paths enabled
+- prompt path scope documented as advisory
+- branch protection, required review, and CI enabled
 - human review required
 - no automatic merge
 

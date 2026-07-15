@@ -10,10 +10,10 @@ harness hardening as part of the core safety model, not as an optional add-on.
 `aiops-platform` has two separate sandbox layers. They compose when both are
 enabled, but they enforce different boundaries.
 
-| Layer | Writable paths | Configurable repository-subpath allow/deny |
+| Layer | Writable project unit | Configurable repository-subpath allow/deny |
 |---|---|---|
-| Codex `workspaceWrite` | Issue workspace, `$TMPDIR`, `/tmp`, plus any added `writableRoots`; fixed Codex metadata protections still apply | None |
-| Worker `sandbox:` | Whole issue workspace read-write plus backend-private `/tmp` | None |
+| Codex `workspaceWrite` | Issue workspace; fixed Codex metadata protections still apply | None |
+| Worker `sandbox:` | Whole issue workspace read-write | None |
 
 ### Coding-agent sandbox
 
@@ -23,10 +23,16 @@ app-server sandbox. `workspaceWrite` treats the issue workspace as its writable
 project boundary, and `writableRoots` adds writable roots outside it. The
 current defaults leave `$TMPDIR` and `/tmp` writable too. Set both
 `excludeTmpdirEnvVar: true` and `excludeSlashTmp: true` in an explicit
-`workspaceWrite` policy to remove those default temporary write roots. Codex
-also protects a small fixed set of metadata paths such as `.git`, `.agents`,
-and `.codex`, but those built-in protections are not an operator-configurable
-repository path policy. See the official Codex documentation for
+`workspaceWrite` policy to remove those automatic grants. By default, the runner
+injects `GOCACHE` and `GOMODCACHE` below the worker's temporary directory. Go
+workflows must leave the applicable temporary root writable or override both
+variables through `codex.env_passthrough` to the issue workspace or paths listed
+in `writableRoots`; otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
+Codex also protects a small fixed set of metadata paths such as `.git`,
+`.agents`, and `.codex`, but those built-in protections are not an
+operator-configurable repository path policy. See the official Codex
+documentation for
 [sandbox modes](https://learn.chatgpt.com/docs/agent-approvals-security#sandbox-and-approvals)
 and [protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
 
