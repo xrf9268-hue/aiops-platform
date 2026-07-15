@@ -190,6 +190,45 @@ func TestReconcileStartupRemovesOnlyTrackerConfirmedTerminalWorkspace(t *testing
 	}
 }
 
+func TestReconcileStartupRemovesTrackerConfirmedTerminalReworkWorkspaces(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "current sanitizer", key: "issue-2_rework_2026-05-16T10_00_00Z"},
+		{name: "legacy sanitizer", key: "issue-2-rework-2026-05-16t10-00-00z"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			terminalPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.key)
+			if err := os.MkdirAll(terminalPath, 0o755); err != nil {
+				t.Fatalf("mkdir %s: %v", terminalPath, err)
+			}
+
+			emitter := &fakeEmitter{}
+			err := ReconcileStartup(context.Background(), ReconcileConfig{
+				WorkspaceRoot:  root,
+				ActiveStates:   []string{"Rework"},
+				TerminalStates: []string{"Done"},
+				Tracker: &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
+					nil,
+					{{ID: "issue-2", Identifier: "LIN-2", State: "Done"}},
+				}},
+				Emitter:         emitter,
+				ReconcileTaskID: "reconcile-startup",
+			})
+			if err != nil {
+				t.Fatalf("ReconcileStartup: %v", err)
+			}
+			if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+				t.Fatalf("tracker-confirmed terminal Rework workspace should be removed, stat err=%v", err)
+			}
+			wantSingleReconcileWorkspaceReason(t, emitter, "terminal")
+		})
+	}
+}
+
 func TestReconcileStartupKeepsWorkspacesWhenTrackerReturnsNoIssues(t *testing.T) {
 	root := t.TempDir()
 	unknownPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-404")

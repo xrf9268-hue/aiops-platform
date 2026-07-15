@@ -142,12 +142,13 @@ func fetchReconcileIssues(ctx context.Context, cfg ReconcileConfig, taskID strin
 }
 
 // reconcileIndex is the per-workspace lookup state derived from the fetched
-// issues: active/terminal key maps and the issues used to match active rework
-// workspaces.
+// issues: active/terminal key maps and the issues used to match historical
+// rework workspace keys.
 type reconcileIndex struct {
-	activeKeys   map[string]tracker.Issue
-	terminalKeys map[string]tracker.Issue
-	activeIssues []tracker.Issue
+	activeKeys     map[string]tracker.Issue
+	terminalKeys   map[string]tracker.Issue
+	activeIssues   []tracker.Issue
+	terminalIssues []tracker.Issue
 }
 
 func newReconcileIndex(fetch reconcileFetch) reconcileIndex {
@@ -164,9 +165,10 @@ func newReconcileIndex(fetch reconcileFetch) reconcileIndex {
 		}
 	}
 	return reconcileIndex{
-		activeKeys:   activeKeys,
-		terminalKeys: terminalKeys,
-		activeIssues: fetch.activeIssues,
+		activeKeys:     activeKeys,
+		terminalKeys:   terminalKeys,
+		activeIssues:   fetch.activeIssues,
+		terminalIssues: fetch.terminalIssues,
 	}
 }
 
@@ -218,6 +220,10 @@ func reconcileWorkspace(ctx context.Context, cfg ReconcileConfig, taskID string,
 		return false, true, nil
 	}
 	if issue, ok := idx.terminalKeys[workspace.Key]; ok {
+		removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, issue, "terminal")
+		return removedOne, false, err
+	}
+	if issue, ok := terminalReworkIssueForWorkspace(workspace.Key, idx.terminalIssues); ok {
 		removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, issue, "terminal")
 		return removedOne, false, err
 	}
@@ -436,13 +442,32 @@ func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) 
 		if !strings.EqualFold(issue.State, "Rework") || strings.TrimSpace(issue.ID) == "" {
 			continue
 		}
-		for _, prefix := range reworkWorkspaceKeyPrefixes(issue) {
-			if strings.HasPrefix(workspaceKey, prefix) {
-				return issue, true
-			}
+		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
+			return issue, true
 		}
 	}
 	return tracker.Issue{}, false
+}
+
+func terminalReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.ID) == "" {
+			continue
+		}
+		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
+			return issue, true
+		}
+	}
+	return tracker.Issue{}, false
+}
+
+func reworkWorkspaceMatchesIssue(workspaceKey string, issue tracker.Issue) bool {
+	for _, prefix := range reworkWorkspaceKeyPrefixes(issue) {
+		if strings.HasPrefix(workspaceKey, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func reworkWorkspaceKeyPrefixes(issue tracker.Issue) []string { //nolint:gocognit // baseline (#521)
