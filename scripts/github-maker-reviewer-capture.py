@@ -16,7 +16,7 @@ from typing import Any
 
 PR_JSON_FIELDS = (
     "number,title,state,author,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,"
-    "autoMergeRequest,mergedAt,mergedBy,mergeCommit,reviewDecision,reviews,statusCheckRollup,"
+    "autoMergeRequest,mergedAt,mergedBy,mergeCommit,closingIssuesReferences,reviewDecision,reviews,statusCheckRollup,"
     "url,body,createdAt,updatedAt"
 )
 
