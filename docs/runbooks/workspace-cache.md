@@ -221,7 +221,8 @@ only when a tracker actually emits an `issue.ID` containing uppercase or
 `[^a-zA-Z0-9._-]` characters.)
 
 Plain (non-rework) per-issue dirs created under the old sanitizer are
-not back-compat-matched and will be reconciled away.
+not back-compat-matched. They remain on disk unless the tracker explicitly
+confirms the corresponding issue is terminal or an operator removes them.
 
 ## Cleanup policy
 
