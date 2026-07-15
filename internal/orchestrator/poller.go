@@ -15,6 +15,14 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
+var errDispatchPreflight = errors.New("dispatch preflight failed")
+
+// reconciliationTrackerRequestTimeout caps each tracker read in the
+// reconcile-before-dispatch phase. PollOnce's ctx normally lives for the
+// worker process, so passing it through directly would let one unresponsive
+// tracker pin every later poll tick indefinitely.
+var reconciliationTrackerRequestTimeout = 45 * time.Second
+
 // ActiveIssueLister is the tracker reader required by the SPEC poll tick.
 type ActiveIssueLister interface {
 	ListActiveIssues(ctx context.Context) ([]tracker.Issue, error)
@@ -136,14 +144,6 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 	if p.orchestrator == nil {
 		return errors.New("orchestrator poller requires orchestrator")
 	}
-	if p.preflight != nil {
-		if err := validateDispatchPreflight(*p.preflight); err != nil {
-			if recErr := p.orchestrator.recordPreflightFailed(ctx, err); recErr != nil {
-				return errors.Join(fmt.Errorf("dispatch preflight failed: %w", err), recErr)
-			}
-			return fmt.Errorf("dispatch preflight failed: %w", err)
-		}
-	}
 	var pollErr error
 	if err := p.orchestrator.ReconcileBudgetExceededRuns(ctx, p.reconcile.WorkerExitTimeout); err != nil {
 		if ctx.Err() != nil {
@@ -151,26 +151,37 @@ func (p *Poller) PollOnce(ctx context.Context) error { //nolint:gocognit // base
 		}
 		pollErr = errors.Join(pollErr, err)
 	}
-	issues, activeErr := p.tracker.ListActiveIssues(ctx)
-	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
-	// keep the successful issues and join activeErr into pollErr below.
-	if activeErr != nil && len(issues) == 0 {
-		return errors.Join(pollErr, activeErr)
-	}
-	if activeErr != nil {
-		pollErr = errors.Join(pollErr, activeErr)
-	}
-	var reconciledInactive map[string]tracker.Issue
-	if p.reconcileKnown && activeErr == nil {
+	var reconciliation tickReconciliation
+	if p.reconcileKnown {
 		var err error
-		reconciledInactive, err = p.reconcileTick(ctx, issues)
+		reconciliation, err = p.reconcileClaimedTick(ctx, nil)
 		if err != nil {
 			pollErr = errors.Join(pollErr, err)
 		}
 	}
+	if p.preflight != nil {
+		if err := validateDispatchPreflight(*p.preflight); err != nil {
+			preflightErr := fmt.Errorf("%w: %w", errDispatchPreflight, err)
+			return errors.Join(pollErr, preflightErr, p.orchestrator.recordPreflightFailed(ctx, err))
+		}
+	}
+	issues, activeErr := p.tracker.ListActiveIssues(ctx)
+	// Multi-tracker clients return (issues, errors.Join(...)) on partial success;
+	// keep the successful issues and join activeErr into pollErr below.
+	if activeErr != nil {
+		pollErr = errors.Join(pollErr, activeErr)
+	}
+	if p.reconcileKnown && len(issues) > 0 {
+		if err := p.refreshListedActiveIssues(ctx, issues, reconciliation.refreshed); err != nil {
+			pollErr = errors.Join(pollErr, err)
+		}
+	}
+	if activeErr != nil && len(issues) == 0 {
+		return pollErr
+	}
 	candidates := filterEligibleCandidates(mergeOverflowCandidates(p.overflow, issues), p.reconcile.TerminalStates, p.reconcile.RequiredLabels)
-	if len(reconciledInactive) > 0 {
-		candidates = filterIssuesNotInMap(candidates, reconciledInactive)
+	if len(reconciliation.inactive) > 0 {
+		candidates = filterIssuesNotInMap(candidates, reconciliation.inactive)
 	}
 	sortCandidates(candidates)
 	p.overflow = nil
@@ -206,43 +217,99 @@ func (l activeIssueListerFromStates) ListActiveIssues(ctx context.Context) ([]tr
 	return l.tracker.ListIssuesByStates(ctx, l.states)
 }
 
+type tickReconciliation struct {
+	inactive  map[string]tracker.Issue
+	refreshed map[string]tracker.Issue
+}
+
+type claimedNarrowRefresh struct {
+	activeIssuesByID    map[string]tracker.Issue
+	activeStateKeys     map[string]struct{}
+	refreshedIssuesByID map[string]tracker.Issue
+}
+
+type claimedInactiveResult struct {
+	issues       map[string]tracker.Issue
+	deriveErr    error
+	reconcileErr error
+}
+
 func (p *Poller) reconcileTick(ctx context.Context, activeIssues []tracker.Issue) (map[string]tracker.Issue, error) {
+	result, err := p.reconcileClaimedTick(ctx, activeIssues)
+	return result.inactive, err
+}
+
+func (p *Poller) reconcileClaimedTick(ctx context.Context, activeIssues []tracker.Issue) (tickReconciliation, error) {
+	var result tickReconciliation
 	if p.stateTracker == nil {
-		return nil, errors.New("orchestrator poller reconciliation requires state tracker")
+		return result, errors.New("orchestrator poller reconciliation requires state tracker")
 	}
-	var fetchErr error
 	// D37 budget reconciliation already ran before the tracker-dependent active
 	// listing, so SPEC §16.3 Part A can treat remaining quiet stale runs as
 	// ordinary stalls. A WorkerExitTimeout on a worker that ignores cancellation
 	// surfaces as context.DeadlineExceeded; surface that as a non-fatal poll
 	// error so one stuck run cannot block Part B from reconciling unrelated
 	// inactive/terminal issues in the same tick.
-	if err := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout); err != nil {
-		if ctx.Err() != nil {
-			return nil, err
+	fetchErr := p.orchestrator.ReconcileStalledRuns(ctx, p.reconcile.StallTimeoutMs, p.reconcile.WorkerExitTimeout)
+	if fetchErr != nil && ctx.Err() != nil {
+		return result, fetchErr
+	}
+	issueRefs := p.orchestrator.RunningRetryingAndBlockedIssueRefs(ctx)
+	if len(issueRefs) == 0 {
+		return result, fetchErr
+	}
+	narrow, narrowErr := p.refreshClaimedNarrowPhase(ctx, activeIssues, issueRefs)
+	fetchErr = errors.Join(fetchErr, narrowErr)
+	result.refreshed = narrow.refreshedIssuesByID
+	if err := p.applyClaimedNarrowPhase(ctx, narrow); err != nil {
+		return result, errors.Join(fetchErr, err)
+	}
+	inactive := p.reconcileClaimedInactivePhase(ctx, activeIssues, narrow)
+	result.inactive = inactive.issues
+	fetchErr = errors.Join(fetchErr, inactive.deriveErr)
+	return result, errors.Join(inactive.reconcileErr, fetchErr)
+}
+
+func (p *Poller) refreshClaimedNarrowPhase(ctx context.Context, activeIssues []tracker.Issue, issueRefs []tracker.IssueRef) (claimedNarrowRefresh, error) {
+	refresh := claimedNarrowRefresh{
+		activeIssuesByID: issueMap(activeIssues),
+		activeStateKeys:  normalizedStates(p.reconcile.ActiveStates),
+	}
+	var err error
+	refresh.refreshedIssuesByID, err = p.refreshRunningIssueStates(ctx, refresh.activeIssuesByID, issueRefs)
+	return refresh, err
+}
+
+func (p *Poller) applyClaimedNarrowPhase(ctx context.Context, refresh claimedNarrowRefresh) error {
+	if err := p.orchestrator.PatchActiveClaimedTrackerIssueStates(ctx, refresh.refreshedIssuesByID, refresh.activeStateKeys); err != nil {
+		return err
+	}
+	mergeRefreshedActiveStates(refresh.activeIssuesByID, refresh.refreshedIssuesByID, refresh.activeStateKeys)
+	// The active listing may be partial, so absence is "no information." Only
+	// refresh stored metadata for explicit active observations here.
+	if len(refresh.activeIssuesByID) == 0 {
+		return nil
+	}
+	return p.orchestrator.RefreshActiveTrackerIssues(ctx, refresh.activeIssuesByID, refresh.activeStateKeys)
+}
+
+func (p *Poller) reconcileClaimedInactivePhase(ctx context.Context, activeIssues []tracker.Issue, refresh claimedNarrowRefresh) claimedInactiveResult {
+	activeEvidenceByID := issueMap(activeIssues)
+	for id, issue := range refresh.refreshedIssuesByID {
+		if isActiveTrackerState(issue.State, refresh.activeStateKeys) {
+			activeEvidenceByID[id] = issue
 		}
-		fetchErr = errors.Join(fetchErr, err)
 	}
-	activeIssuesByID := issueMap(activeIssues)
-	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
-	refreshedIssuesByID, err := p.refreshRunningIssueStates(ctx, activeIssuesByID)
-	if err != nil {
-		fetchErr = errors.Join(fetchErr, err)
-	}
-	mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID, activeStateKeys)
-	// The active listing may be partial (pagination caps), so absence from it
-	// is "no information," not inactivity: refresh stored issue metadata for the
-	// runs we DO see (so per-state capacity gates observe the latest tracker
-	// state) and leave cancellation to the terminal/inactive pass below, which
-	// acts only on explicit terminal/inactive observations (SPEC §11.2 narrow
-	// refresh + §16.3) rather than treating an unlisted issue as gone.
-	if err := p.orchestrator.RefreshActiveTrackerIssues(ctx, activeIssuesByID, activeStateKeys); err != nil {
-		return nil, err
-	}
-	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeIssuesByID, refreshedIssuesByID, activeStateKeys)
-	fetchErr = errors.Join(fetchErr, deriveErr)
+	inactiveByID, deriveErr := p.deriveInactiveIssues(ctx, activeEvidenceByID, refresh.refreshedIssuesByID, refresh.activeStateKeys)
 	reconcileErr := p.orchestrator.ReconcileInactiveTrackerIssuesAndWait(ctx, inactiveByID, normalizedStates(p.reconcile.TerminalStates), p.reconcile.WorkerExitTimeout)
-	return inactiveByID, errors.Join(reconcileErr, fetchErr)
+	return claimedInactiveResult{issues: inactiveByID, deriveErr: deriveErr, reconcileErr: reconcileErr}
+}
+
+func (p *Poller) refreshListedActiveIssues(ctx context.Context, issues []tracker.Issue, refreshed map[string]tracker.Issue) error {
+	issuesByID := issueMap(issues)
+	activeStateKeys := normalizedStates(p.reconcile.ActiveStates)
+	mergeRefreshedActiveStates(issuesByID, refreshed, activeStateKeys)
+	return p.orchestrator.RefreshActiveTrackerIssues(ctx, issuesByID, activeStateKeys)
 }
 
 // mergeRefreshedActiveStates folds the narrow per-issue state refresh back into
@@ -254,8 +321,7 @@ func mergeRefreshedActiveStates(activeIssuesByID, refreshedIssuesByID map[string
 	for id, issue := range refreshedIssuesByID {
 		if isActiveTrackerState(issue.State, activeStateKeys) {
 			if existing, ok := activeIssuesByID[id]; ok {
-				existing.State = issue.State
-				activeIssuesByID[id] = existing
+				activeIssuesByID[id] = patchTrackerIssueState(existing, issue)
 			}
 		} else {
 			delete(activeIssuesByID, id)
@@ -308,7 +374,9 @@ func (p *Poller) refreshedIssueIsInactive(issue tracker.Issue, activeStateKeys m
 func (p *Poller) appendInactiveFromStateGroups(ctx context.Context, inactiveByID map[string]tracker.Issue, activeByID map[string]struct{}) error {
 	var groupErr error
 	for _, states := range p.reconcileInactiveStateGroups() {
-		issues, err := p.stateTracker.ListIssuesByStates(ctx, states)
+		listCtx, cancel := context.WithTimeout(ctx, reconciliationTrackerRequestTimeout)
+		issues, err := p.stateTracker.ListIssuesByStates(listCtx, states)
+		cancel()
 		if err != nil {
 			groupErr = errors.Join(groupErr, err)
 			continue
@@ -333,16 +401,14 @@ func addInactiveListedIssues(inactiveByID map[string]tracker.Issue, activeByID m
 	}
 }
 
-func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue) (map[string]tracker.Issue, error) {
+func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID map[string]tracker.Issue, issueRefs []tracker.IssueRef) (map[string]tracker.Issue, error) {
 	refresher, ok := p.stateTracker.(IssueStateRefresher)
 	if !ok {
 		return nil, nil
 	}
-	issueRefs := p.orchestrator.RunningRetryingAndBlockedIssueRefs(ctx)
-	if len(issueRefs) == 0 {
-		return nil, nil
-	}
-	statesByID, err := fetchIssueStates(ctx, refresher, issueRefs)
+	fetchCtx, cancel := context.WithTimeout(ctx, reconciliationTrackerRequestTimeout)
+	statesByID, err := fetchIssueStates(fetchCtx, refresher, issueRefs)
+	cancel()
 	refsByID := make(map[string]tracker.IssueRef, len(issueRefs))
 	for _, ref := range issueRefs {
 		refsByID[ref.ID] = ref
@@ -364,6 +430,7 @@ func (p *Poller) refreshRunningIssueStates(ctx context.Context, activeIssuesByID
 		// not). Only rows the tracker actually returned with a non-empty state
 		// reach here, so absence stays "no information" (never a mass-cancel).
 		issue.Labels = st.Labels
+		issue.BlockedBy = st.BlockedBy
 		refreshed[id] = issue
 	}
 	if err == nil {

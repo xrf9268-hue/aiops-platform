@@ -177,6 +177,7 @@ type fakeIssueStateTracker struct {
 	err           error
 	fetchIDErr    error
 	fetchRefCalls [][]tracker.IssueRef
+	onFetchRefs   func([]tracker.IssueRef)
 	fetchIDStates map[string]string
 	// fetchIDIssueStates, when set, takes precedence over fetchIDStates and
 	// returns full refresh facts (state + labels + blockers) per issue ID.
@@ -188,6 +189,100 @@ type fakeIssueStateTrackerByCall struct {
 	issues    [][]tracker.Issue
 	errByCall []error
 	calls     int
+}
+
+type fixedActiveIssueLister struct {
+	mu     sync.Mutex
+	issues []tracker.Issue
+	err    error
+	calls  int
+	onList func()
+}
+
+func (f *fixedActiveIssueLister) ListActiveIssues(_ context.Context) ([]tracker.Issue, error) {
+	f.mu.Lock()
+	f.calls++
+	issues, err, onList := f.issues, f.err, f.onList
+	f.mu.Unlock()
+	if onList != nil {
+		onList()
+	}
+	return defaultTrackerIssueTitles(issues), err
+}
+
+func (f *fixedActiveIssueLister) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
+}
+
+type pollOrderSpy struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+type blockingReconcileTracker struct {
+	mu            sync.Mutex
+	blockFetch    bool
+	blockListings bool
+	fetchCalls    int
+	listCalls     int
+	fetchDeadline []bool
+	listDeadlines []bool
+}
+
+func (b *blockingReconcileTracker) ListIssuesByStates(ctx context.Context, _ []string) ([]tracker.Issue, error) {
+	_, hasDeadline := ctx.Deadline()
+	b.mu.Lock()
+	b.listCalls++
+	b.listDeadlines = append(b.listDeadlines, hasDeadline)
+	block := b.blockListings
+	b.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return nil, nil
+}
+
+func (b *blockingReconcileTracker) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
+	return b.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(ids))
+}
+
+func (b *blockingReconcileTracker) FetchIssueStatesByRefs(ctx context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	_, hasDeadline := ctx.Deadline()
+	b.mu.Lock()
+	b.fetchCalls++
+	b.fetchDeadline = append(b.fetchDeadline, hasDeadline)
+	block := b.blockFetch
+	b.mu.Unlock()
+	if block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	states := make(map[string]tracker.IssueState, len(refs))
+	for _, ref := range refs {
+		states[ref.ID] = tracker.IssueState{State: "In Progress"}
+	}
+	return states, nil
+}
+
+func (b *blockingReconcileTracker) callSnapshot() (int, int, []bool, []bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.fetchCalls, b.listCalls, append([]bool(nil), b.fetchDeadline...), append([]bool(nil), b.listDeadlines...)
+}
+
+func (s *pollOrderSpy) record(call string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, call)
+}
+
+func (s *pollOrderSpy) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
 }
 
 func (f *fakeIssueStateTracker) ListActiveIssues(ctx context.Context) ([]tracker.Issue, error) {
@@ -218,6 +313,9 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs [
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetchRefCalls = append(f.fetchRefCalls, append([]tracker.IssueRef(nil), refs...))
+	if f.onFetchRefs != nil {
+		f.onFetchRefs(append([]tracker.IssueRef(nil), refs...))
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -278,6 +376,12 @@ func (f *fakeIssueStateTracker) setFetchIDErr(err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fetchIDErr = err
+}
+
+func (f *fakeIssueStateTracker) setFetchObserver(observer func([]tracker.IssueRef)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.onFetchRefs = observer
 }
 
 func (f *fakeIssueStateTracker) resetFetchIssueStatesByIDsCalls() {
@@ -342,6 +446,12 @@ func (d *cancellationDispatcher) contextAt(i int) context.Context {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.contexts[i]
+}
+
+func (d *cancellationDispatcher) issueAt(i int) tracker.Issue {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.issues[i]
 }
 
 // stuckCancellationDispatcher behaves like cancellationDispatcher but its
@@ -543,23 +653,132 @@ func TestPollOnceTrackerErrorDoesNotCancelRunningIssue(t *testing.T) {
 	}
 }
 
+func TestPollOnceZeroResultListingErrorStillReconcilesRunningIssue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 1), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
+	})
+	preflightCfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+	}
+	poller.preflight = &preflightCfg
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher)
+
+	listingErr := errors.New("active listing failed")
+	poller.tracker = &fixedActiveIssueLister{err: listingErr}
+	trackerClient.setIssues(nil)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done"})
+
+	err := poller.PollOnce(ctx)
+	if !errors.Is(err, listingErr) {
+		t.Fatalf("listing-error poll error = %v, want %v", err, listingErr)
+	}
+	if got := trackerClient.fetchIssueStatesByRefsCalls(); len(got) != 1 {
+		t.Errorf("FetchIssueStatesByRefs calls = %d, want 1", len(got))
+	}
+	if got := dispatcher.count(); got != 1 {
+		t.Errorf("dispatcher count = %d, want 1 (no new dispatch)", got)
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch)
+}
+
+func TestPollOncePartialListingErrorStillReconcilesAndDispatchesReturnedCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
+	dispatcher := &cancellationDispatcher{}
+	orch := New(NewOrchestratorState(30000, 2), Deps{Dispatcher: dispatcher, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+	go orch.Run(ctx)
+	if err := orch.WaitStarted(ctx); err != nil {
+		t.Fatalf("wait for orchestrator: %v", err)
+	}
+	poller := NewPollerWithReconciliation(trackerClient, orch, ReconciliationConfig{
+		ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}, WorkerExitTimeout: time.Second,
+	})
+	preflightCfg := workflow.Config{
+		Tracker: workflow.TrackerConfig{Kind: "linear", APIKey: "lin_xxxx", ProjectSlug: "team-x"},
+		Codex:   workflow.CommandConfig{Command: "codex app-server"},
+	}
+	poller.preflight = &preflightCfg
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("initial poll once: %v", err)
+	}
+	waitForCancellationDispatcherCount(t, dispatcher)
+
+	order := &pollOrderSpy{}
+	listingErr := errors.New("one tracker failed")
+	candidateLister := &fixedActiveIssueLister{
+		issues: []tracker.Issue{{ID: "issue-2", Identifier: "LIN-2", State: "In Progress"}},
+		err:    listingErr,
+		onList: func() { order.record("candidate") },
+	}
+	poller.tracker = candidateLister
+	trackerClient.setIssues(nil)
+	trackerClient.resetFetchIssueStatesByIDsCalls()
+	trackerClient.setFetchObserver(func(refs []tracker.IssueRef) {
+		for _, ref := range refs {
+			switch ref.ID {
+			case "issue-1":
+				order.record("narrow")
+			case "issue-2":
+				order.record("revalidate")
+			}
+		}
+	})
+	trackerClient.setFetchIDStates(map[string]string{"issue-1": "Done", "issue-2": "In Progress"})
+
+	err := poller.PollOnce(ctx)
+	if !errors.Is(err, listingErr) {
+		t.Fatalf("partial-listing poll error = %v, want %v", err, listingErr)
+	}
+	calls := trackerClient.fetchIssueStatesByRefsCalls()
+	if len(calls) != 2 {
+		t.Errorf("FetchIssueStatesByRefs calls = %d, want 2 (reconcile then revalidate)", len(calls))
+	}
+	if got := candidateLister.count(); got != 1 {
+		t.Errorf("candidate ListActiveIssues calls = %d, want 1", got)
+	}
+	if got := strings.Join(order.snapshot(), ","); got != "narrow,candidate,revalidate" {
+		t.Errorf("poll order = %q, want %q", got, "narrow,candidate,revalidate")
+	}
+	waitForContextCanceled(t, dispatcher.contextAt(0))
+	waitForNoRunningOrRetrying(t, ctx, orch)
+	waitFor(t, func() bool { return dispatcher.count() == 2 }, time.Second)
+	if got := dispatcher.issueAt(1).ID; got != "issue-2" {
+		t.Fatalf("second dispatched issue ID = %q, want issue-2", got)
+	}
+}
+
 func TestPollOnceCancelsTerminalIssueBeforeReturningLaterInactiveFetchError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	trackerClient := &fakeIssueStateTrackerByCall{issues: [][]tracker.Issue{
 		{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}},
-		{},
-		{},
-		{},
 		{{ID: "issue-1", Identifier: "LIN-1", State: "Done"}},
+		{},
+		{},
 	}, errByCall: []error{
 		nil,
 		nil,
-		nil,
-		nil,
-		nil,
 		fmt.Errorf("inactive state fetch failed"),
+		nil,
 	}}
 	dispatcher := &cancellationDispatcher{}
 	orch := New(NewOrchestratorState(30000, 1), Deps{
