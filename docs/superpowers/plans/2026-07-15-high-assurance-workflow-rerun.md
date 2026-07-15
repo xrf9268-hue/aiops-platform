@@ -47,7 +47,9 @@ Cover these pure functions with synthetic maker/reviewer state payloads:
 4. bind the ten-minute external gate to the current
    `(headRefOid, baseRefOid, baseRefName)` and accept only a review object from
    bot numeric id `199175422` with `commit_id` equal to that head and
-   `submitted_at` at/after the one trigger; comments and reactions are
+   `submitted_at` at/after the one trigger; require the reviewer checkpoint to
+   have a strictly earlier GitHub timestamp than the trigger because equal
+   whole-second timestamps cannot prove ordering; comments and reactions are
    advisory, not reliable completion;
 5. reject stale-head/base signals and keep nested/subagent/external usage marked
    unmeasured.
@@ -75,7 +77,11 @@ The supervisor must:
   issue 1, activate issue 2 only after issue 1 is closed, and perform no other
   GitHub mutation;
 - sample local worker state at most every 250 ms and forge state every 5 s;
+- perform forge reads outside the local stop loop with a five-second overall
+  request deadline, rejecting non-advancing pagination cursors;
 - aggregate sessions/tokens per issue across maker and reviewer;
+- cross-check the process-token delta against issue-attributed
+  ended/running/blocked usage and reject incomplete state schemas;
 - fail closed on an unavailable state API, changed worker PID, counter
   regression, unexpected active issue, workflow change, or tuple/trigger
   inconsistency;
@@ -85,6 +91,8 @@ The supervisor must:
   checks, settings, or merges;
 - terminate cleanly after both issues close and preserve JSONL lifecycle data
   and worker logs under the run root.
+- signal both process groups even when a worker leader has already exited, and
+  clean up a first worker if the second worker fails to start.
 
 ### Step 3: Make the tests pass and perform a dry-run failure injection
 

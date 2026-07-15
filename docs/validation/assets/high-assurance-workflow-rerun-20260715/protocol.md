@@ -104,6 +104,8 @@ merges, or closes. The reviewer is read-only locally and must:
 - run configured Go gates and real-process negative/failure-path probes once
   for each unseen tuple;
 - write the exact reviewer-owned tuple checkpoint on local PASS;
+- wait until GitHub can assign the trigger a strictly later whole-second
+  timestamp than that checkpoint, because equal timestamps cannot prove order;
 - reuse that checkpoint for unchanged tuples instead of repeating local review;
 - trigger external `@codex review` at most once per tuple and never infer clean
   from absence, prose, or reactions;
@@ -125,7 +127,7 @@ worker process groups.
 | Limit | Executable interpretation |
 | --- | --- |
 | Four worker sessions per issue | Count issue-matching `completed_session_usage + running + blocked` claim rows across both workers; do not deduplicate the thread-turn `session_id`. Abort at `>4`, or at `==4` while a continuation is pending, before claim five. |
-| 3,500,000 worker-observed tokens per issue | At activation freeze both process `codex_totals.total_tokens`; sum both deltas while exactly one issue is active. Abort at the first observed value above 3,500,000. Preserve last-below, first-above, and detection-to-TERM latency. |
+| 3,500,000 worker-observed tokens per issue | At activation freeze both process `codex_totals.total_tokens`; sum both deltas while exactly one issue is active and require that delta to equal issue-attributed ended/running/blocked usage. Abort on an accounting mismatch or the first observed value above 3,500,000. Preserve last-below, first-above, and detection-to-TERM latency. |
 | Ten minutes for external review | Start at the exact trigger comment's `created_at`; require the reliable exact-head review object above. Abort at 600 seconds without it. |
 | Thirty minutes wall per issue | Start a monotonic timer before the activation request. Completion requires GitHub closed plus no live/blocked/retrying claim for that issue; abort at 1,800 seconds until both are true. |
 
@@ -133,11 +135,14 @@ Token updates are discrete runner events, so an individual turn can overshoot
 the token threshold. The first observed value is the enforceable boundary and
 the final total after termination is a worker-observed lower bound.
 
-State API unavailability, parse failure, process exit/replacement, token counter
-regression, unexpected active issue, workflow mutation, duplicate trigger, or
-tuple inconsistency fails closed. The stop sequence is: fsync breach evidence,
-send `SIGTERM` to both process groups, wait the fixed grace, send `SIGKILL` to
-survivors, record exits. It never changes a lifecycle label to stop work.
+State API unavailability, missing required state fields, parse failure, process
+exit/replacement, token counter regression, unexpected active issue, workflow
+mutation, duplicate trigger, or tuple inconsistency fails closed. Forge reads
+run on a daemon observation thread with a five-second overall deadline so they
+cannot block the 250 ms local stop loop. The stop sequence is: fsync breach
+evidence, send `SIGTERM` to both process groups even if a worker leader already
+exited, wait the fixed grace, send `SIGKILL` to surviving groups, record exits.
+It never changes a lifecycle label to stop work.
 
 ## Operator boundary
 

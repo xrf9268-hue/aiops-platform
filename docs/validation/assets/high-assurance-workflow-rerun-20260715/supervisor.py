@@ -14,10 +14,12 @@ import dataclasses
 import hashlib
 import json
 import os
+import queue
 import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -69,6 +71,64 @@ class WorkerProcess:
     spec: WorkerSpec
     process: subprocess.Popen[str]
     log_handle: Any
+
+
+class ForgePoller:
+    """Run forge snapshots off the stop-contract sampling path."""
+
+    def __init__(
+        self,
+        client: GhClient,
+        repo: str,
+        issue_number: int,
+        *,
+        interval_seconds: float,
+        timeout_seconds: float,
+    ):
+        self.client = client
+        self.repo = repo
+        self.issue_number = issue_number
+        self.interval_seconds = interval_seconds
+        self.timeout_seconds = timeout_seconds
+        self.next_due = 0.0
+        self.started_at: float | None = None
+        self.results: queue.SimpleQueue[tuple[dict[str, Any] | None, BaseException | None]] = (
+            queue.SimpleQueue()
+        )
+
+    def maybe_start(self, now: float) -> None:
+        if self.started_at is not None or now < self.next_due:
+            return
+        self.started_at = now
+        threading.Thread(target=self._fetch, daemon=True).start()
+
+    def _fetch(self) -> None:
+        try:
+            self.results.put(
+                (forge_snapshot(self.client, self.repo, self.issue_number), None)
+            )
+        except BaseException as exc:
+            self.results.put((None, exc))
+
+    def take(self, now: float) -> dict[str, Any] | None:
+        if self.started_at is None:
+            return None
+        try:
+            snapshot, error = self.results.get_nowait()
+        except queue.Empty:
+            if now - self.started_at >= self.timeout_seconds:
+                raise TimeoutError(
+                    f"forge snapshot exceeded {self.timeout_seconds:.3f}s"
+                )
+            return None
+        started_at = self.started_at
+        self.started_at = None
+        self.next_due = max(now, started_at + self.interval_seconds)
+        if error is not None:
+            raise RuntimeError(f"forge snapshot failed: {error}") from error
+        if snapshot is None:
+            raise RuntimeError("forge snapshot returned no data")
+        return snapshot
 
 
 def utc_now() -> str:
@@ -133,7 +193,11 @@ def canonical_issue_hash(issue: dict[str, Any]) -> str:
 
 
 def token_total(state: dict[str, Any]) -> int:
-    return int((state.get("codex_totals") or {}).get("total_tokens") or 0)
+    totals = state.get("codex_totals")
+    value = totals.get("total_tokens") if isinstance(totals, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("state codex_totals.total_tokens is invalid")
+    return value
 
 
 def token_delta(states: list[dict[str, Any]], baselines: list[int]) -> int:
@@ -148,6 +212,63 @@ def token_delta(states: list[dict[str, Any]], baselines: list[int]) -> int:
             )
         total += current - baseline
     return total
+
+
+def issue_token_total(states: Iterable[dict[str, Any]], issue_number: int) -> int:
+    total = 0
+    for state in states:
+        for field in ("completed_session_usage", "running", "blocked"):
+            for usage in state[field]:
+                if not issue_matches(usage, issue_number):
+                    continue
+                value = int(usage["tokens"]["total_tokens"])
+                if value < 0:
+                    raise ValueError(f"negative issue-attributed token value {value}")
+                total += value
+    return total
+
+
+def validate_token_accounting(
+    states: list[dict[str, Any]], baselines: list[int], issue_number: int
+) -> int:
+    process_delta = token_delta(states, baselines)
+    attributed = issue_token_total(states, issue_number)
+    if process_delta != attributed:
+        raise ValueError(
+            "token accounting mismatch: "
+            f"process_delta={process_delta} issue_attributed={attributed}"
+        )
+    return process_delta
+
+
+def validate_state_payload(state: dict[str, Any]) -> None:
+    if state.get("version") != "v0.1.16":
+        raise ValueError(f"state version is {state.get('version')!r}; want 'v0.1.16'")
+    totals = state.get("codex_totals")
+    if not isinstance(totals, dict):
+        raise ValueError("state codex_totals must be an object")
+    total_tokens = totals.get("total_tokens")
+    if isinstance(total_tokens, bool) or not isinstance(total_tokens, int):
+        raise ValueError("state codex_totals.total_tokens must be an integer")
+    if total_tokens < 0:
+        raise ValueError("state codex_totals.total_tokens must be non-negative")
+    for field in ("completed_session_usage", "running", "blocked", "retrying"):
+        rows = state.get(field)
+        if not isinstance(rows, list):
+            raise ValueError(f"state {field} must be an array")
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError(f"state {field}[{index}] must be an object")
+            if not row.get("issue_identifier") and not row.get("issue_url"):
+                raise ValueError(f"state {field}[{index}] lacks issue identity")
+            if field == "retrying":
+                continue
+            tokens = row.get("tokens")
+            value = tokens.get("total_tokens") if isinstance(tokens, dict) else None
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(
+                    f"state {field}[{index}].tokens.total_tokens must be a non-negative integer"
+                )
 
 
 def evaluate_limits(
@@ -213,7 +334,7 @@ def checkpoint_tuple_for_trigger(
             continue
         submitted_at = parse_time(str(submitted))
         review_tuple = ReviewTuple(*match.groups())
-        if submitted_at <= trigger_time and review.get("commit_id") == review_tuple.head:
+        if submitted_at < trigger_time and review.get("commit_id") == review_tuple.head:
             candidates.append((submitted_at, review_tuple))
     if not candidates:
         return None
@@ -246,7 +367,7 @@ def validate_active_rows(states: Iterable[dict[str, Any]], issue_number: int) ->
 
 def workflow_rows(state: dict[str, Any], issue_number: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for field in ("completed_session_usage", "running"):
+    for field in ("completed_session_usage", "running", "blocked"):
         rows.extend(
             row for row in (state.get(field) or []) if issue_matches(row, issue_number)
         )
@@ -279,6 +400,16 @@ def append_event(path: Path, event: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
+def process_group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def terminate_workers(
     processes: Iterable[subprocess.Popen[str] | WorkerProcess],
     event_log: Path,
@@ -292,12 +423,12 @@ def terminate_workers(
     append_event(event_log, persisted)
     signaled: list[int] = []
     for process in raw:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                signaled.append(process.pid)
-            except ProcessLookupError:
-                pass
+        process.poll()
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            signaled.append(process.pid)
+        except ProcessLookupError:
+            pass
     signal_ns = time.monotonic_ns()
     append_event(
         event_log,
@@ -310,11 +441,16 @@ def terminate_workers(
         },
     )
     deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline and any(process.poll() is None for process in raw):
+    while time.monotonic() < deadline:
+        for process in raw:
+            process.poll()
+        if not any(process_group_alive(process.pid) for process in raw):
+            break
         time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
     killed: list[int] = []
     for process in raw:
-        if process.poll() is None:
+        process.poll()
+        if process_group_alive(process.pid):
             try:
                 os.killpg(process.pid, signal.SIGKILL)
                 killed.append(process.pid)
@@ -437,6 +573,7 @@ query($owner:String!,$name:String!,$number:Int!,$after:String){
 def fetch_review_threads(client: GhClient, repo: str, pr_number: int) -> list[dict[str, Any]]:
     owner, name = repo.split("/", 1)
     cursor: str | None = None
+    seen_cursors: set[str] = set()
     threads: list[dict[str, Any]] = []
     while True:
         args = [
@@ -463,9 +600,13 @@ def fetch_review_threads(client: GhClient, repo: str, pr_number: int) -> list[di
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
             return threads
-        cursor = page.get("endCursor")
-        if not cursor:
+        next_cursor = page.get("endCursor")
+        if not next_cursor:
             raise RuntimeError("reviewThreads pagination hasNextPage without endCursor")
+        if next_cursor == cursor or next_cursor in seen_cursors:
+            raise RuntimeError("reviewThreads pagination cursor did not advance")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
 
 
 def discover_pr_number(repo: str, comments: list[dict[str, Any]]) -> int | None:
@@ -686,14 +827,18 @@ class Supervisor:
                 }
             )
             handle = (logs / f"{spec.role}-worker.log").open("w", encoding="utf-8")
-            process = subprocess.Popen(
-                [worker_bin, "--port", str(spec.port), str(spec.workflow)],
-                env=env,
-                text=True,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            try:
+                process = subprocess.Popen(
+                    [worker_bin, "--port", str(spec.port), str(spec.workflow)],
+                    env=env,
+                    text=True,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except BaseException:
+                handle.close()
+                raise
             self.workers.append(WorkerProcess(spec, process, handle))
         append_event(
             self.event_log,
@@ -718,7 +863,12 @@ class Supervisor:
                 raise RuntimeError(
                     f"{worker.spec.role} worker exited unexpectedly with {worker.process.returncode}"
                 )
-            result.append(fetch_json(f"http://127.0.0.1:{worker.spec.port}/api/v1/state"))
+            state = fetch_json(
+                f"http://127.0.0.1:{worker.spec.port}/api/v1/state",
+                timeout=min(0.1, self.args.state_poll_seconds / 2),
+            )
+            validate_state_payload(state)
+            result.append(state)
         return result
 
     def wait_ready(self) -> list[dict[str, Any]]:
@@ -795,28 +945,30 @@ class Supervisor:
             return None, None
         return current[0], None
 
-    def external_breach(self, snapshot: dict[str, Any]) -> LimitBreach | None:
+    def external_status(
+        self, snapshot: dict[str, Any]
+    ) -> tuple[bool, LimitBreach | None]:
         review_tuple = tuple_from_snapshot(snapshot)
         if review_tuple is None:
-            return None
+            return False, None
         trigger, breach = self.assign_triggers(snapshot, review_tuple)
         if breach or trigger is None:
-            return breach
+            return False, breach
         created = trigger.get("created_at")
         if not created:
-            return LimitBreach("external_trigger_missing_time", 1, 0)
+            return False, LimitBreach("external_trigger_missing_time", 1, 0)
         triggered_at = parse_time(str(created))
         signal_review = reliable_external_review(
             snapshot.get("reviews") or [], review_tuple, triggered_at
         )
         if signal_review is not None:
-            return None
+            return True, None
         waited = (datetime.now(timezone.utc) - triggered_at).total_seconds()
         if waited >= MAX_EXTERNAL_WAIT_SECONDS:
-            return LimitBreach(
+            return False, LimitBreach(
                 "external_review_signal_timeout", waited, MAX_EXTERNAL_WAIT_SECONDS
             )
-        return None
+        return False, None
 
     def activate_issue(self, issue_number: int, states: list[dict[str, Any]]) -> tuple[list[int], float]:
         issue = self.operator.api(f"repos/{self.args.repo}/issues/{issue_number}")
@@ -850,21 +1002,22 @@ class Supervisor:
         previous_totals = baselines[:]
         last_below_states = states
         state_signature: str | None = None
-        last_forge = 0.0
         forge: dict[str, Any] = {"issue": {"state": "open"}}
+        external_satisfied = False
+        forge_poller = ForgePoller(
+            self.operator,
+            self.args.repo,
+            issue_number,
+            interval_seconds=self.args.forge_poll_seconds,
+            timeout_seconds=self.args.forge_request_timeout_seconds,
+        )
         breach: LimitBreach | None = None
         while True:
+            breach = None
             cycle_started = time.monotonic()
             try:
                 states = self.states()
                 self.ensure_workflows_unchanged()
-                for index, state in enumerate(states):
-                    current = token_total(state)
-                    if current < previous_totals[index]:
-                        raise RuntimeError(
-                            f"worker {index} token counter regressed from {previous_totals[index]} to {current}"
-                        )
-                    previous_totals[index] = current
                 validate_active_rows(states, issue_number)
                 self.observe_workflow_bindings(states, issue_number)
                 state_signature = self.record_state_change(states, state_signature)
@@ -874,22 +1027,18 @@ class Supervisor:
                 return False, states
 
             now = time.monotonic()
-            if now - last_forge >= self.args.forge_poll_seconds:
-                try:
-                    forge = forge_snapshot(self.operator, self.args.repo, issue_number)
-                    append_event(
-                        self.event_log,
-                        {"event": "forge_state", "issue": issue_number, "snapshot": forge},
-                    )
-                    last_forge = now
-                except Exception as exc:
-                    breach = LimitBreach("forge_observation_failed", 1, 0)
-                    self.abort(issue_number, breach, states, {"error": str(exc)})
-                    return False, states
-
-            closed = is_closed(forge)
             try:
-                observed_tokens = token_delta(states, baselines)
+                for index, state in enumerate(states):
+                    current = token_total(state)
+                    if current < previous_totals[index]:
+                        raise ValueError(
+                            f"worker {index} token counter regressed "
+                            f"from {previous_totals[index]} to {current}"
+                        )
+                    previous_totals[index] = current
+                observed_tokens = validate_token_accounting(
+                    states, baselines, issue_number
+                )
                 if observed_tokens <= MAX_TOKENS_PER_ISSUE:
                     last_below_states = states
                 breach = evaluate_limits(
@@ -897,14 +1046,17 @@ class Supervisor:
                     baselines,
                     issue_number=issue_number,
                     elapsed_seconds=now - started,
-                    issue_closed=closed,
+                    issue_closed=is_closed(forge),
                 )
             except ValueError as exc:
-                breach = LimitBreach("counter_regression", 1, 0)
+                reason = (
+                    "counter_regression"
+                    if "regressed" in str(exc)
+                    else "token_accounting_failed"
+                )
+                breach = LimitBreach(reason, 1, 0)
                 self.abort(issue_number, breach, states, {"error": str(exc), "forge": forge})
                 return False, states
-            if breach is None:
-                breach = self.external_breach(forge)
             if breach is not None:
                 self.abort(
                     issue_number,
@@ -913,7 +1065,31 @@ class Supervisor:
                     {"forge": forge, "last_below_states": last_below_states},
                 )
                 return False, states
+
+            try:
+                forge_poller.maybe_start(now)
+                snapshot = forge_poller.take(now)
+            except Exception as exc:
+                breach = LimitBreach("forge_observation_failed", 1, 0)
+                self.abort(issue_number, breach, states, {"error": str(exc)})
+                return False, states
+            if snapshot is not None:
+                forge = snapshot
+                append_event(
+                    self.event_log,
+                    {"event": "forge_state", "issue": issue_number, "snapshot": forge},
+                )
+                external_satisfied, breach = self.external_status(forge)
+                if breach is not None:
+                    self.abort(issue_number, breach, states, {"forge": forge})
+                    return False, states
+
+            closed = is_closed(forge)
             if closed and not issue_active(states, issue_number):
+                if not external_satisfied:
+                    breach = LimitBreach("external_review_required", 0, 1)
+                    self.abort(issue_number, breach, states, {"forge": forge})
+                    return False, states
                 append_event(
                     self.event_log,
                     {
@@ -961,8 +1137,8 @@ class Supervisor:
         self.run_root.mkdir(parents=True, exist_ok=True)
         self.verify_files()
         self.verify_identities_and_initial_state()
-        self.start_workers()
         try:
+            self.start_workers()
             states = self.wait_ready()
             for issue_number in self.args.issues:
                 completed, states = self.run_issue(issue_number, states)
@@ -1015,6 +1191,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--reviewer-port", type=int, default=4929)
     parser.add_argument("--state-poll-seconds", type=float, default=0.25)
     parser.add_argument("--forge-poll-seconds", type=float, default=5.0)
+    parser.add_argument("--forge-request-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--ready-timeout-seconds", type=float, default=60.0)
     parser.add_argument("--term-grace-seconds", type=float, default=5.0)
     args = parser.parse_args(argv)
@@ -1022,6 +1199,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--state-poll-seconds must be >0 and <=0.25")
     if args.forge_poll_seconds <= 0 or args.forge_poll_seconds > 5:
         parser.error("--forge-poll-seconds must be >0 and <=5")
+    if args.forge_request_timeout_seconds <= 0 or args.forge_request_timeout_seconds > 5:
+        parser.error("--forge-request-timeout-seconds must be >0 and <=5")
     return args
 
 
