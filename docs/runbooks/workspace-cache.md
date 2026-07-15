@@ -182,10 +182,10 @@ Because the project is pre-release ([`AGENTS.md`
 §SPEC-alignment-is-a-hard-requirement](../../AGENTS.md#spec-alignment-is-a-hard-requirement),
 [`DEVIATIONS.md`](../../DEVIATIONS.md)) the cutover is hard, not
 gradual: dirs created under the pre-#229 sanitizer are orphaned on
-disk and will be removed by the next startup reconciliation pass as
-"unknown" workspaces. Operators should clean up the orphans before
-rolling out the change to avoid a one-time burst of reconcile-remove
-events on the next worker boot:
+disk and remain unmatched by current workspace keys. Startup
+reconciliation deliberately keeps those dirs because their absence from a
+tracker result is not proof of terminal state. Operators who no longer need
+the orphans should audit and remove them explicitly:
 
 ```sh
 # Audit (no removals): list workspace components that contain old-style
@@ -221,7 +221,8 @@ only when a tracker actually emits an `issue.ID` containing uppercase or
 `[^a-zA-Z0-9._-]` characters.)
 
 Plain (non-rework) per-issue dirs created under the old sanitizer are
-not back-compat-matched and will be reconciled away.
+not back-compat-matched. They remain on disk unless the tracker explicitly
+confirms the corresponding issue is terminal or an operator removes them.
 
 ## Cleanup policy
 

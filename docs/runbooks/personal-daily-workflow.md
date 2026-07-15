@@ -175,7 +175,7 @@ change is larger.
 
 ## Handling failed tasks
 
-The SPEC-aligned worker does not persist scheduler attempts in Postgres. It polls the tracker, records in-flight/completed/retry state in the in-memory orchestrator runtime, and starts with fresh scheduler state after restart. Startup reconciliation compares tracker state with deterministic workspaces before the first poll so terminal/unknown workspace directories are cleaned without reading queue rows.
+The SPEC-aligned worker does not persist scheduler attempts in Postgres. It polls the tracker, records in-flight/completed/retry state in the in-memory orchestrator runtime, and starts with fresh scheduler state after restart. Before the first poll, startup reconciliation removes only deterministic workspaces whose issue identifiers the tracker confirms are terminal; unmatched workspaces remain untouched.
 
 ### Triage with the runtime status API
 
