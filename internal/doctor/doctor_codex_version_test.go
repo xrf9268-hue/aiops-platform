@@ -88,7 +88,7 @@ func TestRunReturnsFailureForCodexVersionMismatch(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())
 	want, ok := parseGoVersion(runner.CodexProtocolVersion)
 	if !ok {
-		t.Fatalf("parseGoVersion(%q) failed", runner.CodexProtocolVersion)
+		t.Fatalf("parseGoVersion(%q) ok = %v; want true", runner.CodexProtocolVersion, ok)
 	}
 	newer := formatTestVersion(goVersion{major: want.major, minor: want.minor, patch: want.patch + 1, patchSet: true})
 	path := writeWorkflowBody(t, "gitea", "token", runner.NameCodexAppServer, "")
