@@ -1112,7 +1112,7 @@ func TestGitHubMakerReviewerReportRejectsUnprovenIssueClosures(t *testing.T) {
 		{"operator manual close", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:20:00Z","actor":{"login":"setup-bot"},"commit_id":null}]`},
 		{"reviewer close before merge", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:00Z","actor":{"login":"reviewer-bot"},"commit_id":null}]`},
 		{"mismatched native commit", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}]`},
-		{"wrong refs linkage", strings.Replace(fakeGitHubMergedPRsJSON(), `"body":"Refs #1"`, `"body":"Refs #99"`, 1), ""},
+		{"wrong refs linkage", strings.Replace(fakeGitHubMergedPRsJSON(), `Refs #1.`, `Refs #10.`, 1), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runRoot := filepath.Join(t.TempDir(), "run")
@@ -1483,7 +1483,7 @@ func writeFakeFinalVerifyLogs(t *testing.T, runRoot string) {
 
 func fakeGitHubMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":5,"title":"feat: filters","body":"Implemented the requested filter.\n\nRefs #1.","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
   {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
   {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -233,6 +234,14 @@ def pr_merge_commit(pr: dict[str, Any]) -> str:
     return str(commit.get("oid") or "")
 
 
+def pr_references_issue(pr: dict[str, Any], issue_number: Any) -> bool:
+    number = str(issue_number).strip()
+    if not number.isdigit():
+        return False
+    body = str(pr.get("body") or "")
+    return re.search(rf"(?m)(?<!\w)Refs[ \t]+#{number}(?!\d)", body) is not None
+
+
 def issue_events(forge_json: Path, issue_number: int | str) -> list[dict[str, Any]]:
     for path in issue_event_candidates(forge_json, issue_number):
         loaded = load_json(path)
@@ -260,8 +269,7 @@ def issue_closure_provenance_present(
         issue = closed_issue_by_title(issues, marker)
         if not issue:
             return False
-        reference = f"Refs #{issue.get('number')}"
-        linked = [pr for pr in merged if str(pr.get("body") or "").strip() == reference]
+        linked = [pr for pr in merged if pr_references_issue(pr, issue.get("number"))]
         if len(linked) != 1:
             return False
         pr = linked[0]
