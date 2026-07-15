@@ -263,7 +263,6 @@ type tokenUsage struct {
 	input, output, total int64
 	hasInput, hasOutput  bool
 	hasTotal             bool
-	absolute             bool
 }
 
 func tokenUsageFromEvent(event task.RuntimeEvent) (tokenUsage, bool) {
@@ -280,15 +279,13 @@ func tokenUsageFromEvent(event task.RuntimeEvent) (tokenUsage, bool) {
 	}
 	for _, path := range absolutePaths {
 		if usage, ok := tokenUsageFromMap(mapAtPath(payload, path)); ok {
-			usage.absolute = true
 			return usage, true
 		}
 	}
-	paths := [][]string{{"usage"}, {"turn", "usage"}}
-	if event.Event == task.EventTurnCompleted {
-		paths = append(paths, nil)
+	if event.Event != task.EventTurnCompleted {
+		return tokenUsage{}, false
 	}
-	for _, path := range paths {
+	for _, path := range [][]string{{"usage"}, {"turn", "usage"}, nil} {
 		if usage, ok := tokenUsageFromMap(mapAtPath(payload, path)); ok {
 			return usage, true
 		}
@@ -307,39 +304,25 @@ func tokenUsageFromMap(m map[string]any) (tokenUsage, bool) {
 	if v, ok := numberField(m, "total_tokens", "total", "totalTokens"); ok {
 		usage.total, usage.hasTotal = v, true
 	}
-	if !usage.hasTotal && (usage.hasInput || usage.hasOutput) {
-		usage.total, usage.hasTotal = usage.input+usage.output, true
-	}
 	return usage, usage.hasInput || usage.hasOutput || usage.hasTotal
 }
 
 func applyTokenUsage(run *RunningEntry, usage tokenUsage) (inputDelta, outputDelta, totalDelta int64) {
 	if usage.hasInput {
-		inputDelta = usage.input
-		if usage.absolute {
-			inputDelta = positiveDelta(usage.input, run.CodexInputTokens)
-			run.LastReportedInputTokens += inputDelta
-		}
+		inputDelta = positiveDelta(usage.input, run.LastReportedInputTokens)
+		run.LastReportedInputTokens = max(run.LastReportedInputTokens, usage.input)
+		run.CodexInputTokens = run.LastReportedInputTokens
 	}
 	if usage.hasOutput {
-		outputDelta = usage.output
-		if usage.absolute {
-			outputDelta = positiveDelta(usage.output, run.CodexOutputTokens)
-			run.LastReportedOutputTokens += outputDelta
-		}
+		outputDelta = positiveDelta(usage.output, run.LastReportedOutputTokens)
+		run.LastReportedOutputTokens = max(run.LastReportedOutputTokens, usage.output)
+		run.CodexOutputTokens = run.LastReportedOutputTokens
 	}
 	if usage.hasTotal {
-		totalDelta = usage.total
-		if usage.absolute {
-			totalDelta = positiveDelta(usage.total, run.CodexTotalTokens)
-			run.LastReportedTotalTokens += totalDelta
-		}
-	} else {
-		totalDelta = inputDelta + outputDelta
+		totalDelta = positiveDelta(usage.total, run.LastReportedTotalTokens)
+		run.LastReportedTotalTokens = max(run.LastReportedTotalTokens, usage.total)
+		run.CodexTotalTokens = run.LastReportedTotalTokens
 	}
-	run.CodexInputTokens += inputDelta
-	run.CodexOutputTokens += outputDelta
-	run.CodexTotalTokens += totalDelta
 	return inputDelta, outputDelta, totalDelta
 }
 
