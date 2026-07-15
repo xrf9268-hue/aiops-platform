@@ -23,13 +23,17 @@ app-server sandbox. `workspaceWrite` treats the issue workspace as its writable
 project boundary, and `writableRoots` adds writable roots outside it. The
 current defaults leave `$TMPDIR` and `/tmp` writable too. Set both
 `excludeTmpdirEnvVar: true` and `excludeSlashTmp: true` in an explicit
-`workspaceWrite` policy to remove those automatic grants. By default, the runner
-injects `GOCACHE` and `GOMODCACHE` below the worker's temporary directory. Go
-workflows should normally leave the applicable temporary root writable. With
-the worker wrapper enabled, the worker's temporary directory must also be
-visible to both sandbox layers. Bubblewrap mounts `/tmp`, not an arbitrary host
-`$TMPDIR`; a custom temp path outside `/tmp` and the issue workspace requires
-cache overrides to paths both layers expose. If either cache variable is
+`workspaceWrite` policy to remove those automatic grants. The Codex app-server
+baseline inherits the worker's `$TMPDIR`, so the default Codex grant and the
+worker-selected temp root refer to the same path. The optional worker wrapper
+still filters `TMPDIR` through `sandbox.env_allowlist`; add it only when the
+selected temp path is visible to that backend. By default, the runner injects
+`GOCACHE` and `GOMODCACHE` below the worker's temporary directory. Go workflows
+should normally leave the applicable temporary root writable. With the worker
+wrapper enabled, the worker's temporary directory must also be visible to both
+sandbox layers. Bubblewrap mounts `/tmp`, not an arbitrary host `$TMPDIR`; a
+custom temp path outside `/tmp` and the issue workspace requires cache overrides
+to paths both layers expose. If either cache variable is
 overridden through `codex.env_passthrough`, each override path must be writable
 and visible to both sandbox layers; when
 `sandbox:` is enabled, also add each overridden name to
@@ -188,7 +192,8 @@ The current Go implementation provides these safety controls:
   default these children run with only a small POSIX baseline env (`PATH`,
   `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`); the Codex
   app-server runner additionally receives `CODEX_HOME` so Codex can resolve its
-  configured home without giving that credential directory to non-Codex agents
+  configured home and, when set, `TMPDIR` so its temporary write root matches the
+  worker-injected cache paths. Non-Codex agents do not receive either variable
   by default. Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`,
   `GITEA_TOKEN`) and any other secret in the worker's `.env` are excluded — a
   malicious or buggy WORKFLOW.md cannot `env > /tmp/dump` and exfiltrate them.

@@ -129,7 +129,7 @@ func codexAppServerEnvStubScript(t *testing.T, body string) string {
 	header := `#!/usr/bin/env python3
 import os, sys
 with open("env.txt", "w") as f:
-    for name in ("LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "PATH", "CODEX_HOME"):
+    for name in ("LINEAR_API_KEY", "GITEA_TOKEN", "GITHUB_TOKEN", "PATH", "CODEX_HOME", "TMPDIR"):
         if name in os.environ:
             f.write(f"{name}={os.environ[name]}\n")
 `
@@ -328,6 +328,7 @@ for line in sys.stdin:
 	t.Setenv("GITEA_TOKEN", "gitea-secret")
 	t.Setenv("GITHUB_TOKEN", "github-secret")
 	t.Setenv("CODEX_HOME", filepath.Join(wd, "codex-home"))
+	t.Setenv("TMPDIR", filepath.Join(wd, "worker-tmp"))
 
 	if _, err := (CodexAppServerRunner{}).Run(context.Background(), appServerInput(wd)); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -347,6 +348,9 @@ for line in sys.stdin:
 	}
 	if !strings.Contains(string(body), "CODEX_HOME="+filepath.Join(wd, "codex-home")) {
 		t.Fatalf("codex app-server env lost baseline CODEX_HOME:\n%s", body)
+	}
+	if !strings.Contains(string(body), "TMPDIR="+filepath.Join(wd, "worker-tmp")) {
+		t.Fatalf("codex app-server env lost baseline TMPDIR:\n%s", body)
 	}
 }
 

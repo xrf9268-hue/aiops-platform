@@ -35,12 +35,12 @@ import (
 //
 // Anchor: os.TempDir() — /tmp on a default Linux worker (codex's workspace-write
 // sandbox grants it; empirically confirmed in #544) and the platform temp dir
-// ($TMPDIR, e.g. /var/folders/...) on macOS (#539). The load-bearing assumption
-// is host-temp ≡ sandbox-writable-temp; it holds for the documented default
-// worker env but NOT if an operator points the worker's TMPDIR at a directory
-// the sandbox cannot write — that operator must override GOCACHE/GOMODCACHE via
-// codex.env_passthrough, which wins because a default is applied only when the
-// name is not already set to a non-empty value.
+// ($TMPDIR, e.g. /var/folders/...) on macOS (#539). The Codex app-server baseline
+// inherits TMPDIR so its writable root matches these paths. An optional outer
+// sandbox must also expose the selected root: bubblewrap exposes /tmp but not an
+// arbitrary host TMPDIR. Operators with a custom hidden root must override each
+// cache through codex.env_passthrough and the worker sandbox allowlist; a
+// non-empty override wins over the injected default.
 //
 // The per-workspace build cache dirs live outside the workspace tree, so a
 // lazy TTL reaper keeps long-lived workers from retaining one forever per

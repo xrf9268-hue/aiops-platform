@@ -112,7 +112,7 @@ over stdio).
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; a `codex exec` argv is rejected (#541) |
-| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
+| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
 | `codex.turn_sandbox_policy` | typed map | derived from `thread_sandbox` | Explicit per-turn `sandboxPolicy` override; `type` is required (`dangerFullAccess`, `readOnly`, `externalSandbox`, `workspaceWrite`), with per-type required fields (`writableRoots`, `networkAccess`, …) | strict per-type field checking; legacy `mode:`-style shapes rejected |
@@ -126,8 +126,12 @@ For `workspaceWrite`, the issue workspace is the writable project unit, while
 `writableRoots` adds other writable roots. The current defaults leave `$TMPDIR`
 and `/tmp` writable too. Set both `excludeTmpdirEnvVar: true` and
 `excludeSlashTmp: true` in an explicit `workspaceWrite` policy to remove those
-automatic grants. By default, the runner injects `GOCACHE` and `GOMODCACHE`
-below the worker's temporary directory. Go workflows should normally leave the
+automatic grants. The Codex app-server baseline inherits the worker's
+`$TMPDIR`, so the default Codex grant and the worker-selected temp root refer to
+the same path. The optional worker wrapper still filters `TMPDIR` through
+`sandbox.env_allowlist`; add it only when the selected temp path is visible to
+that backend. By default, the runner injects `GOCACHE` and `GOMODCACHE` below
+the worker's temporary directory. Go workflows should normally leave the
 applicable temporary root writable. With the worker wrapper enabled, the
 worker's temporary directory must also be visible to both sandbox layers.
 Bubblewrap mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path

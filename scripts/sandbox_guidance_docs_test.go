@@ -76,6 +76,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"`excludetmpdirenvvar: true` and `excludeslashtmp: true`",
+				"the codex app-server baseline inherits the worker's `$tmpdir`",
+				"the optional worker wrapper still filters `tmpdir` through `sandbox.env_allowlist`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
 				"the worker's temporary directory must also be visible to both sandbox layers",
 				"bubblewrap mounts `/tmp`, not an arbitrary host `$tmpdir`",
@@ -89,6 +91,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
 				"`excludetmpdirenvvar: true` and `excludeslashtmp: true`",
+				"the codex app-server baseline inherits the worker's `$tmpdir`",
+				"the optional worker wrapper still filters `tmpdir` through `sandbox.env_allowlist`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
 				"the worker's temporary directory must also be visible to both sandbox layers",
 				"bubblewrap mounts `/tmp`, not an arbitrary host `$tmpdir`",
@@ -102,6 +106,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			path: "docs/runbooks/personal-daily-workflow.md",
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
+				"the codex app-server baseline inherits the worker's `$tmpdir`",
+				"the optional worker wrapper still filters `tmpdir` through `sandbox.env_allowlist`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
 				"the worker's temporary directory must also be visible to both sandbox layers",
 				"bubblewrap mounts `/tmp`, not an arbitrary host `$tmpdir`",
@@ -114,6 +120,8 @@ func assertSandboxGuidanceText(t *testing.T, root string) {
 			path: "docs/runbooks/codex-app-server-docker.md",
 			wants: []string{
 				"current defaults leave `$tmpdir` and `/tmp` writable",
+				"the codex app-server baseline inherits the worker's `$tmpdir`",
+				"the optional worker wrapper still filters `tmpdir` through `sandbox.env_allowlist`",
 				"the runner injects `gocache` and `gomodcache` below the worker's temporary directory",
 				"the worker's temporary directory must also be visible to both sandbox layers",
 				"bubblewrap mounts `/tmp`, not an arbitrary host `$tmpdir`",

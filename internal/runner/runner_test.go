@@ -252,6 +252,7 @@ func TestShellRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 	t.Setenv("GITEA_TOKEN", "gitea-secret")
 	t.Setenv("GITHUB_TOKEN", "github-secret")
 	t.Setenv("CODEX_HOME", filepath.Join(workdir, "codex-home"))
+	t.Setenv("TMPDIR", filepath.Join(workdir, "worker-tmp"))
 
 	wf := workflow.Workflow{Config: workflow.Config{
 		Workspace: workflow.WorkspaceConfig{Root: filepath.Dir(workdir)},
@@ -279,6 +280,9 @@ func TestShellRunnerDoesNotInheritWorkerSecretsByDefault(t *testing.T) {
 	}
 	if strings.Contains(string(body), "CODEX_HOME=") {
 		t.Fatalf("shell runner inherited Codex credential home by default:\n%s", body)
+	}
+	if strings.Contains(string(body), "TMPDIR=") {
+		t.Fatalf("shell runner inherited Codex temporary root by default:\n%s", body)
 	}
 	if !strings.Contains(string(body), "PATH=") {
 		t.Fatalf("runner env lost baseline PATH:\n%s", body)

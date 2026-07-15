@@ -175,9 +175,15 @@ func TestSetupAppServerCommandPinsPerWorkspaceGoCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("setupAppServerCommand: %v", err)
 	}
-	want := "GOCACHE=" + filepath.Join("/sandbox-tmp", "aiops-go-cache", "build", workspaceCacheKey(in.Workdir))
-	if !strings.Contains(strings.Join(cmd.Env, "\n"), want) {
-		t.Errorf("setupAppServerCommand cmd.Env missing %q; got:\n%s", want, strings.Join(cmd.Env, "\n"))
+	body := strings.Join(cmd.Env, "\n")
+	for _, want := range []string{
+		"TMPDIR=/sandbox-tmp",
+		"GOCACHE=" + filepath.Join("/sandbox-tmp", "aiops-go-cache", "build", workspaceCacheKey(in.Workdir)),
+		"GOMODCACHE=" + filepath.Join("/sandbox-tmp", "aiops-go-cache", "mod"),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("setupAppServerCommand cmd.Env missing %q; got:\n%s", want, body)
+		}
 	}
 }
 

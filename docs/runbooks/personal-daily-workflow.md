@@ -136,7 +136,11 @@ the workspace, but the current defaults leave `$TMPDIR` and `/tmp` writable too;
 it does not enforce operator-selected off-limits subdirectories inside the
 workspace. Use an explicit `workspaceWrite` turn policy with both temporary-root
 exclusion flags set to `true` when those default write roots are unnecessary.
-By default, the runner injects `GOCACHE` and `GOMODCACHE` below the worker's
+The Codex app-server baseline inherits the worker's `$TMPDIR`, so the default
+Codex grant and the worker-selected temp root refer to the same path. The
+optional worker wrapper still filters `TMPDIR` through `sandbox.env_allowlist`;
+add it only when the selected temp path is visible to that backend. By default,
+the runner injects `GOCACHE` and `GOMODCACHE` below the worker's
 temporary directory. Go workflows should normally leave the applicable
 temporary root writable. With the worker wrapper enabled, the worker's
 temporary directory must also be visible to both sandbox layers. Bubblewrap
