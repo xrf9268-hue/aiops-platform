@@ -630,7 +630,7 @@ func TestGitHubClaimedIssueNumbersMatchesPRContract(t *testing.T) {
 	}
 	for _, text := range []string{"Refs #10", "See also #10", "Related to #11", "Not a claim"} {
 		if got := githubClaimedIssueNumbers(text); len(got) != 0 {
-			t.Fatalf("claimed issue numbers = %#v, want none", got)
+			t.Fatalf("githubClaimedIssueNumbers(%q) = %#v; want none", text, got)
 		}
 	}
 }

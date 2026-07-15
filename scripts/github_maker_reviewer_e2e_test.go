@@ -277,8 +277,10 @@ func assertGitHubRolePromptContract(t *testing.T, role, prompt string) {
 		}
 	}
 	const closingMergeBody = `--body "Closes #<N>"`
-	if role == "maker" && strings.Contains(text, closingMergeBody) {
-		t.Fatalf("maker prompt contains reviewer-only merge closing body")
+	if role == "maker" {
+		if got := strings.Count(text, closingMergeBody); got != 0 {
+			t.Fatalf("maker merge closing body count = %d; want 0", got)
+		}
 	}
 	if role == "reviewer" {
 		if got := strings.Count(text, closingMergeBody); got != 1 {
@@ -359,8 +361,8 @@ func TestGitHubMakerReviewerTopologyRetiresDoneLabel(t *testing.T) {
 		"docs/runbooks/github-maker-reviewer-governance.md",
 		"docs/runbooks/github-maker-reviewer-automerge-e2e.md",
 	} {
-		if strings.Contains(readFileString(t, filepath.Join(root, path)), legacyDone) {
-			t.Fatalf("%s still contains retired GitHub terminal label", path)
+		if got := strings.Count(readFileString(t, filepath.Join(root, path)), legacyDone); got != 0 {
+			t.Fatalf("%s retired terminal label count = %d; want 0", path, got)
 		}
 	}
 }
@@ -1090,8 +1092,9 @@ func TestGitHubMakerReviewerReportRequiresClosedDependencyScenario(t *testing.T)
 		t.Fatalf("report failed: %v\n%s", err, out)
 	}
 	report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
-	if strings.Contains(report, "READY FOR OPERATOR PASS REVIEW") {
-		t.Fatalf("report marked ready with an open dependency issue\n%s", report)
+	const readyVerdict = "READY FOR OPERATOR PASS REVIEW"
+	if got := strings.Contains(report, readyVerdict); got {
+		t.Fatalf("strings.Contains(report, %q) = %v; want false\nreport:\n%s", readyVerdict, got, report)
 	}
 	if !strings.Contains(report, "INCOMPLETE - review the evidence before claiming PASS") {
 		t.Fatalf("report missing incomplete verdict\n%s", report)
