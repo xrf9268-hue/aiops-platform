@@ -257,8 +257,8 @@ type OrchestratorState struct {
 
 	// completedOrder pins FIFO insertion order for cap-and-evict and Snapshot.
 	// It mirrors Completed: every id present in the set is also in the slice.
-	completedOrder        []IssueID
-	completedSessionUsage []SessionUsageEntry
+	completedOrder    []IssueID
+	endedSessionUsage []SessionUsageEntry
 
 	// MaxRecentCompleted caps how many entries the orchestrator retains in
 	// Completed for /api/v1/state publication. SPEC §4.1.8 marks Completed as
@@ -632,7 +632,7 @@ func (s *OrchestratorState) FinishRunSucceeded(id IssueID, run *RunningEntry, el
 	delete(s.Claimed, id)
 	delete(s.ClaimedIssues, id)
 	s.recordCompleted(id)
-	s.recordCompletedSessionUsage(id, run, elapsed, time.Now().UTC(), "completed")
+	s.recordEndedSessionUsage(id, run, elapsed, time.Now().UTC(), "completed")
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
@@ -649,19 +649,17 @@ func (s *OrchestratorState) FinishRunActiveSuccessNoHandoff(id IssueID, run *Run
 	delete(s.ClaimedIssues, id)
 	s.recordCompleted(id)
 	s.recordActiveSuccessNoHandoff(id)
-	s.recordCompletedSessionUsage(id, run, elapsed, time.Now().UTC(), "active_success_no_handoff")
+	s.recordEndedSessionUsage(id, run, elapsed, time.Now().UTC(), "active_success_no_handoff")
 	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
 
 // FinishRunFailed is the transition for a worker that exited abnormally
-// (SPEC §7.3 abnormal exit). The retry policy itself (exponential
-// backoff per SPEC §8.4, currently D16) is owned by the scheduler in
-// the next migration step; this method only releases the run slot and
-// folds elapsed time so the caller can decide whether to enqueue a
-// retry via ScheduleRetry.
+// (SPEC §7.3 abnormal exit). The scheduler owns exponential backoff
+// (SPEC §8.4); this method releases the slot and folds elapsed time
+// before the caller decides whether to ScheduleRetry.
 func (s *OrchestratorState) FinishRunFailed(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
-	return s.finishRunAborted(id, run, elapsed)
+	return s.finishRunAborted(id, run, elapsed, "failed")
 }
 
 // FinishRunReconciledCancelled releases a run that was stopped because the
@@ -669,7 +667,14 @@ func (s *OrchestratorState) FinishRunFailed(id IssueID, run *RunningEntry, elaps
 // FinishRunFailed so reconciliation cancellations are not counted as worker
 // failures and cannot consume retry budget.
 func (s *OrchestratorState) FinishRunReconciledCancelled(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
-	return s.finishRunAborted(id, run, elapsed)
+	return s.finishRunAborted(id, run, elapsed, "reconcile_ineligible")
+}
+
+// FinishRunTerminalSelfStop releases a clean run whose per-turn tracker refresh
+// observed the issue in a terminal state. It stays distinct from reconciliation
+// cancellation so operator-visible usage reports the actual stop mechanism.
+func (s *OrchestratorState) FinishRunTerminalSelfStop(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	return s.finishRunAborted(id, run, elapsed, "terminal_self_stop")
 }
 
 func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt time.Time, runErr string, elapsed time.Duration) bool {
@@ -733,17 +738,6 @@ func (s *OrchestratorState) BlockRetryWithReason(id IssueID, retry *RetryEntry, 
 		Method:     method,
 		Error:      runErr,
 	}
-	return true
-}
-
-func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
-	if current, ok := s.Running[id]; !ok || current != run {
-		return false
-	}
-	delete(s.Running, id)
-	delete(s.Claimed, id)
-	delete(s.ClaimedIssues, id)
-	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
 

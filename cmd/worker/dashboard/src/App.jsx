@@ -434,12 +434,18 @@ function BlockedTable({ rows }) {
   );
 }
 
-function CompletedUsageTable({ rows }) {
-  if (!rows.length) return <Empty title="No completed usage yet" sub="Completed-session token totals appear after clean handoffs in this process." />;
+function endedUsageBadgeKind(outcome) {
+  if (outcome === 'failed') return 'failed';
+  if (outcome === 'reconcile_ineligible') return 'blocked';
+  return 'done';
+}
+
+function EndedUsageTable({ rows }) {
+  if (!rows.length) return <Empty title="No ended usage yet" sub="Session token totals appear after completed, failed, terminal self-stopped, or reconcile-cancelled runs in this process." />;
   return (
     <div className="table-wrap narrow">
       <table className="sessions">
-        <caption className="sr-only">Completed session usage</caption>
+        <caption className="sr-only">Ended session usage</caption>
         <thead><tr>
           <th scope="col">Issue</th><th scope="col">Outcome</th><th scope="col">Runtime</th><th scope="col" className="r">Tokens</th>
         </tr></thead>
@@ -452,7 +458,7 @@ function CompletedUsageTable({ rows }) {
                   <span className="wp">workflow {workflowProfile(r)}{r.session_id ? ` · ${r.session_id}` : ''}</span>
                 </div>
               </td>
-              <td data-label="Outcome"><Badge kind="done">{r.outcome || 'completed'}</Badge><div className="dim">{r.agent_model || r.agent_provider || 'unknown'}</div></td>
+              <td data-label="Outcome"><Badge kind={endedUsageBadgeKind(r.outcome)}>{r.outcome || 'completed'}</Badge><div className="dim">{r.agent_model || r.agent_provider || 'unknown'}</div></td>
               <td data-label="Runtime"><span className="runtime tnum">{dur(r.runtime_seconds)}</span><div className="dim">{sinceISO(r.completed_at)} ago</div></td>
               <td className="tok" data-label="Tokens"><b>{compact(r.tokens?.total_tokens)}</b><div className="dim">{compact(r.tokens?.input_tokens)} in / {compact(r.tokens?.output_tokens)} out</div></td>
             </tr>
@@ -691,10 +697,10 @@ export default function App() {
 
           <div className="panel">
             <div className="panel-head">
-              <div className="panel-title"><span className="accent-stroke" />Completed usage<Badge kind="done">{(s.completed_session_usage || []).length}</Badge></div>
+              <div className="panel-title"><span className="accent-stroke" />Ended usage<Badge kind="running">{(s.completed_session_usage || []).length}</Badge></div>
               <div className="panel-meta">current process</div>
             </div>
-            <CompletedUsageTable rows={s.completed_session_usage || []} />
+            <EndedUsageTable rows={s.completed_session_usage || []} />
           </div>
 
           {/* Reconcile roll-up — Stopped-with-progress (#557), Agent-handoff

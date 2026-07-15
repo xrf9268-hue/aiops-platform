@@ -156,6 +156,9 @@ func TestFinalizeTerminalSelfStopRecordsStopAndCleansWithoutContinuation(t *test
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
+	if got := view.CompletedSessionUsage; len(got) != 1 || got[0].IssueID != IssueID(issue.ID) || got[0].Outcome != "terminal_self_stop" {
+		t.Fatalf("CompletedSessionUsage = %+v; want one terminal_self_stop row for %s", got, issue.ID)
+	}
 	if len(view.Completed) != 0 {
 		t.Fatalf("Completed = %v; want empty because terminal self-stop is not clean continuation", view.Completed)
 	}
@@ -217,6 +220,9 @@ func TestFinalizeAgentOwnedTerminalHandoffDoesNotSuppressFutureRework(t *testing
 	}
 	if len(view.OperatorTerminalStops) != 0 {
 		t.Fatalf("OperatorTerminalStops = %+v; want empty for agent-owned terminal handoff", view.OperatorTerminalStops)
+	}
+	if got := view.CompletedSessionUsage; len(got) != 1 || got[0].IssueID != IssueID(issue.ID) || got[0].Outcome != "terminal_self_stop" {
+		t.Fatalf("CompletedSessionUsage = %+v; want one terminal_self_stop row for agent-owned handoff %s", got, issue.ID)
 	}
 
 	rework := tracker.Issue{ID: issue.ID, Identifier: issue.Identifier, State: "In Progress", Title: issue.Title}
