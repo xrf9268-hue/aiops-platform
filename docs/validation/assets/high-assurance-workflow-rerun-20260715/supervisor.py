@@ -113,6 +113,25 @@ def continuation_pending(states: Iterable[dict[str, Any]], issue_number: int) ->
     )
 
 
+def issue_active(states: Iterable[dict[str, Any]], issue_number: int) -> bool:
+    return any(
+        issue_matches(row, issue_number)
+        for state in states
+        for field in ("running", "blocked", "retrying")
+        for row in (state.get(field) or [])
+    )
+
+
+def canonical_issue_hash(issue: dict[str, Any]) -> str:
+    canonical = {
+        "body": issue.get("body") or "",
+        "number": issue.get("number"),
+        "title": issue.get("title") or "",
+    }
+    encoded = (json.dumps(canonical, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def token_total(state: dict[str, Any]) -> int:
     return int((state.get("codex_totals") or {}).get("total_tokens") or 0)
 
@@ -145,13 +164,9 @@ def evaluate_limits(
     claims = claim_count(states, issue_number)
     if claims > MAX_CLAIMS_PER_ISSUE:
         return LimitBreach("worker_sessions_exceeded", claims, MAX_CLAIMS_PER_ISSUE)
-    if (
-        not issue_closed
-        and claims >= MAX_CLAIMS_PER_ISSUE
-        and continuation_pending(states, issue_number)
-    ):
+    if claims >= MAX_CLAIMS_PER_ISSUE and continuation_pending(states, issue_number):
         return LimitBreach("worker_sessions_exhausted", claims, MAX_CLAIMS_PER_ISSUE)
-    if not issue_closed and elapsed_seconds >= MAX_ISSUE_WALL_SECONDS:
+    if elapsed_seconds >= MAX_ISSUE_WALL_SECONDS:
         return LimitBreach(
             "issue_wall_exceeded", elapsed_seconds, MAX_ISSUE_WALL_SECONDS
         )
@@ -625,6 +640,11 @@ class Supervisor:
         ]
         if any(issue.get("state") != "open" or labels(issue) & ACTIVE_LABELS for issue in issues):
             raise RuntimeError("issues must be open with no active lifecycle labels")
+        observed_hashes = [canonical_issue_hash(issue) for issue in issues]
+        if observed_hashes != self.args.issue_json_sha256:
+            raise RuntimeError(
+                f"canonical issue hashes differ: {observed_hashes} != {self.args.issue_json_sha256}"
+            )
         append_event(
             self.event_log,
             {
@@ -636,6 +656,7 @@ class Supervisor:
                         "number": issue.get("number"),
                         "state": issue.get("state"),
                         "labels": sorted(labels(issue)),
+                        "canonical_sha256": canonical_issue_hash(issue),
                     }
                     for issue in issues
                 ],
@@ -798,6 +819,14 @@ class Supervisor:
         return None
 
     def activate_issue(self, issue_number: int, states: list[dict[str, Any]]) -> tuple[list[int], float]:
+        issue = self.operator.api(f"repos/{self.args.repo}/issues/{issue_number}")
+        expected_hash = self.args.issue_json_sha256[
+            self.args.issues.index(issue_number)
+        ]
+        if canonical_issue_hash(issue) != expected_hash:
+            raise RuntimeError(f"issue {issue_number} canonical content changed before activation")
+        if issue.get("state") != "open" or labels(issue) & ACTIVE_LABELS:
+            raise RuntimeError(f"issue {issue_number} is not inactive/open before activation")
         baselines = [token_total(state) for state in states]
         started = time.monotonic()
         append_event(
@@ -823,6 +852,7 @@ class Supervisor:
         state_signature: str | None = None
         last_forge = 0.0
         forge: dict[str, Any] = {"issue": {"state": "open"}}
+        breach: LimitBreach | None = None
         while True:
             cycle_started = time.monotonic()
             try:
@@ -883,7 +913,7 @@ class Supervisor:
                     {"forge": forge, "last_below_states": last_below_states},
                 )
                 return False, states
-            if closed:
+            if closed and not issue_active(states, issue_number):
                 append_event(
                     self.event_log,
                     {
@@ -968,6 +998,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--clone-url", required=True)
     parser.add_argument("--worker-bin", required=True)
     parser.add_argument("--issues", type=int, nargs=2, default=[1, 2])
+    parser.add_argument("--issue-json-sha256", nargs=2, required=True)
     parser.add_argument("--maker-workflow", required=True)
     parser.add_argument("--reviewer-workflow", required=True)
     parser.add_argument("--maker-workflow-sha256", required=True)

@@ -1,8 +1,11 @@
 import importlib.util
+import hashlib
+import http.server
 import json
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from datetime import datetime, timezone
@@ -88,6 +91,29 @@ class AccountingTests(unittest.TestCase):
         )
 
         self.assertEqual(breach.reason, "issue_wall_exceeded")
+
+    def test_closed_but_not_quiescent_still_obeys_end_to_end_wall_limit(self):
+        breach = supervisor.evaluate_limits(
+            [state(running=[row(1)]), state()],
+            [0, 0],
+            issue_number=1,
+            elapsed_seconds=1_800,
+            issue_closed=True,
+        )
+
+        self.assertEqual(breach.reason, "issue_wall_exceeded")
+
+    def test_closed_issue_is_not_quiescent_until_live_rows_clear(self):
+        self.assertTrue(supervisor.issue_active([state(running=[row(1)])], 1))
+        self.assertFalse(supervisor.issue_active([state(completed=[row(1)])], 1))
+
+    def test_canonical_issue_hash_ignores_mutable_forge_fields(self):
+        issue = {"number": 1, "title": "title", "body": "body", "state": "open"}
+        expected = hashlib.sha256(
+            b'{"body":"body","number":1,"title":"title"}\n'
+        ).hexdigest()
+
+        self.assertEqual(supervisor.canonical_issue_hash(issue), expected)
 
 
 class ExternalReviewTests(unittest.TestCase):
@@ -207,6 +233,75 @@ class WorkflowAndAbortTests(unittest.TestCase):
             self.assertEqual(events[0]["event"], "breach")
             self.assertEqual(events[1]["event"], "signal_sent")
             self.assertIn("detection_to_signal_ms", events[1])
+
+    def test_fake_state_servers_drive_token_crossing_and_two_process_abort(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            payload = state()
+
+            def do_GET(self):
+                encoded = json.dumps(self.payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, *_args):
+                return
+
+        servers = []
+        threads = []
+        processes = []
+        with tempfile.TemporaryDirectory() as temp:
+            try:
+                for total in (1_000_000, 2_500_001):
+                    role_handler = type(
+                        f"Handler{total}",
+                        (Handler,),
+                        {"payload": state(total=total)},
+                    )
+                    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), role_handler)
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    servers.append(server)
+                    threads.append(thread)
+                observed = [
+                    supervisor.fetch_json(f"http://127.0.0.1:{server.server_port}/api/v1/state")
+                    for server in servers
+                ]
+                breach = supervisor.evaluate_limits(
+                    observed,
+                    [0, 0],
+                    issue_number=1,
+                    elapsed_seconds=1,
+                    issue_closed=False,
+                )
+                self.assertEqual(breach.reason, "worker_tokens_exceeded")
+                processes = [
+                    subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        start_new_session=True,
+                    )
+                    for _ in range(2)
+                ]
+                started = time.monotonic()
+                supervisor.terminate_workers(
+                    processes,
+                    Path(temp) / "events.jsonl",
+                    {"event": "breach", "reason": breach.reason},
+                    grace_seconds=0.2,
+                )
+                self.assertLess(time.monotonic() - started, 1.0)
+                self.assertTrue(all(process.poll() is not None for process in processes))
+            finally:
+                for server in servers:
+                    server.shutdown()
+                    server.server_close()
+                for thread in threads:
+                    thread.join(timeout=1)
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
 
 
 if __name__ == "__main__":
