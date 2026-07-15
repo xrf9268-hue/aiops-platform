@@ -15,6 +15,7 @@ import (
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
 	"github.com/xrf9268-hue/aiops-platform/internal/workflow"
+	"github.com/xrf9268-hue/aiops-platform/internal/workspace"
 )
 
 type fakeReconcileTracker struct {
@@ -156,15 +157,18 @@ func TestReconcileStartupIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestReconcileStartupRemovesUnknownWorkspacesWhenTerminalIssuesObserved(t *testing.T) {
+func TestReconcileStartupRemovesOnlyTrackerConfirmedTerminalWorkspace(t *testing.T) {
 	root := t.TempDir()
+	terminalPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
 	unknownPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-404")
-	if err := os.MkdirAll(unknownPath, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	for _, path := range []string{terminalPath, unknownPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
 	}
 
 	fake := &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
-		{{ID: "issue-1", Identifier: "LIN-1", State: "Todo"}},
+		nil,
 		{{ID: "issue-2", Identifier: "LIN-2", State: "Done"}},
 	}}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
@@ -178,32 +182,39 @@ func TestReconcileStartupRemovesUnknownWorkspacesWhenTerminalIssuesObserved(t *t
 	if err != nil {
 		t.Fatalf("ReconcileStartup: %v", err)
 	}
-	if _, err := os.Stat(unknownPath); !os.IsNotExist(err) {
-		t.Fatalf("unknown workspace should be removed after terminal state is observed, stat err=%v", err)
+	if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
+		t.Fatalf("tracker-confirmed terminal workspace should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(unknownPath); err != nil {
+		t.Fatalf("unmatched workspace should remain without terminal-state confirmation: %v", err)
 	}
 }
 
-func TestReconcileStartupRefusesToRemoveWhenTrackerReturnsNoIssues(t *testing.T) {
+func TestReconcileStartupKeepsWorkspacesWhenTrackerReturnsNoIssues(t *testing.T) {
 	root := t.TempDir()
 	unknownPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-404")
 	if err := os.MkdirAll(unknownPath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 
+	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
 		ActiveStates:    []string{"Todo"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fakeReconcileTracker{},
-		Emitter:         &fakeEmitter{},
+		Emitter:         emitter,
 		ReconcileTaskID: "reconcile-startup",
 	})
-	if err == nil || !strings.Contains(err.Error(), "tracker returned no active or terminal issues") {
-		t.Fatalf("ReconcileStartup error = %v, want empty tracker safety error", err)
+	if err != nil {
+		t.Fatalf("ReconcileStartup must continue when tracker returns no issues: %v", err)
 	}
 	if _, err := os.Stat(unknownPath); err != nil {
 		t.Fatalf("workspace should remain when tracker returns no issues: %v", err)
 	}
+	payload := reconcileEndPayloadFor(t, emitter)
+	wantPayloadCount(t, payload, "kept", 1)
+	wantPayloadCount(t, payload, "removed", 0)
 }
 
 // TestReconcileStartupTolerantOfActiveFetchFailure pins SPEC §8.6 / §11.4:
@@ -276,8 +287,8 @@ func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
 		ActiveStates:   []string{"Todo"},
 		TerminalStates: []string{"Done"},
 		Tracker: &fakeReconcileTrackerByCall{
-			// Active fetch returns capped error; terminal fetch would have
-			// terminal issues, which is what would normally arm canRemoveUnknown.
+			// Active fetch returns capped error; terminal fetch would otherwise
+			// provide positive evidence for removing LIN-2.
 			errByCall:    []error{tracker.ErrIssueListingCapped, nil},
 			issuesByCall: [][]tracker.Issue{nil, {{ID: "issue-2", Identifier: "LIN-2", State: "Done"}}},
 		},
@@ -313,8 +324,8 @@ func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
 }
 
 // TestReconcileStartupTolerantOfTerminalFetchFailure: terminal-fetch failure
-// is non-fatal. Active workspaces are still kept; terminal/unknown removal is
-// skipped because terminalKeys is empty and canRemoveUnknown stays false.
+// is non-fatal. Active workspaces are still kept and no terminal workspace is
+// removed because the tracker returned no positive terminal-state evidence.
 func TestReconcileStartupTolerantOfTerminalFetchFailure(t *testing.T) {
 	root := t.TempDir()
 	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
@@ -357,6 +368,56 @@ func TestReconcileStartupTolerantOfTerminalFetchFailure(t *testing.T) {
 	if reason, _ := payload["reason"].(string); reason != "terminal_fetch_failed" {
 		t.Fatalf("reconcile_end reason = %q, want \"terminal_fetch_failed\"", reason)
 	}
+}
+
+func TestReconcileStartupSafeWhenTerminalListingCapped(t *testing.T) {
+	root := t.TempDir()
+	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
+	unmatchedPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-9")
+	for _, path := range []string{activePath, unmatchedPath} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+
+	emitter := &fakeEmitter{}
+	var reconcileErr error
+	logs := captureLog(t, func() {
+		reconcileErr = ReconcileStartup(context.Background(), ReconcileConfig{
+			WorkspaceRoot:  root,
+			ActiveStates:   []string{"In Progress"},
+			TerminalStates: []string{"Done"},
+			Tracker: &fakeReconcileTrackerByCall{
+				issuesByCall: [][]tracker.Issue{{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}, nil},
+				errByCall:    []error{nil, tracker.ErrIssueListingCapped},
+			},
+			Emitter:         emitter,
+			ReconcileTaskID: "reconcile-startup",
+		})
+	})
+	if reconcileErr != nil {
+		t.Fatalf("ReconcileStartup must not fail when terminal listing is capped: %v", reconcileErr)
+	}
+	if !strings.Contains(logs, "event=startup_reconcile_terminal_fetch_failed") || !strings.Contains(logs, "issue_listing_capped") {
+		t.Fatalf("terminal listing warning log = %q, want event and issue_listing_capped category", logs)
+	}
+	for _, path := range []string{activePath, unmatchedPath} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("workspace %s must remain when terminal listing is capped: %v", path, err)
+		}
+	}
+	payload := reconcileEndPayloadFor(t, emitter)
+	if status, _ := payload["status"].(string); status != "partial" {
+		t.Fatalf("reconcile_end status = %q, want \"partial\"", status)
+	}
+	if reason, _ := payload["reason"].(string); reason != "terminal_fetch_failed" {
+		t.Fatalf("reconcile_end reason = %q, want \"terminal_fetch_failed\"", reason)
+	}
+	if errMsg, _ := payload["error"].(string); !strings.Contains(errMsg, "issue_listing_capped") {
+		t.Fatalf("reconcile_end error = %q, want issue_listing_capped category surfaced", errMsg)
+	}
+	wantPayloadCount(t, payload, "kept", 2)
+	wantPayloadCount(t, payload, "removed", 0)
 }
 
 // TestReconcileStartupTolerantOfBothFetchFailures: both fail. Treated as the
@@ -493,7 +554,7 @@ func TestReconcileStartupMatchesGitHubWorkspaceLayout(t *testing.T) {
 
 func TestReconcileStartupSkipsOtherTrackerWorkspaceLayouts(t *testing.T) {
 	root := t.TempDir()
-	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-2-done")
+	linearTerminalPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-2")
 	giteaOtherTrackerPath := filepath.Join(root, "acme", "repo", "gitea_issue", "issue-owned-by-gitea-worker")
 	for _, path := range []string{linearTerminalPath, giteaOtherTrackerPath} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
@@ -592,8 +653,8 @@ func TestReworkWorkspaceKeyPrefixesMatchCanonicalAndLegacyOffsetSuffixes(t *test
 // created by the pre-#229 sanitizer (lowercased input, `-` separators
 // throughout, lowercased timestamp) must still be classified as
 // `active_rework` on the first reconcile after the upgrade, instead of
-// being removed as `unknown` once a terminal fetch unlocks the
-// unknown-removal path. The shipped trackers' Rework key is the
+// being misclassified when the terminal fetch also returns issues. The shipped
+// trackers' Rework key is the
 // all-lowercase `issue.ID`, so the case-preserving form 2 (`<id>-rework-`)
 // matches the on-disk directory — this is exactly why #679 could drop the
 // speculative lowercased-base third form without regressing the promise.
@@ -611,6 +672,7 @@ func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	if err := os.MkdirAll(preSpecPath, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:  root,
 		ActiveStates:   []string{"Rework"},
@@ -619,7 +681,7 @@ func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 			{ID: "issue-3", Identifier: "LIN-123", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")},
 			{ID: "issue-2", Identifier: "LIN-2", State: "Done"},
 		}},
-		Emitter:         &fakeEmitter{},
+		Emitter:         emitter,
 		ReconcileTaskID: "reconcile-startup",
 	})
 	if err != nil {
@@ -628,6 +690,7 @@ func TestReconcileStartupKeepsPreSpecLowercasedReworkWorkspace(t *testing.T) {
 	if _, err := os.Stat(preSpecPath); err != nil {
 		t.Fatalf("pre-#229 Rework workspace should remain after the SPEC §4.2 cutover: %v", err)
 	}
+	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
 }
 
 // TestReworkWorkspaceKeyPrefixesOmitsPreSpecLowercaseForm pins #679: the
@@ -826,12 +889,13 @@ func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *test
 		{{ID: "active", Identifier: "same key", State: "In Progress"}},
 		{{ID: "terminal", Identifier: "same key", State: "Done"}},
 	}}
+	emitter := &fakeEmitter{}
 	err := ReconcileStartup(context.Background(), ReconcileConfig{
 		WorkspaceRoot:   root,
 		ActiveStates:    []string{"In Progress"},
 		TerminalStates:  []string{"Done"},
 		Tracker:         fake,
-		Emitter:         &fakeEmitter{},
+		Emitter:         emitter,
 		ReconcileTaskID: "reconcile-startup",
 	})
 	if err != nil {
@@ -840,6 +904,7 @@ func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *test
 	if _, err := os.Stat(workspacePath); err != nil {
 		t.Fatalf("conflicting active workspace should be preserved: %v", err)
 	}
+	wantSingleReconcileWorkspaceReason(t, emitter, "active")
 }
 
 func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *testing.T) {
@@ -905,6 +970,21 @@ func wantPayloadCount(t *testing.T, payload map[string]any, key string, want int
 	}
 }
 
+func wantSingleReconcileWorkspaceReason(t *testing.T, emitter *fakeEmitter, want string) {
+	t.Helper()
+	events := emitter.byKind(task.EventReconcileWorkspace)
+	if len(events) != 1 {
+		t.Fatalf("reconcile_workspace events = %d, want 1", len(events))
+	}
+	payload, ok := events[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("reconcile_workspace payload = %T, want map", events[0].Payload)
+	}
+	if got, _ := payload["reason"].(string); got != want {
+		t.Fatalf("reconcile_workspace reason = %q, want %q", got, want)
+	}
+}
+
 func TestReconcileStartupEndPayloadReportsKeptRemovedCounts(t *testing.T) {
 	root := t.TempDir()
 	for _, key := range []string{"LIN-1", "LIN-2", "LIN-3"} {
@@ -931,8 +1011,8 @@ func TestReconcileStartupEndPayloadReportsKeptRemovedCounts(t *testing.T) {
 	if status, _ := payload["status"].(string); status != "ok" {
 		t.Errorf("reconcile_end status = %q, want \"ok\"", status)
 	}
-	wantPayloadCount(t, payload, "kept", 1)    // LIN-1 active
-	wantPayloadCount(t, payload, "removed", 2) // LIN-2 terminal + LIN-3 unknown
+	wantPayloadCount(t, payload, "kept", 2)    // LIN-1 active + LIN-3 unmatched
+	wantPayloadCount(t, payload, "removed", 1) // LIN-2 terminal
 	wantPayloadCount(t, payload, "active_issues", 1)
 	wantPayloadCount(t, payload, "terminal_issues", 1)
 }
@@ -970,8 +1050,7 @@ func TestReconcileStartupEndPayloadCountsOnTerminalFetchFailure(t *testing.T) {
 // TestReconcileStartupEndPayloadCountsReworkKeep pins the active_rework branch's
 // kept count. The on-disk workspace timestamp differs from the issue's current
 // updatedAt, so it matches via reworkWorkspaceKeyPrefixes (not an exact active
-// key); a terminal issue arms canRemoveUnknown, so a rework branch that failed
-// to count/keep would remove the workspace instead.
+// key). The terminal result keeps the test representative of a mixed board.
 func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
 	root := t.TempDir()
 	reworkPath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3-rework-2026-05-16t10-00-00z")
@@ -999,6 +1078,31 @@ func TestReconcileStartupEndPayloadCountsReworkKeep(t *testing.T) {
 	payload := reconcileEndPayloadFor(t, emitter)
 	wantPayloadCount(t, payload, "kept", 1) // matched via active_rework prefix branch
 	wantPayloadCount(t, payload, "removed", 0)
+	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
+}
+
+func TestRemoveIssueWorkspaceRejectsUnsafePathWithoutRemoveEvent(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	emitter := &fakeEmitter{}
+	removed, err := RemoveIssueWorkspace(context.Background(), emitter, RemoveWorkspaceRequest{
+		WorkspaceRoot: root,
+		TaskID:        "reconcile-startup",
+		Path:          outside,
+		Reason:        "terminal",
+	})
+	if !errors.Is(err, workspace.ErrSafeRemoveEscapesRoot) {
+		t.Fatalf("RemoveIssueWorkspace error = %v, want ErrSafeRemoveEscapesRoot", err)
+	}
+	if removed {
+		t.Fatal("RemoveIssueWorkspace removed = true, want false")
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("unsafe outside path must remain: %v", err)
+	}
+	if got := len(emitter.byKind(task.EventReconcileWorkspace)); got != 0 {
+		t.Fatalf("reconcile_workspace events = %d, want 0 after failed removal", got)
+	}
 }
 
 // listIssueWorkspaceKeys returns just the sanitized keys discovered by

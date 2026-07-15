@@ -26,8 +26,8 @@ type ReconcileTracker interface {
 }
 
 // ReconcileConfig contains the dependencies for the SPEC startup reconciliation
-// pass. The pass is idempotent: active issue workspaces are preserved, while
-// terminal and unknown/deleted issue workspaces are removed before dispatch.
+// pass. The pass is idempotent: active and unmatched issue workspaces are
+// preserved, while tracker-confirmed terminal issue workspaces are removed.
 type ReconcileConfig struct {
 	WorkspaceRoot      string
 	ActiveStates       []string
@@ -43,10 +43,10 @@ type ReconcileConfig struct {
 }
 
 // ReconcileStartup reconciles existing per-issue workspaces with tracker state.
-// It removes terminal and unknown/deleted workspaces and leaves active issue
-// workspaces intact. It emits reconcile_start, reconcile_workspace, and
-// reconcile_end task events so startup recovery is visible in the same event
-// stream as normal task lifecycle activity.
+// It removes only tracker-confirmed terminal workspaces and leaves active or
+// unmatched workspaces intact. It emits reconcile_start, reconcile_workspace,
+// and reconcile_end task events so startup recovery is visible in the same
+// event stream as normal task lifecycle activity.
 func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	if err := validateReconcileConfig(cfg); err != nil {
 		return err
@@ -70,9 +70,6 @@ func ReconcileStartup(ctx context.Context, cfg ReconcileConfig) error {
 	workspaces, err := listIssueWorkspaces(cfg.WorkspaceRoot, cfg.TrackerKind)
 	if err != nil {
 		return err
-	}
-	if fetch.terminalFetchOK && len(workspaces) > 0 && len(fetch.activeIssues)+len(fetch.terminalIssues) == 0 {
-		return fmt.Errorf("tracker returned no active or terminal issues; refusing to remove %d existing workspaces", len(workspaces))
 	}
 
 	removed, kept, err := reconcileWorkspaces(ctx, cfg, taskID, workspaces, idx)
@@ -119,8 +116,8 @@ type reconcileFetch struct {
 // worst case — without the active list we cannot confirm any workspace is safe
 // to delete — so it emits reconcile_end with `status: skipped` and returns
 // skip=true, leaving every workspace intact. A terminal-fetch failure is
-// non-fatal: active workspaces are still kept and terminal/unknown removal is
-// skipped because canRemoveUnknown stays false when terminalIssues is empty.
+// non-fatal: active and unmatched workspaces are still kept, while terminal
+// cleanup is skipped because no terminal issue identifiers were returned.
 func fetchReconcileIssues(ctx context.Context, cfg ReconcileConfig, taskID string, activeStates, terminalStates []string) (reconcileFetch, bool) {
 	activeIssues, err := cfg.Tracker.ListIssuesByStates(ctx, activeStates)
 	if err != nil {
@@ -145,13 +142,12 @@ func fetchReconcileIssues(ctx context.Context, cfg ReconcileConfig, taskID strin
 }
 
 // reconcileIndex is the per-workspace lookup state derived from the fetched
-// issues: active/terminal key maps, whether unknown workspaces may be removed,
-// and the key function used to match active workspaces.
+// issues: active/terminal key maps and the issues used to match active rework
+// workspaces.
 type reconcileIndex struct {
-	activeKeys       map[string]tracker.Issue
-	terminalKeys     map[string]tracker.Issue
-	canRemoveUnknown bool
-	activeIssues     []tracker.Issue
+	activeKeys   map[string]tracker.Issue
+	terminalKeys map[string]tracker.Issue
+	activeIssues []tracker.Issue
 }
 
 func newReconcileIndex(fetch reconcileFetch) reconcileIndex {
@@ -168,10 +164,9 @@ func newReconcileIndex(fetch reconcileFetch) reconcileIndex {
 		}
 	}
 	return reconcileIndex{
-		activeKeys:       activeKeys,
-		terminalKeys:     terminalKeys,
-		canRemoveUnknown: len(fetch.terminalIssues) > 0,
-		activeIssues:     fetch.activeIssues,
+		activeKeys:   activeKeys,
+		terminalKeys: terminalKeys,
+		activeIssues: fetch.activeIssues,
 	}
 }
 
@@ -199,8 +194,8 @@ func reconcileWorkspaces(ctx context.Context, cfg ReconcileConfig, taskID string
 
 // reconcileWorkspace classifies a single workspace and keeps or removes it,
 // returning whether it was removed and/or kept (both false when removal was
-// declined). Mirrors SPEC §8.6: keep active (exact key or rework), remove
-// terminal, and keep-or-remove unknown depending on canRemoveUnknown.
+// declined). Mirrors SPEC §8.6: keep active (exact key or rework), remove a
+// tracker-confirmed terminal workspace, and keep unmatched workspaces.
 func reconcileWorkspace(ctx context.Context, cfg ReconcileConfig, taskID string, workspace issueWorkspace, idx reconcileIndex) (removedOne, keptOne bool, err error) {
 	if _, ok := idx.activeKeys[workspace.Key]; ok {
 		Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept active workspace", map[string]any{
@@ -226,17 +221,13 @@ func reconcileWorkspace(ctx context.Context, cfg ReconcileConfig, taskID string,
 		removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, issue, "terminal")
 		return removedOne, false, err
 	}
-	if !idx.canRemoveUnknown {
-		Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept unknown workspace", map[string]any{
-			"path":   workspace.Path,
-			"key":    workspace.Key,
-			"action": "keep",
-			"reason": "unknown_terminal_state_unconfirmed",
-		})
-		return false, true, nil
-	}
-	removedOne, err = removeWorkspace(ctx, cfg, taskID, workspace.Path, tracker.Issue{}, "unknown")
-	return removedOne, false, err
+	Emit(ctx, cfg.Emitter, taskID, "", task.EventReconcileWorkspace, "kept unknown workspace", map[string]any{
+		"path":   workspace.Path,
+		"key":    workspace.Key,
+		"action": "keep",
+		"reason": "unknown_terminal_state_unconfirmed",
+	})
+	return false, true, nil
 }
 
 // reconcileEndPayload assembles the reconcile_end event payload, recording a
