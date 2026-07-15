@@ -75,6 +75,7 @@ func scanUnsupportedSandboxClaims(root string) ([]string, error) {
 		{"docs/workflows/company-cautious-WORKFLOW.md", "prompt + `sandbox:` write restrictions keep changes out of the directories you expect"},
 		{"docs/workflows/company-cautious-WORKFLOW.md", "a tight size budget in the prompt, and keep the `sandbox:` write restrictions conservative"},
 		{"docs/workflows/company-cautious-WORKFLOW.md", "without authoring any code, so you can validate policy guardrails before letting a real model touch the repository"},
+		{"docs/workflows/company-cautious-WORKFLOW.md", "draft_pr keeps every change behind human review even after you graduate from analysis-only"},
 		{"docs/runbooks/personal-daily-workflow.md", "so the agent self-limits; use `sandbox:` write restrictions for hard prevention"},
 		{"docs/security-posture.md", "off-limits in the `WORKFLOW.md` prompt (SPEC §3.2) and, for hard prevention, restrict writes via the `sandbox:` block"},
 		{"docs/security-posture.md", "mock loop has proven clone, branch, PR, label, and policy behavior"},

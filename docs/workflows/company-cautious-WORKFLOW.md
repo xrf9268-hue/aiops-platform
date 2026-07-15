@@ -51,9 +51,9 @@ claude:
   command: claude
 
 policy:
-  # draft_pr keeps every change behind human review even after you
-  # graduate from analysis-only. Do not set this to a non-draft mode
-  # for company repositories.
+  # Keep the default paired with the prompt below, which tells the agent to open
+  # a draft PR. This field does not enforce draft state or human review; branch
+  # protection and required reviewers are the landing boundary.
   mode: draft_pr
   # Path/scope rules (e.g. "do not touch infra/**, deploy/**, secrets/**,
   # .github/**; keep the diff small") belong in the prompt body below as
