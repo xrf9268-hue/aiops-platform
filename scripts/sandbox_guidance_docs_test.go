@@ -80,6 +80,7 @@ func scanUnsupportedSandboxClaims(root string) ([]string, error) {
 		{"docs/security-posture.md", "off-limits in the `WORKFLOW.md` prompt (SPEC §3.2) and, for hard prevention, restrict writes via the `sandbox:` block"},
 		{"docs/security-posture.md", "mock loop has proven clone, branch, PR, label, and policy behavior"},
 		{"docs/security-posture.md", "Unless the optional sandbox wrapper is enabled and validated on the worker host, do not assume the platform prevents a malicious or compromised agent run from"},
+		{"docs/security-posture.md", "- draft-PR mode for human review before merge;"},
 		{"docs/runbooks/gitea-bot-and-branch-protection.md", "Scope and path constraints now live in the operator's `WORKFLOW.md` prompt (SPEC §3.2), enforced preventively by the agent before push"},
 		{"docs/adr/0001-symphony-style-personal-orchestrator.md", "- basic deny-path policy - verification commands"},
 		{"docs/adr/0001-symphony-style-personal-orchestrator.md", "- deny sensitive paths in company repositories - do not automatically merge"},

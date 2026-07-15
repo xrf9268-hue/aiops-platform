@@ -162,7 +162,6 @@ The current Go implementation provides these safety controls:
 - coding-agent execution from the per-issue workspace directory;
 - runner-side `cwd` and workspace-root validation before agent subprocess
   launch, even when `sandbox.enabled` is false;
-- draft-PR mode for human review before merge;
 - `$VAR` indirection for secrets in workflow configuration;
 - masking of secret values in configuration inspection output;
 - operator-visible blocked state for Codex input-required and MCP elicitation
