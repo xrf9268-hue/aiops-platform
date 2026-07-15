@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 
+PR_JSON_FIELDS = (
+    "number,title,state,author,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,"
+    "autoMergeRequest,mergedAt,mergedBy,mergeCommit,reviewDecision,reviews,statusCheckRollup,"
+    "url,body,createdAt,updatedAt"
+)
+
+
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--run-root", required=True, type=Path)
@@ -144,7 +151,7 @@ def capture_gh_json(args: argparse.Namespace) -> None:
             "--limit",
             "100",
             "--json",
-            "number,title,state,author,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,autoMergeRequest,mergedAt,mergedBy,reviewDecision,reviews,statusCheckRollup,url,body,createdAt,updatedAt",
+            PR_JSON_FIELDS,
         ).stdout,
     )
     if isinstance(prs, list):
@@ -162,7 +169,7 @@ def capture_gh_json(args: argparse.Namespace) -> None:
                     "--repo",
                     repo,
                     "--json",
-                    "number,title,state,author,headRefName,headRefOid,baseRefName,mergeStateStatus,mergeable,autoMergeRequest,mergedAt,mergedBy,reviewDecision,reviews,statusCheckRollup,url,body,createdAt,updatedAt",
+                    PR_JSON_FIELDS,
                 ).stdout,
             )
             write_json(

@@ -753,9 +753,10 @@ func TestGitHubMakerReviewerReportGeneratesGovernanceDocs(t *testing.T) {
 		"Merged PR build-test evidence: present",
 		"Reviewer approval evidence: matched",
 		"Fresh clone verification evidence: present",
+		"Issue closure provenance evidence: matched",
 	} {
-		if !strings.Contains(report, want) {
-			t.Fatalf("report missing %q\n%s", want, report)
+		if got := strings.Contains(report, want); !got {
+			t.Fatalf("strings.Contains(report, %q) = %v; want true\nreport:\n%s", want, got, report)
 		}
 	}
 
@@ -1101,6 +1102,49 @@ func TestGitHubMakerReviewerReportRequiresClosedDependencyScenario(t *testing.T)
 	}
 }
 
+func TestGitHubMakerReviewerReportRejectsUnprovenIssueClosures(t *testing.T) {
+	root := repoRoot(t)
+	for _, tc := range []struct {
+		name         string
+		prsJSON      string
+		issue1Events string
+	}{
+		{"operator manual close", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:20:00Z","actor":{"login":"setup-bot"},"commit_id":null}]`},
+		{"reviewer close before merge", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:00Z","actor":{"login":"reviewer-bot"},"commit_id":null}]`},
+		{"mismatched native commit", fakeGitHubMergedPRsJSON(), `[{"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"dddddddddddddddddddddddddddddddddddddddd"}]`},
+		{"wrong refs linkage", strings.Replace(fakeGitHubMergedPRsJSON(), `"body":"Refs #1"`, `"body":"Refs #99"`, 1), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runRoot := filepath.Join(t.TempDir(), "run")
+			mkdirAll(t, filepath.Join(runRoot, "forge-json"), filepath.Join(runRoot, "final-verify", "logs"))
+			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-issues-all.json"), fakeGitHubClosedIssuesJSON())
+			writeFileString(t, filepath.Join(runRoot, "forge-json", "final-prs-all.json"), tc.prsJSON)
+			writeFakeGitHubDependencySequencingEvents(t, runRoot, "final")
+			writeFakeGitHubGovernanceEvidence(t, runRoot, "final")
+			writeFakeReviewedHeadEvidence(t, runRoot, "final")
+			if tc.issue1Events != "" {
+				writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-1-events-final.json"), tc.issue1Events)
+			}
+			script := filepath.Join(root, "scripts", "github-maker-reviewer-report.py")
+			cmd := exec.Command("python3", script, "--run-root", runRoot, "--repo", "octo-org/octo-todo", "--reviewer-login", "reviewer-bot", "--date", "2026-06-26")
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("report failed: %v\n%s", err, out)
+			}
+			report := readFileString(t, filepath.Join(runRoot, "reports", "report.md"))
+			for value, want := range map[string]bool{
+				"READY FOR OPERATOR PASS REVIEW":             false,
+				"Issue closure provenance evidence: missing": true,
+			} {
+				if got := strings.Contains(report, value); got != want {
+					t.Fatalf("strings.Contains(report, %q) = %v; want %v\nreport:\n%s", value, got, want, report)
+				}
+			}
+		})
+	}
+}
+
 func TestGitHubMakerReviewerReportRequiresReviewerOwnedMerges(t *testing.T) {
 	root := repoRoot(t)
 	runRoot := filepath.Join(t.TempDir(), "run")
@@ -1200,6 +1244,7 @@ func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
 	runRoot := filepath.Join(t.TempDir(), "run")
 	setupDir := filepath.Join(runRoot, "secrets", "gh", "setup")
 	fakeBin := filepath.Join(t.TempDir(), "fakebin")
+	argsLog := filepath.Join(t.TempDir(), "gh-args.log")
 	mkdirAll(t, setupDir, fakeBin)
 	writeFileString(t, filepath.Join(fakeBin, "gh"), fakeGhForCaptureTokenCheck())
 	if err := os.Chmod(filepath.Join(fakeBin, "gh"), 0o755); err != nil {
@@ -1219,12 +1264,29 @@ func TestGitHubMakerReviewerCaptureStripsAmbientGitHubTokens(t *testing.T) {
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(),
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"AIOPS_FAKE_GH_ARGS_LOG="+argsLog,
 		"GH_TOKEN=tracker-token",
 		"GITHUB_TOKEN=tracker-token",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("capture failed: %v\n%s", err, out)
+	}
+	commands := strings.Split(readFileString(t, argsLog), "\n")
+	for _, prefix := range []string{"pr list ", "pr view "} {
+		var command string
+		for _, line := range commands {
+			if strings.HasPrefix(line, prefix) {
+				command = line
+				break
+			}
+		}
+		if command == "" {
+			t.Fatalf("captured command with prefix %q = %q; want non-empty", prefix, command)
+		}
+		if got := strings.Contains(command, "mergeCommit"); !got {
+			t.Fatalf("strings.Contains(%q, %q) = %v; want true", command, "mergeCommit", got)
+		}
 	}
 }
 
@@ -1347,17 +1409,31 @@ func fakeGitHubOpenDependencyIssuesJSON() string {
 
 func writeFakeGitHubDependencySequencingEvents(t *testing.T, runRoot string, tag string) {
 	t.Helper()
+	writeFakeGitHubRequiredClosureEvents(t, runRoot, tag)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
-  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}}
+  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}},
+  {"event":"closed","created_at":"2026-06-26T08:27:22Z","actor":{"login":"reviewer-bot"},"commit_id":"cccccccccccccccccccccccccccccccccccccccc"}
 ]`)
 }
 
 func writeFakeGitHubEarlyDependencySequencingEvents(t *testing.T, runRoot string, tag string) {
 	t.Helper()
+	writeFakeGitHubRequiredClosureEvents(t, runRoot, tag)
 	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-3-events-"+tag+".json"), `[
   {"event":"labeled","created_at":"2026-06-26T08:00:00Z","label":{"name":"aiops:todo"}},
   {"event":"unlabeled","created_at":"2026-06-26T08:05:00Z","label":{"name":"aiops:todo"}},
-  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}}
+  {"event":"labeled","created_at":"2026-06-26T08:20:00Z","label":{"name":"aiops:todo"}},
+  {"event":"closed","created_at":"2026-06-26T08:27:22Z","actor":{"login":"reviewer-bot"},"commit_id":"cccccccccccccccccccccccccccccccccccccccc"}
+]`)
+}
+
+func writeFakeGitHubRequiredClosureEvents(t *testing.T, runRoot string, tag string) {
+	t.Helper()
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-1-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T07:19:58Z","actor":{"login":"reviewer-bot"},"commit_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+]`)
+	writeFileString(t, filepath.Join(runRoot, "forge-json", "issue-2-events-"+tag+".json"), `[
+  {"event":"closed","created_at":"2026-06-26T08:11:26Z","actor":{"login":"reviewer-bot"},"commit_id":null}
 ]`)
 }
 
@@ -1407,41 +1483,41 @@ func writeFakeFinalVerifyLogs(t *testing.T, runRoot string) {
 
 func fakeGitHubMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMergedPRsWithoutStatusJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}]}
 ]`
 }
 
 func fakeGitHubMergedPRsWithMakerApprovalJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"maker-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMergedPRsWithStaleApprovalJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"1111111111111111111111111111111111111111"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"old2222222222222222222222222222222222222"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"3333333333333333333333333333333333333333"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"1111111111111111111111111111111111111111"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"old2222222222222222222222222222222222222"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"reviewer-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"},"commitOid":"3333333333333333333333333333333333333333"}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
 func fakeGitHubMakerMergedPRsJSON() string {
 	return `[
-  {"number":5,"title":"feat: filters","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":8,"title":"fix: stale delete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
-  {"number":9,"title":"feat: bulk complete","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
+  {"number":5,"title":"feat: filters","body":"Refs #1","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"1111111111111111111111111111111111111111","mergedAt":"2026-06-26T07:19:15Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":8,"title":"fix: stale delete","body":"Refs #2","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"2222222222222222222222222222222222222222","mergedAt":"2026-06-26T08:10:45Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"reviews":[{"state":"CHANGES_REQUESTED","author":{"login":"reviewer-bot"}},{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]},
+  {"number":9,"title":"feat: bulk complete","body":"Refs #3","state":"MERGED","author":{"login":"maker-bot"},"headRefOid":"3333333333333333333333333333333333333333","mergedAt":"2026-06-26T08:26:36Z","mergedBy":{"login":"maker-bot"},"mergeCommit":{"oid":"cccccccccccccccccccccccccccccccccccccccc"},"reviews":[{"state":"APPROVED","author":{"login":"reviewer-bot"}}],"statusCheckRollup":[{"name":"build-test","conclusion":"SUCCESS","status":"COMPLETED"}]}
 ]`
 }
 
@@ -1676,11 +1752,19 @@ if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
   exit 43
 fi
 
-case "${1:-}" in
-  issue|pr|run)
+printf '%s\n' "$*" >> "$AIOPS_FAKE_GH_ARGS_LOG"
+
+case "${1:-}:${2:-}" in
+  issue:list|run:list)
     echo '[]'
     ;;
-  api)
+  pr:list)
+    echo '[{"number":5}]'
+    ;;
+  pr:view)
+    echo '{"number":5}'
+    ;;
+  api:*)
     echo '{}'
     ;;
   *)

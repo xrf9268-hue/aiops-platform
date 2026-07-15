@@ -7,8 +7,20 @@ import argparse
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+@dataclass(frozen=True)
+class ReportEvidence:
+    dependency_sequencing: bool
+    reviewer_merge: bool
+    reviewer_approval: bool
+    branch_protection: bool
+    build_test: bool
+    fresh_clone: bool
+    closure_provenance: bool
 
 
 def parser() -> argparse.ArgumentParser:
@@ -214,6 +226,59 @@ def closed_issue_by_title(issues: list[dict[str, Any]], marker: str) -> dict[str
     return None
 
 
+def pr_merge_commit(pr: dict[str, Any]) -> str:
+    commit = pr.get("mergeCommit")
+    if not isinstance(commit, dict):
+        return ""
+    return str(commit.get("oid") or "")
+
+
+def issue_events(forge_json: Path, issue_number: int | str) -> list[dict[str, Any]]:
+    for path in issue_event_candidates(forge_json, issue_number):
+        loaded = load_json(path)
+        if isinstance(loaded, list):
+            return [event for event in loaded if isinstance(event, dict)]
+    return []
+
+
+def latest_close_event(forge_json: Path, issue_number: int | str) -> dict[str, Any] | None:
+    closed = [event for event in issue_events(forge_json, issue_number) if event.get("event") == "closed"]
+    return max(closed, key=event_created_at) if closed else None
+
+
+def issue_closure_provenance_present(
+    forge_json: Path,
+    issues: list[dict[str, Any]],
+    prs: list[dict[str, Any]],
+    reviewer_login: str,
+) -> bool:
+    reviewer = reviewer_login.strip()
+    if not reviewer or reviewer.startswith("REPLACE_ME"):
+        return False
+    merged = merged_prs(prs)
+    for marker in ("happy path", "rework candidate", "dependency:"):
+        issue = closed_issue_by_title(issues, marker)
+        if not issue:
+            return False
+        reference = f"Refs #{issue.get('number')}"
+        linked = [pr for pr in merged if str(pr.get("body") or "").strip() == reference]
+        if len(linked) != 1:
+            return False
+        pr = linked[0]
+        event = latest_close_event(forge_json, issue.get("number", ""))
+        if not event:
+            return False
+        commit = str(event.get("commit_id") or "")
+        if commit:
+            if commit != pr_merge_commit(pr):
+                return False
+            continue
+        merged_at = str(pr.get("mergedAt") or "")
+        if user_login(event.get("actor")) != reviewer or not merged_at or event_created_at(event) <= merged_at:
+            return False
+    return True
+
+
 def event_label_name(event: dict[str, Any]) -> str:
     label = event.get("label")
     if isinstance(label, dict):
@@ -382,23 +447,19 @@ def fresh_clone_verification_present(run_root: Path) -> bool:
 def automated_verdict(
     issues: list[dict[str, Any]],
     prs: list[dict[str, Any]],
-    sequencing_evidence: bool,
-    reviewer_merge_evidence: bool,
-    reviewer_approval_evidence: bool,
-    branch_protection_evidence: bool,
-    build_test_evidence: bool,
-    fresh_clone_evidence: bool,
+    evidence: ReportEvidence,
 ) -> str:
     reworked = any("CHANGES_REQUESTED" in review_states(p) for p in prs)
-    reviewer_evidence = reviewer_merge_evidence and reviewer_approval_evidence
+    reviewer_evidence = evidence.reviewer_merge and evidence.reviewer_approval
     if (
         required_issue_scenarios_closed(issues)
         and reviewer_evidence
         and reworked
-        and sequencing_evidence
-        and branch_protection_evidence
-        and build_test_evidence
-        and fresh_clone_evidence
+        and evidence.dependency_sequencing
+        and evidence.branch_protection
+        and evidence.build_test
+        and evidence.fresh_clone
+        and evidence.closure_provenance
     ):
         return "READY FOR OPERATOR PASS REVIEW"
     return "INCOMPLETE - review the evidence before claiming PASS"
@@ -415,22 +476,16 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
     reports = args.run_root / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     forge_json = args.run_root / "forge-json"
-    sequencing_evidence = dependency_sequencing_evidence_present(forge_json, issues)
-    reviewer_merge_evidence = reviewer_owned_merges(prs, args.reviewer_login)
-    reviewer_approval_evidence = reviewer_approved_merges(prs, args.reviewer_login, forge_json)
-    branch_protection_evidence = branch_protection_requires_build_test_and_review(forge_json)
-    build_test_evidence = build_test_success_for_merged_prs(prs, forge_json)
-    fresh_clone_evidence = fresh_clone_verification_present(args.run_root)
-    verdict = automated_verdict(
-        issues,
-        prs,
-        sequencing_evidence,
-        reviewer_merge_evidence,
-        reviewer_approval_evidence,
-        branch_protection_evidence,
-        build_test_evidence,
-        fresh_clone_evidence,
+    evidence = ReportEvidence(
+        dependency_sequencing=dependency_sequencing_evidence_present(forge_json, issues),
+        reviewer_merge=reviewer_owned_merges(prs, args.reviewer_login),
+        reviewer_approval=reviewer_approved_merges(prs, args.reviewer_login, forge_json),
+        branch_protection=branch_protection_requires_build_test_and_review(forge_json),
+        build_test=build_test_success_for_merged_prs(prs, forge_json),
+        fresh_clone=fresh_clone_verification_present(args.run_root),
+        closure_provenance=issue_closure_provenance_present(forge_json, issues, prs, args.reviewer_login),
     )
+    verdict = automated_verdict(issues, prs, evidence)
     lines = [
         "# GitHub maker + reviewer-automerge E2E Report",
         "",
@@ -455,18 +510,19 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "- [ ] Reviewer did not edit, commit, or push code.",
         "- [ ] At least one PR received reviewer Rework before a new maker head passed.",
         "- [ ] GitHub branch protection required the `build-test` check and an approving review.",
-        "- [ ] Closed issues have merged PR, exact-head reviewer approval, and required-check evidence.",
+        "- [ ] Each closed issue is linked to a merged PR with exact-head approval, required-check, and closure-provenance evidence.",
         "- [ ] Dependency issue was activated only after prerequisite issues were closed.",
         "- [ ] Fresh clone verification passed `npm ci`, `npm test`, `npm run build`, and `npm run test:e2e`.",
         "",
         "## Issue / PR Table",
         "",
-        f"Dependency sequencing evidence: {'present' if sequencing_evidence else 'missing'}",
-        f"Reviewer merge identity evidence: {'matched' if reviewer_merge_evidence else 'missing'}",
-        f"Reviewer approval evidence: {'matched' if reviewer_approval_evidence else 'missing'}",
-        f"Branch protection evidence: {'present' if branch_protection_evidence else 'missing'}",
-        f"Merged PR build-test evidence: {'present' if build_test_evidence else 'missing'}",
-        f"Fresh clone verification evidence: {'present' if fresh_clone_evidence else 'missing'}",
+        f"Dependency sequencing evidence: {'present' if evidence.dependency_sequencing else 'missing'}",
+        f"Reviewer merge identity evidence: {'matched' if evidence.reviewer_merge else 'missing'}",
+        f"Reviewer approval evidence: {'matched' if evidence.reviewer_approval else 'missing'}",
+        f"Branch protection evidence: {'present' if evidence.branch_protection else 'missing'}",
+        f"Merged PR build-test evidence: {'present' if evidence.build_test else 'missing'}",
+        f"Fresh clone verification evidence: {'present' if evidence.fresh_clone else 'missing'}",
+        f"Issue closure provenance evidence: {'matched' if evidence.closure_provenance else 'missing'}",
         "",
         "Issues:",
         *issue_rows(issues),
@@ -480,7 +536,7 @@ def write_main_report(args: argparse.Namespace, issues: list[dict[str, Any]], pr
         "- Actions/check summaries: `forge-json/actions-runs-*.json`.",
         "- PR review/merge actor metadata: `forge-json/prs-*.json`, `forge-json/pr-*-*.json`, and `forge-json/pr-*-reviews-*.json`.",
         "- Reviewer approvals must include reviewed-head commit evidence matching each merged `headRefOid`.",
-        "- Durable GitHub evidence is reviewer approval, required check success, reviewer merge actor, and non-empty `mergedAt`.",
+        "- Durable GitHub evidence is linked issue closure provenance, reviewer approval, required check success, reviewer merge actor, and non-empty `mergedAt`.",
         "",
         "## Rework Evidence",
         "",
