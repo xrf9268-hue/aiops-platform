@@ -57,7 +57,8 @@ type StateView struct {
 	// survives eviction, read CumulativeOperatorTerminalStopsTotal.
 	OperatorTerminalStops []OperatorTerminalStopView
 	// CompletedSessionUsage keeps the established API field name for clean,
-	// failed, and reconcile-ineligible run outcomes. Blocked claims stay in Blocked.
+	// failed, terminal-self-stop, and reconcile-ineligible run outcomes. Blocked
+	// claims stay in Blocked.
 	CompletedSessionUsage                       []SessionUsageView
 	BudgetGuardrails                            BudgetGuardrailsView
 	CumulativeCompletedTotal                    int64

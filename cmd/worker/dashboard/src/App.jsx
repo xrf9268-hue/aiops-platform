@@ -441,7 +441,7 @@ function endedUsageBadgeKind(outcome) {
 }
 
 function EndedUsageTable({ rows }) {
-  if (!rows.length) return <Empty title="No ended usage yet" sub="Session token totals appear after completed, failed, or reconcile-cancelled runs in this process." />;
+  if (!rows.length) return <Empty title="No ended usage yet" sub="Session token totals appear after completed, failed, terminal self-stopped, or reconcile-cancelled runs in this process." />;
   return (
     <div className="table-wrap narrow">
       <table className="sessions">

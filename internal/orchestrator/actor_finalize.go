@@ -216,7 +216,7 @@ func (f *finalizeRunOp) applyTerminalSelfStop(st *OrchestratorState, elapsed tim
 	}
 	f.entry.ReconcileCleanupWorkspace = true
 	cleanup := f.o.reconciledWorkspaceCleanup(f.id, f.entry)
-	if !st.FinishRunReconciledCancelled(f.id, f.entry, elapsed) {
+	if !st.FinishRunTerminalSelfStop(f.id, f.entry, elapsed) {
 		close(f.done)
 		return nil
 	}

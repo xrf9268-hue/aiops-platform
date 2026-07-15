@@ -381,7 +381,7 @@ describe('Worker status dashboard', () => {
     current = idleState;
     render(<App />);
     expect(await screen.findByText('No ended usage yet')).toBeTruthy();
-    expect(screen.getByText('Session token totals appear after completed, failed, or reconcile-cancelled runs in this process.')).toBeTruthy();
+    expect(screen.getByText('Session token totals appear after completed, failed, terminal self-stopped, or reconcile-cancelled runs in this process.')).toBeTruthy();
   });
 
   it('groups all live-work panels in the main column in KPI order (Worker Status v2)', async () => {

@@ -301,10 +301,11 @@ Use row-level `running[].tokens` / `running[].runtime_seconds`,
 recent ended-session attribution.
 
 `completed_session_usage` is a FIFO-bounded current-process list (same cap as
-recent `completed`) of finalized clean, failed, and reconcile-cancelled
-sessions. The established wire name is retained, but rows cover clean exits (`completed` and
-`active_success_no_handoff`), abnormal exits (`failed`), and tracker-driven
-cancellation (`reconcile_ineligible`). Each row keeps the issue identifier/URL,
+recent `completed`) of finalized clean, failed, terminal-self-stopped, and
+reconcile-cancelled sessions. The established wire name is retained, but rows
+cover clean exits (`completed` and `active_success_no_handoff`), abnormal exits
+(`failed`), clean terminal tracker self-stops (`terminal_self_stop`), and
+tracker-driven cancellation (`reconcile_ineligible`). Each row keeps the issue identifier/URL,
 last observed tracker state, workflow identity, agent model/provider, runtime
 seconds, token totals, end timestamp, and outcome. Blocked claims remain in
 `blocked[]` and are not duplicated here. Failed runs still appear in

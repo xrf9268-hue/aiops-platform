@@ -670,6 +670,13 @@ func (s *OrchestratorState) FinishRunReconciledCancelled(id IssueID, run *Runnin
 	return s.finishRunAborted(id, run, elapsed, "reconcile_ineligible")
 }
 
+// FinishRunTerminalSelfStop releases a clean run whose per-turn tracker refresh
+// observed the issue in a terminal state. It stays distinct from reconciliation
+// cancellation so operator-visible usage reports the actual stop mechanism.
+func (s *OrchestratorState) FinishRunTerminalSelfStop(id IssueID, run *RunningEntry, elapsed time.Duration) bool {
+	return s.finishRunAborted(id, run, elapsed, "terminal_self_stop")
+}
+
 func (s *OrchestratorState) BlockRun(id IssueID, run *RunningEntry, blockedAt time.Time, runErr string, elapsed time.Duration) bool {
 	return s.BlockRunWithReason(id, run, blockedAt, run.InputRequiredMethod, runErr, elapsed)
 }
@@ -731,18 +738,6 @@ func (s *OrchestratorState) BlockRetryWithReason(id IssueID, retry *RetryEntry, 
 		Method:     method,
 		Error:      runErr,
 	}
-	return true
-}
-
-func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration, outcome string) bool {
-	if current, ok := s.Running[id]; !ok || current != run {
-		return false
-	}
-	s.recordEndedSessionUsage(id, run, elapsed, time.Now().UTC(), outcome)
-	delete(s.Running, id)
-	delete(s.Claimed, id)
-	delete(s.ClaimedIssues, id)
-	s.CodexTotals.AddSeconds(elapsed)
 	return true
 }
 

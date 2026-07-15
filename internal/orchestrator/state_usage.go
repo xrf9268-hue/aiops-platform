@@ -19,6 +19,18 @@ type SessionUsageEntry struct {
 	Outcome        string
 }
 
+func (s *OrchestratorState) finishRunAborted(id IssueID, run *RunningEntry, elapsed time.Duration, outcome string) bool {
+	if current, ok := s.Running[id]; !ok || current != run {
+		return false
+	}
+	s.recordEndedSessionUsage(id, run, elapsed, time.Now().UTC(), outcome)
+	delete(s.Running, id)
+	delete(s.Claimed, id)
+	delete(s.ClaimedIssues, id)
+	s.CodexTotals.AddSeconds(elapsed)
+	return true
+}
+
 func (s *OrchestratorState) recordEndedSessionUsage(id IssueID, run *RunningEntry, elapsed time.Duration, completedAt time.Time, outcome string) {
 	if s == nil || run == nil {
 		return
