@@ -439,7 +439,7 @@ func RemoveIssueWorkspace(ctx context.Context, ev EventEmitter, req RemoveWorksp
 
 func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
 	for _, issue := range issues {
-		if !strings.EqualFold(issue.State, "Rework") || strings.TrimSpace(issue.ID) == "" {
+		if !strings.EqualFold(issue.State, "Rework") {
 			continue
 		}
 		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
@@ -451,9 +451,6 @@ func activeReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) 
 
 func terminalReworkIssueForWorkspace(workspaceKey string, issues []tracker.Issue) (tracker.Issue, bool) {
 	for _, issue := range issues {
-		if strings.TrimSpace(issue.ID) == "" {
-			continue
-		}
 		if reworkWorkspaceMatchesIssue(workspaceKey, issue) {
 			return issue, true
 		}
@@ -471,6 +468,9 @@ func reworkWorkspaceMatchesIssue(workspaceKey string, issue tracker.Issue) bool 
 }
 
 func reworkWorkspaceKeyPrefixes(issue tracker.Issue) []string { //nolint:gocognit // baseline (#521)
+	if strings.TrimSpace(issue.ID) == "" {
+		return nil
+	}
 	seen := map[string]struct{}{}
 	var prefixes []string
 	baseKeys := []string{workspace.SanitizeComponent(issue.ID), sanitizeLegacyWorkspaceKey(issue.ID)}
@@ -545,6 +545,9 @@ func workspaceKeysForRawIssueKeys(issue tracker.Issue, rawKeys []string) []strin
 		}
 	}
 	for _, raw := range rawKeys {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
 		for _, key := range []string{workspace.SanitizeComponent(raw), sanitizeLegacyWorkspaceKey(raw)} {
 			if key == "" {
 				continue

@@ -192,18 +192,30 @@ func TestReconcileStartupRemovesOnlyTrackerConfirmedTerminalWorkspace(t *testing
 
 func TestReconcileStartupRemovesTrackerConfirmedTerminalReworkWorkspaces(t *testing.T) {
 	tests := []struct {
-		name string
-		key  string
+		name         string
+		key          string
+		unmatchedKey string
 	}{
-		{name: "current sanitizer", key: "issue-2_rework_2026-05-16T10_00_00Z"},
-		{name: "legacy sanitizer", key: "issue-2-rework-2026-05-16t10-00-00z"},
+		{
+			name:         "current sanitizer",
+			key:          "issue-2_rework_2026-05-16T10_00_00Z",
+			unmatchedKey: "issue-404_rework_2026-05-16T10_00_00Z",
+		},
+		{
+			name:         "legacy sanitizer",
+			key:          "issue-2-rework-2026-05-16t10-00-00z",
+			unmatchedKey: "issue-404-rework-2026-05-16t10-00-00z",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := t.TempDir()
 			terminalPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.key)
-			if err := os.MkdirAll(terminalPath, 0o755); err != nil {
-				t.Fatalf("mkdir %s: %v", terminalPath, err)
+			unmatchedPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.unmatchedKey)
+			for _, path := range []string{terminalPath, unmatchedPath} {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", path, err)
+				}
 			}
 
 			emitter := &fakeEmitter{}
@@ -224,7 +236,63 @@ func TestReconcileStartupRemovesTrackerConfirmedTerminalReworkWorkspaces(t *test
 			if _, err := os.Stat(terminalPath); !os.IsNotExist(err) {
 				t.Fatalf("tracker-confirmed terminal Rework workspace should be removed, stat err=%v", err)
 			}
-			wantSingleReconcileWorkspaceReason(t, emitter, "terminal")
+			if _, err := os.Stat(unmatchedPath); err != nil {
+				t.Fatalf("unmatched Rework workspace should remain: %v", err)
+			}
+			wantReconcileWorkspaceReasonForPath(t, emitter, terminalPath, "terminal")
+			wantReconcileWorkspaceReasonForPath(t, emitter, unmatchedPath, "unknown_terminal_state_unconfirmed")
+		})
+	}
+}
+
+func TestReconcileStartupDoesNotIndexBlankTerminalIssueKeys(t *testing.T) {
+	tests := []struct {
+		name            string
+		issueID         string
+		currentFallback string
+	}{
+		{name: "empty", issueID: "", currentFallback: "unknown"},
+		{name: "whitespace", issueID: "   ", currentFallback: "___"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			confirmedPath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-2")
+			currentFallbackPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.currentFallback)
+			legacyFallbackPath := filepath.Join(root, "acme", "repo", "linear_issue", "workspace")
+			currentReworkFallbackPath := filepath.Join(root, "acme", "repo", "linear_issue", tt.currentFallback+"_rework_2026-05-16T10_00_00Z")
+			legacyReworkFallbackPath := filepath.Join(root, "acme", "repo", "linear_issue", "workspace-rework-2026-05-16t10-00-00z")
+			fallbackPaths := []string{currentFallbackPath, legacyFallbackPath, currentReworkFallbackPath, legacyReworkFallbackPath}
+			for _, path := range append([]string{confirmedPath}, fallbackPaths...) {
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", path, err)
+				}
+			}
+
+			emitter := &fakeEmitter{}
+			err := ReconcileStartup(context.Background(), ReconcileConfig{
+				WorkspaceRoot:  root,
+				ActiveStates:   []string{"Todo"},
+				TerminalStates: []string{"Done"},
+				Tracker: &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
+					nil,
+					{{ID: tt.issueID, Identifier: "LIN-2", State: "Done"}},
+				}},
+				Emitter:         emitter,
+				ReconcileTaskID: "reconcile-startup",
+			})
+			if err != nil {
+				t.Fatalf("ReconcileStartup: %v", err)
+			}
+			if _, err := os.Stat(confirmedPath); !os.IsNotExist(err) {
+				t.Fatalf("identifier-confirmed terminal workspace should be removed, stat err=%v", err)
+			}
+			for _, path := range fallbackPaths {
+				if _, err := os.Stat(path); err != nil {
+					t.Fatalf("blank-key fallback workspace %s should remain: %v", path, err)
+				}
+				wantReconcileWorkspaceReasonForPath(t, emitter, path, "unknown_terminal_state_unconfirmed")
+			}
 		})
 	}
 }
@@ -946,6 +1014,35 @@ func TestReconcileStartupKeepsWorkspaceWhenActiveAndTerminalKeysConflict(t *test
 	wantSingleReconcileWorkspaceReason(t, emitter, "active")
 }
 
+func TestReconcileStartupKeepsActiveReworkWhenTerminalSnapshotConflicts(t *testing.T) {
+	root := t.TempDir()
+	workspacePath := filepath.Join(root, "acme", "repo", "linear-issue", "issue-3_rework_2026-05-16T10_00_00Z")
+	if err := os.MkdirAll(workspacePath, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	fake := &fakeReconcileTrackerByCall{issuesByCall: [][]tracker.Issue{
+		{{ID: "issue-3", Identifier: "LIN-3", State: "Rework", UpdatedAt: mustTime("2026-05-16T11:30:00Z")}},
+		{{ID: "issue-3", Identifier: "LIN-3", State: "Done"}},
+	}}
+	emitter := &fakeEmitter{}
+	err := ReconcileStartup(context.Background(), ReconcileConfig{
+		WorkspaceRoot:   root,
+		ActiveStates:    []string{"Rework"},
+		TerminalStates:  []string{"Done"},
+		Tracker:         fake,
+		Emitter:         emitter,
+		ReconcileTaskID: "reconcile-startup",
+	})
+	if err != nil {
+		t.Fatalf("ReconcileStartup: %v", err)
+	}
+	if _, err := os.Stat(workspacePath); err != nil {
+		t.Fatalf("conflicting active Rework workspace should remain: %v", err)
+	}
+	wantSingleReconcileWorkspaceReason(t, emitter, "active_rework")
+}
+
 func TestReconcileStartupKeepsUnknownWorkspaceWhenTrackerHasActiveIssuesOnly(t *testing.T) {
 	root := t.TempDir()
 	unknownPath := filepath.Join(root, "acme", "repo", "linear-issue", "lin-unknown")
@@ -1022,6 +1119,21 @@ func wantSingleReconcileWorkspaceReason(t *testing.T, emitter *fakeEmitter, want
 	if got, _ := payload["reason"].(string); got != want {
 		t.Fatalf("reconcile_workspace reason = %q, want %q", got, want)
 	}
+}
+
+func wantReconcileWorkspaceReasonForPath(t *testing.T, emitter *fakeEmitter, path, want string) {
+	t.Helper()
+	for _, event := range emitter.byKind(task.EventReconcileWorkspace) {
+		payload, ok := event.Payload.(map[string]any)
+		if !ok || payload["path"] != path {
+			continue
+		}
+		if got, _ := payload["reason"].(string); got != want {
+			t.Fatalf("reconcile_workspace reason for %s = %q, want %q", path, got, want)
+		}
+		return
+	}
+	t.Fatalf("reconcile_workspace event for %s not found", path)
 }
 
 func TestReconcileStartupEndPayloadReportsKeptRemovedCounts(t *testing.T) {
