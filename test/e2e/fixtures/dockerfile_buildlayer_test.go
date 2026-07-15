@@ -117,14 +117,15 @@ func TestDockerfileDefinesCodexWorkerTarget(t *testing.T) {
 
 	for _, want := range []string{
 		"FROM worker AS codex-worker",
-		"ARG CODEX_CLI_VERSION=0.142.0",
-		"x86_64-unknown-linux-musl",
-		"aarch64-unknown-linux-musl",
+		"ARG CODEX_CLI_VERSION=0.144.4",
+		`amd64) codex_arch="x86_64-unknown-linux-musl"; codex_sha="d0a7bdb2ca821c9bb5f4cc2fb11a4ed96025db63b20d1bddf1e632361a108220"`,
+		`arm64) codex_arch="aarch64-unknown-linux-musl"; codex_sha="b1bc561a5bf74f9c5767c698275ae8043cee2ce45341098048b0b0b8b4e2cfc5"`,
 		"sha256sum -c -",
 		"codex --version",
 	} {
-		if !strings.Contains(df, want) {
-			t.Fatalf("Dockerfile codex-worker target missing %q", want)
+		got := strings.Contains(df, want)
+		if !got {
+			t.Fatalf("strings.Contains(Dockerfile, %q) = %v; want true", want, got)
 		}
 	}
 }
