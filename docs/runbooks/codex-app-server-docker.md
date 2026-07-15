@@ -350,6 +350,28 @@ sandbox policy:
       excludeSlashTmp: false
   ```
 
+  With both exclusion fields set to `false`, the current defaults leave
+  `$TMPDIR` and `/tmp` writable too. Set `excludeTmpdirEnvVar: true` and
+  `excludeSlashTmp: true` when those temporary write roots are unnecessary. The
+  Codex app-server baseline inherits the worker's `$TMPDIR`, so the default
+  Codex grant and the worker-selected temp root refer to the same path. The
+  optional worker wrapper still filters `TMPDIR` through
+  `sandbox.env_allowlist`; add it only when the selected temp path is visible to
+  that backend. The
+  runner injects `GOCACHE` and `GOMODCACHE` below the worker's temporary
+  directory by default. Go workflows should normally leave the applicable
+  temporary root writable. With the worker wrapper enabled, the worker's
+  temporary directory must also be visible to both sandbox layers. Bubblewrap
+  mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path outside
+  `/tmp` and the issue workspace requires cache overrides to paths both layers
+  expose. If either cache variable is overridden through
+  `codex.env_passthrough`, each override path must be writable and visible to
+  both sandbox layers; when `sandbox:` is enabled, also add each overridden name
+  to `sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
+  `writableRoots`, so an external cache root cannot rely on that inner Codex
+  setting alone. Otherwise Go commands can fail
+  ([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
+
   A `read-only` workflow likewise blocks network by default; if it only needs to
   *fetch* (not install), opt in on its **own** `type: readOnly` policy
   (`type: readOnly` + `networkAccess: true`) — do not switch it to

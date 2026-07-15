@@ -89,7 +89,7 @@ In scope now:
 - mock runner
 - Codex runner shell integration
 - Claude runner shell integration
-- basic deny-path policy
+- prompt-scoped path guidance with repository-side review and protection
 - verification commands
 - draft pull request handoff
 
@@ -110,7 +110,8 @@ Default operation should be conservative:
 - start with the mock runner
 - use draft pull requests
 - keep human review in the loop
-- deny sensitive paths in company repositories
+- state sensitive paths as prompt scope and enforce landing policy through
+  repository permissions, branch protection, review, and CI
 - do not automatically merge
 - use planning-only workflows for unclear or high-risk tasks
 

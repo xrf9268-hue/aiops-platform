@@ -7,14 +7,64 @@ harness hardening as part of the core safety model, not as an optional add-on.
 
 ## Current sandbox model
 
-`aiops-platform` always relies on the selected coding agent's own sandbox and
-approval behavior. For Codex runs, that means the Codex app-server sandbox
-selected by `codex.thread_sandbox` / `codex.turn_sandbox_policy` in `WORKFLOW.md`.
+`aiops-platform` has two separate sandbox layers. They compose when both are
+enabled, but they enforce different boundaries.
+
+| Layer | Writable project unit | Configurable repository-subpath allow/deny |
+|---|---|---|
+| Codex `workspaceWrite` | Issue workspace; fixed Codex metadata protections still apply | None |
+| Worker `sandbox:` | Whole issue workspace read-write | None |
+
+### Coding-agent sandbox
+
+The selected coding agent owns its sandbox and approval behavior. For Codex
+runs, `codex.thread_sandbox` and `codex.turn_sandbox_policy` select the
+app-server sandbox. `workspaceWrite` treats the issue workspace as its writable
+project boundary, and `writableRoots` adds writable roots outside it. The
+current defaults leave `$TMPDIR` and `/tmp` writable too. Set both
+`excludeTmpdirEnvVar: true` and `excludeSlashTmp: true` in an explicit
+`workspaceWrite` policy to remove those automatic grants. The Codex app-server
+baseline inherits the worker's `$TMPDIR`, so the default Codex grant and the
+worker-selected temp root refer to the same path. The optional worker wrapper
+still filters `TMPDIR` through `sandbox.env_allowlist`; add it only when the
+selected temp path is visible to that backend. By default, the runner injects
+`GOCACHE` and `GOMODCACHE` below the worker's temporary directory. Go workflows
+should normally leave the applicable temporary root writable. With the worker
+wrapper enabled, the worker's temporary directory must also be visible to both
+sandbox layers. Bubblewrap mounts `/tmp`, not an arbitrary host `$TMPDIR`; a
+custom temp path outside `/tmp` and the issue workspace requires cache overrides
+to paths both layers expose. If either cache variable is
+overridden through `codex.env_passthrough`, each override path must be writable
+and visible to both sandbox layers; when
+`sandbox:` is enabled, also add each overridden name to
+`sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
+`writableRoots`, so an external cache root cannot rely on that inner Codex
+setting alone. Otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
+Codex also protects a small fixed set of metadata paths such as `.git`,
+`.agents`, and `.codex`, but those built-in protections are not an
+operator-configurable repository path policy. See the official Codex
+documentation for
+[sandbox modes](https://learn.chatgpt.com/docs/agent-approvals-security#sandbox-and-approvals)
+and [protected paths](https://learn.chatgpt.com/docs/agent-approvals-security#protected-paths-in-writable-roots).
+
+### Optional worker process sandbox
 
 The platform now also supports an optional Linux process sandbox wrapper for
 agent invocation. It is disabled by default; operators enable it explicitly with
 the worker-enforced `sandbox:` workflow block when the host has a supported
-backend installed:
+backend installed. The wrapper covers the agent invocation only; workspace hooks
+run separately as the worker OS user with their own environment and timeout
+controls. For the worker wrapper, the issue workspace remains writable as a
+whole: bubblewrap binds the workdir read-write, and firejail exposes the complete
+workdir as its private workspace.
+
+Neither layer provides a configurable repository-subpath denylist. In
+particular, neither layer can express "allow `src/**` but deny `infra/**`" inside
+the issue workspace. Prompt path rules are advisory, not a security boundary.
+Use repository permissions, branch protection, required review and CI checks,
+trusted tracker eligibility, and narrowly scoped prompts to control what may run
+and what may land.
 
 ```yaml
 sandbox:
@@ -35,17 +85,28 @@ Supported enforcement today:
 - `bubblewrap` or `firejail` wraps the agent process when configured;
 - the agent working directory must remain under `workspace.root` before the
   sandbox wrapper is applied;
-- the child process environment is reduced to `sandbox.env_allowlist`;
-- the agent executable must live under a path the sandbox backend exposes
-  (for example `/usr` or `/bin` with the current bubblewrap/firejail profile);
+- the child process environment is reduced to `sandbox.env_allowlist` plus the
+  worker-injected `GOCACHE` / `GOMODCACHE` paths required for sandboxed Go
+  commands; operator-supplied cache paths do not receive this exception;
+- bubblewrap exposes only its explicit mounts: system paths such as `/usr`,
+  `/bin`, and `/lib` are read-only, `/tmp` is ephemeral, and the complete issue
+  workspace is read-write;
+- firejail makes the issue workdir the private home and supplies a private
+  `/tmp`, but other host paths accessible to the worker OS user may remain
+  visible with their ordinary OS permissions; do not treat it as bubblewrap's
+  explicit-mount boundary;
+- the agent executable must live under a path the selected backend exposes;
 - explicitly listed credential files are checked for readability and bound into
   the sandbox read-only;
+- the full issue workspace is exposed read-write as one unit; the wrapper does
+  not make selected repository subpaths read-only;
 - `network: none` disables network access for supported backends;
 - `network: allowlist` is supported through `firejail --netfilter` and CIDR
   allowlist rules.
 
 Still not provided:
 
+- per-path allow or deny rules inside an issue workspace;
 - Docker-per-run workspace isolation;
 - VM isolation or macOS `sandbox-exec` support;
 - a credential vault that mints per-run credentials;
@@ -122,7 +183,6 @@ The current Go implementation provides these safety controls:
 - coding-agent execution from the per-issue workspace directory;
 - runner-side `cwd` and workspace-root validation before agent subprocess
   launch, even when `sandbox.enabled` is false;
-- draft-PR mode for human review before merge;
 - `$VAR` indirection for secrets in workflow configuration;
 - masking of secret values in configuration inspection output;
 - operator-visible blocked state for Codex input-required and MCP elicitation
@@ -132,7 +192,8 @@ The current Go implementation provides these safety controls:
   default these children run with only a small POSIX baseline env (`PATH`,
   `HOME`, `USER`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`); the Codex
   app-server runner additionally receives `CODEX_HOME` so Codex can resolve its
-  configured home without giving that credential directory to non-Codex agents
+  configured home and, when set, `TMPDIR` so its temporary write root matches the
+  worker-injected cache paths. Non-Codex agents do not receive either variable
   by default. Tracker/repo tokens (`LINEAR_API_KEY`, `GITHUB_TOKEN`,
   `GITEA_TOKEN`) and any other secret in the worker's `.env` are excluded — a
   malicious or buggy WORKFLOW.md cannot `env > /tmp/dump` and exfiltrate them.
@@ -155,13 +216,26 @@ The current Go implementation provides these safety controls:
   `RecordEvent.Message`, or `/api/v1/state` payloads;
 - branch protection and review gates when configured on the remote repository.
 
-These controls reduce accidental damage and make changes reviewable. They do not
-make arbitrary repositories, issue authors, dependencies, or commands safe.
+Even when both sandbox layers are enabled, these controls reduce accidental
+damage and make changes reviewable; they do not make arbitrary repositories,
+issue authors, dependencies, or commands safe.
 
 ## What is not defended today
 
-Unless the optional sandbox wrapper is enabled and validated on the worker host,
-do not assume the platform prevents a malicious or compromised agent run from:
+Neither sandbox can selectively block an operator-selected sensitive
+subdirectory while allowing normal project edits elsewhere in the issue
+workspace. Under writable modes, a compromised or misdirected agent can edit any
+project file that its sandbox exposes as writable and can use whatever repository
+credentials its runtime exposes. Prompt scope helps guide a well-behaved agent,
+but repository permissions, branch protection, review, and CI are the enforced
+landing controls.
+
+Do not assume the platform prevents a malicious or compromised run from the
+following actions, even when the optional wrapper is enabled. The wrapper can
+narrow selected filesystem, environment, credential, and network risks for the
+agent process it wraps, according to the chosen backend; it does not wrap
+workspace hooks, remove agent-side tool or credential authority, or make
+Firejail hide every host path accessible to the worker OS user:
 
 - reading host files that are accessible to the worker OS user;
 - reading credentials present in the process environment or filesystem;
@@ -200,17 +274,20 @@ repository:
    WORKFLOW prompt (PR handoff is agent-side per SPEC §1, #76) until several runs
    have been reviewed cleanly.
 4. Start with `agent.default: mock`. Only switch to a real coding agent after the
-   mock loop has proven clone, branch, PR, label, and policy behavior.
+   mock loop has proven tracker discovery, eligibility, clone, workspace setup,
+   prompt rendering, and runner lifecycle. Mock does not author code, create a
+   PR, apply labels, or prove that a coding agent will honor advisory scope.
 5. Do not pass shared production secrets, broad cloud credentials, personal
    tokens, SSH agents, or customer data into the worker environment or workspace.
 6. Keep `.env`, `.env.*`, private keys, and service-account files outside the
    repository and workspace unless a specific run absolutely requires them.
-7. Keep the agent away from sensitive directories (deployment manifests,
-   infrastructure, migrations, billing, auth, secrets): state them as
-   off-limits in the `WORKFLOW.md` prompt (SPEC §3.2) and, for hard
-   prevention, restrict writes via the `sandbox:` block. (The worker
-   `policy.deny_paths` / `max_changed_*` gate was removed in #561: it ran
-   post-push, so it could only flag — never prevent — a forbidden change.)
+7. State sensitive directories (deployment manifests, infrastructure,
+   migrations, billing, auth, secrets) as off-limits in the `WORKFLOW.md` prompt
+   (SPEC §3.2), then back that advisory scope with repository permissions,
+   branch protection, required review, and CI path checks. Neither sandbox layer
+   supplies a repository-subpath denylist. (The worker `policy.deny_paths` /
+   `max_changed_*` gate was removed in #561: it ran post-push, so it could only
+   flag — never prevent — a forbidden change.)
 8. Keep changes small enough for reliable review — instruct the agent to keep
    diffs tight in the prompt, and split oversized PRs at review time.
 9. Restrict tracker eligibility to trusted projects, teams, labels, and workflow
@@ -233,20 +310,22 @@ repository:
 ## Company repository minimum posture
 
 For company repositories, use `docs/workflows/company-cautious-WORKFLOW.md` as the
-starting point and keep the following minimum posture until an external sandbox
-lands:
+starting point and keep the following minimum posture unless a stronger,
+independently validated container or VM boundary supersedes it:
 
 - `agent.default: mock` for initial validation;
 - `policy.mode: draft_pr`;
 - a WORKFLOW prompt that tells the agent to open draft PRs (SPEC §1, #76);
-- conservative changed-file and changed-LOC limits;
-- explicit denied paths for sensitive directories;
+- conservative changed-file and changed-LOC review guidance in the prompt;
+- explicit off-limits paths in the prompt, backed by repository permissions,
+  branch protection, required review, and CI checks for actual enforcement;
 - low-privilege bot credentials;
 - branch protection with required human review;
 - no shared secrets in the worker environment or workspace.
 
 If any item above is not available, do not run the coding agent on that company
-repository yet. Use mock or analysis-only workflows instead.
+repository yet. Use the mock runner instead; `analysis_only` is prompt behavior,
+not a security boundary.
 
 ## Remaining hardening roadmap
 
@@ -258,9 +337,10 @@ sandbox. Remaining work includes:
 - stronger credential-vault integration that mints per-run credentials instead
   of binding existing files;
 - backend-specific operational validation on each supported host distribution;
-- broader lifecycle-hook integration once SPEC workspace hooks are implemented.
+- explicit isolation guidance for workspace hooks, which currently run outside
+  the optional agent-process wrapper.
 
 Until those controls are implemented and tested for your deployment, document
 this platform as a trusted-environment orchestrator with optional process
-sandboxing, review, and policy guardrails, not as a strong sandbox for arbitrary
-untrusted code.
+sandboxing, repository governance, and workflow guidance, not as a strong
+sandbox for arbitrary untrusted code.

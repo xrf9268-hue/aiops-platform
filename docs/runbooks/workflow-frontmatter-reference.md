@@ -112,7 +112,7 @@ over stdio).
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `codex.command` | string | `codex app-server` | Launch command for the app-server subprocess; real-Codex workflow templates add `--config shell_environment_policy.inherit=all` for upstream-style shell-environment inheritance | `$VAR`; a `codex exec` argv is rejected (#541) |
-| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
+| `codex.env_passthrough` | string list | `[]` | Env vars the Codex app-server subprocess inherits beyond its baseline (`PATH`, `HOME`, `CODEX_HOME`, `TMPDIR`, `USER`, locale, `TZ`, `TERM`) — for model CLI auth/proxy/CA vars. Tracker/repo tokens (`GITHUB_TOKEN`, `GITEA_TOKEN`, `LINEAR_API_KEY`, …) and the `tracker.api_key` variable/value are denied | denied names rejected at load |
 | `codex.approval_policy` | map | `granular` with every flag `false` (auto-reject all approval prompts) | Sent as the app-server approval policy | — |
 | `codex.thread_sandbox` | string | `workspace-write` | `thread/start` sandbox string; also the single knob the per-turn policy derives from (DEVIATIONS D32) | — |
 | `codex.turn_sandbox_policy` | typed map | derived from `thread_sandbox` | Explicit per-turn `sandboxPolicy` override; `type` is required (`dangerFullAccess`, `readOnly`, `externalSandbox`, `workspaceWrite`), with per-type required fields (`writableRoots`, `networkAccess`, …) | strict per-type field checking; legacy `mode:`-style shapes rejected |
@@ -121,6 +121,30 @@ over stdio).
 | `codex.stall_timeout_ms` | int | `300000` (5m) | Stall detection (SPEC §8.5 Part A): max time since the last agent event before the turn is declared stalled, terminated, and retried; `0` disables | ≥ 0 |
 | `codex.linear_graphql.allow_mutations` | bool | `false` | With the default, every GraphQL mutation through the agent-visible `linear_graphql` tool is rejected before any request leaves the process; reads are unrestricted | — |
 | `codex.linear_graphql.allowed_mutations` | string list | `[]` (= all, once mutations are allowed) | Per-operation allow-list of top-level Mutation field names (e.g. `issueUpdate`, `commentCreate`) | valid GraphQL names, unique; requires `allow_mutations: true` |
+
+For `workspaceWrite`, the issue workspace is the writable project unit, while
+`writableRoots` adds other writable roots. The current defaults leave `$TMPDIR`
+and `/tmp` writable too. Set both `excludeTmpdirEnvVar: true` and
+`excludeSlashTmp: true` in an explicit `workspaceWrite` policy to remove those
+automatic grants. The Codex app-server baseline inherits the worker's
+`$TMPDIR`, so the default Codex grant and the worker-selected temp root refer to
+the same path. The optional worker wrapper still filters `TMPDIR` through
+`sandbox.env_allowlist`; add it only when the selected temp path is visible to
+that backend. By default, the runner injects `GOCACHE` and `GOMODCACHE` below
+the worker's temporary directory. Go workflows should normally leave the
+applicable temporary root writable. With the worker wrapper enabled, the
+worker's temporary directory must also be visible to both sandbox layers.
+Bubblewrap mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path
+outside `/tmp` and the issue workspace requires cache overrides to paths both
+layers expose. If either cache variable is overridden through
+`codex.env_passthrough`, each override path must be writable and visible to both
+sandbox layers; when `sandbox:` is enabled, also add each overridden name to
+`sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
+`writableRoots`, so an external cache root cannot rely on that inner Codex
+setting alone. Otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)). Codex's fixed
+protected metadata locations are documented upstream, but this configuration
+does not accept an operator-defined repository-subpath denylist.
 
 ## `claude`
 
@@ -146,6 +170,16 @@ keys) are only consumed by the codex app-server runner, and
 Optional worker-side process hardening around agent invocation (off by
 default; Symphony mandates no universal sandbox posture).
 
+The worker process sandbox and Codex turn sandbox are separate layers. The
+worker wrapper exposes the complete issue workspace read-write while constraining
+the agent process, environment, credential mounts, and network. Host filesystem
+visibility is backend-specific: bubblewrap exposes only explicit mounts, while
+firejail may still expose host paths accessible to the worker OS user outside
+its private home/workdir with their ordinary permissions. Neither layer accepts
+repository-relative allow or deny paths; use prompt scope as advisory guidance
+and repository permissions, branch protection, review, and CI for enforced
+controls over sensitive paths.
+
 | Key | Type | Default | Behavior | Validation |
 |-----|------|---------|----------|------------|
 | `sandbox.enabled` | bool | `false` | Wraps the agent subprocess in the selected backend | requires a non-`none` backend and a non-empty `env_allowlist` |
@@ -153,7 +187,7 @@ default; Symphony mandates no universal sandbox posture).
 | `sandbox.network` | string | `none` | Sandbox network mode | `none` or `allowlist` |
 | `sandbox.network_allowlist_cidrs` | string list | `[]` | IPv4 CIDRs reachable from the sandbox when `network: allowlist` | required for `allowlist`; IPv4 CIDRs only |
 | `sandbox.network_interface` | string | — | Host interface Firejail attaches `--netfilter` to | required for `network: allowlist` (which also requires `backend: firejail`) |
-| `sandbox.env_allowlist` | string list | `[]` | Exact env vars the sandboxed child keeps; same tracker-token deny-list as `env_passthrough` | required when `enabled: true` |
+| `sandbox.env_allowlist` | string list | `[]` | Operator-selected env vars the sandboxed child keeps; the worker-injected `GOCACHE` and `GOMODCACHE` paths are carried separately, while operator-supplied cache paths do not receive that exception and tracker-token names remain denied | required when `enabled: true` |
 | `sandbox.credential_files` | string list | `[]` | Files bind-mounted into the sandbox for model-CLI credentials | `$VAR`; `~/` expansion |
 
 ## `verify`

@@ -62,7 +62,11 @@ Checklist before moving an issue to `Todo`:
 - One clear outcome. Not "improve logging" but "log tracker issue id in worker poll dispatch output".
 - Concrete file or package hints. Mention paths like `internal/runner/shell.go` so the agent does not wander.
 - Acceptance criteria as a bullet list. The verification section in `WORKFLOW.md` runs `go test ./...`, but tests do not catch design intent.
-- Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`, `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt so the agent self-limits; use `sandbox:` write restrictions for hard prevention.
+- Out-of-scope notes. Call out things you do not want touched (e.g. `infra/**`,
+  `deploy/**`, `db/migrations/**`, `secrets/**`) directly in the issue / prompt
+  so the agent self-limits. This is advisory: neither sandbox layer supplies a
+  repository-subpath denylist. Use repository permissions, branch protection,
+  required review, and CI path checks when those paths need enforced controls.
 - Size budget: keep the change small (aim for ≤12 files / ≤300 LOC as a review guideline). If a task realistically needs more, split it.
 - Link to the relevant ADR or research doc when the task involves architecture decisions.
 - Dependency class: mark the issue as a `hard dependency`, `soft overlap`, or
@@ -123,7 +127,32 @@ codex:
   command: codex app-server --config shell_environment_policy.inherit=all
 ```
 
-The agent's sandbox/approval posture is set by `codex.thread_sandbox` (per-session) and `codex.turn_sandbox_policy` (per-turn; derived from `thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on shared hosts and `danger-full-access` only on already-isolated workers (container, dedicated VM).
+The agent's sandbox/approval posture is set by `codex.thread_sandbox`
+(per-session) and `codex.turn_sandbox_policy` (per-turn; derived from
+`thread_sandbox` when unset — see DEVIATIONS.md D32). Use `workspace-write` on
+shared hosts and `danger-full-access` only on already-isolated workers
+(container, dedicated VM). `workspace-write` constrains project-file writes to
+the workspace, but the current defaults leave `$TMPDIR` and `/tmp` writable too;
+it does not enforce operator-selected off-limits subdirectories inside the
+workspace. Use an explicit `workspaceWrite` turn policy with both temporary-root
+exclusion flags set to `true` when those default write roots are unnecessary.
+The Codex app-server baseline inherits the worker's `$TMPDIR`, so the default
+Codex grant and the worker-selected temp root refer to the same path. The
+optional worker wrapper still filters `TMPDIR` through `sandbox.env_allowlist`;
+add it only when the selected temp path is visible to that backend. By default,
+the runner injects `GOCACHE` and `GOMODCACHE` below the worker's
+temporary directory. Go workflows should normally leave the applicable
+temporary root writable. With the worker wrapper enabled, the worker's
+temporary directory must also be visible to both sandbox layers. Bubblewrap
+mounts `/tmp`, not an arbitrary host `$TMPDIR`; a custom temp path outside
+`/tmp` and the issue workspace requires cache overrides to paths both layers
+expose. If either cache variable is overridden through `codex.env_passthrough`,
+each override path must be writable and visible to both sandbox layers; when
+`sandbox:` is enabled, also add each overridden name to
+`sandbox.env_allowlist`. Bubblewrap does not mount arbitrary Codex
+`writableRoots`, so an external cache root cannot rely on that inner Codex
+setting alone. Otherwise Go commands can fail
+([#544](https://github.com/xrf9268-hue/aiops-platform/issues/544)).
 
 > The earlier non-SPEC `codex` (one-shot `codex exec`) runner was removed under [#541](https://github.com/xrf9268-hue/aiops-platform/issues/541); it drove the same agent as `codex app-server` in a strictly worse mode (no in-session `max_turns`).
 

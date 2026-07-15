@@ -153,7 +153,7 @@ If a future change introduces auto-merge, it must be opt-in per repository, must
 Every agent-authored pull request must be reviewed by a human before merge. Reviewers are expected to:
 
 1. **Read the run summary**: confirm the linked task ID, the source event (Gitea, GitHub, or Linear issue), the model used, and the workflow that produced the change.
-2. **Verify diff scope** against the human reviewer's understanding of the issue. Scope and path constraints now live in the operator's `WORKFLOW.md` prompt (SPEC §3.2), enforced preventively by the agent before push — there is no worker-side path/diffstat gate (the `deny_paths` / `max_changed_*` policy caps were removed in #561). So review scope as a human:
+2. **Verify diff scope** against the human reviewer's understanding of the issue. Scope and path constraints now live in the operator's `WORKFLOW.md` prompt (SPEC §3.2) as advisory pre-push instructions — neither sandbox layer nor the worker enforces repository-subpath policy (the `deny_paths` / `max_changed_*` gate was removed in #561). So review scope as a human and rely on repository permissions, branch protection, required checks, and review for enforced landing controls:
    - Confirm only files relevant to the task were changed, and flag any out-of-scope edits the prompt was supposed to keep the agent away from.
    - Treat an unexpectedly large or wide-ranging diff as a signal to request a split, not a config violation.
 3. **Read every changed line**. AI-authored diffs may look reasonable while changing semantics. Do not skim.

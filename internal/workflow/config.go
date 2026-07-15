@@ -367,8 +367,10 @@ func (c LinearGraphQLConfig) IsZero() bool {
 // gate (allow_paths / deny_paths / max_changed_*) was removed under #561: SPEC
 // §3.2 homes scope/validation rules in the operator's WORKFLOW.md prompt, the
 // gate ran post-push (could only flag, never prevent) and raced reconcile-cancel,
-// and upstream has no such config. Hard path prevention belongs to the `sandbox`
-// write restrictions; scope guidance belongs to the prompt.
+// and upstream has no such config. Prompt scope is advisory; repository
+// permissions, branch protection, review, and CI enforce what can land. The
+// worker and coding-agent sandboxes do not expose a configurable repository-
+// subpath denylist.
 type PolicyConfig struct {
 	// Mode selects the run mode: "draft_pr" (default) or "analysis_only".
 	Mode string `yaml:"mode" json:"mode"`

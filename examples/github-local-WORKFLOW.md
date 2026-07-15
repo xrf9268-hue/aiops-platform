@@ -51,9 +51,10 @@ claude:
 
 policy:
   mode: draft_pr
-  # Scope and path rules belong in the prompt body (SPEC §3.2); hard path
-  # prevention belongs to `sandbox:` write restrictions. The worker path/diffstat
-  # gate was removed in #561 — `deny_paths` / `max_changed_*` are not accepted.
+  # Scope and path rules belong in the prompt body as advisory guidance (SPEC
+  # §3.2). Neither sandbox layer exposes a configurable repository-subpath
+  # denylist; use repository permissions, branch protection, review, and CI for
+  # enforced landing controls. The worker path/diffstat gate was removed in #561.
 
 # The agent's safety envelope (allowed networks/paths/commands, forbidden
 # actions) is expressed in the prompt body below (SPEC §3.2). The descriptive
@@ -82,7 +83,9 @@ Hard requirements:
 - Work only on the assigned issue. Do not opportunistically refactor unrelated areas.
 - Read AGENTS.md, README.md, the issue text, and the relevant SPEC/reference paths before design-sensitive changes.
 - Use a focused failing test before production code changes when adding behavior or fixing bugs.
-- Keep changes small enough for review. Respect the configured policy limits unless the issue explicitly requires a larger change.
+- Keep changes within the repository's documented review budget and prompt
+  scope unless the issue explicitly requires a larger change; these are review
+  expectations, not worker-enforced path or diffstat limits.
 - Before opening or updating a PR, check for an existing open PR that closes the
   assigned issue (`gh pr list --state open --search "#<issue-number>"` plus a
   direct PR-body/linked-issue check). If one exists, update and reuse that PR

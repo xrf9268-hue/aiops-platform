@@ -108,7 +108,7 @@ func rejectRemovedMiscFields(raw map[string]any) error {
 		return fmt.Errorf("pr.* is no longer supported (#578): the worker does not open, label, or assign reviewers to PRs — PR creation is the coding agent's responsibility (SPEC §1, #76). Express draft/labels/reviewers in the agent's WORKFLOW prompt or tool surface, and remove the `pr:` block")
 	}
 	if _, present := raw["safety"]; present {
-		return fmt.Errorf("safety.* is no longer supported (#578): it was a descriptive struct the worker never enforced, which falsely implied enforcement. Express the safety envelope in the WORKFLOW prompt/README, and use `sandbox:` for worker-enforced write/network restrictions. Remove the `safety:` block")
+		return fmt.Errorf("safety.* is no longer supported (#578): it was a descriptive struct the worker never enforced, which falsely implied enforcement. Express advisory scope in the WORKFLOW prompt/README, and use `sandbox:` for worker-enforced process, environment, credential, network, and workspace isolation. The whole issue workspace remains writable. Remove the `safety:` block")
 	}
 	return rejectRemovedAgentFields(raw)
 }
@@ -175,7 +175,7 @@ func rejectRemovedPolicyFields(raw map[string]any) error {
 	if policy, ok := raw["policy"].(map[string]any); ok {
 		for _, key := range []string{"allow_paths", "deny_paths", "max_changed_files", "max_changed_lines", "max_changed_loc"} {
 			if _, present := policy[key]; present {
-				return fmt.Errorf("policy.%s is no longer supported (#561): the worker path/diffstat gate was removed — it ran after the agent had already pushed, so it could only flag, never prevent. Express scope/path rules in the WORKFLOW prompt (SPEC §3.2) and use sandbox write restrictions for hard path prevention. Remove policy.%s; policy.mode is still honored", key, key)
+				return fmt.Errorf("policy.%s is no longer supported (#561): the worker path/diffstat gate was removed — it ran after the agent had already pushed, so it could only flag, never prevent. Express advisory scope/path rules in the WORKFLOW prompt (SPEC §3.2), and enforce landing policy with repository permissions, branch protection, review, and CI. Neither sandbox layer provides a repository-subpath denylist. Remove policy.%s; policy.mode is still honored", key, key)
 			}
 		}
 	}

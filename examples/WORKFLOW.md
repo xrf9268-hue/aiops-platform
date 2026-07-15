@@ -70,9 +70,10 @@ claude:
 policy:
   mode: draft_pr
   # Scope and path rules (which files to keep changes within, which paths to
-  # avoid) belong in the prompt body below (SPEC §3.2); hard path prevention
-  # belongs to the `sandbox:` write restrictions. The worker path/diffstat gate
-  # was removed in #561 — `deny_paths` / `max_changed_*` are no longer accepted.
+  # avoid) belong in the prompt body below as advisory guidance (SPEC §3.2).
+  # Neither sandbox layer exposes a configurable repository-subpath denylist;
+  # use repository permissions, branch protection, review, and CI for enforced
+  # landing controls. The worker path/diffstat gate was removed in #561.
 
 # The agent's safety envelope (allowed networks/paths/commands, what is
 # forbidden) is expressed in the prompt body below (SPEC §3.2) — see the Process

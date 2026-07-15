@@ -19,7 +19,9 @@ var baselineAgentEnvAllowlist = []string{
 	"TERM",
 }
 
-var codexAppServerEnvAllowlist = append(append([]string{}, baselineAgentEnvAllowlist...), "CODEX_HOME")
+// Codex resolves the workspace-write TMPDIR root from its own process env, so
+// the app-server must see the same temp root used by worker-injected Go caches.
+var codexAppServerEnvAllowlist = append(append([]string{}, baselineAgentEnvAllowlist...), "CODEX_HOME", "TMPDIR")
 
 var agentLoginPATH = workspace.LoginPATH
 
