@@ -262,7 +262,7 @@ func (b *blockingReconcileTracker) FetchIssueStatesByRefs(ctx context.Context, r
 	}
 	states := make(map[string]tracker.IssueState, len(refs))
 	for _, ref := range refs {
-		states[ref.ID] = tracker.IssueState{State: "In Progress"}
+		states[ref.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: "In Progress"}
 	}
 	return states, nil
 }
@@ -335,7 +335,7 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs [
 	if f.fetchIDStates != nil {
 		for id, state := range f.fetchIDStates {
 			if _, ok := wanted[id]; ok {
-				out[id] = tracker.IssueState{State: state}
+				out[id] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state}
 			}
 		}
 		return out, f.fetchIDErr
@@ -344,7 +344,7 @@ func (f *fakeIssueStateTracker) FetchIssueStatesByRefs(_ context.Context, refs [
 	// same labels the real narrow refresh surfaces (SPEC §6.4 gate).
 	for _, issue := range f.issues {
 		if _, ok := wanted[issue.ID]; ok {
-			out[issue.ID] = tracker.IssueState{State: issue.State, Labels: issue.Labels}
+			out[issue.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: issue.State, Labels: issue.Labels}
 		}
 	}
 	return out, nil

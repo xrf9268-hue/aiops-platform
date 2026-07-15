@@ -187,6 +187,10 @@ func (c *TrackerClient) scopeIssue(ctx context.Context, issue Issue, wantedState
 	if err != nil {
 		return tracker.Issue{}, false, err
 	}
+	blockedBy, err := c.buildBlockedBy(ctx, issue.Body, blockerLookupBestEffort)
+	if err != nil {
+		return tracker.Issue{}, false, err
+	}
 	return tracker.Issue{
 		ID:          giteaIssueID(issue),
 		Identifier:  fmt.Sprintf("#%d", issue.Number),
@@ -197,7 +201,7 @@ func (c *TrackerClient) scopeIssue(ctx context.Context, issue Issue, wantedState
 		CreatedAt:   createdAt,
 		UpdatedAt:   updatedAt,
 		Labels:      extractGiteaLabels(issue.Labels),
-		BlockedBy:   c.buildBlockedBy(ctx, issue.Body),
+		BlockedBy:   blockedBy,
 		// Priority: Gitea has no native priority field — see
 		// dependsOnRegexp comment / SPEC §4.1.1 note. Left at the zero
 		// value; dispatch sort treats every Gitea issue as equal priority

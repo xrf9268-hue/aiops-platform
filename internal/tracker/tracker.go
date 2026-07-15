@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 )
@@ -21,14 +22,33 @@ type Issue struct {
 	BlockedBy   []BlockerRef
 }
 
-// IssueState is the narrow SPEC §11.2 state-refresh fact: an issue's current
-// workflow state plus its normalized labels. Labels are carried so the SPEC §6.4
-// required_labels "continue" gate can observe label removal on already-claimed
-// issues that may sit beyond the active-listing page (#682). Producing clients
-// lowercase/trim each label so matching is case-insensitive.
+// IssueStateOutcome classifies one requested narrow-refresh reference. Unknown
+// is the zero value so a missing map key or an unclassified response can never
+// be mistaken for an authoritative tracker fact.
+type IssueStateOutcome uint8
+
+// ErrIssueStateRefreshIncomplete marks a syntactically decodable issue-state
+// or blocker response that omits fields required for authoritative
+// classification. Transport failures, malformed JSON, and oversized bodies
+// retain their own error identity instead of being mislabeled as structurally
+// incomplete.
+var ErrIssueStateRefreshIncomplete = errors.New("issue state refresh response incomplete")
+
+const (
+	IssueStateOutcomeUnknown IssueStateOutcome = iota
+	IssueStateOutcomeCurrent
+	IssueStateOutcomeAbsent
+)
+
+// IssueState is the narrow SPEC §11.2 state-refresh fact for one requested
+// reference. Current rows carry workflow state plus normalized labels; absent
+// rows carry no fabricated issue facts. Labels let the SPEC §6.4 required_labels
+// "continue" gate observe label removal on already-claimed issues beyond the
+// active-listing page (#682). Producing clients lowercase/trim each label.
 type IssueState struct {
-	State  string
-	Labels []string
+	Outcome IssueStateOutcome
+	State   string
+	Labels  []string
 	// BlockedBy carries the refreshed blocker dependencies so dispatch-time
 	// revalidation can re-apply the SPEC §8.2 Todo blocker gate, matching
 	// upstream retry_candidate_issue? (orchestrator.ex:1602-1604), which
@@ -57,6 +77,44 @@ type IssueState struct {
 type IssueRef struct {
 	ID         string
 	Identifier string
+}
+
+// UnknownIssueStatesByRefs totalizes refs into one zero-safe Unknown row per
+// unique non-empty ID while preserving the first ref for adapter lookup.
+func UnknownIssueStatesByRefs(issueRefs []IssueRef) (map[string]IssueState, []IssueRef) {
+	states := make(map[string]IssueState, len(issueRefs))
+	refs := make([]IssueRef, 0, len(issueRefs))
+	for _, ref := range issueRefs {
+		ref.ID = strings.TrimSpace(ref.ID)
+		if ref.ID == "" {
+			continue
+		}
+		if _, exists := states[ref.ID]; exists {
+			continue
+		}
+		states[ref.ID] = IssueState{Outcome: IssueStateOutcomeUnknown}
+		refs = append(refs, ref)
+	}
+	return states, refs
+}
+
+func unknownIssueStatesByIDs(issueIDs []string) (map[string]IssueState, []string) {
+	states, refs := UnknownIssueStatesByRefs(IssueRefsFromIDs(issueIDs))
+	ids := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ids = append(ids, ref.ID)
+	}
+	return states, ids
+}
+
+// ShouldStopIssueStateRefresh reports whether an adapter must leave all later
+// refs Unknown because the shared request budget or caller context is spent.
+// Nested tracker reads used to hydrate a listing or refresh obey the same stop
+// rule so a rate limit or spent context cannot trigger more downstream I/O.
+func ShouldStopIssueStateRefresh(ctx context.Context, err error) bool {
+	return errors.Is(err, ErrRateLimited) || errors.Is(err, ErrJSONResponseTooLarge) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
 func IssueRefsFromIDs(issueIDs []string) []IssueRef {
@@ -107,8 +165,11 @@ func TimeString(t time.Time) string {
 }
 
 // IssueStateRefresher fetches the current tracker state for explicit issue IDs.
-// Poll-tick reconciliation uses this to refresh already-running issues without
-// relying on candidate pagination side effects.
+// The returned map has one row per unique non-empty requested ID. Missing rows
+// and the zero value mean Unknown; Absent is reserved for authoritative tracker
+// evidence. A non-nil error may accompany usable Current or Absent rows, while
+// failed or unattempted refs remain Unknown. Poll-tick reconciliation uses this
+// without relying on candidate pagination side effects.
 type IssueStateRefresher interface {
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error)
 }

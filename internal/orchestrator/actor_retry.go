@@ -385,9 +385,10 @@ func (r *retryFireOp) fireWithCandidateFetch(entry *RetryEntry, lister ActiveIss
 // classification for a fired failure-retry whose issue is absent from the active
 // candidate set, recovering upstream handle_retry_issue_lookup's terminal branch
 // that the active-only fetch collapses into plain absence (#341). It returns
-// (true, state) only when a resolver is wired and reports a terminal state;
-// every other outcome (no resolver, fetch error, empty/non-terminal state)
-// returns (false, "") so the caller keeps the release-only default. Runs
+// (true, state) only when a resolver is wired and reports a Current terminal
+// state; every other outcome (no resolver, fetch error, Unknown, Absent,
+// empty/non-terminal state) returns (false, "") so the caller keeps the
+// release-only default. Runs
 // off-actor; the lookup gets its OWN timeout budget rather than reusing the
 // already-consumed candidate-fetch ctx, because a slow-but-successful fetch near
 // the deadline would otherwise fail this call immediately with
@@ -408,7 +409,11 @@ func resolveRetryTerminalState(o *Orchestrator, id IssueID, identifier string) (
 	if rerr != nil {
 		return false, ""
 	}
-	s := strings.TrimSpace(statesByID[string(id)].State)
+	state := statesByID[string(id)]
+	if state.Outcome != tracker.IssueStateOutcomeCurrent {
+		return false, ""
+	}
+	s := strings.TrimSpace(state.State)
 	if s == "" || !isTerminalTrackerState(s, terminalStates) {
 		return false, ""
 	}

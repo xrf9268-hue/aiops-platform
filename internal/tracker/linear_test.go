@@ -60,6 +60,28 @@ func TestLinearClient_SatisfiesIssueStateRefresher(t *testing.T) {
 	var _ IssueStateRefresher = (*LinearClient)(nil)
 }
 
+func TestIssueStateOutcomeZeroSafe(t *testing.T) {
+	var zero IssueState
+	if zero.Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("zero IssueState outcome = %v; want unknown", zero.Outcome)
+	}
+
+	current := IssueState{
+		Outcome:   IssueStateOutcomeCurrent,
+		State:     "Todo",
+		Labels:    []string{"ready"},
+		BlockedBy: []BlockerRef{{ID: "blocker-1", State: "In Progress"}},
+	}
+	if current.Outcome != IssueStateOutcomeCurrent || current.State != "Todo" || len(current.Labels) != 1 || len(current.BlockedBy) != 1 {
+		t.Fatalf("current IssueState = %#v; want outcome and refreshed facts preserved", current)
+	}
+
+	absent := IssueState{Outcome: IssueStateOutcomeAbsent}
+	if absent.Outcome != IssueStateOutcomeAbsent || absent.State != "" || absent.Labels != nil || absent.BlockedBy != nil {
+		t.Fatalf("absent IssueState = %#v; want outcome without fabricated facts", absent)
+	}
+}
+
 func TestListIssuesByStatesRequiresProjectSlugAndUsesProjectFilter(t *testing.T) {
 	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -251,7 +273,7 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 		mu.Lock()
 		recorded = fakeLinearRequest{OpName: opNameFromQuery(payload.Query), Query: payload.Query, Variables: payload.Variables}
 		mu.Unlock()
-		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Aiops-Ready"}]}},{"id":"issue-2","state":{"name":"Done"}}]}}}`)
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[{"name":"Aiops-Ready"}]}},{"id":"issue-2","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
 	}))
 	defer httpSrv.Close()
 	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
@@ -287,6 +309,269 @@ func TestFetchIssueStatesByIDsUsesIDListQuery(t *testing.T) {
 	}
 	if states["issue-2"].BlockedBy != nil {
 		t.Fatalf("FetchIssueStatesByIDs(issue-2).BlockedBy = %#v; want nil for non-Todo state", states["issue-2"].BlockedBy)
+	}
+}
+
+func TestFetchIssueStatesByIDsOutcomeCleanMissingIsAbsent(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2", "issue-1", " "})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs() error = %v; want nil", err)
+	}
+	if got := states["issue-1"]; got.Outcome != IssueStateOutcomeCurrent || got.State != "Done" {
+		t.Fatalf("issue-1 = %#v; want current Done", got)
+	}
+	if got := states["issue-2"]; got.Outcome != IssueStateOutcomeAbsent || got.State != "" {
+		t.Fatalf("issue-2 = %#v; want confirmed absent without state", got)
+	}
+	if len(states) != 2 {
+		t.Fatalf("states = %#v; want one row per unique non-empty id", states)
+	}
+}
+
+func TestFetchIssueStatesByIDsPartialGraphQLErrorLeavesChunkUnknown(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"}}]}},"errors":[{"message":"partial"}]}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
+	if !errors.Is(err, ErrLinearGraphQLErrors) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want GraphQL error", err)
+	}
+	for _, id := range []string{"issue-1", "issue-2"} {
+		if got := states[id]; got.Outcome != IssueStateOutcomeUnknown {
+			t.Fatalf("%s = %#v; want unknown for the failed GraphQL chunk", id, got)
+		}
+	}
+}
+
+func TestFetchIssueStatesByIDsPartialPayloadLeavesChunkUnknown(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "missing data", payload: `{}`},
+		{name: "missing issues", payload: `{"data":{}}`},
+		{name: "missing nodes", payload: `{"data":{"issues":{}}}`},
+		{name: "node missing id", payload: `{"data":{"issues":{"nodes":[{"state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`},
+		{name: "node missing state", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","labels":{"nodes":[]}}]}}}`},
+		{name: "node missing labels", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"}}]}}}`},
+		{name: "label missing name", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[{}]}}]}}}`},
+		{name: "label null name", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[{"name":null}]}}]}}}`},
+		{name: "label empty name", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[{"name":"  "}]}}]}}}`},
+		{name: "duplicate returned id", payload: `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[]}},{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.payload)
+			}))
+			defer httpSrv.Close()
+			client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+			states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2"})
+			if !errors.Is(err, ErrLinearUnknownPayload) || !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+				t.Fatalf("FetchIssueStatesByIDs error = %v; want typed incomplete Linear payload", err)
+			}
+			if states["issue-1"].Outcome != IssueStateOutcomeUnknown || states["issue-2"].Outcome != IssueStateOutcomeUnknown {
+				t.Fatalf("states = %#v; want whole incomplete chunk unknown", states)
+			}
+		})
+	}
+}
+
+func TestFetchIssueStatesByIDsExplicitEmptyNodesMeansAbsent(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs() error = %v; want nil", err)
+	}
+	if got := states["issue-1"].Outcome; got != IssueStateOutcomeAbsent {
+		t.Fatalf("outcome = %v; want absent for explicit empty nodes", got)
+	}
+}
+
+func TestFetchIssueStatesByIDsIncompleteChunkPreservesLaterCurrent(t *testing.T) {
+	requests := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = io.WriteString(w, `{"data":{"issues":{}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-51","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, linearIssuePageSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("issue-%d", i+1)
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want typed incomplete response", err)
+	}
+	if states["issue-1"].Outcome != IssueStateOutcomeUnknown || states["issue-51"].Outcome != IssueStateOutcomeCurrent {
+		t.Fatalf("states = %#v; want incomplete first chunk unknown and later clean row current", states)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d; want later independent chunk fetched", requests)
+	}
+}
+
+func TestFetchIssueStatesByIDsRateLimitStopsLaterChunks(t *testing.T) {
+	requests := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, linearIssuePageSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("issue-%d", i+1)
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want typed rate limit", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d; want stop after first rate limit", requests)
+	}
+	if got := states["issue-51"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("trailing outcome = %v; want unknown without second request", got)
+	}
+}
+
+func TestFetchIssueStatesByIDsGraphQLRateLimitStopsLaterChunks(t *testing.T) {
+	requests := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"errors":[{"message":"rate limit exceeded","extensions":{"code":"RATELIMITED"}}]}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, linearIssuePageSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("issue-%d", i+1)
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want typed GraphQL rate limit", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d; want stop after first GraphQL rate limit", requests)
+	}
+	if states["issue-1"].Outcome != IssueStateOutcomeUnknown || states["issue-51"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want all rows unknown", states)
+	}
+}
+
+func TestFetchIssueStatesByIDsBadRequestProbeFailureStopsLaterChunks(t *testing.T) {
+	requests := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", maxJSONResponseBytes+1))
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, linearIssuePageSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("issue-%d", i+1)
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if !errors.Is(err, ErrJSONResponseTooLarge) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want oversized 400 probe error", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d; want stop after failed 400 response probe", requests)
+	}
+	if states["issue-1"].Outcome != IssueStateOutcomeUnknown || states["issue-51"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want all rows unknown", states)
+	}
+}
+
+func TestFetchIssueStatesByIDsNonRateLimitBadRequestRemainsAPIStatus(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"errors":[{"message":"bad request","extensions":{"code":"BAD_USER_INPUT"}}]}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	_, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
+	if !errors.Is(err, ErrLinearAPIStatus) || errors.Is(err, ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want generic API status, not rate limit", err)
+	}
+}
+
+func TestFetchIssueStatesByIDsPartialFailedChunkPreservesEarlierOutcomes(t *testing.T) {
+	requests := 0
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Done"},"labels":{"nodes":[]}}]}}}`)
+			return
+		}
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+	ids := make([]string, linearIssuePageSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("issue-%d", i+1)
+	}
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), ids)
+	if !errors.Is(err, ErrLinearAPIStatus) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want API status error", err)
+	}
+	if got := states["issue-1"].Outcome; got != IssueStateOutcomeCurrent {
+		t.Fatalf("issue-1 outcome = %v; want current from clean earlier chunk", got)
+	}
+	if got := states["issue-2"].Outcome; got != IssueStateOutcomeAbsent {
+		t.Fatalf("issue-2 outcome = %v; want absent from clean earlier chunk", got)
+	}
+	if got := states["issue-51"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("issue-51 outcome = %v; want unknown from failed chunk", got)
+	}
+}
+
+func TestFetchIssueStatesByIDsUnknownOnConfigurationFailure(t *testing.T) {
+	client := &LinearClient{}
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1", "issue-2", "issue-1", ""})
+	if !errors.Is(err, ErrMissingTrackerAPIKey) {
+		t.Fatalf("FetchIssueStatesByIDs error = %v; want missing API key", err)
+	}
+	if len(states) != 2 || states["issue-1"].Outcome != IssueStateOutcomeUnknown || states["issue-2"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want explicit unknown rows for configuration failure", states)
 	}
 }
 
@@ -372,7 +657,7 @@ func linearIssueStatesJSON(ids []any) string {
 		}
 		b.WriteString(`{"id":"`)
 		b.WriteString(id.(string))
-		b.WriteString(`","state":{"name":"Todo"}}`)
+		b.WriteString(`","state":{"name":"Todo"},"labels":{"nodes":[]}}`)
 	}
 	b.WriteString(`]}}}`)
 	return b.String()
@@ -1149,5 +1434,32 @@ func TestFetchIssueStatesByIDsSurvivesBlockerResolutionFailure(t *testing.T) {
 	}
 	if len(got.BlockedBy) != 1 || got.BlockedBy[0].State != "" {
 		t.Fatalf("states[issue-1].BlockedBy = %#v; want one empty-state placeholder (fail closed) after blocker resolution failure", got.BlockedBy)
+	}
+}
+
+func TestFetchIssueStatesByIDsFailsClosedOnIncompleteBlockerPayload(t *testing.T) {
+	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
+			Query string `json:"query"`
+		}
+		_ = json.Unmarshal(body, &payload)
+		w.Header().Set("Content-Type", "application/json")
+		if opNameFromQuery(payload.Query) == "ListIssuesInverseRelations" {
+			_, _ = io.WriteString(w, `{"data":{"issues":{}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"issues":{"nodes":[{"id":"issue-1","state":{"name":"Todo"},"labels":{"nodes":[]}}]}}}`)
+	}))
+	defer httpSrv.Close()
+	client := newTestClient(t, httpSrv, workflow.TrackerConfig{ProjectSlug: "aiops"})
+
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"issue-1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs = error %v; want state refresh to survive incomplete blocker payload", err)
+	}
+	got := states["issue-1"]
+	if got.Outcome != IssueStateOutcomeCurrent || len(got.BlockedBy) != 1 || got.BlockedBy[0].State != "" {
+		t.Fatalf("states[issue-1] = %#v; want current state with fail-closed blocker placeholder", got)
 	}
 }

@@ -36,6 +36,15 @@ func githubLoopServer(t *testing.T, listBody, refreshBody func() any) *httptest.
 			_ = json.NewEncoder(w).Encode(listBody())
 		case "/repos/acme/api/issues/159":
 			_ = json.NewEncoder(w).Encode(refreshBody())
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id": "I_159", "number": 159,
+					"blockedBy": map[string]any{
+						"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false},
+					},
+				},
+			}}})
 		default:
 			t.Errorf("unexpected GitHub request path %q", r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -45,7 +54,7 @@ func githubLoopServer(t *testing.T, listBody, refreshBody func() any) *httptest.
 
 func githubIssueJSON(label string) map[string]any {
 	return map[string]any{
-		"id": 159, "number": 159, "title": "loop integration", "state": "open",
+		"id": 159, "node_id": "I_159", "number": 159, "title": "loop integration", "body": "", "state": "open",
 		"created_at": "2026-05-20T01:02:03Z", "updated_at": "2026-05-20T02:03:04Z",
 		"labels": []map[string]any{{"name": label}},
 	}

@@ -2,6 +2,8 @@ package gitea
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -15,82 +17,152 @@ func (c *TrackerClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 	return c.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(issueIDs))
 }
 
+// FetchIssueStatesByRefs classifies every non-empty requested ID. A 404 is
+// confirmed absence only when this client previously cached the ID-to-number
+// mapping for the current repository; fallback-only not-found responses stay
+// unknown because the human identifier alone does not prove repository scope.
 func (c *TrackerClient) FetchIssueStatesByRefs(ctx context.Context, issueRefs []tracker.IssueRef) (map[string]tracker.IssueState, error) { //nolint:gocognit // baseline (#521)
+	states, refs := tracker.UnknownIssueStatesByRefs(issueRefs)
 	if c.BaseURL == "" || c.Token == "" {
-		return nil, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
+		return states, fmt.Errorf("GITEA_BASE_URL and Gitea tracker api_key are required")
 	}
 	if c.Owner == "" || c.Repo == "" {
-		return nil, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
+		return states, fmt.Errorf("repo.owner and repo.name are required for Gitea tracker polling")
 	}
-	if len(issueRefs) == 0 {
-		return map[string]tracker.IssueState{}, nil
+	if len(refs) == 0 {
+		return states, nil
 	}
 	// Install a per-refresh blocker cache so buildBlockedBy fetches each
 	// `Depends on #N` blocker at most once across the batch, mirroring the
 	// listing path (#677).
 	ctx = withBlockerCache(ctx)
-	states := make(map[string]tracker.IssueState, len(issueRefs))
-	seen := map[string]struct{}{}
-	for _, issueRef := range issueRefs {
-		issueID := strings.TrimSpace(issueRef.ID)
-		if issueID == "" {
-			continue
-		}
-		if _, ok := seen[issueID]; ok {
-			continue
-		}
-		seen[issueID] = struct{}{}
-		issueNumber, ok := c.issueNumberForStateRefresh(issueRef)
+	var refreshErrs []error
+	for _, issueRef := range refs {
+		issueID := issueRef.ID
+		issueNumber, ok, cached := c.issueNumberForStateRefresh(issueRef)
 		if !ok {
 			c.logStateRefreshCacheMiss(issueRef)
 			continue
 		}
-		issue, found, err := c.getIssueByNumber(ctx, issueNumber)
+		if !giteaIssueRefMatchesNumber(issueRef, issueNumber) {
+			continue
+		}
+		issue, found, bodyPresent, err := c.getIssueStateByNumber(ctx, issueNumber)
 		if err != nil {
-			return nil, err
+			refreshErrs = append(refreshErrs, err)
+			if tracker.ShouldStopIssueStateRefresh(ctx, err) {
+				break
+			}
+			continue
 		}
 		if !found {
+			if cached {
+				states[issueID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeAbsent}
+			}
+			continue
+		}
+		if issue.Number != issueNumber {
 			continue
 		}
 		if !giteaIssueMatchesRef(issueID, issueRef.Identifier, issue) {
-			c.cacheIssueNumber(issue)
 			continue
 		}
 		c.cacheIssueNumber(issue)
 		state, diagnostics := IssueStateFromLabels(issue.Labels, DefaultStateLabelMappings())
 		c.logDiagnostics(issue, diagnostics)
-		if state == "" {
+		if giteaTodoWorkflowState(state) && !bodyPresent {
+			refreshErrs = append(refreshErrs, fmt.Errorf("%w: Gitea Todo issue response missing body", tracker.ErrIssueStateRefreshIncomplete))
 			continue
 		}
-		// Carry the full label set (SPEC §6.4 required_labels gate) alongside the
-		// derived state; extractGiteaLabels lowercases/trims to match the gate.
-		// BlockedBy is re-derived from the refreshed body so dispatch-time
-		// revalidation can re-apply the SPEC §8.2 Todo blocker gate (#750);
-		// the body is authoritative for this adapter, so an absence of
-		// `Depends on #N` references is a positive non-nil "no blockers" and
-		// transiently-unresolvable references fail closed as open
-		// placeholders inside buildBlockedBy.
-		blockedBy := c.buildBlockedBy(ctx, issue.Body)
-		if blockedBy == nil {
-			blockedBy = []tracker.BlockerRef{}
+		if state == "" {
+			if stateDiagnosticsContain(diagnostics, "unknown_aiops_label") {
+				continue
+			}
+			// A matching issue with no aiops/* workflow label is authoritatively
+			// outside this adapter's workflow and must release continuations.
+			states[issueID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeAbsent}
+			continue
 		}
-		states[issueID] = tracker.IssueState{State: state, Labels: extractGiteaLabels(issue.Labels), BlockedBy: blockedBy}
+		refreshed, err := c.buildRefreshedIssueState(ctx, issue, state)
+		if err != nil {
+			refreshErrs = append(refreshErrs, err)
+			if tracker.ShouldStopIssueStateRefresh(ctx, err) {
+				break
+			}
+			continue
+		}
+		states[issueID] = refreshed
 	}
-	return states, nil
+	return states, errors.Join(refreshErrs...)
+}
+
+// buildRefreshedIssueState carries the full normalized label set onto an
+// authoritative Current row. Only Todo needs blocker knowledge for the dispatch
+// gate; other states avoid irrelevant dependency I/O and keep BlockedBy nil.
+// For Todo, the issue body is authoritative, so no `Depends on #N` references
+// becomes a positive non-nil "no blockers" result; transient resolution
+// failures become open placeholders inside buildBlockedBy.
+func (c *TrackerClient) buildRefreshedIssueState(ctx context.Context, issue Issue, state string) (tracker.IssueState, error) {
+	refreshed := tracker.IssueState{
+		Outcome: tracker.IssueStateOutcomeCurrent,
+		State:   state,
+		Labels:  extractGiteaLabels(issue.Labels),
+	}
+	if !giteaTodoWorkflowState(state) {
+		return refreshed, nil
+	}
+	blockedBy, err := c.buildBlockedBy(ctx, issue.Body, blockerLookupHaltRefresh)
+	if err != nil {
+		return tracker.IssueState{}, err
+	}
+	if blockedBy == nil {
+		blockedBy = []tracker.BlockerRef{}
+	}
+	refreshed.BlockedBy = blockedBy
+	return refreshed, nil
+}
+
+func giteaTodoWorkflowState(state string) bool {
+	return strings.EqualFold(strings.TrimSpace(state), "Todo")
+}
+
+func stateDiagnosticsContain(diagnostics []StateDiagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func giteaIssueMatchesRef(issueID, identifier string, issue Issue) bool {
 	issueID = strings.TrimSpace(issueID)
-	if issueID == giteaIssueID(issue) {
-		return true
-	}
 	if !giteaIdentifierMatchesIssueNumber(identifier, issue.Number) {
 		return false
+	}
+	if issueID == giteaIssueID(issue) {
+		return true
 	}
 	if strings.HasPrefix(issueID, "#") {
 		return issueID == fmt.Sprintf("#%d", issue.Number)
 	}
 	return issueID == giteaIssueNumberID(issue.Number)
+}
+
+func giteaIssueRefMatchesNumber(ref tracker.IssueRef, issueNumber int) bool {
+	identifier := strings.TrimSpace(ref.Identifier)
+	if identifier != "" {
+		got, ok := giteaIssueNumberFromIdentifier(identifier)
+		if !ok || got != issueNumber {
+			return false
+		}
+	}
+	id := strings.TrimSpace(ref.ID)
+	if !strings.HasPrefix(id, "#") {
+		return true
+	}
+	got, ok := giteaIssueNumberFromIdentifier(id)
+	return ok && got == issueNumber
 }
 
 func giteaIdentifierMatchesIssueNumber(identifier string, issueNumber int) bool {
@@ -107,11 +179,12 @@ func giteaIssueNumberID(issueNumber int) string {
 	return strconv.Itoa(issueNumber)
 }
 
-func (c *TrackerClient) issueNumberForStateRefresh(ref tracker.IssueRef) (int, bool) {
+func (c *TrackerClient) issueNumberForStateRefresh(ref tracker.IssueRef) (int, bool, bool) {
 	if issueNumber, ok := c.cachedIssueNumber(ref.ID); ok {
-		return issueNumber, true
+		return issueNumber, true, true
 	}
-	return IssueNumberFromRef(ref.ID, ref.Identifier)
+	issueNumber, ok := IssueNumberFromRef(ref.ID, ref.Identifier)
+	return issueNumber, ok, false
 }
 
 // IssueNumberFromRef derives a Gitea issue number from a tracker issue
@@ -149,32 +222,72 @@ func giteaIssueNumberFromIdentifier(identifier string) (int, bool) {
 }
 
 func (c *TrackerClient) getIssueByNumber(ctx context.Context, issueNumber int) (Issue, bool, error) {
+	issue, found, _, err := c.getIssueByNumberWithMetadata(ctx, issueNumber)
+	return issue, found, err
+}
+
+func (c *TrackerClient) getIssueStateByNumber(ctx context.Context, issueNumber int) (Issue, bool, bool, error) {
+	return c.getIssueByNumberWithMetadata(ctx, issueNumber)
+}
+
+func (c *TrackerClient) getIssueByNumberWithMetadata(ctx context.Context, issueNumber int) (Issue, bool, bool, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/issues/%d", c.BaseURL, url.PathEscape(c.Owner), url.PathEscape(c.Repo), issueNumber)
 	reqCtx, cancel := context.WithTimeout(ctx, c.requestTimeout())
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return Issue{}, false, err
+		return Issue{}, false, false, err
 	}
 	req.Header.Set("Authorization", "token "+c.Token)
 	client := c.httpClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return Issue{}, false, err
+		return Issue{}, false, false, err
 	}
 	defer tracker.DrainAndClose(resp)
 	if resp.StatusCode == http.StatusNotFound {
-		return Issue{}, false, nil
+		return Issue{}, false, false, nil
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return Issue{}, false, tracker.NewRateLimitedError(fmt.Sprintf("get Gitea issue #%d", issueNumber), resp.StatusCode, resp.Header)
+		return Issue{}, false, false, tracker.NewRateLimitedError(fmt.Sprintf("get Gitea issue #%d", issueNumber), resp.StatusCode, resp.Header)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Issue{}, false, fmt.Errorf("get Gitea issue #%d failed: status %d", issueNumber, resp.StatusCode)
+		return Issue{}, false, false, fmt.Errorf("get Gitea issue #%d failed: status %d", issueNumber, resp.StatusCode)
 	}
-	var issue Issue
-	if err := tracker.DecodeJSONResponse(resp, &issue); err != nil {
+	issue, bodyPresent, err := decodeGiteaIssueStateResponse(resp)
+	if err != nil {
+		return Issue{}, false, false, err
+	}
+	return issue, true, bodyPresent, nil
+}
+
+func decodeGiteaIssueStateResponse(resp *http.Response) (Issue, bool, error) {
+	var raw json.RawMessage
+	if err := tracker.DecodeJSONResponse(resp, &raw); err != nil {
 		return Issue{}, false, fmt.Errorf("decode Gitea issue response: %w", err)
 	}
-	return issue, true, nil
+	var presence struct {
+		ID     *int64  `json:"id"`
+		Number *int    `json:"number"`
+		Body   *string `json:"body"`
+		Labels *[]struct {
+			Name *string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(raw, &presence); err != nil {
+		return Issue{}, false, fmt.Errorf("decode Gitea issue response: %w", err)
+	}
+	if presence.ID == nil || *presence.ID <= 0 || presence.Number == nil || *presence.Number <= 0 || presence.Labels == nil {
+		return Issue{}, false, fmt.Errorf("%w: Gitea issue response has incomplete id, number, or labels", tracker.ErrIssueStateRefreshIncomplete)
+	}
+	for _, label := range *presence.Labels {
+		if label.Name == nil || strings.TrimSpace(*label.Name) == "" {
+			return Issue{}, false, fmt.Errorf("%w: Gitea issue label missing non-empty name", tracker.ErrIssueStateRefreshIncomplete)
+		}
+	}
+	var issue Issue
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return Issue{}, false, fmt.Errorf("decode Gitea issue response: %w", err)
+	}
+	return issue, presence.Body != nil, nil
 }

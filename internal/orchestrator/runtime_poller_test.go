@@ -16,10 +16,11 @@ import (
 )
 
 type stubRefresher struct {
-	calls   [][]string
-	states  map[string]string
-	labels  map[string][]string
-	fetchEr error
+	calls       [][]string
+	states      map[string]string
+	labels      map[string][]string
+	issueStates map[string]tracker.IssueState
+	fetchEr     error
 }
 
 func (s *stubRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]tracker.IssueState, error) {
@@ -29,8 +30,12 @@ func (s *stubRefresher) FetchIssueStatesByIDs(_ context.Context, ids []string) (
 	}
 	out := map[string]tracker.IssueState{}
 	for _, id := range ids {
+		if state, ok := s.issueStates[id]; ok {
+			out[id] = state
+			continue
+		}
 		if state, ok := s.states[id]; ok {
-			out[id] = tracker.IssueState{State: state, Labels: s.labels[id]}
+			out[id] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state, Labels: s.labels[id]}
 		}
 	}
 	return out, nil
@@ -50,7 +55,7 @@ func (s *stubRefAwareRefresher) FetchIssueStatesByRefs(_ context.Context, refs [
 	out := map[string]tracker.IssueState{}
 	for _, ref := range refs {
 		if state, ok := s.states[ref.ID]; ok {
-			out[ref.ID] = tracker.IssueState{State: state}
+			out[ref.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state}
 		}
 	}
 	return out, nil
@@ -76,7 +81,7 @@ func (s *stubNoBlockerRefAwareRefresher) FetchIssueStatesWithoutBlockersByRefs(_
 	out := map[string]tracker.IssueState{}
 	for _, ref := range refs {
 		if state, ok := s.states[ref.ID]; ok {
-			out[ref.ID] = tracker.IssueState{State: state}
+			out[ref.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state}
 		}
 	}
 	return out, nil
@@ -159,6 +164,45 @@ func TestRuntimeDispatcherConfigForSnapshotBuildsRefresherClosure(t *testing.T) 
 			t.Fatalf("err = %v, want wrapped tracker boom", err)
 		}
 	})
+}
+
+func TestRuntimeDispatcherCurrentIssueRefreshRequiresCurrentOutcome(t *testing.T) {
+	d := &RuntimeDispatcher{baseConfig: worker.Config{}}
+	snap := WorkflowSnapshot{Workflow: &workflow.Workflow{Config: workflow.Config{
+		Tracker: workflow.TrackerConfig{ActiveStates: []string{"In Progress"}, TerminalStates: []string{"Done"}},
+	}}}
+	tests := []struct {
+		name   string
+		states map[string]tracker.IssueState
+	}{
+		{
+			name: "state-bearing unknown",
+			states: map[string]tracker.IssueState{
+				"issue-1": {Outcome: tracker.IssueStateOutcomeUnknown, State: "In Progress"},
+			},
+		},
+		{
+			name: "state-bearing absent",
+			states: map[string]tracker.IssueState{
+				"issue-1": {Outcome: tracker.IssueStateOutcomeAbsent, State: "Done"},
+			},
+		},
+		{name: "missing row", states: map[string]tracker.IssueState{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d.SetIssueStateRefresher(&stubRefresher{issueStates: tt.states})
+			cfg := d.configForSnapshot(snap)
+			fn := cfg.IssueStateRefresher(task.Task{ID: "issue-1"}, snap.Workflow.Config)
+			got, err := fn(context.Background())
+			if err != nil {
+				t.Fatalf("current issue refresh error = %v; want nil", err)
+			}
+			if got.Found || !got.Active || got.Terminal || got.State != "" {
+				t.Fatalf("current issue snapshot = %+v; want Found=false Active=true fallback", got)
+			}
+		})
+	}
 }
 
 func TestRuntimeDispatcherIssueStateRefresherUsesNoBlockerRefreshWhenAvailable(t *testing.T) {

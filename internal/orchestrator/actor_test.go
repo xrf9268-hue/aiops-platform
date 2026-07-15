@@ -2682,6 +2682,25 @@ type flakyStateRefresher struct {
 	calls  int
 }
 
+type explicitOutcomeStateRefresher struct {
+	states map[string]tracker.IssueState
+	err    error
+}
+
+func (r *explicitOutcomeStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
+	return r.FetchIssueStatesByRefs(ctx, tracker.IssueRefsFromIDs(ids))
+}
+
+func (r *explicitOutcomeStateRefresher) FetchIssueStatesByRefs(_ context.Context, refs []tracker.IssueRef) (map[string]tracker.IssueState, error) {
+	out := make(map[string]tracker.IssueState, len(refs))
+	for _, ref := range refs {
+		if state, ok := r.states[ref.ID]; ok {
+			out[ref.ID] = state
+		}
+	}
+	return out, r.err
+}
+
 func (f *flakyStateRefresher) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]tracker.IssueState, error) {
 	f.calls++
 	if f.calls == 1 {
@@ -2698,9 +2717,102 @@ func (r *redispatchDuringCleanupRefresher) FetchIssueStatesByRefs(ctx context.Co
 	r.attempted <- r.orch.RequestDispatch(ctx, r.issue, nil)
 	out := make(map[string]tracker.IssueState, len(refs))
 	for _, ref := range refs {
-		out[ref.ID] = tracker.IssueState{State: r.state}
+		out[ref.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: r.state}
 	}
 	return out, nil
+}
+
+func TestReconcileWorkspaceCleanupRecheckUsesExplicitOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		states      map[string]tracker.IssueState
+		wantRequest RetryKind
+		wantCleanup bool
+		wantRetry   bool
+	}{
+		{
+			name: "current terminal cleans",
+			states: map[string]tracker.IssueState{
+				"ENG-OUTCOME": {Outcome: tracker.IssueStateOutcomeCurrent, State: "Done"},
+			},
+			wantCleanup: true,
+		},
+		{
+			name: "current nonterminal resumes continuation",
+			states: map[string]tracker.IssueState{
+				"ENG-OUTCOME": {Outcome: tracker.IssueStateOutcomeCurrent, State: "In Progress"},
+			},
+			wantRequest: RetryKindContinuation,
+			wantRetry:   true,
+		},
+		{
+			name: "state-bearing unknown retries recheck",
+			states: map[string]tracker.IssueState{
+				"ENG-OUTCOME": {Outcome: tracker.IssueStateOutcomeUnknown, State: "Done"},
+			},
+			wantRequest: RetryKindFailure,
+		},
+		{
+			name: "terminal-looking invalid outcome retries recheck",
+			states: map[string]tracker.IssueState{
+				"ENG-OUTCOME": {Outcome: tracker.IssueStateOutcome(99), State: "Done"},
+			},
+			wantRequest: RetryKindFailure,
+		},
+		{
+			name:        "missing row retries recheck",
+			states:      map[string]tracker.IssueState{},
+			wantRequest: RetryKindFailure,
+		},
+		{
+			name: "state-bearing absent stops without cleanup or continuation",
+			states: map[string]tracker.IssueState{
+				"ENG-OUTCOME": {Outcome: tracker.IssueStateOutcomeAbsent, State: "Done"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheduler := &recordingScheduler{delay: time.Hour}
+			cleaner := &recordingWorkspaceCleaner{}
+			o, cancel := startActor(t, Deps{
+				Dispatcher: &fakeDispatcher{}, Scheduler: scheduler, WorkspaceCleaner: cleaner,
+			})
+			defer cancel()
+			o.SetRetryTerminalStateResolver(&explicitOutcomeStateRefresher{states: tt.states}, []string{"Done"})
+
+			issue := tracker.Issue{ID: "ENG-OUTCOME", Identifier: "ENG-OUTCOME", State: "In Progress"}
+			workspace := Workspace{Path: "/var/aiops/workspaces/acme/repo/linear_issue/ENG-OUTCOME", Root: testWorkspaceRoot}
+			continuation := &continuationAfterSkippedCleanup{
+				issue: issue, identifier: issue.Identifier, attempt: 2, continuationTurnCount: 3, workspace: workspace,
+			}
+			o.runReconciledWorkspaceCleanup(ReconciledWorkspace{
+				IssueID: IssueID(issue.ID), Identifier: issue.Identifier, Path: workspace.Path, Root: workspace.Root, State: "Done", Reason: "terminal",
+			}, continuation)
+
+			if tt.wantRequest != "" {
+				waitFor(t, func() bool { return len(scheduler.snapshotRequests()) > 0 }, time.Second)
+			}
+			requests := scheduler.snapshotRequests()
+			if tt.wantRequest == "" {
+				if len(requests) != 0 {
+					t.Fatalf("scheduler requests = %+v; want none", requests)
+				}
+			} else if len(requests) != 1 || requests[0].Kind != tt.wantRequest {
+				t.Fatalf("scheduler requests = %+v; want one %s", requests, tt.wantRequest)
+			}
+			if got := len(cleaner.snapshot()); (got == 1) != tt.wantCleanup {
+				t.Fatalf("workspace cleanup count = %d; want cleanup=%v", got, tt.wantCleanup)
+			}
+			view, err := o.Snapshot(context.Background())
+			if err != nil {
+				t.Fatalf("Snapshot() error = %v; want nil", err)
+			}
+			if got := len(view.Retrying) == 1; got != tt.wantRetry {
+				t.Fatalf("retry entry present = %v; want %v (view=%+v)", got, tt.wantRetry, view.Retrying)
+			}
+		})
+	}
 }
 
 func TestReconcileWorkspaceCleanupRechecksStateUnderReservation(t *testing.T) {
@@ -4220,6 +4332,67 @@ func TestRetryFire_ReleasesClaimWhenIssueAbsentFromCandidates(t *testing.T) {
 	}
 }
 
+func TestRetryFire_CandidateMissReleasesEveryRetryOwnershipKind(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    RetryKind
+		attempt int
+		runErr  string
+	}{
+		{name: "failure", kind: RetryKindFailure, attempt: 2, runErr: "transient"},
+		{name: "quota backoff", kind: RetryKindQuotaBackoff, runErr: "quota backoff"},
+		{name: "capacity-deferred failure", kind: RetryKindFailure, attempt: 3, runErr: "no available orchestrator slots"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			disp := &fakeDispatcher{}
+			lister := &fakeCandidateLister{}
+			o, cancel := startActor(t, Deps{
+				Dispatcher:      disp,
+				Scheduler:       &sequenceScheduler{delays: []time.Duration{time.Hour}},
+				CandidateLister: lister,
+			})
+			defer cancel()
+
+			issue := tracker.Issue{ID: "ENG-MISS", Identifier: "ENG-MISS", State: "Todo"}
+			req := RetryRequest{Kind: tt.kind, Attempt: tt.attempt}
+			if tt.kind == RetryKindQuotaBackoff {
+				req.DelayOverride = time.Hour
+			}
+			if err := o.scheduleRetry(context.Background(), issue, issue.Identifier, req, tt.attempt, tt.runErr, Workspace{}, 0); err != nil {
+				t.Fatalf("scheduleRetry(%s) error = %v; want nil", tt.kind, err)
+			}
+			waitFor(t, func() bool {
+				view, err := o.Snapshot(context.Background())
+				return err == nil && len(view.Retrying) == 1
+			}, time.Second)
+			if err := o.submit(context.Background(), &retryFireOp{
+				o: o, id: IssueID(issue.ID), issue: issue, attempt: tt.attempt, kind: tt.kind,
+			}); err != nil {
+				t.Fatalf("submit retry fire for %s error = %v; want nil", tt.kind, err)
+			}
+
+			waitFor(t, func() bool {
+				view, err := o.Snapshot(context.Background())
+				return err == nil && len(view.Retrying) == 0
+			}, 2*time.Second)
+			var claimed bool
+			o.WithStateForTest(func(st *OrchestratorState) {
+				claimed = st.IsClaimed(IssueID(issue.ID))
+			})
+			if claimed {
+				t.Fatalf("IsClaimed(%s) = true after successful candidate miss; want released", issue.ID)
+			}
+			if got := disp.count(); got != 0 {
+				t.Fatalf("Dispatcher.Spawn calls = %d, want 0", got)
+			}
+			if got := lister.callCount(); got != 1 {
+				t.Fatalf("candidate lister calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
 // staticStateRefresher is a read-only IssueStateRefresher for the §16.6
 // retry-fire terminal-resolution tests (#341). Concurrent reads of the
 // underlying map from multiple followup goroutines are safe because nothing
@@ -4230,7 +4403,7 @@ func (s staticStateRefresher) FetchIssueStatesByIDs(_ context.Context, ids []str
 	out := make(map[string]tracker.IssueState, len(ids))
 	for _, id := range ids {
 		if state, ok := s[id]; ok {
-			out[id] = tracker.IssueState{State: state}
+			out[id] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state}
 		}
 	}
 	return out, nil
@@ -4250,10 +4423,64 @@ func (r *recordingRefStateRefresher) FetchIssueStatesByRefs(_ context.Context, r
 	out := make(map[string]tracker.IssueState, len(refs))
 	for _, ref := range refs {
 		if state, ok := r.states[ref.ID]; ok {
-			out[ref.ID] = tracker.IssueState{State: state}
+			out[ref.ID] = tracker.IssueState{Outcome: tracker.IssueStateOutcomeCurrent, State: state}
 		}
 	}
 	return out, nil
+}
+
+func TestResolveRetryTerminalStateRequiresCurrentOutcome(t *testing.T) {
+	tests := []struct {
+		name      string
+		refresher *explicitOutcomeStateRefresher
+		want      bool
+		wantState string
+	}{
+		{
+			name: "current terminal",
+			refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{
+				"ENG-RETRY-OUTCOME": {Outcome: tracker.IssueStateOutcomeCurrent, State: "Done"},
+			}},
+			want: true, wantState: "Done",
+		},
+		{
+			name: "current nonterminal",
+			refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{
+				"ENG-RETRY-OUTCOME": {Outcome: tracker.IssueStateOutcomeCurrent, State: "In Progress"},
+			}},
+		},
+		{
+			name: "state-bearing unknown",
+			refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{
+				"ENG-RETRY-OUTCOME": {Outcome: tracker.IssueStateOutcomeUnknown, State: "Done"},
+			}},
+		},
+		{
+			name: "state-bearing absent",
+			refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{
+				"ENG-RETRY-OUTCOME": {Outcome: tracker.IssueStateOutcomeAbsent, State: "Done"},
+			}},
+		},
+		{
+			name: "terminal-looking invalid outcome",
+			refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{
+				"ENG-RETRY-OUTCOME": {Outcome: tracker.IssueStateOutcome(99), State: "Done"},
+			}},
+		},
+		{name: "missing row", refresher: &explicitOutcomeStateRefresher{states: map[string]tracker.IssueState{}}},
+		{name: "refresh error", refresher: &explicitOutcomeStateRefresher{err: errors.New("tracker down")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o, cancel := startActor(t, Deps{Dispatcher: &fakeDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
+			defer cancel()
+			o.SetRetryTerminalStateResolver(tt.refresher, []string{"Done"})
+			terminal, state := resolveRetryTerminalState(o, "ENG-RETRY-OUTCOME", "ENG-RETRY-OUTCOME")
+			if terminal != tt.want || state != tt.wantState {
+				t.Fatalf("resolveRetryTerminalState = (%v, %q); want (%v, %q)", terminal, state, tt.want, tt.wantState)
+			}
+		})
+	}
 }
 
 // TestRetryFire_TerminalIssueFiresWorkspaceCleanup is the failure-retry half of

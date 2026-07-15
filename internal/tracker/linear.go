@@ -369,144 +369,12 @@ func parseLinearIssueTime(field, value string) (time.Time, error) {
 	return parsed, nil
 }
 
-// labels(first:250) mirrors listLinearIssuesQuery: the SPEC §6.4 required_labels
-// gate consults the refresh's label set to stop/release already-claimed work on
-// label removal, so the projection must be wide enough that a required label
-// cannot sort past the cap and look removed (#705).
-const issueStatesByIDsQuery = `query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
-  issues(filter: { id: { in: $ids } }, first: $first) {
-    nodes {
-      id
-      state { name }
-      labels(first: 250) { nodes { name } }
-    }
-  }
-}`
-
-func (c *LinearClient) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]IssueState, error) { //nolint:gocognit // baseline (#521)
-	if c.APIKey == "" {
-		return nil, NewError(CategoryMissingTrackerAPIKey, "Linear API key is required", nil)
-	}
-	if len(issueIDs) == 0 {
-		return map[string]IssueState{}, nil
-	}
-	states := make(map[string]IssueState, len(issueIDs))
-	for start := 0; start < len(issueIDs); start += linearIssuePageSize {
-		end := start + linearIssuePageSize
-		if end > len(issueIDs) {
-			end = len(issueIDs)
-		}
-		chunk := issueIDs[start:end]
-		var out struct {
-			Data struct {
-				Issues struct {
-					Nodes []struct {
-						ID    string `json:"id"`
-						State struct {
-							Name string `json:"name"`
-						} `json:"state"`
-						Labels struct {
-							Nodes []struct {
-								Name string `json:"name"`
-							} `json:"nodes"`
-						} `json:"labels"`
-					} `json:"nodes"`
-				} `json:"issues"`
-			} `json:"data"`
-			Errors []map[string]any `json:"errors"`
-		}
-		if err := c.graphql(ctx, issueStatesByIDsQuery, map[string]any{"ids": chunk, "first": len(chunk)}, &out); err != nil {
-			return nil, err
-		}
-		if len(out.Errors) > 0 {
-			return nil, linearGraphQLErrors(out.Errors)
-		}
-		for _, n := range out.Data.Issues.Nodes {
-			labels := make([]string, 0, len(n.Labels.Nodes))
-			for _, label := range n.Labels.Nodes {
-				if name := strings.ToLower(strings.TrimSpace(label.Name)); name != "" {
-					labels = append(labels, name)
-				}
-			}
-			states[n.ID] = IssueState{State: n.State.Name, Labels: labels}
-		}
-	}
-	if err := c.attachRefreshedTodoBlockers(ctx, states); err != nil {
-		// Blocker data is consumed only by dispatch-time revalidation; the
-		// reconcile and §16.5 per-turn refreshers share this method and must
-		// not fail on it — their state/label result is already complete, and
-		// an error here would short-circuit a healthy run's turn loop on a
-		// transient inverse-relations failure (PR #752 review). Instead,
-		// every refreshed Todo entry fails closed with an empty-state
-		// placeholder blocker — the same shape the Gitea adapter uses for an
-		// unresolvable reference — so the revalidation gate skips the
-		// candidate for this tick and the next tick retries, rather than
-		// dispatching past a blocker the failed query could not see (a
-		// listing-time "unblocked" verdict may predate a newly added
-		// relation). State-only consumers ignore BlockedBy and are
-		// unaffected.
-		log.Printf("event=linear_blocker_refresh_failed error=%q detail=\"refreshed Todo issues fail closed with a placeholder blocker this batch\"", err.Error())
-		failClosedTodoBlockers(states)
-	}
-	return states, nil
-}
-
-// failClosedTodoBlockers marks every Todo-state entry with one empty-state
-// placeholder blocker, which tracker.BlockedByNonTerminal treats as open.
-func failClosedTodoBlockers(states map[string]IssueState) {
-	for id, state := range states {
-		if !isTodoState(state.State) {
-			continue
-		}
-		state.BlockedBy = []BlockerRef{{}}
-		states[id] = state
-	}
-}
-
 func failClosedTodoIssueBlockers(issues []Issue) {
 	for i := range issues {
 		if isTodoState(issues[i].State) {
 			issues[i].BlockedBy = []BlockerRef{{}}
 		}
 	}
-}
-
-// attachRefreshedTodoBlockers resolves blocker data for the refreshed issues
-// whose state is Todo — the only state the SPEC §8.2 blocker gate applies to,
-// mirroring the listing path's Todo-only resolution (#672) — so dispatch-time
-// revalidation can re-apply the gate on refreshed data like upstream
-// retry_candidate_issue? (orchestrator.ex:1602-1604) does (#750). Non-Todo
-// entries keep a nil BlockedBy ("no blocker knowledge supplied"); Todo
-// entries get the non-nil (possibly empty) result linearBlockersForIssues
-// guarantees for every requested id.
-//
-// Dispatch revalidation is the only consumer of the blocker data; the
-// reconcile and §16.5 per-turn refreshers share FetchIssueStatesByIDs and
-// inherit the extra Todo-only batched query as a side effect but ignore
-// BlockedBy (reconcile cancellation and the per-turn continue gate are
-// state/label-only by design). Upstream's fetch_issue_states_by_ids returns
-// fully normalized issues including blocked_by on every caller too, so the
-// cost profile matches the reference.
-func (c *LinearClient) attachRefreshedTodoBlockers(ctx context.Context, states map[string]IssueState) error {
-	ids := make([]string, 0, len(states))
-	for id, state := range states {
-		if isTodoState(state.State) {
-			ids = append(ids, id)
-		}
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	blockers, err := c.linearBlockersForIssues(ctx, ids)
-	if err != nil {
-		return err
-	}
-	for _, id := range ids {
-		state := states[id]
-		state.BlockedBy = blockers[id]
-		states[id] = state
-	}
-	return nil
 }
 
 type linearRelationNode struct {
@@ -518,6 +386,14 @@ type linearRelationNode struct {
 			Name string `json:"name"`
 		} `json:"state"`
 	} `json:"issue"`
+}
+
+type linearInverseRelationsPage struct {
+	Nodes    *[]linearRelationNode `json:"nodes"`
+	PageInfo *struct {
+		HasNextPage *bool   `json:"hasNextPage"`
+		EndCursor   *string `json:"endCursor"`
+	} `json:"pageInfo"`
 }
 
 func isTodoState(state string) bool {
@@ -569,17 +445,11 @@ const listLinearIssuesInverseRelationsQuery = `query ListIssuesInverseRelations(
 // linearBatchInverseRelationsResponse is the batched first-page inverse-relations
 // payload returned by listLinearIssuesInverseRelationsQuery for a chunk of ids.
 type linearBatchInverseRelationsResponse struct {
-	Data struct {
-		Issues struct {
-			Nodes []struct {
-				ID               string `json:"id"`
-				InverseRelations struct {
-					Nodes    []linearRelationNode `json:"nodes"`
-					PageInfo struct {
-						HasNextPage bool   `json:"hasNextPage"`
-						EndCursor   string `json:"endCursor"`
-					} `json:"pageInfo"`
-				} `json:"inverseRelations"`
+	Data *struct {
+		Issues *struct {
+			Nodes *[]struct {
+				ID               *string                     `json:"id"`
+				InverseRelations *linearInverseRelationsPage `json:"inverseRelations"`
 			} `json:"nodes"`
 		} `json:"issues"`
 	} `json:"data"`
@@ -619,17 +489,93 @@ func (c *LinearClient) fetchLinearBlockerChunk(ctx context.Context, chunk []stri
 	if len(out.Errors) > 0 {
 		return linearGraphQLErrors(out.Errors)
 	}
-	for _, n := range out.Data.Issues.Nodes {
-		blockers, err := c.linearBlockersFromInverseRelations(ctx, n.ID, n.InverseRelations.Nodes, n.InverseRelations.PageInfo.HasNextPage, n.InverseRelations.PageInfo.EndCursor)
+	if out.Data == nil || out.Data.Issues == nil || out.Data.Issues.Nodes == nil {
+		return incompleteLinearBlockerResponse("missing data.issues.nodes")
+	}
+	requested := make(map[string]struct{}, len(chunk))
+	for _, id := range chunk {
+		requested[id] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(chunk))
+	for _, n := range *out.Data.Issues.Nodes {
+		id, blockers, err := c.linearBlockersForBatchNode(ctx, n.ID, n.InverseRelations, requested, seen)
 		if err != nil {
 			return err
 		}
-		result[n.ID] = blockers
+		result[id] = blockers
+		seen[id] = struct{}{}
+	}
+	if len(seen) != len(requested) {
+		return incompleteLinearBlockerResponse("response omitted a requested issue node")
 	}
 	return nil
 }
 
+func (c *LinearClient) linearBlockersForBatchNode(
+	ctx context.Context,
+	rawID *string,
+	page *linearInverseRelationsPage,
+	requested, seen map[string]struct{},
+) (string, []BlockerRef, error) {
+	if rawID == nil || strings.TrimSpace(*rawID) == "" {
+		return "", nil, incompleteLinearBlockerResponse("issue node missing id")
+	}
+	id := strings.TrimSpace(*rawID)
+	if _, ok := requested[id]; !ok {
+		return "", nil, incompleteLinearBlockerResponse("issue node id was not requested")
+	}
+	if _, duplicate := seen[id]; duplicate {
+		return "", nil, incompleteLinearBlockerResponse("duplicate issue node id")
+	}
+	nodes, hasNextPage, endCursor, err := linearInverseRelationsValues(page)
+	if err != nil {
+		return "", nil, err
+	}
+	blockers, err := c.linearBlockersFromInverseRelations(ctx, id, nodes, hasNextPage, endCursor)
+	if err != nil {
+		return "", nil, err
+	}
+	return id, blockers, nil
+}
+
+func linearInverseRelationsValues(page *linearInverseRelationsPage) ([]linearRelationNode, bool, string, error) {
+	if page == nil || page.Nodes == nil || page.PageInfo == nil || page.PageInfo.HasNextPage == nil {
+		return nil, false, "", incompleteLinearBlockerResponse("missing inverseRelations nodes or pageInfo")
+	}
+	if err := validateLinearRelationNodes(*page.Nodes); err != nil {
+		return nil, false, "", err
+	}
+	endCursor := ""
+	if page.PageInfo.EndCursor != nil {
+		endCursor = strings.TrimSpace(*page.PageInfo.EndCursor)
+	}
+	if *page.PageInfo.HasNextPage && endCursor == "" {
+		return nil, false, "", incompleteLinearBlockerResponse("paginated inverseRelations missing endCursor")
+	}
+	return *page.Nodes, *page.PageInfo.HasNextPage, endCursor, nil
+}
+
+func validateLinearRelationNodes(nodes []linearRelationNode) error {
+	for _, relation := range nodes {
+		if strings.TrimSpace(relation.Type) == "" {
+			return incompleteLinearBlockerResponse("inverse relation missing type")
+		}
+		if relation.Type == "blocks" && (strings.TrimSpace(relation.Issue.ID) == "" ||
+			strings.TrimSpace(relation.Issue.Identifier) == "" || strings.TrimSpace(relation.Issue.State.Name) == "") {
+			return incompleteLinearBlockerResponse("blocking relation missing issue identity or state")
+		}
+	}
+	return nil
+}
+
+func incompleteLinearBlockerResponse(detail string) error {
+	return NewError(CategoryLinearUnknownPayload, "incomplete Linear blocker response", fmt.Errorf("%w: %s", ErrIssueStateRefreshIncomplete, detail))
+}
+
 func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, issueID string, nodes []linearRelationNode, hasNextPage bool, endCursor string) ([]BlockerRef, error) { //nolint:gocognit // baseline (#521)
+	if err := validateLinearRelationNodes(nodes); err != nil {
+		return nil, err
+	}
 	blockers := make([]BlockerRef, 0, len(nodes))
 	appendBlockers := func(nodes []linearRelationNode) {
 		for _, r := range nodes {
@@ -649,15 +595,9 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 			return nil, NewError(CategoryLinearMissingEndCursor, fmt.Sprintf("linear inverse relation pagination missing endCursor for issue %s", issueID), nil)
 		}
 		var out struct {
-			Data struct {
-				Issue struct {
-					InverseRelations struct {
-						Nodes    []linearRelationNode `json:"nodes"`
-						PageInfo struct {
-							HasNextPage bool   `json:"hasNextPage"`
-							EndCursor   string `json:"endCursor"`
-						} `json:"pageInfo"`
-					} `json:"inverseRelations"`
+			Data *struct {
+				Issue *struct {
+					InverseRelations *linearInverseRelationsPage `json:"inverseRelations"`
 				} `json:"issue"`
 			} `json:"data"`
 			Errors []map[string]any `json:"errors"`
@@ -673,9 +613,16 @@ func (c *LinearClient) linearBlockersFromInverseRelations(ctx context.Context, i
 		if len(out.Errors) > 0 {
 			return nil, linearGraphQLErrors(out.Errors)
 		}
-		appendBlockers(out.Data.Issue.InverseRelations.Nodes)
-		hasNextPage = out.Data.Issue.InverseRelations.PageInfo.HasNextPage
-		endCursor = out.Data.Issue.InverseRelations.PageInfo.EndCursor
+		if out.Data == nil || out.Data.Issue == nil {
+			return nil, incompleteLinearBlockerResponse("missing data.issue")
+		}
+		nextNodes, nextPage, nextCursor, err := linearInverseRelationsValues(out.Data.Issue.InverseRelations)
+		if err != nil {
+			return nil, err
+		}
+		appendBlockers(nextNodes)
+		hasNextPage = nextPage
+		endCursor = nextCursor
 	}
 	return blockers, nil
 }
@@ -711,11 +658,8 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 		return NewError(CategoryLinearAPIRequest, "send Linear GraphQL request", err)
 	}
 	defer DrainAndClose(resp)
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return NewRateLimitedError("linear request", resp.StatusCode, resp.Header)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: status %d", resp.StatusCode), nil)
+	if err := linearGraphQLResponseError(resp); err != nil {
+		return err
 	}
 	if out == nil {
 		return nil
@@ -724,6 +668,44 @@ func (c *LinearClient) graphql(ctx context.Context, query string, variables map[
 		return NewError(CategoryLinearUnknownPayload, "decode Linear GraphQL response", err)
 	}
 	return nil
+}
+
+func linearGraphQLResponseError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return NewRateLimitedError("linear request", resp.StatusCode, resp.Header)
+	}
+	if resp.StatusCode == http.StatusBadRequest {
+		rateLimited, probeErr := linearGraphQLRateLimited(resp)
+		if probeErr != nil {
+			return NewError(CategoryLinearUnknownPayload, "decode Linear GraphQL error response", probeErr)
+		}
+		if rateLimited {
+			return NewRateLimitedError("linear request", resp.StatusCode, resp.Header)
+		}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return NewError(CategoryLinearAPIStatus, fmt.Sprintf("linear request failed: status %d", resp.StatusCode), nil)
+	}
+	return nil
+}
+
+func linearGraphQLRateLimited(resp *http.Response) (bool, error) {
+	var payload struct {
+		Errors []struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		} `json:"errors"`
+	}
+	if err := DecodeJSONResponse(resp, &payload); err != nil {
+		return false, err
+	}
+	for _, graphqlErr := range payload.Errors {
+		if strings.EqualFold(strings.TrimSpace(graphqlErr.Extensions.Code), "RATELIMITED") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func linearGraphQLErrors(errs []map[string]any) error {

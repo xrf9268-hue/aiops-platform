@@ -56,9 +56,8 @@ func TestPollOnceSkipsDispatchWhenRevalidationOmitsIssue(t *testing.T) {
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
 
-	// An empty refresh result is upstream's {:skip, :missing}: the issue was
-	// deleted, or (Gitea) its aiops/* state labels were stripped so no state
-	// can be derived.
+	// An omitted result normalizes to Unknown. Dispatch fails closed, but the
+	// omission is not treated as confirmed tracker absence.
 	trackerClient.setFetchIDStates(map[string]string{})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)
@@ -84,6 +83,50 @@ func TestPollOnceDispatchesRevalidatedCandidateWithRefreshedState(t *testing.T) 
 	}
 	if got := dispatcher.issueAt(0).State; got != "Rework" {
 		t.Fatalf("dispatched issue state = %q; want refreshed state %q", got, "Rework")
+	}
+}
+
+func TestRevalidatedCandidateRequiresCurrentOutcome(t *testing.T) {
+	issue := tracker.Issue{ID: "issue-1", Identifier: "LIN-1", Title: "work", State: "In Progress"}
+	active := normalizedStates([]string{"In Progress", "Rework"})
+	terminal := normalizedStates([]string{"Done"})
+	tests := []struct {
+		name    string
+		states  map[string]tracker.IssueState
+		want    bool
+		wantOut string
+	}{
+		{
+			name: "current active",
+			states: map[string]tracker.IssueState{
+				issue.ID: {Outcome: tracker.IssueStateOutcomeCurrent, State: "Rework"},
+			},
+			want: true, wantOut: "Rework",
+		},
+		{
+			name: "state-bearing unknown",
+			states: map[string]tracker.IssueState{
+				issue.ID: {Outcome: tracker.IssueStateOutcomeUnknown, State: "Rework"},
+			},
+		},
+		{
+			name: "state-bearing absent",
+			states: map[string]tracker.IssueState{
+				issue.ID: {Outcome: tracker.IssueStateOutcomeAbsent, State: "Rework"},
+			},
+		},
+		{name: "missing row", states: map[string]tracker.IssueState{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, keep := revalidatedCandidate(issue, tt.states, active, terminal, nil)
+			if keep != tt.want {
+				t.Fatalf("revalidatedCandidate keep = %v; want %v (got=%+v)", keep, tt.want, got)
+			}
+			if keep && got.State != tt.wantOut {
+				t.Fatalf("revalidatedCandidate state = %q; want %q", got.State, tt.wantOut)
+			}
+		})
 	}
 }
 
@@ -161,16 +204,16 @@ func continuationClaimState(t *testing.T, ctx context.Context, poller *Poller, i
 	return retained, claimed
 }
 
-func TestPollOnceReleasesDueContinuationWhenRevalidationOmitsIssue(t *testing.T) {
+func TestPollOnceReleasesDueContinuationWhenRefreshConfirmsAbsent(t *testing.T) {
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"}}}
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
 	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
 
-	// The refresh omits the issue entirely (deleted / Gitea aiops/* labels
-	// stripped). Reconcile's cancel paths treat absence as no-information
-	// forever, so the vanished-continuation sweep must release the queued
-	// continuation or the issue wedges in retrying (#740 review P2).
-	trackerClient.setFetchIDStates(map[string]string{})
+	// Only the explicit per-ref Absent outcome proves deletion / removal from
+	// the tracker workflow. A missing or Unknown row remains no-information.
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+		"issue-1": {Outcome: tracker.IssueStateOutcomeAbsent},
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)
 	}
@@ -179,20 +222,22 @@ func TestPollOnceReleasesDueContinuationWhenRevalidationOmitsIssue(t *testing.T)
 	}
 	retained, claimed := continuationClaimState(t, ctx, poller, "issue-1")
 	if retained || claimed {
-		t.Fatalf("continuation after missing revalidation: retained=%v claimed=%v; want released", retained, claimed)
+		t.Fatalf("continuation after confirmed absence: retained=%v claimed=%v; want released", retained, claimed)
 	}
 }
 
-func TestPollOnceReleasesDueContinuationAbsentFromActiveListing(t *testing.T) {
+func TestPollOnceReleasesDueContinuationConfirmedAbsentFromActiveListing(t *testing.T) {
 	// The between-tick variant: the issue vanished BEFORE this tick's listing,
 	// so it is never a dispatch candidate at all. The reconcile pass still
-	// narrow-refreshes it as a claimed (retrying) ref; a clean refresh that
-	// does not return it must release the continuation (#740 review HIGH).
+	// narrow-refreshes it as a claimed (retrying) ref; an explicit Absent
+	// outcome must release the continuation (#740 review HIGH).
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{}}
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
 	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
 
-	trackerClient.setFetchIDStates(map[string]string{})
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+		"issue-1": {Outcome: tracker.IssueStateOutcomeAbsent},
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)
 	}
@@ -205,11 +250,11 @@ func TestPollOnceReleasesDueContinuationAbsentFromActiveListing(t *testing.T) {
 	}
 }
 
-func TestPollOnceRetainsVanishedFailureRetry(t *testing.T) {
-	// A failure retry whose issue vanished is NOT released by the sweep: its
-	// own fire path runs the SPEC §16.6 candidate fetch and releases on
-	// absence with terminal-state resolution (#341). Releasing it here would
-	// double-own that contract.
+func TestPollOnceRetainsAbsentFailureRetry(t *testing.T) {
+	// A failure retry whose narrow refresh confirms absence is NOT released by
+	// reconciliation: its own timer fire path runs the SPEC §16.6 candidate
+	// fetch and releases on absence with terminal-state resolution (#341).
+	// Releasing it here would double-own that contract.
 	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{}}
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
 	id := IssueID("issue-1")
@@ -235,7 +280,9 @@ func TestPollOnceRetainsVanishedFailureRetry(t *testing.T) {
 		t.Fatalf("seed failure retry: %v", ctx.Err())
 	}
 
-	trackerClient.setFetchIDStates(map[string]string{})
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
+		"issue-1": {Outcome: tracker.IssueStateOutcomeAbsent},
+	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)
 	}
@@ -244,7 +291,27 @@ func TestPollOnceRetainsVanishedFailureRetry(t *testing.T) {
 	}
 	retained, claimed := continuationClaimState(t, ctx, poller, id)
 	if !retained || !claimed {
-		t.Fatalf("failure retry after vanished refresh: retained=%v claimed=%v; want retained", retained, claimed)
+		t.Fatalf("failure retry after absent refresh: retained=%v claimed=%v; want retained", retained, claimed)
+	}
+}
+
+func TestPollOnceRetainsDueContinuationWhenRefreshOmitsOutcome(t *testing.T) {
+	trackerClient := &fakeIssueStateTracker{issues: []tracker.Issue{}}
+	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, revalidationReconcileConfig())
+	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
+
+	// A non-compliant or partial adapter may omit a requested row. The poller
+	// boundary totalizes that omission to Unknown; it must never infer absence.
+	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{})
+	if err := poller.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce() = %v; want nil", err)
+	}
+	if got := dispatcher.count(); got != 0 {
+		t.Fatalf("dispatched %d issues (%v); want 0", got, dispatcher.issueIDs())
+	}
+	retained, claimed := continuationClaimState(t, ctx, poller, "issue-1")
+	if !retained || !claimed {
+		t.Fatalf("continuation after omitted refresh outcome: retained=%v claimed=%v; want retained", retained, claimed)
 	}
 }
 
@@ -254,8 +321,8 @@ func TestPollOnceRetainsDueContinuationWhenRevalidationFetchFails(t *testing.T) 
 	seedDueContinuation(t, ctx, poller, tracker.Issue{ID: "issue-1", Identifier: "LIN-1", State: "In Progress"})
 
 	// With the fetch failing, a missing row is indistinguishable from tracker
-	// downtime — the vanished-continuation sweep must not run and the
-	// continuation must survive (upstream {:error} leaves state untouched).
+	// downtime. The normalized Unknown outcome must preserve the continuation
+	// (upstream {:error} leaves state untouched).
 	trackerClient.setFetchIDStates(map[string]string{})
 	trackerClient.setFetchIDErr(errors.New("tracker briefly down"))
 	if err := poller.PollOnce(ctx); err == nil || !strings.Contains(err.Error(), "revalidate dispatch candidates") {
@@ -316,7 +383,7 @@ func TestPollOnceSkipsDispatchWhenRevalidationShowsReopenedBlocker(t *testing.T)
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
 
 	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
-		"issue-1": {State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
+		"issue-1": {Outcome: tracker.IssueStateOutcomeCurrent, State: "Todo", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
 	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)
@@ -340,7 +407,7 @@ func TestPollOnceBlockerRevalidationHonorsNilVersusEmptyContract(t *testing.T) {
 		poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
 
 		trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
-			"issue-1": {State: "Todo", BlockedBy: []tracker.BlockerRef{}},
+			"issue-1": {Outcome: tracker.IssueStateOutcomeCurrent, State: "Todo", BlockedBy: []tracker.BlockerRef{}},
 		})
 		if err := poller.PollOnce(ctx); err != nil {
 			t.Fatalf("PollOnce() = %v; want nil", err)
@@ -363,7 +430,7 @@ func TestPollOnceBlockerRevalidationHonorsNilVersusEmptyContract(t *testing.T) {
 		poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
 
 		trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
-			"issue-1": {State: "Todo"},
+			"issue-1": {Outcome: tracker.IssueStateOutcomeCurrent, State: "Todo"},
 		})
 		if err := poller.PollOnce(ctx); err != nil {
 			t.Fatalf("PollOnce() = %v; want nil", err)
@@ -388,7 +455,7 @@ func TestPollOnceBlockerRevalidationGatesTodoOnly(t *testing.T) {
 	poller, dispatcher, ctx := startRevalidationHarness(t, trackerClient, todoBlockerRevalidationConfig())
 
 	trackerClient.setFetchIDIssueStates(map[string]tracker.IssueState{
-		"issue-1": {State: "In Progress", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
+		"issue-1": {Outcome: tracker.IssueStateOutcomeCurrent, State: "In Progress", BlockedBy: []tracker.BlockerRef{{ID: "blocker-1", Identifier: "GT-9", State: "In Progress"}}},
 	})
 	if err := poller.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce() = %v; want nil", err)

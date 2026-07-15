@@ -327,9 +327,9 @@ func TestPollOncePreflightFailurePatchesClaimedActiveStateWithoutWipingMetadata(
 	}
 
 	trackerClient := &fakeIssueStateTracker{fetchIDIssueStates: map[string]tracker.IssueState{
-		runningIssue.ID: {State: "Rework", Labels: []string{"fresh"}, BlockedBy: nil},
-		retryIssue.ID:   {State: "Rework", Labels: []string{"fresh"}, BlockedBy: []tracker.BlockerRef{}},
-		blockedIssue.ID: {State: "Rework", Labels: []string{"fresh"}, BlockedBy: []tracker.BlockerRef{{ID: "new-blocker", State: "Done"}}},
+		runningIssue.ID: {Outcome: tracker.IssueStateOutcomeCurrent, State: "Rework", Labels: []string{"fresh"}, BlockedBy: nil},
+		retryIssue.ID:   {Outcome: tracker.IssueStateOutcomeCurrent, State: "Rework", Labels: []string{"fresh"}, BlockedBy: []tracker.BlockerRef{}},
+		blockedIssue.ID: {Outcome: tracker.IssueStateOutcomeCurrent, State: "Rework", Labels: []string{"fresh"}, BlockedBy: []tracker.BlockerRef{{ID: "new-blocker", State: "Done"}}},
 	}}
 	orch := New(st, Deps{Dispatcher: &cancellationDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Hour}})
 	go orch.Run(ctx)

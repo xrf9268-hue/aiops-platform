@@ -1,8 +1,7 @@
 package orchestrator
 
-// actor_reconcile_inactive_test.go pins reconcileInactiveTrackerIssuesOp release
-// behaviors the existing reconcile suite left unpinned, before #499 decomposes
-// the op's three per-collection loops into helpers. Two classes are covered:
+// actor_reconcile_inactive_test.go pins tracker-reconciliation release behavior
+// across partial inactive listings and explicit narrow-refresh absence:
 //
 //   - Partial-listing safety: an in-process entry whose issue is ABSENT from a
 //     (possibly pagination-truncated) inactive listing is "unknown", not
@@ -18,6 +17,9 @@ package orchestrator
 //     not, so gating the release behind the terminal check would slip past the
 //     suite (the helper releases via `defer st.ReleaseClaim`, which must run on
 //     the non-terminal path too).
+//
+//   - Confirmed absence: running and blocked entries plus continuation retries
+//     release without terminal cleanup; failure/quota retries remain timer-owned.
 
 import (
 	"context"
@@ -27,7 +29,156 @@ import (
 
 	"github.com/xrf9268-hue/aiops-platform/internal/task"
 	"github.com/xrf9268-hue/aiops-platform/internal/tracker"
+	"github.com/xrf9268-hue/aiops-platform/internal/worker"
 )
+
+func TestReconcileAbsentTrackerIssuesWaitsForRunningWorkerDone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	id := IssueID("ENG-ABSENT-RUN")
+	workerDone := make(chan struct{})
+	cancelCause := make(chan error, 1)
+	st := NewOrchestratorState(15000, 4)
+	st.BeginDispatch(id, &RunningEntry{
+		Issue:                                 tracker.Issue{ID: string(id), Identifier: "ENG-1", State: "In Progress"},
+		Identifier:                            "ENG-1",
+		Done:                                  workerDone,
+		CancelWorker:                          func(err error) { cancelCause <- err },
+		ReconcileCleanupWorkspace:             true,
+		AgentCurrentIssueHandoff:              true,
+		AgentCurrentIssueTerminalHandoff:      true,
+		AgentCurrentIssueTerminalHandoffState: "Done",
+	})
+	cleaner := &recordingWorkspaceCleaner{}
+	o := New(st, Deps{Dispatcher: &fakeDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}, WorkspaceCleaner: cleaner})
+	safeGo("test.reconcile_absent_wait", func() { o.Run(ctx) })
+	if err := o.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted() error = %v; want nil", err)
+	}
+
+	result := make(chan error, 1)
+	safeGo("test.reconcile_absent_call", func() {
+		result <- o.ReconcileAbsentTrackerIssuesAndWait(ctx, map[string]struct{}{string(id): {}}, time.Second)
+	})
+
+	select {
+	case got := <-cancelCause:
+		if !errors.Is(got, worker.ErrReconcileCancel) {
+			t.Fatalf("cancel cause = %v; want %v", got, worker.ErrReconcileCancel)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel cause received = false after 1s; want true")
+	}
+	select {
+	case err := <-result:
+		t.Fatalf("ReconcileAbsentTrackerIssuesAndWait returned before Done closed with error = %v; want call blocked", err)
+	default:
+	}
+
+	close(workerDone)
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("ReconcileAbsentTrackerIssuesAndWait() error = %v; want nil", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ReconcileAbsentTrackerIssuesAndWait returned after Done closed = false after 1s; want true")
+	}
+
+	var run RunningEntry
+	var found, claimed bool
+	o.WithStateForTest(func(got *OrchestratorState) {
+		if entry := got.Running[id]; entry != nil {
+			run = *entry
+			found = true
+		}
+		_, claimed = got.Claimed[id]
+	})
+	if !found {
+		t.Fatalf("Running[%s] = nil; want non-nil until test worker finalizes", id)
+	}
+	if claimed {
+		t.Errorf("Claimed[%s] present = true; want released after confirmed absence", id)
+	}
+	if !run.ReconcileCancel || run.ReconcileCleanupWorkspace || run.AgentCurrentIssueHandoff || run.AgentCurrentIssueTerminalHandoff || run.AgentCurrentIssueTerminalHandoffState != "" {
+		t.Errorf("running reconcile flags = cancel:%v cleanup:%v handoff:%v terminal:%v state:%q; want true,false,false,false,empty",
+			run.ReconcileCancel, run.ReconcileCleanupWorkspace, run.AgentCurrentIssueHandoff,
+			run.AgentCurrentIssueTerminalHandoff, run.AgentCurrentIssueTerminalHandoffState)
+	}
+	if calls := cleaner.snapshot(); len(calls) != 0 {
+		t.Fatalf("workspace cleanups = %+v; want none for confirmed absence", calls)
+	}
+}
+
+func TestReconcileAbsentTrackerIssuesReleasesOnlyAbsenceOwnedClaims(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	st := NewOrchestratorState(15000, 8)
+	issueFor := func(id IssueID) tracker.Issue {
+		return tracker.Issue{ID: string(id), Identifier: string(id), State: "In Progress"}
+	}
+	blockedID := IssueID("ABSENT-BLOCKED")
+	st.Blocked[blockedID] = &BlockedEntry{Issue: issueFor(blockedID), Identifier: string(blockedID)}
+	st.Claimed[blockedID] = struct{}{}
+	st.ClaimedIssues[blockedID] = issueFor(blockedID)
+
+	continuationID := IssueID("ABSENT-CONTINUATION")
+	continuationTimer := time.NewTimer(time.Hour)
+	st.ScheduleRetry(&RetryEntry{
+		Issue: issueFor(continuationID), IssueID: continuationID, Identifier: string(continuationID),
+		Kind: RetryKindContinuation, Timer: continuationTimer,
+	})
+	retainedTimers := make(map[IssueID]*time.Timer)
+	for _, tc := range []struct {
+		id   IssueID
+		kind RetryKind
+	}{
+		{id: "ABSENT-FAILURE", kind: RetryKindFailure},
+		{id: "ABSENT-CAPACITY-DEFERRED", kind: RetryKindFailure},
+		{id: "ABSENT-QUOTA", kind: RetryKindQuotaBackoff},
+		{id: "UNKNOWN-CONTINUATION", kind: RetryKindContinuation},
+	} {
+		timer := time.NewTimer(time.Hour)
+		retainedTimers[tc.id] = timer
+		st.ScheduleRetry(&RetryEntry{Issue: issueFor(tc.id), IssueID: tc.id, Identifier: string(tc.id), Kind: tc.kind, Timer: timer})
+	}
+
+	o := New(st, Deps{Dispatcher: &fakeDispatcher{}, Scheduler: RetryScheduler{MaxBackoff: time.Minute}})
+	safeGo("test.reconcile_absent_owned_claims", func() { o.Run(ctx) })
+	if err := o.WaitStarted(ctx); err != nil {
+		t.Fatalf("WaitStarted() error = %v; want nil", err)
+	}
+	absent := map[string]struct{}{
+		string(blockedID): {}, string(continuationID): {},
+		"ABSENT-FAILURE": {}, "ABSENT-CAPACITY-DEFERRED": {}, "ABSENT-QUOTA": {},
+	}
+	if err := o.ReconcileAbsentTrackerIssuesAndWait(ctx, absent, time.Second); err != nil {
+		t.Fatalf("ReconcileAbsentTrackerIssuesAndWait() error = %v; want nil", err)
+	}
+
+	o.WithStateForTest(func(got *OrchestratorState) {
+		for _, id := range []IssueID{blockedID, continuationID} {
+			if got.IsClaimed(id) {
+				t.Errorf("IsClaimed(%s) = true; want released", id)
+			}
+		}
+		for _, id := range []IssueID{"ABSENT-FAILURE", "ABSENT-CAPACITY-DEFERRED", "ABSENT-QUOTA", "UNKNOWN-CONTINUATION"} {
+			if !got.IsClaimed(id) || got.RetryAttempts[id] == nil {
+				t.Errorf("retry %s retained = %v claimed = %v; want both true", id, got.RetryAttempts[id] != nil, got.IsClaimed(id))
+			}
+		}
+	})
+	if continuationTimer.Stop() {
+		t.Fatal("released continuation timer active = true; want false after ReleaseClaim")
+	}
+	for id, timer := range retainedTimers {
+		if !timer.Stop() {
+			t.Errorf("retained retry timer %s was stopped; want timer ownership preserved", id)
+		}
+	}
+}
 
 // blockIssue dispatches issue and drives it to the Blocked state via an
 // input-required runtime event, returning once the actor reports it blocked.

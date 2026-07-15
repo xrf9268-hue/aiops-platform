@@ -396,6 +396,68 @@ func TestGitHubClientListIssuesByStatesReturnsErrorWhenNativeBlockerLookupIsRate
 	}
 }
 
+func TestGitHubClientListIssuesByStatesOmitsBodyFallbackOnLookupFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "ordinary failure", statusCode: http.StatusInternalServerError},
+		{name: "rate limit", statusCode: http.StatusTooManyRequests},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/repos/acme/api/pulls":
+					_ = json.NewEncoder(w).Encode([]map[string]any{})
+				case "/repos/acme/api/issues":
+					_ = json.NewEncoder(w).Encode([]githubIssue{{
+						ID: 100, NodeID: "I_100", Number: 10, Title: "best effort body dependency",
+						Body: "Blocked by #13", State: "open", Labels: []githubLabel{{Name: "aiops:todo"}},
+					}})
+				case "/graphql":
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+						map[string]any{
+							"id": "I_100", "number": float64(10),
+							"blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}},
+						},
+					}}})
+				case "/repos/acme/api/issues/13":
+					w.WriteHeader(tc.statusCode)
+				default:
+					t.Fatalf("request path = %q; want known listing or blocker endpoint", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+
+			client := NewGitHubClient(workflow.TrackerConfig{
+				APIKey:       "test-token",
+				ActiveStates: []string{"aiops:todo"},
+			}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+			client.Logf = func(format string, args ...any) {
+				logs = append(logs, fmt.Sprintf(format, args...))
+			}
+
+			issues, err := client.ListActiveIssues(context.Background())
+			if err != nil {
+				t.Fatalf("ListActiveIssues(status=%d) error = %v; want nil", tc.statusCode, err)
+			}
+			if len(issues) != 1 {
+				t.Fatalf("ListActiveIssues(status=%d) issues = %#v; want one listed issue", tc.statusCode, issues)
+			}
+			if got := issues[0].BlockedBy; got == nil || len(got) != 0 {
+				t.Fatalf("ListActiveIssues(status=%d) BlockedBy = %#v; want non-nil empty blockers", tc.statusCode, got)
+			}
+			if len(logs) != 1 || !strings.Contains(logs[0], "omitting unverified fallback blocker this tick") {
+				t.Fatalf("ListActiveIssues(status=%d) logs = %#v; want one omitted-fallback diagnostic", tc.statusCode, logs)
+			}
+		})
+	}
+}
+
 func TestGitHubClientListIssuesByStatesOmitsBodyFallbackWhenLookupTransportFails(t *testing.T) {
 	var fallbackRequested bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -497,9 +559,13 @@ func TestGitHubClientListIssuesByStatesChunksNativeBlockerLookups(t *testing.T) 
 			graphqlBatchSizes = append(graphqlBatchSizes, len(req.Variables.IDs))
 			nodes := make([]any, 0, len(req.Variables.IDs))
 			for _, id := range req.Variables.IDs {
+				var number int
+				if _, err := fmt.Sscanf(id, "I_%d", &number); err != nil {
+					t.Fatalf("parse node id %q error = %v; want nil", id, err)
+				}
 				nodes = append(nodes, map[string]any{
 					"id":     id,
-					"number": float64(1),
+					"number": float64(number),
 					"blockedBy": map[string]any{
 						"nodes":    []any{},
 						"pageInfo": map[string]any{"hasNextPage": false},
@@ -916,8 +982,8 @@ func TestGitHubClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
-	if got, want := states, map[string]string{"101": "done"}; len(got) != len(want) || got["101"].State != want["101"] {
-		t.Fatalf("states = %#v, want %#v", got, want)
+	if len(states) != 4 || states["101"].Outcome != IssueStateOutcomeCurrent || states["101"].State != "done" || states["202"].Outcome != IssueStateOutcomeAbsent || states["303"].Outcome != IssueStateOutcomeAbsent || states["999"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want current 101, absent 202/303, unknown 999", states)
 	}
 	if got, want := states["101"].Labels, []string{"done", "aiops-ready"}; !slices.Equal(got, want) {
 		t.Fatalf("FetchIssueStatesByIDs(101).Labels = %v; want %v", got, want)
@@ -926,6 +992,372 @@ func TestGitHubClientFetchIssueStatesByIDsUsesCachedIssueNumbers(t *testing.T) {
 	gotJoined := strings.Join(requestedPaths[2:], ",")
 	if gotJoined != wantPathPrefix {
 		t.Fatalf("requested paths after listing = %s, want %s", gotJoined, wantPathPrefix)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsOutcomeMatrixAndPartialError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/1":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 101, Number: 1, State: "closed", Labels: []githubLabel{{Name: "Done"}}})
+		case "/repos/acme/api/issues/2":
+			http.NotFound(w, r)
+		case "/repos/acme/api/issues/3":
+			w.WriteHeader(http.StatusGone)
+		case "/repos/acme/api/issues/4":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 999, Number: 4, State: "open"})
+		case "/repos/acme/api/issues/5":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 505, Number: 5})
+		case "/repos/acme/api/issues/6":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		case "/repos/acme/api/issues/7":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 707, Number: 7, State: "closed", Labels: []githubLabel{{Name: "Done"}}})
+		case "/repos/acme/api/issues/8":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("request path = %q; want one of issue endpoints #1 through #8", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	client.cacheIssueNumber("202", 2)
+	client.cacheIssueNumber("303", 3)
+	refs := []IssueRef{
+		{ID: "101", Identifier: "#1"},
+		{ID: "202", Identifier: "#2"},
+		{ID: "303", Identifier: "#3"},
+		{ID: "opaque"},
+		{ID: "#bad"},
+		{ID: "404", Identifier: "#4"},
+		{ID: "505", Identifier: "#5"},
+		{ID: "606", Identifier: "#6"},
+		{ID: "707", Identifier: "#7"},
+		{ID: "808", Identifier: "#8"},
+		{ID: "101", Identifier: "#1"},
+		{},
+	}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), refs)
+	if err == nil {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want HTTP 500", err)
+	}
+	want := map[string]IssueStateOutcome{
+		"101":    IssueStateOutcomeCurrent,
+		"202":    IssueStateOutcomeAbsent,
+		"303":    IssueStateOutcomeAbsent,
+		"opaque": IssueStateOutcomeUnknown,
+		"#bad":   IssueStateOutcomeUnknown,
+		"404":    IssueStateOutcomeUnknown,
+		"505":    IssueStateOutcomeUnknown,
+		"606":    IssueStateOutcomeUnknown,
+		"707":    IssueStateOutcomeCurrent,
+		"808":    IssueStateOutcomeUnknown,
+	}
+	if len(states) != len(want) {
+		t.Fatalf("states len = %d; want %d: %#v", len(states), len(want), states)
+	}
+	for id, outcome := range want {
+		if got := states[id].Outcome; got != outcome {
+			t.Fatalf("states[%q].Outcome = %v; want %v (row=%#v)", id, got, outcome, states[id])
+		}
+	}
+}
+
+func TestGitHubClientFetchIssueStatesPayloadNumberMismatchStaysUnknown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(githubIssue{ID: 101, Number: 2, State: "open", Labels: []githubLabel{}})
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	client.cacheIssueNumber("101", 1)
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	if got := states["101"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want unknown for payload number mismatch", got)
+	}
+	if number, ok := client.cachedIssueNumber("101"); !ok || number != 1 {
+		t.Fatalf("cached issue number = %d, %v; want original 1 preserved", number, ok)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesPartialPayloadAndEmptyLabels(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     string
+		wantOutcome IssueStateOutcome
+		wantErr     bool
+	}{
+		{name: "missing id", payload: `{"node_id":"I_101","number":1,"state":"open","labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "zero id", payload: `{"id":0,"node_id":"I_101","number":1,"state":"open","labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "missing number", payload: `{"id":101,"node_id":"I_101","state":"open","labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "zero number", payload: `{"id":101,"node_id":"I_101","number":0,"state":"open","labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "missing state", payload: `{"id":101,"node_id":"I_101","number":1,"labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "empty state", payload: `{"id":101,"node_id":"I_101","number":1,"state":"  ","labels":[]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "missing labels", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open"}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "null labels", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":null}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label missing name", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":[{}]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label null name", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":[{"name":null}]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "label empty name", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":[{"name":"  "}]}`, wantOutcome: IssueStateOutcomeUnknown, wantErr: true},
+		{name: "empty labels", payload: `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":[]}`, wantOutcome: IssueStateOutcomeCurrent},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, tc.payload)
+			}))
+			defer srv.Close()
+			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+			client.cacheIssueNumber("101", 1)
+
+			states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"101"})
+			if tc.wantErr && !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+				t.Fatalf("FetchIssueStatesByIDs error = %v; want typed incomplete response", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("FetchIssueStatesByIDs() error = %v; want nil", err)
+			}
+			if got := states["101"].Outcome; got != tc.wantOutcome {
+				t.Fatalf("outcome = %v; want %v", got, tc.wantOutcome)
+			}
+		})
+	}
+}
+
+func TestGitHubClientFetchIssueStatesTodoRequiresNodeIDOnlyWithBlockers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":101,"number":1,"state":"open","labels":[{"name":"todo"}]}`)
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	ref := IssueRef{ID: "101", Identifier: "#1"}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{ref})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) || states["101"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("with-blockers = (%#v, %v); want unknown and typed incomplete node_id", states, err)
+	}
+	states, err = client.FetchIssueStatesWithoutBlockersByRefs(context.Background(), []IssueRef{ref})
+	if err != nil || states["101"].Outcome != IssueStateOutcomeCurrent {
+		t.Fatalf("without-blockers = (%#v, %v); want current without node_id requirement", states, err)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesTodoRequiresBodyOnlyWithBlockers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/api/issues/1":
+			_, _ = io.WriteString(w, `{"id":101,"node_id":"I_101","number":1,"state":"open","labels":[{"name":"todo"}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+			_, _ = io.WriteString(w, `{"data":{"nodes":[{"id":"I_101","number":1,"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false}}}]}}`)
+		default:
+			t.Fatalf("request = %s %s; want GET issue #1 or POST /graphql", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	ref := IssueRef{ID: "101", Identifier: "#1"}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{ref})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) || states["101"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("with-blockers = (%#v, %v); want unknown and typed incomplete body", states, err)
+	}
+	states, err = client.FetchIssueStatesWithoutBlockersByRefs(context.Background(), []IssueRef{ref})
+	if err != nil || states["101"].Outcome != IssueStateOutcomeCurrent {
+		t.Fatalf("without-blockers = (%#v, %v); want current without body requirement", states, err)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesTodoAcceptsExplicitEmptyBody(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "null", body: "null"},
+		{name: "empty string", body: `""`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/api/issues/1":
+					_, _ = fmt.Fprintf(w, `{"id":101,"node_id":"I_101","number":1,"body":%s,"state":"open","labels":[{"name":"todo"}]}`, tc.body)
+				case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+					_, _ = io.WriteString(w, `{"data":{"nodes":[{"id":"I_101","number":1,"blockedBy":{"nodes":[],"pageInfo":{"hasNextPage":false}}}]}}`)
+				default:
+					t.Fatalf("request = %s %s; want GET issue #1 or POST /graphql", r.Method, r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+			ref := IssueRef{ID: "101", Identifier: "#1"}
+
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{ref})
+			if err != nil || states["101"].Outcome != IssueStateOutcomeCurrent || states["101"].BlockedBy == nil || len(states["101"].BlockedBy) != 0 {
+				t.Fatalf("FetchIssueStatesByRefs = (%#v, %v); want current with non-nil empty blockers", states, err)
+			}
+		})
+	}
+}
+
+func TestGitHubClientFetchIssueStatesIncompletePayloadPreservesLaterCurrent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/1":
+			_, _ = io.WriteString(w, `{"id":101,"number":1,"state":"open"}`)
+		case "/repos/acme/api/issues/2":
+			_, _ = io.WriteString(w, `{"id":202,"number":2,"state":"closed","labels":[]}`)
+		default:
+			t.Fatalf("request path = %q; want issue endpoint #1 or #2", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed incomplete response", err)
+	}
+	if states["101"].Outcome != IssueStateOutcomeUnknown || states["202"].Outcome != IssueStateOutcomeCurrent {
+		t.Fatalf("states = %#v; want incomplete row unknown and later clean row current", states)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesRateLimitStopsLaterRefs(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed rate limit", err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d; want stop after first rate limit", requests)
+	}
+	if states["101"].Outcome != IssueStateOutcomeUnknown || states["202"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want both refs unknown", states)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesRequestDeadlineStopsLaterRefs(t *testing.T) {
+	serverRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		serverRequests++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":202,"number":2,"state":"open","labels":[]}`)
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client.HTTP = &http.Client{Transport: githubPathErrorTransport{
+		base: srv.Client().Transport,
+		path: "/repos/acme/api/issues/1",
+		err:  context.DeadlineExceeded,
+	}}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want request deadline", err)
+	}
+	if serverRequests != 0 {
+		t.Fatalf("server requests = %d; want no second lookup after request deadline", serverRequests)
+	}
+	if states["101"].Outcome != IssueStateOutcomeUnknown || states["202"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want both refs unknown", states)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesUnknownForInconsistentCachedRefOutcome(t *testing.T) {
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token"}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	tests := []struct {
+		name string
+		ref  IssueRef
+	}{
+		{name: "conflicting identifier", ref: IssueRef{ID: "101", Identifier: "#2"}},
+		{name: "malformed identifier", ref: IssueRef{ID: "101", Identifier: "not-a-number"}},
+		{name: "number id conflicts with identifier", ref: IssueRef{ID: "#1", Identifier: "#2"}},
+		{name: "number id conflicts with cache", ref: IssueRef{ID: "#2"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client.cacheIssueNumber(tc.ref.ID, 1)
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{tc.ref})
+			if err != nil {
+				t.Fatalf("FetchIssueStatesByRefs(%+v) error = %v; want nil", tc.ref, err)
+			}
+			if got := states[tc.ref.ID].Outcome; got != IssueStateOutcomeUnknown {
+				t.Fatalf("outcome = %v; want unknown for inconsistent cached ref", got)
+			}
+		})
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d; want inconsistent refs rejected before network lookup", requests)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesOutcomeBlockerFailureOnlyInvalidatesTodo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/api/issues/1":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 101, NodeID: "todo-node", Number: 1, State: "open", Labels: []githubLabel{{Name: "Todo"}}})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/acme/api/issues/2":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 202, NodeID: "done-node", Number: 2, State: "closed", Labels: []githubLabel{{Name: "Done"}}})
+		case r.Method == http.MethodPost && r.URL.Path == "/graphql":
+			http.Error(w, "boom", http.StatusInternalServerError)
+		default:
+			t.Fatalf("request = %s %s; want GET issue #1/#2 or POST /graphql", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "token", ActiveStates: []string{"todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+	refs := []IssueRef{{ID: "101", Identifier: "#1"}, {ID: "202", Identifier: "#2"}}
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), refs)
+	if err == nil {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want blocker hydration error", err)
+	}
+	if got := states["101"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("Todo outcome = %v; want unknown after blocker hydration failure", got)
+	}
+	if got := states["202"].Outcome; got != IssueStateOutcomeCurrent {
+		t.Fatalf("Done outcome = %v; want current despite unrelated blocker failure", got)
+	}
+
+	states, err = client.FetchIssueStatesWithoutBlockersByRefs(context.Background(), refs)
+	if err != nil {
+		t.Fatalf("FetchIssueStatesWithoutBlockersByRefs() error = %v; want nil", err)
+	}
+	if states["101"].Outcome != IssueStateOutcomeCurrent || states["202"].Outcome != IssueStateOutcomeCurrent {
+		t.Fatalf("without-blockers outcomes = %#v; want both current", states)
 	}
 }
 
@@ -983,8 +1415,8 @@ func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t 
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs wrong ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched issue id = %#v, want empty", states)
+	if len(states) != 1 || states["other-global-id"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched issue id = %#v; want explicit unknown", states)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "#7"}})
 	if err != nil {
@@ -997,8 +1429,8 @@ func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t 
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs mismatched #number ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched #number ID = %#v, want empty", states)
+	if len(states) != 1 || states["#8"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched #number ID = %#v; want explicit unknown", states)
 	}
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "7", Identifier: "#7"}})
 	if err != nil {
@@ -1011,24 +1443,24 @@ func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t 
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs mismatched numeric fallback ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for mismatched numeric fallback ID = %#v, want empty", states)
+	if len(states) != 1 || states["5"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states for mismatched numeric fallback ID = %#v; want explicit unknown", states)
 	}
 	client.cacheIssueNumber("5", 5)
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "5", Identifier: "#7"}})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs cached mismatched numeric fallback ID: %v", err)
 	}
-	if len(states) != 0 {
-		t.Fatalf("states for cached mismatched numeric fallback ID = %#v, want empty", states)
+	if len(states) != 1 || states["5"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states for cached mismatched numeric fallback ID = %#v; want explicit unknown", states)
 	}
 	client.cacheIssueNumber("555", 5)
 	states, err = client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "555", Identifier: "#7"}})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByRefs cached global ID with stale identifier: %v", err)
 	}
-	if got := states["555"].State; got != "done" {
-		t.Fatalf("cached global ID state = %q, want done", got)
+	if got := states["555"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("cached global ID outcome = %v; want unknown for stale identifier", got)
 	}
 	states, err = client.FetchIssueStatesByIDs(context.Background(), []string{"987654"})
 	if err != nil {
@@ -1041,8 +1473,12 @@ func TestGitHubClientFetchIssueStatesByRefsUsesIdentifierFallbackWithoutCache(t 
 
 func TestGitHubClientFetchIssueStatesByIDsRequiresToken(t *testing.T) {
 	client := NewGitHubClient(workflow.TrackerConfig{}, "https://api.github.test", "acme", "api")
-	if _, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1"}); err == nil || !strings.Contains(err.Error(), "GitHub tracker api_key") {
-		t.Fatalf("missing token error = %v", err)
+	states, err := client.FetchIssueStatesByIDs(context.Background(), []string{"1", "2", "1", ""})
+	if err == nil {
+		t.Fatal("missing token error = nil; want configuration error")
+	}
+	if len(states) != 2 || states["1"].Outcome != IssueStateOutcomeUnknown || states["2"].Outcome != IssueStateOutcomeUnknown {
+		t.Fatalf("states = %#v; want explicit unknown rows for configuration failure", states)
 	}
 }
 
@@ -1155,6 +1591,283 @@ func TestGitHubClientFetchIssueStatesByRefsPopulatesBlockedByAndDropsDeletedFall
 	}
 	if got := states["230"].BlockedBy; got == nil || len(got) != 0 {
 		t.Fatalf("FetchIssueStatesByRefs(#23).BlockedBy = %#v, want non-nil empty slice for confirmed no blockers", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsRejectsMissingBlockedByPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:     200,
+				NodeID: "I_200",
+				Number: 20,
+				State:  "open",
+				Labels: []githubLabel{{Name: "aiops:todo"}},
+			})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{"id": "I_200", "number": float64(20)},
+			}}})
+		default:
+			t.Fatalf("request path = %q; want issue #20 or /graphql", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed incomplete blockedBy payload", err)
+	}
+	if got := states["200"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want Todo refresh unknown when native blockers are incomplete", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsRejectsDuplicateBlockerSourceNode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{
+				ID:     200,
+				NodeID: "I_200",
+				Number: 20,
+				State:  "open",
+				Labels: []githubLabel{{Name: "aiops:todo"}},
+			})
+		case "/graphql":
+			blockedBy := func(nodes []any) map[string]any {
+				return map[string]any{"nodes": nodes, "pageInfo": map[string]any{"hasNextPage": false}}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{
+					"id": "I_200", "number": float64(20),
+					"blockedBy": blockedBy([]any{map[string]any{
+						"id": "I_210", "databaseId": float64(210), "number": float64(21),
+						"state": "OPEN", "labels": map[string]any{"nodes": []any{}},
+					}}),
+				},
+				map[string]any{"id": "I_200", "number": float64(20), "blockedBy": blockedBy([]any{})},
+			}}})
+		default:
+			t.Fatalf("request path = %q; want issue #20 or /graphql", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed duplicate source-node error", err)
+	}
+	if got := states["200"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want Todo refresh unknown for duplicate native source node", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsRejectsNativeSourceNumberMismatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 200, NodeID: "I_200", Number: 20, State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{"id": "I_200", "number": float64(99), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+			}}})
+		default:
+			t.Fatalf("request path = %q; want issue #20 or /graphql", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+		t.Fatalf("FetchIssueStatesByRefs error = %v; want typed native source-number mismatch", err)
+	}
+	if got := states["200"].Outcome; got != IssueStateOutcomeUnknown {
+		t.Fatalf("outcome = %v; want Todo refresh unknown for mismatched native source number", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesByRefsRejectsUnexpectedOrMissingNativeSourceNodes(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []any
+	}{
+		{
+			name: "unexpected source id",
+			nodes: []any{
+				map[string]any{"id": "I_999", "number": float64(20), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+			},
+		},
+		{name: "missing requested source", nodes: []any{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/repos/acme/api/issues/20":
+					_ = json.NewEncoder(w).Encode(githubIssue{ID: 200, NodeID: "I_200", Number: 20, State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+				case "/graphql":
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": tc.nodes}})
+				default:
+					t.Fatalf("request path = %q; want issue #20 or /graphql", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+			if !errors.Is(err, ErrIssueStateRefreshIncomplete) {
+				t.Fatalf("FetchIssueStatesByRefs error = %v; want typed native source authority error", err)
+			}
+			if got := states["200"].Outcome; got != IssueStateOutcomeUnknown {
+				t.Fatalf("outcome = %v; want Todo refresh unknown for non-authoritative native source set", got)
+			}
+		})
+	}
+}
+
+func TestGitHubClientFetchIssueStatesBodyFallbackHaltStopsLaterBlockerLookups(t *testing.T) {
+	tests := []struct {
+		name      string
+		blocker21 func(http.ResponseWriter)
+		transport error
+		wantErr   error
+	}{
+		{
+			name: "rate limit",
+			blocker21: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusTooManyRequests)
+			},
+			wantErr: ErrRateLimited,
+		},
+		{
+			name:      "request deadline",
+			transport: context.DeadlineExceeded,
+			wantErr:   context.DeadlineExceeded,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var requestedPaths []string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestedPaths = append(requestedPaths, r.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/repos/acme/api/issues/20":
+					_ = json.NewEncoder(w).Encode(githubIssue{ID: 200, NodeID: "I_200", Number: 20, Body: "Depends on #21\nDepends on #22", State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+				case "/repos/acme/api/issues/23":
+					_ = json.NewEncoder(w).Encode(githubIssue{ID: 230, NodeID: "I_230", Number: 23, Body: "Depends on #24", State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+				case "/graphql":
+					_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+						map[string]any{"id": "I_200", "number": float64(20), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+						map[string]any{"id": "I_230", "number": float64(23), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+					}}})
+				case "/repos/acme/api/issues/21":
+					if tc.blocker21 == nil {
+						t.Fatal("blocker #21 handler reached = true; want false with injected transport error")
+					}
+					tc.blocker21(w)
+				case "/repos/acme/api/issues/22", "/repos/acme/api/issues/24":
+					_ = json.NewEncoder(w).Encode(githubIssue{ID: 999, Number: 99, State: "closed", Labels: []githubLabel{{Name: "done"}}})
+				default:
+					t.Fatalf("request path = %q; want source #20/#23, /graphql, or blocker #21/#22/#24", r.URL.Path)
+				}
+			}))
+			defer srv.Close()
+			client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+			client.HTTP = srv.Client()
+			if tc.transport != nil {
+				client.HTTP = &http.Client{Transport: githubPathErrorTransport{base: srv.Client().Transport, path: "/repos/acme/api/issues/21", err: tc.transport}}
+			}
+
+			states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}, {ID: "230", Identifier: "#23"}})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("FetchIssueStatesByRefs error = %v; want %v", err, tc.wantErr)
+			}
+			for _, path := range []string{"/repos/acme/api/issues/22", "/repos/acme/api/issues/24"} {
+				if slices.Contains(requestedPaths, path) {
+					t.Fatalf("requested paths = %v; want later blocker %s skipped after halt", requestedPaths, path)
+				}
+			}
+			if states["200"].Outcome != IssueStateOutcomeUnknown || states["230"].Outcome != IssueStateOutcomeUnknown {
+				t.Fatalf("states = %#v; want Todo refs unknown after body fallback halt", states)
+			}
+		})
+	}
+}
+
+func TestGitHubClientFetchIssueStatesBodyFallbackFailureUsesPlaceholder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 200, NodeID: "I_200", Number: 20, Body: "Depends on #21", State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{"id": "I_200", "number": float64(20), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+			}}})
+		case "/repos/acme/api/issues/21":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			t.Fatalf("request path = %q; want source #20, /graphql, or blocker #21", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	got := states["200"]
+	if got.Outcome != IssueStateOutcomeCurrent || len(got.BlockedBy) != 1 || got.BlockedBy[0].Identifier != "#21" || got.BlockedBy[0].State != "" {
+		t.Fatalf("states[200] = %#v; want current Todo with fail-closed #21 placeholder", got)
+	}
+}
+
+func TestGitHubClientFetchIssueStatesBodyFallbackNumberMismatchFailsClosedWithoutCaching(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/acme/api/issues/20":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 200, NodeID: "I_200", Number: 20, Body: "Depends on #21", State: "open", Labels: []githubLabel{{Name: "aiops:todo"}}})
+		case "/graphql":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"nodes": []any{
+				map[string]any{"id": "I_200", "number": float64(20), "blockedBy": map[string]any{"nodes": []any{}, "pageInfo": map[string]any{"hasNextPage": false}}},
+			}}})
+		case "/repos/acme/api/issues/21":
+			_ = json.NewEncoder(w).Encode(githubIssue{ID: 990, Number: 99, State: "closed", Labels: []githubLabel{{Name: "done"}}})
+		default:
+			t.Fatalf("request path = %q; want source #20, /graphql, or blocker #21", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	client := NewGitHubClient(workflow.TrackerConfig{APIKey: "test-token", ActiveStates: []string{"aiops:todo"}, TerminalStates: []string{"done"}}, srv.URL, "acme", "api")
+	client.HTTP = srv.Client()
+
+	states, err := client.FetchIssueStatesByRefs(context.Background(), []IssueRef{{ID: "200", Identifier: "#20"}})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByRefs() error = %v; want nil", err)
+	}
+	got := states["200"]
+	if got.Outcome != IssueStateOutcomeCurrent || len(got.BlockedBy) != 1 || got.BlockedBy[0].Identifier != "#21" || got.BlockedBy[0].State != "" {
+		t.Fatalf("states[200] = %#v; want current Todo with fail-closed requested #21 placeholder", got)
+	}
+	if number, ok := client.cachedIssueNumber("990"); ok {
+		t.Fatalf("cached mismatched blocker id 990 as issue #%d; want no cache pollution", number)
 	}
 }
 
