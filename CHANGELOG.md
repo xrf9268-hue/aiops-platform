@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.16](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.15...v0.1.16) (2026-07-15)
+
+
+### Bug Fixes
+
+* **doctor:** fail on Codex protocol drift ([#1106](https://github.com/xrf9268-hue/aiops-platform/issues/1106)) ([4b9f053](https://github.com/xrf9268-hue/aiops-platform/commit/4b9f0535fe5d396a6c3b38178023001b5d913f62))
+* **observability:** retain ended session usage ([#1104](https://github.com/xrf9268-hue/aiops-platform/issues/1104)) ([33bb17e](https://github.com/xrf9268-hue/aiops-platform/commit/33bb17e58fe8cd4d2ff8450757ff78e984409f1f))
+* **orchestrator:** make token usage folding exact ([#1103](https://github.com/xrf9268-hue/aiops-platform/issues/1103)) ([dcf47cd](https://github.com/xrf9268-hue/aiops-platform/commit/dcf47cd936c4bc92f33a1ab572e619c1dd046197))
+* **workflow:** close reviewed issues from squash commits ([#1109](https://github.com/xrf9268-hue/aiops-platform/issues/1109)) ([9702dc0](https://github.com/xrf9268-hue/aiops-platform/commit/9702dc07732a88f7547317678baec4e9db178435))
+* **workflow:** make stable-head reviewer retries idempotent ([#1094](https://github.com/xrf9268-hue/aiops-platform/issues/1094)) ([480844b](https://github.com/xrf9268-hue/aiops-platform/commit/480844b2f60baec5ebe44e82ee5710343d2c044a))
+
 ## [0.1.15](https://github.com/xrf9268-hue/aiops-platform/compare/v0.1.14...v0.1.15) (2026-07-03)
 
 
