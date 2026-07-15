@@ -268,9 +268,9 @@ func TestReconcileStartupTolerantOfActiveFetchFailure(t *testing.T) {
 
 // TestReconcileStartupSafeWhenActiveListingCapped pins #401/#402: a partial
 // active list (signaled by tracker.ErrIssueListingCapped) MUST be treated as a
-// fetch failure so reconcile skips cleanup. Otherwise an active workspace that
-// fell past the page cap would be deleted as "unknown" on restart whenever
-// terminal issues are present.
+// fetch failure so reconcile skips cleanup. This preserves the established
+// fail-safe: no terminal workspace is removed from a startup snapshot whose
+// active half is incomplete.
 func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
 	root := t.TempDir()
 	activePath := filepath.Join(root, "acme", "repo", "linear_issue", "LIN-1")
@@ -318,8 +318,8 @@ func TestReconcileStartupSafeWhenActiveListingCapped(t *testing.T) {
 	if reason, _ := payload["reason"].(string); reason != "active_fetch_failed" {
 		t.Fatalf("reconcile_end reason = %q, want \"active_fetch_failed\"", reason)
 	}
-	if errMsg, _ := payload["error"].(string); !strings.Contains(errMsg, "issue_listing_capped") {
-		t.Fatalf("reconcile_end error = %q, want issue_listing_capped category surfaced", errMsg)
+	if errMsg, _ := payload["error"].(string); errMsg != tracker.ErrIssueListingCapped.Error() {
+		t.Fatalf("reconcile_end error = %q, want %q", errMsg, tracker.ErrIssueListingCapped.Error())
 	}
 }
 
@@ -413,8 +413,8 @@ func TestReconcileStartupSafeWhenTerminalListingCapped(t *testing.T) {
 	if reason, _ := payload["reason"].(string); reason != "terminal_fetch_failed" {
 		t.Fatalf("reconcile_end reason = %q, want \"terminal_fetch_failed\"", reason)
 	}
-	if errMsg, _ := payload["error"].(string); !strings.Contains(errMsg, "issue_listing_capped") {
-		t.Fatalf("reconcile_end error = %q, want issue_listing_capped category surfaced", errMsg)
+	if errMsg, _ := payload["error"].(string); errMsg != tracker.ErrIssueListingCapped.Error() {
+		t.Fatalf("reconcile_end error = %q, want %q", errMsg, tracker.ErrIssueListingCapped.Error())
 	}
 	wantPayloadCount(t, payload, "kept", 2)
 	wantPayloadCount(t, payload, "removed", 0)
