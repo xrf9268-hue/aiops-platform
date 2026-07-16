@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-16T02:22:31.622744Z",
+  "sources": [
+    "one-shot supervisor events.jsonl",
+    "live GitHub REST and GraphQL read after fail-closed termination"
+  ],
+  "repository": "zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",
+  "actors": {
+    "operator": {
+      "login": "zjlgdx",
+      "id": 1209636,
+      "type": "User"
+    },
+    "maker": {
+      "login": "xrf-9527",
+      "id": 15884336,
+      "type": "User"
+    },
+    "required_external_bot": {
+      "id": 199175422,
+      "type": "Bot"
+    }
+  },
+  "timeline": [
+    {
+      "at": "2026-07-16T02:06:33.332536Z",
+      "event": "activation_requested",
+      "issue": 1,
+      "actor": "zjlgdx"
+    },
+    {
+      "at": "2026-07-16T02:06:35Z",
+      "event": "labeled",
+      "issue": 1,
+      "label": "aiops:todo",
+      "actor": "zjlgdx"
+    },
+    {
+      "at": "2026-07-16T02:06:35.516941Z",
+      "event": "activation_completed",
+      "issue": 1
+    },
+    {
+      "at": "2026-07-16T02:07:09.242381Z",
+      "event": "maker_claim_started",
+      "issue": 1
+    },
+    {
+      "at": "2026-07-16T02:10:11Z",
+      "event": "pull_request_created",
+      "pr": 3,
+      "actor": "xrf-9527",
+      "headRefOid": "71cb71a31ecc3fde684ddbc7d9cc848ead99b5fa",
+      "baseRefOid": "5e6264cdcfd2decb53491e37de4f825878339487",
+      "baseRefName": "main"
+    },
+    {
+      "at": "2026-07-16T02:10:17Z",
+      "event": "required_check_started",
+      "pr": 3,
+      "check": "build-test"
+    },
+    {
+      "at": "2026-07-16T02:10:26Z",
+      "event": "issue_pr_link_commented",
+      "issue": 1,
+      "comment_id": 4987428020,
+      "actor": "xrf-9527",
+      "body": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/pull/3"
+    },
+    {
+      "at": "2026-07-16T02:10:26.386330Z",
+      "event": "last_successful_supervisor_forge_snapshot",
+      "issue": 1,
+      "pr_discovered": false,
+      "note": "The snapshot's issue-comments result did not yet include the same-second PR-link comment."
+    },
+    {
+      "at": "2026-07-16T02:10:34.245115Z",
+      "event": "supervisor_fail_closed",
+      "issue": 1,
+      "reason": "forge_observation_failed",
+      "error": "forge snapshot exceeded 5.000s"
+    },
+    {
+      "at": "2026-07-16T02:10:34.245348Z",
+      "event": "workers_signaled",
+      "signal": "SIGTERM",
+      "detection_to_signal_ms": 0.260833
+    },
+    {
+      "at": "2026-07-16T02:10:34.293086Z",
+      "event": "workers_stopped",
+      "exit_codes": [
+        0,
+        0
+      ],
+      "sigkill_required": false
+    },
+    {
+      "at": "2026-07-16T02:10:39Z",
+      "event": "required_check_completed",
+      "pr": 3,
+      "check": "build-test",
+      "conclusion": "SUCCESS",
+      "after_supervisor_abort": true
+    }
+  ],
+  "supervisor_observation": {
+    "successful_forge_snapshots": 46,
+    "last_successful_snapshot_at": "2026-07-16T02:10:26.386330Z",
+    "timeout_seconds": 5,
+    "failure_at": "2026-07-16T02:10:34.245115Z",
+    "failure_reason": "forge_observation_failed"
+  },
+  "pull_request": {
+    "number": 3,
+    "state": "OPEN",
+    "body": "Refs #1",
+    "headRefOid": "71cb71a31ecc3fde684ddbc7d9cc848ead99b5fa",
+    "baseRefOid": "5e6264cdcfd2decb53491e37de4f825878339487",
+    "baseRefName": "main",
+    "review_decision": "REVIEW_REQUIRED",
+    "reviews": [],
+    "review_threads": {
+      "total_count": 0,
+      "has_next_page": false
+    },
+    "external_trigger": null,
+    "external_signal": null,
+    "merged_at": null
+  },
+  "issues": [
+    {
+      "number": 1,
+      "state": "OPEN",
+      "labels": [
+        "aiops:todo"
+      ],
+      "closed_at": null
+    },
+    {
+      "number": 2,
+      "state": "OPEN",
+      "labels": [],
+      "activated": false,
+      "closed_at": null
+    }
+  ],
+  "post_abort_reproduction": {
+    "function": "forge_snapshot",
+    "mode": "read-only",
+    "evidence_file": "post-abort-probe.json",
+    "evidence_sha256": "672e266e20c05704e080ae336f69f319466cb7a0dc26e0fda3539128a063eeaa",
+    "elapsed_seconds": 7.355921,
+    "returned_keys": [
+      "issue",
+      "issue_comments",
+      "pr",
+      "pr_comments",
+      "review_threads",
+      "reviews"
+    ],
+    "github_rate_limit": {
+      "rest_core_remaining": 4881,
+      "rest_core_limit": 5000,
+      "graphql_remaining": 4868,
+      "graphql_limit": 5000
+    }
+  }
+}

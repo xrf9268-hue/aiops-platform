@@ -1,0 +1,138 @@
+{
+  "detected_monotonic_ns": 78745689755250,
+  "error": "forge snapshot exceeded 5.000s",
+  "event": "breach",
+  "issue": 1,
+  "limit": 0,
+  "observed": 1,
+  "reason": "forge_observation_failed",
+  "recorded_at": "2026-07-16T02:10:34.245115Z",
+  "states": [
+    {
+      "active_success_no_handoff": null,
+      "agent_default": "codex-app-server",
+      "agent_handoff_reconcile_stopped": null,
+      "blocked": [],
+      "budget_guardrails": {
+        "max_runtime_seconds_per_claim": 7200,
+        "max_tokens_per_claim": 20000000
+      },
+      "codex_totals": {
+        "input_tokens": 571492,
+        "output_tokens": 9172,
+        "seconds_running": 205.001428417,
+        "total_tokens": 580664
+      },
+      "completed": null,
+      "completed_session_usage": [],
+      "counts": {
+        "active_success_no_handoff": 0,
+        "active_success_no_handoff_total": 0,
+        "agent_handoff_reconcile_stopped": 0,
+        "agent_handoff_reconcile_stopped_total": 0,
+        "blocked": 0,
+        "completed": 0,
+        "completed_total": 0,
+        "operator_terminal_stops": 0,
+        "operator_terminal_stops_total": 0,
+        "reconcile_stopped_with_progress": 0,
+        "reconcile_stopped_with_progress_total": 0,
+        "retrying": 0,
+        "running": 1
+      },
+      "generated_at": "2026-07-16T02:10:34.243604Z",
+      "max_concurrent_agents": 1,
+      "operator_terminal_stops": [],
+      "poll_interval_ms": 30000,
+      "rate_limits": {
+        "credits": {
+          "balance": "0",
+          "has_credits": false,
+          "unlimited": false
+        },
+        "individual_limit": null,
+        "limit_id": "codex",
+        "limit_name": null,
+        "plan_type": "pro",
+        "primary": {
+          "resets_at": 1784769208,
+          "used_percent": 11,
+          "window_duration_mins": 10080
+        },
+        "rate_limit_reached_type": null,
+        "secondary": null
+      },
+      "reconcile_stopped_with_progress": null,
+      "retrying": [],
+      "running": [
+        {
+          "agent_model": "gpt-5.6-sol",
+          "agent_provider": "codex-app-server",
+          "codex_app_server_pid": 23211,
+          "issue_id": "4897924244",
+          "issue_identifier": "#1",
+          "issue_url": "https://github.com/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/issues/1",
+          "last_event": "notification",
+          "last_event_at": "2026-07-16T02:10:34.011074Z",
+          "last_message": "",
+          "runtime_seconds": 205.001428417,
+          "session_id": "019f68ad-9da9-7e90-98e1-7fa2e04e78d7-019f68ad-aa8b-7e92-ba02-b6df93aa139b",
+          "started_at": "2026-07-16T10:07:09.242381+08:00",
+          "state": "aiops:todo",
+          "tokens": {
+            "input_tokens": 571492,
+            "output_tokens": 9172,
+            "total_tokens": 580664
+          },
+          "turn_count": 0,
+          "workflow_path": "/private/tmp/aiops-workflow-benchmark-20260715-1117/workflows/high-maker-WORKFLOW.md",
+          "workflow_source": "file",
+          "workspace_path": "/tmp/aiops-workflow-benchmark-20260715-1117/workspaces/maker/zjlgdx/aiops-workflow-bench-high-20260715-1117-v1/github_issue/_1"
+        }
+      ],
+      "version": "v0.1.16"
+    },
+    {
+      "active_success_no_handoff": null,
+      "agent_default": "codex-app-server",
+      "agent_handoff_reconcile_stopped": null,
+      "blocked": [],
+      "budget_guardrails": {
+        "max_runtime_seconds_per_claim": 7200,
+        "max_tokens_per_claim": 12000000
+      },
+      "codex_totals": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "seconds_running": 0,
+        "total_tokens": 0
+      },
+      "completed": null,
+      "completed_session_usage": [],
+      "counts": {
+        "active_success_no_handoff": 0,
+        "active_success_no_handoff_total": 0,
+        "agent_handoff_reconcile_stopped": 0,
+        "agent_handoff_reconcile_stopped_total": 0,
+        "blocked": 0,
+        "completed": 0,
+        "completed_total": 0,
+        "operator_terminal_stops": 0,
+        "operator_terminal_stops_total": 0,
+        "reconcile_stopped_with_progress": 0,
+        "reconcile_stopped_with_progress_total": 0,
+        "retrying": 0,
+        "running": 0
+      },
+      "generated_at": "2026-07-16T02:10:34.244383Z",
+      "max_concurrent_agents": 1,
+      "operator_terminal_stops": [],
+      "poll_interval_ms": 30000,
+      "rate_limits": null,
+      "reconcile_stopped_with_progress": null,
+      "retrying": [],
+      "running": [],
+      "version": "v0.1.16"
+    }
+  ]
+}

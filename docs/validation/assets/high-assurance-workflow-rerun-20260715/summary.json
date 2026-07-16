@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-16",
+  "issue": 1117,
+  "repository": "zjlgdx/aiops-workflow-bench-high-20260715-1117-v1",
+  "seed_sha": "5e6264cdcfd2decb53491e37de4f825878339487",
+  "result": "aborted_fail_closed",
+  "verdict": "keep disabled pending a named defect",
+  "named_defect": {
+    "name": "PR-present forge snapshot cannot satisfy the five-second evidence deadline",
+    "scope": "one-shot validation supervisor",
+    "description": "After an issue comment exposed PR #3, forge_snapshot performed six sequential gh subprocess reads under one five-second overall deadline. The live arm exceeded that deadline and a persisted post-abort read-only call of the identical function took 7.355921 seconds.",
+    "effect": "The fixed arm stopped before reviewer, external-review, merge, issue-2, or holdout evidence could be collected; the high-assurance profile therefore remains uncertified."
+  },
+  "pins": {
+    "worker_version": "v0.1.16",
+    "worker_release_commit": "a7a973cb83c42c60f7f8d9d11c9d7b7dda08159f",
+    "worker_binary_sha256": "7b58d23feba8a5167b60e2aafe9d441bbdebe3e2136737562000df7d299a7c35",
+    "codex_cli_version": "0.144.4",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "high",
+    "sandbox": "danger-full-access",
+    "approval_policy": "never",
+    "max_concurrent_agents_per_worker": 1,
+    "required_check": "build-test",
+    "protocol_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
+    "supervisor_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
+    "holdout_sha256": "cc389a18573c0687b77ee510f1779750322300a302483293599f6779ed153a21",
+    "maker_workflow_sha256": "8b0c7f715394a1540aa529862dfdd9494b98c182a6d2ba23f3d919f1977468c7",
+    "reviewer_workflow_sha256": "ce7727b4420c83ba0ac865557c5da29e47db0e351f33ab8352ef0787f90e43ee",
+    "preflight_sha256": "1d90cca3fcf1fd795bedc65ecf7b1efb5c70899bf736f646353846d43f5b736b",
+    "post_abort_probe_sha256": "672e266e20c05704e080ae336f69f319466cb7a0dc26e0fda3539128a063eeaa"
+  },
+  "roles": {
+    "maker": "xrf-9527",
+    "reviewer": "zjlgdx",
+    "setup": "zjlgdx",
+    "operator": "zjlgdx"
+  },
+  "limits_per_issue": {
+    "worker_claims": 4,
+    "worker_observed_tokens": 3500000,
+    "external_exact_tuple_wait_seconds": 600,
+    "wall_seconds": 1800,
+    "forge_snapshot_timeout_seconds": 5
+  },
+  "activation": {
+    "issue_1_requested_at": "2026-07-16T02:06:33.332536Z",
+    "issue_1_completed_at": "2026-07-16T02:06:35.516941Z",
+    "actor": "zjlgdx",
+    "actor_id": 1209636,
+    "issue_2_activated": false
+  },
+  "worker_observed": {
+    "activation_baseline": {
+      "maker_total_tokens": 0,
+      "reviewer_total_tokens": 0
+    },
+    "terminal": {
+      "maker": {
+        "input_tokens": 571492,
+        "output_tokens": 9172,
+        "total_tokens": 580664,
+        "runtime_seconds": 205.001428417,
+        "claims": 1
+      },
+      "reviewer": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "runtime_seconds": 0,
+        "claims": 0
+      },
+      "combined_delta": {
+        "input_tokens": 571492,
+        "output_tokens": 9172,
+        "total_tokens": 580664,
+        "runtime_seconds": 205.001428417,
+        "claims": 1,
+        "input_plus_output_tokens": 580664,
+        "component_sum_minus_reported_total": 0
+      }
+    }
+  },
+  "stop": {
+    "reason": "forge_observation_failed",
+    "error": "forge snapshot exceeded 5.000s",
+    "breach_at": "2026-07-16T02:10:34.245115Z",
+    "activation_request_to_breach_seconds": 240.912579,
+    "activation_complete_to_breach_seconds": 238.728174,
+    "detection_to_signal_ms": 0.260833,
+    "signal": "SIGTERM",
+    "sigkill_required": false,
+    "worker_exit_codes": [
+      0,
+      0
+    ],
+    "successful_forge_snapshots": 46,
+    "last_successful_forge_snapshot_at": "2026-07-16T02:10:26.386330Z"
+  },
+  "holdout": {
+    "status": "not_run",
+    "reason": "The arm stopped before both issues closed; the protocol makes the fixed public regression suite ineligible on an incomplete backlog."
+  },
+  "issues": [
+    {
+      "number": 1,
+      "result": "open_after_supervisor_fail_closed",
+      "lifecycle_label": "aiops:todo",
+      "claims": {
+        "maker": 1,
+        "reviewer": 0
+      },
+      "pr": {
+        "number": 3,
+        "state": "OPEN",
+        "body": "Refs #1",
+        "created_at": "2026-07-16T02:10:11Z",
+        "headRefOid": "71cb71a31ecc3fde684ddbc7d9cc848ead99b5fa",
+        "baseRefOid": "5e6264cdcfd2decb53491e37de4f825878339487",
+        "baseRefName": "main",
+        "required_check": {
+          "name": "build-test",
+          "started_at": "2026-07-16T02:10:17Z",
+          "completed_at": "2026-07-16T02:10:39Z",
+          "conclusion": "SUCCESS",
+          "completed_after_abort": true
+        },
+        "review_threads": 0,
+        "reviews": 0,
+        "merged_at": null
+      }
+    },
+    {
+      "number": 2,
+      "result": "not_activated",
+      "labels": [],
+      "claims": {
+        "maker": 0,
+        "reviewer": 0
+      }
+    }
+  ],
+  "external_review": {
+    "triggered": false,
+    "reliable_signal_observed": false,
+    "observed_usage": "not applicable; no trigger occurred",
+    "token_accounting_surface": "unmeasured"
+  },
+  "unmeasured_token_sources": [
+    "external GitHub Codex review",
+    "any external reviewer",
+    "otherwise unreported nested or subagent work"
+  ],
+  "relative_to_1089_standard": {
+    "standard_total_tokens": 4206604,
+    "standard_runtime_seconds": 1058.739628,
+    "standard_wall_seconds": 1166,
+    "partial_arm_percent_of_standard_tokens": 13.803629,
+    "partial_arm_percent_of_standard_runtime": 19.36278,
+    "partial_arm_percent_of_standard_wall": 20.661456,
+    "comparability": "The new arm stopped during issue 1 maker delivery, so these percentages describe only partial consumed cost and are not efficiency comparisons."
+  },
+  "continuation_semantics": {
+    "observed_continuations": 0,
+    "separate_issue_required": false,
+    "reason": "The arm stopped before any continuation; it provides no evidence that SPEC's one-second continuation caused waste."
+  }
+}

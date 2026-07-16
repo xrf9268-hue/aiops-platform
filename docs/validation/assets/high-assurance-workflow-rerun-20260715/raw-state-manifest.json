@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "description": "Full JSON values persisted by the one-shot supervisor at selected boundaries. Each file was extracted from one events.jsonl record and sorted for stable serialization; fields were not repaired or redacted. These are supervisor-persisted payloads, not byte-for-byte HTTP response bodies.",
+  "responses": [
+    {
+      "file": "raw-state/activation-baseline.json",
+      "sha256": "614d1cdcd464d307411680a8a506520f191c4fc16764031f6521cf3ececed292",
+      "boundary": "activation-baseline",
+      "source_event": "workers_ready",
+      "recorded_at": "2026-07-16T02:06:32.034992Z",
+      "generated_at": [
+        "2026-07-16T02:06:32.03402Z",
+        "2026-07-16T02:06:32.034661Z"
+      ]
+    },
+    {
+      "file": "raw-state/first-claim.json",
+      "sha256": "3cf6c42ceeb796a32a0845bd4724bca1085513a246efcee783032a50151ae106",
+      "boundary": "first-maker-claim",
+      "source_event": "worker_state",
+      "recorded_at": "2026-07-16T02:07:09.272002Z",
+      "generated_at": [
+        "2026-07-16T02:07:09.268608Z",
+        "2026-07-16T02:07:09.270264Z"
+      ]
+    },
+    {
+      "file": "raw-state/last-successful-forge.json",
+      "sha256": "0834b596bcda15321d2188f4f5d2e4d94a1790839a6ca2ffb0238d5db898c81e",
+      "boundary": "last-successful-forge-snapshot",
+      "source_event": "forge_state",
+      "recorded_at": "2026-07-16T02:10:26.386330Z"
+    },
+    {
+      "file": "raw-state/terminal-breach.json",
+      "sha256": "05971d4e442f883190d2b341fd259460e1cdd10f692040fc8174ad626dbec86f",
+      "boundary": "terminal-fail-closed",
+      "source_event": "breach",
+      "recorded_at": "2026-07-16T02:10:34.245115Z",
+      "generated_at": [
+        "2026-07-16T02:10:34.243604Z",
+        "2026-07-16T02:10:34.244383Z"
+      ]
+    }
+  ]
+}
