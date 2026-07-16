@@ -212,6 +212,21 @@ class RunDirectoryTests(unittest.TestCase):
                     }
                 )
 
+    def test_fresh_directories_reject_nested_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            shared = root / "shared"
+
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                supervisor.validate_fresh_directories(
+                    {
+                        "maker_workspace": shared,
+                        "reviewer_workspace": shared / "reviewer",
+                        "maker_mirror": root / "maker-mirror",
+                        "reviewer_mirror": root / "reviewer-mirror",
+                    }
+                )
+
     def test_fresh_directories_reject_nonempty_path(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -119,7 +119,8 @@ post-abort evidence.
 Final review also found that the at-activation supervisor did not enforce or
 persist the activation gate requiring pairwise-distinct, empty maker/reviewer
 workspaces and mirror roots. The published supervisor now derives workspace
-roots from both workflow front matters, rejects duplicate or non-empty roots,
+roots from both workflow front matters, rejects duplicate, overlapping, or
+non-empty roots,
 and persists `preflight_directories` before forge reads or worker start. It
 also replaces error-text classification with a dedicated counter-regression
 exception and removes an unused field. Those post-run fixes improve the next

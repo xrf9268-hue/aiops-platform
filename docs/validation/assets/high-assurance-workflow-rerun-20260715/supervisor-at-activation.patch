@@ -1,20 +1,11 @@
 --- published-supervisor.py
 +++ supervisor-at-activation.py
-@@ -54,10 +54,6 @@
-     limit: float | int
- 
- 
+@@ -57,4 +56,0 @@
 -class CounterRegressionError(ValueError):
 -    """A monotonic worker token counter moved backwards."""
 -
 -
- @dataclasses.dataclass(frozen=True)
- class WorkerSpec:
-     role: str
-@@ -198,58 +194,6 @@
-         json.dumps(canonical, sort_keys=True, separators=(",", ":")) + "\n"
-     ).encode()
-     return hashlib.sha256(encoded).hexdigest()
+@@ -201,60 +196,0 @@
 -
 -
 -def workflow_workspace_root(workflow: Path) -> Path:
@@ -57,6 +48,14 @@
 -    resolved = {name: path.resolve() for name, path in directories.items()}
 -    if len(set(resolved.values())) != len(resolved):
 -        raise ValueError(f"run directories must be pairwise distinct: {resolved}")
+-    items = list(resolved.items())
+-    for index, (left_name, left_path) in enumerate(items):
+-        for right_name, right_path in items[index + 1 :]:
+-            if left_path in right_path.parents or right_path in left_path.parents:
+-                raise ValueError(
+-                    "run directories must not overlap: "
+-                    f"{left_name}={left_path}, {right_name}={right_path}"
+-                )
 -    manifest: dict[str, dict[str, Any]] = {}
 -    for name, path in resolved.items():
 -        existed = path.exists()
@@ -67,30 +66,12 @@
 -            raise ValueError(f"{name} must be empty: {path} contains {entries}")
 -        manifest[name] = {"path": str(path), "existed": existed, "empty": True}
 -    return manifest
- 
- 
- def token_total(state: dict[str, Any]) -> int:
-@@ -267,7 +211,7 @@
-     for index, (state, baseline) in enumerate(zip(states, baselines, strict=True)):
-         current = token_total(state)
-         if current < baseline:
+@@ -278 +214 @@
 -            raise CounterRegressionError(
 +            raise ValueError(
-                 f"worker {index} token counter regressed from baseline {baseline} to {current}"
-             )
-         total += current - baseline
-@@ -773,6 +717,7 @@
-         self.args = args
-         self.run_root = Path(args.run_root).resolve()
-         self.event_log = self.run_root / "evidence" / "events.jsonl"
+@@ -783,0 +720 @@
 +        self.raw_dir = self.run_root / "evidence" / "raw"
-         self.operator = GhClient(Path(args.operator_gh_config_dir).resolve())
-         self.workers: list[WorkerProcess] = []
-         self.trigger_tuples: dict[int, ReviewTuple] = {}
-@@ -897,19 +842,6 @@
-                     for issue in issues
-                 ],
-             },
+@@ -908,13 +844,0 @@
 -        )
 -
 -    def verify_run_directories(self) -> None:
@@ -104,44 +85,23 @@
 -        append_event(
 -            self.event_log,
 -            {"event": "preflight_directories", "directories": manifest},
-         )
- 
-     def start_workers(self) -> None:
-@@ -1167,7 +1099,7 @@
-                 for index, state in enumerate(states):
-                     current = token_total(state)
-                     if current < previous_totals[index]:
+@@ -1178 +1102 @@
 -                        raise CounterRegressionError(
 +                        raise ValueError(
-                             f"worker {index} token counter regressed "
-                             f"from {previous_totals[index]} to {current}"
-                         )
-@@ -1184,14 +1116,13 @@
-                     elapsed_seconds=now - started,
-                     issue_closed=is_closed(forge),
-                 )
+@@ -1195,6 +1118,0 @@
 -            except CounterRegressionError as exc:
 -                breach = LimitBreach("counter_regression", 1, 0)
 -                self.abort(
 -                    issue_number, breach, states, {"error": str(exc), "forge": forge}
-+            except ValueError as exc:
+-                )
+-                return False, states
+@@ -1202 +1120,6 @@
+-                breach = LimitBreach("token_accounting_failed", 1, 0)
 +                reason = (
 +                    "counter_regression"
 +                    if "regressed" in str(exc)
 +                    else "token_accounting_failed"
-                 )
--                return False, states
--            except ValueError as exc:
--                breach = LimitBreach("token_accounting_failed", 1, 0)
++                )
 +                breach = LimitBreach(reason, 1, 0)
-                 self.abort(
-                     issue_number, breach, states, {"error": str(exc), "forge": forge}
-                 )
-@@ -1286,7 +1217,6 @@
-     def run(self) -> int:
-         self.run_root.mkdir(parents=True, exist_ok=True)
-         self.verify_files()
+@@ -1297 +1219,0 @@
 -        self.verify_run_directories()
-         self.verify_identities_and_initial_state()
-         try:
-             self.start_workers()

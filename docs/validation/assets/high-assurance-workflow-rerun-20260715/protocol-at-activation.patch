@@ -1,9 +1,9 @@
 --- published-protocol.md
 +++ protocol-at-activation.md
-@@ -1,10 +1,7 @@
+@@ -1 +1 @@
 -# High-assurance workflow rerun preregistration and pre-activation amendment
 +# High-assurance workflow rerun preregistration
- 
+@@ -3,5 +3,2 @@
 -The initial decision rule and stop contract were recorded on 2026-07-15 before
 -creation of the disposable repository. After repository creation but before
 -issue activation or worker start, the live permission check produced the
@@ -11,6 +11,3 @@
 -that amendment was frozen.
 +Recorded on 2026-07-15 before creation of the disposable repository, before
 +either issue existed in that repository, and before either worker started.
- 
- ## Question and decision rule
- 

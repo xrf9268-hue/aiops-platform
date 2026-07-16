@@ -240,6 +240,14 @@ def validate_fresh_directories(
     resolved = {name: path.resolve() for name, path in directories.items()}
     if len(set(resolved.values())) != len(resolved):
         raise ValueError(f"run directories must be pairwise distinct: {resolved}")
+    items = list(resolved.items())
+    for index, (left_name, left_path) in enumerate(items):
+        for right_name, right_path in items[index + 1 :]:
+            if left_path in right_path.parents or right_path in left_path.parents:
+                raise ValueError(
+                    "run directories must not overlap: "
+                    f"{left_name}={left_path}, {right_name}={right_path}"
+                )
     manifest: dict[str, dict[str, Any]] = {}
     for name, path in resolved.items():
         existed = path.exists()

@@ -4,13 +4,13 @@
   "artifacts": [
     {
       "published_file": "supervisor.py",
-      "published_sha256": "f09c26a64768e78c1f7aec606b202912abba7925607c2352d4ccc61f72a74bfa",
+      "published_sha256": "a33174ee733391876955b8dc4f4d0d9df3eaa25d7d015796de4a7b047e54211b",
       "at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
       "reconstruction_patch": "supervisor-at-activation.patch",
-      "reconstruction_patch_sha256": "f50810d3efcc6a8cbe99d346654cebe01ff96d5518d92544f99e970f1d2eaacf",
+      "reconstruction_patch_sha256": "0293a3342cfd0c9a489027f239b09b387576580a6462eca2e7f5a39a2555d400",
       "post_run_changes": [
         "typed counter-regression classification",
-        "pairwise-distinct and empty workspace/mirror activation gate",
+        "non-overlapping and empty workspace/mirror activation gate",
         "persisted preflight_directories evidence",
         "unused raw_dir removal"
       ]
@@ -20,7 +20,7 @@
       "published_sha256": "31c4bd49690a320daaf5e3d0c44e6b987aab0bb439d4aa514c0da4a9d41c111c",
       "at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
       "reconstruction_patch": "protocol-at-activation.patch",
-      "reconstruction_patch_sha256": "d091f499be0bc13f389bbac478f4cc8c52ccca5cf6b7a95ba4b25465932e0437",
+      "reconstruction_patch_sha256": "140782dd3098e7a9413c3906112d5495b5c280a5dfdaea0c291d592357e787c0",
       "post_run_changes": [
         "chronology-only header correction distinguishing initial preregistration from the pre-activation permission amendment"
       ]
