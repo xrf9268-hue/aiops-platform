@@ -1103,8 +1103,8 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     proc_root,
                     101,
                     "S",
-                    99,
-                    session=99,
+                    43,
+                    session=42,
                     start_time=999_999,
                 )
                 return 900
