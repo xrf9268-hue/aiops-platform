@@ -40,13 +40,47 @@ def row(number, **extra):
     return {"issue_identifier": f"#{number}", **extra}
 
 
-def write_proc_stat(proc_root, pid, state, process_group, *, session=None):
+def proc_stat_text(
+    pid, state, process_group, session, *, num_threads=1, start_time=None
+):
+    if start_time is None:
+        start_time = pid * 1_000
+    fields = [
+        state,
+        "1",
+        str(process_group),
+        str(session),
+        *(["0"] * 13),
+        str(num_threads),
+        "0",
+        str(start_time),
+    ]
+    return f"{pid} (worker) child) {' '.join(fields)}\n"
+
+
+def write_proc_stat(
+    proc_root,
+    pid,
+    state,
+    process_group,
+    *,
+    session=None,
+    num_threads=1,
+    start_time=None,
+):
     if session is None:
         session = process_group
     process_root = proc_root / str(pid)
     process_root.mkdir(exist_ok=True)
     (process_root / "stat").write_text(
-        f"{pid} (worker) child) {state} 1 {process_group} {session} 0\n",
+        proc_stat_text(
+            pid,
+            state,
+            process_group,
+            session,
+            num_threads=num_threads,
+            start_time=start_time,
+        ),
         encoding="utf-8",
     )
 
@@ -55,7 +89,7 @@ def write_proc_visibility_proof(proc_root, *, mount_options="rw,nosuid,nodev"):
     self_root = proc_root / "self"
     self_root.mkdir(exist_ok=True)
     (self_root / "stat").write_text(
-        f"{os.getpid()} (python) S 1 {os.getpgrp()} {os.getpgrp()} 0\n",
+        proc_stat_text(os.getpid(), "S", os.getpgrp(), os.getsid(0)),
         encoding="utf-8",
     )
     (proc_root / "mounts").write_text(
@@ -763,11 +797,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 self.assertTrue(wait_failed)
                 self.assertIsNotNone(real_poll())
                 self.assertEqual(len(caught.exception.failures), 2)
-                self.assertIn(
-                    "injected poll failure", str(caught.exception.failures[0])
-                )
-                self.assertIn(
-                    "injected wait failure", str(caught.exception.failures[1])
+                self.assertEqual(
+                    {str(failure) for failure in caught.exception.failures},
+                    {"injected poll failure", "injected wait failure"},
                 )
                 events = [
                     json.loads(line)
@@ -784,6 +816,7 @@ class WorkflowAndAbortTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             proc_root = Path(temp)
             write_proc_visibility_proof(proc_root)
+            write_proc_stat(proc_root, 42, "Z", 42)
             write_proc_stat(proc_root, 101, "Z", 42)
             write_proc_stat(proc_root, 102, "X", 42)
             write_proc_stat(proc_root, 103, "x", 42)
@@ -795,6 +828,18 @@ class WorkflowAndAbortTests(unittest.TestCase):
             ):
                 self.assertFalse(supervisor.process_group_alive(42))
                 write_proc_stat(proc_root, 105, "S", 43, session=42)
+                self.assertTrue(supervisor.process_group_alive(42))
+
+    def test_linux_group_scan_treats_terminal_leader_with_threads_as_live(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proc_root = Path(temp)
+            write_proc_visibility_proof(proc_root)
+            write_proc_stat(proc_root, 42, "Z", 42, num_threads=2)
+            with (
+                mock.patch.object(supervisor, "PROC_ROOT", proc_root, create=True),
+                mock.patch.object(supervisor.sys, "platform", "linux"),
+                mock.patch.object(supervisor.os, "killpg"),
+            ):
                 self.assertTrue(supervisor.process_group_alive(42))
 
     def test_linux_group_scan_fails_closed_when_proc_state_is_unknown(self):
@@ -811,11 +856,12 @@ class WorkflowAndAbortTests(unittest.TestCase):
             ):
                 self.assertTrue(supervisor.process_group_alive(42))
 
-    def test_linux_group_scan_fails_closed_on_unreadable_or_invalid_stat(self):
+    def test_linux_group_scan_handles_disappeared_or_unreadable_stat(self):
         for failure in ("disappeared", "permission", "invalid_utf8"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
                 proc_root = Path(temp)
                 write_proc_visibility_proof(proc_root)
+                write_proc_stat(proc_root, 42, "Z", 42)
                 write_proc_stat(proc_root, 101, "S", 42)
                 write_proc_stat(proc_root, 102, "Z", 42)
                 stat_path = proc_root / "101" / "stat"
@@ -836,7 +882,10 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     mock.patch.object(Path, "read_text", new=read_or_fail),
                     mock.patch.object(supervisor.os, "killpg"),
                 ):
-                    self.assertTrue(supervisor.process_group_alive(42))
+                    self.assertEqual(
+                        supervisor.process_group_alive(42),
+                        failure != "disappeared",
+                    )
 
     def test_linux_group_scan_requires_visible_stable_membership(self):
         for new_state in ("S", "Z"):
@@ -846,6 +895,7 @@ class WorkflowAndAbortTests(unittest.TestCase):
             ):
                 proc_root = Path(temp)
                 write_proc_visibility_proof(proc_root)
+                write_proc_stat(proc_root, 42, "Z", 42)
                 write_proc_stat(proc_root, 101, "Z", 42)
                 real_iterdir = Path.iterdir
                 scan_count = 0
@@ -871,6 +921,17 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     )
                 self.assertEqual(scan_count, 2 if new_state == "S" else 3)
 
+    def test_linux_group_scan_fails_closed_without_session_leader(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proc_root = Path(temp)
+            write_proc_visibility_proof(proc_root)
+            write_proc_stat(proc_root, 101, "Z", 42)
+            with (
+                mock.patch.object(supervisor, "PROC_ROOT", proc_root, create=True),
+                mock.patch.object(supervisor.sys, "platform", "linux"),
+            ):
+                self.assertTrue(supervisor.process_group_alive(42))
+
     def test_linux_group_scan_rejects_hidden_proc_and_non_linux_proc(self):
         with tempfile.TemporaryDirectory() as temp:
             proc_root = Path(temp)
@@ -884,7 +945,12 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 self.assertTrue(supervisor.process_group_alive(42))
             write_proc_visibility_proof(proc_root)
             (proc_root / "self" / "stat").write_text(
-                f"{os.getpid() + 1} (python) S 1 {os.getpgrp()} {os.getpgrp()} 0\n",
+                proc_stat_text(
+                    os.getpid() + 1,
+                    "S",
+                    os.getpgrp(),
+                    os.getpgrp(),
+                ),
                 encoding="utf-8",
             )
             with (
@@ -901,8 +967,195 @@ class WorkflowAndAbortTests(unittest.TestCase):
             ):
                 self.assertTrue(supervisor.process_group_alive(42))
 
-    def test_kill_survivors_uses_group_existence_before_final_zombie_check(self):
+    def test_proc_visibility_rejects_stacked_hidden_mount(self):
+        for hidden_first in (False, True):
+            with (
+                self.subTest(hidden_first=hidden_first),
+                tempfile.TemporaryDirectory() as temp,
+            ):
+                proc_root = Path(temp)
+                write_proc_visibility_proof(proc_root)
+                safe = f"proc {proc_root.resolve()} proc rw,nosuid,nodev 0 0\n"
+                hidden = f"proc {proc_root.resolve()} proc rw,hidepid=invisible 0 0\n"
+                (proc_root / "mounts").write_text(
+                    hidden + safe if hidden_first else safe + hidden,
+                    encoding="utf-8",
+                )
+                with (
+                    mock.patch.object(supervisor, "PROC_ROOT", proc_root, create=True),
+                    mock.patch.object(supervisor.sys, "platform", "linux"),
+                ):
+                    self.assertFalse(supervisor.proc_visibility_complete())
+
+    def test_signal_groups_never_reaps_worker_before_signaling(self):
         process = mock.Mock(pid=42)
+        process.returncode = None
+        attempt = supervisor.TerminationAttempt([process], Path("unused"))
+        with (
+            mock.patch.object(supervisor.os, "killpg"),
+            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+        ):
+            attempt.signal_groups(signal.SIGTERM)
+        process.poll.assert_not_called()
+
+    def test_grace_and_kill_never_reap_before_last_signal(self):
+        process = mock.Mock(pid=42)
+        process.returncode = None
+        attempt = supervisor.TerminationAttempt([process], Path("unused"))
+        with (
+            mock.patch.object(attempt, "group_alive", return_value=False),
+            mock.patch.object(supervisor.os, "killpg"),
+            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+        ):
+            attempt.wait_for_grace(0.01)
+            attempt.kill_survivors()
+        process.poll.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_incomplete_session_is_not_reaped_before_outer_retry(self):
+        process = mock.Mock(pid=42)
+        process.returncode = None
+        with (
+            mock.patch.object(supervisor, "append_event"),
+            mock.patch.object(supervisor, "process_group_exists", return_value=True),
+            mock.patch.object(supervisor, "process_group_alive", return_value=True),
+            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+            mock.patch.object(supervisor.os, "killpg"),
+        ):
+            with self.assertRaises(supervisor.WorkersStillRunningError):
+                supervisor.terminate_workers(
+                    [process],
+                    Path("unused"),
+                    {"event": "breach", "reason": "test"},
+                    grace_seconds=0,
+                )
+        process.poll.assert_not_called()
+        process.wait.assert_not_called()
+
+    def test_reaped_leader_never_authorizes_numeric_session_signaling(self):
+        process = mock.Mock(pid=42)
+        process.returncode = 0
+        attempt = supervisor.TerminationAttempt([process], Path("unused"))
+        with (
+            mock.patch.object(supervisor.os, "killpg") as killpg,
+            mock.patch.object(supervisor, "linux_session_pidfds") as pidfds,
+        ):
+            self.assertEqual(attempt.signal_groups(signal.SIGKILL), [])
+            self.assertTrue(attempt.group_alive(process))
+        killpg.assert_not_called()
+        pidfds.assert_not_called()
+
+    def test_no_live_proof_precedes_reap_and_no_scan_follows(self):
+        process = mock.Mock(pid=42)
+        process.returncode = None
+        order = []
+        process.wait.side_effect = lambda timeout: order.append("wait")
+        process.poll.side_effect = lambda: order.append("poll") or 0
+
+        def prove_stopped(_session_id):
+            order.append("proof")
+            return False
+
+        with (
+            mock.patch.object(supervisor, "append_event"),
+            mock.patch.object(supervisor, "process_group_exists", return_value=False),
+            mock.patch.object(supervisor, "process_group_alive", new=prove_stopped),
+            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+        ):
+            supervisor.terminate_workers(
+                [process],
+                Path("unused"),
+                {"event": "breach", "reason": "test"},
+                grace_seconds=0,
+            )
+        self.assertLess(
+            max(i for i, item in enumerate(order) if item == "proof"),
+            order.index("wait"),
+        )
+        self.assertEqual(order[-1], "poll")
+
+    def test_session_member_signal_uses_pidfd_and_closes_it(self):
+        process = mock.Mock(pid=42)
+        process.returncode = None
+        attempt = supervisor.TerminationAttempt([process], Path("unused"))
+        with (
+            mock.patch.object(
+                supervisor, "linux_session_pidfds", return_value=[(101, 900)]
+            ),
+            mock.patch.object(
+                supervisor.signal, "pidfd_send_signal", create=True
+            ) as send,
+            mock.patch.object(supervisor.os, "close") as close,
+        ):
+            self.assertEqual(attempt.signal_session_members(42, signal.SIGTERM), [101])
+        send.assert_called_once_with(900, signal.SIGTERM, None, 0)
+        close.assert_called_once_with(900)
+
+    def test_pidfd_open_recheck_rejects_reused_process_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proc_root = Path(temp)
+            write_proc_visibility_proof(proc_root)
+            write_proc_stat(proc_root, 42, "Z", 42)
+            write_proc_stat(proc_root, 101, "S", 43, session=42)
+
+            def reuse_pid(_pid, _flags):
+                write_proc_stat(
+                    proc_root,
+                    101,
+                    "S",
+                    99,
+                    session=99,
+                    start_time=999_999,
+                )
+                return 900
+
+            with (
+                mock.patch.object(supervisor, "PROC_ROOT", proc_root, create=True),
+                mock.patch.object(supervisor.sys, "platform", "linux"),
+                mock.patch.object(
+                    supervisor.os, "pidfd_open", new=reuse_pid, create=True
+                ),
+                mock.patch.object(supervisor.os, "close") as close,
+                mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
+            ):
+                self.assertEqual(supervisor.linux_session_pidfds(42), [])
+            close.assert_called_once_with(900)
+
+    def test_state_checks_do_not_reap_worker_before_cleanup(self):
+        process = mock.Mock(pid=42)
+        runtime = object.__new__(supervisor.Supervisor)
+        runtime.args = types.SimpleNamespace(
+            state_poll_seconds=0.2,
+            ready_timeout_seconds=1,
+        )
+        runtime.workers = [
+            supervisor.WorkerProcess(
+                types.SimpleNamespace(role="maker", port=9001),
+                process,
+                mock.Mock(),
+            )
+        ]
+        with mock.patch.object(
+            supervisor, "fetch_json", side_effect=RuntimeError("worker unavailable")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "worker unavailable"):
+                runtime.states()
+        with (
+            mock.patch.object(
+                supervisor, "fetch_text", side_effect=RuntimeError("not ready")
+            ),
+            mock.patch.object(
+                supervisor.time, "monotonic", side_effect=[0.0, 0.0, 2.0]
+            ),
+            mock.patch.object(supervisor.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+                runtime.wait_ready()
+        process.poll.assert_not_called()
+
+    def test_kill_survivors_skips_terminal_only_session(self):
+        process = mock.Mock(pid=42)
+        process.returncode = None
         process.poll.return_value = None
         attempt = supervisor.TerminationAttempt([process], Path("unused"))
         with (
@@ -912,8 +1165,8 @@ class WorkflowAndAbortTests(unittest.TestCase):
             mock.patch.object(supervisor, "process_group_alive", return_value=False),
             mock.patch.object(supervisor.os, "killpg") as killpg,
         ):
-            self.assertEqual(attempt.kill_survivors(), [42])
-        killpg.assert_called_once_with(42, signal.SIGKILL)
+            self.assertEqual(attempt.kill_survivors(), [])
+        killpg.assert_not_called()
 
     def test_termination_signals_group_after_worker_leader_exits(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -953,9 +1206,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
             try:
                 assert parent.stdout is not None
                 child_pid = int(parent.stdout.readline().strip())
-                parent.wait(timeout=2)
                 parent.stdout.close()
-                self.assertIsNotNone(parent.poll())
+                time.sleep(0.1)
+                self.assertIsNone(parent.returncode)
                 supervisor.terminate_workers(
                     [parent],
                     root / "events.jsonl",
@@ -970,7 +1223,85 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     except ProcessLookupError:
                         pass
 
-    def test_direct_kill_of_leader_keeps_live_child_group_owned(self):
+    @unittest.skipUnless(
+        sys.platform.startswith("linux"), "requires Linux procfs session evidence"
+    )
+    def test_termination_stops_sibling_group_after_worker_leader_exits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            ready = root / "sibling-ready"
+            child_code = (
+                "import os, pathlib, time\n"
+                "os.setpgid(0, 0)\n"
+                f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
+                "time.sleep(60)\n"
+            )
+            parent_code = (
+                "import os, pathlib, subprocess, time\n"
+                f"ready = pathlib.Path({str(ready)!r})\n"
+                f"child = subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}])\n"
+                "while not ready.exists():\n"
+                "    time.sleep(.01)\n"
+                "print(child.pid, os.getpgid(child.pid), os.getsid(child.pid), flush=True)\n"
+            )
+            parent = subprocess.Popen(
+                [sys.executable, "-c", parent_code],
+                start_new_session=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+            child_pid = None
+            child_group = None
+            try:
+                assert parent.stdout is not None
+                child_pid, child_group, child_session = map(
+                    int, parent.stdout.readline().split()
+                )
+                parent.stdout.close()
+                parent_stat = Path("/proc") / str(parent.pid) / "stat"
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline:
+                    _, parent_state, _, _, _, _ = supervisor.parse_proc_stat(
+                        parent_stat.read_text(encoding="utf-8")
+                    )
+                    if parent_state in supervisor.TERMINAL_PROC_STATES:
+                        break
+                    time.sleep(0.01)
+                else:
+                    self.fail("worker leader did not exit before shutdown")
+                self.assertIsNone(parent.returncode)
+                self.assertEqual(child_group, child_pid)
+                self.assertEqual(child_session, parent.pid)
+                self.assertNotEqual(child_group, parent.pid)
+
+                event_log = root / "events.jsonl"
+                supervisor.terminate_workers(
+                    [parent],
+                    event_log,
+                    {"event": "breach", "reason": "test"},
+                    grace_seconds=0.05,
+                )
+
+                child_stat = Path("/proc") / str(child_pid) / "stat"
+                if child_stat.exists():
+                    _, state, _, _, _, _ = supervisor.parse_proc_stat(
+                        child_stat.read_text(encoding="utf-8")
+                    )
+                    self.assertIn(state, supervisor.TERMINAL_PROC_STATES)
+                events = [
+                    json.loads(line)
+                    for line in event_log.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(events[-1]["event"], "workers_stopped")
+                self.assertIsNotNone(parent.returncode)
+            finally:
+                if child_group is not None:
+                    try:
+                        os.killpg(child_group, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_group_signal_failures_are_retried_before_reap(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             child_code = "import time; time.sleep(60)"
@@ -1006,11 +1337,16 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 child_pid = int(parent.stdout.readline().strip())
                 parent.stdout.close()
                 first_log = root / "first-events.jsonl"
-                with mock.patch.object(
-                    supervisor.os, "killpg", new=fail_first_group_signal
+                with (
+                    mock.patch.object(
+                        supervisor.os, "killpg", new=fail_first_group_signal
+                    ),
+                    mock.patch.object(
+                        supervisor, "linux_session_pidfds", return_value=[]
+                    ),
                 ):
                     with self.assertRaises(
-                        supervisor.WorkersStillRunningError
+                        supervisor.TerminationOperationError
                     ) as caught:
                         supervisor.terminate_workers(
                             [parent],
@@ -1021,26 +1357,16 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
                 self.assertEqual(failed_signals, {signal.SIGTERM, signal.SIGKILL})
                 self.assertEqual(parent.poll(), -signal.SIGKILL)
-                self.assertTrue(supervisor.process_group_alive(parent.pid))
-                self.assertEqual(caught.exception.pids, (parent.pid,))
+                self.assertEqual(len(caught.exception.failures), 2)
                 events = [
                     json.loads(line)
                     for line in first_log.read_text(encoding="utf-8").splitlines()
                 ]
-                self.assertEqual(events[-1]["event"], "workers_stop_incomplete")
-                self.assertEqual(events[-1]["alive_pids"], [parent.pid])
-
-                supervisor.terminate_workers(
-                    [parent],
-                    root / "retry-events.jsonl",
-                    {"event": "breach", "reason": "outer_retry"},
-                    grace_seconds=0.2,
-                )
-                self.assertFalse(supervisor.process_group_alive(parent.pid))
+                self.assertEqual(events[-1]["event"], "workers_stopped")
+                self.assertEqual(events[-1]["alive_pids"], [])
             finally:
-                if supervisor.process_group_alive(parent.pid):
-                    real_killpg(parent.pid, signal.SIGKILL)
                 if parent.poll() is None:
+                    real_killpg(parent.pid, signal.SIGKILL)
                     parent.wait(timeout=1)
                 if child_pid is not None:
                     try:
@@ -1879,6 +2205,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 with (
                     mock.patch.object(supervisor.os, "killpg", new=deny_group_signal),
                     mock.patch.object(
+                        supervisor, "linux_session_pidfds", return_value=[]
+                    ),
+                    mock.patch.object(
                         process,
                         "kill",
                         side_effect=PermissionError("injected fallback failure"),
@@ -2136,34 +2465,27 @@ class WorkflowAndAbortTests(unittest.TestCase):
                         raise AssertionError("worker child did not start")
                     raise supervisor.SupervisorSignal(signal.SIGTERM)
 
-            real_killpg = os.killpg
-            failed_signals = set()
-
-            def fail_first_group_signal(pgid, signum):
-                if (
-                    signum in (signal.SIGTERM, signal.SIGKILL)
-                    and signum not in failed_signals
-                ):
-                    failed_signals.add(signum)
-                    raise PermissionError(
-                        f"injected first {signal.Signals(signum).name}"
-                    )
-                return real_killpg(pgid, signum)
-
-            real_process_kill = subprocess.Popen.kill
-            fallback_failed = False
-
-            def fail_first_process_kill(process):
-                nonlocal fallback_failed
-                if not fallback_failed:
-                    fallback_failed = True
-                    raise PermissionError("injected first fallback failure")
-                return real_process_kill(process)
-
             loop = StartSupervisor(args)
             interrupted_workers = InterruptingWorkers()
             loop.workers = interrupted_workers
             loop.signal_on_worker_transfer = True
+            real_terminate_workers = supervisor.terminate_workers
+            retained_pid = None
+
+            def retain_first_untracked(processes, *call_args, **call_kwargs):
+                nonlocal retained_pid
+                process_list = list(processes)
+                rejected = interrupted_workers.rejected
+                if (
+                    retained_pid is None
+                    and rejected is not None
+                    and len(process_list) == 1
+                    and process_list[0] is rejected.process
+                ):
+                    retained_pid = rejected.process.pid
+                    raise supervisor.WorkersStillRunningError([retained_pid], [])
+                return real_terminate_workers(process_list, *call_args, **call_kwargs)
+
             old_token = os.environ.get("TEST_START_TOKEN")
             os.environ["TEST_START_TOKEN"] = "not-a-real-token"
             observed = None
@@ -2171,12 +2493,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 with (
                     supervisor.termination_signal_handlers(),
                     mock.patch.object(
-                        supervisor.os, "killpg", new=fail_first_group_signal
-                    ),
-                    mock.patch.object(
-                        supervisor.subprocess.Popen,
-                        "kill",
-                        new=fail_first_process_kill,
+                        supervisor,
+                        "terminate_workers",
+                        side_effect=retain_first_untracked,
                     ),
                 ):
                     try:
@@ -2186,18 +2505,15 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
                 self.assertIsInstance(observed, supervisor.WorkersStillRunningError)
                 self.assertTrue(loop.transfer_signal_sent)
-                self.assertEqual(failed_signals, {signal.SIGTERM, signal.SIGKILL})
-                self.assertTrue(fallback_failed)
+                self.assertEqual(retained_pid, interrupted_workers.rejected.process.pid)
                 self.assertIsNotNone(interrupted_workers.rejected.process.poll())
                 self.assertEqual(len(loop.workers), 2)
                 for worker_process in loop.workers:
                     self.assertIsNotNone(worker_process.process.poll())
-                    self.assertFalse(
-                        supervisor.process_group_alive(worker_process.process.pid)
-                    )
                     self.assertTrue(worker_process.log_handle.closed)
                 self.assertTrue(loop.shutdown_completed)
             finally:
+                real_killpg = os.killpg
                 workers = [*loop.workers]
                 rejected = interrupted_workers.rejected
                 if rejected is not None and all(
@@ -2205,9 +2521,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 ):
                     workers.append(rejected)
                 for worker_process in workers:
-                    if supervisor.process_group_alive(worker_process.process.pid):
+                    if worker_process.process.poll() is None:
                         real_killpg(worker_process.process.pid, signal.SIGKILL)
-                    worker_process.process.wait(timeout=1)
+                        worker_process.process.wait(timeout=1)
                 if old_token is None:
                     os.environ.pop("TEST_START_TOKEN", None)
                 else:

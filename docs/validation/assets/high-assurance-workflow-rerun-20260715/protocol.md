@@ -150,8 +150,11 @@ exit/replacement, token counter regression, unexpected active issue, workflow
 mutation, duplicate trigger, or tuple inconsistency fails closed. Forge reads
 run on a daemon observation thread with a five-second overall deadline so they
 cannot block the 250 ms local stop loop. The stop sequence is: fsync breach
-evidence, send `SIGTERM` to both process groups even if a worker leader already
-exited, wait the fixed grace, send `SIGKILL` to surviving groups, record exits.
+evidence, send `SIGTERM` to both owned worker sessions, wait the fixed grace,
+send `SIGKILL` to surviving session members, prove the sessions quiescent, then
+reap the leaders and record exits. An exited but unreaped leader remains the
+identity anchor; an already reaped leader makes ownership unprovable and fails
+closed without signaling a numeric PID, PGID, or SID.
 It never changes a lifecycle label to stop work. If any termination event
 cannot be persisted, worker safety takes priority: complete the full signal,
 grace, kill, wait, and log-handle cleanup sequence, then fail the run with a
@@ -165,17 +168,27 @@ signal-guarded, and a process group not proven absent remains owned for the
 outer shutdown retry before completion can be recorded. Once shutdown begins,
 additional `SIGINT`, `SIGTERM`, and `SIGHUP` signals cannot interrupt its safety
 sequence.
-Per-process poll, group-signal, and wait failures are accumulated while cleanup
-continues, with direct-process kill as a group-signal fallback. On Linux,
-same-namespace, non-hidden `/proc` state for the entire worker session
-(session ID equals its initial process-group ID) distinguishes terminal-only
-(`Z`/`X`/`x`) sessions from sessions with live members. A terminal-only result
-requires the same non-empty PID set in two consecutive complete scans;
-incomplete, unreadable, hidden, cross-namespace, unstable, or exhausted scan
-state fails closed as live. This proof is used only after TERM, KILL, and wait;
-raw process-group existence still controls grace waiting and whether SIGKILL is
-sent. Shutdown is complete only after every process group is absent or its
-worker session is confirmed terminal-only;
+Per-process group-signal, pidfd, and wait failures are accumulated while
+cleanup continues. No `poll` or `wait` may run before the final possible
+signal. Direct-process kill is a non-Linux fallback only while the leader is
+still unreaped. On Linux, the supervisor verifies its PID, process group, and
+session in a non-hidden `/proc` and rejects any unsafe row among stacked proc
+mounts. It scans the entire worker session (session ID equals the initial
+leader PID), tracking `(pid,starttime)` identities across process groups. A
+member is terminal only when its state is `Z`/`X`/`x` and `num_threads == 1`;
+a terminal leader with another live thread remains live. A terminal-only result
+requires the same non-empty identity set, including the unreaped leader, in two
+consecutive complete scans. A stat entry that vanishes during a scan is ignored
+as exited, while unreadable, malformed, hidden, cross-namespace, leaderless,
+unstable, or exhausted state fails closed.
+
+The initial group signal is supplemented by pidfd-pinned signals to every live
+same-session member. Each target uses pre-stat, `pidfd_open`, and post-stat
+`pid/session/starttime` verification before `pidfd_send_signal`, so PID reuse
+cannot redirect a signal; SIGKILL rescans are bounded and repeated to catch
+fork races. Shutdown is complete only after every owned worker session has a
+final no-live proof while its leader is still unreaped. Only then may `wait`
+reap leaders, and no later numeric session scan or signal is allowed;
 otherwise the supervisor records `workers_stop_incomplete`, reports the live
 PIDs, and never marks the run stopped. Every worker log close is attempted;
 close failures are accumulated, cannot mask a termination-evidence error, and

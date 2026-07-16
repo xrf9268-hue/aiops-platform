@@ -133,24 +133,27 @@ roots from both workflow front matters, rejects duplicate, overlapping, or
 non-empty roots,
 and persists `preflight_directories` before forge reads or worker start. It
 also replaces error-text classification with a dedicated counter-regression
-exception, guarantees the full TERM/grace/KILL/wait cleanup even when shutdown
-evidence writes fail, reports those failures with a classified error, and
-routes operator interrupts plus OS `SIGTERM`/`SIGHUP` through the same cleanup.
+exception, guarantees the full TERM/grace/KILL/proof/wait cleanup even when
+shutdown evidence writes fail, reports those failures with a classified error,
+and routes operator interrupts plus OS `SIGTERM`/`SIGHUP` through the same cleanup.
 This includes interruption between process spawn and worker tracking even when
 that local cleanup cannot persist its evidence. Signals immediately before fork
 through registration of the returned `Popen` are deferred until ownership is
 established; local cleanup and ownership transfer are signal-guarded, and any
 process group not proven absent remains owned for the outer shutdown retry.
 The shutdown sequence now resists additional termination signals, isolates
-per-process termination errors, falls back to direct-process kill, and confirms
-every process group has no live members before marking shutdown complete. On
-Linux it treats a terminal-only (`Z`/`X`/`x`) worker session as stopped only
-after two consecutive stable, complete scans of a verified same-namespace,
-non-hidden `/proc`; the session ID is the worker's initial process-group ID, so
-any live same-session sibling group is also a survivor. Hidden, unreadable,
-cross-namespace, unstable, or exhausted scan state fails closed. That final
-proof does not replace raw process-group existence when deciding whether to
-send SIGKILL. It attempts
+per-process termination errors, and retains each unreaped leader as the
+PID/PGID/SID identity anchor until the last possible signal and final no-live
+proof. On Linux it supplements the initial group signal with identity-rechecked
+pidfds for every live member of the complete worker session, including sibling
+process groups, and repeats bounded SIGKILL scans for fork races. A member is
+terminal only when it is `Z`/`X`/`x` with exactly one thread; the same non-empty
+`(pid,starttime)` set including the leader must be observed twice through a
+same-namespace, non-hidden `/proc`. Hidden, unreadable, cross-namespace,
+leaderless, unstable, or exhausted state fails closed, while a stat entry that
+vanishes during enumeration is treated as exited. Only after this proof may the
+leader be reaped; an already reaped leader is never used to authorize a numeric
+session signal. It attempts
 every worker-log close without masking the primary evidence error or retrying
 an already completed shutdown, and removes an unused field. Those post-run
 fixes improve the next run only; they do not retroactively validate this one.

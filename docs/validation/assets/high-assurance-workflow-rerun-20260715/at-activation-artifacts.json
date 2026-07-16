@@ -4,31 +4,31 @@
   "artifacts": [
     {
       "published_file": "supervisor.py",
-      "published_sha256": "26a670b2d5d15b5e621d98d818204b89bf0a8fd05f33abbdee06d0733ca916ee",
+      "published_sha256": "340cc1980a3626f287b93f575a58d9ecb18069d230491bc902821f1e7e88696f",
       "at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
       "reconstruction_patch": "supervisor-at-activation.patch",
-      "reconstruction_patch_sha256": "dd5e510d5e60916f188b963d2ee3d50d59fcfb8e975c1c0cacf805eb8831a980",
+      "reconstruction_patch_sha256": "be7a79b5ad6a7f47bd4e74c5015cd186556700ffb4d59745e66bfbf7e0940140",
       "reconstruction_command": "patch -s -o - supervisor.py < supervisor-at-activation.patch",
       "post_run_changes": [
         "typed counter-regression classification",
         "non-overlapping and empty workspace/mirror activation gate",
         "persisted preflight_directories evidence",
         "fail-closed worker cleanup when termination evidence writes fail",
-        "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated per-process termination failures, stable visibility-verified Linux terminal-only worker-session classification after raw-existence-driven process-group signaling, survivor verification, and worker-log close failures",
+        "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated per-process termination failures, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failures",
         "unused raw_dir removal"
       ]
     },
     {
       "published_file": "protocol.md",
-      "published_sha256": "b614b87e2a77106f380655a71b945aed7f162790a7e1a35d1821ef64fcbeec59",
+      "published_sha256": "a5b5cb6ebc5f22d8aeb3310a4bd9dffd1df0bd3ec8455e99f72e75163f556e28",
       "at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
       "reconstruction_patch": "protocol-at-activation.patch",
-      "reconstruction_patch_sha256": "5b15ba59ce24ba4dd61a4fcb1a1076c38537aa6f38fefaaf3e6d4bd413f7099f",
+      "reconstruction_patch_sha256": "d278d5f26874ccc028d6e3e20bc482e07a77faa60d4cd2cb00bb14e50a56bcde",
       "reconstruction_command": "patch -s -o - protocol.md < protocol-at-activation.patch",
       "post_run_changes": [
         "chronology-only header correction distinguishing initial preregistration from the pre-activation permission amendment",
         "termination-evidence safety exception prioritizing worker shutdown before reporting incomplete evidence",
-        "operator-interrupt and SIGTERM/SIGHUP routing including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated-signal shielding, per-process termination isolation, stable visibility-verified Linux terminal-only worker-session classification after raw-existence-driven process-group signaling, survivor verification, and worker-log close failure semantics"
+        "operator-interrupt and SIGTERM/SIGHUP routing including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated-signal shielding, per-process termination isolation, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failure semantics"
       ]
     }
   ]

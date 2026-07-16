@@ -58,6 +58,12 @@ class LimitBreach:
     limit: float | int
 
 
+@dataclasses.dataclass(frozen=True)
+class ProcSessionSnapshot:
+    members: frozenset[tuple[int, int]]
+    live_members: tuple[tuple[int, int], ...]
+
+
 class CounterRegressionError(ValueError):
     """A monotonic worker token counter moved backwards."""
 
@@ -156,59 +162,85 @@ class TerminationAttempt:
             return None
 
     def group_alive(self, process: subprocess.Popen[str]) -> bool:
+        if process.returncode is not None:
+            # A reaped leader releases the numeric SID; ownership is unprovable.
+            return True
         try:
             return process_group_alive(process.pid)
         except BaseException as exc:
             self.operation_errors.append(exc)
             return True
 
-    def group_exists(self, process: subprocess.Popen[str]) -> bool:
+    def signal_session_members(
+        self, session_id: int, signum: signal.Signals
+    ) -> list[int]:
         try:
-            return process_group_exists(process.pid)
+            targets = linux_session_pidfds(session_id)
         except BaseException as exc:
             self.operation_errors.append(exc)
-            return True
+            return []
+        if not targets:
+            return []
 
-    def signal_groups(self, signum: signal.Signals) -> list[int]:
         signaled: list[int] = []
-        for process in self.processes:
-            self.poll(process)
+        send_signal = getattr(signal, "pidfd_send_signal")
+        for pid, pidfd in targets:
             try:
-                os.killpg(process.pid, signum)
-                signaled.append(process.pid)
+                send_signal(pidfd, signum, None, 0)
+                signaled.append(pid)
             except ProcessLookupError:
                 pass
             except BaseException as exc:
                 self.operation_errors.append(exc)
+            finally:
+                try:
+                    os.close(pidfd)
+                except BaseException as exc:
+                    self.operation_errors.append(exc)
         return signaled
+
+    def signal_groups(self, signum: signal.Signals) -> list[int]:
+        signaled: set[int] = set()
+        for process in self.processes:
+            # Holding an unreaped session leader keeps its PID/PGID from reuse.
+            if process.returncode is not None:
+                continue
+            if process_group_exists(process.pid):
+                try:
+                    os.killpg(process.pid, signum)
+                    signaled.add(process.pid)
+                except ProcessLookupError:
+                    pass
+                except BaseException as exc:
+                    self.operation_errors.append(exc)
+                    if signum == signal.SIGKILL and not sys.platform.startswith(
+                        "linux"
+                    ):
+                        try:
+                            process.kill()
+                            signaled.add(process.pid)
+                        except BaseException as fallback_error:
+                            self.operation_errors.append(fallback_error)
+            signaled.update(self.signal_session_members(process.pid, signum))
+        return sorted(signaled)
 
     def wait_for_grace(self, grace_seconds: float) -> None:
         deadline = time.monotonic() + grace_seconds
         while time.monotonic() < deadline:
-            for process in self.processes:
-                self.poll(process)
-            if not any(self.group_exists(process) for process in self.processes):
+            if not any(self.group_alive(process) for process in self.processes):
                 return
             time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
 
     def kill_survivors(self) -> list[int]:
-        killed: list[int] = []
-        for process in self.processes:
-            self.poll(process)
-            if not self.group_exists(process):
-                continue
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-                killed.append(process.pid)
-            except ProcessLookupError:
-                pass
-            except BaseException as exc:
-                self.operation_errors.append(exc)
-                try:
-                    process.kill()
-                except BaseException as fallback_error:
-                    self.operation_errors.append(fallback_error)
-        return killed
+        killed: set[int] = set()
+        for _ in range(PROC_SCAN_ATTEMPTS):
+            if not any(self.group_alive(process) for process in self.processes):
+                break
+            killed.update(self.signal_groups(signal.SIGKILL))
+            if not any(self.group_alive(process) for process in self.processes):
+                break
+            time.sleep(0.01)
+        return sorted(killed)
 
     def wait_for_exit(self) -> None:
         for process in self.processes:
@@ -219,12 +251,11 @@ class TerminationAttempt:
             except BaseException as exc:
                 self.operation_errors.append(exc)
 
-    def final_status(self) -> tuple[dict[str, int | None], list[int]]:
-        exit_codes = {
-            str(process.pid): self.poll(process) for process in self.processes
-        }
-        alive = [process.pid for process in self.processes if self.group_alive(process)]
-        return exit_codes, alive
+    def live_sessions(self) -> list[int]:
+        return [process.pid for process in self.processes if self.group_alive(process)]
+
+    def exit_codes(self) -> dict[str, int | None]:
+        return {str(process.pid): self.poll(process) for process in self.processes}
 
 
 class ForgePoller:
@@ -635,13 +666,15 @@ def append_event(path: Path, event: dict[str, Any]) -> None:
         os.fsync(handle.fileno())
 
 
-def parse_proc_stat(stat: str) -> tuple[int, str, int, int]:
+def parse_proc_stat(stat: str) -> tuple[int, str, int, int, int, int]:
     fields = stat[stat.rindex(")") + 1 :].split()
     return (
         int(stat.split(" ", 1)[0]),
         fields[0],
         int(fields[2]),
         int(fields[3]),
+        int(fields[17]),
+        int(fields[19]),
     )
 
 
@@ -657,15 +690,20 @@ def proc_visibility_complete() -> bool:
     if not sys.platform.startswith("linux") or not PROC_ROOT.is_dir():
         return False
     try:
-        self_pid, _, self_group, _ = parse_proc_stat(
+        self_pid, _, self_group, self_session, _, _ = parse_proc_stat(
             (PROC_ROOT / "self" / "stat").read_text(encoding="utf-8")
         )
         mount_lines = (PROC_ROOT / "mounts").read_text(encoding="utf-8").splitlines()
         proc_root = str(PROC_ROOT.resolve())
     except (IndexError, OSError, ValueError):
         return False
-    if self_pid != os.getpid() or self_group != os.getpgrp():
+    if (
+        self_pid != os.getpid()
+        or self_group != os.getpgrp()
+        or self_session != os.getsid(0)
+    ):
         return False
+    found_proc_mount = False
     for line in mount_lines:
         fields = line.split()
         if (
@@ -674,43 +712,47 @@ def proc_visibility_complete() -> bool:
             or decode_mount_field(fields[1]) != proc_root
         ):
             continue
+        found_proc_mount = True
         for option in fields[3].split(","):
             if option == "hidepid" or (
                 option.startswith("hidepid=")
                 and option.partition("=")[2] not in {"0", "off"}
             ):
                 return False
-        return True
-    return False
+    return found_proc_mount
 
 
 def linux_process_group_snapshot(
     pgid: int,
-) -> tuple[frozenset[int], bool] | None:
+) -> ProcSessionSnapshot | None:
     """Inspect the worker session whose leader and initial group share pgid."""
     try:
         process_roots = tuple(PROC_ROOT.iterdir())
     except OSError:
         return None
-    members: set[int] = set()
-    has_live_member = False
+    members: set[tuple[int, int]] = set()
+    live_members: list[tuple[int, int]] = []
     for process_root in process_roots:
         if not process_root.name.isdigit():
             continue
+        directory_pid = int(process_root.name)
         try:
-            pid, state, _, session = parse_proc_stat(
+            pid, state, _, session, num_threads, start_time = parse_proc_stat(
                 (process_root / "stat").read_text(encoding="utf-8")
             )
+        except FileNotFoundError:
+            # The enumerated task exited before its stat read; it is no longer live.
+            continue
         except (IndexError, OSError, ValueError):
+            return None
+        if pid != directory_pid:
             return None
         if session != pgid:
             continue
-        members.add(pid)
-        if state not in TERMINAL_PROC_STATES:
-            has_live_member = True
-    if not members:
-        return None
-    return frozenset(members), has_live_member
+        members.add((pid, start_time))
+        if state not in TERMINAL_PROC_STATES or num_threads != 1:
+            live_members.append((pid, start_time))
+    return ProcSessionSnapshot(frozenset(members), tuple(sorted(live_members)))
 
 
 def linux_process_group_has_live_member(pgid: int) -> bool | None:
@@ -718,19 +760,70 @@ def linux_process_group_has_live_member(pgid: int) -> bool | None:
         return None
     # A stable terminal-only session is quiescent: terminal processes cannot
     # fork, and a process outside this start_new_session boundary cannot join it.
-    previous_terminal_members: frozenset[int] | None = None
+    previous_terminal_members: frozenset[tuple[int, int]] | None = None
     for _ in range(PROC_SCAN_ATTEMPTS):
         snapshot = linux_process_group_snapshot(pgid)
         if snapshot is None:
             previous_terminal_members = None
             continue
-        members, has_live_member = snapshot
-        if has_live_member:
+        if not any(pid == pgid for pid, _ in snapshot.members):
+            previous_terminal_members = None
+            continue
+        if snapshot.live_members:
             return True
-        if members == previous_terminal_members:
+        if snapshot.members == previous_terminal_members:
             return False
-        previous_terminal_members = members
+        previous_terminal_members = snapshot.members
     return None
+
+
+def linux_session_pidfds(session_id: int) -> list[tuple[int, int]] | None:
+    """Pin live session members so later signals cannot hit PID-reuse victims."""
+    if (
+        not sys.platform.startswith("linux")
+        or not hasattr(os, "pidfd_open")
+        or not hasattr(signal, "pidfd_send_signal")
+        or not proc_visibility_complete()
+    ):
+        return None
+    snapshot = linux_process_group_snapshot(session_id)
+    if snapshot is None:
+        raise RuntimeError(f"cannot inspect Linux worker session {session_id}")
+    if not any(pid == session_id for pid, _ in snapshot.members):
+        raise RuntimeError(f"Linux worker session leader {session_id} is not visible")
+
+    targets: list[tuple[int, int]] = []
+    try:
+        for pid, start_time in snapshot.live_members:
+            try:
+                pidfd = os.pidfd_open(pid, 0)
+            except ProcessLookupError:
+                continue
+            try:
+                current = parse_proc_stat(
+                    (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8")
+                )
+            except FileNotFoundError:
+                os.close(pidfd)
+                continue
+            except BaseException:
+                os.close(pidfd)
+                raise
+            current_pid, state, _, current_session, num_threads, current_start = current
+            if (
+                current_pid != pid
+                or current_session != session_id
+                or current_start != start_time
+                or (state in TERMINAL_PROC_STATES and num_threads == 1)
+            ):
+                os.close(pidfd)
+                continue
+            targets.append((pid, pidfd))
+    except BaseException:
+        for _, pidfd in targets:
+            os.close(pidfd)
+        raise
+    return targets
 
 
 def process_group_exists(pgid: int) -> bool:
@@ -739,16 +832,19 @@ def process_group_exists(pgid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
+        if sys.platform == "darwin":
+            try:
+                os.getpgid(pgid)
+            except ProcessLookupError:
+                return False
         return True
     return True
 
 
 def process_group_alive(pgid: int) -> bool:
-    if not process_group_exists(pgid):
-        return False
-    live_member = linux_process_group_has_live_member(pgid)
-    if live_member is not None:
-        return live_member
+    if sys.platform.startswith("linux"):
+        live_member = linux_process_group_has_live_member(pgid)
+        return True if live_member is None else live_member
     return process_group_exists(pgid)
 
 
@@ -831,8 +927,16 @@ def terminate_workers(
         )
         attempt.wait_for_grace(grace_seconds)
         killed = attempt.kill_survivors()
-        attempt.wait_for_exit()
-        exit_codes, alive = attempt.final_status()
+        alive = attempt.live_sessions()
+        if alive:
+            # Preserve the leader PID/SID reservation for the caller's retry.
+            exit_codes = {
+                str(process.pid): process.returncode for process in attempt.processes
+            }
+        else:
+            # Session ownership is no longer needed only after the no-live proof.
+            attempt.wait_for_exit()
+            exit_codes = attempt.exit_codes()
         attempt.record_event(
             {
                 "event": "workers_stopped" if not alive else "workers_stop_incomplete",
@@ -1326,10 +1430,6 @@ class Supervisor:
     def states(self) -> list[dict[str, Any]]:
         result = []
         for worker in self.workers:
-            if worker.process.poll() is not None:
-                raise RuntimeError(
-                    f"{worker.spec.role} worker exited unexpectedly with {worker.process.returncode}"
-                )
             state = fetch_json(
                 f"http://127.0.0.1:{worker.spec.port}/api/v1/state",
                 timeout=min(0.1, self.args.state_poll_seconds / 2),
@@ -1343,10 +1443,6 @@ class Supervisor:
         while time.monotonic() < deadline:
             try:
                 for worker in self.workers:
-                    if worker.process.poll() is not None:
-                        raise RuntimeError(
-                            f"{worker.spec.role} worker exited before readiness"
-                        )
                     fetch_text(f"http://127.0.0.1:{worker.spec.port}/readyz")
                 states = self.states()
                 for state in states:
