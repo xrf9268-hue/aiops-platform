@@ -92,9 +92,9 @@ class ForgePoller:
         self.timeout_seconds = timeout_seconds
         self.next_due = 0.0
         self.started_at: float | None = None
-        self.results: queue.SimpleQueue[tuple[dict[str, Any] | None, BaseException | None]] = (
-            queue.SimpleQueue()
-        )
+        self.results: queue.SimpleQueue[
+            tuple[dict[str, Any] | None, BaseException | None]
+        ] = queue.SimpleQueue()
 
     def maybe_start(self, now: float) -> None:
         if self.started_at is not None or now < self.next_due:
@@ -160,7 +160,9 @@ def claim_count(states: Iterable[dict[str, Any]], issue_number: int) -> int:
     for state in states:
         for field in ("completed_session_usage", "running", "blocked"):
             count += sum(
-                1 for row in (state.get(field) or []) if issue_matches(row, issue_number)
+                1
+                for row in (state.get(field) or [])
+                if issue_matches(row, issue_number)
             )
     return count
 
@@ -188,7 +190,9 @@ def canonical_issue_hash(issue: dict[str, Any]) -> str:
         "number": issue.get("number"),
         "title": issue.get("title") or "",
     }
-    encoded = (json.dumps(canonical, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    encoded = (
+        json.dumps(canonical, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -346,7 +350,9 @@ def state_fingerprint(states: list[dict[str, Any]]) -> str:
 
     def stable(value: Any) -> Any:
         if isinstance(value, dict):
-            return {key: stable(item) for key, item in value.items() if key not in volatile}
+            return {
+                key: stable(item) for key, item in value.items() if key not in volatile
+            }
         if isinstance(value, list):
             return [stable(item) for item in value]
         return value
@@ -417,9 +423,13 @@ def terminate_workers(
     *,
     grace_seconds: float,
 ) -> None:
-    raw = [item.process if isinstance(item, WorkerProcess) else item for item in processes]
+    raw = [
+        item.process if isinstance(item, WorkerProcess) else item for item in processes
+    ]
     persisted = dict(first_event)
-    detected_ns = int(persisted.setdefault("detected_monotonic_ns", time.monotonic_ns()))
+    detected_ns = int(
+        persisted.setdefault("detected_monotonic_ns", time.monotonic_ns())
+    )
     append_event(event_log, persisted)
     signaled: list[int] = []
     for process in raw:
@@ -518,7 +528,9 @@ class GhClient:
         try:
             return json.loads(output)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"gh returned invalid JSON for {args[:3]}: {exc}") from exc
+            raise RuntimeError(
+                f"gh returned invalid JSON for {args[:3]}: {exc}"
+            ) from exc
 
     def api(self, endpoint: str) -> Any:
         return self.json(["api", endpoint])
@@ -570,7 +582,9 @@ query($owner:String!,$name:String!,$number:Int!,$after:String){
 """
 
 
-def fetch_review_threads(client: GhClient, repo: str, pr_number: int) -> list[dict[str, Any]]:
+def fetch_review_threads(
+    client: GhClient, repo: str, pr_number: int
+) -> list[dict[str, Any]]:
     owner, name = repo.split("/", 1)
     cursor: str | None = None
     seen_cursors: set[str] = set()
@@ -592,10 +606,8 @@ def fetch_review_threads(client: GhClient, repo: str, pr_number: int) -> list[di
             args.extend(["-F", f"after={cursor}"])
         data = client.json(args)
         connection = (
-            (((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
-            .get("reviewThreads")
-            or {}
-        )
+            ((data.get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+        ).get("reviewThreads") or {}
         threads.extend(connection.get("nodes") or [])
         page = connection.get("pageInfo") or {}
         if not page.get("hasNextPage"):
@@ -664,6 +676,15 @@ def labels(issue: dict[str, Any]) -> set[str]:
 
 def is_closed(snapshot: dict[str, Any]) -> bool:
     return str((snapshot.get("issue") or {}).get("state") or "").lower() == "closed"
+
+
+def native_close_breach(snapshot: dict[str, Any]) -> LimitBreach | None:
+    if not is_closed(snapshot):
+        return None
+    pr = snapshot.get("pr")
+    if not isinstance(pr, dict) or not pr.get("mergedAt"):
+        return LimitBreach("issue_closed_without_merged_pr", 1, 0)
+    return None
 
 
 def tuple_from_snapshot(snapshot: dict[str, Any]) -> ReviewTuple | None:
@@ -766,20 +787,29 @@ class Supervisor:
         }
         observed = {role: client.identity() for role, client in clients.items()}
         if observed != expected or len(set(observed.values())) != 3:
-            raise RuntimeError(f"role identity mismatch: observed={observed}, expected={expected}")
+            raise RuntimeError(
+                f"role identity mismatch: observed={observed}, expected={expected}"
+            )
         permissions = {
             role: client.api(f"repos/{self.args.repo}").get("permissions") or {}
             for role, client in clients.items()
         }
         if not permissions["maker"].get("push"):
             raise RuntimeError("maker lacks push permission")
-        if permissions["operator"].get("push") or not permissions["operator"].get("triage"):
-            raise RuntimeError(f"operator permission is not triage-only: {permissions['operator']}")
+        if permissions["operator"].get("push") or not permissions["operator"].get(
+            "triage"
+        ):
+            raise RuntimeError(
+                f"operator permission is not triage-only: {permissions['operator']}"
+            )
         issues = [
             self.operator.api(f"repos/{self.args.repo}/issues/{number}")
             for number in self.args.issues
         ]
-        if any(issue.get("state") != "open" or labels(issue) & ACTIVE_LABELS for issue in issues):
+        if any(
+            issue.get("state") != "open" or labels(issue) & ACTIVE_LABELS
+            for issue in issues
+        ):
             raise RuntimeError("issues must be open with no active lifecycle labels")
         observed_hashes = [canonical_issue_hash(issue) for issue in issues]
         if observed_hashes != self.args.issue_json_sha256:
@@ -811,7 +841,9 @@ class Supervisor:
         for spec in self.specs():
             token = os.environ.get(spec.token_env)
             if not token:
-                raise RuntimeError(f"required secret environment {spec.token_env} is missing")
+                raise RuntimeError(
+                    f"required secret environment {spec.token_env} is missing"
+                )
             spec.mirror_root.mkdir(parents=True, exist_ok=True)
             env = os.environ.copy()
             env.pop("GH_TOKEN", None)
@@ -877,17 +909,27 @@ class Supervisor:
             try:
                 for worker in self.workers:
                     if worker.process.poll() is not None:
-                        raise RuntimeError(f"{worker.spec.role} worker exited before readiness")
+                        raise RuntimeError(
+                            f"{worker.spec.role} worker exited before readiness"
+                        )
                     fetch_text(f"http://127.0.0.1:{worker.spec.port}/readyz")
                 states = self.states()
                 for state in states:
                     if state.get("version") != "v0.1.16":
                         raise RuntimeError(f"state version is {state.get('version')!r}")
-                    if state.get("running") or state.get("blocked") or state.get("retrying"):
+                    if (
+                        state.get("running")
+                        or state.get("blocked")
+                        or state.get("retrying")
+                    ):
                         raise RuntimeError("worker was not quiescent before activation")
                     if token_total(state) != 0:
-                        raise RuntimeError("worker token total was non-zero before activation")
-                append_event(self.event_log, {"event": "workers_ready", "states": states})
+                        raise RuntimeError(
+                            "worker token total was non-zero before activation"
+                        )
+                append_event(
+                    self.event_log, {"event": "workers_ready", "states": states}
+                )
                 return states
             except RuntimeError:
                 time.sleep(0.1)
@@ -906,11 +948,18 @@ class Supervisor:
             append_event(self.event_log, {"event": "worker_state", "states": states})
         return signature
 
-    def observe_workflow_bindings(self, states: list[dict[str, Any]], issue_number: int) -> None:
+    def observe_workflow_bindings(
+        self, states: list[dict[str, Any]], issue_number: int
+    ) -> None:
         for worker, state in zip(self.workers, states, strict=True):
-            seen = validate_workflow_rows(state, issue_number, str(worker.spec.workflow))
+            seen = validate_workflow_rows(
+                state, issue_number, str(worker.spec.workflow)
+            )
             self.workflow_seen[worker.spec.role] |= seen
-            if claim_count([state], issue_number) and not self.workflow_seen[worker.spec.role]:
+            if (
+                claim_count([state], issue_number)
+                and not self.workflow_seen[worker.spec.role]
+            ):
                 raise RuntimeError(
                     f"{worker.spec.role} claim appeared without workflow path/source evidence"
                 )
@@ -932,7 +981,9 @@ class Supervisor:
                     comment, snapshot.get("reviews") or [], self.args.reviewer_login
                 )
                 if bound is None:
-                    return None, LimitBreach("external_trigger_without_checkpoint", 1, 0)
+                    return None, LimitBreach(
+                        "external_trigger_without_checkpoint", 1, 0
+                    )
                 self.trigger_tuples[comment_id] = bound
         current = [
             comment
@@ -970,15 +1021,21 @@ class Supervisor:
             )
         return False, None
 
-    def activate_issue(self, issue_number: int, states: list[dict[str, Any]]) -> tuple[list[int], float]:
+    def activate_issue(
+        self, issue_number: int, states: list[dict[str, Any]]
+    ) -> tuple[list[int], float]:
         issue = self.operator.api(f"repos/{self.args.repo}/issues/{issue_number}")
         expected_hash = self.args.issue_json_sha256[
             self.args.issues.index(issue_number)
         ]
         if canonical_issue_hash(issue) != expected_hash:
-            raise RuntimeError(f"issue {issue_number} canonical content changed before activation")
+            raise RuntimeError(
+                f"issue {issue_number} canonical content changed before activation"
+            )
         if issue.get("state") != "open" or labels(issue) & ACTIVE_LABELS:
-            raise RuntimeError(f"issue {issue_number} is not inactive/open before activation")
+            raise RuntimeError(
+                f"issue {issue_number} is not inactive/open before activation"
+            )
         baselines = [token_total(state) for state in states]
         started = time.monotonic()
         append_event(
@@ -997,7 +1054,9 @@ class Supervisor:
         )
         return baselines, started
 
-    def run_issue(self, issue_number: int, states: list[dict[str, Any]]) -> tuple[bool, list[dict[str, Any]]]:
+    def run_issue(
+        self, issue_number: int, states: list[dict[str, Any]]
+    ) -> tuple[bool, list[dict[str, Any]]]:
         baselines, started = self.activate_issue(issue_number, states)
         previous_totals = baselines[:]
         last_below_states = states
@@ -1054,7 +1113,9 @@ class Supervisor:
                     else "token_accounting_failed"
                 )
                 breach = LimitBreach(reason, 1, 0)
-                self.abort(issue_number, breach, states, {"error": str(exc), "forge": forge})
+                self.abort(
+                    issue_number, breach, states, {"error": str(exc), "forge": forge}
+                )
                 return False, states
             if breach is not None:
                 self.abort(
@@ -1085,6 +1146,10 @@ class Supervisor:
                     self.event_log,
                     {"event": "forge_state", "issue": issue_number, "snapshot": forge},
                 )
+                breach = native_close_breach(forge)
+                if breach is not None:
+                    self.abort(issue_number, breach, states, {"forge": forge})
+                    return False, states
                 external_satisfied, breach = self.external_status(forge)
                 if breach is not None:
                     self.abort(issue_number, breach, states, {"forge": forge})
@@ -1165,7 +1230,11 @@ class Supervisor:
                 terminate_workers(
                     self.workers,
                     self.event_log,
-                    {"event": "breach", "reason": "supervisor_failed", "error": str(exc)},
+                    {
+                        "event": "breach",
+                        "reason": "supervisor_failed",
+                        "error": str(exc),
+                    },
                     grace_seconds=self.args.term_grace_seconds,
                 )
                 for worker in self.workers:
@@ -1205,7 +1274,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         parser.error("--state-poll-seconds must be >0 and <=0.25")
     if args.forge_poll_seconds <= 0 or args.forge_poll_seconds > 5:
         parser.error("--forge-poll-seconds must be >0 and <=5")
-    if args.forge_request_timeout_seconds <= 0 or args.forge_request_timeout_seconds > 5:
+    if (
+        args.forge_request_timeout_seconds <= 0
+        or args.forge_request_timeout_seconds > 5
+    ):
         parser.error("--forge-request-timeout-seconds must be >0 and <=5")
     return args
 

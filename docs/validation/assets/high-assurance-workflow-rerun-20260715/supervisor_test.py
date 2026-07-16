@@ -88,7 +88,11 @@ class AccountingTests(unittest.TestCase):
         )
 
         breach = supervisor.evaluate_limits(
-            [maker, reviewer], [0, 0], issue_number=1, elapsed_seconds=10, issue_closed=False
+            [maker, reviewer],
+            [0, 0],
+            issue_number=1,
+            elapsed_seconds=10,
+            issue_closed=False,
         )
 
         self.assertEqual(breach.reason, "worker_sessions_exhausted")
@@ -108,7 +112,11 @@ class AccountingTests(unittest.TestCase):
 
     def test_limit_evaluation_stops_at_wall_limit(self):
         breach = supervisor.evaluate_limits(
-            [state(), state()], [0, 0], issue_number=1, elapsed_seconds=1_800, issue_closed=False
+            [state(), state()],
+            [0, 0],
+            issue_number=1,
+            elapsed_seconds=1_800,
+            issue_closed=False,
         )
 
         self.assertEqual(breach.reason, "issue_wall_exceeded")
@@ -166,7 +174,9 @@ class ExternalReviewTests(unittest.TestCase):
             }
         ]
 
-        signal = supervisor.reliable_external_review(reviews, self.tuple, self.triggered_at)
+        signal = supervisor.reliable_external_review(
+            reviews, self.tuple, self.triggered_at
+        )
 
         self.assertIsNotNone(signal)
 
@@ -178,7 +188,11 @@ class ExternalReviewTests(unittest.TestCase):
                 "submitted_at": "2026-07-15T12:00:01Z",
             },
             {
-                "user": {"id": 1, "login": "chatgpt-codex-connector[bot]", "type": "Bot"},
+                "user": {
+                    "id": 1,
+                    "login": "chatgpt-codex-connector[bot]",
+                    "type": "Bot",
+                },
                 "commit_id": "head123",
                 "submitted_at": "2026-07-15T12:00:01Z",
             },
@@ -189,7 +203,9 @@ class ExternalReviewTests(unittest.TestCase):
             },
         ]
 
-        self.assertIsNone(supervisor.reliable_external_review(reviews, self.tuple, self.triggered_at))
+        self.assertIsNone(
+            supervisor.reliable_external_review(reviews, self.tuple, self.triggered_at)
+        )
 
     def test_comment_or_reaction_is_not_a_reliable_signal(self):
         self.assertFalse(hasattr(supervisor, "reliable_external_comment"))
@@ -251,10 +267,14 @@ class WorkflowAndAbortTests(unittest.TestCase):
         first["generated_at"] = "one"
         second = state(total=10)
         second["generated_at"] = "two"
-        self.assertEqual(supervisor.state_fingerprint([first]), supervisor.state_fingerprint([second]))
+        self.assertEqual(
+            supervisor.state_fingerprint([first]),
+            supervisor.state_fingerprint([second]),
+        )
         second["codex_totals"]["total_tokens"] = 11
         self.assertNotEqual(
-            supervisor.state_fingerprint([first]), supervisor.state_fingerprint([second])
+            supervisor.state_fingerprint([first]),
+            supervisor.state_fingerprint([second]),
         )
 
     def test_unexpected_live_issue_fails_closed(self):
@@ -398,13 +418,17 @@ class WorkflowAndAbortTests(unittest.TestCase):
                         (Handler,),
                         {"payload": state(total=total)},
                     )
-                    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), role_handler)
+                    server = http.server.ThreadingHTTPServer(
+                        ("127.0.0.1", 0), role_handler
+                    )
                     thread = threading.Thread(target=server.serve_forever, daemon=True)
                     thread.start()
                     servers.append(server)
                     threads.append(thread)
                 observed = [
-                    supervisor.fetch_json(f"http://127.0.0.1:{server.server_port}/api/v1/state")
+                    supervisor.fetch_json(
+                        f"http://127.0.0.1:{server.server_port}/api/v1/state"
+                    )
                     for server in servers
                 ]
                 breach = supervisor.evaluate_limits(
@@ -430,7 +454,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     grace_seconds=0.2,
                 )
                 self.assertLess(time.monotonic() - started, 1.0)
-                self.assertTrue(all(process.poll() is not None for process in processes))
+                self.assertTrue(
+                    all(process.poll() is not None for process in processes)
+                )
             finally:
                 for server in servers:
                     server.shutdown()
@@ -443,12 +469,20 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
     def test_run_issue_aborts_crossing_without_waiting_for_slow_forge_io(self):
         below = [
-            state(total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]),
-            state(total=2_499_999, running=[row(1, tokens={"total_tokens": 2_499_999})]),
+            state(
+                total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]
+            ),
+            state(
+                total=2_499_999, running=[row(1, tokens={"total_tokens": 2_499_999})]
+            ),
         ]
         above = [
-            state(total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]),
-            state(total=2_500_001, running=[row(1, tokens={"total_tokens": 2_500_001})]),
+            state(
+                total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]
+            ),
+            state(
+                total=2_500_001, running=[row(1, tokens={"total_tokens": 2_500_001})]
+            ),
         ]
 
         class LoopSupervisor(supervisor.Supervisor):
@@ -498,19 +532,24 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 for _ in range(2)
             ]
             loop = LoopSupervisor(temp, processes)
+
             def slow_forge(*_args):
                 time.sleep(1)
                 return {"issue": {"state": "open"}}
 
             started = time.monotonic()
             try:
-                with mock.patch.object(supervisor, "forge_snapshot", side_effect=slow_forge):
+                with mock.patch.object(
+                    supervisor, "forge_snapshot", side_effect=slow_forge
+                ):
                     completed, _states = loop.run_issue(1, [state(), state()])
                 elapsed = time.monotonic() - started
                 self.assertFalse(completed)
                 self.assertEqual(loop.breach.reason, "worker_tokens_exceeded")
                 self.assertLess(elapsed, 0.5)
-                self.assertTrue(all(process.poll() is not None for process in processes))
+                self.assertTrue(
+                    all(process.poll() is not None for process in processes)
+                )
             finally:
                 for process in processes:
                     if process.poll() is None:
@@ -518,8 +557,12 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
     def test_run_issue_checks_limit_before_persisting_nonbreach_state(self):
         above = [
-            state(total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]),
-            state(total=2_500_001, running=[row(1, tokens={"total_tokens": 2_500_001})]),
+            state(
+                total=1_000_000, running=[row(1, tokens={"total_tokens": 1_000_000})]
+            ),
+            state(
+                total=2_500_001, running=[row(1, tokens={"total_tokens": 2_500_001})]
+            ),
         ]
 
         class LoopSupervisor(supervisor.Supervisor):
@@ -634,12 +677,34 @@ class WorkflowAndAbortTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             loop = LoopSupervisor(temp)
-            closed_without_pr = {"issue": {"state": "closed"}}
-            with mock.patch.object(supervisor, "forge_snapshot", return_value=closed_without_pr):
+            closed_without_review = {
+                "issue": {"state": "closed"},
+                "pr": {
+                    "headRefOid": "head",
+                    "baseRefOid": "base",
+                    "baseRefName": "main",
+                    "mergedAt": "2026-07-16T00:00:00Z",
+                },
+                "pr_comments": [],
+                "reviews": [],
+            }
+            with mock.patch.object(
+                supervisor, "forge_snapshot", return_value=closed_without_review
+            ):
                 completed, _states = loop.run_issue(1, [state(), state()])
 
         self.assertFalse(completed)
         self.assertEqual(loop.breach.reason, "external_review_required")
+
+    def test_closed_issue_without_merged_pr_is_a_native_close_breach(self):
+        snapshot = {
+            "issue": {"state": "closed"},
+            "pr": {"state": "OPEN", "mergedAt": None},
+        }
+
+        breach = supervisor.native_close_breach(snapshot)
+
+        self.assertEqual(breach.reason, "issue_closed_without_merged_pr")
 
     def test_partial_worker_start_is_cleaned_up(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -670,12 +735,24 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 def specs(self):
                     return [
                         supervisor.WorkerSpec(
-                            "maker", 4928, workflow, "unused", root / "maker-auth",
-                            "maker", root / "maker-mirror", "TEST_MAKER_TOKEN",
+                            "maker",
+                            4928,
+                            workflow,
+                            "unused",
+                            root / "maker-auth",
+                            "maker",
+                            root / "maker-mirror",
+                            "TEST_MAKER_TOKEN",
                         ),
                         supervisor.WorkerSpec(
-                            "reviewer", 4929, workflow, "unused", root / "reviewer-auth",
-                            "reviewer", root / "reviewer-mirror", "TEST_REVIEWER_TOKEN",
+                            "reviewer",
+                            4929,
+                            workflow,
+                            "unused",
+                            root / "reviewer-auth",
+                            "reviewer",
+                            root / "reviewer-mirror",
+                            "TEST_REVIEWER_TOKEN",
                         ),
                     ]
 

@@ -89,8 +89,9 @@ The supervisor must:
   then terminate both workers immediately on a stop decision; never repair
   labels, code, PRs, reviews,
   checks, settings, or merges;
-- terminate cleanly after both issues close and preserve JSONL lifecycle data
-  and worker logs under the run root.
+- terminate cleanly after both PRs merge natively close their issues and
+  preserve JSONL lifecycle data and worker logs under the run root; treat a
+  closed issue without a merged PR as a breach rather than success.
 - signal both process groups even when a worker leader has already exited, and
   clean up a first worker if the second worker fails to start.
 

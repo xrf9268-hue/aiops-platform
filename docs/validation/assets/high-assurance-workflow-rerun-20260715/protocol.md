@@ -129,7 +129,7 @@ worker process groups.
 | Four worker sessions per issue | Count issue-matching `completed_session_usage + running + blocked` claim rows across both workers; do not deduplicate the thread-turn `session_id`. Abort at `>4`, or at `==4` while a continuation is pending, before claim five. |
 | 3,500,000 worker-observed tokens per issue | At activation freeze both process `codex_totals.total_tokens`; sum both deltas while exactly one issue is active and require that delta to equal issue-attributed ended/running/blocked usage. Abort on an accounting mismatch or the first observed value above 3,500,000. Preserve last-below, first-above, and detection-to-TERM latency. |
 | Ten minutes for external review | Start at the exact trigger comment's `created_at`; require the reliable exact-head review object above. Abort at 600 seconds without it. |
-| Thirty minutes wall per issue | Start a monotonic timer before the activation request. Completion requires GitHub closed plus no live/blocked/retrying claim for that issue; abort at 1,800 seconds until both are true. |
+| Thirty minutes wall per issue | Start a monotonic timer before the activation request. Completion requires a merged PR, GitHub issue closed, and no live/blocked/retrying claim for that issue; a closed issue without a merged PR is a native-close breach. Abort at 1,800 seconds until all completion conditions are true. |
 
 Token updates are discrete runner events, so an individual turn can overshoot
 the token threshold. The first observed value is the enforceable boundary and
