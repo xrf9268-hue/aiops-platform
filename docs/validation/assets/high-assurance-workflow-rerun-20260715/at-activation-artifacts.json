@@ -4,17 +4,17 @@
   "artifacts": [
     {
       "published_file": "supervisor.py",
-      "published_sha256": "340cc1980a3626f287b93f575a58d9ecb18069d230491bc902821f1e7e88696f",
+      "published_sha256": "5ff4a051f08026cf1d2d49a421050569ee979165ff60f787f9ec240b0e36ad0e",
       "at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
       "reconstruction_patch": "supervisor-at-activation.patch",
-      "reconstruction_patch_sha256": "be7a79b5ad6a7f47bd4e74c5015cd186556700ffb4d59745e66bfbf7e0940140",
+      "reconstruction_patch_sha256": "68f4f91221c7dd6ca473ee8c3e34374af3339651df990fc12fc87219daac4dce",
       "reconstruction_command": "patch -s -o - supervisor.py < supervisor-at-activation.patch",
       "post_run_changes": [
         "typed counter-regression classification",
         "non-overlapping and empty workspace/mirror activation gate",
         "persisted preflight_directories evidence",
         "fail-closed worker cleanup when termination evidence writes fail",
-        "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated per-process termination failures, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failures",
+        "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated group-probe and pidfd-target failures, unreaped leader identity anchoring, stable visibility-verified Linux session classification, identity-rechecked pidfd signaling across sibling process groups, no-live proof before reaping, and worker-log close failures",
         "unused raw_dir removal"
       ]
     },

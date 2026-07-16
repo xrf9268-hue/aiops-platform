@@ -64,6 +64,12 @@ class ProcSessionSnapshot:
     live_members: tuple[tuple[int, int], ...]
 
 
+@dataclasses.dataclass(frozen=True)
+class PidfdCollection:
+    targets: tuple[tuple[int, int], ...]
+    errors: tuple[BaseException, ...]
+
+
 class CounterRegressionError(ValueError):
     """A monotonic worker token counter moved backwards."""
 
@@ -175,16 +181,19 @@ class TerminationAttempt:
         self, session_id: int, signum: signal.Signals
     ) -> list[int]:
         try:
-            targets = linux_session_pidfds(session_id)
+            collection = linux_session_pidfds(session_id)
         except BaseException as exc:
             self.operation_errors.append(exc)
             return []
-        if not targets:
+        if collection is None:
+            return []
+        self.operation_errors.extend(collection.errors)
+        if not collection.targets:
             return []
 
         signaled: list[int] = []
         send_signal = getattr(signal, "pidfd_send_signal")
-        for pid, pidfd in targets:
+        for pid, pidfd in collection.targets:
             try:
                 send_signal(pidfd, signum, None, 0)
                 signaled.append(pid)
@@ -205,7 +214,12 @@ class TerminationAttempt:
             # Holding an unreaped session leader keeps its PID/PGID from reuse.
             if process.returncode is not None:
                 continue
-            if process_group_exists(process.pid):
+            try:
+                group_exists = process_group_exists(process.pid)
+            except BaseException as exc:
+                self.operation_errors.append(exc)
+                group_exists = False
+            if group_exists:
                 try:
                     os.killpg(process.pid, signum)
                     signaled.add(process.pid)
@@ -777,7 +791,14 @@ def linux_process_group_has_live_member(pgid: int) -> bool | None:
     return None
 
 
-def linux_session_pidfds(session_id: int) -> list[tuple[int, int]] | None:
+def close_pidfd(pidfd: int, errors: list[BaseException]) -> None:
+    try:
+        os.close(pidfd)
+    except BaseException as exc:
+        errors.append(exc)
+
+
+def linux_session_pidfds(session_id: int) -> PidfdCollection | None:
     """Pin live session members so later signals cannot hit PID-reuse victims."""
     if (
         not sys.platform.startswith("linux")
@@ -793,37 +814,37 @@ def linux_session_pidfds(session_id: int) -> list[tuple[int, int]] | None:
         raise RuntimeError(f"Linux worker session leader {session_id} is not visible")
 
     targets: list[tuple[int, int]] = []
-    try:
-        for pid, start_time in snapshot.live_members:
-            try:
-                pidfd = os.pidfd_open(pid, 0)
-            except ProcessLookupError:
-                continue
-            try:
-                current = parse_proc_stat(
-                    (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8")
-                )
-            except FileNotFoundError:
-                os.close(pidfd)
-                continue
-            except BaseException:
-                os.close(pidfd)
-                raise
-            current_pid, state, _, current_session, num_threads, current_start = current
-            if (
-                current_pid != pid
-                or current_session != session_id
-                or current_start != start_time
-                or (state in TERMINAL_PROC_STATES and num_threads == 1)
-            ):
-                os.close(pidfd)
-                continue
-            targets.append((pid, pidfd))
-    except BaseException:
-        for _, pidfd in targets:
-            os.close(pidfd)
-        raise
-    return targets
+    errors: list[BaseException] = []
+    for pid, start_time in snapshot.live_members:
+        try:
+            pidfd = os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            continue
+        except BaseException as exc:
+            errors.append(exc)
+            continue
+        try:
+            current = parse_proc_stat(
+                (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
+            close_pidfd(pidfd, errors)
+            continue
+        except BaseException as exc:
+            errors.append(exc)
+            close_pidfd(pidfd, errors)
+            continue
+        current_pid, state, _, current_session, num_threads, current_start = current
+        if (
+            current_pid != pid
+            or current_session != session_id
+            or current_start != start_time
+            or (state in TERMINAL_PROC_STATES and num_threads == 1)
+        ):
+            close_pidfd(pidfd, errors)
+            continue
+        targets.append((pid, pidfd))
+    return PidfdCollection(tuple(targets), tuple(errors))
 
 
 def process_group_exists(pgid: int) -> bool:

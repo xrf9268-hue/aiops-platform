@@ -9,10 +9,16 @@
 -PROC_ROOT = Path("/proc")
 -PROC_SCAN_ATTEMPTS = 4
 -TERMINAL_PROC_STATES = {"Z", "X", "x"}
-@@ -62,63 +57,0 @@
+@@ -62,69 +57,0 @@
 -class ProcSessionSnapshot:
 -    members: frozenset[tuple[int, int]]
 -    live_members: tuple[tuple[int, int], ...]
+-
+-
+-@dataclasses.dataclass(frozen=True)
+-class PidfdCollection:
+-    targets: tuple[tuple[int, int], ...]
+-    errors: tuple[BaseException, ...]
 -
 -
 -class CounterRegressionError(ValueError):
@@ -73,7 +79,9 @@
 -
 -
 -@dataclasses.dataclass(frozen=True)
-@@ -143,118 +75,0 @@
+@@ -147,126 +73,0 @@
+-
+-
 -@dataclasses.dataclass
 -class TerminationAttempt:
 -    processes: list[subprocess.Popen[str]]
@@ -109,16 +117,19 @@
 -        self, session_id: int, signum: signal.Signals
 -    ) -> list[int]:
 -        try:
--            targets = linux_session_pidfds(session_id)
+-            collection = linux_session_pidfds(session_id)
 -        except BaseException as exc:
 -            self.operation_errors.append(exc)
 -            return []
--        if not targets:
+-        if collection is None:
+-            return []
+-        self.operation_errors.extend(collection.errors)
+-        if not collection.targets:
 -            return []
 -
 -        signaled: list[int] = []
 -        send_signal = getattr(signal, "pidfd_send_signal")
--        for pid, pidfd in targets:
+-        for pid, pidfd in collection.targets:
 -            try:
 -                send_signal(pidfd, signum, None, 0)
 -                signaled.append(pid)
@@ -139,7 +150,12 @@
 -            # Holding an unreaped session leader keeps its PID/PGID from reuse.
 -            if process.returncode is not None:
 -                continue
--            if process_group_exists(process.pid):
+-            try:
+-                group_exists = process_group_exists(process.pid)
+-            except BaseException as exc:
+-                self.operation_errors.append(exc)
+-                group_exists = False
+-            if group_exists:
 -                try:
 -                    os.killpg(process.pid, signum)
 -                    signaled.add(process.pid)
@@ -190,11 +206,7 @@
 -
 -    def exit_codes(self) -> dict[str, int | None]:
 -        return {str(process.pid): self.poll(process) for process in self.processes}
--
--
-@@ -382,34 +196,0 @@
--
--
+@@ -398,60 +198,0 @@
 -def workflow_workspace_root(workflow: Path) -> Path:
 -    lines = workflow.read_text(encoding="utf-8").splitlines()
 -    if not lines or lines[0] != "---":
@@ -227,7 +239,8 @@
 -    if not root.is_absolute():
 -        raise ValueError(f"workflow workspace.root must be absolute: {root}")
 -    return root.resolve()
-@@ -418,26 +198,0 @@
+-
+-
 -def validate_fresh_directories(
 -    directories: dict[str, Path],
 -) -> dict[str, dict[str, Any]]:
@@ -254,12 +267,10 @@
 -    return manifest
 -
 -
-@@ -459 +214 @@
+@@ -473 +214 @@
 -            raise CounterRegressionError(
 +            raise ValueError(
-@@ -667,160 +421,0 @@
--
--
+@@ -683,168 +424 @@
 -def parse_proc_stat(stat: str) -> tuple[int, str, int, int, int, int]:
 -    fields = stat[stat.rindex(")") + 1 :].split()
 -    return (
@@ -371,7 +382,14 @@
 -    return None
 -
 -
--def linux_session_pidfds(session_id: int) -> list[tuple[int, int]] | None:
+-def close_pidfd(pidfd: int, errors: list[BaseException]) -> None:
+-    try:
+-        os.close(pidfd)
+-    except BaseException as exc:
+-        errors.append(exc)
+-
+-
+-def linux_session_pidfds(session_id: int) -> PidfdCollection | None:
 -    """Pin live session members so later signals cannot hit PID-reuse victims."""
 -    if (
 -        not sys.platform.startswith("linux")
@@ -387,47 +405,48 @@
 -        raise RuntimeError(f"Linux worker session leader {session_id} is not visible")
 -
 -    targets: list[tuple[int, int]] = []
--    try:
--        for pid, start_time in snapshot.live_members:
--            try:
--                pidfd = os.pidfd_open(pid, 0)
--            except ProcessLookupError:
--                continue
--            try:
--                current = parse_proc_stat(
--                    (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8")
--                )
--            except FileNotFoundError:
--                os.close(pidfd)
--                continue
--            except BaseException:
--                os.close(pidfd)
--                raise
--            current_pid, state, _, current_session, num_threads, current_start = current
--            if (
--                current_pid != pid
--                or current_session != session_id
--                or current_start != start_time
--                or (state in TERMINAL_PROC_STATES and num_threads == 1)
--            ):
--                os.close(pidfd)
--                continue
--            targets.append((pid, pidfd))
--    except BaseException:
--        for _, pidfd in targets:
--            os.close(pidfd)
--        raise
--    return targets
-@@ -829 +424 @@
+-    errors: list[BaseException] = []
+-    for pid, start_time in snapshot.live_members:
+-        try:
+-            pidfd = os.pidfd_open(pid, 0)
+-        except ProcessLookupError:
+-            continue
+-        except BaseException as exc:
+-            errors.append(exc)
+-            continue
+-        try:
+-            current = parse_proc_stat(
+-                (PROC_ROOT / str(pid) / "stat").read_text(encoding="utf-8")
+-            )
+-        except FileNotFoundError:
+-            close_pidfd(pidfd, errors)
+-            continue
+-        except BaseException as exc:
+-            errors.append(exc)
+-            close_pidfd(pidfd, errors)
+-            continue
+-        current_pid, state, _, current_session, num_threads, current_start = current
+-        if (
+-            current_pid != pid
+-            or current_session != session_id
+-            or current_start != start_time
+-            or (state in TERMINAL_PROC_STATES and num_threads == 1)
+-        ):
+-            close_pidfd(pidfd, errors)
+-            continue
+-        targets.append((pid, pidfd))
+-    return PidfdCollection(tuple(targets), tuple(errors))
+-
+-
 -def process_group_exists(pgid: int) -> bool:
 +def process_group_alive(pgid: int) -> bool:
-@@ -835,5 +429,0 @@
+@@ -856,5 +429,0 @@
 -        if sys.platform == "darwin":
 -            try:
 -                os.getpgid(pgid)
 -            except ProcessLookupError:
 -                return False
-@@ -844,55 +433,0 @@
+@@ -865,55 +433,0 @@
 -def process_group_alive(pgid: int) -> bool:
 -    if sys.platform.startswith("linux"):
 -        live_member = linux_process_group_has_live_member(pgid)
@@ -483,7 +502,7 @@
 -            signal.signal(restore_signal, handler)
 -
 -
-@@ -909,56 +444,53 @@
+@@ -930,56 +444,53 @@
 -    attempt = TerminationAttempt(raw, event_log)
 -
 -    with shutdown_signal_guard():
@@ -593,11 +612,11 @@
 +            "exit_codes": {str(process.pid): process.poll() for process in raw},
 +        },
 +    )
-@@ -1187,0 +720 @@
+@@ -1208,0 +720 @@
 +        self.raw_dir = self.run_root / "evidence" / "raw"
-@@ -1190 +722,0 @@
+@@ -1211 +722,0 @@
 -        self.shutdown_completed = False
-@@ -1315,13 +846,0 @@
+@@ -1336,13 +846,0 @@
 -    def verify_run_directories(self) -> None:
 -        directories: dict[str, Path] = {}
 -        for spec in self.specs():
@@ -611,9 +630,9 @@
 -            {"event": "preflight_directories", "directories": manifest},
 -        )
 -
-@@ -1353 +871,0 @@
+@@ -1374 +871,0 @@
 -            process: subprocess.Popen[str] | None = None
-@@ -1355,58 +873,10 @@
+@@ -1376,58 +873,10 @@
 -                with defer_spawn_signals() as pending_signals:
 -                    process = subprocess.Popen(
 -                        [worker_bin, "--port", str(spec.port), str(spec.workflow)],
@@ -682,22 +701,22 @@
 +                )
 +            except BaseException:
 +                handle.close()
-@@ -1413,0 +884 @@
+@@ -1434,0 +884 @@
 +            self.workers.append(WorkerProcess(spec, process, handle))
-@@ -1432,0 +904,4 @@
+@@ -1453,0 +904,4 @@
 +            if worker.process.poll() is not None:
 +                raise RuntimeError(
 +                    f"{worker.spec.role} worker exited unexpectedly with {worker.process.returncode}"
 +                )
-@@ -1445,0 +921,4 @@
+@@ -1466,0 +921,4 @@
 +                    if worker.process.poll() is not None:
 +                        raise RuntimeError(
 +                            f"{worker.spec.role} worker exited before readiness"
 +                        )
-@@ -1623 +1102 @@
+@@ -1644 +1102 @@
 -                        raise CounterRegressionError(
 +                        raise ValueError(
-@@ -1640,4 +1119,5 @@
+@@ -1661,4 +1119,5 @@
 -            except CounterRegressionError as exc:
 -                breach = LimitBreach("counter_regression", 1, 0)
 -                self.abort(
@@ -707,12 +726,12 @@
 +                    "counter_regression"
 +                    if "regressed" in str(exc)
 +                    else "token_accounting_failed"
-@@ -1645,3 +1125 @@
+@@ -1666,3 +1125 @@
 -                return False, states
 -            except ValueError as exc:
 -                breach = LimitBreach("token_accounting_failed", 1, 0)
 +                breach = LimitBreach(reason, 1, 0)
-@@ -1712,28 +1189,0 @@
+@@ -1733,28 +1189,0 @@
 -    def stop_workers(self, event: dict[str, Any]) -> None:
 -        termination_error: BaseException | None = None
 -        close_errors: list[BaseException] = []
@@ -741,7 +760,7 @@
 -        if close_errors:
 -            raise WorkerLogCloseError(close_errors) from close_errors[0]
 -
-@@ -1758 +1208,8 @@
+@@ -1779 +1208,8 @@
 -        self.stop_workers(event)
 +        terminate_workers(
 +            self.workers,
@@ -751,9 +770,9 @@
 +        )
 +        for worker in self.workers:
 +            worker.log_handle.close()
-@@ -1763 +1219,0 @@
+@@ -1784 +1219,0 @@
 -        self.verify_run_directories()
-@@ -1773 +1229,8 @@
+@@ -1794 +1229,8 @@
 -            self.stop_workers({"event": "arm_completed", "issues": self.args.issues})
 +            terminate_workers(
 +                self.workers,
@@ -763,7 +782,7 @@
 +            )
 +            for worker in self.workers:
 +                worker.log_handle.close()
-@@ -1775,20 +1238,14 @@
+@@ -1796,20 +1238,14 @@
 -        except BaseException as exc:
 -            cleanup_error: BaseException | None = None
 -            if self.workers and not self.shutdown_completed:
@@ -798,7 +817,7 @@
 +                )
 +                for worker in self.workers:
 +                    worker.log_handle.close()
-@@ -1841,2 +1298 @@
+@@ -1862,2 +1298 @@
 -        with termination_signal_handlers():
 -            return Supervisor(args).run()
 +        return Supervisor(args).run()

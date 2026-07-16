@@ -98,6 +98,10 @@ def write_proc_visibility_proof(proc_root, *, mount_options="rw,nosuid,nodev"):
     )
 
 
+def pidfd_collection(*targets):
+    return supervisor.PidfdCollection(tuple(targets), ())
+
+
 class ArtifactReconstructionTests(unittest.TestCase):
     def test_summary_pins_reconstruction_manifest(self):
         asset_root = Path(__file__).parent
@@ -993,10 +997,37 @@ class WorkflowAndAbortTests(unittest.TestCase):
         attempt = supervisor.TerminationAttempt([process], Path("unused"))
         with (
             mock.patch.object(supervisor.os, "killpg"),
-            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+            mock.patch.object(
+                supervisor, "linux_session_pidfds", return_value=pidfd_collection()
+            ),
         ):
             attempt.signal_groups(signal.SIGTERM)
         process.poll.assert_not_called()
+
+    def test_group_probe_failure_isolated_per_worker(self):
+        first = mock.Mock(pid=41)
+        second = mock.Mock(pid=42)
+        first.returncode = None
+        second.returncode = None
+        attempt = supervisor.TerminationAttempt([first, second], Path("unused"))
+        with (
+            mock.patch.object(
+                supervisor,
+                "process_group_exists",
+                side_effect=[OSError("injected probe failure"), True],
+            ),
+            mock.patch.object(supervisor.os, "killpg") as killpg,
+            mock.patch.object(
+                attempt, "signal_session_members", return_value=[]
+            ) as session_signal,
+        ):
+            self.assertEqual(attempt.signal_groups(signal.SIGTERM), [42])
+        self.assertEqual(len(attempt.operation_errors), 1)
+        self.assertIn("injected probe failure", str(attempt.operation_errors[0]))
+        session_signal.assert_has_calls(
+            [mock.call(41, signal.SIGTERM), mock.call(42, signal.SIGTERM)]
+        )
+        killpg.assert_called_once_with(42, signal.SIGTERM)
 
     def test_grace_and_kill_never_reap_before_last_signal(self):
         process = mock.Mock(pid=42)
@@ -1005,7 +1036,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
         with (
             mock.patch.object(attempt, "group_alive", return_value=False),
             mock.patch.object(supervisor.os, "killpg"),
-            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+            mock.patch.object(
+                supervisor, "linux_session_pidfds", return_value=pidfd_collection()
+            ),
         ):
             attempt.wait_for_grace(0.01)
             attempt.kill_survivors()
@@ -1019,7 +1052,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
             mock.patch.object(supervisor, "append_event"),
             mock.patch.object(supervisor, "process_group_exists", return_value=True),
             mock.patch.object(supervisor, "process_group_alive", return_value=True),
-            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+            mock.patch.object(
+                supervisor, "linux_session_pidfds", return_value=pidfd_collection()
+            ),
             mock.patch.object(supervisor.os, "killpg"),
         ):
             with self.assertRaises(supervisor.WorkersStillRunningError):
@@ -1060,7 +1095,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
             mock.patch.object(supervisor, "append_event"),
             mock.patch.object(supervisor, "process_group_exists", return_value=False),
             mock.patch.object(supervisor, "process_group_alive", new=prove_stopped),
-            mock.patch.object(supervisor, "linux_session_pidfds", return_value=[]),
+            mock.patch.object(
+                supervisor, "linux_session_pidfds", return_value=pidfd_collection()
+            ),
         ):
             supervisor.terminate_workers(
                 [process],
@@ -1074,13 +1111,18 @@ class WorkflowAndAbortTests(unittest.TestCase):
         )
         self.assertEqual(order[-1], "poll")
 
-    def test_session_member_signal_uses_pidfd_and_closes_it(self):
+    def test_session_member_signal_uses_partial_pidfds_and_accumulates_errors(self):
         process = mock.Mock(pid=42)
         process.returncode = None
         attempt = supervisor.TerminationAttempt([process], Path("unused"))
+        collection_error = PermissionError("injected collection failure")
         with (
             mock.patch.object(
-                supervisor, "linux_session_pidfds", return_value=[(101, 900)]
+                supervisor,
+                "linux_session_pidfds",
+                return_value=supervisor.PidfdCollection(
+                    ((101, 900),), (collection_error,)
+                ),
             ),
             mock.patch.object(
                 supervisor.signal, "pidfd_send_signal", create=True
@@ -1088,6 +1130,7 @@ class WorkflowAndAbortTests(unittest.TestCase):
             mock.patch.object(supervisor.os, "close") as close,
         ):
             self.assertEqual(attempt.signal_session_members(42, signal.SIGTERM), [101])
+        self.assertEqual(attempt.operation_errors, [collection_error])
         send.assert_called_once_with(900, signal.SIGTERM, None, 0)
         close.assert_called_once_with(900)
 
@@ -1118,8 +1161,36 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 mock.patch.object(supervisor.os, "close") as close,
                 mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
             ):
-                self.assertEqual(supervisor.linux_session_pidfds(42), [])
+                collection = supervisor.linux_session_pidfds(42)
+                self.assertEqual(collection.targets, ())
+                self.assertEqual(collection.errors, ())
             close.assert_called_once_with(900)
+
+    def test_pidfd_collection_isolates_target_open_failures(self):
+        with tempfile.TemporaryDirectory() as temp:
+            proc_root = Path(temp)
+            write_proc_visibility_proof(proc_root)
+            write_proc_stat(proc_root, 42, "Z", 42)
+            write_proc_stat(proc_root, 101, "S", 43, session=42)
+            write_proc_stat(proc_root, 102, "S", 44, session=42)
+
+            def open_pidfd(pid, _flags):
+                if pid == 101:
+                    raise PermissionError("injected pidfd permission failure")
+                return 902
+
+            with (
+                mock.patch.object(supervisor, "PROC_ROOT", proc_root, create=True),
+                mock.patch.object(supervisor.sys, "platform", "linux"),
+                mock.patch.object(
+                    supervisor.os, "pidfd_open", new=open_pidfd, create=True
+                ),
+                mock.patch.object(supervisor.signal, "pidfd_send_signal", create=True),
+            ):
+                collection = supervisor.linux_session_pidfds(42)
+            self.assertEqual(collection.targets, ((102, 902),))
+            self.assertEqual(len(collection.errors), 1)
+            self.assertIn("injected pidfd permission", str(collection.errors[0]))
 
     def test_state_checks_do_not_reap_worker_before_cleanup(self):
         process = mock.Mock(pid=42)
@@ -1342,7 +1413,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                         supervisor.os, "killpg", new=fail_first_group_signal
                     ),
                     mock.patch.object(
-                        supervisor, "linux_session_pidfds", return_value=[]
+                        supervisor,
+                        "linux_session_pidfds",
+                        return_value=pidfd_collection(),
                     ),
                 ):
                     with self.assertRaises(
@@ -2205,7 +2278,9 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 with (
                     mock.patch.object(supervisor.os, "killpg", new=deny_group_signal),
                     mock.patch.object(
-                        supervisor, "linux_session_pidfds", return_value=[]
+                        supervisor,
+                        "linux_session_pidfds",
+                        return_value=pidfd_collection(),
                     ),
                     mock.patch.object(
                         process,
