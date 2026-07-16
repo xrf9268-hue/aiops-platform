@@ -1,5 +1,5 @@
---- published-protocol.md
-+++ protocol-at-activation.md
+--- protocol.md
++++ protocol.md
 @@ -1 +1 @@
 -# High-assurance workflow rerun preregistration and pre-activation amendment
 +# High-assurance workflow rerun preregistration

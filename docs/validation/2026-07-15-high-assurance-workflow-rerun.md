@@ -74,8 +74,16 @@ restored #1089's `zjlgdx` setup/reviewer/operator identity without granting
 The published protocol header now distinguishes its initial preregistration
 from that post-repository, pre-activation permission amendment. The exact
 at-activation protocol and supervisor remain reconstructable from the
-published files plus the adjacent patches; their SHA-256 values are recorded
-in `summary.json`.
+published files plus the adjacent patches. From the asset directory, use these
+non-destructive commands:
+
+```sh
+patch -s -o - protocol.md < protocol-at-activation.patch
+patch -s -o - supervisor.py < supervisor-at-activation.patch
+```
+
+Their expected SHA-256 values are recorded in `at-activation-artifacts.json`
+and `summary.json`.
 
 ## Observed run
 

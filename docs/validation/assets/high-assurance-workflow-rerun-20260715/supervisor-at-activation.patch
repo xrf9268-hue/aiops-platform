@@ -1,5 +1,5 @@
---- published-supervisor.py
-+++ supervisor-at-activation.py
+--- supervisor.py
++++ supervisor.py
 @@ -57,4 +56,0 @@
 -class CounterRegressionError(ValueError):
 -    """A monotonic worker token counter moved backwards."""

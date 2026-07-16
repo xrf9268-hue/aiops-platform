@@ -3,6 +3,7 @@ import hashlib
 import http.server
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -36,6 +37,100 @@ def state(*, total=0, completed=None, running=None, blocked=None, retrying=None)
 
 def row(number, **extra):
     return {"issue_identifier": f"#{number}", **extra}
+
+
+class ArtifactReconstructionTests(unittest.TestCase):
+    def test_summary_pins_reconstruction_manifest(self):
+        asset_root = Path(__file__).parent
+        manifest_path = asset_root / "at-activation-artifacts.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        summary = json.loads((asset_root / "summary.json").read_text(encoding="utf-8"))
+        pins = summary["pins"]
+
+        self.assertEqual(
+            hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            pins["at_activation_artifact_manifest_sha256"],
+        )
+        for artifact in manifest["artifacts"]:
+            with self.subTest(file=artifact["published_file"]):
+                prefix = Path(artifact["published_file"]).stem
+                self.assertEqual(
+                    artifact["published_sha256"], pins[f"published_{prefix}_sha256"]
+                )
+                self.assertEqual(
+                    artifact["at_activation_sha256"],
+                    pins[f"{prefix}_at_activation_sha256"],
+                )
+                self.assertEqual(
+                    artifact["reconstruction_patch_sha256"],
+                    pins[f"{prefix}_at_activation_patch_sha256"],
+                )
+
+    def test_patches_apply_to_committed_files_and_recreate_activation_bytes(self):
+        asset_root = Path(__file__).parent
+        manifest = json.loads(
+            (asset_root / "at-activation-artifacts.json").read_text(encoding="utf-8")
+        )
+
+        for artifact in manifest["artifacts"]:
+            with self.subTest(file=artifact["published_file"]):
+                published = asset_root / artifact["published_file"]
+                patch = asset_root / artifact["reconstruction_patch"]
+                self.assertEqual(
+                    hashlib.sha256(published.read_bytes()).hexdigest(),
+                    artifact["published_sha256"],
+                )
+                self.assertEqual(
+                    hashlib.sha256(patch.read_bytes()).hexdigest(),
+                    artifact["reconstruction_patch_sha256"],
+                )
+                command, separator, patch_name = artifact[
+                    "reconstruction_command"
+                ].partition(" < ")
+                self.assertEqual(separator, " < ")
+                self.assertEqual(patch_name, artifact["reconstruction_patch"])
+                reconstruction = subprocess.run(
+                    shlex.split(command),
+                    cwd=asset_root,
+                    input=patch.read_bytes(),
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    reconstruction.returncode,
+                    0,
+                    reconstruction.stdout.decode() + reconstruction.stderr.decode(),
+                )
+                self.assertEqual(
+                    hashlib.sha256(reconstruction.stdout).hexdigest(),
+                    artifact["at_activation_sha256"],
+                )
+                headers = patch.read_text(encoding="utf-8").splitlines()[:2]
+                self.assertEqual(
+                    headers,
+                    [
+                        f"--- {artifact['published_file']}",
+                        f"+++ {artifact['published_file']}",
+                    ],
+                )
+                with tempfile.TemporaryDirectory() as temp:
+                    candidate = Path(temp) / artifact["published_file"]
+                    candidate.write_bytes(published.read_bytes())
+                    result = subprocess.run(
+                        ["patch", "-f", "-p0", "-i", str(patch.resolve())],
+                        cwd=temp,
+                        capture_output=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        result.stdout.decode() + result.stderr.decode(),
+                    )
+                    self.assertEqual(
+                        hashlib.sha256(candidate.read_bytes()).hexdigest(),
+                        artifact["at_activation_sha256"],
+                    )
 
 
 class AccountingTests(unittest.TestCase):
