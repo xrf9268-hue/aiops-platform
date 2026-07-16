@@ -131,8 +131,10 @@ roots from both workflow front matters, rejects duplicate, overlapping, or
 non-empty roots,
 and persists `preflight_directories` before forge reads or worker start. It
 also replaces error-text classification with a dedicated counter-regression
-exception and removes an unused field. Those post-run fixes improve the next
-run only; they do not retroactively validate this one.
+exception, guarantees the full TERM/grace/KILL/wait cleanup even when shutdown
+evidence writes fail, reports those failures with a classified error, and
+removes an unused field. Those post-run fixes improve the next run only; they
+do not retroactively validate this one.
 
 ## Comparison with the valid #1089 standard arm
 

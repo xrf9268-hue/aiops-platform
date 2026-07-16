@@ -563,13 +563,30 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 )
                 for _ in range(2)
             ]
+            original_fsync = os.fsync
+            original_killpg = os.killpg
+            fsynced: list[int] = []
+
+            def observe_fsync(fd):
+                original_fsync(fd)
+                fsynced.append(fd)
+
+            def observe_signal(pgid, sent_signal):
+                if sent_signal == signal.SIGTERM:
+                    self.assertTrue(fsynced)
+                return original_killpg(pgid, sent_signal)
+
             started = time.monotonic()
-            supervisor.terminate_workers(
-                processes,
-                event_log,
-                {"event": "breach", "reason": "worker_tokens_exceeded"},
-                grace_seconds=0.2,
-            )
+            with (
+                mock.patch.object(supervisor.os, "fsync", side_effect=observe_fsync),
+                mock.patch.object(supervisor.os, "killpg", side_effect=observe_signal),
+            ):
+                supervisor.terminate_workers(
+                    processes,
+                    event_log,
+                    {"event": "breach", "reason": "worker_tokens_exceeded"},
+                    grace_seconds=0.2,
+                )
             elapsed = time.monotonic() - started
 
             self.assertLess(elapsed, 1.0)
@@ -578,6 +595,103 @@ class WorkflowAndAbortTests(unittest.TestCase):
             self.assertEqual(events[0]["event"], "breach")
             self.assertEqual(events[1]["event"], "signal_sent")
             self.assertIn("detection_to_signal_ms", events[1])
+
+    def test_event_log_failure_cannot_block_worker_shutdown(self):
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+            )
+            for _ in range(2)
+        ]
+        try:
+            with mock.patch.object(
+                supervisor, "append_event", side_effect=OSError("disk full")
+            ):
+                with self.assertRaisesRegex(
+                    supervisor.TerminationEvidenceError, "3 writes.*disk full"
+                ) as caught:
+                    supervisor.terminate_workers(
+                        processes,
+                        Path("unused-events.jsonl"),
+                        {"event": "breach", "reason": "worker_tokens_exceeded"},
+                        grace_seconds=0.2,
+                    )
+
+            self.assertTrue(all(process.poll() is not None for process in processes))
+            self.assertIsInstance(caught.exception.__cause__, OSError)
+            self.assertEqual(len(caught.exception.failures), 3)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+
+    def test_signal_event_failure_still_reaches_sigkill_and_wait(self):
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import signal,time; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                "print('ready', flush=True); time.sleep(60)",
+            ],
+            start_new_session=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        try:
+            assert process.stdout is not None
+            self.assertEqual(process.stdout.readline().strip(), "ready")
+            with mock.patch.object(
+                supervisor,
+                "append_event",
+                side_effect=[None, OSError("signal log full"), None],
+            ):
+                with self.assertRaisesRegex(
+                    supervisor.TerminationEvidenceError, "signal log full"
+                ):
+                    supervisor.terminate_workers(
+                        [process],
+                        Path("unused-events.jsonl"),
+                        {"event": "breach", "reason": "test"},
+                        grace_seconds=0.05,
+                    )
+
+            self.assertEqual(process.returncode, -signal.SIGKILL)
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=1)
+
+    def test_final_event_failure_is_reported_after_worker_stops(self):
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            start_new_session=True,
+        )
+        try:
+            with mock.patch.object(
+                supervisor,
+                "append_event",
+                side_effect=[None, None, OSError("stopped log full")],
+            ):
+                with self.assertRaisesRegex(
+                    supervisor.TerminationEvidenceError, "stopped log full"
+                ):
+                    supervisor.terminate_workers(
+                        [process],
+                        Path("unused-events.jsonl"),
+                        {"event": "breach", "reason": "test"},
+                        grace_seconds=0.2,
+                    )
+
+            self.assertIsNotNone(process.poll())
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=1)
 
     def test_termination_signals_group_after_worker_leader_exits(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -975,6 +1089,122 @@ class WorkflowAndAbortTests(unittest.TestCase):
         breach = supervisor.native_close_breach(snapshot)
 
         self.assertEqual(breach.reason, "issue_closed_without_merged_pr")
+
+    def test_abort_closes_worker_log_when_termination_evidence_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[1],
+            )
+
+            class AbortingSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def run_issue(self, issue_number, states):
+                    self.abort(
+                        issue_number,
+                        supervisor.LimitBreach("worker_tokens_exceeded", 11, 10),
+                        states,
+                        {},
+                    )
+                    raise AssertionError("abort returned after evidence failure")
+
+            loop = AbortingSupervisor(args)
+            try:
+                with mock.patch.object(
+                    supervisor, "append_event", side_effect=OSError("disk full")
+                ) as append:
+                    with self.assertRaises(supervisor.TerminationEvidenceError):
+                        loop.run()
+
+                self.assertEqual(append.call_count, 3)
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(handle.closed)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
+
+    def test_completion_log_failure_cannot_return_success_or_retry_shutdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[],
+            )
+
+            class CompletionSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def ensure_workflows_unchanged(self):
+                    return None
+
+            loop = CompletionSupervisor(args)
+            try:
+                with mock.patch.object(
+                    supervisor, "append_event", side_effect=OSError("disk full")
+                ) as append:
+                    with self.assertRaises(supervisor.TerminationEvidenceError):
+                        loop.run()
+
+                self.assertEqual(append.call_count, 3)
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(handle.closed)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
 
     def test_partial_worker_start_is_cleaned_up(self):
         with tempfile.TemporaryDirectory() as temp:

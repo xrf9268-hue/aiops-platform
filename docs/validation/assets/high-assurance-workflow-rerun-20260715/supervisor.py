@@ -58,6 +58,17 @@ class CounterRegressionError(ValueError):
     """A monotonic worker token counter moved backwards."""
 
 
+class TerminationEvidenceError(RuntimeError):
+    """Workers stopped, but one or more shutdown events could not be persisted."""
+
+    def __init__(self, failures: list[Exception]):
+        self.failures = tuple(failures)
+        super().__init__(
+            f"failed to persist termination evidence ({len(failures)} writes): "
+            f"{failures[0]}"
+        )
+
+
 @dataclasses.dataclass(frozen=True)
 class WorkerSpec:
     role: str
@@ -505,11 +516,20 @@ def terminate_workers(
     raw = [
         item.process if isinstance(item, WorkerProcess) else item for item in processes
     ]
+    event_errors: list[Exception] = []
+
+    def record_event(event: dict[str, Any]) -> None:
+        try:
+            append_event(event_log, event)
+        except Exception as exc:
+            # A failed evidence sink must not keep breached workers alive.
+            event_errors.append(exc)
+
     persisted = dict(first_event)
     detected_ns = int(
         persisted.setdefault("detected_monotonic_ns", time.monotonic_ns())
     )
-    append_event(event_log, persisted)
+    record_event(persisted)
     signaled: list[int] = []
     for process in raw:
         process.poll()
@@ -519,8 +539,7 @@ def terminate_workers(
         except ProcessLookupError:
             pass
     signal_ns = time.monotonic_ns()
-    append_event(
-        event_log,
+    record_event(
         {
             "event": "signal_sent",
             "signal": "SIGTERM",
@@ -550,14 +569,15 @@ def terminate_workers(
             process.wait(timeout=1)
         except subprocess.TimeoutExpired:
             pass
-    append_event(
-        event_log,
+    record_event(
         {
             "event": "workers_stopped",
             "sigkill_pids": killed,
             "exit_codes": {str(process.pid): process.poll() for process in raw},
         },
     )
+    if event_errors:
+        raise TerminationEvidenceError(event_errors) from event_errors[0]
 
 
 def fetch_text(url: str, *, timeout: float = 0.5) -> str:
@@ -1264,6 +1284,18 @@ class Supervisor:
             if delay > 0:
                 time.sleep(delay)
 
+    def stop_workers(self, event: dict[str, Any]) -> None:
+        try:
+            terminate_workers(
+                self.workers,
+                self.event_log,
+                event,
+                grace_seconds=self.args.term_grace_seconds,
+            )
+        finally:
+            for worker in self.workers:
+                worker.log_handle.close()
+
     def abort(
         self,
         issue_number: int,
@@ -1282,14 +1314,7 @@ class Supervisor:
             "states": states,
             **extra,
         }
-        terminate_workers(
-            self.workers,
-            self.event_log,
-            event,
-            grace_seconds=self.args.term_grace_seconds,
-        )
-        for worker in self.workers:
-            worker.log_handle.close()
+        self.stop_workers(event)
 
     def run(self) -> int:
         self.run_root.mkdir(parents=True, exist_ok=True)
@@ -1304,29 +1329,17 @@ class Supervisor:
                 if not completed:
                     return 3
             self.ensure_workflows_unchanged()
-            terminate_workers(
-                self.workers,
-                self.event_log,
-                {"event": "arm_completed", "issues": self.args.issues},
-                grace_seconds=self.args.term_grace_seconds,
-            )
-            for worker in self.workers:
-                worker.log_handle.close()
+            self.stop_workers({"event": "arm_completed", "issues": self.args.issues})
             return 0
         except Exception as exc:
-            if self.workers:
-                terminate_workers(
-                    self.workers,
-                    self.event_log,
+            if self.workers and not isinstance(exc, TerminationEvidenceError):
+                self.stop_workers(
                     {
                         "event": "breach",
                         "reason": "supervisor_failed",
                         "error": str(exc),
-                    },
-                    grace_seconds=self.args.term_grace_seconds,
+                    }
                 )
-                for worker in self.workers:
-                    worker.log_handle.close()
             raise
 
 

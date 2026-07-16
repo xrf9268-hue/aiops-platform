@@ -1,11 +1,22 @@
 --- supervisor.py
 +++ supervisor.py
-@@ -57,4 +56,0 @@
+@@ -57,15 +56,0 @@
 -class CounterRegressionError(ValueError):
 -    """A monotonic worker token counter moved backwards."""
 -
 -
-@@ -201,60 +196,0 @@
+-class TerminationEvidenceError(RuntimeError):
+-    """Workers stopped, but one or more shutdown events could not be persisted."""
+-
+-    def __init__(self, failures: list[Exception]):
+-        self.failures = tuple(failures)
+-        super().__init__(
+-            f"failed to persist termination evidence ({len(failures)} writes): "
+-            f"{failures[0]}"
+-        )
+-
+-
+@@ -212,60 +196,0 @@
 -
 -
 -def workflow_workspace_root(workflow: Path) -> Path:
@@ -66,14 +77,36 @@
 -            raise ValueError(f"{name} must be empty: {path} contains {entries}")
 -        manifest[name] = {"path": str(path), "existed": existed, "empty": True}
 -    return manifest
-@@ -278 +214 @@
+@@ -289 +214 @@
 -            raise CounterRegressionError(
 +            raise ValueError(
-@@ -783,0 +720 @@
-+        self.raw_dir = self.run_root / "evidence" / "raw"
-@@ -908,13 +844,0 @@
--        )
+@@ -519,9 +443,0 @@
+-    event_errors: list[Exception] = []
 -
+-    def record_event(event: dict[str, Any]) -> None:
+-        try:
+-            append_event(event_log, event)
+-        except Exception as exc:
+-            # A failed evidence sink must not keep breached workers alive.
+-            event_errors.append(exc)
+-
+@@ -532 +448 @@
+-    record_event(persisted)
++    append_event(event_log, persisted)
+@@ -542 +458,2 @@
+-    record_event(
++    append_event(
++        event_log,
+@@ -572 +489,2 @@
+-    record_event(
++    append_event(
++        event_log,
+@@ -579,2 +496,0 @@
+-    if event_errors:
+-        raise TerminationEvidenceError(event_errors) from event_errors[0]
+@@ -803,0 +720 @@
++        self.raw_dir = self.run_root / "evidence" / "raw"
+@@ -930,13 +846,0 @@
 -    def verify_run_directories(self) -> None:
 -        directories: dict[str, Path] = {}
 -        for spec in self.specs():
@@ -85,17 +118,20 @@
 -        append_event(
 -            self.event_log,
 -            {"event": "preflight_directories", "directories": manifest},
-@@ -1178 +1102 @@
+-        )
+-
+@@ -1198 +1102 @@
 -                        raise CounterRegressionError(
 +                        raise ValueError(
-@@ -1195,6 +1118,0 @@
+@@ -1214,5 +1117,0 @@
+-                )
 -            except CounterRegressionError as exc:
 -                breach = LimitBreach("counter_regression", 1, 0)
 -                self.abort(
 -                    issue_number, breach, states, {"error": str(exc), "forge": forge}
--                )
+@@ -1220 +1118,0 @@
 -                return False, states
-@@ -1202 +1120,6 @@
+@@ -1222 +1120,6 @@
 -                breach = LimitBreach("token_accounting_failed", 1, 0)
 +                reason = (
 +                    "counter_regression"
@@ -103,5 +139,52 @@
 +                    else "token_accounting_failed"
 +                )
 +                breach = LimitBreach(reason, 1, 0)
-@@ -1297 +1219,0 @@
+@@ -1287,12 +1189,0 @@
+-    def stop_workers(self, event: dict[str, Any]) -> None:
+-        try:
+-            terminate_workers(
+-                self.workers,
+-                self.event_log,
+-                event,
+-                grace_seconds=self.args.term_grace_seconds,
+-            )
+-        finally:
+-            for worker in self.workers:
+-                worker.log_handle.close()
+-
+@@ -1317 +1208,8 @@
+-        self.stop_workers(event)
++        terminate_workers(
++            self.workers,
++            self.event_log,
++            event,
++            grace_seconds=self.args.term_grace_seconds,
++        )
++        for worker in self.workers:
++            worker.log_handle.close()
+@@ -1322 +1219,0 @@
 -        self.verify_run_directories()
+@@ -1332 +1229,8 @@
+-            self.stop_workers({"event": "arm_completed", "issues": self.args.issues})
++            terminate_workers(
++                self.workers,
++                self.event_log,
++                {"event": "arm_completed", "issues": self.args.issues},
++                grace_seconds=self.args.term_grace_seconds,
++            )
++            for worker in self.workers:
++                worker.log_handle.close()
+@@ -1335,2 +1239,4 @@
+-            if self.workers and not isinstance(exc, TerminationEvidenceError):
+-                self.stop_workers(
++            if self.workers:
++                terminate_workers(
++                    self.workers,
++                    self.event_log,
+@@ -1341 +1247,2 @@
+-                    }
++                    },
++                    grace_seconds=self.args.term_grace_seconds,
+@@ -1342,0 +1250,2 @@
++                for worker in self.workers:
++                    worker.log_handle.close()

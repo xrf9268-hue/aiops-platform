@@ -152,7 +152,10 @@ run on a daemon observation thread with a five-second overall deadline so they
 cannot block the 250 ms local stop loop. The stop sequence is: fsync breach
 evidence, send `SIGTERM` to both process groups even if a worker leader already
 exited, wait the fixed grace, send `SIGKILL` to surviving groups, record exits.
-It never changes a lifecycle label to stop work.
+It never changes a lifecycle label to stop work. If any termination event
+cannot be persisted, worker safety takes priority: complete the full signal,
+grace, kill, wait, and log-handle cleanup sequence, then fail the run with a
+classified evidence error rather than returning success or ordinary abort.
 
 ## Operator boundary
 

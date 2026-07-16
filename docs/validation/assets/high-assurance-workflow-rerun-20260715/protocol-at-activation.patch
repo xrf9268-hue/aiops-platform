@@ -11,3 +11,9 @@
 -that amendment was frozen.
 +Recorded on 2026-07-15 before creation of the disposable repository, before
 +either issue existed in that repository, and before either worker started.
+@@ -155,4 +152 @@
+-It never changes a lifecycle label to stop work. If any termination event
+-cannot be persisted, worker safety takes priority: complete the full signal,
+-grace, kill, wait, and log-handle cleanup sequence, then fail the run with a
+-classified evidence error rather than returning success or ordinary abort.
++It never changes a lifecycle label to stop work.
