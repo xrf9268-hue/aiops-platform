@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import http.server
+import io
 import json
 import os
 import shlex
@@ -693,6 +694,68 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=1)
 
+    def test_poll_and_wait_failures_are_reported_after_worker_stops(self):
+        with tempfile.TemporaryDirectory() as temp:
+            event_log = Path(temp) / "events.jsonl"
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+            )
+            real_poll = process.poll
+            real_wait = process.wait
+            poll_failed = False
+            wait_failed = False
+
+            def fail_first_poll():
+                nonlocal poll_failed
+                if not poll_failed:
+                    poll_failed = True
+                    raise OSError("injected poll failure")
+                return real_poll()
+
+            def fail_first_wait(*, timeout=None):
+                nonlocal wait_failed
+                if not wait_failed:
+                    wait_failed = True
+                    raise OSError("injected wait failure")
+                return real_wait(timeout=timeout)
+
+            try:
+                with (
+                    mock.patch.object(process, "poll", side_effect=fail_first_poll),
+                    mock.patch.object(process, "wait", side_effect=fail_first_wait),
+                ):
+                    with self.assertRaises(
+                        supervisor.TerminationOperationError
+                    ) as caught:
+                        supervisor.terminate_workers(
+                            [process],
+                            event_log,
+                            {"event": "breach", "reason": "test"},
+                            grace_seconds=0.1,
+                        )
+
+                self.assertTrue(poll_failed)
+                self.assertTrue(wait_failed)
+                self.assertIsNotNone(real_poll())
+                self.assertEqual(len(caught.exception.failures), 2)
+                self.assertIn(
+                    "injected poll failure", str(caught.exception.failures[0])
+                )
+                self.assertIn(
+                    "injected wait failure", str(caught.exception.failures[1])
+                )
+                events = [
+                    json.loads(line)
+                    for line in event_log.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(events[-1]["event"], "workers_stopped")
+                self.assertEqual(events[-1]["alive_pids"], [])
+            finally:
+                if real_poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    real_wait(timeout=1)
+
     def test_termination_signals_group_after_worker_leader_exits(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -742,6 +805,84 @@ class WorkflowAndAbortTests(unittest.TestCase):
                 )
                 self.assertTrue(terminated.exists())
             finally:
+                if child_pid is not None:
+                    try:
+                        os.kill(child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def test_direct_kill_of_leader_keeps_live_child_group_owned(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            child_code = "import time; time.sleep(60)"
+            parent_code = (
+                "import subprocess, time\n"
+                f"child = subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}])\n"
+                "print(child.pid, flush=True)\n"
+                "time.sleep(60)\n"
+            )
+            parent = subprocess.Popen(
+                [sys.executable, "-c", parent_code],
+                start_new_session=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+            child_pid = None
+            real_killpg = os.killpg
+            failed_signals = set()
+
+            def fail_first_group_signal(pgid, signum):
+                if (
+                    signum in (signal.SIGTERM, signal.SIGKILL)
+                    and signum not in failed_signals
+                ):
+                    failed_signals.add(signum)
+                    raise PermissionError(
+                        f"injected first {signal.Signals(signum).name}"
+                    )
+                return real_killpg(pgid, signum)
+
+            try:
+                assert parent.stdout is not None
+                child_pid = int(parent.stdout.readline().strip())
+                parent.stdout.close()
+                first_log = root / "first-events.jsonl"
+                with mock.patch.object(
+                    supervisor.os, "killpg", new=fail_first_group_signal
+                ):
+                    with self.assertRaises(
+                        supervisor.WorkersStillRunningError
+                    ) as caught:
+                        supervisor.terminate_workers(
+                            [parent],
+                            first_log,
+                            {"event": "breach", "reason": "test"},
+                            grace_seconds=0.01,
+                        )
+
+                self.assertEqual(failed_signals, {signal.SIGTERM, signal.SIGKILL})
+                self.assertEqual(parent.poll(), -signal.SIGKILL)
+                self.assertTrue(supervisor.process_group_alive(parent.pid))
+                self.assertEqual(caught.exception.pids, (parent.pid,))
+                events = [
+                    json.loads(line)
+                    for line in first_log.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(events[-1]["event"], "workers_stop_incomplete")
+                self.assertEqual(events[-1]["alive_pids"], [parent.pid])
+
+                supervisor.terminate_workers(
+                    [parent],
+                    root / "retry-events.jsonl",
+                    {"event": "breach", "reason": "outer_retry"},
+                    grace_seconds=0.2,
+                )
+                self.assertFalse(supervisor.process_group_alive(parent.pid))
+            finally:
+                if supervisor.process_group_alive(parent.pid):
+                    real_killpg(parent.pid, signal.SIGKILL)
+                if parent.poll() is None:
+                    parent.wait(timeout=1)
                 if child_pid is not None:
                     try:
                         os.kill(child_pid, signal.SIGKILL)
@@ -1205,6 +1346,1187 @@ class WorkflowAndAbortTests(unittest.TestCase):
                     process.wait(timeout=1)
                 if not handle.closed:
                     handle.close()
+
+    def test_operator_interrupt_still_stops_workers_and_closes_logs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[1],
+            )
+
+            class InterruptingSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def run_issue(self, _issue_number, _states):
+                    raise KeyboardInterrupt("operator interrupted")
+
+            loop = InterruptingSupervisor(args)
+            try:
+                with self.assertRaisesRegex(KeyboardInterrupt, "operator interrupted"):
+                    loop.run()
+
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(handle.closed)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
+
+    def test_sigterm_routes_through_worker_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[1],
+            )
+
+            class SignaledSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def run_issue(self, _issue_number, _states):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    raise AssertionError("SIGTERM did not interrupt the supervisor")
+
+            loop = SignaledSupervisor(args)
+            previous = signal.getsignal(signal.SIGTERM)
+            try:
+                with supervisor.termination_signal_handlers():
+                    with self.assertRaisesRegex(supervisor.SupervisorSignal, "SIGTERM"):
+                        loop.run()
+
+                self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(handle.closed)
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
+
+    def test_main_routes_termination_signals_through_worker_cleanup(self):
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=signal.Signals(signum).name):
+                with tempfile.TemporaryDirectory() as temp:
+                    root = Path(temp)
+                    process = subprocess.Popen(
+                        [sys.executable, "-c", "import time; time.sleep(60)"],
+                        start_new_session=True,
+                        text=True,
+                    )
+                    handle = (root / "worker.log").open("w", encoding="utf-8")
+                    args = types.SimpleNamespace(
+                        run_root=str(root),
+                        operator_gh_config_dir=str(root / "operator-auth"),
+                        term_grace_seconds=0.1,
+                        issues=[1],
+                    )
+
+                    class SignaledSupervisor(supervisor.Supervisor):
+                        def verify_files(self):
+                            return None
+
+                        def verify_run_directories(self):
+                            return None
+
+                        def verify_identities_and_initial_state(self):
+                            return None
+
+                        def start_workers(self):
+                            self.workers = [
+                                supervisor.WorkerProcess(
+                                    mock.sentinel.spec, process, handle
+                                )
+                            ]
+
+                        def wait_ready(self):
+                            return [state(), state()]
+
+                        def run_issue(self, _issue_number, _states):
+                            os.kill(os.getpid(), signum)
+                            raise AssertionError(
+                                f"{signal.Signals(signum).name} did not interrupt"
+                            )
+
+                    previous = {
+                        watched: signal.getsignal(watched)
+                        for watched in (signal.SIGTERM, signal.SIGHUP)
+                    }
+                    for watched in previous:
+                        signal.signal(watched, signal.SIG_IGN)
+                    stderr = io.StringIO()
+                    try:
+                        with (
+                            mock.patch.object(
+                                supervisor, "parse_args", return_value=args
+                            ),
+                            mock.patch.object(
+                                supervisor, "Supervisor", SignaledSupervisor
+                            ),
+                            mock.patch.object(supervisor.sys, "stderr", stderr),
+                        ):
+                            self.assertEqual(supervisor.main([]), 2)
+
+                        self.assertIn(
+                            f"received {signal.Signals(signum).name}", stderr.getvalue()
+                        )
+                        for watched in previous:
+                            self.assertIs(signal.getsignal(watched), signal.SIG_IGN)
+                        self.assertIsNotNone(process.poll())
+                        self.assertTrue(handle.closed)
+                    finally:
+                        for watched, handler in previous.items():
+                            signal.signal(watched, handler)
+                        if process.poll() is None:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait(timeout=1)
+                        if not handle.closed:
+                            handle.close()
+
+    def test_signal_after_fork_before_popen_return_stops_worker(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            spec = supervisor.WorkerSpec(
+                "maker",
+                4928,
+                workflow,
+                "unused",
+                root / "maker-auth",
+                "maker",
+                root / "maker-mirror",
+                "TEST_START_TOKEN",
+            )
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return [spec]
+
+            created = []
+            real_fork_exec = supervisor.subprocess._fork_exec
+
+            def interrupt_after_fork(*fork_args, **fork_kwargs):
+                pid = real_fork_exec(*fork_args, **fork_kwargs)
+                created.append(pid)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return pid
+
+            loop = StartSupervisor(args)
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            try:
+                with (
+                    supervisor.termination_signal_handlers(),
+                    mock.patch.object(
+                        supervisor.subprocess,
+                        "_fork_exec",
+                        new=interrupt_after_fork,
+                    ),
+                ):
+                    with self.assertRaisesRegex(supervisor.SupervisorSignal, "SIGTERM"):
+                        loop.run()
+
+                self.assertEqual(len(created), 1)
+                self.assertEqual(len(loop.workers), 1)
+                self.assertIsNotNone(loop.workers[0].process.poll())
+                self.assertTrue(loop.workers[0].log_handle.closed)
+                self.assertTrue(loop.shutdown_completed)
+            finally:
+                for pid in created:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    try:
+                        os.waitpid(pid, 0)
+                    except ChildProcessError:
+                        pass
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_second_termination_signal_does_not_interrupt_worker_cleanup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[1],
+            )
+
+            class SignaledSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def run_issue(self, _issue_number, _states):
+                    os.kill(os.getpid(), signal.SIGTERM)
+                    raise AssertionError("first SIGTERM did not interrupt")
+
+            real_killpg = os.killpg
+            second_signal_sent = False
+
+            def send_second_signal_then_kill(pgid, signum):
+                nonlocal second_signal_sent
+                if signum == signal.SIGTERM and not second_signal_sent:
+                    second_signal_sent = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return real_killpg(pgid, signum)
+
+            loop = SignaledSupervisor(args)
+            try:
+                with (
+                    supervisor.termination_signal_handlers(),
+                    mock.patch.object(
+                        supervisor.os, "killpg", new=send_second_signal_then_kill
+                    ),
+                ):
+                    with self.assertRaisesRegex(supervisor.SupervisorSignal, "SIGTERM"):
+                        loop.run()
+
+                self.assertTrue(second_signal_sent)
+                self.assertTrue(loop.shutdown_completed)
+                self.assertIsNotNone(process.poll())
+                self.assertTrue(handle.closed)
+            finally:
+                if process.poll() is None:
+                    real_killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
+
+    def test_unstoppable_worker_does_not_mark_shutdown_completed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                start_new_session=True,
+                text=True,
+            )
+            handle = (root / "worker.log").open("w", encoding="utf-8")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.01,
+            )
+            loop = supervisor.Supervisor(args)
+            loop.workers = [
+                supervisor.WorkerProcess(mock.sentinel.spec, process, handle)
+            ]
+            real_killpg = os.killpg
+
+            def deny_group_signal(_pgid, signum):
+                if signum in (signal.SIGTERM, signal.SIGKILL):
+                    raise PermissionError("injected group signal failure")
+                return real_killpg(_pgid, signum)
+
+            try:
+                with (
+                    mock.patch.object(supervisor.os, "killpg", new=deny_group_signal),
+                    mock.patch.object(
+                        process,
+                        "kill",
+                        side_effect=PermissionError("injected fallback failure"),
+                    ),
+                ):
+                    with self.assertRaises(supervisor.WorkersStillRunningError):
+                        loop.stop_workers({"event": "breach"})
+
+                self.assertFalse(loop.shutdown_completed)
+                self.assertIsNone(process.poll())
+                self.assertTrue(handle.closed)
+                events = [
+                    json.loads(line)
+                    for line in loop.event_log.read_text(encoding="utf-8").splitlines()
+                ]
+                self.assertEqual(events[-1]["event"], "workers_stop_incomplete")
+                self.assertEqual(events[-1]["alive_pids"], [process.pid])
+            finally:
+                if process.poll() is None:
+                    real_killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=1)
+                if not handle.closed:
+                    handle.close()
+
+    def test_worker_start_interruption_stops_process_before_tracking(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            spec = supervisor.WorkerSpec(
+                "maker",
+                4928,
+                workflow,
+                "unused",
+                root / "maker-auth",
+                "maker",
+                root / "maker-mirror",
+                "TEST_START_TOKEN",
+            )
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def specs(self):
+                    return [spec]
+
+            class InterruptingWorkers(list):
+                def append(self, _worker):
+                    raise supervisor.SupervisorSignal(signal.SIGTERM)
+
+            loop = StartSupervisor(args)
+            interrupted_workers = InterruptingWorkers()
+            loop.workers = interrupted_workers
+            started = []
+            real_popen = subprocess.Popen
+
+            def record_popen(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                started.append(process)
+                return process
+
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            try:
+                with mock.patch.object(
+                    supervisor.subprocess, "Popen", side_effect=record_popen
+                ):
+                    with self.assertRaises(supervisor.SupervisorSignal):
+                        loop.start_workers()
+
+                self.assertEqual(len(started), 1)
+                self.assertIsNotNone(started[0].poll())
+                self.assertEqual(loop.workers, [])
+            finally:
+                for process in started:
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait(timeout=1)
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_worker_start_kill_error_does_not_abandon_untracked_process(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            spec = supervisor.WorkerSpec(
+                "maker",
+                4928,
+                workflow,
+                "unused",
+                root / "maker-auth",
+                "maker",
+                root / "maker-mirror",
+                "TEST_START_TOKEN",
+            )
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return [spec]
+
+            class InterruptingWorkers(list):
+                rejected = None
+
+                def append(self, worker_process):
+                    self.rejected = worker_process
+                    raise supervisor.SupervisorSignal(signal.SIGTERM)
+
+            real_killpg = os.killpg
+            failed_once = False
+
+            def fail_first_term(pgid, signum):
+                nonlocal failed_once
+                if signum == signal.SIGTERM and not failed_once:
+                    failed_once = True
+                    raise PermissionError("injected killpg failure")
+                return real_killpg(pgid, signum)
+
+            loop = StartSupervisor(args)
+            loop.workers = InterruptingWorkers()
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            try:
+                with mock.patch.object(supervisor.os, "killpg", new=fail_first_term):
+                    try:
+                        loop.run()
+                    except BaseException:
+                        pass
+
+                self.assertTrue(failed_once)
+                self.assertIsNotNone(loop.workers.rejected)
+                self.assertIsNotNone(loop.workers.rejected.process.poll())
+                self.assertTrue(loop.workers.rejected.log_handle.closed)
+            finally:
+                rejected = loop.workers.rejected
+                if rejected is not None and rejected.process.poll() is None:
+                    real_killpg(rejected.process.pid, signal.SIGKILL)
+                    rejected.process.wait(timeout=1)
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_untracked_survivor_is_retained_for_outer_shutdown_retry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\n"
+                "import pathlib, subprocess, sys, time\n"
+                "port = sys.argv[sys.argv.index('--port') + 1]\n"
+                "subprocess.Popen([sys.executable, '-c', "
+                "'import time; time.sleep(60)'])\n"
+                f"pathlib.Path({str(root)!r}, 'child-ready-' + port).write_text('ready')\n"
+                "time.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            specs = [
+                supervisor.WorkerSpec(
+                    role,
+                    port,
+                    workflow,
+                    "unused",
+                    root / f"{role}-auth",
+                    role,
+                    root / f"{role}-mirror",
+                    "TEST_START_TOKEN",
+                )
+                for role, port in (("maker", 4928), ("reviewer", 4929))
+            ]
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.01,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                signal_on_worker_transfer = False
+                transfer_signal_sent = False
+
+                def __setattr__(self, name, value):
+                    if name == "workers" and getattr(
+                        self, "signal_on_worker_transfer", False
+                    ):
+                        object.__setattr__(self, "signal_on_worker_transfer", False)
+                        object.__setattr__(self, "transfer_signal_sent", True)
+                        os.kill(os.getpid(), signal.SIGTERM)
+                    super().__setattr__(name, value)
+
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return specs
+
+            class InterruptingWorkers(list):
+                rejected = None
+
+                def append(self, worker_process):
+                    if not self:
+                        super().append(worker_process)
+                        return
+                    self.rejected = worker_process
+                    child_ready = root / f"child-ready-{worker_process.spec.port}"
+                    deadline = time.monotonic() + 1
+                    while not child_ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    if not child_ready.exists():
+                        raise AssertionError("worker child did not start")
+                    raise supervisor.SupervisorSignal(signal.SIGTERM)
+
+            real_killpg = os.killpg
+            failed_signals = set()
+
+            def fail_first_group_signal(pgid, signum):
+                if (
+                    signum in (signal.SIGTERM, signal.SIGKILL)
+                    and signum not in failed_signals
+                ):
+                    failed_signals.add(signum)
+                    raise PermissionError(
+                        f"injected first {signal.Signals(signum).name}"
+                    )
+                return real_killpg(pgid, signum)
+
+            real_process_kill = subprocess.Popen.kill
+            fallback_failed = False
+
+            def fail_first_process_kill(process):
+                nonlocal fallback_failed
+                if not fallback_failed:
+                    fallback_failed = True
+                    raise PermissionError("injected first fallback failure")
+                return real_process_kill(process)
+
+            loop = StartSupervisor(args)
+            interrupted_workers = InterruptingWorkers()
+            loop.workers = interrupted_workers
+            loop.signal_on_worker_transfer = True
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            observed = None
+            try:
+                with (
+                    supervisor.termination_signal_handlers(),
+                    mock.patch.object(
+                        supervisor.os, "killpg", new=fail_first_group_signal
+                    ),
+                    mock.patch.object(
+                        supervisor.subprocess.Popen,
+                        "kill",
+                        new=fail_first_process_kill,
+                    ),
+                ):
+                    try:
+                        loop.run()
+                    except BaseException as exc:
+                        observed = exc
+
+                self.assertIsInstance(observed, supervisor.WorkersStillRunningError)
+                self.assertTrue(loop.transfer_signal_sent)
+                self.assertEqual(failed_signals, {signal.SIGTERM, signal.SIGKILL})
+                self.assertTrue(fallback_failed)
+                self.assertIsNotNone(interrupted_workers.rejected.process.poll())
+                self.assertEqual(len(loop.workers), 2)
+                for worker_process in loop.workers:
+                    self.assertIsNotNone(worker_process.process.poll())
+                    self.assertFalse(
+                        supervisor.process_group_alive(worker_process.process.pid)
+                    )
+                    self.assertTrue(worker_process.log_handle.closed)
+                self.assertTrue(loop.shutdown_completed)
+            finally:
+                workers = [*loop.workers]
+                rejected = interrupted_workers.rejected
+                if rejected is not None and all(
+                    item.process is not rejected.process for item in workers
+                ):
+                    workers.append(rejected)
+                for worker_process in workers:
+                    if supervisor.process_group_alive(worker_process.process.pid):
+                        real_killpg(worker_process.process.pid, signal.SIGKILL)
+                    worker_process.process.wait(timeout=1)
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_worker_start_cleanup_failure_still_stops_tracked_workers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            specs = [
+                supervisor.WorkerSpec(
+                    role,
+                    port,
+                    workflow,
+                    "unused",
+                    root / f"{role}-auth",
+                    role,
+                    root / f"{role}-mirror",
+                    "TEST_START_TOKEN",
+                )
+                for role, port in (("maker", 4928), ("reviewer", 4929))
+            ]
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return specs
+
+            class InterruptingWorkers(list):
+                rejected = None
+
+                def append(self, worker_process):
+                    if self:
+                        self.rejected = worker_process
+                        raise supervisor.SupervisorSignal(signal.SIGTERM)
+                    super().append(worker_process)
+
+            loop = StartSupervisor(args)
+            loop.workers = InterruptingWorkers()
+            loop.event_log.parent.mkdir(parents=True)
+            loop.event_log.mkdir()
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            try:
+                with self.assertRaises(supervisor.TerminationEvidenceError):
+                    loop.run()
+
+                workers = [*loop.workers, loop.workers.rejected]
+                self.assertEqual(len(workers), 2)
+                for worker_process in workers:
+                    self.assertIsNotNone(worker_process.process.poll())
+                    self.assertTrue(worker_process.log_handle.closed)
+            finally:
+                workers = [*loop.workers]
+                if loop.workers.rejected is not None:
+                    workers.append(loop.workers.rejected)
+                for worker_process in workers:
+                    if worker_process.process.poll() is None:
+                        os.killpg(worker_process.process.pid, signal.SIGKILL)
+                        worker_process.process.wait(timeout=1)
+                    if not worker_process.log_handle.closed:
+                        worker_process.log_handle.close()
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_worker_start_close_failure_does_not_mask_evidence_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            spec = supervisor.WorkerSpec(
+                "maker",
+                4928,
+                workflow,
+                "unused",
+                root / "maker-auth",
+                "maker",
+                root / "maker-mirror",
+                "TEST_START_TOKEN",
+            )
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return [spec]
+
+            class InterruptingWorkers(list):
+                rejected = None
+
+                def append(self, worker_process):
+                    self.rejected = worker_process
+                    raise supervisor.SupervisorSignal(signal.SIGTERM)
+
+            class CloseFailingHandle:
+                def __init__(self, handle):
+                    self.handle = handle
+
+                @property
+                def closed(self):
+                    return self.handle.closed
+
+                def fileno(self):
+                    return self.handle.fileno()
+
+                def close(self):
+                    self.handle.close()
+                    raise OSError("worker log close failed")
+
+            loop = StartSupervisor(args)
+            loop.workers = InterruptingWorkers()
+            loop.event_log.parent.mkdir(parents=True)
+            loop.event_log.mkdir()
+            real_open = Path.open
+
+            def open_with_close_failure(path, *open_args, **open_kwargs):
+                handle = real_open(path, *open_args, **open_kwargs)
+                if path.name.endswith("-worker.log"):
+                    return CloseFailingHandle(handle)
+                return handle
+
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            observed = None
+            try:
+                with mock.patch.object(Path, "open", new=open_with_close_failure):
+                    try:
+                        loop.run()
+                    except BaseException as exc:
+                        observed = exc
+
+                self.assertIsInstance(observed, supervisor.TerminationEvidenceError)
+                self.assertTrue(
+                    any(
+                        "worker log close failed" in note for note in observed.__notes__
+                    )
+                )
+                self.assertIsNotNone(loop.workers.rejected.process.poll())
+                self.assertTrue(loop.workers.rejected.log_handle.closed)
+            finally:
+                rejected = loop.workers.rejected
+                if rejected is not None and rejected.process.poll() is None:
+                    os.killpg(rejected.process.pid, signal.SIGKILL)
+                    rejected.process.wait(timeout=1)
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_start_evidence_error_survives_tracked_log_close_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            worker = root / "fake-worker"
+            worker.write_text(
+                f"#!{sys.executable}\nimport time\ntime.sleep(60)\n",
+                encoding="utf-8",
+            )
+            worker.chmod(0o755)
+            workflow = root / "WORKFLOW.md"
+            workflow.write_text("---\n---\n", encoding="utf-8")
+            specs = [
+                supervisor.WorkerSpec(
+                    role,
+                    port,
+                    workflow,
+                    "unused",
+                    root / f"{role}-auth",
+                    role,
+                    root / f"{role}-mirror",
+                    "TEST_START_TOKEN",
+                )
+                for role, port in (("maker", 4928), ("reviewer", 4929))
+            ]
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                worker_bin=str(worker),
+                clone_url="https://github.com/example/repo.git",
+                term_grace_seconds=0.1,
+            )
+
+            class StartSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def specs(self):
+                    return specs
+
+            class InterruptingWorkers(list):
+                rejected = None
+
+                def append(self, worker_process):
+                    if self:
+                        self.rejected = worker_process
+                        raise supervisor.SupervisorSignal(signal.SIGTERM)
+                    super().append(worker_process)
+
+            class CloseFailingHandle:
+                def __init__(self, handle):
+                    self.handle = handle
+
+                @property
+                def closed(self):
+                    return self.handle.closed
+
+                def fileno(self):
+                    return self.handle.fileno()
+
+                def close(self):
+                    self.handle.close()
+                    raise OSError("tracked worker log close failed")
+
+            real_open = Path.open
+
+            def open_with_close_failure(path, *open_args, **open_kwargs):
+                handle = real_open(path, *open_args, **open_kwargs)
+                if path.name == "maker-worker.log":
+                    return CloseFailingHandle(handle)
+                return handle
+
+            real_append_event = supervisor.append_event
+            event_calls = 0
+
+            def fail_local_termination_evidence(path, event):
+                nonlocal event_calls
+                event_calls += 1
+                if event_calls <= 3:
+                    raise OSError("local termination evidence failed")
+                return real_append_event(path, event)
+
+            loop = StartSupervisor(args)
+            loop.workers = InterruptingWorkers()
+            old_token = os.environ.get("TEST_START_TOKEN")
+            os.environ["TEST_START_TOKEN"] = "not-a-real-token"
+            observed = None
+            try:
+                with (
+                    mock.patch.object(Path, "open", new=open_with_close_failure),
+                    mock.patch.object(
+                        supervisor,
+                        "append_event",
+                        new=fail_local_termination_evidence,
+                    ),
+                ):
+                    try:
+                        loop.run()
+                    except BaseException as exc:
+                        observed = exc
+
+                self.assertIsInstance(observed, supervisor.TerminationEvidenceError)
+                self.assertTrue(
+                    any(
+                        "tracked worker log close failed" in note
+                        for note in getattr(observed, "__notes__", [])
+                    )
+                )
+                workers = [*loop.workers, loop.workers.rejected]
+                self.assertEqual(len(workers), 2)
+                for worker_process in workers:
+                    self.assertIsNotNone(worker_process.process.poll())
+                    self.assertTrue(worker_process.log_handle.closed)
+            finally:
+                workers = [*loop.workers]
+                if loop.workers.rejected is not None:
+                    workers.append(loop.workers.rejected)
+                for worker_process in workers:
+                    if worker_process.process.poll() is None:
+                        os.killpg(worker_process.process.pid, signal.SIGKILL)
+                        worker_process.process.wait(timeout=1)
+                if old_token is None:
+                    os.environ.pop("TEST_START_TOKEN", None)
+                else:
+                    os.environ["TEST_START_TOKEN"] = old_token
+
+    def test_log_close_failure_closes_every_handle_without_retrying_shutdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first_handle = mock.Mock()
+            first_handle.close.side_effect = OSError("first close failed")
+            second_handle = mock.Mock()
+            second_handle.close.side_effect = OSError("second close failed")
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[],
+            )
+
+            class CompletionSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(
+                            mock.sentinel.first_spec,
+                            mock.sentinel.first_process,
+                            first_handle,
+                        ),
+                        supervisor.WorkerProcess(
+                            mock.sentinel.second_spec,
+                            mock.sentinel.second_process,
+                            second_handle,
+                        ),
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def ensure_workflows_unchanged(self):
+                    return None
+
+            loop = CompletionSupervisor(args)
+            with mock.patch.object(supervisor, "terminate_workers") as terminate:
+                with self.assertRaisesRegex(
+                    supervisor.WorkerLogCloseError, "2 handles.*first close failed"
+                ) as caught:
+                    loop.run()
+
+            self.assertEqual(terminate.call_count, 1)
+            first_handle.close.assert_called_once_with()
+            second_handle.close.assert_called_once_with()
+            self.assertEqual(
+                [str(error) for error in caught.exception.failures],
+                ["first close failed", "second close failed"],
+            )
+
+    def test_log_close_interrupt_is_classified_without_retrying_shutdown(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first_handle = mock.Mock()
+            first_handle.close.side_effect = KeyboardInterrupt("close interrupted")
+            second_handle = mock.Mock()
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+                issues=[],
+            )
+
+            class CompletionSupervisor(supervisor.Supervisor):
+                def verify_files(self):
+                    return None
+
+                def verify_run_directories(self):
+                    return None
+
+                def verify_identities_and_initial_state(self):
+                    return None
+
+                def start_workers(self):
+                    self.workers = [
+                        supervisor.WorkerProcess(
+                            mock.sentinel.first_spec,
+                            mock.sentinel.first_process,
+                            first_handle,
+                        ),
+                        supervisor.WorkerProcess(
+                            mock.sentinel.second_spec,
+                            mock.sentinel.second_process,
+                            second_handle,
+                        ),
+                    ]
+
+                def wait_ready(self):
+                    return [state(), state()]
+
+                def ensure_workflows_unchanged(self):
+                    return None
+
+            loop = CompletionSupervisor(args)
+            observed = None
+            with mock.patch.object(supervisor, "terminate_workers") as terminate:
+                try:
+                    loop.run()
+                except BaseException as exc:
+                    observed = exc
+
+            self.assertIsInstance(observed, supervisor.WorkerLogCloseError)
+            self.assertEqual(terminate.call_count, 1)
+            first_handle.close.assert_called_once_with()
+            second_handle.close.assert_called_once_with()
+
+    def test_log_close_failure_does_not_mask_termination_evidence_error(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first_handle = mock.Mock()
+            first_handle.close.side_effect = OSError("first close failed")
+            second_handle = mock.Mock()
+            args = types.SimpleNamespace(
+                run_root=str(root),
+                operator_gh_config_dir=str(root / "operator-auth"),
+                term_grace_seconds=0.1,
+            )
+            loop = supervisor.Supervisor(args)
+            loop.workers = [
+                supervisor.WorkerProcess(
+                    mock.sentinel.first_spec,
+                    mock.sentinel.first_process,
+                    first_handle,
+                ),
+                supervisor.WorkerProcess(
+                    mock.sentinel.second_spec,
+                    mock.sentinel.second_process,
+                    second_handle,
+                ),
+            ]
+            evidence_error = supervisor.TerminationEvidenceError(
+                [OSError("event log full")]
+            )
+
+            with mock.patch.object(
+                supervisor, "terminate_workers", side_effect=evidence_error
+            ) as terminate:
+                with self.assertRaises(supervisor.TerminationEvidenceError) as caught:
+                    loop.stop_workers({"event": "breach"})
+
+            self.assertIs(caught.exception, evidence_error)
+            self.assertEqual(terminate.call_count, 1)
+            first_handle.close.assert_called_once_with()
+            second_handle.close.assert_called_once_with()
+            self.assertIn("first close failed", "\n".join(evidence_error.__notes__))
 
     def test_partial_worker_start_is_cleaned_up(self):
         with tempfile.TemporaryDirectory() as temp:

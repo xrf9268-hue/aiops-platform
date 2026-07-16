@@ -4,29 +4,31 @@
   "artifacts": [
     {
       "published_file": "supervisor.py",
-      "published_sha256": "1ea61768e2dae53e688240a859007995adbc7cd3ffd83b869d9d65ec4176d045",
+      "published_sha256": "77a03650abb63349102fa046ca034fb93bd3459ef91364642baa6d901db6dea7",
       "at_activation_sha256": "f76fd4a2e5120fb2123dd02d35f81da6220b318a3a4fc230c3ce87a3dc90432c",
       "reconstruction_patch": "supervisor-at-activation.patch",
-      "reconstruction_patch_sha256": "cd7c7ac5b558dffdf3bb4c75a2148d97d382dec2e277dc66c403b9ac63977c4a",
+      "reconstruction_patch_sha256": "f711d7fceba6f54e4a967e2f48b6921f617427b356feb10c5f3bc110f9dbb158",
       "reconstruction_command": "patch -s -o - supervisor.py < supervisor-at-activation.patch",
       "post_run_changes": [
         "typed counter-regression classification",
         "non-overlapping and empty workspace/mirror activation gate",
         "persisted preflight_directories evidence",
         "fail-closed worker cleanup when termination evidence writes fail",
+        "interrupt-safe shutdown for KeyboardInterrupt, SIGTERM, and SIGHUP including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated signals, isolated per-process termination failures, survivor verification, and worker-log close failures",
         "unused raw_dir removal"
       ]
     },
     {
       "published_file": "protocol.md",
-      "published_sha256": "f0124f6956623e2fc77ab5de1f3fe950796cc565805256fcb6085c584ff35325",
+      "published_sha256": "0ca495aba83d12fbc4ada675fd34f9c9e9bb18ef2f4eeae13dea9a19caadf2b6",
       "at_activation_sha256": "83fd37c26466a7c363085c7d84eeccb9c743f2ba39edc250a3ee73688e0eb93b",
       "reconstruction_patch": "protocol-at-activation.patch",
-      "reconstruction_patch_sha256": "ded252422a8960072d8a34ce4acd7145be6da3b2cf78385ca919e3385d404822",
+      "reconstruction_patch_sha256": "d53cbd9a71895500896b2cfdf497d77e23d9fd587e3d1784f2f6493519090edd",
       "reconstruction_command": "patch -s -o - protocol.md < protocol-at-activation.patch",
       "post_run_changes": [
         "chronology-only header correction distinguishing initial preregistration from the pre-activation permission amendment",
-        "termination-evidence safety exception prioritizing worker shutdown before reporting incomplete evidence"
+        "termination-evidence safety exception prioritizing worker shutdown before reporting incomplete evidence",
+        "operator-interrupt and SIGTERM/SIGHUP routing including deferred pre-fork-to-Popen-registration signals, signal-guarded local cleanup and ownership transfer, outer retry ownership for unproven survivors, repeated-signal shielding, per-process termination isolation, survivor verification, and worker-log close failure semantics"
       ]
     }
   ]

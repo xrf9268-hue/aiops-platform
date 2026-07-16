@@ -1,14 +1,31 @@
 --- supervisor.py
 +++ supervisor.py
-@@ -57,15 +56,0 @@
+@@ -13 +12,0 @@
+-import contextlib
+@@ -29 +28 @@
+-from typing import Any, Iterable, Iterator
++from typing import Any, Iterable
+@@ -58,57 +56,0 @@
 -class CounterRegressionError(ValueError):
 -    """A monotonic worker token counter moved backwards."""
 -
 -
--class TerminationEvidenceError(RuntimeError):
+-class SupervisorSignal(RuntimeError):
+-    """The supervisor received an OS termination signal."""
+-
+-    def __init__(self, signum: int):
+-        self.signum = signum
+-        super().__init__(f"received {signal.Signals(signum).name}")
+-
+-
+-class WorkersStoppedError(RuntimeError):
+-    """Worker shutdown completed, but cleanup evidence is incomplete."""
+-
+-
+-class TerminationEvidenceError(WorkersStoppedError):
 -    """Workers stopped, but one or more shutdown events could not be persisted."""
 -
--    def __init__(self, failures: list[Exception]):
+-    def __init__(self, failures: list[BaseException]):
 -        self.failures = tuple(failures)
 -        super().__init__(
 -            f"failed to persist termination evidence ({len(failures)} writes): "
@@ -16,7 +33,126 @@
 -        )
 -
 -
-@@ -212,60 +196,0 @@
+-class TerminationOperationError(WorkersStoppedError):
+-    """Workers stopped, but one or more shutdown operations failed."""
+-
+-    def __init__(self, failures: list[BaseException]):
+-        self.failures = tuple(failures)
+-        super().__init__(
+-            f"worker shutdown recovered from {len(failures)} operation errors: "
+-            f"{failures[0]}"
+-        )
+-
+-
+-class WorkersStillRunningError(RuntimeError):
+-    """Worker shutdown exhausted its signal sequence with live process groups."""
+-
+-    def __init__(self, pids: list[int], failures: list[BaseException]):
+-        self.pids = tuple(pids)
+-        self.failures = tuple(failures)
+-        super().__init__(f"worker process groups still alive after shutdown: {pids}")
+-
+-
+-class WorkerLogCloseError(WorkersStoppedError):
+-    """Workers stopped, but one or more worker log handles failed to close."""
+-
+-    def __init__(self, failures: list[BaseException]):
+-        self.failures = tuple(failures)
+-        super().__init__(
+-            f"worker log close failed ({len(failures)} handles): {failures[0]}"
+-        )
+-
+-
+@@ -132,79 +73,0 @@
+-
+-
+-@dataclasses.dataclass
+-class TerminationAttempt:
+-    processes: list[subprocess.Popen[str]]
+-    event_log: Path
+-    event_errors: list[BaseException] = dataclasses.field(default_factory=list)
+-    operation_errors: list[BaseException] = dataclasses.field(default_factory=list)
+-
+-    def record_event(self, event: dict[str, Any]) -> None:
+-        try:
+-            append_event(self.event_log, event)
+-        except BaseException as exc:
+-            # A failed evidence sink must not keep breached workers alive.
+-            self.event_errors.append(exc)
+-
+-    def poll(self, process: subprocess.Popen[str]) -> int | None:
+-        try:
+-            return process.poll()
+-        except BaseException as exc:
+-            self.operation_errors.append(exc)
+-            return None
+-
+-    def group_alive(self, process: subprocess.Popen[str]) -> bool:
+-        try:
+-            return process_group_alive(process.pid)
+-        except BaseException as exc:
+-            self.operation_errors.append(exc)
+-            return True
+-
+-    def signal_groups(self, signum: signal.Signals) -> list[int]:
+-        signaled: list[int] = []
+-        for process in self.processes:
+-            self.poll(process)
+-            try:
+-                os.killpg(process.pid, signum)
+-                signaled.append(process.pid)
+-            except ProcessLookupError:
+-                pass
+-            except BaseException as exc:
+-                self.operation_errors.append(exc)
+-        return signaled
+-
+-    def wait_for_grace(self, grace_seconds: float) -> None:
+-        deadline = time.monotonic() + grace_seconds
+-        while time.monotonic() < deadline:
+-            for process in self.processes:
+-                self.poll(process)
+-            if not any(self.group_alive(process) for process in self.processes):
+-                return
+-            time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+-
+-    def kill_survivors(self) -> list[int]:
+-        killed: list[int] = []
+-        for process in self.processes:
+-            self.poll(process)
+-            if not self.group_alive(process):
+-                continue
+-            try:
+-                os.killpg(process.pid, signal.SIGKILL)
+-                killed.append(process.pid)
+-            except ProcessLookupError:
+-                pass
+-            except BaseException as exc:
+-                self.operation_errors.append(exc)
+-                try:
+-                    process.kill()
+-                except BaseException as fallback_error:
+-                    self.operation_errors.append(fallback_error)
+-        return killed
+-
+-    def wait_for_exit(self) -> None:
+-        for process in self.processes:
+-            try:
+-                process.wait(timeout=1)
+-            except subprocess.TimeoutExpired:
+-                pass
+-            except BaseException as exc:
+-                self.operation_errors.append(exc)
+@@ -212,6 +74,0 @@
+-    def final_status(self) -> tuple[dict[str, int | None], list[int]]:
+-        exit_codes = {
+-            str(process.pid): self.poll(process) for process in self.processes
+-        }
+-        alive = [process.pid for process in self.processes if self.group_alive(process)]
+-        return exit_codes, alive
+@@ -219 +75,0 @@
+-
+@@ -341,60 +196,0 @@
 -
 -
 -def workflow_workspace_root(workflow: Path) -> Path:
@@ -77,36 +213,166 @@
 -            raise ValueError(f"{name} must be empty: {path} contains {entries}")
 -        manifest[name] = {"path": str(path), "existed": existed, "empty": True}
 -    return manifest
-@@ -289 +214 @@
+@@ -418 +214 @@
 -            raise CounterRegressionError(
 +            raise ValueError(
-@@ -519,9 +443,0 @@
--    event_errors: list[Exception] = []
+@@ -636,35 +431,0 @@
 -
--    def record_event(event: dict[str, Any]) -> None:
--        try:
--            append_event(event_log, event)
--        except Exception as exc:
--            # A failed evidence sink must not keep breached workers alive.
--            event_errors.append(exc)
 -
-@@ -532 +448 @@
--    record_event(persisted)
+-@contextlib.contextmanager
+-def termination_signal_handlers() -> Iterator[None]:
+-    previous: dict[signal.Signals, Any] = {}
+-
+-    def interrupt(signum: int, _frame: Any) -> None:
+-        raise SupervisorSignal(signum)
+-
+-    try:
+-        for signum in (signal.SIGTERM, signal.SIGHUP):
+-            previous[signum] = signal.getsignal(signum)
+-            signal.signal(signum, interrupt)
+-        yield
+-    finally:
+-        for restore_signal, handler in previous.items():
+-            signal.signal(restore_signal, handler)
+-
+-
+-@contextlib.contextmanager
+-def defer_spawn_signals() -> Iterator[list[int]]:
+-    previous: dict[signal.Signals, Any] = {}
+-    pending: list[int] = []
+-
+-    def defer(signum: int, _frame: Any) -> None:
+-        pending.append(signum)
+-
+-    try:
+-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+-            previous[signum] = signal.getsignal(signum)
+-            signal.signal(signum, defer)
+-        yield pending
+-    finally:
+-        for restore_signal, handler in previous.items():
+-            signal.signal(restore_signal, handler)
+@@ -673,13 +433,0 @@
+-@contextlib.contextmanager
+-def shutdown_signal_guard() -> Iterator[None]:
+-    previous: dict[signal.Signals, Any] = {}
+-    try:
+-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+-            previous[signum] = signal.getsignal(signum)
+-            signal.signal(signum, signal.SIG_IGN)
+-        yield
+-    finally:
+-        for restore_signal, handler in previous.items():
+-            signal.signal(restore_signal, handler)
+-
+-
+@@ -696,48 +444,53 @@
+-    attempt = TerminationAttempt(raw, event_log)
+-
+-    with shutdown_signal_guard():
+-        persisted = dict(first_event)
+-        detected_ns = int(
+-            persisted.setdefault("detected_monotonic_ns", time.monotonic_ns())
+-        )
+-        attempt.record_event(persisted)
+-        signaled = attempt.signal_groups(signal.SIGTERM)
+-        signal_ns = time.monotonic_ns()
+-        attempt.record_event(
+-            {
+-                "event": "signal_sent",
+-                "signal": "SIGTERM",
+-                "pids": signaled,
+-                "signal_monotonic_ns": signal_ns,
+-                "detection_to_signal_ms": (signal_ns - detected_ns) / 1_000_000,
+-            },
+-        )
+-        attempt.wait_for_grace(grace_seconds)
+-        killed = attempt.kill_survivors()
+-        attempt.wait_for_exit()
+-        exit_codes, alive = attempt.final_status()
+-        attempt.record_event(
+-            {
+-                "event": "workers_stopped" if not alive else "workers_stop_incomplete",
+-                "sigkill_pids": killed,
+-                "exit_codes": exit_codes,
+-                "alive_pids": alive,
+-            },
+-        )
+-    if alive:
+-        survivors_error = WorkersStillRunningError(alive, attempt.operation_errors)
+-        for event_error in attempt.event_errors:
+-            survivors_error.add_note(f"termination evidence failed: {event_error}")
+-        cause = attempt.operation_errors[0] if attempt.operation_errors else None
+-        if cause is not None:
+-            raise survivors_error from cause
+-        raise survivors_error
+-    if attempt.event_errors:
+-        evidence_error = TerminationEvidenceError(attempt.event_errors)
+-        for operation_error in attempt.operation_errors:
+-            evidence_error.add_note(f"shutdown operation recovered: {operation_error}")
+-        raise evidence_error from attempt.event_errors[0]
+-    if attempt.operation_errors:
+-        raise TerminationOperationError(
+-            attempt.operation_errors
+-        ) from attempt.operation_errors[0]
++    persisted = dict(first_event)
++    detected_ns = int(
++        persisted.setdefault("detected_monotonic_ns", time.monotonic_ns())
++    )
 +    append_event(event_log, persisted)
-@@ -542 +458,2 @@
--    record_event(
++    signaled: list[int] = []
++    for process in raw:
++        process.poll()
++        try:
++            os.killpg(process.pid, signal.SIGTERM)
++            signaled.append(process.pid)
++        except ProcessLookupError:
++            pass
++    signal_ns = time.monotonic_ns()
 +    append_event(
 +        event_log,
-@@ -572 +489,2 @@
--    record_event(
++        {
++            "event": "signal_sent",
++            "signal": "SIGTERM",
++            "pids": signaled,
++            "signal_monotonic_ns": signal_ns,
++            "detection_to_signal_ms": (signal_ns - detected_ns) / 1_000_000,
++        },
++    )
++    deadline = time.monotonic() + grace_seconds
++    while time.monotonic() < deadline:
++        for process in raw:
++            process.poll()
++        if not any(process_group_alive(process.pid) for process in raw):
++            break
++        time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
++    killed: list[int] = []
++    for process in raw:
++        process.poll()
++        if process_group_alive(process.pid):
++            try:
++                os.killpg(process.pid, signal.SIGKILL)
++                killed.append(process.pid)
++            except ProcessLookupError:
++                pass
++    for process in raw:
++        try:
++            process.wait(timeout=1)
++        except subprocess.TimeoutExpired:
++            pass
 +    append_event(
 +        event_log,
-@@ -579,2 +496,0 @@
--    if event_errors:
--        raise TerminationEvidenceError(event_errors) from event_errors[0]
-@@ -803,0 +720 @@
++        {
++            "event": "workers_stopped",
++            "sigkill_pids": killed,
++            "exit_codes": {str(process.pid): process.poll() for process in raw},
++        },
++    )
+@@ -966,0 +720 @@
 +        self.raw_dir = self.run_root / "evidence" / "raw"
-@@ -930,13 +846,0 @@
+@@ -969 +722,0 @@
+-        self.shutdown_completed = False
+@@ -1094,13 +846,0 @@
 -    def verify_run_directories(self) -> None:
 -        directories: dict[str, Path] = {}
 -        for spec in self.specs():
@@ -120,18 +386,90 @@
 -            {"event": "preflight_directories", "directories": manifest},
 -        )
 -
-@@ -1198 +1102 @@
+@@ -1132 +871,0 @@
+-            process: subprocess.Popen[str] | None = None
+@@ -1134,58 +873,10 @@
+-                with defer_spawn_signals() as pending_signals:
+-                    process = subprocess.Popen(
+-                        [worker_bin, "--port", str(spec.port), str(spec.workflow)],
+-                        env=env,
+-                        text=True,
+-                        stdout=handle,
+-                        stderr=subprocess.STDOUT,
+-                        start_new_session=True,
+-                    )
+-                    self.workers.append(WorkerProcess(spec, process, handle))
+-                if pending_signals:
+-                    if pending_signals[0] == signal.SIGINT:
+-                        raise KeyboardInterrupt("received SIGINT")
+-                    raise SupervisorSignal(pending_signals[0])
+-            except BaseException as exc:
+-                with shutdown_signal_guard():
+-                    tracked = process is not None and any(
+-                        worker.process is process for worker in self.workers
+-                    )
+-                    if process is not None and not tracked:
+-                        cleanup_error: BaseException | None = None
+-                        try:
+-                            terminate_workers(
+-                                [process],
+-                                self.event_log,
+-                                {
+-                                    "event": "breach",
+-                                    "reason": "worker_start_interrupted",
+-                                    "role": spec.role,
+-                                    "error": str(exc),
+-                                },
+-                                grace_seconds=self.args.term_grace_seconds,
+-                            )
+-                        except BaseException as stop_error:
+-                            cleanup_error = stop_error
+-                        if cleanup_error is not None and not isinstance(
+-                            cleanup_error, WorkersStoppedError
+-                        ):
+-                            self.workers = [
+-                                *self.workers,
+-                                WorkerProcess(spec, process, handle),
+-                            ]
+-                            raise cleanup_error
+-                        close_error: BaseException | None = None
+-                        try:
+-                            handle.close()
+-                        except BaseException as log_error:
+-                            close_error = log_error
+-                        if cleanup_error is not None:
+-                            if close_error is not None:
+-                                cleanup_error.add_note(
+-                                    f"worker log close failed: {close_error}"
+-                                )
+-                            raise cleanup_error
+-                        if close_error is not None:
+-                            raise WorkerLogCloseError([close_error]) from close_error
+-                    elif process is None:
+-                        handle.close()
++                process = subprocess.Popen(
++                    [worker_bin, "--port", str(spec.port), str(spec.workflow)],
++                    env=env,
++                    text=True,
++                    stdout=handle,
++                    stderr=subprocess.STDOUT,
++                    start_new_session=True,
++                )
++            except BaseException:
++                handle.close()
+@@ -1192,0 +884 @@
++            self.workers.append(WorkerProcess(spec, process, handle))
+@@ -1410 +1102 @@
 -                        raise CounterRegressionError(
 +                        raise ValueError(
-@@ -1214,5 +1117,0 @@
--                )
+@@ -1427,6 +1118,0 @@
 -            except CounterRegressionError as exc:
 -                breach = LimitBreach("counter_regression", 1, 0)
 -                self.abort(
 -                    issue_number, breach, states, {"error": str(exc), "forge": forge}
-@@ -1220 +1118,0 @@
+-                )
 -                return False, states
-@@ -1222 +1120,6 @@
+@@ -1434 +1120,6 @@
 -                breach = LimitBreach("token_accounting_failed", 1, 0)
 +                reason = (
 +                    "counter_regression"
@@ -139,20 +477,36 @@
 +                    else "token_accounting_failed"
 +                )
 +                breach = LimitBreach(reason, 1, 0)
-@@ -1287,12 +1189,0 @@
+@@ -1499,28 +1189,0 @@
 -    def stop_workers(self, event: dict[str, Any]) -> None:
--        try:
--            terminate_workers(
--                self.workers,
--                self.event_log,
--                event,
--                grace_seconds=self.args.term_grace_seconds,
--            )
--        finally:
+-        termination_error: BaseException | None = None
+-        close_errors: list[BaseException] = []
+-        with shutdown_signal_guard():
+-            try:
+-                terminate_workers(
+-                    self.workers,
+-                    self.event_log,
+-                    event,
+-                    grace_seconds=self.args.term_grace_seconds,
+-                )
+-            except BaseException as exc:
+-                termination_error = exc
 -            for worker in self.workers:
--                worker.log_handle.close()
+-                try:
+-                    worker.log_handle.close()
+-                except BaseException as exc:
+-                    close_errors.append(exc)
+-            self.shutdown_completed = termination_error is None or isinstance(
+-                termination_error, WorkersStoppedError
+-            )
+-        if termination_error is not None:
+-            for error in close_errors:
+-                termination_error.add_note(f"worker log close failed: {error}")
+-            raise termination_error
+-        if close_errors:
+-            raise WorkerLogCloseError(close_errors) from close_errors[0]
 -
-@@ -1317 +1208,8 @@
+@@ -1545 +1208,8 @@
 -        self.stop_workers(event)
 +        terminate_workers(
 +            self.workers,
@@ -162,9 +516,9 @@
 +        )
 +        for worker in self.workers:
 +            worker.log_handle.close()
-@@ -1322 +1219,0 @@
+@@ -1550 +1219,0 @@
 -        self.verify_run_directories()
-@@ -1332 +1229,8 @@
+@@ -1560 +1229,8 @@
 -            self.stop_workers({"event": "arm_completed", "issues": self.args.issues})
 +            terminate_workers(
 +                self.workers,
@@ -174,17 +528,42 @@
 +            )
 +            for worker in self.workers:
 +                worker.log_handle.close()
-@@ -1335,2 +1239,4 @@
--            if self.workers and not isinstance(exc, TerminationEvidenceError):
--                self.stop_workers(
+@@ -1562,20 +1238,14 @@
+-        except BaseException as exc:
+-            cleanup_error: BaseException | None = None
+-            if self.workers and not self.shutdown_completed:
+-                try:
+-                    self.stop_workers(
+-                        {
+-                            "event": "breach",
+-                            "reason": "supervisor_failed",
+-                            "error": str(exc),
+-                        }
+-                    )
+-                except BaseException as stop_error:
+-                    cleanup_error = stop_error
+-            if cleanup_error is not None:
+-                if isinstance(exc, TerminationEvidenceError) and isinstance(
+-                    cleanup_error, WorkersStoppedError
+-                ):
+-                    exc.add_note(f"additional cleanup error: {cleanup_error}")
+-                    raise exc from cleanup_error
+-                raise cleanup_error
++        except Exception as exc:
 +            if self.workers:
 +                terminate_workers(
 +                    self.workers,
 +                    self.event_log,
-@@ -1341 +1247,2 @@
--                    }
++                    {
++                        "event": "breach",
++                        "reason": "supervisor_failed",
++                        "error": str(exc),
 +                    },
 +                    grace_seconds=self.args.term_grace_seconds,
-@@ -1342,0 +1250,2 @@
++                )
 +                for worker in self.workers:
 +                    worker.log_handle.close()
+@@ -1628,2 +1298 @@
+-        with termination_signal_handlers():
+-            return Supervisor(args).run()
++        return Supervisor(args).run()

@@ -87,9 +87,11 @@ and `summary.json`.
 
 ## Observed run
 
-Times are UTC. The operator performed only the pre-registered `aiops:todo`
-activation for issue 1. No code, PR, label, workflow, check, review, or setting
-was repaired after activation.
+Times are UTC. During the live arm, the operator performed only the
+pre-registered `aiops:todo` activation for issue 1; no code, PR, label,
+workflow, check, review, or setting was repaired before termination. The
+post-run artifact hardening documented below occurred only after the arm had
+stopped and cannot affect its verdict.
 
 | Time | Event |
 | --- | --- |
@@ -133,8 +135,18 @@ and persists `preflight_directories` before forge reads or worker start. It
 also replaces error-text classification with a dedicated counter-regression
 exception, guarantees the full TERM/grace/KILL/wait cleanup even when shutdown
 evidence writes fail, reports those failures with a classified error, and
-removes an unused field. Those post-run fixes improve the next run only; they
-do not retroactively validate this one.
+routes operator interrupts plus OS `SIGTERM`/`SIGHUP` through the same cleanup.
+This includes interruption between process spawn and worker tracking even when
+that local cleanup cannot persist its evidence. Signals immediately before fork
+through registration of the returned `Popen` are deferred until ownership is
+established; local cleanup and ownership transfer are signal-guarded, and any
+process group not proven absent remains owned for the outer shutdown retry.
+The shutdown sequence now resists additional termination signals, isolates
+per-process termination errors, falls back to direct-process kill, and confirms
+every process group is gone before marking shutdown complete. It also attempts
+every worker-log close without masking the primary evidence error or retrying
+an already completed shutdown, and removes an unused field. Those post-run fixes
+improve the next run only; they do not retroactively validate this one.
 
 ## Comparison with the valid #1089 standard arm
 

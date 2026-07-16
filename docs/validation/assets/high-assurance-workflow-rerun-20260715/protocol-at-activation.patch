@@ -11,9 +11,25 @@
 -that amendment was frozen.
 +Recorded on 2026-07-15 before creation of the disposable repository, before
 +either issue existed in that repository, and before either worker started.
-@@ -155,4 +152 @@
+@@ -155,20 +152 @@
 -It never changes a lifecycle label to stop work. If any termination event
 -cannot be persisted, worker safety takes priority: complete the full signal,
 -grace, kill, wait, and log-handle cleanup sequence, then fail the run with a
 -classified evidence error rather than returning success or ordinary abort.
+-Operator interrupts and other `BaseException` paths after worker start use the
+-same shutdown sequence; OS `SIGTERM` and `SIGHUP` are converted into that path,
+-including the spawn-to-worker-tracking window. Signals received immediately
+-before fork through registration of the returned `Popen` are deferred until
+-ownership is established. Local cleanup and ownership transfer are
+-signal-guarded, and a process group not proven absent remains owned for the
+-outer shutdown retry before completion can be recorded. Once shutdown begins,
+-additional `SIGINT`, `SIGTERM`, and `SIGHUP` signals cannot interrupt its safety
+-sequence.
+-Per-process poll, group-signal, and wait failures are accumulated while cleanup
+-continues, with direct-process kill as a group-signal fallback. Shutdown is
+-complete only after every process group is confirmed absent; otherwise the
+-supervisor records `workers_stop_incomplete`, reports the live PIDs, and never
+-marks the run stopped. Every worker log close is attempted; close failures are
+-accumulated, cannot mask a termination-evidence error, and cannot trigger a
+-second shutdown after workers are already stopped.
 +It never changes a lifecycle label to stop work.
